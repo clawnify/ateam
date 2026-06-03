@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { agentCommand, getAgent, listAgents } from "@grove/agents";
-import { repo } from "@grove/db";
+import { agentCommand, getAgent, listAgents } from "@ateam/agents";
+import { repo } from "@ateam/db";
 import {
 	commit,
 	createTask as gitCreateTask,
@@ -16,7 +16,7 @@ import {
 	removeTask as gitRemoveTask,
 	trackingStatus,
 	updateFromBase,
-} from "@grove/git-core";
+} from "@ateam/git-core";
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import {
 	type GitStatusSnapshot,

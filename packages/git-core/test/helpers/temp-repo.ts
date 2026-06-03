@@ -15,7 +15,7 @@ export interface TempRepo {
 }
 
 async function configIdentity(git: SimpleGit): Promise<void> {
-	await git.addConfig("user.email", "tester@grove.dev");
+	await git.addConfig("user.email", "tester@ateam.dev");
 	await git.addConfig("user.name", "Grove Tester");
 	await git.addConfig("commit.gpgsign", "false");
 	await git.addConfig("init.defaultBranch", "main");

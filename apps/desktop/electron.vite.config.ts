@@ -5,15 +5,15 @@ import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 export default defineConfig({
 	main: {
 		// Externalize real npm deps (node-pty/better-sqlite3/drizzle/simple-git
-		// load from node_modules at runtime), but BUNDLE the @grove/* workspace
+		// load from node_modules at runtime), but BUNDLE the @ateam/* workspace
 		// packages — their entry points are raw TypeScript that node can't require.
 		plugins: [
 			externalizeDepsPlugin({
 				exclude: [
-					"@grove/git-core",
-					"@grove/db",
-					"@grove/agents",
-					"@grove/panes",
+					"@ateam/git-core",
+					"@ateam/db",
+					"@ateam/agents",
+					"@ateam/panes",
 				],
 			}),
 		],

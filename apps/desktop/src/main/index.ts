@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createDb, repo } from "@grove/db";
+import { createDb, repo } from "@ateam/db";
 import { app, BrowserWindow } from "electron";
 import { type AgentStatus, type KanbanColumn, CH } from "../shared/types";
 import { ensureNotifyScript } from "./agent-setup";

@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/clawnify/ateam/releases/latest/download/Ateam-macos.dmg">
-    <img src="https://img.shields.io/badge/Download%20for%20macOS-111111?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" height="44" />
+    <img src="./assets/macos-badge.svg" alt="Download app for macOS" width="220" />
   </a>
 </p>
 
@@ -19,9 +19,10 @@ watch several agents work at once.
 
 No login, no cloud. Identity and all GitHub operations come from the `gh` CLI.
 
-> **Builds:** macOS releases will be published on the
-> [Releases](https://github.com/clawnify/ateam/releases) page. Until then, run
-> from source (see [Develop](#develop)).
+> **Install:** grab the signed & notarized DMG above (or any release from the
+> [Releases](https://github.com/clawnify/ateam/releases) page), drag Ateam to
+> Applications, and open it — no Gatekeeper warnings. Or run from source (see
+> [Develop](#develop)).
 
 ## Requirements
 
@@ -32,7 +33,7 @@ No login, no cloud. Identity and all GitHub operations come from the `gh` CLI.
 > Note: if your `node` is x86_64 (Rosetta) while Bun + Electron are arm64, the
 > desktop dev/build scripts run under Bun's runtime (`bunx --bun`) so the right
 > native binaries are used. After `bun install`, native modules are rebuilt for
-> Electron via `bun run --filter @grove/desktop rebuild`.
+> Electron via `bun run --filter @ateam/desktop rebuild`.
 
 ## Layout
 
@@ -48,8 +49,8 @@ apps/desktop        Electron + React app (main · preload · renderer)
 
 ```bash
 bun install
-bun run --filter @grove/desktop rebuild   # native modules for Electron (arm64)
-bun run --filter @grove/desktop dev        # launch the app (Electron + Vite HMR)
+bun run --filter @ateam/desktop rebuild   # native modules for Electron (arm64)
+bun run --filter @ateam/desktop dev        # launch the app (Electron + Vite HMR)
 ```
 
 ## Test & typecheck
@@ -57,7 +58,7 @@ bun run --filter @grove/desktop dev        # launch the app (Electron + Vite HMR
 ```bash
 bun test             # git-core + db
 bun run typecheck    # all packages
-bun run --filter @grove/desktop build      # production bundle
+bun run --filter @ateam/desktop build      # production bundle
 ```
 
 ## How the safe git model works

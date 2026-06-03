@@ -3,7 +3,7 @@ productName: Ateam
 directories:
   output: release
   buildResources: build
-# electron-vite bundles main/preload/renderer into out/; @grove/* workspace
+# electron-vite bundles main/preload/renderer into out/; @ateam/* workspace
 # packages are inlined there. Only native deps load from node_modules at runtime.
 files:
   - out/**/*
