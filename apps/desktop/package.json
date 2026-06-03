@@ -4,9 +4,10 @@
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "bunx --bun electron-vite dev",
+    "dev": "bash scripts/brand-dev-electron.sh && bunx --bun electron-vite dev",
     "build": "bunx --bun electron-vite build",
-    "start": "bunx --bun electron-vite preview",
+    "start": "bash scripts/brand-dev-electron.sh && bunx --bun electron-vite preview",
+    "brand-dev": "bash scripts/brand-dev-electron.sh",
     "rebuild": "electron-rebuild -f -w better-sqlite3,node-pty --arch arm64",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
