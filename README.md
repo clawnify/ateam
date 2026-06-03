@@ -88,4 +88,6 @@ modules.
 
 ## License
 
-[MIT](./LICENSE) © Clawnify
+Dual-licensed: **[GPL-3.0-or-later](./LICENSE)** for open source use — or a
+**commercial license** for organizations that can't comply with the GPL
+(contact [Clawnify](https://github.com/clawnify)). © 2026 Clawnify
