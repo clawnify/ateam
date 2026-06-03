@@ -33,6 +33,7 @@ export function bootstrap(db: SqliteExecutor): void {
 			worktree_path TEXT NOT NULL,
 			"column" TEXT NOT NULL DEFAULT 'todo',
 			agent_status TEXT,
+			agent_id TEXT,
 			pr_number INTEGER,
 			pr_url TEXT,
 			pr_state TEXT,
@@ -92,4 +93,14 @@ export function bootstrap(db: SqliteExecutor): void {
 		);
 		INSERT OR IGNORE INTO settings (id) VALUES (1);
 	`);
+
+	// Migrations for databases created before a column existed. SQLite has no
+	// "ADD COLUMN IF NOT EXISTS", so attempt and ignore the "duplicate" error.
+	for (const sql of ["ALTER TABLE tasks ADD COLUMN agent_id TEXT"]) {
+		try {
+			db.exec(sql);
+		} catch {
+			/* column already exists */
+		}
+	}
 }

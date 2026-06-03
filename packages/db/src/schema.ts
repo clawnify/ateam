@@ -63,6 +63,7 @@ export const tasks = sqliteTable(
 		worktreePath: text("worktree_path").notNull(),
 		column: text("column").$type<KanbanColumn>().notNull().default("todo"),
 		agentStatus: text("agent_status").$type<AgentStatus>(),
+		agentId: text("agent_id"),
 		prNumber: integer("pr_number"),
 		prUrl: text("pr_url"),
 		prState: text("pr_state").$type<PrState>(),
