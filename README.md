@@ -85,3 +85,7 @@ modules.
 - Integrations (Linear / Slack / GitHub issues) with **no paywall** — exposed to
   every agent via MCP, brokered through Composio/Arcade.
 - Session-history continuity across worktrees ("fork session").
+
+## License
+
+[MIT](./LICENSE) © Clawnify
