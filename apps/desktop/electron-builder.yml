@@ -22,8 +22,15 @@ mac:
         - arm64
   icon: build/icon.icns
   category: public.app-category.developer-tools
-  # Unsigned for the first release (no Developer ID cert). Users right-click → Open.
-  identity: null
+  # Signed with the Developer ID Application cert from the keychain (auto-
+  # discovered). To build unsigned: CSC_IDENTITY_AUTO_DISCOVERY=false bun run dist
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+# Notarize + staple after signing (uses keychain profile "ateam-notary";
+# skips gracefully if the profile doesn't exist yet).
+afterSign: scripts/notarize.cjs
 dmg:
   title: ${productName}
   # Default contents = the app + an Applications alias → the standard
