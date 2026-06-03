@@ -1,0 +1,411 @@
+import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
+import { agentCommand, getAgent, listAgents } from "@grove/agents";
+import { repo } from "@grove/db";
+import {
+	commit,
+	createTask as gitCreateTask,
+	diff,
+	errorMessage,
+	fileDiff,
+	gitFor,
+	mergeViaPR,
+	push,
+	registerProject,
+	removeTask as gitRemoveTask,
+	trackingStatus,
+	updateFromBase,
+} from "@grove/git-core";
+import { BrowserWindow, dialog, ipcMain } from "electron";
+import {
+	type GitStatusSnapshot,
+	type KanbanColumn,
+	type MergeStrategy,
+	CH,
+} from "../shared/types";
+import { buildAgentEnv, ensureClaudeHooks } from "./agent-setup";
+import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
+
+export interface IpcContext {
+	services: Services;
+	sendTaskUpdated: (taskId: string) => void;
+}
+
+function requireTask(services: Services, taskId: string) {
+	const task = repo.getTask(services.db, taskId);
+	if (!task) throw new Error(`Task not found: ${taskId}`);
+	return task;
+}
+
+function requireProjectFor(services: Services, projectId: string) {
+	const project = repo.getProject(services.db, projectId);
+	if (!project) throw new Error(`Project not found: ${projectId}`);
+	return project;
+}
+
+async function computeGitStatus(
+	worktreePath: string,
+	baseBranch: string,
+): Promise<GitStatusSnapshot> {
+	const tracking = await trackingStatus(worktreePath);
+	const d = await diff({ worktreePath, baseBranch });
+	return {
+		ahead: tracking?.ahead ?? 0,
+		behind: tracking?.behind ?? 0,
+		dirty: d.files.length,
+		updatedAt: Date.now(),
+	};
+}
+
+export function registerIpc(ctx: IpcContext): void {
+	const { services, sendTaskUpdated } = ctx;
+	const { db } = services;
+
+	// ---- projects ----
+	ipcMain.handle(CH.projectsPick, async () => {
+		const res = await dialog.showOpenDialog({
+			properties: ["openDirectory"],
+			title: "Select a git repository",
+		});
+		return res.canceled ? null : (res.filePaths[0] ?? null);
+	});
+
+	ipcMain.handle(CH.projectsRegister, async (_e, repoPath: string) => {
+		const info = await registerProject(repoPath);
+		const row = repo.upsertProject(db, {
+			repoPath: info.repoPath,
+			name: basename(info.repoPath),
+			defaultBranch: info.defaultBranch,
+			githubOwner: info.githubRepo?.owner ?? null,
+			githubName: info.githubRepo?.name ?? null,
+		});
+		return toProjectDTO(row!);
+	});
+
+	ipcMain.handle(CH.projectsList, async () =>
+		repo.listProjects(db).map(toProjectDTO),
+	);
+
+	ipcMain.handle(CH.projectsRemove, async (_e, id: string) => {
+		repo.deleteProject(db, id);
+	});
+
+	// ---- tasks ----
+	ipcMain.handle(CH.tasksList, async (_e, projectId: string) =>
+		repo.listTasks(db, projectId).map(toTaskDTO),
+	);
+
+	ipcMain.handle(
+		CH.tasksCreate,
+		async (
+			_e,
+			input: { projectId: string; name: string; baseBranch?: string },
+		) => {
+			const project = requireProjectFor(services, input.projectId);
+			const created = await gitCreateTask({
+				repoPath: project.repoPath,
+				name: input.name,
+				baseBranch: input.baseBranch ?? project.defaultBranch ?? undefined,
+				worktreesRoot: project.worktreesRoot ?? undefined,
+			});
+			const row = repo.createTask(db, {
+				projectId: project.id,
+				name: input.name,
+				slug: created.slug,
+				branch: created.branch,
+				baseBranch: created.baseBranch,
+				worktreePath: created.worktreePath,
+			});
+			return toTaskDTO(row);
+		},
+	);
+
+	ipcMain.handle(
+		CH.tasksRemove,
+		async (
+			_e,
+			input: { id: string; deleteBranch?: boolean; force?: boolean },
+		) => {
+			const task = requireTask(services, input.id);
+			const project = requireProjectFor(services, task.projectId);
+			// Tear down any live agent/shell sessions in this worktree first.
+			for (const s of repo.listSessionsByTask(db, task.id)) {
+				services.pty.kill(s.terminalId);
+			}
+			await gitRemoveTask({
+				repoPath: project.repoPath,
+				worktreePath: task.worktreePath,
+				branch: task.branch,
+				deleteBranch: input.deleteBranch,
+				force: input.force,
+			});
+			repo.deleteTask(db, task.id);
+		},
+	);
+
+	ipcMain.handle(
+		CH.tasksSetColumn,
+		async (_e, id: string, column: KanbanColumn) => {
+			const row = repo.updateTask(db, id, { column });
+			return toTaskDTO(row!);
+		},
+	);
+
+	// ---- cleanup: remove only merged + idle + clean worktrees ----
+	// Classify a project's tasks into removable vs kept (with a reason). A task
+	// is removable ONLY when it merged, has no live agent session, and its
+	// working tree is clean. Everything else is kept — never deleting unmerged
+	// work or a task an agent is still using.
+	async function classifyForCleanup(projectId: string) {
+		const allTasks = repo.listTasks(db, projectId);
+		const removable: typeof allTasks = [];
+		const kept: { task: (typeof allTasks)[number]; reason: string }[] = [];
+		for (const task of allTasks) {
+			const isMerged = task.column === "merged" || task.prState === "merged";
+			if (!isMerged) {
+				kept.push({ task, reason: "not merged" });
+				continue;
+			}
+			const live = repo
+				.listSessionsByTask(db, task.id)
+				.some((s) => services.pty.has(s.terminalId));
+			if (live) {
+				kept.push({ task, reason: "agent still active" });
+				continue;
+			}
+			const dirty =
+				(await gitFor(task.worktreePath)
+					.raw(["status", "--porcelain"])
+					.catch(() => "")).trim() !== "";
+			if (dirty) {
+				kept.push({ task, reason: "uncommitted/untracked changes" });
+				continue;
+			}
+			removable.push(task);
+		}
+		return { removable, kept };
+	}
+
+	ipcMain.handle(CH.tasksCleanupPreview, async (_e, projectId: string) => {
+		const { removable, kept } = await classifyForCleanup(projectId);
+		return {
+			removed: removable.map((t) => ({
+				id: t.id,
+				name: t.name,
+				branch: t.branch,
+			})),
+			kept: kept.map((k) => ({
+				id: k.task.id,
+				name: k.task.name,
+				branch: k.task.branch,
+				reason: k.reason,
+			})),
+		};
+	});
+
+	ipcMain.handle(CH.tasksCleanup, async (_e, projectId: string) => {
+		const project = requireProjectFor(services, projectId);
+		const { removable, kept } = await classifyForCleanup(projectId);
+		const removed: { id: string; name: string; branch: string }[] = [];
+		for (const task of removable) {
+			try {
+				// force:false → git refuses if the tree somehow became dirty between
+				// classify and now; deleteBranch:true (branch -d refuses unmerged).
+				await gitRemoveTask({
+					repoPath: project.repoPath,
+					worktreePath: task.worktreePath,
+					branch: task.branch,
+					deleteBranch: true,
+					force: false,
+				});
+				repo.deleteTask(db, task.id);
+				removed.push({ id: task.id, name: task.name, branch: task.branch });
+			} catch (err) {
+				kept.push({ task, reason: errorMessage(err) });
+			}
+		}
+		return {
+			removed,
+			kept: kept.map((k) => ({
+				id: k.task.id,
+				name: k.task.name,
+				branch: k.task.branch,
+				reason: k.reason,
+			})),
+		};
+	});
+
+	// ---- git ----
+	ipcMain.handle(CH.gitCommit, async (_e, taskId: string, message: string) => {
+		const task = requireTask(services, taskId);
+		return commit({ worktreePath: task.worktreePath, message });
+	});
+
+	ipcMain.handle(CH.gitPush, async (_e, taskId: string) => {
+		const task = requireTask(services, taskId);
+		await push({ worktreePath: task.worktreePath, branch: task.branch });
+	});
+
+	ipcMain.handle(CH.gitUpdate, async (_e, taskId: string) => {
+		const task = requireTask(services, taskId);
+		const settings = repo.getSettings(db);
+		const result = await updateFromBase({
+			worktreePath: task.worktreePath,
+			baseBranch: task.baseBranch,
+			strategy: settings.defaultUpdateStrategy ?? "merge",
+		});
+		return result;
+	});
+
+	ipcMain.handle(
+		CH.gitMerge,
+		async (_e, taskId: string, strategy: MergeStrategy) => {
+			const task = requireTask(services, taskId);
+			const project = requireProjectFor(services, task.projectId);
+			const settings = repo.getSettings(db);
+			const result = await mergeViaPR({
+				repoPath: project.repoPath,
+				worktreePath: task.worktreePath,
+				branch: task.branch,
+				baseBranch: task.baseBranch,
+				strategy,
+				deleteRemoteBranch: settings.deleteRemoteBranchOnMerge ?? false,
+			});
+			repo.updateTask(db, task.id, {
+				column: "merged",
+				prNumber: result.prNumber ?? null,
+				prUrl: result.prUrl ?? null,
+				prState: "merged",
+			});
+			sendTaskUpdated(task.id);
+			return result;
+		},
+	);
+
+	ipcMain.handle(CH.gitDiff, async (_e, taskId: string) => {
+		const task = requireTask(services, taskId);
+		return diff({ worktreePath: task.worktreePath, baseBranch: task.baseBranch });
+	});
+
+	ipcMain.handle(CH.gitFileDiff, async (_e, taskId: string, file: string) => {
+		const task = requireTask(services, taskId);
+		return fileDiff({
+			worktreePath: task.worktreePath,
+			file,
+			baseBranch: task.baseBranch,
+		});
+	});
+
+	ipcMain.handle(CH.gitStatus, async (_e, taskId: string) => {
+		const task = requireTask(services, taskId);
+		const snapshot = await computeGitStatus(task.worktreePath, task.baseBranch);
+		repo.updateTask(db, task.id, { gitStatus: snapshot });
+		return snapshot;
+	});
+
+	// ---- agents ----
+	ipcMain.handle(CH.agentsList, async () => {
+		const agents = await listAgents();
+		return agents.map((a) => ({
+			id: a.id,
+			label: a.label,
+			description: a.description,
+			available: a.available,
+		}));
+	});
+
+	// ---- pty ----
+	const shell = process.env.SHELL || "/bin/zsh";
+
+	ipcMain.handle(
+		CH.ptySpawnAgent,
+		async (
+			_e,
+			input: { taskId: string; agentId: string; yolo?: boolean },
+		) => {
+			const task = requireTask(services, input.taskId);
+			const agent = getAgent(input.agentId);
+			if (!agent) throw new Error(`Unknown agent: ${input.agentId}`);
+
+			const terminalId = randomUUID();
+			repo.createSession(db, {
+				taskId: task.id,
+				agentId: agent.id,
+				terminalId,
+				cwd: task.worktreePath,
+			});
+
+			if (agent.id === "claude") {
+				await ensureClaudeHooks(task.worktreePath, services.notifyScriptPath);
+			}
+
+			const env = buildAgentEnv({
+				terminalId,
+				agentId: agent.id,
+				hookPort: services.hookPort,
+				hooksDir: services.hooksDir,
+			});
+			// Run the agent in a login shell, then drop to an interactive shell so
+			// the pane stays usable after the agent exits. YOLO mode appends the
+			// agent's bypass flag.
+			const command = `${agentCommand(agent, input.yolo ?? false)}; exec ${shell} -l`;
+			services.pty.spawn({
+				terminalId,
+				shell,
+				args: ["-l", "-c", command],
+				cwd: task.worktreePath,
+				env,
+			});
+
+			repo.updateTask(db, task.id, { column: "running", agentStatus: "running" });
+			sendTaskUpdated(task.id);
+			return { terminalId };
+		},
+	);
+
+	ipcMain.handle(CH.ptySpawnShell, async (_e, input: { taskId: string }) => {
+		const task = requireTask(services, input.taskId);
+		const terminalId = randomUUID();
+		repo.createSession(db, {
+			taskId: task.id,
+			agentId: "shell",
+			terminalId,
+			cwd: task.worktreePath,
+		});
+		services.pty.spawn({
+			terminalId,
+			shell,
+			args: ["-l"],
+			cwd: task.worktreePath,
+			env: { ...process.env },
+		});
+		return { terminalId };
+	});
+
+	ipcMain.on(CH.ptyWrite, (_e, terminalId: string, data: string) => {
+		services.pty.write(terminalId, data);
+	});
+
+	ipcMain.on(
+		CH.ptyResize,
+		(_e, terminalId: string, cols: number, rows: number) => {
+			services.pty.resize(terminalId, cols, rows);
+		},
+	);
+
+	ipcMain.handle(CH.ptyKill, async (_e, terminalId: string) => {
+		services.pty.kill(terminalId);
+	});
+
+	ipcMain.handle(CH.ptySnapshot, async (_e, terminalId: string) =>
+		services.pty.snapshot(terminalId),
+	);
+
+	ipcMain.handle(CH.ptyListForTask, async (_e, taskId: string) => {
+		// Return the task's sessions that still have a live PTY.
+		return repo
+			.listSessionsByTask(db, taskId)
+			.filter((s) => services.pty.has(s.terminalId))
+			.map(toSessionDTO);
+	});
+}

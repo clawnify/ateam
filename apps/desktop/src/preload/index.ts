@@ -1,0 +1,74 @@
+import { contextBridge, ipcRenderer } from "electron";
+import {
+	type GroveApi,
+	type KanbanColumn,
+	type MergeStrategy,
+	type PtyDataEvent,
+	type PtyExitEvent,
+	type TaskDTO,
+	CH,
+} from "../shared/types";
+
+const api: GroveApi = {
+	projects: {
+		pick: () => ipcRenderer.invoke(CH.projectsPick),
+		register: (repoPath) => ipcRenderer.invoke(CH.projectsRegister, repoPath),
+		list: () => ipcRenderer.invoke(CH.projectsList),
+		remove: (id) => ipcRenderer.invoke(CH.projectsRemove, id),
+	},
+	tasks: {
+		list: (projectId) => ipcRenderer.invoke(CH.tasksList, projectId),
+		create: (input) => ipcRenderer.invoke(CH.tasksCreate, input),
+		remove: (input) => ipcRenderer.invoke(CH.tasksRemove, input),
+		setColumn: (id, column: KanbanColumn) =>
+			ipcRenderer.invoke(CH.tasksSetColumn, id, column),
+		cleanupPreview: (projectId) =>
+			ipcRenderer.invoke(CH.tasksCleanupPreview, projectId),
+		cleanup: (projectId) => ipcRenderer.invoke(CH.tasksCleanup, projectId),
+	},
+	git: {
+		commit: (taskId, message) =>
+			ipcRenderer.invoke(CH.gitCommit, taskId, message),
+		push: (taskId) => ipcRenderer.invoke(CH.gitPush, taskId),
+		update: (taskId) => ipcRenderer.invoke(CH.gitUpdate, taskId),
+		merge: (taskId, strategy: MergeStrategy) =>
+			ipcRenderer.invoke(CH.gitMerge, taskId, strategy),
+		diff: (taskId) => ipcRenderer.invoke(CH.gitDiff, taskId),
+		fileDiff: (taskId, file) =>
+			ipcRenderer.invoke(CH.gitFileDiff, taskId, file),
+		status: (taskId) => ipcRenderer.invoke(CH.gitStatus, taskId),
+	},
+	agents: {
+		list: () => ipcRenderer.invoke(CH.agentsList),
+	},
+	pty: {
+		spawnAgent: (input) => ipcRenderer.invoke(CH.ptySpawnAgent, input),
+		spawnShell: (input) => ipcRenderer.invoke(CH.ptySpawnShell, input),
+		write: (terminalId, data) =>
+			ipcRenderer.send(CH.ptyWrite, terminalId, data),
+		resize: (terminalId, cols, rows) =>
+			ipcRenderer.send(CH.ptyResize, terminalId, cols, rows),
+		kill: (terminalId) => ipcRenderer.invoke(CH.ptyKill, terminalId),
+		snapshot: (terminalId) => ipcRenderer.invoke(CH.ptySnapshot, terminalId),
+		listForTask: (taskId) => ipcRenderer.invoke(CH.ptyListForTask, taskId),
+		onData: (cb: (e: PtyDataEvent) => void) => {
+			const handler = (_: unknown, e: PtyDataEvent) => cb(e);
+			ipcRenderer.on(CH.evtPtyData, handler);
+			return () => ipcRenderer.off(CH.evtPtyData, handler);
+		},
+		onExit: (cb: (e: PtyExitEvent) => void) => {
+			const handler = (_: unknown, e: PtyExitEvent) => cb(e);
+			ipcRenderer.on(CH.evtPtyExit, handler);
+			return () => ipcRenderer.off(CH.evtPtyExit, handler);
+		},
+	},
+	events: {
+		onTaskUpdated: (cb: (task: TaskDTO) => void) => {
+			const handler = (_: unknown, task: TaskDTO) => cb(task);
+			ipcRenderer.on(CH.evtTaskUpdated, handler);
+			return () => ipcRenderer.off(CH.evtTaskUpdated, handler);
+		},
+	},
+};
+
+contextBridge.exposeInMainWorld("grove", api);
