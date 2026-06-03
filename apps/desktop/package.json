@@ -1,5 +1,5 @@
 {
-  "name": "@grove/desktop",
+  "name": "@ateam/desktop",
   "version": "0.1.2",
   "private": true,
   "main": "./out/main/index.js",
@@ -19,10 +19,10 @@
   "devDependencies": {
     "@electron/notarize": "^3.1.1",
     "@electron/rebuild": "^3.7.1",
-    "@grove/agents": "workspace:*",
-    "@grove/db": "workspace:*",
-    "@grove/git-core": "workspace:*",
-    "@grove/panes": "workspace:*",
+    "@ateam/agents": "workspace:*",
+    "@ateam/db": "workspace:*",
+    "@ateam/git-core": "workspace:*",
+    "@ateam/panes": "workspace:*",
     "@types/node": "^22.10.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

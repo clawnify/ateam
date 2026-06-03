@@ -3,7 +3,7 @@ import type {
 	GroveDb,
 	Project,
 	Task,
-} from "@grove/db";
+} from "@ateam/db";
 import type { HookServer } from "./hooks/hook-server";
 import type { PtyClient } from "./pty/pty-client";
 import type {
