@@ -115,6 +115,23 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
 	app.setName(APP_NAME);
+
+	// Show the app icon in the macOS dock during dev (packaged builds use the
+	// .icns in build/). Best-effort: the icon lives at build/icon.png.
+	if (process.platform === "darwin" && app.dock) {
+		for (const p of [
+			join(process.cwd(), "build", "icon.png"),
+			join(__dirname, "../../build/icon.png"),
+		]) {
+			try {
+				app.dock.setIcon(p);
+				break;
+			} catch {
+				/* try next path */
+			}
+		}
+	}
+
 	services = await initServices();
 	registerIpc({ services, sendTaskUpdated });
 

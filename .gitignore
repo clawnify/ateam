@@ -1,7 +1,7 @@
 node_modules/
 dist/
 out/
-build/
+release/
 .turbo/
 *.log
 .DS_Store

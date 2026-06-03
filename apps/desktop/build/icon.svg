@@ -1,0 +1,17 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b3b44"/>
+      <stop offset="0.55" stop-color="#222227"/>
+      <stop offset="1" stop-color="#141417"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="230" ry="230" fill="url(#bg)"/>
+
+  <!-- Minimal mission-control tiling: one wide pane spanning two rows, two squares below. -->
+  <g>
+    <rect x="252" y="197" width="520" height="360" rx="4" fill="#e6e6ea"/>
+    <rect x="252" y="575" width="251" height="251" rx="4" fill="#ffffff" opacity="0.78"/>
+    <rect x="521" y="575" width="251" height="251" rx="4" fill="#ffffff" opacity="0.6"/>
+  </g>
+</svg>
