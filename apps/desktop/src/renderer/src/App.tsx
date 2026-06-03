@@ -277,7 +277,12 @@ export function App() {
 					<div className="tabs">
 						<div
 							className={`tab ${view === "board" ? "active" : ""}`}
-							onClick={() => setView("board")}
+							onClick={() => {
+								// A full-width task hides the board — clicking "Board" while
+								// one is open means "show me the board", so deselect it.
+								if (panelMode === "full") setSelectedTaskId(null);
+								setView("board");
+							}}
 						>
 							Board
 						</div>
