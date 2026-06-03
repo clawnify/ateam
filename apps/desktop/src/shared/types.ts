@@ -202,6 +202,7 @@ export interface GroveApi {
 			taskId: string;
 			agentId: string;
 			yolo?: boolean;
+			resume?: boolean;
 		}): Promise<{ terminalId: string }>;
 		spawnShell(input: { taskId: string }): Promise<{ terminalId: string }>;
 		write(terminalId: string, data: string): void;

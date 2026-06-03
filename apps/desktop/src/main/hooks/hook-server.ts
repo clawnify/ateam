@@ -16,7 +16,7 @@ export class HookServer extends EventEmitter {
 	private server?: http.Server;
 	port = 0;
 
-	async start(): Promise<number> {
+	async start(preferred?: number): Promise<number> {
 		this.server = http.createServer((req, res) => {
 			try {
 				const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -43,9 +43,31 @@ export class HookServer extends EventEmitter {
 			}
 		});
 
-		await new Promise<void>((resolve) => {
-			this.server?.listen(0, "127.0.0.1", resolve);
-		});
+		// Prefer the port persisted from the previous run so agents that survived
+		// an app restart (their env still points at the old port) keep reporting
+		// status. Fall back to an ephemeral port if it's taken.
+		const tryListen = (port: number) =>
+			new Promise<boolean>((resolve) => {
+				const srv = this.server;
+				if (!srv) return resolve(false);
+				const onError = () => {
+					srv.removeListener("listening", onListening);
+					resolve(false);
+				};
+				const onListening = () => {
+					srv.removeListener("error", onError);
+					resolve(true);
+				};
+				srv.once("error", onError);
+				srv.once("listening", onListening);
+				srv.listen(port, "127.0.0.1");
+			});
+
+		let bound = false;
+		if (preferred && preferred > 0) bound = await tryListen(preferred);
+		if (!bound) bound = await tryListen(0);
+		if (!bound) throw new Error("hook server could not bind to a port");
+
 		const addr = this.server.address();
 		this.port = typeof addr === "object" && addr ? addr.port : 0;
 		return this.port;

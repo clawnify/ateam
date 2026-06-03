@@ -44,7 +44,7 @@ async function initServices(): Promise<Services> {
 		process.execPath,
 	);
 	const hooks = new HookServer();
-	const hookPort = await hooks.start();
+	const hookPort = await hooks.start(repo.getSettings(db).hookPort ?? undefined);
 	const notifyScriptPath = await ensureNotifyScript(userDataDir);
 	const hooksDir = join(userDataDir, "hooks");
 	repo.updateSettings(db, { hookPort });

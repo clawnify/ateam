@@ -14,6 +14,7 @@ import {
 	GitBranch,
 	GitCommitVertical,
 	GitMerge,
+	History,
 	Lock,
 	type LucideIcon,
 	Maximize2,
@@ -229,9 +230,6 @@ export function App() {
 							<ChevronDown size={14} strokeWidth={2} />
 						)}
 						<span>Tasks</span>
-						{!tasksCollapsed && sidebarTasks.length > 0 && (
-							<span className="count">{sidebarTasks.length}</span>
-						)}
 					</button>
 					<IconButton
 						icon={Plus}
@@ -479,12 +477,13 @@ function TaskPanel({
 		};
 	}, [task.id, terminalId, setTerminal]);
 
-	const launch = (yolo: boolean) =>
+	const launch = (yolo: boolean, resume = false) =>
 		run(async () => {
 			const { terminalId: tid } = await window.grove.pty.spawnAgent({
 				taskId: task.id,
 				agentId,
 				yolo,
+				resume,
 			});
 			setTerminal(tid);
 		});
@@ -554,6 +553,11 @@ function TaskPanel({
 					icon={Zap}
 					label="Launch in YOLO mode — bypass all permissions"
 					onClick={() => launch(true)}
+				/>
+				<IconButton
+					icon={History}
+					label="Resume the last conversation in this worktree"
+					onClick={() => launch(false, true)}
 				/>
 				<IconButton icon={SquareTerminal} label="Open a shell" onClick={shell} />
 

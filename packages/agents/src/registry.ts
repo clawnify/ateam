@@ -21,6 +21,11 @@ export interface AgentDefinition {
 	 * Omitted for agents that have no such flag (e.g. OpenCode).
 	 */
 	yoloFlag?: string;
+	/**
+	 * Command that resumes the most recent conversation in the cwd — used to
+	 * pick a session back up after the agent process ended (e.g. app restart).
+	 */
+	resumeCommand?: string;
 	/** How an initial task prompt is delivered (if supported). */
 	promptTransport?: PromptTransport;
 }
@@ -37,6 +42,7 @@ export const AGENTS = [
 		bin: "claude",
 		command: "claude",
 		yoloFlag: "--dangerously-skip-permissions",
+		resumeCommand: "claude --continue",
 	},
 	{
 		id: "codex",
@@ -46,6 +52,7 @@ export const AGENTS = [
 		bin: "codex",
 		command: "codex",
 		yoloFlag: "--dangerously-bypass-approvals-and-sandbox",
+		resumeCommand: "codex resume --last",
 	},
 	{
 		id: "opencode",
@@ -53,14 +60,18 @@ export const AGENTS = [
 		description: "Open-source coding agent for the terminal, IDE, and desktop.",
 		bin: "opencode",
 		command: "opencode",
+		resumeCommand: "opencode --continue",
 	},
 ] as const satisfies readonly AgentDefinition[];
 
-/** Build the launch command line for an agent, optionally in YOLO mode. */
-export function agentCommand(agent: AgentDefinition, yolo: boolean): string {
-	return yolo && agent.yoloFlag
-		? `${agent.command} ${agent.yoloFlag}`
-		: agent.command;
+/** Build the launch command line for an agent (YOLO and/or resume variants). */
+export function agentCommand(
+	agent: AgentDefinition,
+	opts: { yolo?: boolean; resume?: boolean } = {},
+): string {
+	const base =
+		opts.resume && agent.resumeCommand ? agent.resumeCommand : agent.command;
+	return opts.yolo && agent.yoloFlag ? `${base} ${agent.yoloFlag}` : base;
 }
 
 export type AgentId = (typeof AGENTS)[number]["id"];

@@ -394,7 +394,12 @@ export function registerIpc(ctx: IpcContext): void {
 		CH.ptySpawnAgent,
 		async (
 			_e,
-			input: { taskId: string; agentId: string; yolo?: boolean },
+			input: {
+				taskId: string;
+				agentId: string;
+				yolo?: boolean;
+				resume?: boolean;
+			},
 		) => {
 			const task = requireTask(services, input.taskId);
 			const agent = getAgent(input.agentId);
@@ -419,9 +424,12 @@ export function registerIpc(ctx: IpcContext): void {
 				hooksDir: services.hooksDir,
 			});
 			// Run the agent in a login shell, then drop to an interactive shell so
-			// the pane stays usable after the agent exits. YOLO mode appends the
-			// agent's bypass flag.
-			const command = `${agentCommand(agent, input.yolo ?? false)}; exec ${shell} -l`;
+			// the pane stays usable after the agent exits. YOLO appends the bypass
+			// flag; resume relaunches the agent's most recent conversation here.
+			const command = `${agentCommand(agent, {
+				yolo: input.yolo,
+				resume: input.resume,
+			})}; exec ${shell} -l`;
 			services.pty.spawn({
 				terminalId,
 				shell,
