@@ -5,7 +5,7 @@ import type {
 	Task,
 } from "@grove/db";
 import type { HookServer } from "./hooks/hook-server";
-import type { PtyManager } from "./pty/pty-manager";
+import type { PtyClient } from "./pty/pty-client";
 import type {
 	ProjectDTO,
 	SessionDTO,
@@ -14,7 +14,7 @@ import type {
 
 export interface Services {
 	db: GroveDb;
-	pty: PtyManager;
+	pty: PtyClient;
 	hooks: HookServer;
 	userDataDir: string;
 	hooksDir: string;
@@ -45,6 +45,7 @@ export function toTaskDTO(t: Task): TaskDTO {
 		worktreePath: t.worktreePath,
 		column: t.column,
 		agentStatus: t.agentStatus ?? null,
+		agentId: t.agentId ?? null,
 		prNumber: t.prNumber ?? null,
 		prUrl: t.prUrl ?? null,
 		gitStatus: t.gitStatus ?? null,

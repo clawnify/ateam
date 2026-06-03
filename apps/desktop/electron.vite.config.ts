@@ -19,7 +19,11 @@ export default defineConfig({
 		],
 		build: {
 			rollupOptions: {
-				input: { index: resolve(__dirname, "src/main/index.ts") },
+				input: {
+					index: resolve(__dirname, "src/main/index.ts"),
+					// The detached PTY daemon, built alongside main → out/main/daemon.js
+					daemon: resolve(__dirname, "src/daemon/index.ts"),
+				},
 			},
 		},
 	},

@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { createDb, repo } from "@grove/db";
 import { app, BrowserWindow } from "electron";
@@ -5,7 +6,7 @@ import { type AgentStatus, type KanbanColumn, CH } from "../shared/types";
 import { ensureNotifyScript } from "./agent-setup";
 import { HookServer, type HookEvent } from "./hooks/hook-server";
 import { registerIpc } from "./ipc";
-import { PtyManager } from "./pty/pty-manager";
+import { PtyClient } from "./pty/pty-client";
 import { APP_NAME } from "./app-name";
 import { type Services, toTaskDTO } from "./services";
 
@@ -35,7 +36,13 @@ function sendTaskUpdated(taskId: string): void {
 async function initServices(): Promise<Services> {
 	const userDataDir = app.getPath("userData");
 	const db = createDb(join(userDataDir, "grove.sqlite"));
-	const pty = new PtyManager();
+	// The detached PTY daemon survives app restarts; out/main/daemon.js is run via
+	// the Electron binary as node (ELECTRON_RUN_AS_NODE) so node-pty's ABI matches.
+	const pty = new PtyClient(
+		join(__dirname, "daemon.js"),
+		join(homedir(), ".ateam", "pty-daemon.sock"),
+		process.execPath,
+	);
 	const hooks = new HookServer();
 	const hookPort = await hooks.start();
 	const notifyScriptPath = await ensureNotifyScript(userDataDir);
@@ -137,12 +144,19 @@ app.whenReady().then(async () => {
 
 	if (SMOKE) {
 		// Headless boot check: prove services init (db, hook server, notify
-		// script) without opening a window, then exit cleanly.
+		// script) without opening a window or the daemon, then exit cleanly.
 		console.log(`GROVE_READY hookPort=${services.hookPort}`);
-		services.pty.killAll();
 		services.hooks.stop();
 		app.exit(0);
 		return;
+	}
+
+	// Connect to (or launch) the PTY daemon and learn which sessions are still
+	// alive from a previous run, so the renderer can re-attach to them.
+	try {
+		await services.pty.connect();
+	} catch (err) {
+		console.error("[ateam] PTY daemon connect failed:", err);
 	}
 
 	createWindow();
@@ -152,7 +166,9 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-	services?.pty.killAll();
+	// Do NOT kill PTYs — the daemon keeps them alive across restarts. Just
+	// disconnect; the daemon stays running with the sessions.
+	services?.pty.disconnect();
 	services?.hooks.stop();
 	if (process.platform !== "darwin") app.quit();
 });
