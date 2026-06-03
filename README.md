@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/clawnify/ateam/releases/latest">
+  <a href="https://github.com/clawnify/ateam/releases/latest/download/Ateam-macos.dmg">
     <img src="https://img.shields.io/badge/Download%20for%20macOS-111111?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" height="44" />
   </a>
 </p>

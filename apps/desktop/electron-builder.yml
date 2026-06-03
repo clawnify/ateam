@@ -35,4 +35,7 @@ dmg:
   title: ${productName}
   # Default contents = the app + an Applications alias → the standard
   # "drag to Applications" install window.
-  artifactName: ${productName}-${version}-arm64.${ext}
+  # Stable (unversioned) name so the README's
+  # releases/latest/download/Ateam-macos.dmg link always works; the release
+  # tag carries the version.
+  artifactName: ${productName}-macos.${ext}
