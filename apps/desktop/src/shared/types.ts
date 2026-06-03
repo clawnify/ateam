@@ -37,6 +37,7 @@ export interface TaskDTO {
 	worktreePath: string;
 	column: KanbanColumn;
 	agentStatus: AgentStatus | null;
+	agentId: string | null;
 	prNumber: number | null;
 	prUrl: string | null;
 	gitStatus: GitStatusSnapshot | null;
@@ -100,6 +101,18 @@ export interface CleanupReport {
 	kept: CleanupSkip[];
 }
 
+// A worktree advised for cleanup, shown in the cleanup dialog with its terminal.
+export interface CleanupCandidate {
+	id: string;
+	name: string;
+	branch: string;
+	worktreePath: string;
+	reason: string;
+	/** A live PTY session to show/continue, or null if the session ended. */
+	terminalId: string | null;
+	agentStatus: AgentStatus | null;
+}
+
 // ---- IPC channel names ----
 export const CH = {
 	projectsPick: "projects:pick",
@@ -112,6 +125,7 @@ export const CH = {
 	tasksSetColumn: "tasks:setColumn",
 	tasksCleanup: "tasks:cleanup",
 	tasksCleanupPreview: "tasks:cleanupPreview",
+	tasksCleanupCandidates: "tasks:cleanupCandidates",
 	gitCommit: "git:commit",
 	gitPush: "git:push",
 	gitUpdate: "git:update",
@@ -166,6 +180,8 @@ export interface GroveApi {
 		setColumn(id: string, column: KanbanColumn): Promise<TaskDTO>;
 		/** Preview which tasks a cleanup would remove vs keep (and why). */
 		cleanupPreview(projectId: string): Promise<CleanupReport>;
+		/** Worktrees advised for cleanup (idle/finished), with their terminals. */
+		cleanupCandidates(projectId: string): Promise<CleanupCandidate[]>;
 		/** Remove merged + idle worktrees. Never deletes unmerged/active/dirty. */
 		cleanup(projectId: string): Promise<CleanupReport>;
 	};

@@ -45,12 +45,13 @@ button:hover {
 	border-color: #3a3a46;
 }
 button.primary {
-	background: var(--accent);
-	border-color: var(--accent);
-	color: white;
+	background: #ffffff;
+	border-color: #ffffff;
+	color: #15151a;
 }
 button.primary:hover {
-	background: var(--accent-dim);
+	background: #e4e4e8;
+	border-color: #e4e4e8;
 }
 button:disabled {
 	opacity: 0.4;
@@ -242,16 +243,23 @@ input {
 	flex: 1;
 	min-height: 0;
 	display: flex;
+	/* When the side panel opens we don't squeeze the board — the row scrolls
+	   horizontally and the panel stays pinned in view (see .panel). */
+	overflow-x: auto;
 }
 
 /* ---- board ---- */
 .board {
-	flex: 1;
+	/* Always exactly the content width — never reflows when the panel opens
+	   (the sticky panel overlays the right edge), so columns don't flicker. */
+	flex: 0 0 100%;
+	min-width: 760px;
 	display: grid;
 	grid-template-columns: repeat(5, 1fr);
 	gap: 10px;
 	padding: 14px;
-	overflow: auto;
+	overflow-y: auto;
+	align-content: start;
 }
 .col h3 {
 	font-size: 11px;
@@ -282,7 +290,7 @@ input {
 	border-color: #3a3a46;
 }
 .card.selected {
-	border-color: var(--accent);
+	border-color: #ffffff;
 }
 .card .name {
 	font-size: 13px;
@@ -321,6 +329,12 @@ input {
 .ring.idle {
 	background: var(--green);
 }
+.card-agent {
+	position: absolute;
+	right: 10px;
+	bottom: 8px;
+	opacity: 0.9;
+}
 @keyframes pulse {
 	0%,
 	100% {
@@ -333,16 +347,20 @@ input {
 
 /* ---- task panel ---- */
 .panel {
-	width: 46%;
-	min-width: 380px;
+	flex: 0 0 480px; /* fixed width; board scrolls beside it, not squeezed */
+	/* Pin the panel in view while the board scrolls horizontally behind it. */
+	position: sticky;
+	right: 0;
+	align-self: stretch;
 	border-left: 1px solid var(--border);
 	display: flex;
 	flex-direction: column;
 	background: var(--bg);
+	z-index: 5;
 }
 .panel.full {
-	width: 100%;
-	min-width: 0;
+	position: static;
+	flex: 1 1 100%;
 	border-left: none;
 }
 .panel .head {
@@ -634,4 +652,126 @@ input {
 .section-head .iconbtn {
 	width: 24px;
 	height: 24px;
+}
+
+/* ---- navbar button: danger variant ---- */
+.navbtn.danger {
+	color: var(--red);
+}
+.navbtn.danger:hover {
+	background: rgba(248, 113, 113, 0.14);
+	color: var(--red);
+}
+
+/* ---- cleanup dialog ---- */
+.cleanup {
+	width: 82vw;
+	height: 78vh;
+	max-width: 1100px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+}
+.cleanup-head {
+	display: flex;
+	align-items: center;
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--border);
+	font-size: 14px;
+}
+.cleanup-body {
+	flex: 1;
+	min-height: 0;
+	display: grid;
+	grid-template-columns: 240px 1fr;
+}
+.cleanup-list {
+	border-right: 1px solid var(--border);
+	overflow: auto;
+	padding: 6px 0;
+}
+.cleanup-item {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	width: 100%;
+	text-align: left;
+	background: transparent;
+	border: none;
+	border-left: 2px solid transparent;
+	border-radius: 0;
+	padding: 8px 14px;
+	cursor: pointer;
+}
+.cleanup-item:hover {
+	background: var(--bg-elev-2);
+}
+.cleanup-item.selected {
+	background: var(--bg-elev-2);
+	border-left: 2px solid #fff;
+}
+.cleanup-item .tname {
+	font-size: 13px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.cleanup-item .sub {
+	font-size: 11px;
+	color: var(--text-dim);
+	font-family: ui-monospace, Menlo, monospace;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.cleanup-main {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	background: var(--bg);
+}
+.cleanup-detail-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--border);
+}
+.cleanup-detail-head .title {
+	font-size: 14px;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* ---- scrollbars: dark + thin ---- */
+* {
+	scrollbar-width: thin;
+	scrollbar-color: #2f2f37 transparent;
+}
+::-webkit-scrollbar {
+	width: 9px;
+	height: 9px;
+}
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+::-webkit-scrollbar-thumb {
+	background: #2f2f37;
+	border-radius: 6px;
+	border: 2px solid transparent;
+	background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: #41414c;
+	background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+	background: transparent;
 }

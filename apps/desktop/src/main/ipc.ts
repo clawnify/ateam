@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
+import { readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { agentCommand, getAgent, listAgents } from "@grove/agents";
 import { repo } from "@grove/db";
 import {
@@ -29,6 +30,28 @@ import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services
 export interface IpcContext {
 	services: Services;
 	sendTaskUpdated: (taskId: string) => void;
+}
+
+/** Project display name from the repo's README H1 (md or HTML), if present. */
+function readmeTitle(repoPath: string): string | null {
+	const clean = (s: string) =>
+		s
+			.replace(/<[^>]+>/g, "")
+			.replace(/[*_`#]/g, "")
+			.trim()
+			.slice(0, 60);
+	for (const f of ["README.md", "readme.md", "Readme.md"]) {
+		try {
+			const txt = readFileSync(join(repoPath, f), "utf8").slice(0, 4000);
+			const md = txt.match(/^#\s+(.+?)\s*$/m);
+			if (md?.[1]) return clean(md[1]) || null;
+			const html = txt.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+			if (html?.[1]) return clean(html[1]) || null;
+		} catch {
+			/* no readme at this casing */
+		}
+	}
+	return null;
 }
 
 function requireTask(services: Services, taskId: string) {
@@ -74,7 +97,7 @@ export function registerIpc(ctx: IpcContext): void {
 		const info = await registerProject(repoPath);
 		const row = repo.upsertProject(db, {
 			repoPath: info.repoPath,
-			name: basename(info.repoPath),
+			name: readmeTitle(info.repoPath) ?? basename(info.repoPath),
 			defaultBranch: info.defaultBranch,
 			githubOwner: info.githubRepo?.owner ?? null,
 			githubName: info.githubRepo?.name ?? null,
@@ -83,7 +106,11 @@ export function registerIpc(ctx: IpcContext): void {
 	});
 
 	ipcMain.handle(CH.projectsList, async () =>
-		repo.listProjects(db).map(toProjectDTO),
+		repo
+			.listProjects(db)
+			.map((p) =>
+				toProjectDTO({ ...p, name: readmeTitle(p.repoPath) ?? p.name }),
+			),
 	);
 
 	ipcMain.handle(CH.projectsRemove, async (_e, id: string) => {
@@ -185,6 +212,52 @@ export function registerIpc(ctx: IpcContext): void {
 		}
 		return { removable, kept };
 	}
+
+	// Candidates for the interactive cleanup dialog: every task that isn't
+	// actively running (idle / stopped / merged / no activity). Each carries a
+	// live terminalId when its PTY is still around, so the dialog can show the
+	// conversation and let the user continue it instead of deleting.
+	ipcMain.handle(
+		CH.tasksCleanupCandidates,
+		async (_e, projectId: string) => {
+			const out: {
+				id: string;
+				name: string;
+				branch: string;
+				worktreePath: string;
+				reason: string;
+				terminalId: string | null;
+				agentStatus: string | null;
+			}[] = [];
+			for (const task of repo.listTasks(db, projectId)) {
+				if (
+					task.agentStatus === "running" ||
+					task.agentStatus === "awaiting_input"
+				) {
+					continue;
+				}
+				const live = repo
+					.listSessionsByTask(db, task.id)
+					.find((s) => services.pty.has(s.terminalId));
+				const reason =
+					task.column === "merged"
+						? "merged"
+						: task.agentStatus === "idle" || task.agentStatus === "stopped"
+							? "agent idle"
+							: "no recent activity";
+				out.push({
+					id: task.id,
+					name: task.name,
+					branch: task.branch,
+					worktreePath: task.worktreePath,
+					reason,
+					terminalId: live?.terminalId ?? null,
+					agentStatus: task.agentStatus ?? null,
+				});
+			}
+			return out;
+		},
+	);
 
 	ipcMain.handle(CH.tasksCleanupPreview, async (_e, projectId: string) => {
 		const { removable, kept } = await classifyForCleanup(projectId);
@@ -357,7 +430,11 @@ export function registerIpc(ctx: IpcContext): void {
 				env,
 			});
 
-			repo.updateTask(db, task.id, { column: "running", agentStatus: "running" });
+			repo.updateTask(db, task.id, {
+				column: "running",
+				agentStatus: "running",
+				agentId: agent.id,
+			});
 			sendTaskUpdated(task.id);
 			return { terminalId };
 		},

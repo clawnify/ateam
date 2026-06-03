@@ -25,6 +25,8 @@ const api: GroveApi = {
 		cleanupPreview: (projectId) =>
 			ipcRenderer.invoke(CH.tasksCleanupPreview, projectId),
 		cleanup: (projectId) => ipcRenderer.invoke(CH.tasksCleanup, projectId),
+		cleanupCandidates: (projectId) =>
+			ipcRenderer.invoke(CH.tasksCleanupCandidates, projectId),
 	},
 	git: {
 		commit: (taskId, message) =>

@@ -39,6 +39,8 @@ import type {
 	ProjectDTO,
 	TaskDTO,
 } from "../../shared/types";
+import { AgentIcon } from "./components/AgentIcon";
+import { CleanupDialog } from "./components/CleanupDialog";
 import { IconButton } from "./components/IconButton";
 import { Menu } from "./components/Menu";
 import { TerminalView } from "./components/Terminal";
@@ -86,6 +88,7 @@ export function App() {
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
+	const [cleanupOpen, setCleanupOpen] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [info, setInfo] = useState<string | null>(null);
 	const [termByTask, setTermByTask] = useState<Record<string, string>>({});
@@ -172,29 +175,9 @@ export function App() {
 			setSelectedTaskId(task.id);
 		});
 
-	const cleanup = () =>
-		run(async () => {
-			if (!activeProjectId) return;
-			const preview = await window.grove.tasks.cleanupPreview(activeProjectId);
-			if (preview.removed.length === 0) {
-				setInfo(
-					`Nothing to clean — ${preview.kept.length} task(s) kept (unmerged, active, or with changes).`,
-				);
-				return;
-			}
-			const ok = await confirm(
-				`Remove ${preview.removed.length} merged worktree(s)?`,
-				`Removing: ${preview.removed
-					.map((r) => r.name)
-					.join(", ")}. Keeping ${preview.kept.length} (not merged, agent active, or uncommitted changes).`,
-			);
-			if (!ok) return;
-			const report = await window.grove.tasks.cleanup(activeProjectId);
-			await loadTasks(activeProjectId);
-			setInfo(
-				`Cleaned ${report.removed.length} worktree(s); kept ${report.kept.length}.`,
-			);
-		});
+	const cleanup = () => {
+		if (activeProjectId) setCleanupOpen(true);
+	};
 
 	return (
 		<div className="app">
@@ -272,7 +255,13 @@ export function App() {
 									className={`tasknode ${t.id === selectedTaskId ? "selected" : ""}`}
 									onClick={() => openTask(t)}
 								>
-									<Icon className="ticon" size={14} strokeWidth={1.75} />
+									{t.agentId ? (
+										<span className="ticon">
+											<AgentIcon agentId={t.agentId} size={14} />
+										</span>
+									) : (
+										<Icon className="ticon" size={14} strokeWidth={1.75} />
+									)}
 									<span className="tname">{t.name}</span>
 									{t.agentStatus && (
 										<span className={`tstatus ${t.agentStatus}`} />
@@ -328,6 +317,7 @@ export function App() {
 									tasks={activeTasks}
 									selectedId={selectedTaskId}
 									onSelect={selectFromBoard}
+									onDeselect={() => setSelectedTaskId(null)}
 								/>
 							)}
 							{selectedTask && (
@@ -342,6 +332,7 @@ export function App() {
 									}
 									run={run}
 									ask={ask}
+									confirm={confirm}
 									reload={() => activeProjectId && loadTasks(activeProjectId)}
 									onClose={() => setSelectedTaskId(null)}
 								/>
@@ -353,6 +344,14 @@ export function App() {
 				</div>
 			</main>
 
+			{cleanupOpen && activeProjectId && (
+				<CleanupDialog
+					projectId={activeProjectId}
+					confirm={confirm}
+					reload={() => activeProjectId && loadTasks(activeProjectId)}
+					onClose={() => setCleanupOpen(false)}
+				/>
+			)}
 			{promptUi}
 			{error && (
 				<div className="toast" onClick={() => setError(null)}>
@@ -372,13 +371,16 @@ function Board({
 	tasks,
 	selectedId,
 	onSelect,
+	onDeselect,
 }: {
 	tasks: TaskDTO[];
 	selectedId: string | null;
 	onSelect: (id: string) => void;
+	onDeselect: () => void;
 }) {
 	return (
-		<div className="board">
+		// Clicking empty board space deselects; card clicks stopPropagation.
+		<div className="board" onClick={onDeselect}>
 			{COLUMNS.map((col) => {
 				const items = tasks.filter((t) => t.column === col.key);
 				return (
@@ -390,7 +392,10 @@ function Board({
 							<div
 								key={t.id}
 								className={`card ${t.id === selectedId ? "selected" : ""}`}
-								onClick={() => onSelect(t.id)}
+								onClick={(e) => {
+									e.stopPropagation();
+									onSelect(t.id);
+								}}
 							>
 								{t.agentStatus && <span className={`ring ${t.agentStatus}`} />}
 								<div className="name">{t.name}</div>
@@ -404,6 +409,11 @@ function Board({
 									)}
 									{t.prNumber && <span>PR #{t.prNumber}</span>}
 								</div>
+								{t.agentId && (
+									<span className="card-agent">
+										<AgentIcon agentId={t.agentId} size={15} />
+									</span>
+								)}
 							</div>
 						))}
 					</div>
@@ -422,6 +432,7 @@ function TaskPanel({
 	setTerminal,
 	run,
 	ask,
+	confirm,
 	reload,
 	onClose,
 }: {
@@ -433,6 +444,7 @@ function TaskPanel({
 	setTerminal: (tid: string) => void;
 	run: (fn: () => Promise<void>) => Promise<void>;
 	ask: (title: string, initial?: string) => Promise<string | null>;
+	confirm: (title: string, body?: string) => Promise<boolean>;
 	reload: () => void;
 	onClose: () => void;
 }) {
@@ -449,6 +461,18 @@ function TaskPanel({
 	useEffect(() => {
 		refreshDiff();
 	}, [refreshDiff]);
+
+	// Re-attach to a surviving daemon session when (re)opening this task.
+	useEffect(() => {
+		if (terminalId) return;
+		let cancelled = false;
+		void window.grove.pty.listForTask(task.id).then((sessions) => {
+			if (!cancelled && sessions[0]) setTerminal(sessions[0].terminalId);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [task.id, terminalId, setTerminal]);
 
 	const launch = (yolo: boolean) =>
 		run(async () => {
@@ -566,15 +590,41 @@ function TaskPanel({
 							label: "Remove task & worktree",
 							icon: Trash2,
 							danger: true,
-							onClick: () =>
-								run(async () => {
+							onClick: async () => {
+								try {
 									await window.grove.tasks.remove({
 										id: task.id,
 										deleteBranch: true,
 									});
-									onClose();
-									reload();
-								}),
+								} catch (e) {
+									const msg = e instanceof Error ? e.message : String(e);
+									if (
+										/modified or untracked|not fully merged|use --force/i.test(
+											msg,
+										)
+									) {
+										const ok = await confirm(
+											"Force delete?",
+											"This worktree has uncommitted/untracked changes or an unmerged branch. Delete it anyway?",
+										);
+										if (!ok) return;
+										await run(() =>
+											window.grove.tasks.remove({
+												id: task.id,
+												deleteBranch: true,
+												force: true,
+											}),
+										);
+									} else {
+										await run(async () => {
+											throw e;
+										});
+										return;
+									}
+								}
+								onClose();
+								reload();
+							},
 						},
 					]}
 				/>

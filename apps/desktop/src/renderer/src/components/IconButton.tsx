@@ -28,13 +28,15 @@ export function IconButton({
 	size = 16,
 }: IconButtonProps) {
 	return (
+		// Native title tooltips: they can't overflow the window edge or create
+		// scrollbars the way absolutely-positioned CSS tooltips can.
 		<button
 			type="button"
 			className={`iconbtn ${variant}`}
 			onClick={onClick}
 			disabled={disabled}
 			aria-label={label}
-			data-tip={shortcut ? `${label}  ${shortcut}` : label}
+			title={shortcut ? `${label} (${shortcut})` : label}
 		>
 			<Icon size={size} strokeWidth={1.75} />
 		</button>
