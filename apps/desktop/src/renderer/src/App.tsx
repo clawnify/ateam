@@ -932,14 +932,16 @@ function MissionControl({ tasks }: { tasks: TaskDTO[] }) {
 	return (
 		<div className="mc">
 			{tiles.map(({ task, terminalId }) => (
-				<div
-					key={terminalId}
-					className={`tile ${task.agentStatus === "awaiting_input" ? "attention" : ""}`}
-				>
+				<div key={terminalId} className="tile">
 					<div className="bar">
-						{task.agentStatus && <span className={`ring ${task.agentStatus}`} />}
 						<span>{task.name}</span>
 						<span className="muted">· {task.branch}</span>
+						{task.agentStatus && (
+							<span
+								className={`tstatus ${task.agentStatus}`}
+								style={{ marginLeft: "auto" }}
+							/>
+						)}
 					</div>
 					<TerminalView terminalId={terminalId} />
 				</div>

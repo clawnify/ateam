@@ -179,7 +179,7 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.tasknode .tstatus {
+.tstatus {
 	width: 7px;
 	height: 7px;
 	border-radius: 50%;
@@ -572,10 +572,6 @@ input {
 	display: flex;
 	flex-direction: column;
 	background: #000;
-}
-.mc .tile.attention {
-	border-color: var(--amber);
-	box-shadow: 0 0 0 1px var(--amber);
 }
 .mc .tile .bar {
 	height: 26px;
