@@ -5,11 +5,17 @@
       <stop offset="0.55" stop-color="#222227"/>
       <stop offset="1" stop-color="#141417"/>
     </linearGradient>
+    <filter id="ds" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
   </defs>
-  <rect x="0" y="0" width="1024" height="1024" rx="230" ry="230" fill="url(#bg)"/>
 
-  <!-- Minimal mission-control tiling: one wide pane spanning two rows, two squares below. -->
-  <g>
+  <!-- Apple icon grid: the squircle is 824x824 centered on the 1024 canvas
+       (built-in transparent margin), with a subtle baked drop shadow — this is
+       why system icons all read as the same visual size. -->
+  <g transform="translate(100,100) scale(0.8046875)" filter="url(#ds)">
+    <rect x="0" y="0" width="1024" height="1024" rx="230" ry="230" fill="url(#bg)"/>
+    <!-- Minimal mission-control tiling: one wide pane spanning two rows, two squares below. -->
     <rect x="252" y="197" width="520" height="360" rx="4" fill="#e6e6ea"/>
     <rect x="252" y="575" width="251" height="251" rx="4" fill="#ffffff" opacity="0.78"/>
     <rect x="521" y="575" width="251" height="251" rx="4" fill="#ffffff" opacity="0.6"/>

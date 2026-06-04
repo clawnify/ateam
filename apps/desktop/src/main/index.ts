@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createDb, repo } from "@ateam/db";
@@ -25,6 +26,29 @@ function mapEventToColumn(eventType: string): KanbanColumn {
 	if (eventType === "PermissionRequest") return "needs_attention";
 	if (eventType === "Stop") return "review";
 	return "running";
+}
+
+/**
+ * GUI apps on macOS launch with a minimal PATH (/usr/bin:/bin:…), so agent
+ * binaries in ~/.local/bin or /opt/homebrew/bin look "not installed" and
+ * can't be spawned. Resolve the user's real login-shell PATH once at startup
+ * and adopt it — the availability probe, PTY env, and the daemon all inherit
+ * process.env.
+ */
+function adoptLoginShellPath(): void {
+	if (process.platform !== "darwin") return;
+	try {
+		const shell = process.env.SHELL || "/bin/zsh";
+		const out = execFileSync(
+			shell,
+			["-ilc", 'printf "__ATEAM_PATH__%s__END__" "$PATH"'],
+			{ encoding: "utf8", timeout: 8000 },
+		);
+		const m = out.match(/__ATEAM_PATH__([\s\S]*?)__END__/);
+		if (m?.[1]) process.env.PATH = m[1];
+	} catch (err) {
+		console.warn("[ateam] could not resolve login-shell PATH:", err);
+	}
 }
 
 function sendTaskUpdated(taskId: string): void {
@@ -122,6 +146,7 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
 	app.setName(APP_NAME);
+	adoptLoginShellPath();
 
 	// Show the app icon in the macOS dock during dev (packaged builds use the
 	// .icns in build/). Best-effort: the icon lives at build/icon.png.
