@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./assets/icon.png" alt="Ateam app icon" width="128" />
+</p>
+
 <h1 align="center">Ateam</h1>
 
 <p align="center">
@@ -9,6 +13,14 @@
   <a href="https://github.com/clawnify/ateam/releases/latest/download/Ateam-macos.dmg">
     <img src="./assets/macos-badge.svg" alt="Download app for macOS" width="220" />
   </a>
+</p>
+
+<p align="center">
+  <img src="./assets/screenshot-board.png" alt="Ateam — kanban board with tasks across Backlog, In Progress, Needs You, Review, and Done" width="900" />
+</p>
+
+<p align="center">
+  <img src="./assets/screenshot-changes.png" alt="Ateam — task panel with the changes view: file list and a GitHub-style diff beside the board" width="900" />
 </p>
 
 A lean, **local-first** desktop app to orchestrate a crew of AI coding agents
