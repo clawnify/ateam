@@ -394,30 +394,55 @@ input {
 	background: #000;
 	padding: 6px;
 }
-/* panel body: terminal/diff on the left, changes column on the right */
+/* panel body: terminal, or the changes view (files left · diff right) */
 .panel-body {
 	flex: 1;
 	min-height: 0;
 	display: flex;
 }
-.panel-main {
-	flex: 1;
-	min-width: 0;
-	display: flex;
-	flex-direction: column;
-}
 .term-wrap {
 	flex: 1;
+	min-width: 0;
 	min-height: 0;
 	display: flex;
 	flex-direction: column;
 }
 
-/* changes column (GitHub-Desktop-style file list) */
+/* +N -N stat on the right of the actions bar; opens the changes view */
+.diffstat {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	padding: 4px 8px;
+	cursor: pointer;
+	font-family: ui-monospace, Menlo, monospace;
+	font-size: 11.5px;
+}
+.diffstat:hover,
+.diffstat.active {
+	background: var(--bg-elev-2);
+}
+.diffstat .add {
+	color: var(--green);
+}
+.diffstat .del {
+	color: var(--red);
+}
+
+/* changes view: GitHub-Desktop layout — file list left, diff right */
+.changes-view {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+}
 .changes {
 	flex: 0 0 220px;
 	min-width: 0;
-	border-left: 1px solid var(--border);
+	border-right: 1px solid var(--border);
 	overflow-y: auto;
 	font-size: 12px;
 	display: flex;
@@ -425,6 +450,12 @@ input {
 }
 .panel:not(.full) .changes {
 	flex-basis: 156px;
+}
+.changes-diff {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
 }
 .changes-head {
 	display: flex;

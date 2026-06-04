@@ -585,10 +585,12 @@ function TaskPanel({
 		agents.find((a) => a.available)?.id ?? "claude",
 	);
 	const [diff, setDiff] = useState<DiffResultDTO | null>(null);
+	const [changesOpen, setChangesOpen] = useState(false);
 	const [viewFile, setViewFile] = useState<string | null>(null);
 
-	// Selecting another task closes any open file diff.
+	// Selecting another task closes the changes view.
 	useEffect(() => {
+		setChangesOpen(false);
 		setViewFile(null);
 	}, [task.id]);
 
@@ -639,6 +641,18 @@ function TaskPanel({
 			await window.grove.git.commit(task.id, msg);
 			refreshDiff();
 		});
+
+	const additions = diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0;
+	const deletions = diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0;
+	const toggleChanges = () => {
+		if (changesOpen) {
+			setChangesOpen(false);
+			return;
+		}
+		refreshDiff();
+		setChangesOpen(true);
+		if (!viewFile && diff?.files[0]) setViewFile(diff.files[0].path);
+	};
 
 	return (
 		<section className={`panel ${mode === "full" ? "full" : ""}`}>
@@ -773,72 +787,92 @@ function TaskPanel({
 						},
 					]}
 				/>
+
+				<span className="spacer" />
+				<button
+					type="button"
+					className={`diffstat ${changesOpen ? "active" : ""}`}
+					title={changesOpen ? "Back to terminal" : "Show changes"}
+					onClick={toggleChanges}
+				>
+					<span className="add">+{additions}</span>
+					<span className="del">-{deletions}</span>
+				</button>
 			</div>
 
 			<div className="panel-body">
-				<div className="panel-main">
-					{/* Keep the terminal mounted (xterm state survives) while a diff
-					    is open — just hide it. */}
-					<div
-						className="term-wrap"
-						style={{ display: viewFile ? "none" : "flex" }}
-					>
-						{terminalId ? (
-							<TerminalView terminalId={terminalId} />
-						) : (
-							<div
-								className="term"
-								style={{ display: "grid", placeItems: "center" }}
-							>
-								<span className="muted">
-									Launch an agent or shell to start a terminal
-								</span>
-							</div>
-						)}
-					</div>
-					{viewFile && (
-						<FileDiffView
-							taskId={task.id}
-							file={viewFile}
-							split={mode === "full"}
-							onClose={() => setViewFile(null)}
-						/>
-					)}
-				</div>
-
-				<div className="changes">
-					<div className="changes-head">
-						<strong>Changes</strong>
-						<IconButton
-							icon={RotateCw}
-							label="Refresh changes"
-							onClick={refreshDiff}
-						/>
-					</div>
-					{diff?.files.length ? (
-						diff.files.map((f) => (
-							<button
-								type="button"
-								key={f.path}
-								className={`file ${viewFile === f.path ? "selected" : ""}`}
-								title={f.path}
-								onClick={() =>
-									setViewFile(viewFile === f.path ? null : f.path)
-								}
-							>
-								<span className="fpath">{f.path}</span>
-								<span className="fstat">
-									<span className="add">+{f.additions}</span>{" "}
-									<span className="del">-{f.deletions}</span>
-								</span>
-							</button>
-						))
+				{/* Keep the terminal mounted (xterm state survives) while the
+				    changes view is open — just hide it. */}
+				<div
+					className="term-wrap"
+					style={{ display: changesOpen ? "none" : "flex" }}
+				>
+					{terminalId ? (
+						<TerminalView terminalId={terminalId} />
 					) : (
-						<div className="muted" style={{ padding: "4px 10px" }}>
-							No changes
+						<div
+							className="term"
+							style={{ display: "grid", placeItems: "center" }}
+						>
+							<span className="muted">
+								Launch an agent or shell to start a terminal
+							</span>
 						</div>
 					)}
 				</div>
+
+				{changesOpen && (
+					<div className="changes-view">
+						<div className="changes">
+							<div className="changes-head">
+								<strong>Changes</strong>
+								<IconButton
+									icon={RotateCw}
+									label="Refresh changes"
+									onClick={refreshDiff}
+								/>
+							</div>
+							{diff?.files.length ? (
+								diff.files.map((f) => (
+									<button
+										type="button"
+										key={f.path}
+										className={`file ${viewFile === f.path ? "selected" : ""}`}
+										title={f.path}
+										onClick={() => setViewFile(f.path)}
+									>
+										<span className="fpath">{f.path}</span>
+										<span className="fstat">
+											<span className="add">+{f.additions}</span>{" "}
+											<span className="del">-{f.deletions}</span>
+										</span>
+									</button>
+								))
+							) : (
+								<div className="muted" style={{ padding: "4px 10px" }}>
+									No changes
+								</div>
+							)}
+						</div>
+						<div className="changes-diff">
+							{viewFile ? (
+								<FileDiffView
+									taskId={task.id}
+									file={viewFile}
+									split={mode === "full"}
+									onClose={() => setChangesOpen(false)}
+								/>
+							) : (
+								<div
+									className="muted"
+									style={{ display: "grid", placeItems: "center", flex: 1 }}
+								>
+									Select a file to see its diff
+								</div>
+							)}
+						</div>
+					</div>
+				)}
 			</div>
 		</section>
 	);
