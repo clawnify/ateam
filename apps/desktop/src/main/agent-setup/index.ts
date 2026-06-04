@@ -92,9 +92,15 @@ export async function ensureClaudeHooks(
 	const map: Record<string, string> = {
 		SessionStart: "Start",
 		Stop: "Stop",
+		// Dedicated dialog hook — fires the moment a permission prompt appears
+		// (Notification may stay quiet while the terminal has focus).
+		PermissionRequest: "PermissionRequest",
 		Notification: "PermissionRequest",
 		PreToolUse: "Working",
-		UserPromptSubmit: "Working",
+		// Typing a reply is the only unambiguous "user responded" signal —
+		// subagent tool-use also fires PreToolUse, so Working can't clear
+		// needs_attention without masking pending questions.
+		UserPromptSubmit: "UserReply",
 	};
 
 	settings.hooks ??= {};
@@ -142,7 +148,7 @@ export async function ensureCodexHooks(
 		Stop: "Stop",
 		PermissionRequest: "PermissionRequest",
 		PreToolUse: "Working",
-		UserPromptSubmit: "Working",
+		UserPromptSubmit: "UserReply",
 	};
 
 	settings.hooks ??= {};

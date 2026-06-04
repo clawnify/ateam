@@ -207,6 +207,12 @@ async function initServices(): Promise<Services> {
 		const task = repo.getTask(db, session.taskId);
 		if (task) {
 			const column = mapEventToColumn(e.eventType);
+			// Subagents fire PreToolUse too, so a Working event must never mask a
+			// pending question — only an explicit user reply (UserReply), Stop, or
+			// a fresh Start may move a task out of needs_attention.
+			if (e.eventType === "Working" && task.column === "needs_attention") {
+				return;
+			}
 			// Skip no-op Working updates so the renderer isn't pinged per tool use.
 			if (
 				e.eventType === "Working" &&
