@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createDb, repo } from "@ateam/db";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, dialog } from "electron";
 import { autoUpdater } from "electron-updater";
 import { type AgentStatus, type KanbanColumn, CH } from "../shared/types";
 import { ensureNotifyScript } from "./agent-setup";
@@ -60,15 +61,81 @@ function adoptLoginShellPath(): void {
 }
 
 /**
- * Auto-update from GitHub Releases (electron-updater): check at launch and
- * every 4 hours; downloads in the background and notifies — the update
- * installs when the app quits. No more manual trips to the repo.
+ * Auto-update from GitHub Releases (electron-updater), Sparkle-style: ask
+ * before downloading (with release notes; "Skip This Version" is remembered),
+ * then offer "Restart Now" once downloaded — otherwise it installs on quit.
+ * Checks at launch and every 4 hours.
  */
 function setupAutoUpdate(): void {
 	if (!app.isPackaged) return;
+	autoUpdater.autoDownload = false;
+
+	const skipFile = join(app.getPath("userData"), "skipped-version.txt");
+	const skippedVersion = (): string => {
+		try {
+			return readFileSync(skipFile, "utf8").trim();
+		} catch {
+			return "";
+		}
+	};
+	// "Remind Me Later" = stay quiet until the next app launch.
+	let snoozed = false;
+
+	autoUpdater.on("update-available", (info) => {
+		if (snoozed || info.version === skippedVersion()) return;
+		const notes =
+			typeof info.releaseNotes === "string"
+				? info.releaseNotes.replace(/<[^>]+>/g, "").trim()
+				: "";
+		void dialog
+			.showMessageBox({
+				type: "info",
+				title: "Software Update",
+				message: `A new version of Ateam is available!`,
+				detail: `Ateam ${info.version} is now available — you have ${app.getVersion()}. Would you like to download it now?${notes ? `\n\n${notes.slice(0, 1500)}` : ""}`,
+				buttons: ["Install Update", "Remind Me Later", "Skip This Version"],
+				defaultId: 0,
+				cancelId: 1,
+			})
+			.then(({ response }) => {
+				if (response === 0) {
+					void autoUpdater
+						.downloadUpdate()
+						.catch((err) =>
+							console.warn("[ateam] update download failed:", err),
+						);
+				} else if (response === 1) {
+					snoozed = true;
+				} else {
+					try {
+						writeFileSync(skipFile, info.version, "utf8");
+					} catch {
+						/* best-effort */
+					}
+				}
+			});
+	});
+
+	autoUpdater.on("update-downloaded", (info) => {
+		void dialog
+			.showMessageBox({
+				type: "info",
+				title: "Update Ready",
+				message: `Ateam ${info.version} has been downloaded.`,
+				detail:
+					"Restart now to apply it — or keep working, and it will install when you quit. Agent terminals survive the restart.",
+				buttons: ["Restart Now", "Later"],
+				defaultId: 0,
+				cancelId: 1,
+			})
+			.then(({ response }) => {
+				if (response === 0) autoUpdater.quitAndInstall();
+			});
+	});
+
 	const check = () =>
 		autoUpdater
-			.checkForUpdatesAndNotify()
+			.checkForUpdates()
 			.catch((err) => console.warn("[ateam] update check failed:", err));
 	check();
 	setInterval(check, 4 * 60 * 60 * 1000);
