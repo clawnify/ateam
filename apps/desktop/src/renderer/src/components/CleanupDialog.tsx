@@ -26,7 +26,7 @@ export function CleanupDialog({
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
-		void window.grove.tasks.cleanupCandidates(projectId).then((list) => {
+		void window.ateam.tasks.cleanupCandidates(projectId).then((list) => {
 			setItems(list);
 			setSelectedId(list[0]?.id ?? null);
 			setLoading(false);
@@ -44,7 +44,7 @@ export function CleanupDialog({
 
 	const del = async (item: CleanupCandidate) => {
 		try {
-			await window.grove.tasks.remove({ id: item.id, deleteBranch: true });
+			await window.ateam.tasks.remove({ id: item.id, deleteBranch: true });
 		} catch (e) {
 			// git refuses to remove a dirty/unmerged worktree without --force.
 			const msg = e instanceof Error ? e.message : String(e);
@@ -55,7 +55,7 @@ export function CleanupDialog({
 				);
 				if (!ok) return;
 				try {
-					await window.grove.tasks.remove({
+					await window.ateam.tasks.remove({
 						id: item.id,
 						deleteBranch: true,
 						force: true,

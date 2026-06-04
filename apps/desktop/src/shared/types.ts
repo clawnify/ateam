@@ -160,8 +160,8 @@ export interface PtyExitEvent {
 	exitCode: number;
 }
 
-// ---- the API surface exposed on window.grove ----
-export interface GroveApi {
+// ---- the API surface exposed on window.ateam ----
+export interface AteamApi {
 	projects: {
 		pick(): Promise<string | null>;
 		/** `init: true` runs `git init` + initial commit first (after asking). */

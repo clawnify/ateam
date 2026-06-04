@@ -16,7 +16,7 @@ export interface TempRepo {
 
 async function configIdentity(git: SimpleGit): Promise<void> {
 	await git.addConfig("user.email", "tester@ateam.dev");
-	await git.addConfig("user.name", "Grove Tester");
+	await git.addConfig("user.name", "Ateam Tester");
 	await git.addConfig("commit.gpgsign", "false");
 	await git.addConfig("init.defaultBranch", "main");
 }
@@ -27,7 +27,7 @@ async function configIdentity(git: SimpleGit): Promise<void> {
  * we care about is git's own behavior — mocking would prove nothing.
  */
 export async function makeTempRepoPair(): Promise<TempRepo> {
-	const dir = await mkdtemp(join(tmpdir(), "grove-git-"));
+	const dir = await mkdtemp(join(tmpdir(), "ateam-git-"));
 	const origin = join(dir, "origin.git");
 	await simpleGit().raw(["init", "--bare", "-b", "main", origin]);
 

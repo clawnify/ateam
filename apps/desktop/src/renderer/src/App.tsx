@@ -126,20 +126,20 @@ export function App() {
 	}, []);
 
 	const loadTasks = useCallback(async (projectId: string) => {
-		const list = await window.grove.tasks.list(projectId);
+		const list = await window.ateam.tasks.list(projectId);
 		setTasksByProject((prev) => ({ ...prev, [projectId]: list }));
 	}, []);
 
 	const loadProjects = useCallback(async () => {
-		const list = await window.grove.projects.list();
+		const list = await window.ateam.projects.list();
 		setProjects(list);
 		setActiveProjectId((cur) => cur ?? list[0]?.id ?? null);
 	}, []);
 
 	useEffect(() => {
 		void loadProjects();
-		void window.grove.agents.list().then(setAgents);
-		const off = window.grove.events.onTaskUpdated((updated) => {
+		void window.ateam.agents.list().then(setAgents);
+		const off = window.ateam.events.onTaskUpdated((updated) => {
 			setTasksByProject((prev) => {
 				const next: Record<string, TaskDTO[]> = {};
 				for (const [pid, list] of Object.entries(prev)) {
@@ -221,11 +221,11 @@ export function App() {
 
 	const addProject = () =>
 		run(async () => {
-			const path = await window.grove.projects.pick();
+			const path = await window.ateam.projects.pick();
 			if (!path) return;
 			let proj: ProjectDTO;
 			try {
-				proj = await window.grove.projects.register(path);
+				proj = await window.ateam.projects.register(path);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
 				if (!/not a git repository/i.test(msg)) throw e;
@@ -235,7 +235,7 @@ export function App() {
 					"This folder isn't a git repository yet. Initialize one here? Ateam will run git init, add a starter .gitignore (if none exists), and make an initial commit of the current files.",
 				);
 				if (!ok) return;
-				proj = await window.grove.projects.register(path, { init: true });
+				proj = await window.ateam.projects.register(path, { init: true });
 			}
 			await loadProjects();
 			selectProject(proj.id);
@@ -246,7 +246,7 @@ export function App() {
 			if (!activeProjectId) return;
 			const name = await ask("New task name");
 			if (!name) return;
-			const task = await window.grove.tasks.create({
+			const task = await window.ateam.tasks.create({
 				projectId: activeProjectId,
 				name,
 			});
@@ -608,8 +608,8 @@ function TaskPanel({
 	}, [task.id]);
 
 	const refreshDiff = useCallback(() => {
-		void window.grove.git.diff(task.id).then(setDiff);
-		void window.grove.git.status(task.id);
+		void window.ateam.git.diff(task.id).then(setDiff);
+		void window.ateam.git.status(task.id);
 	}, [task.id]);
 
 	useEffect(() => {
@@ -620,7 +620,7 @@ function TaskPanel({
 	useEffect(() => {
 		if (terminalId) return;
 		let cancelled = false;
-		void window.grove.pty.listForTask(task.id).then((sessions) => {
+		void window.ateam.pty.listForTask(task.id).then((sessions) => {
 			if (!cancelled && sessions[0]) setTerminal(sessions[0].terminalId);
 		});
 		return () => {
@@ -630,7 +630,7 @@ function TaskPanel({
 
 	const launch = (yolo: boolean, resume = false) =>
 		run(async () => {
-			const { terminalId: tid } = await window.grove.pty.spawnAgent({
+			const { terminalId: tid } = await window.ateam.pty.spawnAgent({
 				taskId: task.id,
 				agentId,
 				yolo,
@@ -641,7 +641,7 @@ function TaskPanel({
 
 	const shell = () =>
 		run(async () => {
-			const { terminalId: tid } = await window.grove.pty.spawnShell({
+			const { terminalId: tid } = await window.ateam.pty.spawnShell({
 				taskId: task.id,
 			});
 			setTerminal(tid);
@@ -651,7 +651,7 @@ function TaskPanel({
 		run(async () => {
 			const msg = await ask("Commit message");
 			if (!msg) return;
-			await window.grove.git.commit(task.id, msg);
+			await window.ateam.git.commit(task.id, msg);
 			refreshDiff();
 		});
 
@@ -734,14 +734,14 @@ function TaskPanel({
 				<IconButton
 					icon={ArrowUp}
 					label="Push branch to origin"
-					onClick={() => run(() => window.grove.git.push(task.id))}
+					onClick={() => run(() => window.ateam.git.push(task.id))}
 				/>
 				<IconButton
 					icon={ArrowDownToLine}
 					label="Update from base branch"
 					onClick={() =>
 						run(async () => {
-							await window.grove.git.update(task.id);
+							await window.ateam.git.update(task.id);
 							refreshDiff();
 						})
 					}
@@ -751,7 +751,7 @@ function TaskPanel({
 					label="Merge via PR (squash) + update local main"
 					onClick={() =>
 						run(async () => {
-							await window.grove.git.merge(task.id, "squash");
+							await window.ateam.git.merge(task.id, "squash");
 							refreshDiff();
 						})
 					}
@@ -764,7 +764,7 @@ function TaskPanel({
 							danger: true,
 							onClick: async () => {
 								try {
-									await window.grove.tasks.remove({
+									await window.ateam.tasks.remove({
 										id: task.id,
 										deleteBranch: true,
 									});
@@ -781,7 +781,7 @@ function TaskPanel({
 										);
 										if (!ok) return;
 										await run(() =>
-											window.grove.tasks.remove({
+											window.ateam.tasks.remove({
 												id: task.id,
 												deleteBranch: true,
 												force: true,
@@ -903,7 +903,7 @@ function MissionControl({ tasks }: { tasks: TaskDTO[] }) {
 		const refresh = async () => {
 			const collected: { task: TaskDTO; terminalId: string }[] = [];
 			for (const t of tasksRef.current) {
-				const sessions = await window.grove.pty.listForTask(t.id);
+				const sessions = await window.ateam.pty.listForTask(t.id);
 				for (const s of sessions)
 					collected.push({ task: t, terminalId: s.terminalId });
 			}

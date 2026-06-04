@@ -24,7 +24,7 @@ export function FileDiffView({
 	useEffect(() => {
 		let on = true;
 		setText(null);
-		void window.grove.git.fileDiff(taskId, file).then((t) => {
+		void window.ateam.git.fileDiff(taskId, file).then((t) => {
 			if (on) setText(t);
 		});
 		return () => {

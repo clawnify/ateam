@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import {
-	type GroveApi,
+	type AteamApi,
 	type KanbanColumn,
 	type MergeStrategy,
 	type PtyDataEvent,
@@ -9,7 +9,7 @@ import {
 	CH,
 } from "../shared/types";
 
-const api: GroveApi = {
+const api: AteamApi = {
 	projects: {
 		pick: () => ipcRenderer.invoke(CH.projectsPick),
 		register: (repoPath, opts) =>
@@ -74,4 +74,4 @@ const api: GroveApi = {
 	},
 };
 
-contextBridge.exposeInMainWorld("grove", api);
+contextBridge.exposeInMainWorld("ateam", api);

@@ -1,8 +1,8 @@
-import type { GroveApi } from "../../shared/types";
+import type { AteamApi } from "../../shared/types";
 
 declare global {
 	interface Window {
-		grove: GroveApi;
+		ateam: AteamApi;
 	}
 }
 

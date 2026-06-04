@@ -36,23 +36,23 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		const focusTerm = () => term.focus();
 		el.addEventListener("mousedown", focusTerm);
 
-		const offData = window.grove.pty.onData((e) => {
+		const offData = window.ateam.pty.onData((e) => {
 			if (e.terminalId === terminalId) term.write(e.data);
 		});
 
 		// Replay recent output after attaching the live listener.
-		void window.grove.pty.snapshot(terminalId).then((buf) => {
+		void window.ateam.pty.snapshot(terminalId).then((buf) => {
 			if (buf) term.write(buf);
 		});
 
 		const disposeInput = term.onData((d) =>
-			window.grove.pty.write(terminalId, d),
+			window.ateam.pty.write(terminalId, d),
 		);
 
 		const syncSize = () => {
 			try {
 				fit.fit();
-				window.grove.pty.resize(terminalId, term.cols, term.rows);
+				window.ateam.pty.resize(terminalId, term.cols, term.rows);
 			} catch {
 				/* ignore */
 			}

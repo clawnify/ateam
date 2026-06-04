@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { type GroveDb, repo } from "../src/index";
+import { type AteamDb, repo } from "../src/index";
 import { createTestDb } from "./helpers/test-db";
 
-let db: GroveDb;
+let db: AteamDb;
 beforeEach(() => {
 	db = createTestDb();
 });

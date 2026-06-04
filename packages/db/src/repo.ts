@@ -1,5 +1,5 @@
 import { desc, eq } from "drizzle-orm";
-import type { GroveDb } from "./types";
+import type { AteamDb } from "./types";
 import {
 	agentEvents,
 	agentSessions,
@@ -12,12 +12,12 @@ import {
 } from "./schema";
 
 /**
- * Typed data-access layer over the Grove db. Pure functions taking a `GroveDb`
+ * Typed data-access layer over the Ateam db. Pure functions taking a `AteamDb`
  * so the same code serves the Electron main process and the in-memory tests.
  */
 export const repo = {
 	// ---- projects ----
-	upsertProject(db: GroveDb, p: NewProject) {
+	upsertProject(db: AteamDb, p: NewProject) {
 		const existing = db
 			.select()
 			.from(projects)
@@ -33,7 +33,7 @@ export const repo = {
 		return db.insert(projects).values(p).returning().get();
 	},
 
-	listProjects(db: GroveDb) {
+	listProjects(db: AteamDb) {
 		return db
 			.select()
 			.from(projects)
@@ -41,20 +41,20 @@ export const repo = {
 			.all();
 	},
 
-	getProject(db: GroveDb, id: string) {
+	getProject(db: AteamDb, id: string) {
 		return db.select().from(projects).where(eq(projects.id, id)).get();
 	},
 
-	deleteProject(db: GroveDb, id: string) {
+	deleteProject(db: AteamDb, id: string) {
 		db.delete(projects).where(eq(projects.id, id)).run();
 	},
 
 	// ---- tasks ----
-	createTask(db: GroveDb, t: NewTask) {
+	createTask(db: AteamDb, t: NewTask) {
 		return db.insert(tasks).values(t).returning().get();
 	},
 
-	listTasks(db: GroveDb, projectId: string) {
+	listTasks(db: AteamDb, projectId: string) {
 		return db
 			.select()
 			.from(tasks)
@@ -63,11 +63,11 @@ export const repo = {
 			.all();
 	},
 
-	getTask(db: GroveDb, id: string) {
+	getTask(db: AteamDb, id: string) {
 		return db.select().from(tasks).where(eq(tasks.id, id)).get();
 	},
 
-	updateTask(db: GroveDb, id: string, patch: Partial<NewTask>) {
+	updateTask(db: AteamDb, id: string, patch: Partial<NewTask>) {
 		db.update(tasks)
 			.set({ ...patch, updatedAt: Date.now() })
 			.where(eq(tasks.id, id))
@@ -75,19 +75,19 @@ export const repo = {
 		return repo.getTask(db, id);
 	},
 
-	deleteTask(db: GroveDb, id: string) {
+	deleteTask(db: AteamDb, id: string) {
 		db.delete(tasks).where(eq(tasks.id, id)).run();
 	},
 
 	// ---- agent sessions & events ----
 	createSession(
-		db: GroveDb,
+		db: AteamDb,
 		s: { taskId: string; agentId: string; terminalId: string; cwd: string; pid?: number },
 	) {
 		return db.insert(agentSessions).values(s).returning().get();
 	},
 
-	getSessionByTerminal(db: GroveDb, terminalId: string) {
+	getSessionByTerminal(db: AteamDb, terminalId: string) {
 		return db
 			.select()
 			.from(agentSessions)
@@ -95,7 +95,7 @@ export const repo = {
 			.get();
 	},
 
-	listSessionsByTask(db: GroveDb, taskId: string) {
+	listSessionsByTask(db: AteamDb, taskId: string) {
 		return db
 			.select()
 			.from(agentSessions)
@@ -104,7 +104,7 @@ export const repo = {
 	},
 
 	updateSession(
-		db: GroveDb,
+		db: AteamDb,
 		id: string,
 		patch: Partial<typeof agentSessions.$inferInsert>,
 	) {
@@ -112,7 +112,7 @@ export const repo = {
 	},
 
 	recordEvent(
-		db: GroveDb,
+		db: AteamDb,
 		e: {
 			sessionId?: string | null;
 			terminalId: string;
@@ -124,13 +124,13 @@ export const repo = {
 	},
 
 	// ---- settings (single row, id=1) ----
-	getSettings(db: GroveDb): Settings {
+	getSettings(db: AteamDb): Settings {
 		const row = db.select().from(settings).where(eq(settings.id, 1)).get();
 		if (row) return row;
 		return db.insert(settings).values({ id: 1 }).returning().get();
 	},
 
-	updateSettings(db: GroveDb, patch: Partial<Settings>) {
+	updateSettings(db: AteamDb, patch: Partial<Settings>) {
 		db.update(settings).set(patch).where(eq(settings.id, 1)).run();
 		return repo.getSettings(db);
 	},

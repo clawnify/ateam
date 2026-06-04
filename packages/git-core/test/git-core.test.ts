@@ -216,7 +216,7 @@ describe("detectMerged — external merge detection (no GitHub needed)", () => {
 		await simpleGit().clone(repo.origin, clone);
 		const g = simpleGit(clone);
 		await g.addConfig("user.email", "tester@ateam.dev");
-		await g.addConfig("user.name", "Grove Tester");
+		await g.addConfig("user.name", "Ateam Tester");
 		await g.raw(["fetch", "origin", task.branch]);
 		await g.raw(["merge", "--no-ff", "--no-edit", `origin/${task.branch}`]);
 		await g.push("origin", "main");

@@ -1,6 +1,6 @@
 import type {
 	AgentSession,
-	GroveDb,
+	AteamDb,
 	Project,
 	Task,
 } from "@ateam/db";
@@ -13,7 +13,7 @@ import type {
 } from "../shared/types";
 
 export interface Services {
-	db: GroveDb;
+	db: AteamDb;
 	pty: PtyClient;
 	hooks: HookServer;
 	userDataDir: string;

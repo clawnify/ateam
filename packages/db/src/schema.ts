@@ -72,9 +72,10 @@ export const tasks = sqliteTable(
 		lastEventAt: integer("last_event_at"),
 		isUnread: integer("is_unread", { mode: "boolean" }).default(false),
 		createdBy: text("created_by")
-			.$type<"grove" | "external">()
+			// "grove" appears in rows written before the product rename.
+			.$type<"ateam" | "grove" | "external">()
 			.notNull()
-			.default("grove"),
+			.default("ateam"),
 		createdAt: epochMs("created_at"),
 		updatedAt: epochMs("updated_at"),
 	},

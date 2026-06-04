@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createDb, repo } from "@ateam/db";
@@ -16,7 +16,7 @@ import { type Services, toTaskDTO } from "./services";
 let win: BrowserWindow | null = null;
 let services: Services | null = null;
 
-const SMOKE = process.env.GROVE_SMOKE === "1";
+const SMOKE = process.env.ATEAM_SMOKE === "1";
 
 function mapEventToStatus(eventType: string): AgentStatus {
 	if (eventType === "PermissionRequest") return "awaiting_input";
@@ -149,7 +149,15 @@ function sendTaskUpdated(taskId: string): void {
 
 async function initServices(): Promise<Services> {
 	const userDataDir = app.getPath("userData");
-	const db = createDb(join(userDataDir, "grove.sqlite"));
+	// One-time migration from the pre-rename database filename.
+	const dbPath = join(userDataDir, "ateam.sqlite");
+	if (!existsSync(dbPath) && existsSync(join(userDataDir, "grove.sqlite"))) {
+		for (const suffix of ["", "-wal", "-shm"]) {
+			const old = join(userDataDir, `grove.sqlite${suffix}`);
+			if (existsSync(old)) renameSync(old, `${dbPath}${suffix}`);
+		}
+	}
+	const db = createDb(dbPath);
 	// The detached PTY daemon survives app restarts; out/main/daemon.js is run via
 	// the Electron binary as node (ELECTRON_RUN_AS_NODE) so node-pty's ABI matches.
 	const pty = new PtyClient(
@@ -275,7 +283,7 @@ app.whenReady().then(async () => {
 	if (SMOKE) {
 		// Headless boot check: prove services init (db, hook server, notify
 		// script) without opening a window or the daemon, then exit cleanly.
-		console.log(`GROVE_READY hookPort=${services.hookPort}`);
+		console.log(`ATEAM_READY hookPort=${services.hookPort}`);
 		services.hooks.stop();
 		app.exit(0);
 		return;

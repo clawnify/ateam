@@ -7,7 +7,7 @@ import type * as schema from "./schema";
  * synchronous SQLite drivers exposing the same query builder; we widen the
  * RunResult to `unknown` so the repo layer is driver-agnostic.
  */
-export type GroveDb = BaseSQLiteDatabase<"sync", unknown, typeof schema>;
+export type AteamDb = BaseSQLiteDatabase<"sync", unknown, typeof schema>;
 
 /** Minimal surface bootstrap needs — satisfied by both drivers' Database. */
 export interface SqliteExecutor {

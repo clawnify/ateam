@@ -37,7 +37,7 @@ export default defineConfig({
 	},
 	renderer: {
 		root: resolve(__dirname, "src/renderer"),
-		// Dedicated port so Grove never collides with other local dev servers
+		// Dedicated port so Ateam never collides with other local dev servers
 		// (e.g. another project on the default 5173). strictPort surfaces a clash
 		// instead of silently hopping to a different port.
 		server: { port: 5219, strictPort: true },

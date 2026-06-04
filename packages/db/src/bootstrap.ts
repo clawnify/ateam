@@ -41,7 +41,7 @@ export function bootstrap(db: SqliteExecutor): void {
 			git_status TEXT,
 			last_event_at INTEGER,
 			is_unread INTEGER DEFAULT 0,
-			created_by TEXT NOT NULL DEFAULT 'grove',
+			created_by TEXT NOT NULL DEFAULT 'ateam',
 			created_at INTEGER,
 			updated_at INTEGER
 		);
