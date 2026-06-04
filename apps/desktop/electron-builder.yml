@@ -28,6 +28,12 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # Friendly TCC (Files & Folders) prompt text — macOS asks automatically the
+  # first time a project in one of these folders is opened.
+  extendInfo:
+    NSDesktopFolderUsageDescription: Ateam opens project repositories and git worktrees you select on your Desktop.
+    NSDocumentsFolderUsageDescription: Ateam opens project repositories and git worktrees you select in Documents.
+    NSDownloadsFolderUsageDescription: Ateam opens project repositories and git worktrees you select in Downloads.
 # Notarize + staple after signing (uses keychain profile "ateam-notary";
 # skips gracefully if the profile doesn't exist yet).
 afterSign: scripts/notarize.cjs
