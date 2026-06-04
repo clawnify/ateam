@@ -67,11 +67,16 @@ export const AGENTS = [
 /** Build the launch command line for an agent (YOLO and/or resume variants). */
 export function agentCommand(
 	agent: AgentDefinition,
-	opts: { yolo?: boolean; resume?: boolean } = {},
+	opts: { yolo?: boolean; resume?: boolean; prompt?: string } = {},
 ): string {
 	const base =
 		opts.resume && agent.resumeCommand ? agent.resumeCommand : agent.command;
-	return opts.yolo && agent.yoloFlag ? `${base} ${agent.yoloFlag}` : base;
+	const cmd = opts.yolo && agent.yoloFlag ? `${base} ${agent.yoloFlag}` : base;
+	if (!opts.prompt) return cmd;
+	// Single-quoted for the login shell; claude/codex take the prompt as a
+	// positional argument, opencode via --prompt.
+	const q = `'${opts.prompt.replace(/'/g, `'\\''`)}'`;
+	return agent.id === "opencode" ? `${cmd} --prompt ${q}` : `${cmd} ${q}`;
 }
 
 export type AgentId = (typeof AGENTS)[number]["id"];

@@ -47,6 +47,7 @@ import type {
 import { AgentIcon } from "./components/AgentIcon";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { FileDiffView } from "./components/FileDiffView";
+import { NewTaskComposer } from "./components/NewTaskComposer";
 import { IconButton } from "./components/IconButton";
 import { Menu } from "./components/Menu";
 import { TerminalView } from "./components/Terminal";
@@ -122,6 +123,7 @@ export function App() {
 	);
 	const [customOrder, setCustomOrder] = useState<string[]>([]);
 	const [cleanupOpen, setCleanupOpen] = useState(false);
+	const [composerOpen, setComposerOpen] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [info, setInfo] = useState<string | null>(null);
 	const [termByTask, setTermByTask] = useState<Record<string, string>>({});
@@ -267,17 +269,36 @@ export function App() {
 			selectProject(proj.id);
 		});
 
-	const newTask = () =>
+	const newTask = () => {
+		if (activeProjectId) setComposerOpen(true);
+	};
+
+	// Create the task, open it full-width, and launch the chosen agent with
+	// the prompt as its first instruction.
+	const composeTask = (input: {
+		name: string;
+		prompt: string;
+		agentId: string;
+		yolo: boolean;
+	}) =>
 		run(async () => {
 			if (!activeProjectId) return;
-			const name = await ask("New task name");
-			if (!name) return;
+			setComposerOpen(false);
 			const task = await window.ateam.tasks.create({
 				projectId: activeProjectId,
-				name,
+				name: input.name,
 			});
 			await loadTasks(activeProjectId);
 			setSelectedTaskId(task.id);
+			setPanelMode("full");
+			setView("board");
+			const { terminalId } = await window.ateam.pty.spawnAgent({
+				taskId: task.id,
+				agentId: input.agentId,
+				yolo: input.yolo,
+				prompt: input.prompt || undefined,
+			});
+			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		});
 
 	const cleanup = () => {
@@ -570,6 +591,13 @@ export function App() {
 					confirm={confirm}
 					reload={() => activeProjectId && loadTasks(activeProjectId)}
 					onClose={() => setCleanupOpen(false)}
+				/>
+			)}
+			{composerOpen && activeProjectId && (
+				<NewTaskComposer
+					agents={agents}
+					onClose={() => setComposerOpen(false)}
+					onCreate={composeTask}
 				/>
 			)}
 			{promptUi}

@@ -207,6 +207,8 @@ export interface AteamApi {
 			agentId: string;
 			yolo?: boolean;
 			resume?: boolean;
+			/** Initial instruction handed to the agent at launch. */
+			prompt?: string;
 		}): Promise<{ terminalId: string }>;
 		spawnShell(input: { taskId: string }): Promise<{ terminalId: string }>;
 		write(terminalId: string, data: string): void;

@@ -448,6 +448,7 @@ export function registerIpc(ctx: IpcContext): void {
 				agentId: string;
 				yolo?: boolean;
 				resume?: boolean;
+				prompt?: string;
 			},
 		) => {
 			const task = requireTask(services, input.taskId);
@@ -480,6 +481,7 @@ export function registerIpc(ctx: IpcContext): void {
 			let agentCmd = agentCommand(agent, {
 				yolo: input.yolo,
 				resume: input.resume,
+				prompt: input.prompt,
 			});
 			if (agent.id === "codex") {
 				// Codex has no hooks, but `notify` invokes a program with a JSON
