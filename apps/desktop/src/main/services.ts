@@ -50,6 +50,7 @@ export function toTaskDTO(t: Task): TaskDTO {
 		prNumber: t.prNumber ?? null,
 		prUrl: t.prUrl ?? null,
 		gitStatus: t.gitStatus ?? null,
+		lastEventAt: t.lastEventAt ?? t.updatedAt ?? null,
 		isUnread: Boolean(t.isUnread),
 	};
 }

@@ -6,6 +6,7 @@ import { repo } from "@ateam/db";
 import {
 	commit,
 	createTask as gitCreateTask,
+	detectMerged,
 	diff,
 	errorMessage,
 	fileDiff,
@@ -369,10 +370,39 @@ export function registerIpc(ctx: IpcContext): void {
 		});
 	});
 
+	// Detect merges done OUTSIDE Ateam (the agent ran `gh pr merge` in its
+	// terminal, or the PR was merged on github.com) and move the task to Done.
+	// Throttled per task; fire-and-forget so status replies stay fast.
+	const mergeCheckedAt = new Map<string, number>();
+	const detectExternalMerge = async (taskId: string): Promise<void> => {
+		if (Date.now() - (mergeCheckedAt.get(taskId) ?? 0) < 60_000) return;
+		mergeCheckedAt.set(taskId, Date.now());
+		const task = repo.getTask(db, taskId);
+		if (!task || task.column === "merged") return;
+		try {
+			const res = await detectMerged({
+				worktreePath: task.worktreePath,
+				branch: task.branch,
+				baseBranch: task.baseBranch,
+			});
+			if (!res.merged) return;
+			repo.updateTask(db, task.id, {
+				column: "merged",
+				prState: "merged",
+				prNumber: res.prNumber ?? task.prNumber ?? null,
+				prUrl: res.prUrl ?? task.prUrl ?? null,
+			});
+			sendTaskUpdated(task.id);
+		} catch {
+			/* offline or gh unavailable — retried on a later refresh */
+		}
+	};
+
 	ipcMain.handle(CH.gitStatus, async (_e, taskId: string) => {
 		const task = requireTask(services, taskId);
 		const snapshot = await computeGitStatus(task.worktreePath, task.baseBranch);
 		repo.updateTask(db, task.id, { gitStatus: snapshot });
+		if (task.column !== "merged") void detectExternalMerge(task.id);
 		return snapshot;
 	});
 

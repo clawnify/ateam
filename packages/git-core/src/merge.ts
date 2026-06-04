@@ -118,6 +118,67 @@ export async function updateLocalMain(
 	}
 }
 
+export interface DetectMergedResult {
+	merged: boolean;
+	prNumber: number | null;
+	prUrl: string | null;
+}
+
+/**
+ * Detect a merge that happened OUTSIDE Ateam — the agent ran `gh pr merge` in
+ * its terminal, or the PR was merged on github.com. `gh pr view` is the
+ * primary signal because squash/rebase merges rewrite the commits, so the
+ * branch tip never becomes an ancestor of base; the ancestor check is the
+ * fallback for plain merges (or repos without a PR/gh).
+ */
+export async function detectMerged(input: {
+	worktreePath: string;
+	branch: string;
+	baseBranch: string;
+}): Promise<DetectMergedResult> {
+	try {
+		const out = await gh(
+			["pr", "view", input.branch, "--json", "number,state,url"],
+			input.worktreePath,
+		);
+		const p = JSON.parse(out) as {
+			number?: number;
+			state?: string;
+			url?: string;
+		};
+		if (p.state === "MERGED") {
+			return { merged: true, prNumber: p.number ?? null, prUrl: p.url ?? null };
+		}
+		if (p.state === "OPEN" || p.state === "CLOSED") {
+			return {
+				merged: false,
+				prNumber: p.number ?? null,
+				prUrl: p.url ?? null,
+			};
+		}
+	} catch {
+		/* gh missing or no PR for this branch — fall through */
+	}
+
+	// Fallback: the branch tip is already contained in origin/<base>. We use
+	// `rev-list --count` (answer on stdout) rather than `merge-base
+	// --is-ancestor`, whose silent exit-code-1 looks like success to simple-git.
+	const git = gitFor(input.worktreePath);
+	try {
+		await git.raw(["fetch", "origin", input.baseBranch]);
+		const ahead = await git.raw([
+			"rev-list",
+			"--count",
+			input.branch,
+			"--not",
+			`origin/${input.baseBranch}`,
+		]);
+		return { merged: ahead.trim() === "0", prNumber: null, prUrl: null };
+	} catch {
+		return { merged: false, prNumber: null, prUrl: null };
+	}
+}
+
 /**
  * Merge a task branch into base via a GitHub PR (Stage A, entirely remote-side
  * and therefore safe for every local worktree), then auto-update local base

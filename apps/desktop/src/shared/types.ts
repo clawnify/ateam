@@ -42,6 +42,8 @@ export interface TaskDTO {
 	prNumber: number | null;
 	prUrl: string | null;
 	gitStatus: GitStatusSnapshot | null;
+	/** Last agent/lifecycle activity (falls back to row update time). */
+	lastEventAt: number | null;
 	isUnread: boolean;
 }
 

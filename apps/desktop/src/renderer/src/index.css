@@ -394,24 +394,134 @@ input {
 	background: #000;
 	padding: 6px;
 }
-.diff {
-	max-height: 30%;
-	overflow: auto;
-	border-top: 1px solid var(--border);
-	padding: 8px 14px;
-	font-size: 12px;
+/* panel body: terminal/diff on the left, changes column on the right */
+.panel-body {
+	flex: 1;
+	min-height: 0;
+	display: flex;
 }
-.diff .file {
+.panel-main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+.term-wrap {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+/* changes column (GitHub-Desktop-style file list) */
+.changes {
+	flex: 0 0 220px;
+	min-width: 0;
+	border-left: 1px solid var(--border);
+	overflow-y: auto;
+	font-size: 12px;
+	display: flex;
+	flex-direction: column;
+}
+.panel:not(.full) .changes {
+	flex-basis: 156px;
+}
+.changes-head {
 	display: flex;
 	justify-content: space-between;
-	padding: 3px 0;
-	font-family: ui-monospace, Menlo, monospace;
+	align-items: center;
+	padding: 6px 4px 4px 10px;
 }
-.diff .add {
+.changes .file {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 10px;
+	background: transparent;
+	border: none;
+	color: var(--text);
+	cursor: pointer;
+	text-align: left;
+	font-family: ui-monospace, Menlo, monospace;
+	font-size: 11.5px;
+}
+.changes .file:hover,
+.changes .file.selected {
+	background: var(--bg-elev-2);
+}
+.changes .fpath {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.changes .fstat {
+	flex: none;
+}
+.changes .add {
 	color: var(--green);
 }
-.diff .del {
+.changes .del {
 	color: var(--red);
+}
+
+/* file diff view (react-diff-view, re-themed dark) */
+.filediff {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	background: #000;
+}
+.filediff-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 4px 6px 4px 12px;
+	border-bottom: 1px solid var(--border);
+}
+.filediff-head .fname {
+	font-family: ui-monospace, Menlo, monospace;
+	font-size: 12px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.filediff-body {
+	flex: 1;
+	overflow: auto;
+}
+.filediff-body .diff {
+	width: 100%;
+	background: transparent;
+	color: var(--text);
+	font-family: ui-monospace, Menlo, monospace;
+	font-size: 11.5px;
+}
+.filediff-body .diff-gutter {
+	color: var(--text-dim);
+	background: transparent;
+}
+.filediff-body .diff-code {
+	color: var(--text);
+}
+.filediff-body .diff-gutter-insert,
+.filediff-body .diff-code-insert {
+	background: rgba(63, 185, 80, 0.16);
+}
+.filediff-body .diff-gutter-delete,
+.filediff-body .diff-code-delete {
+	background: rgba(248, 81, 73, 0.16);
+}
+.filediff-body .diff-code-edit {
+	background: transparent;
+}
+.filediff-body .diff-hunk-header,
+.filediff-body .diff-gutter-omit,
+.filediff-body .diff-hunk-header-gutter,
+.filediff-body .diff-hunk-header-content {
+	background: var(--bg-elev-2);
+	color: var(--text-dim);
 }
 
 /* ---- mission control ---- */
