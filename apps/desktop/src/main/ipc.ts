@@ -26,7 +26,11 @@ import {
 	type MergeStrategy,
 	CH,
 } from "../shared/types";
-import { buildAgentEnv, ensureClaudeHooks } from "./agent-setup";
+import {
+	buildAgentEnv,
+	ensureClaudeHooks,
+	ensureCodexHooks,
+} from "./agent-setup";
 import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
 
 export interface IpcContext {
@@ -238,12 +242,12 @@ export function registerIpc(ctx: IpcContext): void {
 				agentStatus: string | null;
 			}[] = [];
 			for (const task of repo.listTasks(db, projectId)) {
-				if (
+				const busy =
 					task.agentStatus === "running" ||
-					task.agentStatus === "awaiting_input"
-				) {
-					continue;
-				}
+					task.agentStatus === "awaiting_input";
+				// Done tasks are always proposed — merged work is cleanup material
+				// even when its agent session is technically still alive.
+				if (busy && task.column !== "merged") continue;
 				const live = repo
 					.listSessionsByTask(db, task.id)
 					.find((s) => services.pty.has(s.terminalId));
@@ -460,6 +464,8 @@ export function registerIpc(ctx: IpcContext): void {
 
 			if (agent.id === "claude") {
 				await ensureClaudeHooks(task.worktreePath, services.notifyScriptPath);
+			} else if (agent.id === "codex") {
+				await ensureCodexHooks(task.worktreePath, services.notifyScriptPath);
 			}
 
 			const env = buildAgentEnv({
@@ -471,10 +477,21 @@ export function registerIpc(ctx: IpcContext): void {
 			// Run the agent in a login shell, then drop to an interactive shell so
 			// the pane stays usable after the agent exits. YOLO appends the bypass
 			// flag; resume relaunches the agent's most recent conversation here.
-			const command = `${agentCommand(agent, {
+			let agentCmd = agentCommand(agent, {
 				yolo: input.yolo,
 				resume: input.resume,
-			})}; exec ${shell} -l`;
+			});
+			if (agent.id === "codex") {
+				// Codex has no hooks, but `notify` invokes a program with a JSON
+				// payload on turn completion — our script maps it to Stop. Injected
+				// per-launch via -c so the user's ~/.codex/config.toml is untouched.
+				const codexNotify = join(services.hooksDir, "codex-notify.sh");
+				agentCmd = agentCmd.replace(
+					/^codex/,
+					`codex -c 'notify=["sh","${codexNotify}"]'`,
+				);
+			}
+			const command = `${agentCmd}; exec ${shell} -l`;
 			services.pty.spawn({
 				terminalId,
 				shell,

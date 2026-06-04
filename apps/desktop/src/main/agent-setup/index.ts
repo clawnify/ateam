@@ -22,13 +22,36 @@ curl -s -m 2 "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventTy
 exit 0
 `;
 
-/** Write the shared notify.sh into Ateam's userData dir; returns its path. */
+/**
+ * Codex has no Claude-style hooks, but its `notify` config invokes a program
+ * with a JSON payload on lifecycle events. We map turn completion to Stop
+ * (and any approval-flavored event to PermissionRequest, future-proofing).
+ */
+const CODEX_NOTIFY_SCRIPT = `#!/bin/sh
+# Ateam status hook for Codex. Codex calls this with one JSON argument.
+PORT="\${ATEAM_HOOK_PORT:-}"
+TID="\${ATEAM_TERMINAL_ID:-}"
+[ -z "$PORT" ] && exit 0
+[ -z "$TID" ] && exit 0
+case "$1" in
+	*agent-turn-complete*) EVENT="Stop" ;;
+	*approval*) EVENT="PermissionRequest" ;;
+	*) exit 0 ;;
+esac
+curl -s -m 2 "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}" >/dev/null 2>&1 || true
+exit 0
+`;
+
+/** Write the notify scripts into Ateam's userData dir; returns notify.sh's path. */
 export async function ensureNotifyScript(userDataDir: string): Promise<string> {
 	const hooksDir = join(userDataDir, "hooks");
 	await mkdir(hooksDir, { recursive: true });
 	const scriptPath = join(hooksDir, "notify.sh");
 	await writeFile(scriptPath, NOTIFY_SCRIPT, "utf8");
 	await chmod(scriptPath, 0o755);
+	const codexPath = join(hooksDir, "codex-notify.sh");
+	await writeFile(codexPath, CODEX_NOTIFY_SCRIPT, "utf8");
+	await chmod(codexPath, 0o755);
 	return scriptPath;
 }
 
@@ -84,6 +107,54 @@ export async function ensureClaudeHooks(
 		if (!already) {
 			entries.push({ hooks: [{ type: "command", command }] });
 			settings.hooks[claudeEvent] = entries;
+		}
+	}
+
+	await writeFile(file, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+}
+
+/**
+ * Register Ateam's status hooks in `<worktree>/.codex/hooks.json` — Codex
+ * supports the same lifecycle-event schema as Claude Code (verified against
+ * the Codex config reference). Project-local hooks load once the repo's
+ * `.codex` layer is trusted; the `notify` override injected at launch covers
+ * Stop until then.
+ */
+export async function ensureCodexHooks(
+	worktreePath: string,
+	notifyScriptPath: string,
+): Promise<void> {
+	const dir = join(worktreePath, ".codex");
+	await mkdir(dir, { recursive: true });
+	const file = join(dir, "hooks.json");
+
+	let settings: ClaudeSettings = {};
+	try {
+		settings = JSON.parse(await readFile(file, "utf8")) as ClaudeSettings;
+	} catch {
+		/* no existing file */
+	}
+
+	const cmd = (event: string) =>
+		`sh ${JSON.stringify(notifyScriptPath)} ${event}`;
+	const map: Record<string, string> = {
+		SessionStart: "Start",
+		Stop: "Stop",
+		PermissionRequest: "PermissionRequest",
+		PreToolUse: "Working",
+		UserPromptSubmit: "Working",
+	};
+
+	settings.hooks ??= {};
+	for (const [codexEvent, ateamEvent] of Object.entries(map)) {
+		const command = cmd(ateamEvent);
+		const entries = settings.hooks[codexEvent] ?? [];
+		const already = entries.some((e) =>
+			e.hooks.some((h) => h.command.includes("notify.sh")),
+		);
+		if (!already) {
+			entries.push({ hooks: [{ type: "command", command }] });
+			settings.hooks[codexEvent] = entries;
 		}
 	}
 

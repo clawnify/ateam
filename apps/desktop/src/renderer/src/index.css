@@ -137,6 +137,26 @@ input {
 	background: var(--text-dim);
 	flex: none;
 }
+/* A non-selected project with tasks needing eyes pulses its dot. */
+.proj .dot.alert.needs_attention {
+	background: var(--amber);
+	animation: dotpulse 1.4s ease-in-out infinite;
+}
+.proj .dot.alert.review {
+	background: var(--green);
+	animation: dotpulse 1.4s ease-in-out infinite;
+}
+@keyframes dotpulse {
+	0%,
+	100% {
+		transform: scale(1);
+		opacity: 1;
+	}
+	50% {
+		transform: scale(1.45);
+		opacity: 0.5;
+	}
+}
 .proj-name {
 	overflow: hidden;
 	text-overflow: ellipsis;

@@ -136,20 +136,39 @@ export async function detectMerged(input: {
 	branch: string;
 	baseBranch: string;
 }): Promise<DetectMergedResult> {
+	const git = gitFor(input.worktreePath);
+	let tip = "";
+	try {
+		tip = (await git.raw(["rev-parse", input.branch])).trim();
+	} catch {
+		return { merged: false, prNumber: null, prUrl: null };
+	}
+
 	try {
 		const out = await gh(
-			["pr", "view", input.branch, "--json", "number,state,url"],
+			["pr", "view", input.branch, "--json", "number,state,url,headRefOid"],
 			input.worktreePath,
 		);
 		const p = JSON.parse(out) as {
 			number?: number;
 			state?: string;
 			url?: string;
+			headRefOid?: string;
 		};
 		if (p.state === "MERGED") {
-			return { merged: true, prNumber: p.number ?? null, prUrl: p.url ?? null };
-		}
-		if (p.state === "OPEN" || p.state === "CLOSED") {
+			// `gh pr view <branch>` returns the most recent PR for that head NAME —
+			// which can be a stale, already-merged PR from an earlier branch that
+			// happened to share the name. Only trust MERGED when GitHub's recorded
+			// head commit is the branch's current tip.
+			if (p.headRefOid && p.headRefOid === tip) {
+				return {
+					merged: true,
+					prNumber: p.number ?? null,
+					prUrl: p.url ?? null,
+				};
+			}
+			// Stale PR — fall through to the local merge-commit check.
+		} else if (p.state === "OPEN" || p.state === "CLOSED") {
 			return {
 				merged: false,
 				prNumber: p.number ?? null,
@@ -164,10 +183,8 @@ export async function detectMerged(input: {
 	// as a parent of a merge commit on origin/<base>. Mere containment is NOT
 	// enough — a freshly created (or stale) branch with no commits of its own
 	// is trivially contained in base and would read as a false "merged".
-	const git = gitFor(input.worktreePath);
 	try {
 		await git.raw(["fetch", "origin", input.baseBranch]);
-		const tip = (await git.raw(["rev-parse", input.branch])).trim();
 		const mergeParents = await git.raw([
 			"log",
 			`origin/${input.baseBranch}`,

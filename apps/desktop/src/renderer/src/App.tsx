@@ -156,6 +156,22 @@ export function App() {
 		if (activeProjectId) void loadTasks(activeProjectId);
 	}, [activeProjectId, loadTasks]);
 
+	// Load every project's tasks so non-selected projects can surface their
+	// attention state (pulsing dot); evtTaskUpdated keeps them fresh after.
+	useEffect(() => {
+		for (const p of projects) void loadTasks(p.id);
+	}, [projects, loadTasks]);
+
+	// Highest-priority alert among a non-selected project's tasks.
+	const projectAlert = (pid: string): "needs_attention" | "review" | null => {
+		if (pid === activeProjectId) return null;
+		const list = tasksByProject[pid] ?? [];
+		if (list.some((t) => t.column === "needs_attention"))
+			return "needs_attention";
+		if (list.some((t) => t.column === "review")) return "review";
+		return null;
+	};
+
 	const activeTasks = activeProjectId
 		? (tasksByProject[activeProjectId] ?? [])
 		: [];
@@ -278,7 +294,9 @@ export function App() {
 					<IconButton icon={FolderPlus} label="Add project" onClick={addProject} />
 				</div>
 				{!projectsCollapsed &&
-					projects.map((p) => (
+					projects.map((p) => {
+						const alert = projectAlert(p.id);
+						return (
 						<button
 							type="button"
 							key={p.id}
@@ -286,14 +304,17 @@ export function App() {
 							onClick={() => selectProject(p.id)}
 						>
 							<span
-								className="dot"
-								style={p.color ? { background: p.color } : undefined}
+								className={`dot ${alert ? `alert ${alert}` : ""}`}
+								style={
+									!alert && p.color ? { background: p.color } : undefined
+								}
 							/>
 							<span className="proj-name" title={p.repoPath}>
 								{p.name}
 							</span>
 						</button>
-					))}
+						);
+					})}
 
 				{/* TASKS accordion — active tasks of the selected project */}
 				<div className="section-head tasks-head">

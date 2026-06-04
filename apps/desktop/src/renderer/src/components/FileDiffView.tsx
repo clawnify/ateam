@@ -32,7 +32,9 @@ export function FileDiffView({
 		};
 	}, [taskId, file]);
 
-	const files = text ? parseDiff(text) : [];
+	// "zip" pairs nearby delete/insert runs side-by-side in split view
+	// (GitHub-Desktop-style) instead of stacking them sequentially.
+	const files = text ? parseDiff(text, { nearbySequences: "zip" }) : [];
 
 	return (
 		<div className="filediff">
