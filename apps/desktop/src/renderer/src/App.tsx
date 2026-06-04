@@ -223,7 +223,20 @@ export function App() {
 		run(async () => {
 			const path = await window.grove.projects.pick();
 			if (!path) return;
-			const proj = await window.grove.projects.register(path);
+			let proj: ProjectDTO;
+			try {
+				proj = await window.grove.projects.register(path);
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				if (!/not a git repository/i.test(msg)) throw e;
+				// GitHub-Desktop-style: offer to create a repository here instead.
+				const ok = await confirm(
+					"Not a git repository",
+					"This folder isn't a git repository yet. Initialize one here? Ateam will run git init, add a starter .gitignore (if none exists), and make an initial commit of the current files.",
+				);
+				if (!ok) return;
+				proj = await window.grove.projects.register(path, { init: true });
+			}
 			await loadProjects();
 			selectProject(proj.id);
 		});

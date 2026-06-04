@@ -164,7 +164,8 @@ export interface PtyExitEvent {
 export interface GroveApi {
 	projects: {
 		pick(): Promise<string | null>;
-		register(repoPath: string): Promise<ProjectDTO>;
+		/** `init: true` runs `git init` + initial commit first (after asking). */
+		register(repoPath: string, opts?: { init?: boolean }): Promise<ProjectDTO>;
 		list(): Promise<ProjectDTO[]>;
 		remove(id: string): Promise<void>;
 	};

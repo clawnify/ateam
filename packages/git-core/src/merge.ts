@@ -160,20 +160,26 @@ export async function detectMerged(input: {
 		/* gh missing or no PR for this branch — fall through */
 	}
 
-	// Fallback: the branch tip is already contained in origin/<base>. We use
-	// `rev-list --count` (answer on stdout) rather than `merge-base
-	// --is-ancestor`, whose silent exit-code-1 looks like success to simple-git.
+	// Fallback for plain (--no-ff) merges without a PR: the branch tip shows up
+	// as a parent of a merge commit on origin/<base>. Mere containment is NOT
+	// enough — a freshly created (or stale) branch with no commits of its own
+	// is trivially contained in base and would read as a false "merged".
 	const git = gitFor(input.worktreePath);
 	try {
 		await git.raw(["fetch", "origin", input.baseBranch]);
-		const ahead = await git.raw([
-			"rev-list",
-			"--count",
-			input.branch,
-			"--not",
+		const tip = (await git.raw(["rev-parse", input.branch])).trim();
+		const mergeParents = await git.raw([
+			"log",
 			`origin/${input.baseBranch}`,
+			"--merges",
+			"--format=%P",
+			"-n",
+			"200",
 		]);
-		return { merged: ahead.trim() === "0", prNumber: null, prUrl: null };
+		const merged = mergeParents
+			.split("\n")
+			.some((line) => line.trim().split(/\s+/).slice(1).includes(tip));
+		return { merged, prNumber: null, prUrl: null };
 	} catch {
 		return { merged: false, prNumber: null, prUrl: null };
 	}

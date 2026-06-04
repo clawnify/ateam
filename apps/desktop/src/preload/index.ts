@@ -12,7 +12,8 @@ import {
 const api: GroveApi = {
 	projects: {
 		pick: () => ipcRenderer.invoke(CH.projectsPick),
-		register: (repoPath) => ipcRenderer.invoke(CH.projectsRegister, repoPath),
+		register: (repoPath, opts) =>
+			ipcRenderer.invoke(CH.projectsRegister, repoPath, opts),
 		list: () => ipcRenderer.invoke(CH.projectsList),
 		remove: (id) => ipcRenderer.invoke(CH.projectsRemove, id),
 	},
