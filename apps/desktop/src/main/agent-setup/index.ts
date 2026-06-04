@@ -43,6 +43,9 @@ interface ClaudeSettings {
  * (scoped to this worktree, never touches global config). Maps Claude's
  * lifecycle events to our notify script with a literal event type:
  *   SessionStart → Start · Stop → Stop · Notification → PermissionRequest
+ *   PreToolUse/UserPromptSubmit → Working (the agent resumed after the user
+ *   answered a permission prompt or typed a reply — moves the card back to
+ *   "running"; without these it would sit in needs_attention until Stop).
  */
 export async function ensureClaudeHooks(
 	worktreePath: string,
@@ -64,6 +67,8 @@ export async function ensureClaudeHooks(
 		SessionStart: "Start",
 		Stop: "Stop",
 		Notification: "PermissionRequest",
+		PreToolUse: "Working",
+		UserPromptSubmit: "Working",
 	};
 
 	settings.hooks ??= {};

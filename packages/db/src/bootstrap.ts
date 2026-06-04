@@ -27,6 +27,7 @@ export function bootstrap(db: SqliteExecutor): void {
 			id TEXT PRIMARY KEY,
 			project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
 			name TEXT NOT NULL,
+			description TEXT,
 			slug TEXT NOT NULL,
 			branch TEXT NOT NULL,
 			base_branch TEXT NOT NULL,
@@ -96,7 +97,10 @@ export function bootstrap(db: SqliteExecutor): void {
 
 	// Migrations for databases created before a column existed. SQLite has no
 	// "ADD COLUMN IF NOT EXISTS", so attempt and ignore the "duplicate" error.
-	for (const sql of ["ALTER TABLE tasks ADD COLUMN agent_id TEXT"]) {
+	for (const sql of [
+		"ALTER TABLE tasks ADD COLUMN agent_id TEXT",
+		"ALTER TABLE tasks ADD COLUMN description TEXT",
+	]) {
 		try {
 			db.exec(sql);
 		} catch {

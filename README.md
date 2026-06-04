@@ -82,10 +82,12 @@ modules.
 
 ## Roadmap
 
+- **Transcript → tasks** — paste a meeting transcript or a long task summary
+  and let Claude Code (headless, in the background) distribute it into tasks
+  automatically.
 - Integrations (Linear / Slack / GitHub issues) with **no paywall** — exposed to
   every agent via MCP, brokered through Composio/Arcade.
 - Session-history continuity across worktrees ("fork session").
-- Signed + notarized macOS builds.
 
 ## License
 

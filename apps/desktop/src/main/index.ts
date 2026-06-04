@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createDb, repo } from "@ateam/db";
 import { app, BrowserWindow } from "electron";
+import { autoUpdater } from "electron-updater";
 import { type AgentStatus, type KanbanColumn, CH } from "../shared/types";
 import { ensureNotifyScript } from "./agent-setup";
 import { HookServer, type HookEvent } from "./hooks/hook-server";
@@ -51,6 +52,21 @@ function adoptLoginShellPath(): void {
 	}
 }
 
+/**
+ * Auto-update from GitHub Releases (electron-updater): check at launch and
+ * every 4 hours; downloads in the background and notifies — the update
+ * installs when the app quits. No more manual trips to the repo.
+ */
+function setupAutoUpdate(): void {
+	if (!app.isPackaged) return;
+	const check = () =>
+		autoUpdater
+			.checkForUpdatesAndNotify()
+			.catch((err) => console.warn("[ateam] update check failed:", err));
+	check();
+	setInterval(check, 4 * 60 * 60 * 1000);
+}
+
 function sendTaskUpdated(taskId: string): void {
 	if (!services) return;
 	const task = repo.getTask(services.db, taskId);
@@ -96,19 +112,34 @@ async function initServices(): Promise<Services> {
 			status,
 			lastEventAt: Date.now(),
 		});
-		repo.recordEvent(db, {
-			sessionId: session.id,
-			terminalId: e.terminalId,
-			eventType: e.eventType,
-			rawAgentSessionId: e.sessionId ?? null,
-		});
+		// "Working" fires on every tool use — too chatty for the append-only
+		// event log; it only needs to drive status/column.
+		if (e.eventType !== "Working") {
+			repo.recordEvent(db, {
+				sessionId: session.id,
+				terminalId: e.terminalId,
+				eventType: e.eventType,
+				rawAgentSessionId: e.sessionId ?? null,
+			});
+		}
 		const task = repo.getTask(db, session.taskId);
 		if (task) {
+			const column = mapEventToColumn(e.eventType);
+			// Skip no-op Working updates so the renderer isn't pinged per tool use.
+			if (
+				e.eventType === "Working" &&
+				task.column === column &&
+				task.agentStatus === status
+			) {
+				return;
+			}
 			repo.updateTask(db, task.id, {
 				agentStatus: status,
-				column: mapEventToColumn(e.eventType),
+				column,
 				lastEventAt: Date.now(),
-				isUnread: e.eventType !== "Start",
+				// Working/Start mean the user just interacted or launched — the
+				// task isn't "unread"; Stop/PermissionRequest are news for them.
+				isUnread: e.eventType === "Stop" || e.eventType === "PermissionRequest",
 			});
 			sendTaskUpdated(task.id);
 		}
@@ -185,6 +216,7 @@ app.whenReady().then(async () => {
 	}
 
 	createWindow();
+	setupAutoUpdate();
 	app.on("activate", () => {
 		if (BrowserWindow.getAllWindows().length === 0) createWindow();
 	});
