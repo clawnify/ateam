@@ -35,6 +35,11 @@ function mapEventToColumn(eventType: string): KanbanColumn {
  * can't be spawned. Resolve the user's real login-shell PATH once at startup
  * and adopt it — the availability probe, PTY env, and the daemon all inherit
  * process.env.
+ *
+ * Same for the locale: GUI apps also launch with no LANG/LC_*, and `pbcopy`
+ * then interprets UTF-8 input as Mac OS Roman — copying from a terminal turns
+ * "→ — €" into ",Üí ,Äî ,Ç¨". Adopt the login shell's LANG, falling back to a
+ * UTF-8 locale.
  */
 function adoptLoginShellPath(): void {
 	if (process.platform !== "darwin") return;
@@ -42,13 +47,15 @@ function adoptLoginShellPath(): void {
 		const shell = process.env.SHELL || "/bin/zsh";
 		const out = execFileSync(
 			shell,
-			["-ilc", 'printf "__ATEAM_PATH__%s__END__" "$PATH"'],
+			["-ilc", 'printf "__ATEAM_PATH__%s__SEP__%s__END__" "$PATH" "${LANG:-}"'],
 			{ encoding: "utf8", timeout: 8000 },
 		);
-		const m = out.match(/__ATEAM_PATH__([\s\S]*?)__END__/);
+		const m = out.match(/__ATEAM_PATH__([\s\S]*?)__SEP__([\s\S]*?)__END__/);
 		if (m?.[1]) process.env.PATH = m[1];
+		if (!process.env.LANG) process.env.LANG = m?.[2] || "en_US.UTF-8";
 	} catch (err) {
 		console.warn("[ateam] could not resolve login-shell PATH:", err);
+		process.env.LANG ??= "en_US.UTF-8";
 	}
 }
 
