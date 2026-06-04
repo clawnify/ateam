@@ -31,6 +31,7 @@ export interface TaskDTO {
 	id: string;
 	projectId: string;
 	name: string;
+	description: string | null;
 	slug: string;
 	branch: string;
 	baseBranch: string;

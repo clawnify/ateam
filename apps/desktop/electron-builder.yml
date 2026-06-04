@@ -15,9 +15,19 @@ asarUnpack:
 # Native modules are prebuilt for Electron arm64 via `bun run rebuild`; don't let
 # electron-builder rebuild them under the x64 toolchain.
 npmRebuild: false
+# Auto-update feed: electron-updater reads latest-mac.yml + the zip from the
+# newest GitHub release (public repo — no token needed at runtime).
+publish:
+  provider: github
+  owner: clawnify
+  repo: ateam
 mac:
   target:
     - target: dmg
+      arch:
+        - arm64
+    # zip target is required for macOS auto-updates (Squirrel.Mac)
+    - target: zip
       arch:
         - arm64
   icon: build/icon.icns

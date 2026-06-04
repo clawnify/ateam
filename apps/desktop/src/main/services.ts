@@ -39,6 +39,7 @@ export function toTaskDTO(t: Task): TaskDTO {
 		id: t.id,
 		projectId: t.projectId,
 		name: t.name,
+		description: t.description ?? null,
 		slug: t.slug,
 		branch: t.branch,
 		baseBranch: t.baseBranch,
