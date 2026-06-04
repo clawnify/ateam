@@ -249,6 +249,13 @@ function createWindow(): void {
 	});
 }
 
+// Demo mode: a fully isolated profile (own DB + seeded sample repos) for
+// screenshots/recordings — the normal profile is never touched.
+const DEMO = process.env.GROVE_DEMO === "1";
+if (DEMO) {
+	app.setPath("userData", join(homedir(), ".ateam-demo"));
+}
+
 app.whenReady().then(async () => {
 	app.setName(APP_NAME);
 	adoptLoginShellPath();
@@ -271,6 +278,15 @@ app.whenReady().then(async () => {
 
 	services = await initServices();
 	registerIpc({ services, sendTaskUpdated });
+
+	if (DEMO) {
+		const { seedDemo } = await import("./demo");
+		try {
+			await seedDemo(services);
+		} catch (err) {
+			console.error("[ateam] demo seed failed:", err);
+		}
+	}
 
 	if (SMOKE) {
 		// Headless boot check: prove services init (db, hook server, notify
