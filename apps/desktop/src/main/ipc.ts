@@ -11,6 +11,7 @@ import {
 	errorMessage,
 	fileDiff,
 	gitFor,
+	initRepository,
 	mergeViaPR,
 	push,
 	registerProject,
@@ -94,17 +95,23 @@ export function registerIpc(ctx: IpcContext): void {
 		return res.canceled ? null : (res.filePaths[0] ?? null);
 	});
 
-	ipcMain.handle(CH.projectsRegister, async (_e, repoPath: string) => {
-		const info = await registerProject(repoPath);
-		const row = repo.upsertProject(db, {
-			repoPath: info.repoPath,
-			name: readmeTitle(info.repoPath) ?? basename(info.repoPath),
-			defaultBranch: info.defaultBranch,
-			githubOwner: info.githubRepo?.owner ?? null,
-			githubName: info.githubRepo?.name ?? null,
-		});
-		return toProjectDTO(row!);
-	});
+	ipcMain.handle(
+		CH.projectsRegister,
+		async (_e, repoPath: string, opts?: { init?: boolean }) => {
+			// "Create a repository here instead" (GitHub-Desktop-style), after the
+			// renderer asked the user.
+			if (opts?.init) await initRepository(repoPath);
+			const info = await registerProject(repoPath);
+			const row = repo.upsertProject(db, {
+				repoPath: info.repoPath,
+				name: readmeTitle(info.repoPath) ?? basename(info.repoPath),
+				defaultBranch: info.defaultBranch,
+				githubOwner: info.githubRepo?.owner ?? null,
+				githubName: info.githubRepo?.name ?? null,
+			});
+			return toProjectDTO(row!);
+		},
+	);
 
 	ipcMain.handle(CH.projectsList, async () =>
 		repo
@@ -379,6 +386,14 @@ export function registerIpc(ctx: IpcContext): void {
 		mergeCheckedAt.set(taskId, Date.now());
 		const task = repo.getTask(db, taskId);
 		if (!task || task.column === "merged") return;
+		// Done only when the conversation ended on a plain text reply: the agent
+		// fired Stop (idle/stopped) and is not waiting on a question/permission.
+		// A merge mid-conversation must NOT yank the card to Done.
+		const finished =
+			task.agentStatus == null ||
+			task.agentStatus === "idle" ||
+			task.agentStatus === "stopped";
+		if (!finished || task.column === "needs_attention") return;
 		try {
 			const res = await detectMerged({
 				worktreePath: task.worktreePath,

@@ -9,6 +9,7 @@ import {
 	detectDefaultBranch,
 	detectMerged,
 	diff,
+	initRepository,
 	push,
 	parseWorktreeList,
 	registerProject,
@@ -174,6 +175,34 @@ describe("updateLocalMain — Stage B safety (no GitHub needed)", () => {
 	});
 });
 
+describe("initRepository — create a repository here instead", () => {
+	it("turns a plain folder into a usable repo (init + gitignore + commit)", async () => {
+		const plain = await mkdtemp(join(repo.dir, "plain-"));
+		await Bun.write(join(plain, "app.ts"), "console.log('hi')\n");
+
+		await initRepository(plain);
+
+		const info = await registerProject(plain);
+		expect(info.defaultBranch).toBe("main");
+		expect(existsSync(join(plain, ".gitignore"))).toBe(true);
+		// The initial commit exists, so tasks/worktrees can branch immediately.
+		const task = await createTask({ repoPath: plain, name: "first" });
+		expect(existsSync(join(task.worktreePath, "app.ts"))).toBe(true);
+	});
+
+	it("keeps an existing .gitignore and refuses to re-init a repo", async () => {
+		const plain = await mkdtemp(join(repo.dir, "plain-"));
+		await Bun.write(join(plain, ".gitignore"), "custom\n");
+
+		await initRepository(plain);
+		expect(await Bun.file(join(plain, ".gitignore")).text()).toBe("custom\n");
+
+		await expect(initRepository(plain)).rejects.toMatchObject({
+			code: "ALREADY_A_REPO",
+		});
+	});
+});
+
 describe("detectMerged — external merge detection (no GitHub needed)", () => {
 	it("detects a branch merged into origin/main behind Ateam's back", async () => {
 		const task = await createTask({ repoPath: repo.work, name: "ext merge" });
@@ -181,14 +210,15 @@ describe("detectMerged — external merge detection (no GitHub needed)", () => {
 		await push({ worktreePath: task.worktreePath, branch: task.branch });
 
 		// Merge the branch into main remote-side via a throwaway clone — the
-		// same end state as an agent running `gh pr merge` (merge strategy).
+		// same end state as `gh pr merge --merge`, which always records a merge
+		// commit (--no-ff). Detection keys off that merge commit's parents.
 		const clone = await mkdtemp(join(repo.dir, "merge-"));
 		await simpleGit().clone(repo.origin, clone);
 		const g = simpleGit(clone);
 		await g.addConfig("user.email", "tester@ateam.dev");
 		await g.addConfig("user.name", "Grove Tester");
 		await g.raw(["fetch", "origin", task.branch]);
-		await g.raw(["merge", "--no-edit", `origin/${task.branch}`]);
+		await g.raw(["merge", "--no-ff", "--no-edit", `origin/${task.branch}`]);
 		await g.push("origin", "main");
 
 		const res = await detectMerged({
@@ -209,6 +239,28 @@ describe("detectMerged — external merge detection (no GitHub needed)", () => {
 			baseBranch: "main",
 		});
 		expect(res.merged).toBe(false);
+	});
+
+	it("does NOT mistake a fresh branch with no own commits for a merge", async () => {
+		// Regression: containment-based detection flagged brand-new branches as
+		// merged (their tip is trivially contained in base).
+		const task = await createTask({ repoPath: repo.work, name: "untouched" });
+
+		const res = await detectMerged({
+			worktreePath: task.worktreePath,
+			branch: task.branch,
+			baseBranch: "main",
+		});
+		expect(res.merged).toBe(false);
+
+		// Still not merged after base advances past the stale branch.
+		await advanceOrigin(repo);
+		const res2 = await detectMerged({
+			worktreePath: task.worktreePath,
+			branch: task.branch,
+			baseBranch: "main",
+		});
+		expect(res2.merged).toBe(false);
 	});
 });
 

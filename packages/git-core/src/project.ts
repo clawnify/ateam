@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { gitFor, refExists } from "./git-client";
@@ -138,6 +138,54 @@ export async function ensureWorktreesIgnored(
 		await appendFile(excludePath, `${prefix}${entry}\n`);
 	} catch {
 		/* best-effort */
+	}
+}
+
+const DEFAULT_GITIGNORE = `node_modules/
+dist/
+build/
+.DS_Store
+*.log
+.env
+`;
+
+/**
+ * Turn a plain folder into a git repository the way GitHub Desktop's
+ * "create a repository here instead" does: `git init -b main`, a starter
+ * .gitignore (only when none exists), and an initial commit of the current
+ * files — worktrees need at least one commit to branch from.
+ */
+export async function initRepository(repoPath: string): Promise<void> {
+	const abs = resolve(repoPath);
+	const git = gitFor(abs);
+
+	// Refuse to re-init an existing repo (or a folder inside one).
+	try {
+		await git.raw(["rev-parse", "--git-dir"]);
+		throw new GitCoreError(
+			"ALREADY_A_REPO",
+			`${abs} is already inside a git repository`,
+		);
+	} catch (err) {
+		if (err instanceof GitCoreError) throw err;
+		/* not a repo — good */
+	}
+
+	await git.raw(["init", "-b", "main"]);
+
+	const gitignore = join(abs, ".gitignore");
+	try {
+		await readFile(gitignore, "utf8");
+	} catch {
+		await writeFile(gitignore, DEFAULT_GITIGNORE, "utf8");
+	}
+
+	await git.raw(["add", "-A"]);
+	try {
+		await git.raw(["commit", "-m", "Initial commit"]);
+	} catch {
+		// Nothing staged (empty folder) — still need a commit for worktrees.
+		await git.raw(["commit", "--allow-empty", "-m", "Initial commit"]);
 	}
 }
 

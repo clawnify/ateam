@@ -16,7 +16,7 @@ export {
 export type { WorktreeRecord } from "./worktree-list";
 export { slugify } from "./util";
 
-export { registerProject, detectDefaultBranch } from "./project";
+export { initRepository, registerProject, detectDefaultBranch } from "./project";
 export type { ProjectInfo, GithubRepo } from "./project";
 
 export { createTask, removeTask } from "./task";

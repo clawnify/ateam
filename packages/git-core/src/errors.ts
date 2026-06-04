@@ -1,5 +1,6 @@
 export type GitCoreErrorCode =
 	| "NOT_A_REPO"
+	| "ALREADY_A_REPO"
 	| "INVALID_NAME"
 	| "PATH_TRAVERSAL"
 	| "NO_DEFAULT_BRANCH"

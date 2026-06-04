@@ -35,8 +35,10 @@ export async function safeRaw(git: SimpleGit, args: string[]): Promise<string> {
 /** Returns true if a ref exists, false otherwise (never throws). */
 export async function refExists(git: SimpleGit, ref: string): Promise<boolean> {
 	try {
-		await git.raw(["rev-parse", "--verify", "--quiet", ref]);
-		return true;
+		// `--quiet` exits 1 with NO stderr on a missing ref, which simple-git
+		// reports as success — so the answer must come from stdout (the sha).
+		const out = await git.raw(["rev-parse", "--verify", "--quiet", ref]);
+		return out.trim().length > 0;
 	} catch {
 		return false;
 	}
