@@ -348,6 +348,10 @@ input {
 /* ---- task panel ---- */
 .panel {
 	flex: 0 0 480px; /* fixed width; board scrolls beside it, not squeezed */
+	/* Flex min-width:auto would let the terminal's canvas (sized while the
+	   panel was full-width) clamp the panel and stop it collapsing back to
+	   480px — the basis must always win over content min-width. */
+	min-width: 0;
 	/* Pin the panel in view while the board scrolls horizontally behind it. */
 	position: sticky;
 	right: 0;
