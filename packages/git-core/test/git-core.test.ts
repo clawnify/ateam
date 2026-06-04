@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import simpleGit from "simple-git";
 import {
 	commit,
 	createTask,
 	detectDefaultBranch,
+	detectMerged,
 	diff,
+	push,
 	parseWorktreeList,
 	registerProject,
 	removeTask,
@@ -168,6 +171,44 @@ describe("updateLocalMain — Stage B safety (no GitHub needed)", () => {
 		// Local main is exactly where we left it — nothing clobbered.
 		expect(await branchSha(repo.work, "main")).toBe(localSha);
 		expect(existsSync(join(repo.work, "local.txt"))).toBe(true);
+	});
+});
+
+describe("detectMerged — external merge detection (no GitHub needed)", () => {
+	it("detects a branch merged into origin/main behind Ateam's back", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "ext merge" });
+		await commitFile(task.worktreePath, "ext.txt", "x\n", "work");
+		await push({ worktreePath: task.worktreePath, branch: task.branch });
+
+		// Merge the branch into main remote-side via a throwaway clone — the
+		// same end state as an agent running `gh pr merge` (merge strategy).
+		const clone = await mkdtemp(join(repo.dir, "merge-"));
+		await simpleGit().clone(repo.origin, clone);
+		const g = simpleGit(clone);
+		await g.addConfig("user.email", "tester@ateam.dev");
+		await g.addConfig("user.name", "Grove Tester");
+		await g.raw(["fetch", "origin", task.branch]);
+		await g.raw(["merge", "--no-edit", `origin/${task.branch}`]);
+		await g.push("origin", "main");
+
+		const res = await detectMerged({
+			worktreePath: task.worktreePath,
+			branch: task.branch,
+			baseBranch: "main",
+		});
+		expect(res.merged).toBe(true);
+	});
+
+	it("reports not-merged while the branch is still ahead of base", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "in flight" });
+		await commitFile(task.worktreePath, "wip.txt", "w\n", "wip");
+
+		const res = await detectMerged({
+			worktreePath: task.worktreePath,
+			branch: task.branch,
+			baseBranch: "main",
+		});
+		expect(res.merged).toBe(false);
 	});
 });
 

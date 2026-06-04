@@ -36,8 +36,9 @@ export type {
 	UpdateResult,
 } from "./sync";
 
-export { mergeViaPR, updateLocalMain } from "./merge";
+export { detectMerged, mergeViaPR, updateLocalMain } from "./merge";
 export type {
+	DetectMergedResult,
 	MergeStrategy,
 	MergeViaPRInput,
 	MergeResult,

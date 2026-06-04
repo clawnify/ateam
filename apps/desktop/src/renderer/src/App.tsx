@@ -1,9 +1,11 @@
 import {
 	ArrowDownToLine,
 	ArrowUp,
+	ArrowUpDown,
 	BookOpen,
 	Brush,
 	Bug,
+	Check,
 	ChevronDown,
 	ChevronRight,
 	Database,
@@ -32,7 +34,8 @@ import {
 	X,
 	Zap,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { motion, Reorder } from "motion/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	AgentDTO,
 	DiffResultDTO,
@@ -42,6 +45,7 @@ import type {
 } from "../../shared/types";
 import { AgentIcon } from "./components/AgentIcon";
 import { CleanupDialog } from "./components/CleanupDialog";
+import { FileDiffView } from "./components/FileDiffView";
 import { IconButton } from "./components/IconButton";
 import { Menu } from "./components/Menu";
 import { TerminalView } from "./components/Terminal";
@@ -77,6 +81,20 @@ function taskIcon(name: string): LucideIcon {
 	return GitBranch;
 }
 
+// ---- sidebar task ordering ----
+type TaskSortMode = "status" | "updated" | "custom";
+
+// Status order: what needs the user's eyes first.
+const STATUS_RANK: Record<KanbanColumn, number> = {
+	review: 0,
+	needs_attention: 1,
+	running: 2,
+	todo: 3,
+	merged: 4,
+};
+
+const springy = { type: "spring", stiffness: 550, damping: 42 } as const;
+
 export function App() {
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
 	const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -89,6 +107,10 @@ export function App() {
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
+	const [taskSort, setTaskSortState] = useState<TaskSortMode>(
+		() => (localStorage.getItem("ateam.taskSort") as TaskSortMode) || "status",
+	);
+	const [customOrder, setCustomOrder] = useState<string[]>([]);
 	const [cleanupOpen, setCleanupOpen] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [info, setInfo] = useState<string | null>(null);
@@ -140,6 +162,49 @@ export function App() {
 	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
 	// "Active" tasks for the sidebar list = everything not yet merged/done.
 	const sidebarTasks = activeTasks.filter((t) => t.column !== "merged");
+
+	// Sidebar ordering: by status (Review → Needs You → In Progress → Backlog),
+	// most-recently-updated first, or a hand-dragged custom order.
+	const setTaskSort = (mode: TaskSortMode) => {
+		setTaskSortState(mode);
+		localStorage.setItem("ateam.taskSort", mode);
+	};
+	useEffect(() => {
+		if (!activeProjectId) return;
+		try {
+			setCustomOrder(
+				JSON.parse(
+					localStorage.getItem(`ateam.taskOrder.${activeProjectId}`) ?? "[]",
+				) as string[],
+			);
+		} catch {
+			setCustomOrder([]);
+		}
+	}, [activeProjectId]);
+	const reorderTasks = (ids: string[]) => {
+		setCustomOrder(ids);
+		if (activeProjectId)
+			localStorage.setItem(
+				`ateam.taskOrder.${activeProjectId}`,
+				JSON.stringify(ids),
+			);
+	};
+	const orderedSidebarTasks = useMemo(() => {
+		const list = [...sidebarTasks];
+		if (taskSort === "status") {
+			list.sort((a, b) => STATUS_RANK[a.column] - STATUS_RANK[b.column]);
+		} else if (taskSort === "updated") {
+			list.sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0));
+		} else {
+			const rank = new Map(customOrder.map((id, i) => [id, i]));
+			list.sort(
+				(a, b) =>
+					(rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+					(rank.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+			);
+		}
+		return list;
+	}, [sidebarTasks, taskSort, customOrder]);
 
 	const selectProject = (id: string) => setActiveProjectId(id);
 	// From the sidebar → open full width. From the board → open on the side.
@@ -231,42 +296,76 @@ export function App() {
 						)}
 						<span>Tasks</span>
 					</button>
-					<IconButton
-						icon={Plus}
-						label="New task"
-						onClick={newTask}
-						disabled={!activeProjectId}
-					/>
+					<span style={{ display: "flex", gap: 2 }}>
+						<Menu
+							icon={ArrowUpDown}
+							label="Order tasks"
+							items={[
+								{
+									label: "By status",
+									icon: taskSort === "status" ? Check : undefined,
+									onClick: () => setTaskSort("status"),
+								},
+								{
+									label: "Last updated first",
+									icon: taskSort === "updated" ? Check : undefined,
+									onClick: () => setTaskSort("updated"),
+								},
+								{
+									label: "Custom (drag to reorder)",
+									icon: taskSort === "custom" ? Check : undefined,
+									onClick: () => setTaskSort("custom"),
+								},
+							]}
+						/>
+						<IconButton
+							icon={Plus}
+							label="New task"
+							onClick={newTask}
+							disabled={!activeProjectId}
+						/>
+					</span>
 				</div>
 				{!tasksCollapsed &&
 					(!activeProjectId ? (
 						<div className="tree-empty">Select a project</div>
-					) : sidebarTasks.length === 0 ? (
+					) : orderedSidebarTasks.length === 0 ? (
 						<div className="tree-empty">No active tasks</div>
-					) : (
-						sidebarTasks.map((t) => {
-							const Icon = taskIcon(t.name);
-							return (
-								<button
-									type="button"
+					) : taskSort === "custom" ? (
+						// Custom order: drag rows up/down; Motion animates the shuffle.
+						<Reorder.Group
+							as="div"
+							axis="y"
+							values={orderedSidebarTasks.map((t) => t.id)}
+							onReorder={reorderTasks}
+						>
+							{orderedSidebarTasks.map((t) => (
+								<Reorder.Item
+									as="div"
 									key={t.id}
-									className={`tasknode ${t.id === selectedTaskId ? "selected" : ""}`}
-									onClick={() => openTask(t)}
+									value={t.id}
+									transition={springy}
 								>
-									{t.agentId ? (
-										<span className="ticon">
-											<AgentIcon agentId={t.agentId} size={14} />
-										</span>
-									) : (
-										<Icon className="ticon" size={14} strokeWidth={1.75} />
-									)}
-									<span className="tname">{t.name}</span>
-									{t.agentStatus && (
-										<span className={`tstatus ${t.agentStatus}`} />
-									)}
-								</button>
-							);
-						})
+									<TaskRow
+										task={t}
+										selected={t.id === selectedTaskId}
+										onClick={() => openTask(t)}
+									/>
+								</Reorder.Item>
+							))}
+						</Reorder.Group>
+					) : (
+						// Sorted modes: layout animation glides rows to their new spot
+						// when a status change or update reorders them.
+						orderedSidebarTasks.map((t) => (
+							<motion.div key={t.id} layout transition={springy}>
+								<TaskRow
+									task={t}
+									selected={t.id === selectedTaskId}
+									onClick={() => openTask(t)}
+								/>
+							</motion.div>
+						))
 					))}
 			</aside>
 
@@ -370,6 +469,35 @@ export function App() {
 	);
 }
 
+function TaskRow({
+	task: t,
+	selected,
+	onClick,
+}: {
+	task: TaskDTO;
+	selected: boolean;
+	onClick: () => void;
+}) {
+	const Icon = taskIcon(t.name);
+	return (
+		<button
+			type="button"
+			className={`tasknode ${selected ? "selected" : ""}`}
+			onClick={onClick}
+		>
+			{t.agentId ? (
+				<span className="ticon">
+					<AgentIcon agentId={t.agentId} size={14} />
+				</span>
+			) : (
+				<Icon className="ticon" size={14} strokeWidth={1.75} />
+			)}
+			<span className="tname">{t.name}</span>
+			{t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />}
+		</button>
+	);
+}
+
 function Board({
 	tasks,
 	selectedId,
@@ -392,8 +520,10 @@ function Board({
 							{col.label} <span className="count">{items.length}</span>
 						</h3>
 						{items.map((t) => (
-							<div
+							<motion.div
 								key={t.id}
+								layout
+								transition={springy}
 								className={`card ${t.id === selectedId ? "selected" : ""}`}
 								onClick={(e) => {
 									e.stopPropagation();
@@ -417,7 +547,7 @@ function Board({
 										<AgentIcon agentId={t.agentId} size={15} />
 									</span>
 								)}
-							</div>
+							</motion.div>
 						))}
 					</div>
 				);
@@ -455,6 +585,12 @@ function TaskPanel({
 		agents.find((a) => a.available)?.id ?? "claude",
 	);
 	const [diff, setDiff] = useState<DiffResultDTO | null>(null);
+	const [viewFile, setViewFile] = useState<string | null>(null);
+
+	// Selecting another task closes any open file diff.
+	useEffect(() => {
+		setViewFile(null);
+	}, [task.id]);
 
 	const refreshDiff = useCallback(() => {
 		void window.grove.git.diff(task.id).then(setDiff);
@@ -639,34 +775,70 @@ function TaskPanel({
 				/>
 			</div>
 
-			{terminalId ? (
-				<TerminalView terminalId={terminalId} />
-			) : (
-				<div className="term" style={{ display: "grid", placeItems: "center" }}>
-					<span className="muted">Launch an agent or shell to start a terminal</span>
-				</div>
-			)}
-
-			<div className="diff">
-				<div style={{ display: "flex", justifyContent: "space-between" }}>
-					<strong>Changes vs {task.baseBranch}</strong>
-					<IconButton icon={RotateCw} label="Refresh diff" onClick={refreshDiff} />
-				</div>
-				{diff?.files.length ? (
-					diff.files.map((f) => (
-						<div className="file" key={f.path}>
-							<span>{f.path}</span>
-							<span>
-								<span className="add">+{f.additions}</span>{" "}
-								<span className="del">-{f.deletions}</span>
-							</span>
-						</div>
-					))
-				) : (
-					<div className="muted" style={{ padding: "4px 0" }}>
-						No changes
+			<div className="panel-body">
+				<div className="panel-main">
+					{/* Keep the terminal mounted (xterm state survives) while a diff
+					    is open — just hide it. */}
+					<div
+						className="term-wrap"
+						style={{ display: viewFile ? "none" : "flex" }}
+					>
+						{terminalId ? (
+							<TerminalView terminalId={terminalId} />
+						) : (
+							<div
+								className="term"
+								style={{ display: "grid", placeItems: "center" }}
+							>
+								<span className="muted">
+									Launch an agent or shell to start a terminal
+								</span>
+							</div>
+						)}
 					</div>
-				)}
+					{viewFile && (
+						<FileDiffView
+							taskId={task.id}
+							file={viewFile}
+							split={mode === "full"}
+							onClose={() => setViewFile(null)}
+						/>
+					)}
+				</div>
+
+				<div className="changes">
+					<div className="changes-head">
+						<strong>Changes</strong>
+						<IconButton
+							icon={RotateCw}
+							label="Refresh changes"
+							onClick={refreshDiff}
+						/>
+					</div>
+					{diff?.files.length ? (
+						diff.files.map((f) => (
+							<button
+								type="button"
+								key={f.path}
+								className={`file ${viewFile === f.path ? "selected" : ""}`}
+								title={f.path}
+								onClick={() =>
+									setViewFile(viewFile === f.path ? null : f.path)
+								}
+							>
+								<span className="fpath">{f.path}</span>
+								<span className="fstat">
+									<span className="add">+{f.additions}</span>{" "}
+									<span className="del">-{f.deletions}</span>
+								</span>
+							</button>
+						))
+					) : (
+						<div className="muted" style={{ padding: "4px 10px" }}>
+							No changes
+						</div>
+					)}
+				</div>
 			</div>
 		</section>
 	);
