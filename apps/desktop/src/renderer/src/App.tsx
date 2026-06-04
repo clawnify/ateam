@@ -20,6 +20,7 @@ import {
 	Lock,
 	type LucideIcon,
 	Maximize2,
+	PanelLeft,
 	Minimize2,
 	Palette,
 	Play,
@@ -107,6 +108,15 @@ export function App() {
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
+	const [rail, setRail] = useState(
+		() => localStorage.getItem("ateam.sidebarRail") === "1",
+	);
+	const toggleRail = () => {
+		setRail((r) => {
+			localStorage.setItem("ateam.sidebarRail", r ? "0" : "1");
+			return !r;
+		});
+	};
 	const [taskSort, setTaskSortState] = useState<TaskSortMode>(
 		() => (localStorage.getItem("ateam.taskSort") as TaskSortMode) || "status",
 	);
@@ -275,8 +285,80 @@ export function App() {
 	};
 
 	return (
-		<div className="app">
-			<aside className="sidebar">
+		<div className={`app ${rail ? "rail" : ""}`}>
+			<aside className={`sidebar ${rail ? "rail" : ""}`}>
+				{/* In rail mode the traffic lights own this strip; the toggle moves
+				    below them as the first tile. */}
+				<div className="side-top">
+					{!rail && (
+						<IconButton
+							icon={PanelLeft}
+							label="Collapse sidebar"
+							onClick={toggleRail}
+						/>
+					)}
+				</div>
+
+				{rail ? (
+					<>
+						<button
+							type="button"
+							className="rail-tile"
+							title="Expand sidebar"
+							onClick={toggleRail}
+						>
+							<PanelLeft size={16} strokeWidth={1.75} />
+						</button>
+						<div className="rail-divider" />
+						{projects.map((p) => {
+							const alert = projectAlert(p.id);
+							return (
+								<button
+									type="button"
+									key={p.id}
+									className={`rail-tile ${p.id === activeProjectId ? "active" : ""}`}
+									title={p.name}
+									onClick={() => selectProject(p.id)}
+								>
+									{p.name.charAt(0).toUpperCase()}
+									{alert && <span className={`corner pulse ${alert}`} />}
+								</button>
+							);
+						})}
+						<div className="rail-divider" />
+						<button
+							type="button"
+							className="rail-tile"
+							title="New task"
+							onClick={newTask}
+							disabled={!activeProjectId}
+						>
+							<Plus size={16} strokeWidth={1.75} />
+						</button>
+						{orderedSidebarTasks.map((t) => {
+							const Icon = taskIcon(t.name);
+							return (
+								<button
+									type="button"
+									key={t.id}
+									className={`rail-tile ${t.id === selectedTaskId ? "active" : ""}`}
+									title={t.name}
+									onClick={() => openTask(t)}
+								>
+									{t.agentId ? (
+										<AgentIcon agentId={t.agentId} size={16} />
+									) : (
+										<Icon size={16} strokeWidth={1.75} />
+									)}
+									{t.agentStatus && (
+										<span className={`corner ${t.agentStatus}`} />
+									)}
+								</button>
+							);
+						})}
+					</>
+				) : (
+					<>
 				{/* PROJECTS accordion */}
 				<div className="section-head">
 					<button
@@ -401,6 +483,8 @@ export function App() {
 							</motion.div>
 						))
 					))}
+					</>
+				)}
 			</aside>
 
 			<main className="main">

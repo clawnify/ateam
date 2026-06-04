@@ -91,13 +91,96 @@ input {
 	grid-template-columns: 240px 1fr;
 	height: 100%;
 }
+.app.rail {
+	grid-template-columns: 56px 1fr;
+}
 
 .sidebar {
 	background: var(--bg-elev);
 	border-right: 1px solid var(--border);
 	display: flex;
 	flex-direction: column;
-	padding-top: 38px; /* room for traffic lights (hiddenInset) */
+}
+/* Slim header row sharing the traffic-light strip: the collapse toggle lives
+   here (like Arc/Linear), and the accordions start right below — no dead gap. */
+.side-top {
+	height: 38px;
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	padding: 0 6px;
+	-webkit-app-region: drag;
+}
+.side-top .iconbtn {
+	-webkit-app-region: no-drag;
+}
+
+/* collapsed rail: project initials + task agent icons */
+.sidebar.rail {
+	align-items: center;
+	overflow-y: auto;
+	overflow-x: hidden;
+}
+.sidebar.rail .side-top {
+	justify-content: center;
+	width: 100%;
+}
+.rail-tile {
+	position: relative;
+	width: 36px;
+	height: 36px;
+	flex: none;
+	margin: 2px 0;
+	border: none;
+	border-radius: 9px;
+	background: transparent;
+	color: var(--text-dim);
+	font-size: 14px;
+	font-weight: 600;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+}
+.rail-tile:hover,
+.rail-tile.active {
+	background: var(--bg-elev-2);
+	color: var(--text);
+}
+.rail-tile .corner {
+	position: absolute;
+	top: 3px;
+	right: 3px;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	border: 2px solid var(--bg-elev);
+	box-sizing: content-box;
+}
+.rail-tile .corner.needs_attention,
+.rail-tile .corner.awaiting_input {
+	background: var(--amber);
+}
+.rail-tile .corner.review,
+.rail-tile .corner.idle {
+	background: var(--green);
+}
+.rail-tile .corner.running {
+	background: var(--blue);
+}
+.rail-tile .corner.stopped {
+	background: var(--text-dim);
+}
+.rail-tile .corner.pulse {
+	animation: dotpulse 1.4s ease-in-out infinite;
+}
+.rail-divider {
+	width: 24px;
+	height: 1px;
+	flex: none;
+	background: var(--border);
+	margin: 8px 0;
 }
 .sidebar h2 {
 	font-size: 11px;
