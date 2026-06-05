@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
 	type AteamApi,
 	type KanbanColumn,
@@ -64,6 +64,11 @@ const api: AteamApi = {
 			ipcRenderer.on(CH.evtPtyExit, handler);
 			return () => ipcRenderer.off(CH.evtPtyExit, handler);
 		},
+	},
+	utils: {
+		pathForFile: (file) => webUtils.getPathForFile(file),
+		clipboardHasImage: () =>
+			ipcRenderer.sendSync(CH.utilClipboardHasImage) === true,
 	},
 	events: {
 		onTaskUpdated: (cb: (task: TaskDTO) => void) => {

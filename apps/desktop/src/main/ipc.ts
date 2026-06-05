@@ -19,7 +19,7 @@ import {
 	trackingStatus,
 	updateFromBase,
 } from "@ateam/git-core";
-import { BrowserWindow, dialog, ipcMain } from "electron";
+import { BrowserWindow, clipboard, dialog, ipcMain } from "electron";
 import {
 	type GitStatusSnapshot,
 	type KanbanColumn,
@@ -423,6 +423,16 @@ export function registerIpc(ctx: IpcContext): void {
 		repo.updateTask(db, task.id, { gitStatus: snapshot });
 		if (task.column !== "merged") void detectExternalMerge(task.id);
 		return snapshot;
+	});
+
+	// Sync (rare, keypress-driven): does the clipboard hold an image-only
+	// payload? Used to translate Cmd+V into the Ctrl+V agents expect for
+	// image paste.
+	ipcMain.on(CH.utilClipboardHasImage, (e) => {
+		const hasImage = clipboard
+			.availableFormats()
+			.some((f) => f.startsWith("image/"));
+		e.returnValue = hasImage && clipboard.readText().length === 0;
 	});
 
 	// ---- agents ----

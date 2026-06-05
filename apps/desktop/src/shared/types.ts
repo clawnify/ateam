@@ -137,6 +137,7 @@ export const CH = {
 	gitFileDiff: "git:fileDiff",
 	gitStatus: "git:status",
 	agentsList: "agents:list",
+	utilClipboardHasImage: "util:clipboardHasImage",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -221,5 +222,11 @@ export interface AteamApi {
 	};
 	events: {
 		onTaskUpdated(cb: (task: TaskDTO) => void): () => void;
+	};
+	utils: {
+		/** Absolute filesystem path for a dragged-in File (Electron webUtils). */
+		pathForFile(file: File): string;
+		/** True when the clipboard holds an image and no text (sync). */
+		clipboardHasImage(): boolean;
 	};
 }

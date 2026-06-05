@@ -36,33 +36,94 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		const focusTerm = () => term.focus();
 		el.addEventListener("mousedown", focusTerm);
 
+		// Cmd+V with an image-only clipboard: agents read images from the
+		// clipboard on Ctrl+V — forward that instead of pasting (empty) text.
+		term.attachCustomKeyEventHandler((ev) => {
+			if (
+				ev.type === "keydown" &&
+				ev.metaKey &&
+				!ev.ctrlKey &&
+				ev.key.toLowerCase() === "v" &&
+				window.ateam.utils.clipboardHasImage()
+			) {
+				window.ateam.pty.write(terminalId, "\x16");
+				return false;
+			}
+			return true;
+		});
+
+		// Dropping files types their (quoted) paths, like iTerm — so you can
+		// drag an image straight into an agent conversation.
+		const onDragOver = (e: DragEvent) => e.preventDefault();
+		const onDrop = (e: DragEvent) => {
+			e.preventDefault();
+			const files = Array.from(e.dataTransfer?.files ?? []);
+			if (files.length === 0) return;
+			const paths = files
+				.map((f) => window.ateam.utils.pathForFile(f))
+				.filter(Boolean)
+				.map((p) => (/[\s'"\\]/.test(p) ? `"${p.replace(/"/g, '\\"')}"` : p));
+			if (paths.length) {
+				window.ateam.pty.write(terminalId, `${paths.join(" ")} `);
+				term.focus();
+			}
+		};
+		el.addEventListener("dragover", onDragOver);
+		el.addEventListener("drop", onDrop);
+
+		// The task panel asks us to take focus after layout toggles, so Enter
+		// reaches the agent instead of re-triggering the clicked button.
+		const onFocusRequest = () => term.focus();
+		window.addEventListener("ateam:focus-terminal", onFocusRequest);
+
 		const offData = window.ateam.pty.onData((e) => {
 			if (e.terminalId === terminalId) term.write(e.data);
 		});
 
 		// Replay recent output after attaching the live listener.
 		void window.ateam.pty.snapshot(terminalId).then((buf) => {
-			if (buf) term.write(buf);
+			if (buf) term.write(buf, () => term.scrollToBottom());
 		});
 
 		const disposeInput = term.onData((d) =>
 			window.ateam.pty.write(terminalId, d),
 		);
 
+		// Resize handling. Layout toggles fire several ResizeObserver callbacks
+		// in quick succession (sometimes while the element is mid-layout at zero
+		// size); each PTY resize SIGWINCHes the TUI agent, and a storm of them —
+		// or one bogus zero-size fit — can leave it painted blank until the next
+		// resize. So: coalesce to one fit per frame, never fit a hidden element,
+		// and only notify the PTY when the grid actually changed.
+		let raf = 0;
+		let lastCols = 0;
+		let lastRows = 0;
 		const syncSize = () => {
-			try {
-				fit.fit();
+			cancelAnimationFrame(raf);
+			raf = requestAnimationFrame(() => {
+				if (el.clientWidth === 0 || el.clientHeight === 0) return;
+				try {
+					fit.fit();
+				} catch {
+					return; /* not laid out yet */
+				}
+				if (term.cols === lastCols && term.rows === lastRows) return;
+				lastCols = term.cols;
+				lastRows = term.rows;
 				window.ateam.pty.resize(terminalId, term.cols, term.rows);
-			} catch {
-				/* ignore */
-			}
+				term.scrollToBottom();
+			});
 		};
 		const ro = new ResizeObserver(syncSize);
 		ro.observe(el);
 		syncSize();
 
 		return () => {
+			cancelAnimationFrame(raf);
 			el.removeEventListener("mousedown", focusTerm);
+			el.removeEventListener("dragover", onDragOver);
+			el.removeEventListener("drop", onDrop);
+			window.removeEventListener("ateam:focus-terminal", onFocusRequest);
 			offData();
 			disposeInput.dispose();
 			ro.disconnect();

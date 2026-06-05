@@ -234,7 +234,33 @@ export function App() {
 		return list;
 	}, [sidebarTasks, taskSort, customOrder]);
 
-	const selectProject = (id: string) => setActiveProjectId(id);
+	// Each project remembers its last view (selected task, side/full, board vs
+	// mission) so switching back lands exactly where you left off.
+	const viewMemRef = useRef<
+		Record<
+			string,
+			{
+				taskId: string | null;
+				mode: "side" | "full";
+				view: "board" | "mission";
+			}
+		>
+	>({});
+	const selectProject = (id: string) => {
+		if (id === activeProjectId) return;
+		if (activeProjectId) {
+			viewMemRef.current[activeProjectId] = {
+				taskId: selectedTaskId,
+				mode: panelMode,
+				view,
+			};
+		}
+		const mem = viewMemRef.current[id];
+		setActiveProjectId(id);
+		setSelectedTaskId(mem?.taskId ?? null);
+		setPanelMode(mem?.mode ?? "side");
+		setView(mem?.view ?? "board");
+	};
 	// From the sidebar → open full width. From the board → open on the side.
 	const openTask = (t: TaskDTO) => {
 		setActiveProjectId(t.projectId);
@@ -800,6 +826,15 @@ function TaskPanel({
 		if (!viewFile && diff?.files[0]) setViewFile(diff.files[0].path);
 	};
 
+	// After toggling side/full, hand focus to the terminal so Enter goes to
+	// the agent — not back into the toggle button.
+	const setModeAndFocusTerm = (m: "side" | "full") => {
+		onSetMode(m);
+		requestAnimationFrame(() =>
+			window.dispatchEvent(new Event("ateam:focus-terminal")),
+		);
+	};
+
 	return (
 		<section className={`panel ${mode === "full" ? "full" : ""}`}>
 			<div className="head">
@@ -810,13 +845,13 @@ function TaskPanel({
 							<IconButton
 								icon={Minimize2}
 								label="Show beside the board"
-								onClick={() => onSetMode("side")}
+								onClick={() => setModeAndFocusTerm("side")}
 							/>
 						) : (
 							<IconButton
 								icon={Maximize2}
 								label="Expand to full width"
-								onClick={() => onSetMode("full")}
+								onClick={() => setModeAndFocusTerm("full")}
 							/>
 						)}
 						<IconButton icon={X} label="Close" onClick={onClose} />
