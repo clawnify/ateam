@@ -38,22 +38,22 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 
 		// Cmd+V with an image-only clipboard: agents read images from the
 		// clipboard on Ctrl+V — forward that instead of pasting (empty) text.
-		term.attachCustomKeyEventHandler((ev) => {
-			if (
-				ev.type === "keydown" &&
-				ev.metaKey &&
-				!ev.ctrlKey &&
-				ev.key.toLowerCase() === "v" &&
-				window.ateam.utils.clipboardHasImage()
-			) {
-				window.ateam.pty.write(terminalId, "\x16");
-				return false;
-			}
-			return true;
-		});
+		// The default app menu owns the Cmd+V key equivalent natively, so the
+		// renderer never sees the keydown; the menu's paste role dispatches a
+		// DOM `paste` event instead. Intercept that (capture phase, before
+		// xterm's own paste handler on the textarea).
+		const onPaste = (e: Event) => {
+			if (!window.ateam.utils.clipboardHasImage()) return;
+			e.preventDefault();
+			e.stopPropagation();
+			window.ateam.pty.write(terminalId, "\x16");
+		};
+		el.addEventListener("paste", onPaste, true);
 
-		// Dropping files types their (quoted) paths, like iTerm — so you can
-		// drag an image straight into an agent conversation.
+		// Dropping files pastes their paths, like iTerm: backslash-escaped and
+		// delivered via term.paste() so apps with bracketed paste on (Claude
+		// Code) see a *paste* of a file path — that's what makes them attach a
+		// dropped image as [Image #N] instead of leaving a literal path.
 		const onDragOver = (e: DragEvent) => e.preventDefault();
 		const onDrop = (e: DragEvent) => {
 			e.preventDefault();
@@ -62,14 +62,32 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			const paths = files
 				.map((f) => window.ateam.utils.pathForFile(f))
 				.filter(Boolean)
-				.map((p) => (/[\s'"\\]/.test(p) ? `"${p.replace(/"/g, '\\"')}"` : p));
+				.map((p) => p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1"));
 			if (paths.length) {
-				window.ateam.pty.write(terminalId, `${paths.join(" ")} `);
+				term.paste(`${paths.join(" ")} `);
 				term.focus();
 			}
 		};
 		el.addEventListener("dragover", onDragOver);
 		el.addEventListener("drop", onDrop);
+
+		// Forward app-level focus to the terminal: macOS app switches don't
+		// change DOM focus, so without this an agent that asked for focus
+		// reporting (mode 1004) never hears you came back — Claude Code uses
+		// that to re-check the clipboard for its "Image in clipboard" hint.
+		// xterm only emits CSI I/O if the app enabled 1004, so this is inert
+		// for everything else. Guarded so only the focused tile re-focuses
+		// (Mission Control mounts many terminals).
+		let hadFocus = false;
+		const onWinBlur = () => {
+			hadFocus = document.activeElement === term.textarea;
+			if (hadFocus) term.textarea?.blur();
+		};
+		const onWinFocus = () => {
+			if (hadFocus) term.focus();
+		};
+		window.addEventListener("blur", onWinBlur);
+		window.addEventListener("focus", onWinFocus);
 
 		// The task panel asks us to take focus after layout toggles, so Enter
 		// reaches the agent instead of re-triggering the clicked button.
@@ -123,6 +141,9 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			el.removeEventListener("mousedown", focusTerm);
 			el.removeEventListener("dragover", onDragOver);
 			el.removeEventListener("drop", onDrop);
+			el.removeEventListener("paste", onPaste, true);
+			window.removeEventListener("blur", onWinBlur);
+			window.removeEventListener("focus", onWinFocus);
 			window.removeEventListener("ateam:focus-terminal", onFocusRequest);
 			offData();
 			disposeInput.dispose();
