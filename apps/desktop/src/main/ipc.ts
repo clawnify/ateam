@@ -5,37 +5,33 @@ import { agentCommand, getAgent, listAgents } from "@ateam/agents";
 import { repo } from "@ateam/db";
 import {
 	commit,
-	createTask as gitCreateTask,
 	detectMerged,
 	diff,
 	errorMessage,
 	fileDiff,
+	createTask as gitCreateTask,
 	gitFor,
+	removeTask as gitRemoveTask,
 	initRepository,
-	mergeViaPR,
 	push,
 	registerProject,
-	removeTask as gitRemoveTask,
 	trackingStatus,
 	updateFromBase,
 } from "@ateam/git-core";
 import { BrowserWindow, clipboard, dialog, ipcMain } from "electron";
-import {
-	type GitStatusSnapshot,
-	type KanbanColumn,
-	type MergeStrategy,
-	CH,
-} from "../shared/types";
-import {
-	buildAgentEnv,
-	ensureClaudeHooks,
-	ensureCodexHooks,
-} from "./agent-setup";
+import { CH, type GitStatusSnapshot, type KanbanColumn, type MergeStrategy } from "../shared/types";
+import { buildAgentEnv, ensureClaudeHooks, ensureCodexHooks } from "./agent-setup";
+import type { LoopRunner } from "./loops/runner";
+import type { MergeQueue } from "./merge-queue";
 import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
 
 export interface IpcContext {
 	services: Services;
 	sendTaskUpdated: (taskId: string) => void;
+	mergeQueue: MergeQueue;
+	loopRunner: LoopRunner;
+	/** Push the current loop list to the renderer. */
+	sendLoopsUpdated: () => void;
 }
 
 /** Project display name from the repo's README H1 (md or HTML), if present. */
@@ -87,7 +83,7 @@ async function computeGitStatus(
 }
 
 export function registerIpc(ctx: IpcContext): void {
-	const { services, sendTaskUpdated } = ctx;
+	const { services, sendTaskUpdated, mergeQueue, loopRunner, sendLoopsUpdated } = ctx;
 	const { db } = services;
 
 	// ---- projects ----
@@ -99,30 +95,25 @@ export function registerIpc(ctx: IpcContext): void {
 		return res.canceled ? null : (res.filePaths[0] ?? null);
 	});
 
-	ipcMain.handle(
-		CH.projectsRegister,
-		async (_e, repoPath: string, opts?: { init?: boolean }) => {
-			// "Create a repository here instead" (GitHub-Desktop-style), after the
-			// renderer asked the user.
-			if (opts?.init) await initRepository(repoPath);
-			const info = await registerProject(repoPath);
-			const row = repo.upsertProject(db, {
-				repoPath: info.repoPath,
-				name: readmeTitle(info.repoPath) ?? basename(info.repoPath),
-				defaultBranch: info.defaultBranch,
-				githubOwner: info.githubRepo?.owner ?? null,
-				githubName: info.githubRepo?.name ?? null,
-			});
-			return toProjectDTO(row!);
-		},
-	);
+	ipcMain.handle(CH.projectsRegister, async (_e, repoPath: string, opts?: { init?: boolean }) => {
+		// "Create a repository here instead" (GitHub-Desktop-style), after the
+		// renderer asked the user.
+		if (opts?.init) await initRepository(repoPath);
+		const info = await registerProject(repoPath);
+		const row = repo.upsertProject(db, {
+			repoPath: info.repoPath,
+			name: readmeTitle(info.repoPath) ?? basename(info.repoPath),
+			defaultBranch: info.defaultBranch,
+			githubOwner: info.githubRepo?.owner ?? null,
+			githubName: info.githubRepo?.name ?? null,
+		});
+		return toProjectDTO(row!);
+	});
 
 	ipcMain.handle(CH.projectsList, async () =>
 		repo
 			.listProjects(db)
-			.map((p) =>
-				toProjectDTO({ ...p, name: readmeTitle(p.repoPath) ?? p.name }),
-			),
+			.map((p) => toProjectDTO({ ...p, name: readmeTitle(p.repoPath) ?? p.name })),
 	);
 
 	ipcMain.handle(CH.projectsRemove, async (_e, id: string) => {
@@ -136,10 +127,7 @@ export function registerIpc(ctx: IpcContext): void {
 
 	ipcMain.handle(
 		CH.tasksCreate,
-		async (
-			_e,
-			input: { projectId: string; name: string; baseBranch?: string },
-		) => {
+		async (_e, input: { projectId: string; name: string; baseBranch?: string }) => {
 			const project = requireProjectFor(services, input.projectId);
 			const created = await gitCreateTask({
 				repoPath: project.repoPath,
@@ -161,10 +149,7 @@ export function registerIpc(ctx: IpcContext): void {
 
 	ipcMain.handle(
 		CH.tasksRemove,
-		async (
-			_e,
-			input: { id: string; deleteBranch?: boolean; force?: boolean },
-		) => {
+		async (_e, input: { id: string; deleteBranch?: boolean; force?: boolean }) => {
 			const task = requireTask(services, input.id);
 			const project = requireProjectFor(services, task.projectId);
 			// Tear down any live agent/shell sessions in this worktree first.
@@ -182,13 +167,10 @@ export function registerIpc(ctx: IpcContext): void {
 		},
 	);
 
-	ipcMain.handle(
-		CH.tasksSetColumn,
-		async (_e, id: string, column: KanbanColumn) => {
-			const row = repo.updateTask(db, id, { column });
-			return toTaskDTO(row!);
-		},
-	);
+	ipcMain.handle(CH.tasksSetColumn, async (_e, id: string, column: KanbanColumn) => {
+		const row = repo.updateTask(db, id, { column });
+		return toTaskDTO(row!);
+	});
 
 	// ---- cleanup: remove only merged + idle + clean worktrees ----
 	// Classify a project's tasks into removable vs kept (with a reason). A task
@@ -205,17 +187,17 @@ export function registerIpc(ctx: IpcContext): void {
 				kept.push({ task, reason: "not merged" });
 				continue;
 			}
-			const live = repo
-				.listSessionsByTask(db, task.id)
-				.some((s) => services.pty.has(s.terminalId));
+			const live = repo.listSessionsByTask(db, task.id).some((s) => services.pty.has(s.terminalId));
 			if (live) {
 				kept.push({ task, reason: "agent still active" });
 				continue;
 			}
 			const dirty =
-				(await gitFor(task.worktreePath)
-					.raw(["status", "--porcelain"])
-					.catch(() => "")).trim() !== "";
+				(
+					await gitFor(task.worktreePath)
+						.raw(["status", "--porcelain"])
+						.catch(() => "")
+				).trim() !== "";
 			if (dirty) {
 				kept.push({ task, reason: "uncommitted/untracked changes" });
 				continue;
@@ -229,47 +211,40 @@ export function registerIpc(ctx: IpcContext): void {
 	// actively running (idle / stopped / merged / no activity). Each carries a
 	// live terminalId when its PTY is still around, so the dialog can show the
 	// conversation and let the user continue it instead of deleting.
-	ipcMain.handle(
-		CH.tasksCleanupCandidates,
-		async (_e, projectId: string) => {
-			const out: {
-				id: string;
-				name: string;
-				branch: string;
-				worktreePath: string;
-				reason: string;
-				terminalId: string | null;
-				agentStatus: string | null;
-			}[] = [];
-			for (const task of repo.listTasks(db, projectId)) {
-				const busy =
-					task.agentStatus === "running" ||
-					task.agentStatus === "awaiting_input";
-				// Done tasks are always proposed — merged work is cleanup material
-				// even when its agent session is technically still alive.
-				if (busy && task.column !== "merged") continue;
-				const live = repo
-					.listSessionsByTask(db, task.id)
-					.find((s) => services.pty.has(s.terminalId));
-				const reason =
-					task.column === "merged"
-						? "merged"
-						: task.agentStatus === "idle" || task.agentStatus === "stopped"
-							? "agent idle"
-							: "no recent activity";
-				out.push({
-					id: task.id,
-					name: task.name,
-					branch: task.branch,
-					worktreePath: task.worktreePath,
-					reason,
-					terminalId: live?.terminalId ?? null,
-					agentStatus: task.agentStatus ?? null,
-				});
-			}
-			return out;
-		},
-	);
+	ipcMain.handle(CH.tasksCleanupCandidates, async (_e, projectId: string) => {
+		const out: {
+			id: string;
+			name: string;
+			branch: string;
+			worktreePath: string;
+			reason: string;
+			terminalId: string | null;
+			agentStatus: string | null;
+		}[] = [];
+		for (const task of repo.listTasks(db, projectId)) {
+			const busy = task.agentStatus === "running" || task.agentStatus === "awaiting_input";
+			// Done tasks are always proposed — merged work is cleanup material
+			// even when its agent session is technically still alive.
+			if (busy && task.column !== "merged") continue;
+			const live = repo.listSessionsByTask(db, task.id).find((s) => services.pty.has(s.terminalId));
+			const reason =
+				task.column === "merged"
+					? "merged"
+					: task.agentStatus === "idle" || task.agentStatus === "stopped"
+						? "agent idle"
+						: "no recent activity";
+			out.push({
+				id: task.id,
+				name: task.name,
+				branch: task.branch,
+				worktreePath: task.worktreePath,
+				reason,
+				terminalId: live?.terminalId ?? null,
+				agentStatus: task.agentStatus ?? null,
+			});
+		}
+		return out;
+	});
 
 	ipcMain.handle(CH.tasksCleanupPreview, async (_e, projectId: string) => {
 		const { removable, kept } = await classifyForCleanup(projectId);
@@ -342,30 +317,20 @@ export function registerIpc(ctx: IpcContext): void {
 		return result;
 	});
 
-	ipcMain.handle(
-		CH.gitMerge,
-		async (_e, taskId: string, strategy: MergeStrategy) => {
-			const task = requireTask(services, taskId);
-			const project = requireProjectFor(services, task.projectId);
-			const settings = repo.getSettings(db);
-			const result = await mergeViaPR({
-				repoPath: project.repoPath,
-				worktreePath: task.worktreePath,
-				branch: task.branch,
-				baseBranch: task.baseBranch,
-				strategy,
-				deleteRemoteBranch: settings.deleteRemoteBranchOnMerge ?? false,
-			});
-			repo.updateTask(db, task.id, {
-				column: "merged",
-				prNumber: result.prNumber ?? null,
-				prUrl: result.prUrl ?? null,
-				prState: "merged",
-			});
-			sendTaskUpdated(task.id);
-			return result;
-		},
-	);
+	ipcMain.handle(CH.gitMerge, async (_e, taskId: string, strategy: MergeStrategy) => {
+		const task = requireTask(services, taskId);
+		const project = requireProjectFor(services, task.projectId);
+		const settings = repo.getSettings(db);
+		// Serialize through the merge queue: two branches targeting the same
+		// base never race; each absorbs the freshly-merged base before merging.
+		return mergeQueue.enqueue({
+			task,
+			repoPath: project.repoPath,
+			strategy,
+			updateStrategy: settings.defaultUpdateStrategy ?? "merge",
+			deleteRemoteBranch: settings.deleteRemoteBranchOnMerge ?? false,
+		});
+	});
 
 	ipcMain.handle(CH.gitDiff, async (_e, taskId: string) => {
 		const task = requireTask(services, taskId);
@@ -394,9 +359,7 @@ export function registerIpc(ctx: IpcContext): void {
 		// fired Stop (idle/stopped) and is not waiting on a question/permission.
 		// A merge mid-conversation must NOT yank the card to Done.
 		const finished =
-			task.agentStatus == null ||
-			task.agentStatus === "idle" ||
-			task.agentStatus === "stopped";
+			task.agentStatus == null || task.agentStatus === "idle" || task.agentStatus === "stopped";
 		if (!finished || task.column === "needs_attention") return;
 		try {
 			const res = await detectMerged({
@@ -429,9 +392,7 @@ export function registerIpc(ctx: IpcContext): void {
 	// payload? Used to translate Cmd+V into the Ctrl+V agents expect for
 	// image paste.
 	ipcMain.on(CH.utilClipboardHasImage, (e) => {
-		const hasImage = clipboard
-			.availableFormats()
-			.some((f) => f.startsWith("image/"));
+		const hasImage = clipboard.availableFormats().some((f) => f.startsWith("image/"));
 		e.returnValue = hasImage && clipboard.readText().length === 0;
 	});
 
@@ -444,6 +405,19 @@ export function registerIpc(ctx: IpcContext): void {
 			description: a.description,
 			available: a.available,
 		}));
+	});
+
+	// ---- loops (periodic reconcilers) ----
+	ipcMain.handle(CH.loopsList, () => loopRunner.describe());
+	ipcMain.handle(CH.loopsSetEnabled, (_e, id: string, enabled: boolean) => {
+		loopRunner.setEnabled(id, enabled);
+		sendLoopsUpdated();
+		return loopRunner.describe();
+	});
+	ipcMain.handle(CH.loopsRunNow, async (_e, id: string) => {
+		await loopRunner.runNow(id);
+		sendLoopsUpdated();
+		return loopRunner.describe();
 	});
 
 	// ---- pty ----
@@ -498,10 +472,7 @@ export function registerIpc(ctx: IpcContext): void {
 				// payload on turn completion — our script maps it to Stop. Injected
 				// per-launch via -c so the user's ~/.codex/config.toml is untouched.
 				const codexNotify = join(services.hooksDir, "codex-notify.sh");
-				agentCmd = agentCmd.replace(
-					/^codex/,
-					`codex -c 'notify=["sh","${codexNotify}"]'`,
-				);
+				agentCmd = agentCmd.replace(/^codex/, `codex -c 'notify=["sh","${codexNotify}"]'`);
 			}
 			const command = `${agentCmd}; exec ${shell} -l`;
 			services.pty.spawn({
@@ -545,12 +516,9 @@ export function registerIpc(ctx: IpcContext): void {
 		services.pty.write(terminalId, data);
 	});
 
-	ipcMain.on(
-		CH.ptyResize,
-		(_e, terminalId: string, cols: number, rows: number) => {
-			services.pty.resize(terminalId, cols, rows);
-		},
-	);
+	ipcMain.on(CH.ptyResize, (_e, terminalId: string, cols: number, rows: number) => {
+		services.pty.resize(terminalId, cols, rows);
+	});
 
 	ipcMain.handle(CH.ptyKill, async (_e, terminalId: string) => {
 		services.pty.kill(terminalId);

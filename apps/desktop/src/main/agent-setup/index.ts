@@ -42,6 +42,45 @@ curl -s -m 2 "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventTy
 exit 0
 `;
 
+/**
+ * A `gh` shim placed FIRST on each agent's PATH. It intercepts `gh pr merge`
+ * and routes it into Ateam's merge queue (so two agents merging into the same
+ * base can't race); every other gh call passes straight through to the real gh.
+ * If the app isn't reachable it falls back to a real merge rather than blocking.
+ * Only agent PTYs get this dir on PATH — the main process keeps the real gh.
+ */
+const GH_SHIM = `#!/bin/sh
+PORT="\${ATEAM_HOOK_PORT:-}"
+TID="\${ATEAM_TERMINAL_ID:-}"
+SHIM_DIR="\${ATEAM_HOOKS_DIR:-}"
+
+# Resolve the real gh from PATH with our shim dir removed.
+REALPATH=$(printf '%s' "$PATH" | awk -v RS=: -v d="$SHIM_DIR" 'NF && $0!=d' | paste -sd: -)
+REAL_GH=$(PATH="$REALPATH" command -v gh 2>/dev/null)
+
+if [ "$1" = "pr" ] && [ "$2" = "merge" ] && [ -n "$PORT" ] && [ -n "$TID" ]; then
+	STRAT=""
+	for a in "$@"; do
+		case "$a" in
+			--squash) STRAT=squash ;;
+			--merge) STRAT=merge ;;
+			--rebase) STRAT=rebase ;;
+		esac
+	done
+	if curl -s -m 3 "http://127.0.0.1:\${PORT}/merge/request?terminalId=\${TID}&strategy=\${STRAT}" >/dev/null 2>&1; then
+		echo "Ateam: merge queued. Ateam serializes merges per base branch so concurrent merges never conflict — this PR will merge in turn and the board will show its status. Do not re-run 'gh pr merge'."
+		exit 0
+	fi
+	# App unreachable — fall through to a real merge rather than blocking.
+fi
+
+if [ -n "$REAL_GH" ]; then
+	exec "$REAL_GH" "$@"
+fi
+echo "gh: command not found (and Ateam shim could not locate the real gh)" >&2
+exit 127
+`;
+
 /** Write the notify scripts into Ateam's userData dir; returns notify.sh's path. */
 export async function ensureNotifyScript(userDataDir: string): Promise<string> {
 	const hooksDir = join(userDataDir, "hooks");
@@ -53,6 +92,15 @@ export async function ensureNotifyScript(userDataDir: string): Promise<string> {
 	await writeFile(codexPath, CODEX_NOTIFY_SCRIPT, "utf8");
 	await chmod(codexPath, 0o755);
 	return scriptPath;
+}
+
+/** Write the `gh` merge-queue shim into Ateam's hooks dir (first on agent PATH). */
+export async function ensureGhShim(userDataDir: string): Promise<void> {
+	const hooksDir = join(userDataDir, "hooks");
+	await mkdir(hooksDir, { recursive: true });
+	const shimPath = join(hooksDir, "gh");
+	await writeFile(shimPath, GH_SHIM, "utf8");
+	await chmod(shimPath, 0o755);
 }
 
 interface ClaudeHookEntry {
@@ -107,9 +155,7 @@ export async function ensureClaudeHooks(
 	for (const [claudeEvent, ateamEvent] of Object.entries(map)) {
 		const command = cmd(ateamEvent);
 		const entries = settings.hooks[claudeEvent] ?? [];
-		const already = entries.some((e) =>
-			e.hooks.some((h) => h.command.includes("notify.sh")),
-		);
+		const already = entries.some((e) => e.hooks.some((h) => h.command.includes("notify.sh")));
 		if (!already) {
 			entries.push({ hooks: [{ type: "command", command }] });
 			settings.hooks[claudeEvent] = entries;
@@ -141,8 +187,7 @@ export async function ensureCodexHooks(
 		/* no existing file */
 	}
 
-	const cmd = (event: string) =>
-		`sh ${JSON.stringify(notifyScriptPath)} ${event}`;
+	const cmd = (event: string) => `sh ${JSON.stringify(notifyScriptPath)} ${event}`;
 	const map: Record<string, string> = {
 		SessionStart: "Start",
 		Stop: "Stop",
@@ -155,9 +200,7 @@ export async function ensureCodexHooks(
 	for (const [codexEvent, ateamEvent] of Object.entries(map)) {
 		const command = cmd(ateamEvent);
 		const entries = settings.hooks[codexEvent] ?? [];
-		const already = entries.some((e) =>
-			e.hooks.some((h) => h.command.includes("notify.sh")),
-		);
+		const already = entries.some((e) => e.hooks.some((h) => h.command.includes("notify.sh")));
 		if (!already) {
 			entries.push({ hooks: [{ type: "command", command }] });
 			settings.hooks[codexEvent] = entries;
@@ -179,6 +222,8 @@ export function buildAgentEnv(opts: {
 		ATEAM_TERMINAL_ID: opts.terminalId,
 		ATEAM_AGENT_ID: opts.agentId,
 		ATEAM_HOOK_PORT: String(opts.hookPort),
+		// The gh shim reads this to strip itself from PATH and find the real gh.
+		ATEAM_HOOKS_DIR: opts.hooksDir,
 		PATH: `${opts.hooksDir}:${process.env.PATH ?? ""}`,
 	};
 }

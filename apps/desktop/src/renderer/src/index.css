@@ -1089,3 +1089,102 @@ input {
 ::-webkit-scrollbar-corner {
 	background: transparent;
 }
+
+/* ---- loops panel ---- */
+.loops {
+	flex: 1;
+	overflow: auto;
+	padding: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.loops-head h2 {
+	margin: 0 0 4px;
+	font-size: 15px;
+	color: var(--text);
+}
+.loops-head p {
+	margin: 0 0 6px;
+	font-size: 12px;
+	max-width: 640px;
+}
+.loop-card {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	background: var(--bg-elev);
+	padding: 12px 14px;
+}
+.loop-card.off {
+	opacity: 0.55;
+}
+.loop-main {
+	flex: 1;
+	min-width: 0;
+}
+.loop-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 13px;
+	color: var(--text);
+}
+.loop-cadence {
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	border: 1px solid var(--border);
+	border-radius: 5px;
+	padding: 1px 5px;
+}
+.loop-desc {
+	font-size: 12px;
+	margin: 3px 0 6px;
+}
+.loop-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	font-size: 11px;
+}
+.loop-stat {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+.loop-stat.ok {
+	color: var(--text-dim);
+}
+.loop-stat.ok svg {
+	color: var(--green);
+}
+.loop-stat.err {
+	color: var(--red);
+}
+.loop-actions {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex: none;
+}
+.loop-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 12px;
+	color: var(--text-dim);
+	cursor: pointer;
+	user-select: none;
+}
+.spin {
+	animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+	to {
+		transform: rotate(360deg);
+	}
+}

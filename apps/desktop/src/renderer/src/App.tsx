@@ -49,6 +49,7 @@ import { CleanupDialog } from "./components/CleanupDialog";
 import { FileDiffView } from "./components/FileDiffView";
 import { NewTaskComposer } from "./components/NewTaskComposer";
 import { IconButton } from "./components/IconButton";
+import { LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
@@ -105,7 +106,7 @@ export function App() {
 	>({});
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
-	const [view, setView] = useState<"board" | "mission">("board");
+	const [view, setView] = useState<"board" | "mission" | "loops">("board");
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
@@ -242,7 +243,7 @@ export function App() {
 			{
 				taskId: string | null;
 				mode: "side" | "full";
-				view: "board" | "mission";
+				view: "board" | "mission" | "loops";
 			}
 		>
 	>({});
@@ -554,6 +555,12 @@ export function App() {
 						>
 							Mission Control
 						</div>
+						<div
+							className={`tab ${view === "loops" ? "active" : ""}`}
+							onClick={() => setView("loops")}
+						>
+							Loops
+						</div>
 					</div>
 					<div className="spacer" />
 					<button
@@ -605,8 +612,10 @@ export function App() {
 								/>
 							)}
 						</>
-					) : (
+					) : view === "mission" ? (
 						<MissionControl tasks={activeTasks} />
+					) : (
+						<LoopsPanel />
 					)}
 				</div>
 			</main>

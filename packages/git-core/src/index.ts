@@ -48,3 +48,5 @@ export type {
 
 export { diff, fileDiff } from "./diff";
 export type { DiffFile, DiffResult, DiffInput, FileDiffInput } from "./diff";
+
+export { SerialQueue } from "./serial-queue";

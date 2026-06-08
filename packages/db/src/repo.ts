@@ -1,8 +1,10 @@
 import { desc, eq } from "drizzle-orm";
-import type { AteamDb } from "./types";
 import {
 	agentEvents,
 	agentSessions,
+	type Loop,
+	loops,
+	type NewLoop,
 	type NewProject,
 	type NewTask,
 	projects,
@@ -10,6 +12,7 @@ import {
 	settings,
 	tasks,
 } from "./schema";
+import type { AteamDb } from "./types";
 
 /**
  * Typed data-access layer over the Ateam db. Pure functions taking a `AteamDb`
@@ -18,11 +21,7 @@ import {
 export const repo = {
 	// ---- projects ----
 	upsertProject(db: AteamDb, p: NewProject) {
-		const existing = db
-			.select()
-			.from(projects)
-			.where(eq(projects.repoPath, p.repoPath))
-			.get();
+		const existing = db.select().from(projects).where(eq(projects.repoPath, p.repoPath)).get();
 		if (existing) {
 			db.update(projects)
 				.set({ ...p, lastOpenedAt: Date.now() })
@@ -34,11 +33,7 @@ export const repo = {
 	},
 
 	listProjects(db: AteamDb) {
-		return db
-			.select()
-			.from(projects)
-			.orderBy(desc(projects.lastOpenedAt))
-			.all();
+		return db.select().from(projects).orderBy(desc(projects.lastOpenedAt)).all();
 	},
 
 	getProject(db: AteamDb, id: string) {
@@ -88,26 +83,14 @@ export const repo = {
 	},
 
 	getSessionByTerminal(db: AteamDb, terminalId: string) {
-		return db
-			.select()
-			.from(agentSessions)
-			.where(eq(agentSessions.terminalId, terminalId))
-			.get();
+		return db.select().from(agentSessions).where(eq(agentSessions.terminalId, terminalId)).get();
 	},
 
 	listSessionsByTask(db: AteamDb, taskId: string) {
-		return db
-			.select()
-			.from(agentSessions)
-			.where(eq(agentSessions.taskId, taskId))
-			.all();
+		return db.select().from(agentSessions).where(eq(agentSessions.taskId, taskId)).all();
 	},
 
-	updateSession(
-		db: AteamDb,
-		id: string,
-		patch: Partial<typeof agentSessions.$inferInsert>,
-	) {
+	updateSession(db: AteamDb, id: string, patch: Partial<typeof agentSessions.$inferInsert>) {
 		db.update(agentSessions).set(patch).where(eq(agentSessions.id, id)).run();
 	},
 
@@ -133,5 +116,36 @@ export const repo = {
 	updateSettings(db: AteamDb, patch: Partial<Settings>) {
 		db.update(settings).set(patch).where(eq(settings.id, 1)).run();
 		return repo.getSettings(db);
+	},
+
+	// ---- loops (periodic reconcilers; one row per live loop instance) ----
+	listLoops(db: AteamDb): Loop[] {
+		return db.select().from(loops).all();
+	},
+
+	getLoop(db: AteamDb, id: string): Loop | undefined {
+		return db.select().from(loops).where(eq(loops.id, id)).get();
+	},
+
+	/**
+	 * Ensure a row exists for a loop instance, returning it. Existing rows keep
+	 * their persisted `enabled`/telemetry; only first creation seeds defaults.
+	 */
+	ensureLoop(db: AteamDb, l: NewLoop): Loop {
+		const existing = repo.getLoop(db, l.id);
+		if (existing) return existing;
+		return db.insert(loops).values(l).returning().get();
+	},
+
+	updateLoop(db: AteamDb, id: string, patch: Partial<NewLoop>): Loop | undefined {
+		db.update(loops)
+			.set({ ...patch, updatedAt: Date.now() })
+			.where(eq(loops.id, id))
+			.run();
+		return repo.getLoop(db, id);
+	},
+
+	deleteLoop(db: AteamDb, id: string) {
+		db.delete(loops).where(eq(loops.id, id)).run();
 	},
 };
