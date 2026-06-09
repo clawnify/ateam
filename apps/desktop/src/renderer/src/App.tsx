@@ -8,6 +8,7 @@ import {
 	Check,
 	ChevronDown,
 	ChevronRight,
+	Columns2,
 	Database,
 	FilePen,
 	FlaskConical,
@@ -17,12 +18,14 @@ import {
 	GitCommitVertical,
 	GitMerge,
 	History,
+	LayoutGrid,
 	Lock,
 	type LucideIcon,
 	Maximize2,
 	PanelLeft,
 	Minimize2,
 	Palette,
+	Rows2,
 	Play,
 	Plus,
 	RotateCw,
@@ -86,6 +89,13 @@ function taskIcon(name: string): LucideIcon {
 // ---- sidebar task ordering ----
 type TaskSortMode = "status" | "updated" | "custom";
 
+// ---- mission control layout ----
+// How agent tiles are arranged: "grid" is the responsive overview grid,
+// "split" lays them side-by-side filling the height, "stack" stacks them
+// full-width. Split/stack grow to fill the viewport for a few agents and
+// scroll once there are too many to fit.
+type McLayout = "grid" | "split" | "stack";
+
 // Status order: what needs the user's eyes first.
 const STATUS_RANK: Record<KanbanColumn, number> = {
 	review: 0,
@@ -106,6 +116,13 @@ export function App() {
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [view, setView] = useState<"board" | "mission">("board");
+	const [mcLayout, setMcLayoutState] = useState<McLayout>(
+		() => (localStorage.getItem("ateam.mcLayout") as McLayout) || "grid",
+	);
+	const setMcLayout = (l: McLayout) => {
+		localStorage.setItem("ateam.mcLayout", l);
+		setMcLayoutState(l);
+	};
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
@@ -556,6 +573,29 @@ export function App() {
 						</div>
 					</div>
 					<div className="spacer" />
+					{view === "mission" && (
+						<div className="mclayout" role="group" aria-label="Layout">
+							{(
+								[
+									["grid", LayoutGrid, "Grid"],
+									["split", Columns2, "Split"],
+									["stack", Rows2, "Stack"],
+								] as const
+							).map(([mode, Icon, label]) => (
+								<button
+									key={mode}
+									type="button"
+									className={`navbtn icon ${mcLayout === mode ? "active" : ""}`}
+									title={`${label} layout`}
+									aria-label={`${label} layout`}
+									aria-pressed={mcLayout === mode}
+									onClick={() => setMcLayout(mode)}
+								>
+									<Icon size={14} strokeWidth={1.75} />
+								</button>
+							))}
+						</div>
+					)}
 					<button
 						type="button"
 						className="navbtn"
@@ -606,7 +646,7 @@ export function App() {
 							)}
 						</>
 					) : (
-						<MissionControl tasks={activeTasks} />
+						<MissionControl tasks={activeTasks} layout={mcLayout} />
 					)}
 				</div>
 			</main>
@@ -1059,7 +1099,13 @@ function TaskPanel({
 	);
 }
 
-function MissionControl({ tasks }: { tasks: TaskDTO[] }) {
+function MissionControl({
+	tasks,
+	layout,
+}: {
+	tasks: TaskDTO[];
+	layout: McLayout;
+}) {
 	const [tiles, setTiles] = useState<{ task: TaskDTO; terminalId: string }[]>(
 		[],
 	);
@@ -1087,7 +1133,7 @@ function MissionControl({ tasks }: { tasks: TaskDTO[] }) {
 
 	if (tiles.length === 0) {
 		return (
-			<div className="mc">
+			<div className="mc" data-layout={layout}>
 				<div className="empty">
 					No live agents yet.
 					<br />
@@ -1098,7 +1144,7 @@ function MissionControl({ tasks }: { tasks: TaskDTO[] }) {
 	}
 
 	return (
-		<div className="mc">
+		<div className="mc" data-layout={layout}>
 			{tiles.map(({ task, terminalId }) => (
 				<div key={terminalId} className="tile">
 					<div className="bar">
