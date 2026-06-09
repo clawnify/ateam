@@ -1188,3 +1188,66 @@ input {
 		transform: rotate(360deg);
 	}
 }
+
+.loops-head-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.loop-tag {
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--accent);
+	border: 1px solid var(--accent-dim);
+	border-radius: 5px;
+	padding: 1px 5px;
+}
+.loop-form {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 10px;
+}
+.loop-form .loop-actions {
+	justify-content: flex-end;
+}
+.loop-form-row {
+	display: flex;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.loop-form-row label {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 11px;
+	color: var(--text-dim);
+	flex: 1;
+	min-width: 160px;
+}
+.loop-form-row select,
+.loop-form-row input {
+	background: var(--bg-elev-2);
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	color: var(--text);
+	padding: 6px 8px;
+	font-size: 13px;
+}
+.loop-del {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border-radius: 7px;
+	border: 1px solid var(--border);
+	background: var(--bg-elev-2);
+	color: var(--text-dim);
+	cursor: pointer;
+}
+.loop-del:hover {
+	color: var(--red);
+	border-color: var(--red);
+}

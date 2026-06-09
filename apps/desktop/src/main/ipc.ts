@@ -19,9 +19,16 @@ import {
 	updateFromBase,
 } from "@ateam/git-core";
 import { BrowserWindow, clipboard, dialog, ipcMain } from "electron";
-import { CH, type GitStatusSnapshot, type KanbanColumn, type MergeStrategy } from "../shared/types";
+import {
+	CH,
+	type CreateLoopInput,
+	type GitStatusSnapshot,
+	type KanbanColumn,
+	type MergeStrategy,
+} from "../shared/types";
 import { buildAgentEnv, ensureClaudeHooks, ensureCodexHooks } from "./agent-setup";
 import type { LoopRunner } from "./loops/runner";
+import { LOOP_TEMPLATES } from "./loops/templates";
 import type { MergeQueue } from "./merge-queue";
 import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
 
@@ -418,6 +425,24 @@ export function registerIpc(ctx: IpcContext): void {
 		await loopRunner.runNow(id);
 		sendLoopsUpdated();
 		return loopRunner.describe();
+	});
+	ipcMain.handle(CH.loopsTemplates, () =>
+		LOOP_TEMPLATES.map((t) => ({
+			id: t.id,
+			title: t.title,
+			description: t.description,
+			params: t.params,
+		})),
+	);
+	ipcMain.handle(CH.loopsCreate, (_e, input: CreateLoopInput) => {
+		const loops = loopRunner.createUserLoop(input);
+		sendLoopsUpdated();
+		return loops;
+	});
+	ipcMain.handle(CH.loopsDelete, (_e, id: string) => {
+		const loops = loopRunner.deleteUserLoop(id);
+		sendLoopsUpdated();
+		return loops;
 	});
 
 	// ---- pty ----

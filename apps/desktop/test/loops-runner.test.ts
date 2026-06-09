@@ -1,8 +1,7 @@
-import { beforeEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { repo } from "@ateam/db";
+import { beforeEach, describe, expect, it } from "bun:test";
 import type { AteamDb } from "@ateam/db";
-import { bootstrap } from "@ateam/db";
+import { bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../../packages/db/src/schema";
 import { LoopRunner } from "../src/main/loops/runner";
@@ -17,10 +16,7 @@ function createTestDb(): AteamDb {
 
 /** A self-paced def with cadence long enough that no background timer fires
  *  during the test — every run is driven explicitly through `runNow`. */
-function makeDef(
-	id: string,
-	run: LoopDefinition["run"],
-): LoopDefinition {
+function makeDef(id: string, run: LoopDefinition["run"]): LoopDefinition {
 	return {
 		id,
 		title: `Loop ${id}`,
@@ -126,5 +122,54 @@ describe("LoopRunner", () => {
 		// The disabled flag from the prior run survives (row was persisted).
 		expect(second.describe()[0].enabled).toBe(false);
 		second.stop();
+	});
+
+	it("creates a user loop from a template and persists it across restarts", () => {
+		const runner = new LoopRunner({ db, onTaskUpdated: noop });
+		runner.start();
+
+		const loops = runner.createUserLoop({
+			templateId: "pr-ci-watcher",
+			name: "Watch CI",
+		});
+		const created = loops.find((l) => l.kind === "user");
+		expect(created).toBeDefined();
+		expect(created?.title).toBe("Watch CI");
+		expect(created?.templateId).toBe("pr-ci-watcher");
+		expect(created?.enabled).toBe(true);
+		runner.stop();
+
+		// A fresh runner rebuilds the user loop from its persisted row.
+		const restarted = new LoopRunner({ db, onTaskUpdated: noop });
+		restarted.start();
+		const again = restarted.describe().find((l) => l.kind === "user");
+		expect(again?.title).toBe("Watch CI");
+		expect(again?.templateId).toBe("pr-ci-watcher");
+		restarted.stop();
+	});
+
+	it("rejects an unknown template", () => {
+		const runner = new LoopRunner({ db, onTaskUpdated: noop });
+		runner.start();
+		expect(() => runner.createUserLoop({ templateId: "nope", name: "x" })).toThrow(
+			/Unknown loop template/,
+		);
+		runner.stop();
+	});
+
+	it("deletes a user loop and its row", () => {
+		const runner = new LoopRunner({ db, onTaskUpdated: noop });
+		runner.start();
+		const loops = runner.createUserLoop({
+			templateId: "auto-merge-when-green",
+			name: "Auto-merge",
+		});
+		const id = loops.find((l) => l.kind === "user")?.id as string;
+		expect(id).toBeTruthy();
+
+		const after = runner.deleteUserLoop(id);
+		expect(after.find((l) => l.id === id)).toBeUndefined();
+		expect(repo.getLoop(db, id)).toBeUndefined();
+		runner.stop();
 	});
 });

@@ -1,4 +1,5 @@
 import type { AteamDb } from "@ateam/db";
+import type { MergeQueue } from "../merge-queue";
 
 /** A global loop runs once for the whole app; a per-task loop runs per task. */
 export type LoopScope = "global" | "per_task";
@@ -21,6 +22,8 @@ export interface LoopContext {
 	onTaskUpdated: (taskId: string) => void;
 	/** Emit a diagnostic line (prefixed with the loop id by the runner). */
 	log: (message: string) => void;
+	/** The merge queue, for action templates like auto-merge-when-green. */
+	mergeQueue?: MergeQueue;
 }
 
 /** What a single loop run reports back to the runner. */

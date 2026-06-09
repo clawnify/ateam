@@ -110,6 +110,10 @@ export interface LoopDTO {
 	description: string;
 	scope: "global" | "per_task";
 	scopeKey: string | null;
+	/** "builtin" loops are code-defined; "user" loops are template instances. */
+	kind: "builtin" | "user";
+	templateId: string | null;
+	projectId: string | null;
 	enabled: boolean;
 	cadence: "fixed" | "self_paced";
 	lastRunAt: number | null;
@@ -118,6 +122,31 @@ export interface LoopDTO {
 	lastSummary: string | null;
 	lastError: string | null;
 	runs: number;
+}
+
+/** A loop template the user can instantiate, with its configurable params. */
+export interface LoopTemplateParamDTO {
+	key: string;
+	label: string;
+	type: "number" | "boolean";
+	default: number | boolean;
+	help?: string;
+}
+export interface LoopTemplateDTO {
+	id: string;
+	title: string;
+	description: string;
+	params: LoopTemplateParamDTO[];
+}
+
+/** Input for creating a user loop from a template. */
+export interface CreateLoopInput {
+	templateId: string;
+	name: string;
+	projectId?: string;
+	config?: Record<string, unknown>;
+	intervalMs?: number;
+	enabled?: boolean;
 }
 
 export interface CleanupItem {
@@ -168,6 +197,9 @@ export const CH = {
 	loopsList: "loops:list",
 	loopsSetEnabled: "loops:setEnabled",
 	loopsRunNow: "loops:runNow",
+	loopsTemplates: "loops:templates",
+	loopsCreate: "loops:create",
+	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
 	utilClipboardHasImage: "util:clipboardHasImage",
 	ptySpawnAgent: "pty:spawnAgent",
@@ -235,6 +267,9 @@ export interface AteamApi {
 		list(): Promise<LoopDTO[]>;
 		setEnabled(id: string, enabled: boolean): Promise<LoopDTO[]>;
 		runNow(id: string): Promise<LoopDTO[]>;
+		templates(): Promise<LoopTemplateDTO[]>;
+		create(input: CreateLoopInput): Promise<LoopDTO[]>;
+		remove(id: string): Promise<LoopDTO[]>;
 		onUpdated(cb: (loops: LoopDTO[]) => void): () => void;
 	};
 	pty: {

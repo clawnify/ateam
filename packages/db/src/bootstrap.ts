@@ -98,6 +98,13 @@ export function bootstrap(db: SqliteExecutor): void {
 			id TEXT PRIMARY KEY,
 			definition_id TEXT NOT NULL,
 			scope_key TEXT,
+			kind TEXT NOT NULL DEFAULT 'builtin',
+			template_id TEXT,
+			name TEXT,
+			project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+			config TEXT,
+			cadence_mode TEXT,
+			interval_ms INTEGER,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			last_run_at INTEGER,
 			next_run_at INTEGER,
@@ -117,6 +124,13 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE tasks ADD COLUMN agent_id TEXT",
 		"ALTER TABLE tasks ADD COLUMN description TEXT",
 		"ALTER TABLE tasks ADD COLUMN merge_status TEXT",
+		"ALTER TABLE loops ADD COLUMN kind TEXT NOT NULL DEFAULT 'builtin'",
+		"ALTER TABLE loops ADD COLUMN template_id TEXT",
+		"ALTER TABLE loops ADD COLUMN name TEXT",
+		"ALTER TABLE loops ADD COLUMN project_id TEXT",
+		"ALTER TABLE loops ADD COLUMN config TEXT",
+		"ALTER TABLE loops ADD COLUMN cadence_mode TEXT",
+		"ALTER TABLE loops ADD COLUMN interval_ms INTEGER",
 	]) {
 		try {
 			db.exec(sql);

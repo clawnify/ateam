@@ -165,9 +165,11 @@ export const settings = sqliteTable("settings", {
  * Persisted runtime state for Loops (periodic reconcilers, modeled on Claude
  * Code's /loop). One row per live loop: a global loop has `id == definitionId`
  * and null `scopeKey`; a per-task loop has `id == "<definitionId>:<taskId>"`
- * with `scopeKey == taskId`. Definitions themselves live in code (registered
- * with the LoopRunner); this table only carries enable + last-run telemetry so
- * loops survive restarts and the UI can show/toggle/run-now.
+ * with `scopeKey == taskId`. Built-in loops are defined in code; `kind="user"`
+ * rows ARE the definition — an instance of a code-side template (`templateId`)
+ * with a `name`, a `projectId` scope, JSON `config`, and a cadence override.
+ * The table carries enable + last-run telemetry either way, so loops survive
+ * restarts and the UI can show/toggle/run-now.
  */
 export const loops = sqliteTable(
 	"loops",
@@ -175,6 +177,18 @@ export const loops = sqliteTable(
 		id: text("id").primaryKey(),
 		definitionId: text("definition_id").notNull(),
 		scopeKey: text("scope_key"),
+		kind: text("kind").$type<"builtin" | "user">().notNull().default("builtin"),
+		/** For user loops: which code-side template this instantiates. */
+		templateId: text("template_id"),
+		/** User loops: display name + project scope + template options (JSON). */
+		name: text("name"),
+		projectId: text("project_id").references(() => projects.id, {
+			onDelete: "cascade",
+		}),
+		config: text("config", { mode: "json" }).$type<Record<string, unknown>>(),
+		/** Cadence override for user loops; null falls back to template default. */
+		cadenceMode: text("cadence_mode").$type<LoopCadenceMode>(),
+		intervalMs: integer("interval_ms"),
 		enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
 		lastRunAt: integer("last_run_at"),
 		nextRunAt: integer("next_run_at"),

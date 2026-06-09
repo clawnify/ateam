@@ -42,6 +42,9 @@ const api: AteamApi = {
 		list: () => ipcRenderer.invoke(CH.loopsList),
 		setEnabled: (id, enabled) => ipcRenderer.invoke(CH.loopsSetEnabled, id, enabled),
 		runNow: (id) => ipcRenderer.invoke(CH.loopsRunNow, id),
+		templates: () => ipcRenderer.invoke(CH.loopsTemplates),
+		create: (input) => ipcRenderer.invoke(CH.loopsCreate, input),
+		remove: (id) => ipcRenderer.invoke(CH.loopsDelete, id),
 		onUpdated: (cb: (loops: LoopDTO[]) => void) => {
 			const handler = (_: unknown, loops: LoopDTO[]) => cb(loops);
 			ipcRenderer.on(CH.evtLoopsUpdated, handler);

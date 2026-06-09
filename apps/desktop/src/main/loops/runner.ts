@@ -1,7 +1,10 @@
-import type { AteamDb, Loop } from "@ateam/db";
+import { randomUUID } from "node:crypto";
+import type { AteamDb, Loop, LoopCadenceMode } from "@ateam/db";
 import { repo } from "@ateam/db";
 import type { LoopDTO } from "../../shared/types";
-import type { LoopContext, LoopDefinition, LoopOutcome } from "./types";
+import type { MergeQueue } from "../merge-queue";
+import { getTemplate } from "./templates";
+import type { LoopCadence, LoopContext, LoopDefinition, LoopOutcome } from "./types";
 
 interface Instance {
 	def: LoopDefinition;
@@ -15,6 +18,18 @@ export interface LoopRunnerDeps {
 	db: AteamDb;
 	onTaskUpdated: (taskId: string) => void;
 	log?: (line: string) => void;
+	/** Passed to action templates (e.g. auto-merge-when-green). */
+	mergeQueue?: MergeQueue;
+}
+
+export interface CreateUserLoopInput {
+	templateId: string;
+	name: string;
+	projectId?: string;
+	config?: Record<string, unknown>;
+	cadenceMode?: LoopCadenceMode;
+	intervalMs?: number;
+	enabled?: boolean;
 }
 
 /**
@@ -39,13 +54,77 @@ export class LoopRunner {
 		return def.scope === "global" ? def.id : `${def.id}:${scopeKey}`;
 	}
 
-	/** Instantiate global loops and schedule their first runs. */
+	/** Instantiate global + persisted user loops and schedule their first runs. */
 	start(): void {
 		if (this.started) return;
 		this.started = true;
+		// Rebuild user loops (template instances) from their persisted rows first,
+		// so they're registered before we instantiate everything.
+		for (const row of repo.listLoops(this.deps.db)) {
+			if (row.kind !== "user" || this.defs.has(row.id)) continue;
+			const def = this.defFromUserRow(row);
+			if (def) this.defs.set(def.id, def);
+		}
 		for (const def of this.defs.values()) {
 			if (def.scope === "global") this.ensureInstance(def);
 		}
+	}
+
+	/** Build a runnable definition from a persisted user-loop row + its template. */
+	private defFromUserRow(row: Loop): LoopDefinition | null {
+		if (!row.templateId) return null;
+		const template = getTemplate(row.templateId);
+		if (!template) return null;
+		const config = {
+			...(row.config ?? {}),
+			projectId: row.projectId ?? undefined,
+		};
+		const cadence: LoopCadence =
+			row.cadenceMode === "fixed" && row.intervalMs
+				? { mode: "fixed", everyMs: row.intervalMs }
+				: template.defaultCadence;
+		return {
+			id: row.id,
+			title: row.name ?? template.title,
+			description: template.description,
+			scope: "global",
+			cadence,
+			run: template.build(config),
+		};
+	}
+
+	/** Create a user loop from a template, persist it, and start it. */
+	createUserLoop(input: CreateUserLoopInput): LoopDTO[] {
+		const template = getTemplate(input.templateId);
+		if (!template) throw new Error(`Unknown loop template: ${input.templateId}`);
+		const id = randomUUID();
+		repo.ensureLoop(this.deps.db, {
+			id,
+			definitionId: id,
+			scopeKey: null,
+			kind: "user",
+			templateId: input.templateId,
+			name: input.name,
+			projectId: input.projectId ?? null,
+			config: input.config ?? {},
+			cadenceMode: input.cadenceMode ?? null,
+			intervalMs: input.intervalMs ?? null,
+			enabled: input.enabled ?? true,
+		});
+		const row = repo.getLoop(this.deps.db, id);
+		const def = row && this.defFromUserRow(row);
+		if (def) {
+			this.defs.set(def.id, def);
+			this.ensureInstance(def);
+		}
+		return this.describe();
+	}
+
+	/** Delete a user loop (instance, timer, and persisted row). */
+	deleteUserLoop(id: string): LoopDTO[] {
+		this.removeInstance(id, { deleteRow: true });
+		this.defs.delete(id);
+		return this.describe();
 	}
 
 	/** Cancel all timers (e.g. on app quit). */
@@ -137,10 +216,13 @@ export class LoopRunner {
 			return {
 				id: row.id,
 				definitionId: row.definitionId,
-				title: def?.title ?? row.definitionId,
+				title: def?.title ?? row.name ?? row.definitionId,
 				description: def?.description ?? "",
 				scope: def?.scope ?? "global",
 				scopeKey: row.scopeKey ?? null,
+				kind: row.kind,
+				templateId: row.templateId ?? null,
+				projectId: row.projectId ?? null,
 				enabled: row.enabled,
 				cadence: def?.cadence.mode ?? "self_paced",
 				lastRunAt: row.lastRunAt ?? null,
@@ -180,6 +262,7 @@ export class LoopRunner {
 			scopeKey: inst.scopeKey,
 			onTaskUpdated: this.deps.onTaskUpdated,
 			log: (m) => this.deps.log?.(`[loop ${inst.loopId}] ${m}`),
+			mergeQueue: this.deps.mergeQueue,
 		};
 		let outcome: LoopOutcome = {};
 		let status: "ok" | "error" | "done" = "ok";

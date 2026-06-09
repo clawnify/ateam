@@ -179,6 +179,7 @@ async function initServices(): Promise<Services> {
 		db,
 		onTaskUpdated: sendTaskUpdated,
 		log: (line) => console.log(line),
+		mergeQueue,
 	});
 	loopRunner.register(createBoardReconciler());
 
