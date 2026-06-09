@@ -4,24 +4,38 @@
 //
 // Protocol: newline-delimited JSON over a unix socket. Terminal bytes are
 // base64-encoded in the `data` field. Clients connect, (re)attach by listing
-// sessions + fetching each session's ring-buffer snapshot. Disconnecting a
-// client never kills sessions — that's the whole point.
+// sessions + fetching each session's snapshot. Disconnecting a client never
+// kills sessions — that's the whole point.
+//
+// The snapshot is NOT a raw byte buffer. Each session drives a headless xterm
+// emulator that holds the full terminal STATE — screen contents plus every
+// active mode (bracketed paste ?2004, focus reporting ?1004, alt screen ?1049,
+// cursor keys, mouse tracking, …). On reattach we hand the renderer a
+// serialized snapshot of that state, so a freshly-mounted xterm inherits the
+// modes the agent set long ago. A raw ring buffer can't do this: an app enables
+// bracketed paste once at startup, and once that `\x1b[?2004h` scrolls past the
+// retained window every new view attaches with paste broken (newlines arrive as
+// Enters instead of one bracketed block).
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import net from "node:net";
 import { connect as netConnect } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { SerializeAddon } from "@xterm/addon-serialize";
+import { Terminal } from "@xterm/headless";
 import * as pty from "node-pty";
 
 const SOCK =
 	process.env.ATEAM_PTY_SOCK || join(homedir(), ".ateam", "pty-daemon.sock");
-const RING = 256 * 1024; // chars of scrollback retained per session
+const SCROLLBACK = 5000; // lines of scrollback the emulator (and snapshot) keeps
 const IDLE_EXIT_MS = 10 * 60 * 1000; // exit if no sessions for 10 min
 
 interface Session {
 	id: string;
 	proc: pty.IPty;
-	buffer: string;
+	// Headless emulator mirroring the PTY: source of truth for snapshot state.
+	term: Terminal;
+	serialize: SerializeAddon;
 	exited: boolean;
 	cwd: string;
 	agentId: string;
@@ -58,17 +72,28 @@ function spawnSession(m: {
 	agentId?: string;
 }): void {
 	if (sessions.has(m.terminalId)) return;
+	const cols = m.cols ?? 80;
+	const rows = m.rows ?? 24;
 	const proc = pty.spawn(m.shell, m.args, {
 		name: "xterm-256color",
 		cwd: m.cwd,
 		env: m.env as { [key: string]: string },
-		cols: m.cols ?? 80,
-		rows: m.rows ?? 24,
+		cols,
+		rows,
 	});
+	const term = new Terminal({
+		cols,
+		rows,
+		scrollback: SCROLLBACK,
+		allowProposedApi: true,
+	});
+	const serialize = new SerializeAddon();
+	term.loadAddon(serialize);
 	const s: Session = {
 		id: m.terminalId,
 		proc,
-		buffer: "",
+		term,
+		serialize,
 		exited: false,
 		cwd: m.cwd,
 		agentId: m.agentId ?? "shell",
@@ -77,14 +102,16 @@ function spawnSession(m: {
 	if (idleTimer) clearTimeout(idleTimer);
 
 	proc.onData((data) => {
-		s.buffer += data;
-		if (s.buffer.length > RING) s.buffer = s.buffer.slice(-RING);
+		// Feed the emulator so it tracks screen + mode state for snapshots, and
+		// stream the raw bytes live to attached clients.
+		s.term.write(data);
 		broadcast({ t: "data", terminalId: m.terminalId, data: b64(data) });
 	});
 	proc.onExit(({ exitCode }) => {
 		s.exited = true;
 		broadcast({ t: "exit", terminalId: m.terminalId, exitCode });
 		sessions.delete(m.terminalId);
+		s.term.dispose();
 		if (sessions.size === 0) scheduleIdleExit();
 	});
 }
@@ -102,11 +129,11 @@ function handleMessage(sock: net.Socket, m: Record<string, unknown>): void {
 		case "resize": {
 			const s = sessions.get(m.terminalId as string);
 			if (s && !s.exited) {
+				const cols = Math.max(1, m.cols as number);
+				const rows = Math.max(1, m.rows as number);
 				try {
-					s.proc.resize(
-						Math.max(1, m.cols as number),
-						Math.max(1, m.rows as number),
-					);
+					s.proc.resize(cols, rows);
+					s.term.resize(cols, rows);
 				} catch {
 					/* ignore */
 				}
@@ -122,19 +149,27 @@ function handleMessage(sock: net.Socket, m: Record<string, unknown>): void {
 					/* gone */
 				}
 			}
+			s?.term.dispose();
 			sessions.delete(m.terminalId as string);
 			if (sessions.size === 0) scheduleIdleExit();
 			break;
 		}
-		case "snapshot":
-			sock.write(
-				`${JSON.stringify({
-					t: "snapshot",
-					id: m.id,
-					data: b64(sessions.get(m.terminalId as string)?.buffer ?? ""),
-				})}\n`,
-			);
+		case "snapshot": {
+			const s = sessions.get(m.terminalId as string);
+			const reply = (data: string) =>
+				sock.write(
+					`${JSON.stringify({ t: "snapshot", id: m.id, data: b64(data) })}\n`,
+				);
+			if (!s) {
+				reply("");
+				break;
+			}
+			// xterm parses writes asynchronously; drain the queue with an empty
+			// write so the serialized snapshot reflects the very latest bytes
+			// (modes included) rather than a state a few frames stale.
+			s.term.write("", () => reply(s.serialize.serialize()));
 			break;
+		}
 		case "list":
 			sock.write(
 				`${JSON.stringify({
