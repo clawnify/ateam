@@ -36,17 +36,25 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		const focusTerm = () => term.focus();
 		el.addEventListener("mousedown", focusTerm);
 
-		// Cmd+V with an image-only clipboard: agents read images from the
-		// clipboard on Ctrl+V — forward that instead of pasting (empty) text.
-		// The default app menu owns the Cmd+V key equivalent natively, so the
-		// renderer never sees the keydown; the menu's paste role dispatches a
-		// DOM `paste` event instead. Intercept that (capture phase, before
-		// xterm's own paste handler on the textarea).
+		// Pasting an image: resolve it to a real file path and paste THAT
+		// (bracketed), so the agent loads the file's bytes. Sending Ctrl+V
+		// instead makes the agent do its own clipboard read, which grabs a
+		// copied file's generic Finder icon rather than its contents. The menu's
+		// Paste role fires a DOM `paste` event (the renderer never sees ⌘V's
+		// keydown — the menu owns that accelerator), intercepted here in capture
+		// phase before xterm's own textarea paste handler.
+		const escapePath = (p: string) =>
+			p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1");
 		const onPaste = (e: Event) => {
-			if (!window.ateam.utils.clipboardHasImage()) return;
+			if (!window.ateam.utils.clipboardHasImage()) return; // text → xterm
 			e.preventDefault();
 			e.stopPropagation();
-			window.ateam.pty.write(terminalId, "\x16");
+			void window.ateam.utils.clipboardImagePath().then((p) => {
+				if (p) {
+					term.paste(`${escapePath(p)} `);
+					term.focus();
+				}
+			});
 		};
 		el.addEventListener("paste", onPaste, true);
 
@@ -62,7 +70,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			const paths = files
 				.map((f) => window.ateam.utils.pathForFile(f))
 				.filter(Boolean)
-				.map((p) => p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1"));
+				.map(escapePath);
 			if (paths.length) {
 				term.paste(`${paths.join(" ")} `);
 				term.focus();

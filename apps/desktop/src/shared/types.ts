@@ -138,6 +138,7 @@ export const CH = {
 	gitStatus: "git:status",
 	agentsList: "agents:list",
 	utilClipboardHasImage: "util:clipboardHasImage",
+	utilClipboardImagePath: "util:clipboardImagePath",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -228,5 +229,11 @@ export interface AteamApi {
 		pathForFile(file: File): string;
 		/** True when the clipboard holds an image and no text (sync). */
 		clipboardHasImage(): boolean;
+		/**
+		 * Resolve a clipboard image to a file path the agent can read: a copied
+		 * image file's own path, or a temp PNG written from a clipboard bitmap.
+		 * Null when the clipboard holds no image.
+		 */
+		clipboardImagePath(): Promise<string | null>;
 	};
 }
