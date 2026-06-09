@@ -58,10 +58,13 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		};
 		el.addEventListener("paste", onPaste, true);
 
-		// Dropping files pastes their paths, like iTerm: backslash-escaped and
-		// delivered via term.paste() so apps with bracketed paste on (Claude
-		// Code) see a *paste* of a file path — that's what makes them attach a
-		// dropped image as [Image #N] instead of leaving a literal path.
+		// Dropping files types their backslash-escaped paths straight to the PTY,
+		// exactly like a real terminal (iTerm/Terminal.app) does on a file drop.
+		// This is deliberately NOT term.paste(): a paste arrives wrapped in
+		// bracketed-paste markers, which Claude Code treats as a literal text
+		// block and does NOT scan for a droppable file path — so the image never
+		// attaches and you're left with a literal path. Typed keystrokes are what
+		// trigger its "dropped path → [Image #N]" detection.
 		const onDragOver = (e: DragEvent) => e.preventDefault();
 		const onDrop = (e: DragEvent) => {
 			e.preventDefault();
@@ -72,7 +75,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 				.filter(Boolean)
 				.map(escapePath);
 			if (paths.length) {
-				term.paste(`${paths.join(" ")} `);
+				window.ateam.pty.write(terminalId, `${paths.join(" ")} `);
 				term.focus();
 			}
 		};
