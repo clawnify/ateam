@@ -90,6 +90,37 @@ describe("agent sessions & events", () => {
 		});
 		expect(e.eventType).toBe("Stop");
 	});
+
+	it("lists a task's sessions latest-first", () => {
+		const p = repo.upsertProject(db, { repoPath: "/r/a", name: "A" });
+		const t = repo.createTask(db, {
+			projectId: p!.id,
+			name: "t",
+			slug: "t",
+			branch: "t",
+			baseBranch: "main",
+			worktreePath: "/wt/t",
+		});
+		const older = repo.createSession(db, {
+			taskId: t.id,
+			agentId: "claude",
+			terminalId: "term-old",
+			cwd: "/wt/t",
+		});
+		const newer = repo.createSession(db, {
+			taskId: t.id,
+			agentId: "claude",
+			terminalId: "term-new",
+			cwd: "/wt/t",
+		});
+		repo.updateSession(db, older.id, { startedAt: 1000 });
+		repo.updateSession(db, newer.id, { startedAt: 2000 });
+
+		expect(repo.listSessionsByTask(db, t.id).map((s) => s.id)).toEqual([
+			newer.id,
+			older.id,
+		]);
+	});
 });
 
 describe("settings", () => {
