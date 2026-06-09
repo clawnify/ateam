@@ -110,7 +110,27 @@ export async function removeTask(
 
 	const args = ["worktree", "remove", input.worktreePath];
 	if (input.force) args.push("--force");
-	await git.raw(args);
+	try {
+		await git.raw(args);
+	} catch (err) {
+		// If the worktree directory was deleted out from under us (e.g. removed
+		// manually in Finder/the shell), `git worktree remove` fails with
+		// "is not a working tree". That's not a real failure for our purposes —
+		// the tree is already gone. Prune the stale admin entry below and carry
+		// on to branch deletion instead of surfacing the error to the user.
+		const message = err instanceof Error ? err.message : String(err);
+		if (!/is not a working tree|No such file or directory/i.test(message)) {
+			throw err;
+		}
+		warnings.push(
+			`Worktree "${input.worktreePath}" was already gone; pruned its stale entry.`,
+		);
+	}
+
+	// Prune before deleting the branch: if the worktree dir vanished, git still
+	// believes the branch is checked out there and `branch -d` would refuse with
+	// "Cannot delete branch ... checked out at ...". Pruning clears that link.
+	await git.raw(["worktree", "prune"]).catch(() => {});
 
 	let branchDeleted = false;
 	if (input.deleteBranch) {
@@ -126,8 +146,6 @@ export async function removeTask(
 			);
 		}
 	}
-
-	await git.raw(["worktree", "prune"]).catch(() => {});
 
 	return { removed: true, branchDeleted, warnings };
 }
