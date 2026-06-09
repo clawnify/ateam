@@ -43,10 +43,14 @@ cat > "$STAGE/package.json" <<JSON
 }
 JSON
 
-# 2. Install + rebuild native modules for Electron's arm64 ABI (only when the
-#    install is missing/stale — survives a wiped staging dir).
-if [ ! -d "$STAGE/node_modules/electron" ]; then
-  echo "==> npm install (first run / staging was cleared)"
+# 2. Install + rebuild native modules for Electron's arm64 ABI. Recreated when
+#    the install is missing or incomplete (e.g. a partial install left behind by
+#    a wiped/interrupted run) — checks for the actual binaries it needs.
+if [ ! -x "$STAGE/node_modules/.bin/electron-builder" ] ||
+   [ ! -x "$STAGE/node_modules/.bin/electron-rebuild" ] ||
+   [ ! -d "$STAGE/node_modules/electron/dist" ]; then
+  echo "==> npm install (first run / staging cleared or incomplete)"
+  rm -rf "$STAGE/node_modules" "$STAGE/package-lock.json"
   ( cd "$STAGE" && npm install --no-audit --no-fund )
   echo "==> electron-rebuild better-sqlite3 + node-pty (arm64)"
   ( cd "$STAGE" && ./node_modules/.bin/electron-rebuild -f -w better-sqlite3,node-pty --arch arm64 )
