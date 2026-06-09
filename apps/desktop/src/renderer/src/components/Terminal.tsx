@@ -121,19 +121,42 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		// or one bogus zero-size fit — can leave it painted blank until the next
 		// resize. So: coalesce to one fit per frame, never fit a hidden element,
 		// and only notify the PTY when the grid actually changed.
+		//
+		// One more wrinkle: while the element is hidden (changes view open, etc.)
+		// output still streams in via term.write(), but the DOM renderer can't
+		// paint those rows correctly with zero layout. When we're revealed again
+		// at the *same* window size, fit() is a no-op and the cols/rows guard
+		// below would early-return without ever repainting — leaving the rows
+		// written while hidden missing until an actual resize. So on the
+		// hidden→visible transition we force a full refresh.
 		let raf = 0;
 		let lastCols = 0;
 		let lastRows = 0;
+		let wasHidden = false;
 		const syncSize = () => {
 			cancelAnimationFrame(raf);
 			raf = requestAnimationFrame(() => {
-				if (el.clientWidth === 0 || el.clientHeight === 0) return;
+				if (el.clientWidth === 0 || el.clientHeight === 0) {
+					wasHidden = true;
+					return;
+				}
 				try {
 					fit.fit();
 				} catch {
 					return; /* not laid out yet */
 				}
-				if (term.cols === lastCols && term.rows === lastRows) return;
+				const justRevealed = wasHidden;
+				wasHidden = false;
+				if (term.cols === lastCols && term.rows === lastRows) {
+					// Same grid: fit() didn't trigger a repaint. If we just came
+					// back into view, redraw every row so content written while
+					// hidden isn't left missing until the next resize.
+					if (justRevealed) {
+						term.refresh(0, term.rows - 1);
+						term.scrollToBottom();
+					}
+					return;
+				}
 				lastCols = term.cols;
 				lastRows = term.rows;
 				window.ateam.pty.resize(terminalId, term.cols, term.rows);
