@@ -3,7 +3,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createDb, repo } from "@ateam/db";
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow, dialog, Menu } from "electron";
 import { autoUpdater } from "electron-updater";
 import { type AgentStatus, type KanbanColumn, CH } from "../shared/types";
 import { ensureNotifyScript } from "./agent-setup";
@@ -60,11 +60,30 @@ function adoptLoginShellPath(): void {
 	}
 }
 
+// Triggers a manual update check (with "you're up to date" feedback). Wired by
+// setupAutoUpdate() once auto-update is active; null in dev / unpackaged builds.
+let triggerUpdateCheck: (() => void) | null = null;
+
+// "Check for Updates…" menu handler — works even when auto-update is inactive.
+function onCheckForUpdates(): void {
+	if (triggerUpdateCheck) {
+		triggerUpdateCheck();
+		return;
+	}
+	void dialog.showMessageBox({
+		type: "info",
+		title: "Software Update",
+		message: "Updates aren't available in development builds.",
+		detail: `You're running Ateam ${app.getVersion()}.`,
+		buttons: ["OK"],
+	});
+}
+
 /**
  * Auto-update from GitHub Releases (electron-updater), Sparkle-style: ask
  * before downloading (with release notes; "Skip This Version" is remembered),
  * then offer "Restart Now" once downloaded — otherwise it installs on quit.
- * Checks at launch and every 4 hours.
+ * Checks at launch and every 4 hours, plus on demand via "Check for Updates…".
  */
 function setupAutoUpdate(): void {
 	if (!app.isPackaged) return;
@@ -80,9 +99,12 @@ function setupAutoUpdate(): void {
 	};
 	// "Remind Me Later" = stay quiet until the next app launch.
 	let snoozed = false;
+	// A user-initiated check reports its result (incl. "up to date") and ignores
+	// snooze/skip; background checks stay silent unless there's a fresh update.
+	let manualCheck = false;
 
 	autoUpdater.on("update-available", (info) => {
-		if (snoozed || info.version === skippedVersion()) return;
+		if (!manualCheck && (snoozed || info.version === skippedVersion())) return;
 		const notes =
 			typeof info.releaseNotes === "string"
 				? info.releaseNotes.replace(/<[^>]+>/g, "").trim()
@@ -116,6 +138,31 @@ function setupAutoUpdate(): void {
 			});
 	});
 
+	autoUpdater.on("update-not-available", () => {
+		if (!manualCheck) return;
+		manualCheck = false;
+		void dialog.showMessageBox({
+			type: "info",
+			title: "Software Update",
+			message: "You're up to date!",
+			detail: `Ateam ${app.getVersion()} is the latest version.`,
+			buttons: ["OK"],
+		});
+	});
+
+	autoUpdater.on("error", (err) => {
+		console.warn("[ateam] update check failed:", err);
+		if (!manualCheck) return;
+		manualCheck = false;
+		void dialog.showMessageBox({
+			type: "warning",
+			title: "Software Update",
+			message: "Couldn't check for updates.",
+			detail: String(err?.message ?? err),
+			buttons: ["OK"],
+		});
+	});
+
 	autoUpdater.on("update-downloaded", (info) => {
 		void dialog
 			.showMessageBox({
@@ -133,12 +180,99 @@ function setupAutoUpdate(): void {
 			});
 	});
 
-	const check = () =>
-		autoUpdater
+	const check = (manual: boolean) => {
+		manualCheck = manual;
+		return autoUpdater
 			.checkForUpdates()
 			.catch((err) => console.warn("[ateam] update check failed:", err));
-	check();
-	setInterval(check, 4 * 60 * 60 * 1000);
+	};
+	triggerUpdateCheck = () => void check(true);
+	void check(false);
+	setInterval(() => check(false), 4 * 60 * 60 * 1000);
+}
+
+/**
+ * Build the application menu. macOS gets the standard app menu (named after the
+ * product) with a "Check for Updates…" item; the Edit/View/Window menus keep
+ * copy/paste, devtools, and window roles that the default menu would otherwise
+ * provide (the agent terminals rely on copy/paste).
+ */
+function buildAppMenu(): void {
+	const isMac = process.platform === "darwin";
+	const template: Electron.MenuItemConstructorOptions[] = [
+		...(isMac
+			? [
+					{
+						label: APP_NAME,
+						submenu: [
+							{ role: "about" as const },
+							{
+								label: "Check for Updates…",
+								click: () => onCheckForUpdates(),
+							},
+							{ type: "separator" as const },
+							{ role: "services" as const },
+							{ type: "separator" as const },
+							{ role: "hide" as const },
+							{ role: "hideOthers" as const },
+							{ role: "unhide" as const },
+							{ type: "separator" as const },
+							{ role: "quit" as const },
+						],
+					} as Electron.MenuItemConstructorOptions,
+				]
+			: []),
+		{
+			label: "Edit",
+			submenu: [
+				{ role: "undo" },
+				{ role: "redo" },
+				{ type: "separator" },
+				{ role: "cut" },
+				{ role: "copy" },
+				{ role: "paste" },
+				{ role: "selectAll" },
+			],
+		},
+		{
+			label: "View",
+			submenu: [
+				{ role: "reload" },
+				{ role: "forceReload" },
+				{ role: "toggleDevTools" },
+				{ type: "separator" },
+				{ role: "resetZoom" },
+				{ role: "zoomIn" },
+				{ role: "zoomOut" },
+				{ type: "separator" },
+				{ role: "togglefullscreen" },
+			],
+		},
+		{
+			label: "Window",
+			submenu: [
+				{ role: "minimize" },
+				{ role: "zoom" },
+				...(isMac
+					? [{ type: "separator" as const }, { role: "front" as const }]
+					: [{ role: "close" as const }]),
+			],
+		},
+		...(isMac
+			? []
+			: [
+					{
+						label: "Help",
+						submenu: [
+							{
+								label: "Check for Updates…",
+								click: () => onCheckForUpdates(),
+							},
+						],
+					} as Electron.MenuItemConstructorOptions,
+				]),
+	];
+	Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function sendTaskUpdated(taskId: string): void {
@@ -304,6 +438,7 @@ app.whenReady().then(async () => {
 	}
 
 	createWindow();
+	buildAppMenu();
 	setupAutoUpdate();
 	app.on("activate", () => {
 		if (BrowserWindow.getAllWindows().length === 0) createWindow();
