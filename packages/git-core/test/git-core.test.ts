@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import simpleGit from "simple-git";
 import {
@@ -285,6 +285,31 @@ describe("removeTask", () => {
 		);
 		expect(list.some((w) => w.branch === a.branch)).toBe(false);
 		expect(list.some((w) => w.branch === b.branch)).toBe(true);
+	});
+
+	it("succeeds when the worktree dir was already deleted from disk", async () => {
+		const a = await createTask({ repoPath: repo.work, name: "task gone" });
+
+		// Simulate the user deleting the worktree folder out from under us.
+		await rm(a.worktreePath, { recursive: true, force: true });
+
+		const res = await removeTask({
+			repoPath: repo.work,
+			worktreePath: a.worktreePath,
+			branch: a.branch,
+			deleteBranch: true,
+		});
+
+		expect(res.removed).toBe(true);
+		expect(res.branchDeleted).toBe(true);
+
+		// The stale worktree admin entry and the branch are both gone.
+		const list = parseWorktreeList(
+			await simpleGit(repo.work).raw(["worktree", "list", "--porcelain"]),
+		);
+		expect(list.some((w) => w.branch === a.branch)).toBe(false);
+		const branches = await simpleGit(repo.work).raw(["branch", "--list"]);
+		expect(branches.includes(a.branch)).toBe(false);
 	});
 });
 
