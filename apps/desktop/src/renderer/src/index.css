@@ -310,6 +310,12 @@ input {
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
+	/* Grid items default to min-height: auto, which would let this column grow to
+	   fit a tall child (e.g. a Mission Control grid with many terminals) and spill
+	   past the viewport — where #root's overflow: hidden clips it with no scroll.
+	   Pinning min-height: 0 keeps .main at the grid track height so .content/.mc
+	   stay bounded and their own overflow-y: auto scrolls instead. */
+	min-height: 0;
 }
 .topbar {
 	height: 44px;
