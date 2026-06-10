@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import simpleGit from "simple-git";
 import {
@@ -106,6 +106,28 @@ describe("createTask isolation", () => {
 		// B's working tree and branch are untouched by work in A.
 		expect(await porcelainStatus(b.worktreePath)).toBe("");
 		expect(existsSync(join(b.worktreePath, "a.txt"))).toBe(false);
+	});
+
+	it("copies the Supabase link state into the new worktree", async () => {
+		// Simulate `supabase link`: the gitignored link cache in the main repo.
+		await mkdir(join(repo.work, "supabase", ".temp"), { recursive: true });
+		await writeFile(
+			join(repo.work, "supabase", ".temp", "project-ref"),
+			"abcdefghijklmnopqrst",
+		);
+
+		const task = await createTask({ repoPath: repo.work, name: "linked" });
+
+		const copied = join(task.worktreePath, "supabase", ".temp", "project-ref");
+		expect(existsSync(copied)).toBe(true);
+		expect(await Bun.file(copied).text()).toBe("abcdefghijklmnopqrst");
+	});
+
+	it("creates the worktree fine when there is no Supabase link", async () => {
+		// No supabase/.temp in the repo — task creation must still succeed.
+		const task = await createTask({ repoPath: repo.work, name: "unlinked" });
+		expect(existsSync(task.worktreePath)).toBe(true);
+		expect(existsSync(join(task.worktreePath, "supabase"))).toBe(false);
 	});
 });
 

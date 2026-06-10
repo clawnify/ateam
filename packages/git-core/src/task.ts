@@ -1,5 +1,5 @@
-import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { cp, mkdir, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { gitFor, refExists } from "./git-client";
 import { GitCoreError } from "./errors";
 import { detectDefaultBranch, ensureWorktreesIgnored } from "./project";
@@ -37,6 +37,33 @@ async function resolveStartPoint(
 		return baseBranch;
 	}
 	return "HEAD";
+}
+
+/**
+ * Supabase's project link lives in `supabase/.temp/` (gitignored — it holds the
+ * `project-ref` and cached versions written by `supabase link`). The tracked
+ * `supabase/` config rides along on the branch, but `.temp` does not, so a fresh
+ * worktree's CLI would be unlinked. Copy that untracked link state across so the
+ * CLI in the new worktree is already linked. Best-effort: a missing source dir,
+ * a non-Supabase repo, or a copy error must never fail task creation.
+ */
+async function copySupabaseLink(
+	repoPath: string,
+	worktreePath: string,
+): Promise<void> {
+	const src = join(repoPath, "supabase", ".temp");
+	try {
+		if (!(await stat(src)).isDirectory()) return;
+	} catch {
+		return; // no Supabase link in the source repo — nothing to copy
+	}
+	try {
+		await cp(src, join(worktreePath, "supabase", ".temp"), {
+			recursive: true,
+		});
+	} catch {
+		/* best-effort — leave the worktree unlinked rather than fail the task */
+	}
 }
 
 /**
@@ -83,6 +110,9 @@ export async function createTask(input: CreateTaskInput): Promise<TaskInfo> {
 
 	// Record the base branch so update/merge know what to diff/merge against.
 	await gitFor(worktreePath).raw(["config", `branch.${branch}.base`, baseBranch]);
+
+	// Carry the Supabase link over so the worktree's CLI is already linked.
+	await copySupabaseLink(input.repoPath, worktreePath);
 
 	return { slug, branch, baseBranch, worktreePath };
 }
