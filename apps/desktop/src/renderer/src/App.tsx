@@ -299,7 +299,8 @@ export function App() {
 		if (activeProjectId) setComposerOpen(true);
 	};
 
-	// Create the task, open it full-width, and launch the chosen agent with
+	// Create the task, open it in the current panel mode (side when on the
+	// board, full when already full-width), and launch the chosen agent with
 	// the prompt as its first instruction.
 	const composeTask = (input: {
 		name: string;
@@ -316,7 +317,9 @@ export function App() {
 			});
 			await loadTasks(activeProjectId);
 			setSelectedTaskId(task.id);
-			setPanelMode("full");
+			// Keep whatever panel mode the user is already in: if they're
+			// browsing the board (side), open the new task beside it; if they're
+			// already full-width, stay full-width.
 			setView("board");
 			const { terminalId } = await window.ateam.pty.spawnAgent({
 				taskId: task.id,
