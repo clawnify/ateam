@@ -36,24 +36,35 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		const focusTerm = () => term.focus();
 		el.addEventListener("mousedown", focusTerm);
 
-		// Cmd+V with an image-only clipboard: agents read images from the
-		// clipboard on Ctrl+V — forward that instead of pasting (empty) text.
-		// The default app menu owns the Cmd+V key equivalent natively, so the
-		// renderer never sees the keydown; the menu's paste role dispatches a
-		// DOM `paste` event instead. Intercept that (capture phase, before
-		// xterm's own paste handler on the textarea).
+		// Pasting an image: resolve it to a real file path and paste THAT
+		// (bracketed), so the agent loads the file's bytes. Sending Ctrl+V
+		// instead makes the agent do its own clipboard read, which grabs a
+		// copied file's generic Finder icon rather than its contents. The menu's
+		// Paste role fires a DOM `paste` event (the renderer never sees ⌘V's
+		// keydown — the menu owns that accelerator), intercepted here in capture
+		// phase before xterm's own textarea paste handler.
+		const escapePath = (p: string) =>
+			p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1");
 		const onPaste = (e: Event) => {
-			if (!window.ateam.utils.clipboardHasImage()) return;
+			if (!window.ateam.utils.clipboardHasImage()) return; // text → xterm
 			e.preventDefault();
 			e.stopPropagation();
-			window.ateam.pty.write(terminalId, "\x16");
+			void window.ateam.utils.clipboardImagePath().then((p) => {
+				if (p) {
+					term.paste(`${escapePath(p)} `);
+					term.focus();
+				}
+			});
 		};
 		el.addEventListener("paste", onPaste, true);
 
-		// Dropping files pastes their paths, like iTerm: backslash-escaped and
-		// delivered via term.paste() so apps with bracketed paste on (Claude
-		// Code) see a *paste* of a file path — that's what makes them attach a
-		// dropped image as [Image #N] instead of leaving a literal path.
+		// Dropping files types their backslash-escaped paths straight to the PTY,
+		// exactly like a real terminal (iTerm/Terminal.app) does on a file drop.
+		// This is deliberately NOT term.paste(): a paste arrives wrapped in
+		// bracketed-paste markers, which Claude Code treats as a literal text
+		// block and does NOT scan for a droppable file path — so the image never
+		// attaches and you're left with a literal path. Typed keystrokes are what
+		// trigger its "dropped path → [Image #N]" detection.
 		const onDragOver = (e: DragEvent) => e.preventDefault();
 		const onDrop = (e: DragEvent) => {
 			e.preventDefault();
@@ -62,9 +73,9 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			const paths = files
 				.map((f) => window.ateam.utils.pathForFile(f))
 				.filter(Boolean)
-				.map((p) => p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1"));
+				.map(escapePath);
 			if (paths.length) {
-				term.paste(`${paths.join(" ")} `);
+				window.ateam.pty.write(terminalId, `${paths.join(" ")} `);
 				term.focus();
 			}
 		};
@@ -113,19 +124,42 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		// or one bogus zero-size fit — can leave it painted blank until the next
 		// resize. So: coalesce to one fit per frame, never fit a hidden element,
 		// and only notify the PTY when the grid actually changed.
+		//
+		// One more wrinkle: while the element is hidden (changes view open, etc.)
+		// output still streams in via term.write(), but the DOM renderer can't
+		// paint those rows correctly with zero layout. When we're revealed again
+		// at the *same* window size, fit() is a no-op and the cols/rows guard
+		// below would early-return without ever repainting — leaving the rows
+		// written while hidden missing until an actual resize. So on the
+		// hidden→visible transition we force a full refresh.
 		let raf = 0;
 		let lastCols = 0;
 		let lastRows = 0;
+		let wasHidden = false;
 		const syncSize = () => {
 			cancelAnimationFrame(raf);
 			raf = requestAnimationFrame(() => {
-				if (el.clientWidth === 0 || el.clientHeight === 0) return;
+				if (el.clientWidth === 0 || el.clientHeight === 0) {
+					wasHidden = true;
+					return;
+				}
 				try {
 					fit.fit();
 				} catch {
 					return; /* not laid out yet */
 				}
-				if (term.cols === lastCols && term.rows === lastRows) return;
+				const justRevealed = wasHidden;
+				wasHidden = false;
+				if (term.cols === lastCols && term.rows === lastRows) {
+					// Same grid: fit() didn't trigger a repaint. If we just came
+					// back into view, redraw every row so content written while
+					// hidden isn't left missing until the next resize.
+					if (justRevealed) {
+						term.refresh(0, term.rows - 1);
+						term.scrollToBottom();
+					}
+					return;
+				}
 				lastCols = term.cols;
 				lastRows = term.rows;
 				window.ateam.pty.resize(terminalId, term.cols, term.rows);

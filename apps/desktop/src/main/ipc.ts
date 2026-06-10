@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { agentCommand, getAgent, listAgents } from "@ateam/agents";
 import { repo } from "@ateam/db";
 import {
@@ -39,6 +41,37 @@ export interface IpcContext {
 	loopRunner: LoopRunner;
 	/** Push the current loop list to the renderer. */
 	sendLoopsUpdated: () => void;
+}
+
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|svg)$/i;
+
+/**
+ * Classify the clipboard for image paste. A copied *file* (Finder) is preferred
+ * — paste its real path so the agent reads its contents, not its Finder icon.
+ * A raw bitmap (e.g. a ⌘⌃⇧4 screenshot) falls back to "bitmap". Text present →
+ * not an image (let it paste normally). Returns null when there's nothing to do.
+ */
+function clipboardImageKind(): { kind: "file"; path: string } | { kind: "bitmap" } | null {
+	if (clipboard.readText().length > 0) return null;
+	const formats = clipboard.availableFormats();
+	// A file reference (image file copied in Finder): use its path directly.
+	const fileUrlFmt = formats.find((f) => /file-?url|filenames/i.test(f));
+	if (fileUrlFmt) {
+		const raw = clipboard.read(fileUrlFmt).trim().split(/\r?\n/)[0];
+		if (raw) {
+			try {
+				const path = raw.startsWith("file:") ? fileURLToPath(raw) : raw;
+				if (IMAGE_EXT.test(path)) return { kind: "file", path };
+			} catch {
+				/* not a usable file url */
+			}
+		}
+	}
+	// A real bitmap on the clipboard.
+	if (formats.some((f) => /image|png|tiff|jpeg/i.test(f))) {
+		return { kind: "bitmap" };
+	}
+	return null;
 }
 
 /** Project display name from the repo's README H1 (md or HTML), if present. */
@@ -396,11 +429,27 @@ export function registerIpc(ctx: IpcContext): void {
 	});
 
 	// Sync (rare, keypress-driven): does the clipboard hold an image-only
-	// payload? Used to translate Cmd+V into the Ctrl+V agents expect for
-	// image paste.
+	// payload (a bitmap or a copied image file, no text)? Drives the renderer's
+	// decision to intercept a paste as an image rather than text.
 	ipcMain.on(CH.utilClipboardHasImage, (e) => {
-		const hasImage = clipboard.availableFormats().some((f) => f.startsWith("image/"));
-		e.returnValue = hasImage && clipboard.readText().length === 0;
+		e.returnValue = clipboardImageKind() !== null;
+	});
+
+	// Resolve the clipboard image to a real file path the agent can read.
+	// Pasting a path (bracketed) beats sending Ctrl+V: the agent loads the
+	// file's actual bytes instead of letting its own clipboard read grab a
+	// file's generic Finder icon (the "blank PNG" bug).
+	ipcMain.handle(CH.utilClipboardImagePath, async () => {
+		const kind = clipboardImageKind();
+		if (kind?.kind === "file") return kind.path;
+		if (kind?.kind === "bitmap") {
+			const img = clipboard.readImage();
+			if (img.isEmpty()) return null;
+			const file = join(tmpdir(), `ateam-paste-${Date.now()}.png`);
+			writeFileSync(file, img.toPNG());
+			return file;
+		}
+		return null;
 	});
 
 	// ---- agents ----

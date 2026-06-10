@@ -664,9 +664,46 @@ input {
 	display: grid;
 	gap: 8px;
 	padding: 12px;
-	overflow: auto;
+	/* Always scroll vertically once the tiles don't fit — never shrink a
+	   terminal away. The minmax() row floors below guarantee a usable height
+	   so extra agents overflow downward into the scroll area. */
+	overflow-y: auto;
+	overflow-x: hidden;
+	/* Default ("grid"): responsive auto-fit overview grid of fixed-height tiles. */
 	grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
 	grid-auto-rows: 300px;
+}
+/* Split: two side-by-side columns; rows grow to fill the viewport for a few
+   agents and overflow downward once there are too many. minmax(0,1fr) columns
+   stop wide terminal output from blowing out the track width. */
+.mc[data-layout="split"] {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-auto-rows: minmax(260px, 1fr);
+}
+/* Stack: one full-width column, tiles stacked top-to-bottom and scrolling. */
+.mc[data-layout="stack"] {
+	grid-template-columns: minmax(0, 1fr);
+	grid-auto-rows: minmax(280px, 1fr);
+}
+
+/* layout picker (segmented control in the topbar) */
+.mclayout {
+	display: flex;
+	gap: 2px;
+	padding: 2px;
+	background: var(--bg-elev);
+	border-radius: 7px;
+}
+/* square icon-only variant of the flat navbar button */
+.navbtn.icon {
+	padding: 5px;
+	width: 26px;
+	height: 26px;
+	justify-content: center;
+}
+.navbtn.icon.active {
+	background: var(--bg-elev-2);
+	color: var(--text);
 }
 .mc .tile {
 	border: 1px solid var(--border);

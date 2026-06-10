@@ -8,6 +8,7 @@ import {
 	Check,
 	ChevronDown,
 	ChevronRight,
+	Columns2,
 	Database,
 	FilePen,
 	FlaskConical,
@@ -17,16 +18,18 @@ import {
 	GitCommitVertical,
 	GitMerge,
 	History,
+	LayoutGrid,
 	Lock,
 	type LucideIcon,
 	Maximize2,
-	PanelLeft,
 	Minimize2,
 	Palette,
+	PanelLeft,
 	Play,
 	Plus,
-	RotateCw,
 	Rocket,
+	RotateCw,
+	Rows2,
 	Server,
 	Sparkles,
 	SquareTerminal,
@@ -47,10 +50,10 @@ import type {
 import { AgentIcon } from "./components/AgentIcon";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { FileDiffView } from "./components/FileDiffView";
-import { NewTaskComposer } from "./components/NewTaskComposer";
 import { IconButton } from "./components/IconButton";
 import { LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
+import { NewTaskComposer } from "./components/NewTaskComposer";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
 
@@ -87,6 +90,13 @@ function taskIcon(name: string): LucideIcon {
 // ---- sidebar task ordering ----
 type TaskSortMode = "status" | "updated" | "custom";
 
+// ---- mission control layout ----
+// How agent tiles are arranged: "grid" is the responsive overview grid,
+// "split" lays them side-by-side filling the height, "stack" stacks them
+// full-width. Split/stack grow to fill the viewport for a few agents and
+// scroll once there are too many to fit.
+type McLayout = "grid" | "split" | "stack";
+
 // Status order: what needs the user's eyes first.
 const STATUS_RANK: Record<KanbanColumn, number> = {
 	review: 0,
@@ -101,18 +111,21 @@ const springy = { type: "spring", stiffness: 550, damping: 42 } as const;
 export function App() {
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
 	const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
-	const [tasksByProject, setTasksByProject] = useState<
-		Record<string, TaskDTO[]>
-	>({});
+	const [tasksByProject, setTasksByProject] = useState<Record<string, TaskDTO[]>>({});
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [view, setView] = useState<"board" | "mission" | "loops">("board");
+	const [mcLayout, setMcLayoutState] = useState<McLayout>(
+		() => (localStorage.getItem("ateam.mcLayout") as McLayout) || "grid",
+	);
+	const setMcLayout = (l: McLayout) => {
+		localStorage.setItem("ateam.mcLayout", l);
+		setMcLayoutState(l);
+	};
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
-	const [rail, setRail] = useState(
-		() => localStorage.getItem("ateam.sidebarRail") === "1",
-	);
+	const [rail, setRail] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
 	const toggleRail = () => {
 		setRail((r) => {
 			localStorage.setItem("ateam.sidebarRail", r ? "0" : "1");
@@ -179,15 +192,12 @@ export function App() {
 	const projectAlert = (pid: string): "needs_attention" | "review" | null => {
 		if (pid === activeProjectId) return null;
 		const list = tasksByProject[pid] ?? [];
-		if (list.some((t) => t.column === "needs_attention"))
-			return "needs_attention";
+		if (list.some((t) => t.column === "needs_attention")) return "needs_attention";
 		if (list.some((t) => t.column === "review")) return "review";
 		return null;
 	};
 
-	const activeTasks = activeProjectId
-		? (tasksByProject[activeProjectId] ?? [])
-		: [];
+	const activeTasks = activeProjectId ? (tasksByProject[activeProjectId] ?? []) : [];
 	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
 	// "Active" tasks for the sidebar list = everything not yet merged/done.
 	const sidebarTasks = activeTasks.filter((t) => t.column !== "merged");
@@ -202,9 +212,7 @@ export function App() {
 		if (!activeProjectId) return;
 		try {
 			setCustomOrder(
-				JSON.parse(
-					localStorage.getItem(`ateam.taskOrder.${activeProjectId}`) ?? "[]",
-				) as string[],
+				JSON.parse(localStorage.getItem(`ateam.taskOrder.${activeProjectId}`) ?? "[]") as string[],
 			);
 		} catch {
 			setCustomOrder([]);
@@ -213,10 +221,7 @@ export function App() {
 	const reorderTasks = (ids: string[]) => {
 		setCustomOrder(ids);
 		if (activeProjectId)
-			localStorage.setItem(
-				`ateam.taskOrder.${activeProjectId}`,
-				JSON.stringify(ids),
-			);
+			localStorage.setItem(`ateam.taskOrder.${activeProjectId}`, JSON.stringify(ids));
 	};
 	const orderedSidebarTasks = useMemo(() => {
 		const list = [...sidebarTasks];
@@ -228,8 +233,7 @@ export function App() {
 			const rank = new Map(customOrder.map((id, i) => [id, i]));
 			list.sort(
 				(a, b) =>
-					(rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
-					(rank.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+					(rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER),
 			);
 		}
 		return list;
@@ -302,12 +306,7 @@ export function App() {
 
 	// Create the task, open it full-width, and launch the chosen agent with
 	// the prompt as its first instruction.
-	const composeTask = (input: {
-		name: string;
-		prompt: string;
-		agentId: string;
-		yolo: boolean;
-	}) =>
+	const composeTask = (input: { name: string; prompt: string; agentId: string; yolo: boolean }) =>
 		run(async () => {
 			if (!activeProjectId) return;
 			setComposerOpen(false);
@@ -338,23 +337,12 @@ export function App() {
 				{/* In rail mode the traffic lights own this strip; the toggle moves
 				    below them as the first tile. */}
 				<div className="side-top">
-					{!rail && (
-						<IconButton
-							icon={PanelLeft}
-							label="Collapse sidebar"
-							onClick={toggleRail}
-						/>
-					)}
+					{!rail && <IconButton icon={PanelLeft} label="Collapse sidebar" onClick={toggleRail} />}
 				</div>
 
 				{rail ? (
 					<>
-						<button
-							type="button"
-							className="rail-tile"
-							title="Expand sidebar"
-							onClick={toggleRail}
-						>
+						<button type="button" className="rail-tile" title="Expand sidebar" onClick={toggleRail}>
 							<PanelLeft size={16} strokeWidth={1.75} />
 						</button>
 						<div className="rail-divider" />
@@ -398,139 +386,130 @@ export function App() {
 									) : (
 										<Icon size={16} strokeWidth={1.75} />
 									)}
-									{t.agentStatus && (
-										<span className={`corner ${t.agentStatus}`} />
-									)}
+									{t.agentStatus && <span className={`corner ${t.agentStatus}`} />}
 								</button>
 							);
 						})}
 					</>
 				) : (
 					<>
-				{/* PROJECTS accordion */}
-				<div className="section-head">
-					<button
-						type="button"
-						className="section-toggle"
-						onClick={() => setProjectsCollapsed((c) => !c)}
-					>
-						{projectsCollapsed ? (
-							<ChevronRight size={14} strokeWidth={2} />
-						) : (
-							<ChevronDown size={14} strokeWidth={2} />
-						)}
-						<span>Projects</span>
-					</button>
-					<IconButton icon={FolderPlus} label="Add project" onClick={addProject} />
-				</div>
-				{!projectsCollapsed &&
-					projects.map((p) => {
-						const alert = projectAlert(p.id);
-						return (
-						<button
-							type="button"
-							key={p.id}
-							className={`proj ${p.id === activeProjectId ? "active" : ""}`}
-							onClick={() => selectProject(p.id)}
-						>
-							<span
-								className={`dot ${alert ? `alert ${alert}` : ""}`}
-								style={
-									!alert && p.color ? { background: p.color } : undefined
-								}
-							/>
-							<span className="proj-name" title={p.repoPath}>
-								{p.name}
-							</span>
-						</button>
-						);
-					})}
+						{/* PROJECTS accordion */}
+						<div className="section-head">
+							<button
+								type="button"
+								className="section-toggle"
+								onClick={() => setProjectsCollapsed((c) => !c)}
+							>
+								{projectsCollapsed ? (
+									<ChevronRight size={14} strokeWidth={2} />
+								) : (
+									<ChevronDown size={14} strokeWidth={2} />
+								)}
+								<span>Projects</span>
+							</button>
+							<IconButton icon={FolderPlus} label="Add project" onClick={addProject} />
+						</div>
+						{!projectsCollapsed &&
+							projects.map((p) => {
+								const alert = projectAlert(p.id);
+								return (
+									<button
+										type="button"
+										key={p.id}
+										className={`proj ${p.id === activeProjectId ? "active" : ""}`}
+										onClick={() => selectProject(p.id)}
+									>
+										<span
+											className={`dot ${alert ? `alert ${alert}` : ""}`}
+											style={!alert && p.color ? { background: p.color } : undefined}
+										/>
+										<span className="proj-name" title={p.repoPath}>
+											{p.name}
+										</span>
+									</button>
+								);
+							})}
 
-				{/* TASKS accordion — active tasks of the selected project */}
-				<div className="section-head tasks-head">
-					<button
-						type="button"
-						className="section-toggle"
-						onClick={() => setTasksCollapsed((c) => !c)}
-					>
-						{tasksCollapsed ? (
-							<ChevronRight size={14} strokeWidth={2} />
-						) : (
-							<ChevronDown size={14} strokeWidth={2} />
-						)}
-						<span>Tasks</span>
-					</button>
-					<span style={{ display: "flex", gap: 2 }}>
-						<Menu
-							icon={ArrowUpDown}
-							label="Order tasks"
-							items={[
-								{
-									label: "By status",
-									icon: taskSort === "status" ? Check : undefined,
-									onClick: () => setTaskSort("status"),
-								},
-								{
-									label: "Last updated first",
-									icon: taskSort === "updated" ? Check : undefined,
-									onClick: () => setTaskSort("updated"),
-								},
-								{
-									label: "Custom (drag to reorder)",
-									icon: taskSort === "custom" ? Check : undefined,
-									onClick: () => setTaskSort("custom"),
-								},
-							]}
-						/>
-						<IconButton
-							icon={Plus}
-							label="New task"
-							onClick={newTask}
-							disabled={!activeProjectId}
-						/>
-					</span>
-				</div>
-				{!tasksCollapsed &&
-					(!activeProjectId ? (
-						<div className="tree-empty">Select a project</div>
-					) : orderedSidebarTasks.length === 0 ? (
-						<div className="tree-empty">No active tasks</div>
-					) : taskSort === "custom" ? (
-						// Custom order: drag rows up/down; Motion animates the shuffle.
-						<Reorder.Group
-							as="div"
-							axis="y"
-							values={orderedSidebarTasks.map((t) => t.id)}
-							onReorder={reorderTasks}
-						>
-							{orderedSidebarTasks.map((t) => (
-								<Reorder.Item
-									as="div"
-									key={t.id}
-									value={t.id}
-									transition={springy}
-								>
-									<TaskRow
-										task={t}
-										selected={t.id === selectedTaskId}
-										onClick={() => openTask(t)}
-									/>
-								</Reorder.Item>
-							))}
-						</Reorder.Group>
-					) : (
-						// Sorted modes: layout animation glides rows to their new spot
-						// when a status change or update reorders them.
-						orderedSidebarTasks.map((t) => (
-							<motion.div key={t.id} layout transition={springy}>
-								<TaskRow
-									task={t}
-									selected={t.id === selectedTaskId}
-									onClick={() => openTask(t)}
+						{/* TASKS accordion — active tasks of the selected project */}
+						<div className="section-head tasks-head">
+							<button
+								type="button"
+								className="section-toggle"
+								onClick={() => setTasksCollapsed((c) => !c)}
+							>
+								{tasksCollapsed ? (
+									<ChevronRight size={14} strokeWidth={2} />
+								) : (
+									<ChevronDown size={14} strokeWidth={2} />
+								)}
+								<span>Tasks</span>
+							</button>
+							<span style={{ display: "flex", gap: 2 }}>
+								<Menu
+									icon={ArrowUpDown}
+									label="Order tasks"
+									items={[
+										{
+											label: "By status",
+											icon: taskSort === "status" ? Check : undefined,
+											onClick: () => setTaskSort("status"),
+										},
+										{
+											label: "Last updated first",
+											icon: taskSort === "updated" ? Check : undefined,
+											onClick: () => setTaskSort("updated"),
+										},
+										{
+											label: "Custom (drag to reorder)",
+											icon: taskSort === "custom" ? Check : undefined,
+											onClick: () => setTaskSort("custom"),
+										},
+									]}
 								/>
-							</motion.div>
-						))
-					))}
+								<IconButton
+									icon={Plus}
+									label="New task"
+									onClick={newTask}
+									disabled={!activeProjectId}
+								/>
+							</span>
+						</div>
+						{!tasksCollapsed &&
+							(!activeProjectId ? (
+								<div className="tree-empty">Select a project</div>
+							) : orderedSidebarTasks.length === 0 ? (
+								<div className="tree-empty">No active tasks</div>
+							) : taskSort === "custom" ? (
+								// Custom order: drag rows up/down; Motion animates the shuffle.
+								<Reorder.Group
+									as="div"
+									axis="y"
+									values={orderedSidebarTasks.map((t) => t.id)}
+									onReorder={reorderTasks}
+								>
+									{orderedSidebarTasks.map((t) => (
+										<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
+											<TaskRow
+												task={t}
+												selected={t.id === selectedTaskId}
+												onClick={() => openTask(t)}
+											/>
+										</Reorder.Item>
+									))}
+								</Reorder.Group>
+							) : (
+								// Sorted modes: layout animation glides rows to their new spot
+								// when a status change or update reorders them.
+								orderedSidebarTasks.map((t) => (
+									<motion.div key={t.id} layout transition={springy}>
+										<TaskRow
+											task={t}
+											selected={t.id === selectedTaskId}
+											onClick={() => openTask(t)}
+										/>
+									</motion.div>
+								))
+							))}
 					</>
 				)}
 			</aside>
@@ -563,21 +542,34 @@ export function App() {
 						</div>
 					</div>
 					<div className="spacer" />
-					<button
-						type="button"
-						className="navbtn"
-						onClick={cleanup}
-						disabled={!activeProjectId}
-					>
+					{view === "mission" && (
+						<div className="mclayout" role="group" aria-label="Layout">
+							{(
+								[
+									["grid", LayoutGrid, "Grid"],
+									["split", Columns2, "Split"],
+									["stack", Rows2, "Stack"],
+								] as const
+							).map(([mode, Icon, label]) => (
+								<button
+									key={mode}
+									type="button"
+									className={`navbtn icon ${mcLayout === mode ? "active" : ""}`}
+									title={`${label} layout`}
+									aria-label={`${label} layout`}
+									aria-pressed={mcLayout === mode}
+									onClick={() => setMcLayout(mode)}
+								>
+									<Icon size={14} strokeWidth={1.75} />
+								</button>
+							))}
+						</div>
+					)}
+					<button type="button" className="navbtn" onClick={cleanup} disabled={!activeProjectId}>
 						<Brush size={14} strokeWidth={1.75} />
 						Clean up
 					</button>
-					<button
-						type="button"
-						className="navbtn"
-						onClick={newTask}
-						disabled={!activeProjectId}
-					>
+					<button type="button" className="navbtn" onClick={newTask} disabled={!activeProjectId}>
 						<Plus size={14} strokeWidth={1.75} />
 						New task
 					</button>
@@ -601,9 +593,7 @@ export function App() {
 									mode={panelMode}
 									onSetMode={setPanelMode}
 									terminalId={termByTask[selectedTask.id] ?? null}
-									setTerminal={(tid) =>
-										setTermByTask((m) => ({ ...m, [selectedTask.id]: tid }))
-									}
+									setTerminal={(tid) => setTermByTask((m) => ({ ...m, [selectedTask.id]: tid }))}
 									run={run}
 									ask={ask}
 									confirm={confirm}
@@ -613,7 +603,7 @@ export function App() {
 							)}
 						</>
 					) : view === "mission" ? (
-						<MissionControl tasks={activeTasks} />
+						<MissionControl tasks={activeTasks} layout={mcLayout} />
 					) : (
 						<LoopsPanel />
 					)}
@@ -661,11 +651,7 @@ function TaskRow({
 }) {
 	const Icon = taskIcon(t.name);
 	return (
-		<button
-			type="button"
-			className={`tasknode ${selected ? "selected" : ""}`}
-			onClick={onClick}
-		>
+		<button type="button" className={`tasknode ${selected ? "selected" : ""}`} onClick={onClick}>
 			{t.agentId ? (
 				<span className="ticon">
 					<AgentIcon agentId={t.agentId} size={14} />
@@ -717,8 +703,7 @@ function Board({
 								<div className="meta">
 									{t.gitStatus && (
 										<span>
-											↑{t.gitStatus.ahead} ↓{t.gitStatus.behind} ·{" "}
-											{t.gitStatus.dirty} changed
+											↑{t.gitStatus.ahead} ↓{t.gitStatus.behind} · {t.gitStatus.dirty} changed
 										</span>
 									)}
 									{t.prNumber && <span>PR #{t.prNumber}</span>}
@@ -762,9 +747,7 @@ function TaskPanel({
 	reload: () => void;
 	onClose: () => void;
 }) {
-	const [agentId, setAgentId] = useState(
-		agents.find((a) => a.available)?.id ?? "claude",
-	);
+	const [agentId, setAgentId] = useState(agents.find((a) => a.available)?.id ?? "claude");
 	const [diff, setDiff] = useState<DiffResultDTO | null>(null);
 	const [changesOpen, setChangesOpen] = useState(false);
 	const [viewFile, setViewFile] = useState<string | null>(null);
@@ -839,9 +822,7 @@ function TaskPanel({
 	// the agent — not back into the toggle button.
 	const setModeAndFocusTerm = (m: "side" | "full") => {
 		onSetMode(m);
-		requestAnimationFrame(() =>
-			window.dispatchEvent(new Event("ateam:focus-terminal")),
-		);
+		requestAnimationFrame(() => window.dispatchEvent(new Event("ateam:focus-terminal")));
 	};
 
 	return (
@@ -903,11 +884,7 @@ function TaskPanel({
 
 				<span className="tb-divider" />
 
-				<IconButton
-					icon={GitCommitVertical}
-					label="Commit all changes"
-					onClick={commit}
-				/>
+				<IconButton icon={GitCommitVertical} label="Commit all changes" onClick={commit} />
 				<IconButton
 					icon={ArrowUp}
 					label="Push branch to origin"
@@ -947,11 +924,7 @@ function TaskPanel({
 									});
 								} catch (e) {
 									const msg = e instanceof Error ? e.message : String(e);
-									if (
-										/modified or untracked|not fully merged|use --force/i.test(
-											msg,
-										)
-									) {
+									if (/modified or untracked|not fully merged|use --force/i.test(msg)) {
 										const ok = await confirm(
 											"Force delete?",
 											"This worktree has uncommitted/untracked changes or an unmerged branch. Delete it anyway?",
@@ -993,20 +966,12 @@ function TaskPanel({
 			<div className="panel-body">
 				{/* Keep the terminal mounted (xterm state survives) while the
 				    changes view is open — just hide it. */}
-				<div
-					className="term-wrap"
-					style={{ display: changesOpen ? "none" : "flex" }}
-				>
+				<div className="term-wrap" style={{ display: changesOpen ? "none" : "flex" }}>
 					{terminalId ? (
 						<TerminalView terminalId={terminalId} />
 					) : (
-						<div
-							className="term"
-							style={{ display: "grid", placeItems: "center" }}
-						>
-							<span className="muted">
-								Launch an agent or shell to start a terminal
-							</span>
+						<div className="term" style={{ display: "grid", placeItems: "center" }}>
+							<span className="muted">Launch an agent or shell to start a terminal</span>
 						</div>
 					)}
 				</div>
@@ -1016,11 +981,7 @@ function TaskPanel({
 						<div className="changes">
 							<div className="changes-head">
 								<strong>Changes</strong>
-								<IconButton
-									icon={RotateCw}
-									label="Refresh changes"
-									onClick={refreshDiff}
-								/>
+								<IconButton icon={RotateCw} label="Refresh changes" onClick={refreshDiff} />
 							</div>
 							{diff?.files.length ? (
 								diff.files.map((f) => (
@@ -1053,10 +1014,7 @@ function TaskPanel({
 									onClose={() => setChangesOpen(false)}
 								/>
 							) : (
-								<div
-									className="muted"
-									style={{ display: "grid", placeItems: "center", flex: 1 }}
-								>
+								<div className="muted" style={{ display: "grid", placeItems: "center", flex: 1 }}>
 									Select a file to see its diff
 								</div>
 							)}
@@ -1068,10 +1026,8 @@ function TaskPanel({
 	);
 }
 
-function MissionControl({ tasks }: { tasks: TaskDTO[] }) {
-	const [tiles, setTiles] = useState<{ task: TaskDTO; terminalId: string }[]>(
-		[],
-	);
+function MissionControl({ tasks, layout }: { tasks: TaskDTO[]; layout: McLayout }) {
+	const [tiles, setTiles] = useState<{ task: TaskDTO; terminalId: string }[]>([]);
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
 
@@ -1081,8 +1037,7 @@ function MissionControl({ tasks }: { tasks: TaskDTO[] }) {
 			const collected: { task: TaskDTO; terminalId: string }[] = [];
 			for (const t of tasksRef.current) {
 				const sessions = await window.ateam.pty.listForTask(t.id);
-				for (const s of sessions)
-					collected.push({ task: t, terminalId: s.terminalId });
+				for (const s of sessions) collected.push({ task: t, terminalId: s.terminalId });
 			}
 			if (!cancelled) setTiles(collected);
 		};
@@ -1096,7 +1051,7 @@ function MissionControl({ tasks }: { tasks: TaskDTO[] }) {
 
 	if (tiles.length === 0) {
 		return (
-			<div className="mc">
+			<div className="mc" data-layout={layout}>
 				<div className="empty">
 					No live agents yet.
 					<br />
@@ -1107,17 +1062,14 @@ function MissionControl({ tasks }: { tasks: TaskDTO[] }) {
 	}
 
 	return (
-		<div className="mc">
+		<div className="mc" data-layout={layout}>
 			{tiles.map(({ task, terminalId }) => (
 				<div key={terminalId} className="tile">
 					<div className="bar">
 						<span>{task.name}</span>
 						<span className="muted">· {task.branch}</span>
 						{task.agentStatus && (
-							<span
-								className={`tstatus ${task.agentStatus}`}
-								style={{ marginLeft: "auto" }}
-							/>
+							<span className={`tstatus ${task.agentStatus}`} style={{ marginLeft: "auto" }} />
 						)}
 					</div>
 					<TerminalView terminalId={terminalId} />
