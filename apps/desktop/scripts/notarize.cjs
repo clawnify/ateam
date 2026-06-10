@@ -26,7 +26,9 @@ exports.default = async function notarizeHook(context) {
 
 	const appPath = `${context.appOutDir}/${context.packager.appInfo.productFilename}.app`;
 	console.log(`[notarize] submitting ${appPath} (this can take a few minutes)…`);
-	const { notarize } = require("@electron/notarize");
+	// @electron/notarize is ESM-only (>=3.1); load it via dynamic import so this
+	// CommonJS hook works under Node without ERR_REQUIRE_ESM.
+	const { notarize } = await import("@electron/notarize");
 	await notarize({ appPath, keychainProfile: profile });
 	execSync(`xcrun stapler staple "${appPath}"`, { stdio: "inherit" });
 	console.log("[notarize] notarized + stapled");
