@@ -203,6 +203,7 @@ export const CH = {
 	agentsList: "agents:list",
 	utilClipboardHasImage: "util:clipboardHasImage",
 	utilClipboardImagePath: "util:clipboardImagePath",
+	utilPickFiles: "util:pickFiles",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -305,5 +306,7 @@ export interface AteamApi {
 		 * Null when the clipboard holds no image.
 		 */
 		clipboardImagePath(): Promise<string | null>;
+		/** Native open dialog; resolves to the chosen paths ([] on cancel). */
+		pickFiles(): Promise<string[]>;
 	};
 }

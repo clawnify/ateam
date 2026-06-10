@@ -1,14 +1,27 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
+import { FileUp, Plus } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { Menu } from "./Menu";
+
+/**
+ * Backslash-escape a path so it survives being TYPED into a PTY. Drops and the
+ * file picker type paths as keystrokes (not bracketed paste) so Claude Code's
+ * "typed path → [Image #N]" detection fires — that wants shell-style escaping,
+ * not quoting.
+ */
+const escapePath = (p: string) =>
+	p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1");
 
 /**
  * One xterm.js view bound to a main-process PTY by terminalId. Replays the
  * ring-buffer snapshot on mount (so re-attaching shows recent scrollback),
  * streams live output, and forwards keystrokes + resize back to the PTY.
+ * A slim toolbar underneath offers a `+` menu (e.g. attach files by path).
  */
 export function TerminalView({ terminalId }: { terminalId: string }) {
 	const ref = useRef<HTMLDivElement>(null);
+	const termRef = useRef<Terminal | null>(null);
 
 	useEffect(() => {
 		const el = ref.current;
@@ -24,6 +37,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		const fit = new FitAddon();
 		term.loadAddon(fit);
 		term.open(el);
+		termRef.current = term;
 		try {
 			fit.fit();
 		} catch {
@@ -43,8 +57,6 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		// Paste role fires a DOM `paste` event (the renderer never sees ⌘V's
 		// keydown — the menu owns that accelerator), intercepted here in capture
 		// phase before xterm's own textarea paste handler.
-		const escapePath = (p: string) =>
-			p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1");
 		const onPaste = (e: Event) => {
 			if (!window.ateam.utils.clipboardHasImage()) return; // text → xterm
 			e.preventDefault();
@@ -182,9 +194,36 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			offData();
 			disposeInput.dispose();
 			ro.disconnect();
+			termRef.current = null;
 			term.dispose();
 		};
 	}, [terminalId]);
 
-	return <div className="term" ref={ref} />;
+	// "+ → Files…": native picker, then type the escaped paths into the PTY —
+	// same effect as dragging the files onto the terminal.
+	const addFiles = async () => {
+		const paths = (await window.ateam.utils.pickFiles()).map(escapePath);
+		if (paths.length) {
+			window.ateam.pty.write(terminalId, `${paths.join(" ")} `);
+		}
+		termRef.current?.focus();
+	};
+
+	return (
+		<div className="term-shell">
+			{/* .term-area is the flex-sized box; .term is absolutely positioned to
+			    fill it, so the xterm canvas can never prop the layout open — the
+			    available space drives the terminal size, not the other way round. */}
+			<div className="term-area">
+				<div className="term" ref={ref} />
+			</div>
+			<div className="term-toolbar">
+				<Menu
+					icon={Plus}
+					label="Add to terminal"
+					items={[{ label: "Files…", icon: FileUp, onClick: addFiles }]}
+				/>
+			</div>
+		</div>
+	);
 }

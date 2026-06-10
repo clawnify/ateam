@@ -452,6 +452,16 @@ export function registerIpc(ctx: IpcContext): void {
 		return null;
 	});
 
+	// Native file picker for the terminal toolbar's "+ → Files…" action; the
+	// renderer types the chosen paths into the PTY like a drag-and-drop would.
+	ipcMain.handle(CH.utilPickFiles, async () => {
+		const res = await dialog.showOpenDialog({
+			properties: ["openFile", "multiSelections"],
+			title: "Add files to terminal",
+		});
+		return res.canceled ? [] : res.filePaths;
+	});
+
 	// ---- agents ----
 	ipcMain.handle(CH.agentsList, async () => {
 		const agents = await listAgents();
