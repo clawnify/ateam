@@ -95,11 +95,14 @@ export const repo = {
 			.get();
 	},
 
+	// Latest-first: callers that want the most recent chat session (e.g. the
+	// cleanup preview) can take the first live one without re-sorting.
 	listSessionsByTask(db: AteamDb, taskId: string) {
 		return db
 			.select()
 			.from(agentSessions)
 			.where(eq(agentSessions.taskId, taskId))
+			.orderBy(desc(agentSessions.startedAt))
 			.all();
 	},
 

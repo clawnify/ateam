@@ -4,9 +4,14 @@ import { FileUp, Plus } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Menu } from "./Menu";
 
-/** Shell-quote a path so spaces and quotes survive being typed into a PTY. */
-const quotePath = (p: string) =>
-	/[\s'"\\]/.test(p) ? `"${p.replace(/"/g, '\\"')}"` : p;
+/**
+ * Backslash-escape a path so it survives being TYPED into a PTY. Drops and the
+ * file picker type paths as keystrokes (not bracketed paste) so Claude Code's
+ * "typed path → [Image #N]" detection fires — that wants shell-style escaping,
+ * not quoting.
+ */
+const escapePath = (p: string) =>
+	p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1");
 
 /**
  * One xterm.js view bound to a main-process PTY by terminalId. Replays the
@@ -45,24 +50,33 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		const focusTerm = () => term.focus();
 		el.addEventListener("mousedown", focusTerm);
 
-		// Cmd+V with an image-only clipboard: agents read images from the
-		// clipboard on Ctrl+V — forward that instead of pasting (empty) text.
-		term.attachCustomKeyEventHandler((ev) => {
-			if (
-				ev.type === "keydown" &&
-				ev.metaKey &&
-				!ev.ctrlKey &&
-				ev.key.toLowerCase() === "v" &&
-				window.ateam.utils.clipboardHasImage()
-			) {
-				window.ateam.pty.write(terminalId, "\x16");
-				return false;
-			}
-			return true;
-		});
+		// Pasting an image: resolve it to a real file path and paste THAT
+		// (bracketed), so the agent loads the file's bytes. Sending Ctrl+V
+		// instead makes the agent do its own clipboard read, which grabs a
+		// copied file's generic Finder icon rather than its contents. The menu's
+		// Paste role fires a DOM `paste` event (the renderer never sees ⌘V's
+		// keydown — the menu owns that accelerator), intercepted here in capture
+		// phase before xterm's own textarea paste handler.
+		const onPaste = (e: Event) => {
+			if (!window.ateam.utils.clipboardHasImage()) return; // text → xterm
+			e.preventDefault();
+			e.stopPropagation();
+			void window.ateam.utils.clipboardImagePath().then((p) => {
+				if (p) {
+					term.paste(`${escapePath(p)} `);
+					term.focus();
+				}
+			});
+		};
+		el.addEventListener("paste", onPaste, true);
 
-		// Dropping files types their (quoted) paths, like iTerm — so you can
-		// drag an image straight into an agent conversation.
+		// Dropping files types their backslash-escaped paths straight to the PTY,
+		// exactly like a real terminal (iTerm/Terminal.app) does on a file drop.
+		// This is deliberately NOT term.paste(): a paste arrives wrapped in
+		// bracketed-paste markers, which Claude Code treats as a literal text
+		// block and does NOT scan for a droppable file path — so the image never
+		// attaches and you're left with a literal path. Typed keystrokes are what
+		// trigger its "dropped path → [Image #N]" detection.
 		const onDragOver = (e: DragEvent) => e.preventDefault();
 		const onDrop = (e: DragEvent) => {
 			e.preventDefault();
@@ -71,7 +85,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			const paths = files
 				.map((f) => window.ateam.utils.pathForFile(f))
 				.filter(Boolean)
-				.map(quotePath);
+				.map(escapePath);
 			if (paths.length) {
 				window.ateam.pty.write(terminalId, `${paths.join(" ")} `);
 				term.focus();
@@ -79,6 +93,24 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		};
 		el.addEventListener("dragover", onDragOver);
 		el.addEventListener("drop", onDrop);
+
+		// Forward app-level focus to the terminal: macOS app switches don't
+		// change DOM focus, so without this an agent that asked for focus
+		// reporting (mode 1004) never hears you came back — Claude Code uses
+		// that to re-check the clipboard for its "Image in clipboard" hint.
+		// xterm only emits CSI I/O if the app enabled 1004, so this is inert
+		// for everything else. Guarded so only the focused tile re-focuses
+		// (Mission Control mounts many terminals).
+		let hadFocus = false;
+		const onWinBlur = () => {
+			hadFocus = document.activeElement === term.textarea;
+			if (hadFocus) term.textarea?.blur();
+		};
+		const onWinFocus = () => {
+			if (hadFocus) term.focus();
+		};
+		window.addEventListener("blur", onWinBlur);
+		window.addEventListener("focus", onWinFocus);
 
 		// The task panel asks us to take focus after layout toggles, so Enter
 		// reaches the agent instead of re-triggering the clicked button.
@@ -104,19 +136,42 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		// or one bogus zero-size fit — can leave it painted blank until the next
 		// resize. So: coalesce to one fit per frame, never fit a hidden element,
 		// and only notify the PTY when the grid actually changed.
+		//
+		// One more wrinkle: while the element is hidden (changes view open, etc.)
+		// output still streams in via term.write(), but the DOM renderer can't
+		// paint those rows correctly with zero layout. When we're revealed again
+		// at the *same* window size, fit() is a no-op and the cols/rows guard
+		// below would early-return without ever repainting — leaving the rows
+		// written while hidden missing until an actual resize. So on the
+		// hidden→visible transition we force a full refresh.
 		let raf = 0;
 		let lastCols = 0;
 		let lastRows = 0;
+		let wasHidden = false;
 		const syncSize = () => {
 			cancelAnimationFrame(raf);
 			raf = requestAnimationFrame(() => {
-				if (el.clientWidth === 0 || el.clientHeight === 0) return;
+				if (el.clientWidth === 0 || el.clientHeight === 0) {
+					wasHidden = true;
+					return;
+				}
 				try {
 					fit.fit();
 				} catch {
 					return; /* not laid out yet */
 				}
-				if (term.cols === lastCols && term.rows === lastRows) return;
+				const justRevealed = wasHidden;
+				wasHidden = false;
+				if (term.cols === lastCols && term.rows === lastRows) {
+					// Same grid: fit() didn't trigger a repaint. If we just came
+					// back into view, redraw every row so content written while
+					// hidden isn't left missing until the next resize.
+					if (justRevealed) {
+						term.refresh(0, term.rows - 1);
+						term.scrollToBottom();
+					}
+					return;
+				}
 				lastCols = term.cols;
 				lastRows = term.rows;
 				window.ateam.pty.resize(terminalId, term.cols, term.rows);
@@ -132,6 +187,9 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			el.removeEventListener("mousedown", focusTerm);
 			el.removeEventListener("dragover", onDragOver);
 			el.removeEventListener("drop", onDrop);
+			el.removeEventListener("paste", onPaste, true);
+			window.removeEventListener("blur", onWinBlur);
+			window.removeEventListener("focus", onWinFocus);
 			window.removeEventListener("ateam:focus-terminal", onFocusRequest);
 			offData();
 			disposeInput.dispose();
@@ -141,10 +199,10 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		};
 	}, [terminalId]);
 
-	// "+ → Files…": native picker, then type the quoted paths into the PTY —
+	// "+ → Files…": native picker, then type the escaped paths into the PTY —
 	// same effect as dragging the files onto the terminal.
 	const addFiles = async () => {
-		const paths = (await window.ateam.utils.pickFiles()).map(quotePath);
+		const paths = (await window.ateam.utils.pickFiles()).map(escapePath);
 		if (paths.length) {
 			window.ateam.pty.write(terminalId, `${paths.join(" ")} `);
 		}
