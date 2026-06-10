@@ -39,6 +39,9 @@ interface Session {
 	exited: boolean;
 	cwd: string;
 	agentId: string;
+	// Monotonic chunk counter. Stamped on every broadcast `data` and reported
+	// with each snapshot so reattaching clients can dedupe (see PtyDataEvent).
+	seq: number;
 }
 
 const sessions = new Map<string, Session>();
@@ -97,6 +100,7 @@ function spawnSession(m: {
 		exited: false,
 		cwd: m.cwd,
 		agentId: m.agentId ?? "shell",
+		seq: 0,
 	};
 	sessions.set(m.terminalId, s);
 	if (idleTimer) clearTimeout(idleTimer);
@@ -105,7 +109,13 @@ function spawnSession(m: {
 		// Feed the emulator so it tracks screen + mode state for snapshots, and
 		// stream the raw bytes live to attached clients.
 		s.term.write(data);
-		broadcast({ t: "data", terminalId: m.terminalId, data: b64(data) });
+		s.seq += 1;
+		broadcast({
+			t: "data",
+			terminalId: m.terminalId,
+			data: b64(data),
+			seq: s.seq,
+		});
 	});
 	proc.onExit(({ exitCode }) => {
 		s.exited = true;
@@ -156,18 +166,23 @@ function handleMessage(sock: net.Socket, m: Record<string, unknown>): void {
 		}
 		case "snapshot": {
 			const s = sessions.get(m.terminalId as string);
-			const reply = (data: string) =>
+			const reply = (data: string, seq: number) =>
 				sock.write(
-					`${JSON.stringify({ t: "snapshot", id: m.id, data: b64(data) })}\n`,
+					`${JSON.stringify({ t: "snapshot", id: m.id, data: b64(data), seq })}\n`,
 				);
 			if (!s) {
-				reply("");
+				reply("", 0);
 				break;
 			}
+			// Capture the cut point synchronously: every chunk up to s.seq is
+			// already written into s.term, so the serialized state below reflects
+			// exactly bytes <= cutSeq. Chunks broadcast after this (seq > cutSeq)
+			// are what the client replays on top, with no overlap.
+			const cutSeq = s.seq;
 			// xterm parses writes asynchronously; drain the queue with an empty
 			// write so the serialized snapshot reflects the very latest bytes
 			// (modes included) rather than a state a few frames stale.
-			s.term.write("", () => reply(s.serialize.serialize()));
+			s.term.write("", () => reply(s.serialize.serialize(), cutSeq));
 			break;
 		}
 		case "list":

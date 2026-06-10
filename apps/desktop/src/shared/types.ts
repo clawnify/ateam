@@ -156,6 +156,18 @@ export const CH = {
 export interface PtyDataEvent {
 	terminalId: string;
 	data: string;
+	/**
+	 * Monotonic per-session sequence number for this chunk. The snapshot reply
+	 * carries the seq of the last chunk it already includes, so a freshly-mounted
+	 * view can replay the snapshot first and then apply only the live chunks that
+	 * came *after* it — never double-applying bytes the snapshot already has.
+	 */
+	seq: number;
+}
+/** A serialized terminal state plus the seq of the last chunk it reflects. */
+export interface PtySnapshot {
+	data: string;
+	seq: number;
 }
 export interface PtyExitEvent {
 	terminalId: string;
@@ -216,7 +228,7 @@ export interface AteamApi {
 		write(terminalId: string, data: string): void;
 		resize(terminalId: string, cols: number, rows: number): void;
 		kill(terminalId: string): void;
-		snapshot(terminalId: string): Promise<string>;
+		snapshot(terminalId: string): Promise<PtySnapshot>;
 		listForTask(taskId: string): Promise<SessionDTO[]>;
 		onData(cb: (e: PtyDataEvent) => void): () => void;
 		onExit(cb: (e: PtyExitEvent) => void): () => void;
