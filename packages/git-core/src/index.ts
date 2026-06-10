@@ -1,33 +1,22 @@
-export { GitCoreError, errorMessage } from "./errors";
+export type { DiffFile, DiffInput, DiffResult, FileDiffInput } from "./diff";
+export { diff, fileDiff } from "./diff";
 export type { GitCoreErrorCode } from "./errors";
-export { gitFor, safeRaw, refExists } from "./git-client";
-export type { GitClient } from "./types";
-export {
-	defaultWorktreesRoot,
-	normalizeWorktreeBaseDir,
-	worktreesRootFor,
-	safeResolveWorktreePath,
-} from "./worktree-paths";
-export {
-	parseWorktreeList,
-	listGitWorktrees,
-	normalizeWorktreePath,
-} from "./worktree-list";
-export type { WorktreeRecord } from "./worktree-list";
-export { slugify } from "./util";
-
-export { initRepository, registerProject, detectDefaultBranch } from "./project";
-export type { ProjectInfo, GithubRepo } from "./project";
-
-export { createTask, removeTask } from "./task";
+export { errorMessage, GitCoreError } from "./errors";
+export { gitFor, refExists, safeRaw } from "./git-client";
 export type {
-	CreateTaskInput,
-	TaskInfo,
-	RemoveTaskInput,
-	RemoveTaskResult,
-} from "./task";
+	DetectMergedResult,
+	LocalMainResult,
+	LocalMainStrategy,
+	MergeResult,
+	MergeStrategy,
+	MergeViaPRInput,
+	PrStatus,
+} from "./merge";
+export { detectMerged, mergeViaPR, prStatus, updateLocalMain } from "./merge";
+export type { GithubRepo, ProjectInfo } from "./project";
 
-export { commit, push, trackingStatus, updateFromBase } from "./sync";
+export { detectDefaultBranch, initRepository, registerProject } from "./project";
+export { SerialQueue } from "./serial-queue";
 export type {
 	CommitInput,
 	PushInput,
@@ -35,16 +24,25 @@ export type {
 	UpdateFromBaseInput,
 	UpdateResult,
 } from "./sync";
-
-export { detectMerged, mergeViaPR, updateLocalMain } from "./merge";
+export { commit, push, trackingStatus, updateFromBase } from "./sync";
 export type {
-	DetectMergedResult,
-	MergeStrategy,
-	MergeViaPRInput,
-	MergeResult,
-	LocalMainResult,
-	LocalMainStrategy,
-} from "./merge";
-
-export { diff, fileDiff } from "./diff";
-export type { DiffFile, DiffResult, DiffInput, FileDiffInput } from "./diff";
+	CreateTaskInput,
+	RemoveTaskInput,
+	RemoveTaskResult,
+	TaskInfo,
+} from "./task";
+export { createTask, removeTask } from "./task";
+export type { GitClient } from "./types";
+export { slugify } from "./util";
+export type { WorktreeRecord } from "./worktree-list";
+export {
+	listGitWorktrees,
+	normalizeWorktreePath,
+	parseWorktreeList,
+} from "./worktree-list";
+export {
+	defaultWorktreesRoot,
+	normalizeWorktreeBaseDir,
+	safeResolveWorktreePath,
+	worktreesRootFor,
+} from "./worktree-paths";

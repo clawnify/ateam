@@ -1,16 +1,9 @@
-import type {
-	AgentSession,
-	AteamDb,
-	Project,
-	Task,
-} from "@ateam/db";
+import type { AgentSession, AteamDb, Project, Task } from "@ateam/db";
+import type { ProjectDTO, SessionDTO, TaskDTO } from "../shared/types";
 import type { HookServer } from "./hooks/hook-server";
+import type { LoopRunner } from "./loops/runner";
+import type { MergeQueue } from "./merge-queue";
 import type { PtyClient } from "./pty/pty-client";
-import type {
-	ProjectDTO,
-	SessionDTO,
-	TaskDTO,
-} from "../shared/types";
 
 export interface Services {
 	db: AteamDb;
@@ -20,6 +13,8 @@ export interface Services {
 	hooksDir: string;
 	notifyScriptPath: string;
 	hookPort: number;
+	mergeQueue: MergeQueue;
+	loopRunner: LoopRunner;
 }
 
 export function toProjectDTO(p: Project): ProjectDTO {
@@ -47,6 +42,7 @@ export function toTaskDTO(t: Task): TaskDTO {
 		column: t.column,
 		agentStatus: t.agentStatus ?? null,
 		agentId: t.agentId ?? null,
+		mergeStatus: t.mergeStatus ?? null,
 		prNumber: t.prNumber ?? null,
 		prUrl: t.prUrl ?? null,
 		gitStatus: t.gitStatus ?? null,

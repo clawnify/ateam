@@ -1,14 +1,12 @@
 // Plain DTOs crossing the IPC boundary. Kept dependency-free so the renderer
 // never imports node/electron/db internals.
 
-export type KanbanColumn =
-	| "todo"
-	| "running"
-	| "needs_attention"
-	| "review"
-	| "merged";
+export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
 export type AgentStatus = "idle" | "running" | "awaiting_input" | "stopped";
+
+/** Position of a task in the merge queue; null when not queued. */
+export type MergeStatus = "queued" | "updating" | "merging" | "conflict";
 
 export interface ProjectDTO {
 	id: string;
@@ -39,6 +37,8 @@ export interface TaskDTO {
 	column: KanbanColumn;
 	agentStatus: AgentStatus | null;
 	agentId: string | null;
+	/** Merge-queue position; null when the task is not queued to merge. */
+	mergeStatus: MergeStatus | null;
 	prNumber: number | null;
 	prUrl: string | null;
 	gitStatus: GitStatusSnapshot | null;
@@ -91,6 +91,64 @@ export interface MergeResultDTO {
 
 export type MergeStrategy = "merge" | "squash" | "rebase";
 
+/**
+ * Result of enqueuing a merge. The merge runs serialized per base branch, so
+ * the call resolves only once this task's turn completes (or it parks on a
+ * genuine conflict / busy / error).
+ */
+export type MergeEnqueueDTO =
+	| { ok: true; prNumber: number | null; prUrl: string | null }
+	| { ok: false; reason: "conflict"; conflicts: string[] }
+	| { ok: false; reason: "busy" }
+	| { ok: false; reason: "error"; message: string };
+
+/** A Loop (periodic reconciler) as shown in the Loops panel. */
+export interface LoopDTO {
+	id: string;
+	definitionId: string;
+	title: string;
+	description: string;
+	scope: "global" | "per_task";
+	scopeKey: string | null;
+	/** "builtin" loops are code-defined; "user" loops are template instances. */
+	kind: "builtin" | "user";
+	templateId: string | null;
+	projectId: string | null;
+	enabled: boolean;
+	cadence: "fixed" | "self_paced";
+	lastRunAt: number | null;
+	nextRunAt: number | null;
+	lastStatus: "ok" | "error" | "done" | null;
+	lastSummary: string | null;
+	lastError: string | null;
+	runs: number;
+}
+
+/** A loop template the user can instantiate, with its configurable params. */
+export interface LoopTemplateParamDTO {
+	key: string;
+	label: string;
+	type: "number" | "boolean";
+	default: number | boolean;
+	help?: string;
+}
+export interface LoopTemplateDTO {
+	id: string;
+	title: string;
+	description: string;
+	params: LoopTemplateParamDTO[];
+}
+
+/** Input for creating a user loop from a template. */
+export interface CreateLoopInput {
+	templateId: string;
+	name: string;
+	projectId?: string;
+	config?: Record<string, unknown>;
+	intervalMs?: number;
+	enabled?: boolean;
+}
+
 export interface CleanupItem {
 	id: string;
 	name: string;
@@ -136,6 +194,12 @@ export const CH = {
 	gitDiff: "git:diff",
 	gitFileDiff: "git:fileDiff",
 	gitStatus: "git:status",
+	loopsList: "loops:list",
+	loopsSetEnabled: "loops:setEnabled",
+	loopsRunNow: "loops:runNow",
+	loopsTemplates: "loops:templates",
+	loopsCreate: "loops:create",
+	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
 	utilClipboardHasImage: "util:clipboardHasImage",
 	utilClipboardImagePath: "util:clipboardImagePath",
@@ -150,6 +214,7 @@ export const CH = {
 	evtPtyData: "evt:pty:data",
 	evtPtyExit: "evt:pty:exit",
 	evtTaskUpdated: "evt:task:updated",
+	evtLoopsUpdated: "evt:loops:updated",
 } as const;
 
 // ---- event payloads ----
@@ -173,16 +238,8 @@ export interface AteamApi {
 	};
 	tasks: {
 		list(projectId: string): Promise<TaskDTO[]>;
-		create(input: {
-			projectId: string;
-			name: string;
-			baseBranch?: string;
-		}): Promise<TaskDTO>;
-		remove(input: {
-			id: string;
-			deleteBranch?: boolean;
-			force?: boolean;
-		}): Promise<void>;
+		create(input: { projectId: string; name: string; baseBranch?: string }): Promise<TaskDTO>;
+		remove(input: { id: string; deleteBranch?: boolean; force?: boolean }): Promise<void>;
 		setColumn(id: string, column: KanbanColumn): Promise<TaskDTO>;
 		/** Preview which tasks a cleanup would remove vs keep (and why). */
 		cleanupPreview(projectId: string): Promise<CleanupReport>;
@@ -195,13 +252,26 @@ export interface AteamApi {
 		commit(taskId: string, message: string): Promise<{ sha: string }>;
 		push(taskId: string): Promise<void>;
 		update(taskId: string): Promise<UpdateResultDTO>;
-		merge(taskId: string, strategy: MergeStrategy): Promise<MergeResultDTO>;
+		/**
+		 * Enqueue a merge. Merges serialize per base branch, so this resolves only
+		 * when this task's turn completes — or parks on a conflict/busy/error.
+		 */
+		merge(taskId: string, strategy: MergeStrategy): Promise<MergeEnqueueDTO>;
 		diff(taskId: string): Promise<DiffResultDTO>;
 		fileDiff(taskId: string, file: string): Promise<string>;
 		status(taskId: string): Promise<GitStatusSnapshot>;
 	};
 	agents: {
 		list(): Promise<AgentDTO[]>;
+	};
+	loops: {
+		list(): Promise<LoopDTO[]>;
+		setEnabled(id: string, enabled: boolean): Promise<LoopDTO[]>;
+		runNow(id: string): Promise<LoopDTO[]>;
+		templates(): Promise<LoopTemplateDTO[]>;
+		create(input: CreateLoopInput): Promise<LoopDTO[]>;
+		remove(id: string): Promise<LoopDTO[]>;
+		onUpdated(cb: (loops: LoopDTO[]) => void): () => void;
 	};
 	pty: {
 		spawnAgent(input: {

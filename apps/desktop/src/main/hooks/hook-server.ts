@@ -7,9 +7,16 @@ export interface HookEvent {
 	sessionId?: string;
 }
 
+/** An agent asked to merge (via the `gh` shim) — routed into the merge queue. */
+export interface MergeRequestEvent {
+	terminalId: string;
+	strategy?: string;
+}
+
 /**
  * Tiny localhost HTTP server that agent hooks ping to report lifecycle events.
  * GET /hook/complete?terminalId=&eventType=&sessionId= → emits "hook".
+ * GET /merge/request?terminalId=&strategy=          → emits "merge-request".
  * GET-with-query is trivial to emit from a shell hook with no JSON escaping.
  */
 export class HookServer extends EventEmitter {
@@ -32,6 +39,22 @@ export class HookServer extends EventEmitter {
 						} satisfies HookEvent);
 					}
 					res.writeHead(204);
+					res.end();
+					return;
+				}
+				if (req.method === "GET" && url.pathname === "/merge/request") {
+					const terminalId = url.searchParams.get("terminalId") ?? "";
+					const strategy = url.searchParams.get("strategy") ?? undefined;
+					if (terminalId) {
+						this.emit("merge-request", {
+							terminalId,
+							strategy,
+						} satisfies MergeRequestEvent);
+						res.writeHead(202);
+						res.end();
+						return;
+					}
+					res.writeHead(400);
 					res.end();
 					return;
 				}

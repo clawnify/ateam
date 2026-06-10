@@ -91,9 +91,7 @@ export async function updateLocalMain(
 	}
 
 	// Mechanism 2: fast-forward inside the owning worktree.
-	const list = parseWorktreeList(
-		await git.raw(["worktree", "list", "--porcelain"]),
-	);
+	const list = parseWorktreeList(await git.raw(["worktree", "list", "--porcelain"]));
 	const owner = list.find((w) => w.branch === baseBranch);
 	if (!owner) {
 		return {
@@ -202,6 +200,65 @@ export async function detectMerged(input: {
 	}
 }
 
+export interface PrStatus {
+	/** No PR found for this branch. */
+	state: "OPEN" | "MERGED" | "CLOSED" | "NONE";
+	/** Rollup of the PR's required checks. */
+	checks: "passing" | "failing" | "pending" | "none";
+	/** GitHub's mergeability verdict, when known. */
+	mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+	prNumber: number | null;
+}
+
+/**
+ * Read a branch's PR state + CI rollup + mergeability in one `gh` call. Used by
+ * loop templates (PR-CI watcher, auto-merge-when-green). Read-only; touches no
+ * worktree. Returns state "NONE" when there is no PR or gh is unavailable.
+ */
+export async function prStatus(worktreePath: string): Promise<PrStatus> {
+	const none: PrStatus = {
+		state: "NONE",
+		checks: "none",
+		mergeable: "UNKNOWN",
+		prNumber: null,
+	};
+	try {
+		const out = await gh(
+			["pr", "view", "--json", "number,state,mergeable,statusCheckRollup"],
+			worktreePath,
+		);
+		const p = JSON.parse(out) as {
+			number?: number;
+			state?: string;
+			mergeable?: string;
+			statusCheckRollup?: { status?: string; conclusion?: string; state?: string }[];
+		};
+		const rollup = p.statusCheckRollup ?? [];
+		let checks: PrStatus["checks"] = rollup.length === 0 ? "none" : "passing";
+		for (const c of rollup) {
+			// A check is a CheckRun (status/conclusion) or a StatusContext (state).
+			const done = c.status ? c.status === "COMPLETED" : c.state != null;
+			const ok =
+				(c.conclusion ?? c.state ?? "").toUpperCase() === "SUCCESS" ||
+				(c.conclusion ?? "").toUpperCase() === "NEUTRAL" ||
+				(c.conclusion ?? "").toUpperCase() === "SKIPPED";
+			if (!done) {
+				checks = "pending";
+			} else if (!ok) {
+				checks = "failing";
+				break;
+			}
+		}
+		const state =
+			p.state === "OPEN" || p.state === "MERGED" || p.state === "CLOSED" ? p.state : "NONE";
+		const mergeable =
+			p.mergeable === "MERGEABLE" || p.mergeable === "CONFLICTING" ? p.mergeable : "UNKNOWN";
+		return { state, checks, mergeable, prNumber: p.number ?? null };
+	} catch {
+		return none;
+	}
+}
+
 /**
  * Merge a task branch into base via a GitHub PR (Stage A, entirely remote-side
  * and therefore safe for every local worktree), then auto-update local base
@@ -220,10 +277,7 @@ export async function mergeViaPR(input: MergeViaPRInput): Promise<MergeResult> {
 	let alreadyMerged = false;
 
 	try {
-		const out = await gh(
-			["pr", "view", "--json", "number,state,url"],
-			input.worktreePath,
-		);
+		const out = await gh(["pr", "view", "--json", "number,state,url"], input.worktreePath);
 		const parsed = JSON.parse(out) as {
 			number?: number;
 			state?: string;
@@ -233,24 +287,14 @@ export async function mergeViaPR(input: MergeViaPRInput): Promise<MergeResult> {
 		prUrl = parsed.url ?? null;
 		alreadyMerged = parsed.state === "MERGED";
 	} catch {
-		const createArgs = [
-			"pr",
-			"create",
-			"--base",
-			input.baseBranch,
-			"--head",
-			input.branch,
-		];
+		const createArgs = ["pr", "create", "--base", input.baseBranch, "--head", input.branch];
 		if (input.title) {
 			createArgs.push("--title", input.title, "--body", input.body ?? "");
 		} else {
 			createArgs.push("--fill");
 		}
 		await gh(createArgs, input.worktreePath);
-		const viewOut = await gh(
-			["pr", "view", "--json", "number,url"],
-			input.worktreePath,
-		);
+		const viewOut = await gh(["pr", "view", "--json", "number,url"], input.worktreePath);
 		const p = JSON.parse(viewOut) as { number?: number; url?: string };
 		prNumber = p.number ?? null;
 		prUrl = p.url ?? null;
@@ -261,9 +305,7 @@ export async function mergeViaPR(input: MergeViaPRInput): Promise<MergeResult> {
 		const mergeArgs = ["pr", "merge"];
 		if (prNumber != null) mergeArgs.push(String(prNumber));
 		mergeArgs.push(`--${input.strategy}`);
-		mergeArgs.push(
-			input.deleteRemoteBranch ? "--delete-branch" : "--delete-branch=false",
-		);
+		mergeArgs.push(input.deleteRemoteBranch ? "--delete-branch" : "--delete-branch=false");
 		await gh(mergeArgs, input.worktreePath);
 	}
 

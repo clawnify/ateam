@@ -93,6 +93,29 @@ export function bootstrap(db: SqliteExecutor): void {
 			notifications_muted INTEGER
 		);
 		INSERT OR IGNORE INTO settings (id) VALUES (1);
+
+		CREATE TABLE IF NOT EXISTS loops (
+			id TEXT PRIMARY KEY,
+			definition_id TEXT NOT NULL,
+			scope_key TEXT,
+			kind TEXT NOT NULL DEFAULT 'builtin',
+			template_id TEXT,
+			name TEXT,
+			project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+			config TEXT,
+			cadence_mode TEXT,
+			interval_ms INTEGER,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			last_run_at INTEGER,
+			next_run_at INTEGER,
+			last_status TEXT,
+			last_summary TEXT,
+			last_error TEXT,
+			runs INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER,
+			updated_at INTEGER
+		);
+		CREATE INDEX IF NOT EXISTS loops_definition_idx ON loops (definition_id);
 	`);
 
 	// Migrations for databases created before a column existed. SQLite has no
@@ -100,6 +123,14 @@ export function bootstrap(db: SqliteExecutor): void {
 	for (const sql of [
 		"ALTER TABLE tasks ADD COLUMN agent_id TEXT",
 		"ALTER TABLE tasks ADD COLUMN description TEXT",
+		"ALTER TABLE tasks ADD COLUMN merge_status TEXT",
+		"ALTER TABLE loops ADD COLUMN kind TEXT NOT NULL DEFAULT 'builtin'",
+		"ALTER TABLE loops ADD COLUMN template_id TEXT",
+		"ALTER TABLE loops ADD COLUMN name TEXT",
+		"ALTER TABLE loops ADD COLUMN project_id TEXT",
+		"ALTER TABLE loops ADD COLUMN config TEXT",
+		"ALTER TABLE loops ADD COLUMN cadence_mode TEXT",
+		"ALTER TABLE loops ADD COLUMN interval_ms INTEGER",
 	]) {
 		try {
 			db.exec(sql);

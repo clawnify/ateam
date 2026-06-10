@@ -7,20 +7,30 @@ import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 // is NOT a task row, which makes "never make a task out of main" structural
 // rather than a runtime check.
 
-const pk = () => text("id").primaryKey().$defaultFn(() => randomUUID());
-const epochMs = (name: string) =>
-	integer(name, { mode: "number" }).$defaultFn(() => Date.now());
+const pk = () =>
+	text("id")
+		.primaryKey()
+		.$defaultFn(() => randomUUID());
+const epochMs = (name: string) => integer(name, { mode: "number" }).$defaultFn(() => Date.now());
 
-export type KanbanColumn =
-	| "todo"
-	| "running"
-	| "needs_attention"
-	| "review"
-	| "merged";
+export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
 export type AgentStatus = "idle" | "running" | "awaiting_input" | "stopped";
 
 export type PrState = "open" | "merged" | "closed";
+
+/**
+ * Where a task sits in the merge queue. `null` = not queued. The queue is
+ * serialized per `${repoPath}::${baseBranch}`, so several tasks targeting the
+ * same base sit in `queued` behind whichever is `updating`/`merging`.
+ */
+export type MergeStatus = "queued" | "updating" | "merging" | "conflict";
+
+/** Cadence of a Loop: a fixed cron-like interval, or self-paced like /loop. */
+export type LoopCadenceMode = "fixed" | "self_paced";
+
+/** Outcome class of a Loop's last run, surfaced in the Loops panel. */
+export type LoopRunStatus = "ok" | "error" | "done";
 
 export interface GitStatusSnapshot {
 	ahead: number;
@@ -68,6 +78,7 @@ export const tasks = sqliteTable(
 		prNumber: integer("pr_number"),
 		prUrl: text("pr_url"),
 		prState: text("pr_state").$type<PrState>(),
+		mergeStatus: text("merge_status").$type<MergeStatus>(),
 		gitStatus: text("git_status", { mode: "json" }).$type<GitStatusSnapshot>(),
 		lastEventAt: integer("last_event_at"),
 		isUnread: integer("is_unread", { mode: "boolean" }).default(false),
@@ -150,6 +161,47 @@ export const settings = sqliteTable("settings", {
 	notificationsMuted: integer("notifications_muted", { mode: "boolean" }),
 });
 
+/**
+ * Persisted runtime state for Loops (periodic reconcilers, modeled on Claude
+ * Code's /loop). One row per live loop: a global loop has `id == definitionId`
+ * and null `scopeKey`; a per-task loop has `id == "<definitionId>:<taskId>"`
+ * with `scopeKey == taskId`. Built-in loops are defined in code; `kind="user"`
+ * rows ARE the definition — an instance of a code-side template (`templateId`)
+ * with a `name`, a `projectId` scope, JSON `config`, and a cadence override.
+ * The table carries enable + last-run telemetry either way, so loops survive
+ * restarts and the UI can show/toggle/run-now.
+ */
+export const loops = sqliteTable(
+	"loops",
+	{
+		id: text("id").primaryKey(),
+		definitionId: text("definition_id").notNull(),
+		scopeKey: text("scope_key"),
+		kind: text("kind").$type<"builtin" | "user">().notNull().default("builtin"),
+		/** For user loops: which code-side template this instantiates. */
+		templateId: text("template_id"),
+		/** User loops: display name + project scope + template options (JSON). */
+		name: text("name"),
+		projectId: text("project_id").references(() => projects.id, {
+			onDelete: "cascade",
+		}),
+		config: text("config", { mode: "json" }).$type<Record<string, unknown>>(),
+		/** Cadence override for user loops; null falls back to template default. */
+		cadenceMode: text("cadence_mode").$type<LoopCadenceMode>(),
+		intervalMs: integer("interval_ms"),
+		enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+		lastRunAt: integer("last_run_at"),
+		nextRunAt: integer("next_run_at"),
+		lastStatus: text("last_status").$type<LoopRunStatus>(),
+		lastSummary: text("last_summary"),
+		lastError: text("last_error"),
+		runs: integer("runs").notNull().default(0),
+		createdAt: epochMs("created_at"),
+		updatedAt: epochMs("updated_at"),
+	},
+	(t) => [index("loops_definition_idx").on(t.definitionId)],
+);
+
 export { sql };
 
 export type Project = typeof projects.$inferSelect;
@@ -160,3 +212,5 @@ export type AgentSession = typeof agentSessions.$inferSelect;
 export type NewAgentSession = typeof agentSessions.$inferInsert;
 export type AgentEvent = typeof agentEvents.$inferSelect;
 export type Settings = typeof settings.$inferSelect;
+export type Loop = typeof loops.$inferSelect;
+export type NewLoop = typeof loops.$inferInsert;

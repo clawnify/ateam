@@ -5,12 +5,15 @@ import { join } from "node:path";
 import { createDb, repo } from "@ateam/db";
 import { app, BrowserWindow, dialog, Menu } from "electron";
 import { autoUpdater } from "electron-updater";
-import { type AgentStatus, type KanbanColumn, CH } from "../shared/types";
-import { ensureNotifyScript } from "./agent-setup";
-import { HookServer, type HookEvent } from "./hooks/hook-server";
-import { registerIpc } from "./ipc";
-import { PtyClient } from "./pty/pty-client";
+import { type AgentStatus, CH, type KanbanColumn, type MergeStrategy } from "../shared/types";
+import { ensureGhShim, ensureNotifyScript } from "./agent-setup";
 import { APP_NAME } from "./app-name";
+import { type HookEvent, HookServer, type MergeRequestEvent } from "./hooks/hook-server";
+import { registerIpc } from "./ipc";
+import { createBoardReconciler } from "./loops/board-reconciler";
+import { LoopRunner } from "./loops/runner";
+import { MergeQueue } from "./merge-queue";
+import { PtyClient } from "./pty/pty-client";
 import { type Services, toTaskDTO } from "./services";
 
 let win: BrowserWindow | null = null;
@@ -106,9 +109,7 @@ function setupAutoUpdate(): void {
 	autoUpdater.on("update-available", (info) => {
 		if (!manualCheck && (snoozed || info.version === skippedVersion())) return;
 		const notes =
-			typeof info.releaseNotes === "string"
-				? info.releaseNotes.replace(/<[^>]+>/g, "").trim()
-				: "";
+			typeof info.releaseNotes === "string" ? info.releaseNotes.replace(/<[^>]+>/g, "").trim() : "";
 		void dialog
 			.showMessageBox({
 				type: "info",
@@ -123,9 +124,7 @@ function setupAutoUpdate(): void {
 				if (response === 0) {
 					void autoUpdater
 						.downloadUpdate()
-						.catch((err) =>
-							console.warn("[ateam] update download failed:", err),
-						);
+						.catch((err) => console.warn("[ateam] update download failed:", err));
 				} else if (response === 1) {
 					snoozed = true;
 				} else {
@@ -281,6 +280,11 @@ function sendTaskUpdated(taskId: string): void {
 	if (task) win?.webContents.send(CH.evtTaskUpdated, toTaskDTO(task));
 }
 
+function sendLoopsUpdated(): void {
+	if (!services) return;
+	win?.webContents.send(CH.evtLoopsUpdated, services.loopRunner.describe());
+}
+
 async function initServices(): Promise<Services> {
 	const userDataDir = app.getPath("userData");
 	// One-time migration from the pre-rename database filename.
@@ -302,8 +306,18 @@ async function initServices(): Promise<Services> {
 	const hooks = new HookServer();
 	const hookPort = await hooks.start(repo.getSettings(db).hookPort ?? undefined);
 	const notifyScriptPath = await ensureNotifyScript(userDataDir);
+	await ensureGhShim(userDataDir);
 	const hooksDir = join(userDataDir, "hooks");
 	repo.updateSettings(db, { hookPort });
+
+	const mergeQueue = new MergeQueue({ db, onTaskUpdated: sendTaskUpdated });
+	const loopRunner = new LoopRunner({
+		db,
+		onTaskUpdated: sendTaskUpdated,
+		log: (line) => console.log(line),
+		mergeQueue,
+	});
+	loopRunner.register(createBoardReconciler());
 
 	const svc: Services = {
 		db,
@@ -313,11 +327,37 @@ async function initServices(): Promise<Services> {
 		hooksDir,
 		notifyScriptPath,
 		hookPort,
+		mergeQueue,
+		loopRunner,
 	};
 
 	// PTY output/exit → renderer.
 	pty.on("data", (e) => win?.webContents.send(CH.evtPtyData, e));
-	pty.on("exit", (e) => win?.webContents.send(CH.evtPtyExit, e));
+	pty.on("exit", (e) => {
+		win?.webContents.send(CH.evtPtyExit, e);
+		// Record the exit in the DB so a session is never left looking "running"
+		// after its process is gone — the gap that previously stranded cards in
+		// the running column (the board reconciler is the backstop for exits we
+		// miss entirely, e.g. while the app was closed).
+		const session = repo.getSessionByTerminal(db, e.terminalId);
+		if (!session) return;
+		if (session.exitedAt == null) {
+			repo.updateSession(db, session.id, {
+				status: "stopped",
+				exitedAt: Date.now(),
+			});
+		}
+		const task = repo.getTask(db, session.taskId);
+		if (task && task.column === "running") {
+			repo.updateTask(db, task.id, {
+				agentStatus: "stopped",
+				column:
+					task.prNumber != null || (task.gitStatus?.ahead ?? 0) > 0 ? "review" : "needs_attention",
+				isUnread: true,
+			});
+			sendTaskUpdated(task.id);
+		}
+	});
 
 	// Agent status hooks → update session/task, drive the kanban column.
 	hooks.on("hook", (e: HookEvent) => {
@@ -348,11 +388,7 @@ async function initServices(): Promise<Services> {
 				return;
 			}
 			// Skip no-op Working updates so the renderer isn't pinged per tool use.
-			if (
-				e.eventType === "Working" &&
-				task.column === column &&
-				task.agentStatus === status
-			) {
+			if (e.eventType === "Working" && task.column === column && task.agentStatus === status) {
 				return;
 			}
 			repo.updateTask(db, task.id, {
@@ -365,6 +401,32 @@ async function initServices(): Promise<Services> {
 			});
 			sendTaskUpdated(task.id);
 		}
+	});
+
+	// Agent ran `gh pr merge` in its terminal → the gh shim routed it here.
+	// Resolve the task from the terminal and enqueue, so terminal merges and the
+	// in-app Merge button share one serialized queue per base branch.
+	hooks.on("merge-request", (e: MergeRequestEvent) => {
+		const session = repo.getSessionByTerminal(db, e.terminalId);
+		if (!session) return;
+		const task = repo.getTask(db, session.taskId);
+		if (!task) return;
+		const project = repo.getProject(db, task.projectId);
+		if (!project) return;
+		const settings = repo.getSettings(db);
+		const requested = e.strategy ?? "";
+		const strategy = (
+			["merge", "squash", "rebase"].includes(requested)
+				? requested
+				: (settings.defaultMergeStrategy ?? "squash")
+		) as MergeStrategy;
+		void mergeQueue.enqueue({
+			task,
+			repoPath: project.repoPath,
+			strategy,
+			updateStrategy: settings.defaultUpdateStrategy ?? "merge",
+			deleteRemoteBranch: settings.deleteRemoteBranchOnMerge ?? false,
+		});
 	});
 
 	return svc;
@@ -418,7 +480,13 @@ app.whenReady().then(async () => {
 	}
 
 	services = await initServices();
-	registerIpc({ services, sendTaskUpdated });
+	registerIpc({
+		services,
+		sendTaskUpdated,
+		mergeQueue: services.mergeQueue,
+		loopRunner: services.loopRunner,
+		sendLoopsUpdated,
+	});
 
 	if (SMOKE) {
 		// Headless boot check: prove services init (db, hook server, notify
@@ -439,6 +507,9 @@ app.whenReady().then(async () => {
 
 	createWindow();
 	buildAppMenu();
+	// Start the board reconciler (and any other registered loops) once the
+	// window exists, so the first pass can push corrections to the renderer.
+	services.loopRunner.start();
 	setupAutoUpdate();
 	app.on("activate", () => {
 		if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -450,5 +521,6 @@ app.on("window-all-closed", () => {
 	// disconnect; the daemon stays running with the sessions.
 	services?.pty.disconnect();
 	services?.hooks.stop();
+	services?.loopRunner.stop();
 	if (process.platform !== "darwin") app.quit();
 });
