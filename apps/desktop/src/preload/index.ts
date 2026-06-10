@@ -69,6 +69,7 @@ const api: AteamApi = {
 		pathForFile: (file) => webUtils.getPathForFile(file),
 		clipboardHasImage: () =>
 			ipcRenderer.sendSync(CH.utilClipboardHasImage) === true,
+		pickFiles: () => ipcRenderer.invoke(CH.utilPickFiles),
 	},
 	events: {
 		onTaskUpdated: (cb: (task: TaskDTO) => void) => {

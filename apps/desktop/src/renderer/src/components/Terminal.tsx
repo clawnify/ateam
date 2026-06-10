@@ -1,14 +1,22 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
+import { FileUp, Plus } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { Menu } from "./Menu";
+
+/** Shell-quote a path so spaces and quotes survive being typed into a PTY. */
+const quotePath = (p: string) =>
+	/[\s'"\\]/.test(p) ? `"${p.replace(/"/g, '\\"')}"` : p;
 
 /**
  * One xterm.js view bound to a main-process PTY by terminalId. Replays the
  * ring-buffer snapshot on mount (so re-attaching shows recent scrollback),
  * streams live output, and forwards keystrokes + resize back to the PTY.
+ * A slim toolbar underneath offers a `+` menu (e.g. attach files by path).
  */
 export function TerminalView({ terminalId }: { terminalId: string }) {
 	const ref = useRef<HTMLDivElement>(null);
+	const termRef = useRef<Terminal | null>(null);
 
 	useEffect(() => {
 		const el = ref.current;
@@ -24,6 +32,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		const fit = new FitAddon();
 		term.loadAddon(fit);
 		term.open(el);
+		termRef.current = term;
 		try {
 			fit.fit();
 		} catch {
@@ -62,7 +71,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			const paths = files
 				.map((f) => window.ateam.utils.pathForFile(f))
 				.filter(Boolean)
-				.map((p) => (/[\s'"\\]/.test(p) ? `"${p.replace(/"/g, '\\"')}"` : p));
+				.map(quotePath);
 			if (paths.length) {
 				window.ateam.pty.write(terminalId, `${paths.join(" ")} `);
 				term.focus();
@@ -127,9 +136,36 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			offData();
 			disposeInput.dispose();
 			ro.disconnect();
+			termRef.current = null;
 			term.dispose();
 		};
 	}, [terminalId]);
 
-	return <div className="term" ref={ref} />;
+	// "+ → Files…": native picker, then type the quoted paths into the PTY —
+	// same effect as dragging the files onto the terminal.
+	const addFiles = async () => {
+		const paths = (await window.ateam.utils.pickFiles()).map(quotePath);
+		if (paths.length) {
+			window.ateam.pty.write(terminalId, `${paths.join(" ")} `);
+		}
+		termRef.current?.focus();
+	};
+
+	return (
+		<div className="term-shell">
+			{/* .term-area is the flex-sized box; .term is absolutely positioned to
+			    fill it, so the xterm canvas can never prop the layout open — the
+			    available space drives the terminal size, not the other way round. */}
+			<div className="term-area">
+				<div className="term" ref={ref} />
+			</div>
+			<div className="term-toolbar">
+				<Menu
+					icon={Plus}
+					label="Add to terminal"
+					items={[{ label: "Files…", icon: FileUp, onClick: addFiles }]}
+				/>
+			</div>
+		</div>
+	);
 }

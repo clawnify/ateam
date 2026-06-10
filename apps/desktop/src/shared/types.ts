@@ -138,6 +138,7 @@ export const CH = {
 	gitStatus: "git:status",
 	agentsList: "agents:list",
 	utilClipboardHasImage: "util:clipboardHasImage",
+	utilPickFiles: "util:pickFiles",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -228,5 +229,7 @@ export interface AteamApi {
 		pathForFile(file: File): string;
 		/** True when the clipboard holds an image and no text (sync). */
 		clipboardHasImage(): boolean;
+		/** Native open dialog; resolves to the chosen paths ([] on cancel). */
+		pickFiles(): Promise<string[]>;
 	};
 }

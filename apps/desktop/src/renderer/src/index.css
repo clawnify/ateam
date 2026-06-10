@@ -453,8 +453,11 @@ input {
 	flex: 0 0 480px; /* fixed width; board scrolls beside it, not squeezed */
 	/* Flex min-width:auto would let the terminal's canvas (sized while the
 	   panel was full-width) clamp the panel and stop it collapsing back to
-	   480px — the basis must always win over content min-width. */
+	   480px — the basis must always win over content min-width. Same on the
+	   vertical axis: without min-height:0 the (tall) canvas pins the panel
+	   open, so shrinking the window can't shrink the terminal. */
 	min-width: 0;
+	min-height: 0;
 	/* Pin the panel in view while the board scrolls horizontally behind it. */
 	position: sticky;
 	right: 0;
@@ -497,6 +500,34 @@ input {
 	background: #000;
 	padding: 6px;
 }
+/* Self-contained terminal: a single flex:1 box (drop-in for the old lone .term)
+   that splits into the xterm area + the bottom toolbar. Parents (.term-wrap,
+   .tile) keep treating the terminal as one fill child. */
+.term-shell {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+/* The flex-sized terminal region. position:relative makes it the containing
+   block for the absolutely-positioned xterm host below. */
+.term-area {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	position: relative;
+}
+/* Decouple the xterm host from its canvas: pin it to fill .term-area. Its size
+   is then driven purely by flex (available space), so shrinking the window
+   shrinks the host → ResizeObserver fires → fit() drops rows. Without this the
+   canvas's intrinsic height props the layout open and it only ever grows. */
+.term-area .term {
+	position: absolute;
+	inset: 0;
+	min-height: 0;
+}
 /* panel body: terminal, or the changes view (files left · diff right) */
 .panel-body {
 	flex: 1;
@@ -509,6 +540,15 @@ input {
 	min-height: 0;
 	display: flex;
 	flex-direction: column;
+}
+/* slim bar under each terminal: `+` menu (attach files, …) */
+.term-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	padding: 2px 6px;
+	border-top: 1px solid var(--border);
+	flex: none;
 }
 
 /* +N -N stat on the right of the actions bar; opens the changes view */
