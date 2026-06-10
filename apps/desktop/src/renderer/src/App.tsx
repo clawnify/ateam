@@ -641,7 +641,11 @@ export function App() {
 									ask={ask}
 									confirm={confirm}
 									reload={() => activeProjectId && loadTasks(activeProjectId)}
-									onClose={() => setSelectedTaskId(null)}
+									onClose={(taskId) =>
+							setSelectedTaskId((cur) =>
+								taskId == null || cur === taskId ? null : cur,
+							)
+						}
 								/>
 							)}
 						</>
@@ -791,7 +795,7 @@ function TaskPanel({
 	ask: (title: string, initial?: string) => Promise<string | null>;
 	confirm: (title: string, body?: string) => Promise<boolean>;
 	reload: () => void;
-	onClose: () => void;
+	onClose: (taskId?: string) => void;
 }) {
 	const [agentId, setAgentId] = useState(
 		agents.find((a) => a.available)?.id ?? "claude",
@@ -1002,7 +1006,7 @@ function TaskPanel({
 										return;
 									}
 								}
-								onClose();
+								onClose(task.id);
 								reload();
 							},
 						},
