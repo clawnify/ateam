@@ -117,13 +117,32 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		const onFocusRequest = () => term.focus();
 		window.addEventListener("ateam:focus-terminal", onFocusRequest);
 
+		// Reattach ordering matters: the snapshot is a point-in-time serialize of
+		// the whole screen + modes, while live chunks keep streaming. If we wrote
+		// live bytes straight away and the snapshot afterward, the two interleave —
+		// recent bytes get applied twice and out of order, and a snapshot write can
+		// land in the middle of a half-parsed live escape sequence (that's how a
+		// CSI like `\x1b[21;57H` loses its prefix and leaks as literal `21;57H`).
+		//
+		// So we buffer live chunks until the snapshot is applied, then replay only
+		// the ones the snapshot doesn't already include (seq > the snapshot's cut),
+		// and finally switch to writing live directly. JS is single-threaded, so no
+		// chunk can slip in between the flush and flipping `ready`.
+		let ready = false;
+		let pending: { data: string; seq: number }[] = [];
 		const offData = window.ateam.pty.onData((e) => {
-			if (e.terminalId === terminalId) term.write(e.data);
+			if (e.terminalId !== terminalId) return;
+			if (ready) term.write(e.data);
+			else pending.push({ data: e.data, seq: e.seq });
 		});
 
-		// Replay recent output after attaching the live listener.
-		void window.ateam.pty.snapshot(terminalId).then((buf) => {
-			if (buf) term.write(buf, () => term.scrollToBottom());
+		void window.ateam.pty.snapshot(terminalId).then(({ data, seq }) => {
+			if (data) term.write(data);
+			for (const c of pending) if (c.seq > seq) term.write(c.data);
+			pending = [];
+			ready = true;
+			// Scroll only once everything queued above has actually rendered.
+			term.write("", () => term.scrollToBottom());
 		});
 
 		const disposeInput = term.onData((d) =>

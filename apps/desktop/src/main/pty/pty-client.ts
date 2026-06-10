@@ -98,6 +98,7 @@ export class PtyClient extends EventEmitter {
 				this.emit("data", {
 					terminalId: m.terminalId,
 					data: unb64(m.data as string),
+					seq: (m.seq as number) ?? 0,
 				});
 				break;
 			case "exit":
@@ -213,9 +214,12 @@ export class PtyClient extends EventEmitter {
 		return this.live.has(terminalId);
 	}
 
-	async snapshot(terminalId: string): Promise<string> {
+	async snapshot(terminalId: string): Promise<{ data: string; seq: number }> {
 		const r = await this.request({ t: "snapshot", terminalId });
-		return r.data ? unb64(r.data as string) : "";
+		return {
+			data: r.data ? unb64(r.data as string) : "",
+			seq: (r.seq as number) ?? 0,
+		};
 	}
 
 	async list(): Promise<{ terminalId: string; agentId: string; cwd: string }[]> {
