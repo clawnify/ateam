@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { gitFor, refExists } from "./git-client";
+import { gitFor, refExists, safeRaw } from "./git-client";
 import { GitCoreError } from "./errors";
 import { detectDefaultBranch, ensureWorktreesIgnored } from "./project";
 import { slugify } from "./util";
@@ -22,6 +22,16 @@ export interface TaskInfo {
 	branch: string;
 	baseBranch: string;
 	worktreePath: string;
+}
+
+/**
+ * Best-effort refresh of `origin/<baseBranch>` so a new task starts from the
+ * latest base, not whatever was last fetched. Ignores failures (no remote,
+ * offline, branch not on origin) — `resolveStartPoint` then falls back to the
+ * local base branch or HEAD.
+ */
+async function fetchBase(repoPath: string, baseBranch: string): Promise<void> {
+	await safeRaw(gitFor(repoPath), ["fetch", "origin", baseBranch]);
 }
 
 /** Resolve the start point for a new task branch: prefer the pushed base. */
@@ -64,6 +74,9 @@ export async function createTask(input: CreateTaskInput): Promise<TaskInfo> {
 	);
 
 	const git = gitFor(input.repoPath);
+	// Pull the latest base from origin before branching so the task isn't built
+	// on a stale snapshot.
+	await fetchBase(input.repoPath, baseBranch);
 	const startPoint = await resolveStartPoint(input.repoPath, baseBranch);
 
 	// Keep co-located worktrees out of the project's own `git status`, even if

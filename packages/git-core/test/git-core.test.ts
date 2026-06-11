@@ -97,6 +97,16 @@ describe("createTask isolation", () => {
 		expect(await porcelainStatus(repo.work)).toBe(statusBefore);
 	});
 
+	it("branches from the latest origin/base, fetching before it starts", async () => {
+		// Remote advances after clone; the work repo's origin/main tracking ref is
+		// now stale. createTask must fetch first so the task isn't built on it.
+		await advanceOrigin(repo, { file: "feature.txt", content: "feat\n" });
+
+		const task = await createTask({ repoPath: repo.work, name: "fresh start" });
+
+		expect(existsSync(join(task.worktreePath, "feature.txt"))).toBe(true);
+	});
+
 	it("keeps two tasks mutually isolated", async () => {
 		const a = await createTask({ repoPath: repo.work, name: "task a" });
 		const b = await createTask({ repoPath: repo.work, name: "task b" });
