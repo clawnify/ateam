@@ -91,10 +91,9 @@ function taskIcon(name: string): LucideIcon {
 type TaskSortMode = "status" | "updated" | "custom";
 
 // ---- mission control layout ----
-// How agent tiles are arranged: "grid" is the responsive overview grid,
-// "split" lays them side-by-side filling the height, "stack" stacks them
-// full-width. Split/stack grow to fill the viewport for a few agents and
-// scroll once there are too many to fit.
+// How agent tiles are arranged: "grid" is a 2x2 overview (tiles half the
+// window wide and tall), "split" lays them side-by-side at full window
+// height, "stack" stacks them full-width. Extra tiles scroll downward.
 type McLayout = "grid" | "split" | "stack";
 
 // Status order: what needs the user's eyes first.

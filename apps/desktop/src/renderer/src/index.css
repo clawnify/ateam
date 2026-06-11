@@ -711,20 +711,21 @@ input {
 	gap: 8px;
 	padding: 12px;
 	/* Always scroll vertically once the tiles don't fit — never shrink a
-	   terminal away. The minmax() row floors below guarantee a usable height
-	   so extra agents overflow downward into the scroll area. */
+	   terminal away; extra agents overflow downward into the scroll area. */
 	overflow-y: auto;
 	overflow-x: hidden;
-	/* Default ("grid"): responsive auto-fit overview grid of fixed-height tiles. */
-	grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-	grid-auto-rows: 300px;
+	/* Default ("grid"): 2x2 — each tile is half the window wide and half the
+	   window tall (percentage rows resolve against the visible content box;
+	   calc subtracts half the gap so two rows + gap fit exactly). */
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-auto-rows: calc(50% - 4px);
 }
-/* Split: two side-by-side columns; rows grow to fill the viewport for a few
-   agents and overflow downward once there are too many. minmax(0,1fr) columns
-   stop wide terminal output from blowing out the track width. */
+/* Split: two side-by-side columns, each row the full window height; extra
+   rows overflow downward into the scroll area. minmax(0,1fr) columns stop
+   wide terminal output from blowing out the track width. */
 .mc[data-layout="split"] {
 	grid-template-columns: repeat(2, minmax(0, 1fr));
-	grid-auto-rows: minmax(260px, 1fr);
+	grid-auto-rows: 100%;
 }
 /* Stack: one full-width column, tiles stacked top-to-bottom and scrolling. */
 .mc[data-layout="stack"] {
