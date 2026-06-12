@@ -10,8 +10,7 @@ import { Menu } from "./Menu";
  * "typed path → [Image #N]" detection fires — that wants shell-style escaping,
  * not quoting.
  */
-const escapePath = (p: string) =>
-	p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1");
+const escapePath = (p: string) => p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1");
 
 /**
  * One xterm.js view bound to a main-process PTY by terminalId. Replays the
@@ -50,22 +49,27 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		const focusTerm = () => term.focus();
 		el.addEventListener("mousedown", focusTerm);
 
-		// Pasting an image: resolve it to a real file path and paste THAT
-		// (bracketed), so the agent loads the file's bytes. Sending Ctrl+V
-		// instead makes the agent do its own clipboard read, which grabs a
-		// copied file's generic Finder icon rather than its contents. The menu's
-		// Paste role fires a DOM `paste` event (the renderer never sees ⌘V's
-		// keydown — the menu owns that accelerator), intercepted here in capture
-		// phase before xterm's own textarea paste handler.
+		// Pasting an image. The menu's Paste role fires a DOM `paste` event (the
+		// renderer never sees ⌘V's keydown — the menu owns that accelerator),
+		// intercepted here in capture phase before xterm's own textarea handler.
+		//   - Raw image data (a screenshot, copy-from-browser): forward a bare
+		//     Ctrl+V so the agent reads the bitmap off the clipboard itself,
+		//     exactly like a raw terminal — no temp file.
+		//   - A copied image *file* (Finder): the agent's own clipboard read would
+		//     grab the file's generic Finder icon, so paste its real path instead
+		//     and let the agent load its bytes.
 		const onPaste = (e: Event) => {
 			if (!window.ateam.utils.clipboardHasImage()) return; // text → xterm
 			e.preventDefault();
 			e.stopPropagation();
-			void window.ateam.utils.clipboardImagePath().then((p) => {
-				if (p) {
-					term.paste(`${escapePath(p)} `);
-					term.focus();
+			void window.ateam.utils.clipboardImagePath().then((img) => {
+				if (!img) return;
+				if (img.kind === "file") {
+					term.paste(`${escapePath(img.path)} `);
+				} else {
+					window.ateam.pty.write(terminalId, "\x16");
 				}
+				term.focus();
 			});
 		};
 		el.addEventListener("paste", onPaste, true);
@@ -145,9 +149,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			term.write("", () => term.scrollToBottom());
 		});
 
-		const disposeInput = term.onData((d) =>
-			window.ateam.pty.write(terminalId, d),
-		);
+		const disposeInput = term.onData((d) => window.ateam.pty.write(terminalId, d));
 
 		// Resize handling. Layout toggles fire several ResizeObserver callbacks
 		// in quick succession (sometimes while the element is mid-layout at zero
