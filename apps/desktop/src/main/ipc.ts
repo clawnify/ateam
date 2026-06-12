@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentCommand, getAgent, listAgents } from "@ateam/agents";
@@ -435,20 +434,17 @@ export function registerIpc(ctx: IpcContext): void {
 		e.returnValue = clipboardImageKind() !== null;
 	});
 
-	// Resolve the clipboard image to a real file path the agent can read.
-	// Pasting a path (bracketed) beats sending Ctrl+V: the agent loads the
-	// file's actual bytes instead of letting its own clipboard read grab a
-	// file's generic Finder icon (the "blank PNG" bug).
+	// Classify the clipboard image for the renderer's paste handler.
+	// - "bitmap" (raw image data: a screenshot, copy-from-browser): the renderer
+	//   forwards a bare Ctrl+V so the agent reads the bytes off the clipboard
+	//   itself, exactly like a raw terminal — no temp file.
+	// - "file" (an image file copied in Finder): the agent's own clipboard read
+	//   would grab the file's generic Finder icon, so we hand back its real path
+	//   for the renderer to paste instead.
 	ipcMain.handle(CH.utilClipboardImagePath, async () => {
 		const kind = clipboardImageKind();
-		if (kind?.kind === "file") return kind.path;
-		if (kind?.kind === "bitmap") {
-			const img = clipboard.readImage();
-			if (img.isEmpty()) return null;
-			const file = join(tmpdir(), `ateam-paste-${Date.now()}.png`);
-			writeFileSync(file, img.toPNG());
-			return file;
-		}
+		if (kind?.kind === "file") return { kind: "file" as const, path: kind.path };
+		if (kind?.kind === "bitmap") return { kind: "bitmap" as const };
 		return null;
 	});
 

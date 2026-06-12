@@ -313,11 +313,13 @@ export interface AteamApi {
 		/** True when the clipboard holds an image and no text (sync). */
 		clipboardHasImage(): boolean;
 		/**
-		 * Resolve a clipboard image to a file path the agent can read: a copied
-		 * image file's own path, or a temp PNG written from a clipboard bitmap.
+		 * Classify the clipboard image so the renderer can paste it the right way:
+		 * "file" carries a copied image file's real path (paste it so the agent
+		 * reads its bytes, not its Finder icon); "bitmap" means raw image data the
+		 * agent should read off the clipboard itself via Ctrl+V (no temp file).
 		 * Null when the clipboard holds no image.
 		 */
-		clipboardImagePath(): Promise<string | null>;
+		clipboardImagePath(): Promise<{ kind: "file"; path: string } | { kind: "bitmap" } | null>;
 		/** Native open dialog; resolves to the chosen paths ([] on cancel). */
 		pickFiles(): Promise<string[]>;
 	};
