@@ -129,6 +129,37 @@ describe("createTask isolation", () => {
 		expect(existsSync(task.worktreePath)).toBe(true);
 		expect(existsSync(join(task.worktreePath, "supabase"))).toBe(false);
 	});
+
+	it("copies root and nested env files into the new worktree", async () => {
+		// Gitignored local secrets that don't ride along on the branch.
+		await writeFile(join(repo.work, ".env"), "ROOT=1\n");
+		await writeFile(join(repo.work, ".env.local"), "LOCAL=1\n");
+		await mkdir(join(repo.work, "apps", "api"), { recursive: true });
+		await writeFile(join(repo.work, "apps", "api", ".dev.vars"), "API=2\n");
+		// Template files are tracked already — must NOT be copied as a secret.
+		await writeFile(join(repo.work, ".env.example"), "ROOT=\n");
+
+		const task = await createTask({ repoPath: repo.work, name: "envy" });
+
+		expect(await Bun.file(join(task.worktreePath, ".env")).text()).toBe(
+			"ROOT=1\n",
+		);
+		expect(await Bun.file(join(task.worktreePath, ".env.local")).text()).toBe(
+			"LOCAL=1\n",
+		);
+		expect(
+			await Bun.file(
+				join(task.worktreePath, "apps", "api", ".dev.vars"),
+			).text(),
+		).toBe("API=2\n");
+		expect(existsSync(join(task.worktreePath, ".env.example"))).toBe(false);
+	});
+
+	it("creates the worktree fine when there are no env files", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "no-env" });
+		expect(existsSync(task.worktreePath)).toBe(true);
+		expect(existsSync(join(task.worktreePath, ".env"))).toBe(false);
+	});
 });
 
 describe("updateFromBase", () => {

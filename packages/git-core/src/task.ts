@@ -1,10 +1,10 @@
-import { cp, mkdir, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { cp, mkdir, readdir, stat } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
 import { gitFor, refExists } from "./git-client";
 import { GitCoreError } from "./errors";
 import { detectDefaultBranch, ensureWorktreesIgnored } from "./project";
 import { slugify } from "./util";
-import { safeResolveWorktreePath } from "./worktree-paths";
+import { safeResolveWorktreePath, worktreesRootFor } from "./worktree-paths";
 
 export interface CreateTaskInput {
 	repoPath: string;
@@ -66,6 +66,63 @@ async function copySupabaseLink(
 	}
 }
 
+/** Directories never worth descending into when hunting for env files. */
+const SKIP_DIRS = new Set([".git", "node_modules"]);
+
+/**
+ * Local secrets/config live in gitignored env files — `.env` (and variants like
+ * `.env.local`) and Cloudflare's `.dev.vars` — that don't ride along on the
+ * branch, so a fresh worktree can't run the app until they're present. Copy them
+ * across, including nested ones (e.g. `apps/api/.dev.vars`), preserving their
+ * relative location. Template files (`.env.example` & co.) are tracked already,
+ * so we skip them. Best-effort: any walk/copy error must never fail task
+ * creation.
+ */
+function isEnvFile(name: string): boolean {
+	if (/\.(example|sample|template)$/.test(name)) return false;
+	return (
+		name === ".env" ||
+		name.startsWith(".env.") ||
+		name === ".dev.vars" ||
+		name.startsWith(".dev.vars.")
+	);
+}
+
+async function copyEnvFiles(
+	repoPath: string,
+	worktreePath: string,
+	worktreesRoot?: string | null,
+): Promise<void> {
+	const root = worktreesRootFor(repoPath, worktreesRoot);
+
+	async function walk(dir: string): Promise<void> {
+		let entries;
+		try {
+			entries = await readdir(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const abs = join(dir, entry.name);
+			if (abs === root) continue; // don't descend into other worktrees
+			if (entry.isDirectory()) {
+				if (SKIP_DIRS.has(entry.name)) continue;
+				await walk(abs);
+			} else if (entry.isFile() && isEnvFile(entry.name)) {
+				const dest = join(worktreePath, relative(repoPath, abs));
+				try {
+					await mkdir(dirname(dest), { recursive: true });
+					await cp(abs, dest);
+				} catch {
+					/* best-effort — skip this file */
+				}
+			}
+		}
+	}
+
+	await walk(repoPath);
+}
+
 /**
  * Create a task = a new branch checked out into its own co-located worktree.
  *
@@ -113,6 +170,10 @@ export async function createTask(input: CreateTaskInput): Promise<TaskInfo> {
 
 	// Carry the Supabase link over so the worktree's CLI is already linked.
 	await copySupabaseLink(input.repoPath, worktreePath);
+
+	// Carry gitignored env files (.env*, .dev.vars*) over, including nested ones,
+	// so the worktree can run the app without re-creating its local secrets.
+	await copyEnvFiles(input.repoPath, worktreePath, input.worktreesRoot);
 
 	return { slug, branch, baseBranch, worktreePath };
 }
