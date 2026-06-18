@@ -201,8 +201,6 @@ export const CH = {
 	loopsCreate: "loops:create",
 	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
-	utilClipboardHasImage: "util:clipboardHasImage",
-	utilClipboardImagePath: "util:clipboardImagePath",
 	utilPickFiles: "util:pickFiles",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
@@ -308,18 +306,12 @@ export interface AteamApi {
 		onTaskUpdated(cb: (task: TaskDTO) => void): () => void;
 	};
 	utils: {
-		/** Absolute filesystem path for a dragged-in File (Electron webUtils). */
-		pathForFile(file: File): string;
-		/** True when the clipboard holds an image and no text (sync). */
-		clipboardHasImage(): boolean;
 		/**
-		 * Classify the clipboard image so the renderer can paste it the right way:
-		 * "file" carries a copied image file's real path (paste it so the agent
-		 * reads its bytes, not its Finder icon); "bitmap" means raw image data the
-		 * agent should read off the clipboard itself via Ctrl+V (no temp file).
-		 * Null when the clipboard holds no image.
+		 * Absolute filesystem path for a File from a drop or paste (Electron
+		 * webUtils). Returns "" for a File with no backing path — e.g. a raw
+		 * clipboard bitmap (screenshot) Chromium synthesizes into a File.
 		 */
-		clipboardImagePath(): Promise<{ kind: "file"; path: string } | { kind: "bitmap" } | null>;
+		pathForFile(file: File): string;
 		/** Native open dialog; resolves to the chosen paths ([] on cancel). */
 		pickFiles(): Promise<string[]>;
 	};
