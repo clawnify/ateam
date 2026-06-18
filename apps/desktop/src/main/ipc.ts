@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { agentCommand, getAgent, listAgents } from "@ateam/agents";
 import { repo } from "@ateam/db";
 import {
@@ -19,7 +18,7 @@ import {
 	trackingStatus,
 	updateFromBase,
 } from "@ateam/git-core";
-import { BrowserWindow, clipboard, dialog, ipcMain } from "electron";
+import { dialog, ipcMain } from "electron";
 import {
 	CH,
 	type CreateLoopInput,
@@ -40,37 +39,6 @@ export interface IpcContext {
 	loopRunner: LoopRunner;
 	/** Push the current loop list to the renderer. */
 	sendLoopsUpdated: () => void;
-}
-
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|svg)$/i;
-
-/**
- * Classify the clipboard for image paste. A copied *file* (Finder) is preferred
- * — paste its real path so the agent reads its contents, not its Finder icon.
- * A raw bitmap (e.g. a ⌘⌃⇧4 screenshot) falls back to "bitmap". Text present →
- * not an image (let it paste normally). Returns null when there's nothing to do.
- */
-function clipboardImageKind(): { kind: "file"; path: string } | { kind: "bitmap" } | null {
-	if (clipboard.readText().length > 0) return null;
-	const formats = clipboard.availableFormats();
-	// A file reference (image file copied in Finder): use its path directly.
-	const fileUrlFmt = formats.find((f) => /file-?url|filenames/i.test(f));
-	if (fileUrlFmt) {
-		const raw = clipboard.read(fileUrlFmt).trim().split(/\r?\n/)[0];
-		if (raw) {
-			try {
-				const path = raw.startsWith("file:") ? fileURLToPath(raw) : raw;
-				if (IMAGE_EXT.test(path)) return { kind: "file", path };
-			} catch {
-				/* not a usable file url */
-			}
-		}
-	}
-	// A real bitmap on the clipboard.
-	if (formats.some((f) => /image|png|tiff|jpeg/i.test(f))) {
-		return { kind: "bitmap" };
-	}
-	return null;
 }
 
 /** Project display name from the repo's README H1 (md or HTML), if present. */
@@ -425,27 +393,6 @@ export function registerIpc(ctx: IpcContext): void {
 		repo.updateTask(db, task.id, { gitStatus: snapshot });
 		if (task.column !== "merged") void detectExternalMerge(task.id);
 		return snapshot;
-	});
-
-	// Sync (rare, keypress-driven): does the clipboard hold an image-only
-	// payload (a bitmap or a copied image file, no text)? Drives the renderer's
-	// decision to intercept a paste as an image rather than text.
-	ipcMain.on(CH.utilClipboardHasImage, (e) => {
-		e.returnValue = clipboardImageKind() !== null;
-	});
-
-	// Classify the clipboard image for the renderer's paste handler.
-	// - "bitmap" (raw image data: a screenshot, copy-from-browser): the renderer
-	//   forwards a bare Ctrl+V so the agent reads the bytes off the clipboard
-	//   itself, exactly like a raw terminal — no temp file.
-	// - "file" (an image file copied in Finder): the agent's own clipboard read
-	//   would grab the file's generic Finder icon, so we hand back its real path
-	//   for the renderer to paste instead.
-	ipcMain.handle(CH.utilClipboardImagePath, async () => {
-		const kind = clipboardImageKind();
-		if (kind?.kind === "file") return { kind: "file" as const, path: kind.path };
-		if (kind?.kind === "bitmap") return { kind: "bitmap" as const };
-		return null;
 	});
 
 	// Native file picker for the terminal toolbar's "+ → Files…" action; the

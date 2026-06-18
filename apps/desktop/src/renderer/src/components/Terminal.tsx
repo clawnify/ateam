@@ -49,43 +49,15 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		const focusTerm = () => term.focus();
 		el.addEventListener("mousedown", focusTerm);
 
-		// Pasting an image. The menu's Paste role fires a DOM `paste` event (the
-		// renderer never sees ⌘V's keydown — the menu owns that accelerator),
-		// intercepted here in capture phase before xterm's own textarea handler.
-		//   - Raw image data (a screenshot, copy-from-browser): forward a bare
-		//     Ctrl+V so the agent reads the bitmap off the clipboard itself,
-		//     exactly like a raw terminal — no temp file.
-		//   - A copied image *file* (Finder): the agent's own clipboard read would
-		//     grab the file's generic Finder icon, so paste its real path instead
-		//     and let the agent load its bytes.
-		const onPaste = (e: Event) => {
-			if (!window.ateam.utils.clipboardHasImage()) return; // text → xterm
-			e.preventDefault();
-			e.stopPropagation();
-			void window.ateam.utils.clipboardImagePath().then((img) => {
-				if (!img) return;
-				if (img.kind === "file") {
-					term.paste(`${escapePath(img.path)} `);
-				} else {
-					window.ateam.pty.write(terminalId, "\x16");
-				}
-				term.focus();
-			});
-		};
-		el.addEventListener("paste", onPaste, true);
-
-		// Dropping files types their backslash-escaped paths straight to the PTY,
-		// exactly like a real terminal (iTerm/Terminal.app) does on a file drop.
+		// Type dropped files' backslash-escaped paths straight to the PTY, exactly
+		// like a real terminal (iTerm/Terminal.app) does on a file drop.
+		//
 		// This is deliberately NOT term.paste(): a paste arrives wrapped in
-		// bracketed-paste markers, which Claude Code treats as a literal text
-		// block and does NOT scan for a droppable file path — so the image never
-		// attaches and you're left with a literal path. Typed keystrokes are what
-		// trigger its "dropped path → [Image #N]" detection.
-		const onDragOver = (e: DragEvent) => e.preventDefault();
-		const onDrop = (e: DragEvent) => {
-			e.preventDefault();
-			const files = Array.from(e.dataTransfer?.files ?? []);
-			if (files.length === 0) return;
+		// bracketed-paste markers, which Claude Code treats as a literal text block
+		// and does NOT scan for a droppable file path — so the image never attaches
+		// and you're left with a literal path. Typed keystrokes are what trigger its
+		// "path → [Image #N]" detection.
+		const typeFilePaths = (files: File[]) => {
 			const paths = files
 				.map((f) => window.ateam.utils.pathForFile(f))
 				.filter(Boolean)
@@ -94,6 +66,34 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 				window.ateam.pty.write(terminalId, `${paths.join(" ")} `);
 				term.focus();
 			}
+		};
+
+		// Pasting an image. The menu's Paste role fires a DOM `paste` event with a
+		// populated clipboardData (the renderer never sees ⌘V's keydown — the menu
+		// owns that accelerator), intercepted here in capture phase before xterm's
+		// own textarea handler. We classify straight off the event — no IPC.
+		//
+		// Plain text pastes normally. For any non-text clipboard payload (a raw
+		// bitmap like a screenshot, OR a copied file) we forward a bare Ctrl+V and
+		// let the agent read it off the clipboard itself, exactly like a raw
+		// terminal — no temp file, no typed path. The agent renders its own
+		// attachment (Claude Code shows "[Image #N]"); we never synthesize that.
+		const onPaste = (e: ClipboardEvent) => {
+			const dt = e.clipboardData;
+			if (!dt || dt.getData("text/plain")) return; // text → xterm
+			if (dt.files.length === 0) return; // nothing image/file-like
+			e.preventDefault();
+			e.stopPropagation();
+			window.ateam.pty.write(terminalId, "\x16");
+			term.focus();
+		};
+		el.addEventListener("paste", onPaste, true);
+
+		// Dropping files types their paths, same as above.
+		const onDragOver = (e: DragEvent) => e.preventDefault();
+		const onDrop = (e: DragEvent) => {
+			e.preventDefault();
+			typeFilePaths(Array.from(e.dataTransfer?.files ?? []));
 		};
 		el.addEventListener("dragover", onDragOver);
 		el.addEventListener("drop", onDrop);
