@@ -73,19 +73,28 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		// owns that accelerator), intercepted here in capture phase before xterm's
 		// own textarea handler. We classify straight off the event — no IPC.
 		//
-		// Plain text pastes normally. For any non-text clipboard payload (a raw
-		// bitmap like a screenshot, OR a copied file) we forward a bare Ctrl+V and
-		// let the agent read it off the clipboard itself, exactly like a raw
-		// terminal — no temp file, no typed path. The agent renders its own
-		// attachment (Claude Code shows "[Image #N]"); we never synthesize that.
+		// Plain text pastes normally. A non-text payload splits two ways, and the
+		// split matters: a native ⌃V read of a Finder-copied file yields only its
+		// generic file-type icon, not the bytes, so the two cannot be collapsed.
+		//   - a copied file (Finder) has a real path → type it, exactly like a
+		//     drop, so Claude Code's "path → [Image #N]" detection attaches the
+		//     actual file.
+		//   - a raw bitmap (screenshot) has no path → forward a bare Ctrl+V and let
+		//     the agent read the bitmap off the clipboard itself, like a raw
+		//     terminal — no temp file. The agent renders its own "[Image #N]".
 		const onPaste = (e: ClipboardEvent) => {
 			const dt = e.clipboardData;
 			if (!dt || dt.getData("text/plain")) return; // text → xterm
 			if (dt.files.length === 0) return; // nothing image/file-like
 			e.preventDefault();
 			e.stopPropagation();
-			window.ateam.pty.write(terminalId, "\x16");
-			term.focus();
+			const files = Array.from(dt.files);
+			if (files.every((f) => window.ateam.utils.pathForFile(f))) {
+				typeFilePaths(files); // copied file(s) → real path
+			} else {
+				window.ateam.pty.write(terminalId, "\x16"); // bitmap → bare ⌃V
+				term.focus();
+			}
 		};
 		el.addEventListener("paste", onPaste, true);
 
