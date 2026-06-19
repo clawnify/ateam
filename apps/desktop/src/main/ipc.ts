@@ -460,6 +460,7 @@ export function registerIpc(ctx: IpcContext): void {
 				yolo?: boolean;
 				resume?: boolean;
 				prompt?: string;
+				files?: string[];
 			},
 		) => {
 			const task = requireTask(services, input.taskId);
@@ -489,10 +490,18 @@ export function registerIpc(ctx: IpcContext): void {
 			// Run the agent in a login shell, then drop to an interactive shell so
 			// the pane stays usable after the agent exits. YOLO appends the bypass
 			// flag; resume relaunches the agent's most recent conversation here.
+			// Attached files ride along in the prompt as absolute paths under a
+			// header — the agent reads them with its own Read tool (nothing is
+			// copied into the worktree). Skip on resume, which ignores the prompt.
+			let prompt = input.prompt;
+			if (input.files?.length) {
+				const list = input.files.map((f) => `- ${f}`).join("\n");
+				prompt = prompt ? `${prompt}\n\nAttached files:\n${list}` : `Attached files:\n${list}`;
+			}
 			let agentCmd = agentCommand(agent, {
 				yolo: input.yolo,
 				resume: input.resume,
-				prompt: input.prompt,
+				prompt,
 			});
 			if (agent.id === "codex") {
 				// Codex has no hooks, but `notify` invokes a program with a JSON

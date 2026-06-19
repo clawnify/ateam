@@ -843,6 +843,47 @@ input {
 	font-size: 13px;
 	outline: none;
 }
+.dialog.composer.dropping {
+	outline: 2px dashed var(--accent, #6ea8fe);
+	outline-offset: -4px;
+}
+.comp-files {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.file-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	max-width: 220px;
+	padding: 2px 4px 2px 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--bg);
+	font-size: 11.5px;
+	color: var(--text-dim);
+}
+.file-chip .fc-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.file-chip .fc-x {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border: none;
+	background: transparent;
+	color: var(--text-dim);
+	cursor: pointer;
+	padding: 2px;
+	border-radius: 4px;
+}
+.file-chip .fc-x:hover {
+	color: var(--text);
+	background: var(--border);
+}
 .comp-foot {
 	display: flex;
 	align-items: center;

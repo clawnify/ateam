@@ -292,6 +292,8 @@ export interface AteamApi {
 			resume?: boolean;
 			/** Initial instruction handed to the agent at launch. */
 			prompt?: string;
+			/** Absolute paths to attach — appended to the prompt for the agent to read. */
+			files?: string[];
 		}): Promise<{ terminalId: string }>;
 		spawnShell(input: { taskId: string }): Promise<{ terminalId: string }>;
 		write(terminalId: string, data: string): void;

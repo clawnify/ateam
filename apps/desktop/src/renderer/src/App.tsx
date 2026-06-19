@@ -306,7 +306,13 @@ export function App() {
 	// Create the task, open it in the current panel mode (side when on the
 	// board, full when already full-width), and launch the chosen agent with
 	// the prompt as its first instruction.
-	const composeTask = (input: { name: string; prompt: string; agentId: string; yolo: boolean }) =>
+	const composeTask = (input: {
+		name: string;
+		prompt: string;
+		agentId: string;
+		yolo: boolean;
+		files: string[];
+	}) =>
 		run(async () => {
 			if (!activeProjectId) return;
 			setComposerOpen(false);
@@ -325,6 +331,7 @@ export function App() {
 				agentId: input.agentId,
 				yolo: input.yolo,
 				prompt: input.prompt || undefined,
+				files: input.files.length ? input.files : undefined,
 			});
 			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		});
@@ -601,10 +608,8 @@ export function App() {
 									confirm={confirm}
 									reload={() => activeProjectId && loadTasks(activeProjectId)}
 									onClose={(taskId) =>
-							setSelectedTaskId((cur) =>
-								taskId == null || cur === taskId ? null : cur,
-							)
-						}
+										setSelectedTaskId((cur) => (taskId == null || cur === taskId ? null : cur))
+									}
 								/>
 							)}
 						</>
