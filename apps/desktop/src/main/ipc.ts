@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { agentCommand, getAgent, listAgents } from "@ateam/agents";
 import { repo } from "@ateam/db";
 import {
@@ -18,7 +19,7 @@ import {
 	trackingStatus,
 	updateFromBase,
 } from "@ateam/git-core";
-import { dialog, ipcMain } from "electron";
+import { clipboard, dialog, ipcMain, nativeImage } from "electron";
 import {
 	CH,
 	type CreateLoopInput,
@@ -403,6 +404,47 @@ export function registerIpc(ctx: IpcContext): void {
 			title: "Add files to terminal",
 		});
 		return res.canceled ? [] : res.filePaths;
+	});
+
+	// "+ → Attach image": stage a real bitmap on the clipboard so the renderer's
+	// following Ctrl+V hands the agent pixels, not a path or a file-icon. We must
+	// read an image *file* off disk by its path — clipboard.readImage() on a
+	// Finder file copy returns the file's generic type icon, which is the blank-
+	// placeholder bug. So: prefer a clipboard file URL (read its bytes), then a
+	// genuine clipboard bitmap (a screenshot), then a file the user picks.
+	ipcMain.handle(CH.utilStageImage, async () => {
+		const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif|ico)$/i;
+		const clipFile = clipboard.read("public.file-url").trim();
+		let path: string | null = null;
+		if (clipFile) {
+			try {
+				const p = fileURLToPath(clipFile);
+				if (IMAGE_RE.test(p)) path = p;
+			} catch {
+				/* not a usable file URL */
+			}
+		}
+		// A real bitmap already on the clipboard (e.g. a screenshot) — only trust
+		// it when there's no file URL, since for a file copy this is just the icon.
+		let img = path ? nativeImage.createFromPath(path) : clipboard.readImage();
+		if (img.isEmpty()) {
+			const res = await dialog.showOpenDialog({
+				properties: ["openFile"],
+				title: "Attach image",
+				filters: [
+					{
+						name: "Images",
+						extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic", "avif"],
+					},
+				],
+			});
+			const picked = res.canceled ? null : (res.filePaths[0] ?? null);
+			if (!picked) return false;
+			img = nativeImage.createFromPath(picked);
+		}
+		if (img.isEmpty()) return false;
+		clipboard.writeImage(img);
+		return true;
 	});
 
 	// ---- agents ----

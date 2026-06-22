@@ -202,6 +202,7 @@ export const CH = {
 	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
 	utilPickFiles: "util:pickFiles",
+	utilStageImage: "util:stageImage",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -316,5 +317,13 @@ export interface AteamApi {
 		pathForFile(file: File): string;
 		/** Native open dialog; resolves to the chosen paths ([] on cancel). */
 		pickFiles(): Promise<string[]>;
+		/**
+		 * Put a real image bitmap on the clipboard so a following Ctrl+V hands the
+		 * agent pixels, not a Finder file-icon. Sources, in order: an image already
+		 * on the clipboard, an image *file* copied in Finder (read off disk), or a
+		 * file the user picks. Resolves true when a bitmap was staged, false if the
+		 * user cancelled or the source wasn't an image.
+		 */
+		stageClipboardImage(): Promise<boolean>;
 	};
 }

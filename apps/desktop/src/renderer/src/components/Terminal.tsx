@@ -1,6 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { FileUp, Plus } from "lucide-react";
+import { FileUp, ImageUp, Plus } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Menu } from "./Menu";
 
@@ -239,6 +239,17 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		termRef.current?.focus();
 	};
 
+	// "+ → Attach image": main stages a real bitmap on the clipboard (from a
+	// copied image, a Finder-copied file's bytes, or one the user picks), then we
+	// forward a bare Ctrl+V so the agent reads the pixels off the clipboard — the
+	// one path that attaches reliably, regardless of typed-path detection.
+	const attachImage = async () => {
+		if (await window.ateam.utils.stageClipboardImage()) {
+			window.ateam.pty.write(terminalId, "\x16");
+		}
+		termRef.current?.focus();
+	};
+
 	return (
 		<div className="term-shell">
 			{/* .term-area is the flex-sized box; .term is absolutely positioned to
@@ -251,7 +262,10 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 				<Menu
 					icon={Plus}
 					label="Add to terminal"
-					items={[{ label: "Files…", icon: FileUp, onClick: addFiles }]}
+					items={[
+						{ label: "Attach image", icon: ImageUp, onClick: attachImage },
+						{ label: "Files…", icon: FileUp, onClick: addFiles },
+					]}
 				/>
 			</div>
 		</div>
