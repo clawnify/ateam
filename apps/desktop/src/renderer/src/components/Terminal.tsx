@@ -1,6 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { FileUp, Plus } from "lucide-react";
+import { FileUp, ImageUp, Plus } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Menu } from "./Menu";
 
@@ -73,19 +73,28 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		// owns that accelerator), intercepted here in capture phase before xterm's
 		// own textarea handler. We classify straight off the event — no IPC.
 		//
-		// Plain text pastes normally. For any non-text clipboard payload (a raw
-		// bitmap like a screenshot, OR a copied file) we forward a bare Ctrl+V and
-		// let the agent read it off the clipboard itself, exactly like a raw
-		// terminal — no temp file, no typed path. The agent renders its own
-		// attachment (Claude Code shows "[Image #N]"); we never synthesize that.
+		// Plain text pastes normally. A non-text payload splits two ways, and the
+		// split matters: a native ⌃V read of a Finder-copied file yields only its
+		// generic file-type icon, not the bytes, so the two cannot be collapsed.
+		//   - a copied file (Finder) has a real path → type it, exactly like a
+		//     drop, so Claude Code's "path → [Image #N]" detection attaches the
+		//     actual file.
+		//   - a raw bitmap (screenshot) has no path → forward a bare Ctrl+V and let
+		//     the agent read the bitmap off the clipboard itself, like a raw
+		//     terminal — no temp file. The agent renders its own "[Image #N]".
 		const onPaste = (e: ClipboardEvent) => {
 			const dt = e.clipboardData;
 			if (!dt || dt.getData("text/plain")) return; // text → xterm
 			if (dt.files.length === 0) return; // nothing image/file-like
 			e.preventDefault();
 			e.stopPropagation();
-			window.ateam.pty.write(terminalId, "\x16");
-			term.focus();
+			const files = Array.from(dt.files);
+			if (files.every((f) => window.ateam.utils.pathForFile(f))) {
+				typeFilePaths(files); // copied file(s) → real path
+			} else {
+				window.ateam.pty.write(terminalId, "\x16"); // bitmap → bare ⌃V
+				term.focus();
+			}
 		};
 		el.addEventListener("paste", onPaste, true);
 
@@ -230,6 +239,17 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		termRef.current?.focus();
 	};
 
+	// "+ → Attach image": main stages a real bitmap on the clipboard (from a
+	// copied image, a Finder-copied file's bytes, or one the user picks), then we
+	// forward a bare Ctrl+V so the agent reads the pixels off the clipboard — the
+	// one path that attaches reliably, regardless of typed-path detection.
+	const attachImage = async () => {
+		if (await window.ateam.utils.stageClipboardImage()) {
+			window.ateam.pty.write(terminalId, "\x16");
+		}
+		termRef.current?.focus();
+	};
+
 	return (
 		<div className="term-shell">
 			{/* .term-area is the flex-sized box; .term is absolutely positioned to
@@ -242,7 +262,10 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 				<Menu
 					icon={Plus}
 					label="Add to terminal"
-					items={[{ label: "Files…", icon: FileUp, onClick: addFiles }]}
+					items={[
+						{ label: "Attach image", icon: ImageUp, onClick: attachImage },
+						{ label: "Files…", icon: FileUp, onClick: addFiles },
+					]}
 				/>
 			</div>
 		</div>
