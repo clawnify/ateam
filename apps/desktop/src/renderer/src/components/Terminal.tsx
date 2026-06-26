@@ -239,10 +239,11 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		termRef.current?.focus();
 	};
 
-	// "+ → Attach image": main stages a real bitmap on the clipboard (from a
-	// copied image, a Finder-copied file's bytes, or one the user picks), then we
-	// forward a bare Ctrl+V so the agent reads the pixels off the clipboard — the
-	// one path that attaches reliably, regardless of typed-path detection.
+	// "+ → Attach image": main opens a picker and stages the chosen image as a
+	// bitmap on the clipboard, then we forward a bare Ctrl+V so the agent reads the
+	// pixels off the clipboard — the one path that attaches reliably, regardless of
+	// typed-path detection. Each click re-opens the picker, so you can add several
+	// different images one after another.
 	const attachImage = async () => {
 		if (await window.ateam.utils.stageClipboardImage()) {
 			window.ateam.pty.write(terminalId, "\x16");

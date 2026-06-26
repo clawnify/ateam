@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { agentCommand, getAgent, listAgents } from "@ateam/agents";
 import { repo } from "@ateam/db";
 import {
@@ -406,42 +405,29 @@ export function registerIpc(ctx: IpcContext): void {
 		return res.canceled ? [] : res.filePaths;
 	});
 
-	// "+ → Attach image": stage a real bitmap on the clipboard so the renderer's
-	// following Ctrl+V hands the agent pixels, not a path or a file-icon. We must
-	// read an image *file* off disk by its path — clipboard.readImage() on a
-	// Finder file copy returns the file's generic type icon, which is the blank-
-	// placeholder bug. So: prefer a clipboard file URL (read its bytes), then a
-	// genuine clipboard bitmap (a screenshot), then a file the user picks.
+	// "+ → Attach image": open a picker, then stage the chosen image as a real
+	// bitmap on the clipboard so the renderer's following Ctrl+V hands the agent
+	// pixels, not a path or a file-icon.
+	//
+	// Always a picker — deliberately never sourced from the clipboard. Staging
+	// writes the image *to* the clipboard, so reading it back here would skip the
+	// picker on the next attach and re-stage the same image (you could never add a
+	// second, different one). Copied screenshots/images are attached via ⌘V paste,
+	// handled separately in the renderer's paste handler.
 	ipcMain.handle(CH.utilStageImage, async () => {
-		const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif|ico)$/i;
-		const clipFile = clipboard.read("public.file-url").trim();
-		let path: string | null = null;
-		if (clipFile) {
-			try {
-				const p = fileURLToPath(clipFile);
-				if (IMAGE_RE.test(p)) path = p;
-			} catch {
-				/* not a usable file URL */
-			}
-		}
-		// A real bitmap already on the clipboard (e.g. a screenshot) — only trust
-		// it when there's no file URL, since for a file copy this is just the icon.
-		let img = path ? nativeImage.createFromPath(path) : clipboard.readImage();
-		if (img.isEmpty()) {
-			const res = await dialog.showOpenDialog({
-				properties: ["openFile"],
-				title: "Attach image",
-				filters: [
-					{
-						name: "Images",
-						extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic", "avif"],
-					},
-				],
-			});
-			const picked = res.canceled ? null : (res.filePaths[0] ?? null);
-			if (!picked) return false;
-			img = nativeImage.createFromPath(picked);
-		}
+		const res = await dialog.showOpenDialog({
+			properties: ["openFile"],
+			title: "Attach image",
+			filters: [
+				{
+					name: "Images",
+					extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic", "avif"],
+				},
+			],
+		});
+		const picked = res.canceled ? null : (res.filePaths[0] ?? null);
+		if (!picked) return false;
+		const img = nativeImage.createFromPath(picked);
 		if (img.isEmpty()) return false;
 		clipboard.writeImage(img);
 		return true;
