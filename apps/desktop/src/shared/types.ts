@@ -318,11 +318,11 @@ export interface AteamApi {
 		/** Native open dialog; resolves to the chosen paths ([] on cancel). */
 		pickFiles(): Promise<string[]>;
 		/**
-		 * Put a real image bitmap on the clipboard so a following Ctrl+V hands the
-		 * agent pixels, not a Finder file-icon. Sources, in order: an image already
-		 * on the clipboard, an image *file* copied in Finder (read off disk), or a
-		 * file the user picks. Resolves true when a bitmap was staged, false if the
-		 * user cancelled or the source wasn't an image.
+		 * Open an image picker, then put the chosen image on the clipboard as a real
+		 * bitmap so a following Ctrl+V hands the agent pixels, not a Finder file-icon.
+		 * Always a picker (never read from the clipboard, which we just wrote to).
+		 * Resolves true when a bitmap was staged, false if the user cancelled or the
+		 * file wasn't a decodable image.
 		 */
 		stageClipboardImage(): Promise<boolean>;
 	};
