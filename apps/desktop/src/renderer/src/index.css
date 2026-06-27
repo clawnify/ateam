@@ -105,6 +105,11 @@ input {
 	border-right: 1px solid var(--border);
 	display: flex;
 	flex-direction: column;
+	/* Bounded by the .app grid row above; scroll the project/task lists rather
+	   than overflow off-screen (the collapsed .sidebar.rail already does this). */
+	min-height: 0;
+	overflow-y: auto;
+	overflow-x: hidden;
 }
 /* Slim header row sharing the traffic-light strip: the collapse toggle lives
    here (like Arc/Linear), and the accordions start right below — no dead gap. */
