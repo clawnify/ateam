@@ -74,6 +74,7 @@ const api: AteamApi = {
 		pathForFile: (file) => webUtils.getPathForFile(file),
 		pickFiles: () => ipcRenderer.invoke(CH.utilPickFiles),
 		stageClipboardImage: () => ipcRenderer.invoke(CH.utilStageImage),
+		stageImagePath: (path) => ipcRenderer.invoke(CH.utilStageImagePath, path),
 	},
 	events: {
 		onTaskUpdated: (cb: (task: TaskDTO) => void) => {

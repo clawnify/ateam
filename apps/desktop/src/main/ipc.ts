@@ -89,6 +89,20 @@ async function computeGitStatus(
 	};
 }
 
+/**
+ * Load an image file and put it on the clipboard as a real bitmap, so a
+ * following Ctrl+V hands the agent pixels — not a path, and not the generic
+ * file-type icon a raw clipboard read of a Finder file copy returns. Returns
+ * false when the path is missing or isn't a decodable image.
+ */
+function stageImageOnClipboard(path: string | null): boolean {
+	if (!path) return false;
+	const img = nativeImage.createFromPath(path);
+	if (img.isEmpty()) return false;
+	clipboard.writeImage(img);
+	return true;
+}
+
 export function registerIpc(ctx: IpcContext): void {
 	const { services, sendTaskUpdated, mergeQueue, loopRunner, sendLoopsUpdated } = ctx;
 	const { db } = services;
@@ -425,13 +439,16 @@ export function registerIpc(ctx: IpcContext): void {
 				},
 			],
 		});
-		const picked = res.canceled ? null : (res.filePaths[0] ?? null);
-		if (!picked) return false;
-		const img = nativeImage.createFromPath(picked);
-		if (img.isEmpty()) return false;
-		clipboard.writeImage(img);
-		return true;
+		return stageImageOnClipboard(res.canceled ? null : (res.filePaths[0] ?? null));
 	});
+
+	// Paste/drop of a copied image *file*: stage its bytes as a real bitmap so the
+	// renderer's following Ctrl+V attaches the pixels. Typing the path only
+	// attaches when the agent runs typed-path detection, and a bare Ctrl+V on a
+	// file copy grabs the file's generic icon — staging the bytes is the reliable
+	// path. Returns false (renderer then falls back to typing the path) if the
+	// file isn't a decodable image.
+	ipcMain.handle(CH.utilStageImagePath, async (_e, path: string) => stageImageOnClipboard(path));
 
 	// ---- agents ----
 	ipcMain.handle(CH.agentsList, async () => {

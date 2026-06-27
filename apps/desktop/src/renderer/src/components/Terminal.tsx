@@ -12,6 +12,9 @@ import { Menu } from "./Menu";
  */
 const escapePath = (p: string) => p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1");
 
+/** Paths we attach as a staged bitmap rather than a typed path. */
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif|ico)$/i;
+
 /**
  * One xterm.js view bound to a main-process PTY by terminalId. Replays the
  * ring-buffer snapshot on mount (so re-attaching shows recent scrollback),
@@ -68,20 +71,40 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			}
 		};
 
+		// Bring copied/dropped file(s) into the terminal. A single image file is
+		// attached by staging its real bitmap on the clipboard + Ctrl+V — the only
+		// reliable path: a bare Ctrl+V grabs a Finder file's generic icon, and a
+		// typed path only attaches when the agent runs typed-path detection (else it
+		// just leaves a literal path). Anything else (non-image, or multiple files)
+		// types the escaped path(s); so does an image we couldn't decode.
+		const attachFiles = (files: File[]) => {
+			const paths = files.map((f) => window.ateam.utils.pathForFile(f)).filter(Boolean);
+			const [only] = paths;
+			if (paths.length === 1 && only && IMAGE_RE.test(only)) {
+				void window.ateam.utils.stageImagePath(only).then((staged) => {
+					if (staged) {
+						window.ateam.pty.write(terminalId, "\x16");
+						term.focus();
+					} else {
+						typeFilePaths(files);
+					}
+				});
+				return;
+			}
+			typeFilePaths(files);
+		};
+
 		// Pasting an image. The menu's Paste role fires a DOM `paste` event with a
 		// populated clipboardData (the renderer never sees ⌘V's keydown — the menu
 		// owns that accelerator), intercepted here in capture phase before xterm's
 		// own textarea handler. We classify straight off the event — no IPC.
 		//
-		// Plain text pastes normally. A non-text payload splits two ways, and the
-		// split matters: a native ⌃V read of a Finder-copied file yields only its
-		// generic file-type icon, not the bytes, so the two cannot be collapsed.
-		//   - a copied file (Finder) has a real path → type it, exactly like a
-		//     drop, so Claude Code's "path → [Image #N]" detection attaches the
-		//     actual file.
+		// Plain text pastes normally. A non-text payload splits two ways:
+		//   - a copied file (Finder) has a real path → attachFiles (a single image
+		//     is staged as a bitmap + Ctrl+V; other files type their path).
 		//   - a raw bitmap (screenshot) has no path → forward a bare Ctrl+V and let
 		//     the agent read the bitmap off the clipboard itself, like a raw
-		//     terminal — no temp file. The agent renders its own "[Image #N]".
+		//     terminal. The agent renders its own "[Image #N]".
 		const onPaste = (e: ClipboardEvent) => {
 			const dt = e.clipboardData;
 			if (!dt || dt.getData("text/plain")) return; // text → xterm
@@ -90,7 +113,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			e.stopPropagation();
 			const files = Array.from(dt.files);
 			if (files.every((f) => window.ateam.utils.pathForFile(f))) {
-				typeFilePaths(files); // copied file(s) → real path
+				attachFiles(files); // copied file(s) on disk
 			} else {
 				window.ateam.pty.write(terminalId, "\x16"); // bitmap → bare ⌃V
 				term.focus();
@@ -98,11 +121,11 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		};
 		el.addEventListener("paste", onPaste, true);
 
-		// Dropping files types their paths, same as above.
+		// Dropping files behaves like pasting copied files.
 		const onDragOver = (e: DragEvent) => e.preventDefault();
 		const onDrop = (e: DragEvent) => {
 			e.preventDefault();
-			typeFilePaths(Array.from(e.dataTransfer?.files ?? []));
+			attachFiles(Array.from(e.dataTransfer?.files ?? []));
 		};
 		el.addEventListener("dragover", onDragOver);
 		el.addEventListener("drop", onDrop);

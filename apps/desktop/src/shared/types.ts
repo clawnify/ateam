@@ -203,6 +203,7 @@ export const CH = {
 	agentsList: "agents:list",
 	utilPickFiles: "util:pickFiles",
 	utilStageImage: "util:stageImage",
+	utilStageImagePath: "util:stageImagePath",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -325,5 +326,12 @@ export interface AteamApi {
 		 * file wasn't a decodable image.
 		 */
 		stageClipboardImage(): Promise<boolean>;
+		/**
+		 * Put the image at `path` on the clipboard as a real bitmap (for a following
+		 * Ctrl+V), used when a copied/dropped image *file* is brought into a terminal.
+		 * Resolves false if the file isn't a decodable image, so the caller can fall
+		 * back to typing the path.
+		 */
+		stageImagePath(path: string): Promise<boolean>;
 	};
 }
