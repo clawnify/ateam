@@ -89,6 +89,11 @@ input {
 .app {
 	display: grid;
 	grid-template-columns: 240px 1fr;
+	/* A definite single row (not the implicit `auto`, which grows to its tallest
+	   child) so a long board column or a tall Mission Control grid stays bounded
+	   to the viewport — letting .content/.board/.mc scroll instead of overflowing
+	   #root's `overflow: hidden` and being clipped off-screen with no scrollbar. */
+	grid-template-rows: minmax(0, 1fr);
 	height: 100%;
 }
 .app.rail {
@@ -100,6 +105,11 @@ input {
 	border-right: 1px solid var(--border);
 	display: flex;
 	flex-direction: column;
+	/* Bounded by the .app grid row above; scroll the project/task lists rather
+	   than overflow off-screen (the collapsed .sidebar.rail already does this). */
+	min-height: 0;
+	overflow-y: auto;
+	overflow-x: hidden;
 }
 /* Slim header row sharing the traffic-light strip: the collapse toggle lives
    here (like Arc/Linear), and the accordions start right below — no dead gap. */
