@@ -374,11 +374,17 @@ input {
 	flex: 0 0 100%;
 	min-width: 760px;
 	display: grid;
-	grid-template-columns: repeat(5, 1fr);
+	/* minmax(0, 1fr), not 1fr (= minmax(auto, 1fr)): a card with a long name or
+	   branch would otherwise widen its column past its share, so columns ended up
+	   unequal. The 0 min keeps all five exactly equal; card text truncates. */
+	grid-template-columns: repeat(5, minmax(0, 1fr));
 	gap: 10px;
 	padding: 14px;
 	overflow-y: auto;
 	align-content: start;
+}
+.col {
+	min-width: 0;
 }
 .col h3 {
 	font-size: 11px;
@@ -415,11 +421,17 @@ input {
 	font-size: 13px;
 	font-weight: 500;
 	margin-bottom: 4px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .card .branch {
 	font-size: 11px;
 	color: var(--text-dim);
 	font-family: ui-monospace, Menlo, monospace;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .card .meta {
 	display: flex;

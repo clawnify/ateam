@@ -527,7 +527,7 @@ export function App() {
 				<div className="topbar">
 					<div className="tabs">
 						<div
-							className={`tab ${view === "board" ? "active" : ""}`}
+							className={`tab ${view === "board" && !(selectedTask && panelMode === "full") ? "active" : ""}`}
 							onClick={() => {
 								// A full-width task hides the board — clicking "Board" while
 								// one is open means "show me the board", so deselect it.
