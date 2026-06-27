@@ -200,11 +200,15 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		let raf = 0;
 		let lastCols = 0;
 		let lastRows = 0;
+		let lastW = 0;
+		let lastH = 0;
 		let wasHidden = false;
 		const syncSize = () => {
 			cancelAnimationFrame(raf);
 			raf = requestAnimationFrame(() => {
-				if (el.clientWidth === 0 || el.clientHeight === 0) {
+				const w = el.clientWidth;
+				const h = el.clientHeight;
+				if (w === 0 || h === 0) {
 					wasHidden = true;
 					return;
 				}
@@ -215,24 +219,33 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 				}
 				const justRevealed = wasHidden;
 				wasHidden = false;
-				if (term.cols === lastCols && term.rows === lastRows) {
-					// Same grid: fit() didn't trigger a repaint. If we just came
-					// back into view, redraw every row so content written while
-					// hidden isn't left missing until the next resize.
-					if (justRevealed) {
-						term.refresh(0, term.rows - 1);
-						term.scrollToBottom();
-					}
-					return;
+				const gridChanged = term.cols !== lastCols || term.rows !== lastRows;
+				const boxChanged = w !== lastW || h !== lastH;
+				lastW = w;
+				lastH = h;
+				if (gridChanged) {
+					lastCols = term.cols;
+					lastRows = term.rows;
+					window.ateam.pty.resize(terminalId, term.cols, term.rows);
 				}
-				lastCols = term.cols;
-				lastRows = term.rows;
-				window.ateam.pty.resize(terminalId, term.cols, term.rows);
-				term.scrollToBottom();
+				// Repaint whenever the box changed, not just when the grid did: fit()
+				// is a no-op on a sub-row resize (or a width change within the same
+				// cols), but the DOM renderer can still be left with stale geometry —
+				// which makes the visible height look wrong and mouse selection miss
+				// until a remount. A forced refresh keeps it in sync without one.
+				if (gridChanged || boxChanged || justRevealed) {
+					term.refresh(0, term.rows - 1);
+				}
+				if (gridChanged || justRevealed) term.scrollToBottom();
 			});
 		};
 		const ro = new ResizeObserver(syncSize);
 		ro.observe(el);
+		// A ResizeObserver on the absolutely-positioned host can miss a window
+		// resize (its box tracks the containing block, and a reflow that ends at the
+		// same size never fires), so also re-fit on the window's own resize.
+		const onWinResize = () => syncSize();
+		window.addEventListener("resize", onWinResize);
 		syncSize();
 
 		return () => {
@@ -244,6 +257,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			window.removeEventListener("blur", onWinBlur);
 			window.removeEventListener("focus", onWinFocus);
 			window.removeEventListener("ateam:focus-terminal", onFocusRequest);
+			window.removeEventListener("resize", onWinResize);
 			offData();
 			disposeInput.dispose();
 			ro.disconnect();
