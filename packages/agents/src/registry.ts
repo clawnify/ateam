@@ -41,7 +41,7 @@ export const AGENTS = [
 			"Anthropic's coding agent for reading code, editing files, and running terminal workflows.",
 		bin: "claude",
 		command: "claude",
-		yoloFlag: "--dangerously-skip-permissions",
+		yoloFlag: "--permission-mode auto",
 		resumeCommand: "claude --continue",
 	},
 	{
