@@ -190,6 +190,9 @@ export function registerIpc(ctx: IpcContext): void {
 
 	ipcMain.handle(CH.tasksSetColumn, async (_e, id: string, column: KanbanColumn) => {
 		const row = repo.updateTask(db, id, { column });
+		// Broadcast so every view (board, sidebar) reflects the move — e.g. the
+		// "Done" button under the terminal that sends a review task to merged.
+		sendTaskUpdated(id);
 		return toTaskDTO(row!);
 	});
 

@@ -116,6 +116,17 @@ export function bootstrap(db: SqliteExecutor): void {
 			updated_at INTEGER
 		);
 		CREATE INDEX IF NOT EXISTS loops_definition_idx ON loops (definition_id);
+
+		CREATE TABLE IF NOT EXISTS board_changes (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+			from_column TEXT NOT NULL,
+			to_column TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT 'organizer',
+			created_at INTEGER
+		);
+		CREATE INDEX IF NOT EXISTS board_changes_task_idx ON board_changes (task_id);
 	`);
 
 	// Migrations for databases created before a column existed. SQLite has no

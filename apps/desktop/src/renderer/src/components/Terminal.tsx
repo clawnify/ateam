@@ -1,7 +1,8 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { FileUp, ImageUp, Plus } from "lucide-react";
+import { Check, FileUp, ImageUp, Plus } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { IconButton } from "./IconButton";
 import { Menu } from "./Menu";
 
 /**
@@ -21,7 +22,17 @@ const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif|ico)$/i;
  * streams live output, and forwards keystrokes + resize back to the PTY.
  * A slim toolbar underneath offers a `+` menu (e.g. attach files by path).
  */
-export function TerminalView({ terminalId }: { terminalId: string }) {
+export function TerminalView({
+	terminalId,
+	showDone,
+	onDone,
+}: {
+	terminalId: string;
+	/** Show a "Done" action in the toolbar (e.g. task is in Review). */
+	showDone?: boolean;
+	/** Called when Done is clicked — the parent owns the status change. */
+	onDone?: () => void;
+}) {
 	const ref = useRef<HTMLDivElement>(null);
 	const termRef = useRef<Terminal | null>(null);
 
@@ -305,6 +316,9 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 						{ label: "Files…", icon: FileUp, onClick: addFiles },
 					]}
 				/>
+				{showDone && (
+					<IconButton icon={Check} label="Mark task Done" variant="primary" onClick={onDone} />
+				)}
 			</div>
 		</div>
 	);
