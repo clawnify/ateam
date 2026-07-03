@@ -2,8 +2,11 @@ import { desc, eq } from "drizzle-orm";
 import {
 	agentEvents,
 	agentSessions,
+	type BoardChange,
+	boardChanges,
 	type Loop,
 	loops,
+	type NewBoardChange,
 	type NewLoop,
 	type NewProject,
 	type NewTask,
@@ -154,5 +157,19 @@ export const repo = {
 
 	deleteLoop(db: AteamDb, id: string) {
 		db.delete(loops).where(eq(loops.id, id)).run();
+	},
+
+	// ---- board changes (organizer audit trail) ----
+	recordBoardChange(db: AteamDb, c: NewBoardChange): BoardChange {
+		return db.insert(boardChanges).values(c).returning().get();
+	},
+
+	/** Most-recent-first audit of organizer moves; optionally scoped to one task. */
+	listBoardChanges(db: AteamDb, opts: { taskId?: string; limit?: number } = {}): BoardChange[] {
+		const q = db.select().from(boardChanges);
+		const rows = (opts.taskId ? q.where(eq(boardChanges.taskId, opts.taskId)) : q)
+			.orderBy(desc(boardChanges.createdAt))
+			.all();
+		return opts.limit ? rows.slice(0, opts.limit) : rows;
 	},
 };
