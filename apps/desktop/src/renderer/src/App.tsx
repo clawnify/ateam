@@ -997,7 +997,15 @@ function TaskPanel({
 				    changes view is open — just hide it. */}
 				<div className="term-wrap" style={{ display: changesOpen ? "none" : "flex" }}>
 					{terminalId ? (
-						<TerminalView terminalId={terminalId} />
+						<TerminalView
+							terminalId={terminalId}
+							showDone={task.column === "review"}
+							onDone={() =>
+								run(async () => {
+									await window.ateam.tasks.setColumn(task.id, "merged");
+								})
+							}
+						/>
 					) : (
 						<div className="term" style={{ display: "grid", placeItems: "center" }}>
 							<span className="muted">Launch an agent or shell to start a terminal</span>

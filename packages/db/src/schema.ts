@@ -202,6 +202,30 @@ export const loops = sqliteTable(
 	(t) => [index("loops_definition_idx").on(t.definitionId)],
 );
 
+/**
+ * Audit trail for board moves made by the agent-driven Board Organizer loop.
+ * Every applied `set_status` writes one row so a misfiled card is always
+ * traceable (and reversible): what moved, from where to where, and the
+ * organizer's stated reason. Only APPROVED moves land here — rejections are
+ * dropped by the guardrail before this point.
+ */
+export const boardChanges = sqliteTable(
+	"board_changes",
+	{
+		id: pk(),
+		taskId: text("task_id")
+			.notNull()
+			.references(() => tasks.id, { onDelete: "cascade" }),
+		fromColumn: text("from_column").$type<KanbanColumn>().notNull(),
+		toColumn: text("to_column").$type<KanbanColumn>().notNull(),
+		reason: text("reason").notNull(),
+		/** Who made the move — the organizer today; leaves room for other sources. */
+		source: text("source").notNull().default("organizer"),
+		createdAt: epochMs("created_at"),
+	},
+	(t) => [index("board_changes_task_idx").on(t.taskId)],
+);
+
 export { sql };
 
 export type Project = typeof projects.$inferSelect;
@@ -214,3 +238,5 @@ export type AgentEvent = typeof agentEvents.$inferSelect;
 export type Settings = typeof settings.$inferSelect;
 export type Loop = typeof loops.$inferSelect;
 export type NewLoop = typeof loops.$inferInsert;
+export type BoardChange = typeof boardChanges.$inferSelect;
+export type NewBoardChange = typeof boardChanges.$inferInsert;
