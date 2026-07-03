@@ -883,7 +883,7 @@ function TaskPanel({
 				/>
 				<IconButton
 					icon={Zap}
-					label="Launch in YOLO mode — bypass all permissions"
+					label="Launch in auto mode"
 					onClick={() => launch(true)}
 				/>
 				<IconButton

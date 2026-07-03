@@ -155,8 +155,8 @@ export function NewTaskComposer({
 					<button
 						type="button"
 						className={`iconbtn comp-yolo ${yolo ? "active" : ""}`}
-						title="YOLO mode — bypass all permissions"
-						aria-label="YOLO mode"
+						title="Auto mode"
+						aria-label="Auto mode"
 						onClick={() => setYolo((v) => !v)}
 					>
 						<Zap size={16} strokeWidth={1.75} />
