@@ -778,28 +778,46 @@ function TaskPanel({
 		refreshDiff();
 	}, [refreshDiff]);
 
-	// Re-attach to a surviving daemon session when (re)opening this task.
+	const launch = useCallback(
+		(yolo: boolean, resume = false, agent = agentId) =>
+			run(async () => {
+				const { terminalId: tid } = await window.ateam.pty.spawnAgent({
+					taskId: task.id,
+					agentId: agent,
+					yolo,
+					resume,
+				});
+				setTerminal(tid);
+			}),
+		[task.id, agentId, run, setTerminal],
+	);
+
+	// Re-attach to a surviving daemon session when (re)opening this task. If the
+	// session has ended while the task was still active work (running or awaiting
+	// input), resume the agent's last conversation automatically so reopening the
+	// task brings it back. Terminal columns (review/merged) are left alone — there
+	// a relaunch is a deliberate act via the Resume button, not a side effect of
+	// opening the task (and spawning would bounce the card back to "running").
+	const autoResumedRef = useRef<string | null>(null);
 	useEffect(() => {
 		if (terminalId) return;
 		let cancelled = false;
 		void window.ateam.pty.listForTask(task.id).then((sessions) => {
-			if (!cancelled && sessions[0]) setTerminal(sessions[0].terminalId);
+			if (cancelled) return;
+			if (sessions[0]) {
+				setTerminal(sessions[0].terminalId);
+			} else if (
+				(task.column === "running" || task.column === "needs_attention") &&
+				autoResumedRef.current !== task.id
+			) {
+				autoResumedRef.current = task.id;
+				void launch(false, true, task.agentId ?? agentId);
+			}
 		});
 		return () => {
 			cancelled = true;
 		};
-	}, [task.id, terminalId, setTerminal]);
-
-	const launch = (yolo: boolean, resume = false) =>
-		run(async () => {
-			const { terminalId: tid } = await window.ateam.pty.spawnAgent({
-				taskId: task.id,
-				agentId,
-				yolo,
-				resume,
-			});
-			setTerminal(tid);
-		});
+	}, [task.id, terminalId, task.column, task.agentId, agentId, setTerminal, launch]);
 
 	const shell = () =>
 		run(async () => {
