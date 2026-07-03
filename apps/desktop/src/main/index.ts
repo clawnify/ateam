@@ -11,6 +11,7 @@ import { APP_NAME } from "./app-name";
 import { type HookEvent, HookServer, type MergeRequestEvent } from "./hooks/hook-server";
 import { registerIpc } from "./ipc";
 import { createBoardReconciler } from "./loops/board-reconciler";
+import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
 import { PtyClient } from "./pty/pty-client";
@@ -318,6 +319,13 @@ async function initServices(): Promise<Services> {
 		mergeQueue,
 	});
 	loopRunner.register(createBoardReconciler());
+
+	// Board Organizer tools: the organizer loop's headless `claude -p` turn reads
+	// the board and proposes moves through these, guarded by validateSetStatus.
+	hooks.setBoardHandlers({
+		get: () => buildBoardView(db),
+		setStatus: async (req) => applySetStatus(db, req, sendTaskUpdated),
+	});
 
 	const svc: Services = {
 		db,

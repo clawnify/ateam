@@ -1,6 +1,7 @@
-import type { AgentSession, AteamDb, Task } from "@ateam/db";
+import type { Task } from "@ateam/db";
 import { repo } from "@ateam/db";
 import { detectMerged } from "@ateam/git-core";
+import { agentAlive } from "./session-liveness";
 import type { LoopContext, LoopDefinition } from "./types";
 
 const ID = "board-reconciler";
@@ -10,33 +11,6 @@ const NET_THROTTLE_MS = 60_000;
 /** Self-paced bounds: tight while agents work, loose when the board is quiet. */
 const MIN_MS = 5_000;
 const MAX_MS = 120_000;
-
-/** A pid is "alive" if it exists — EPERM means it exists but isn't ours. */
-function pidAlive(pid: number | null | undefined): boolean {
-	if (!pid) return false;
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (err) {
-		return (err as NodeJS.ErrnoException).code === "EPERM";
-	}
-}
-
-/**
- * A session counts as live if its pid is still running. When no pid was
- * recorded (older sessions) fall back to the DB flags. This is deliberately
- * pid-first: the PTY exit path doesn't always write `exitedAt`, so a killed
- * agent can sit in the db as "running" forever — pid liveness is the ground
- * truth that catches exactly that.
- */
-function sessionAlive(s: AgentSession): boolean {
-	if (s.pid != null) return pidAlive(s.pid);
-	return s.exitedAt == null && s.status !== "stopped";
-}
-
-function agentAlive(db: AteamDb, taskId: string): boolean {
-	return repo.listSessionsByTask(db, taskId).some(sessionAlive);
-}
 
 /** Has this task produced something worth reviewing? */
 function hasReviewableWork(task: Task): boolean {
