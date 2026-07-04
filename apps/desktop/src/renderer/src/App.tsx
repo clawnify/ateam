@@ -10,6 +10,7 @@ import {
 	ChevronRight,
 	Columns2,
 	Database,
+	ExternalLink,
 	FilePen,
 	FlaskConical,
 	FolderPlus,
@@ -108,6 +109,9 @@ const STATUS_RANK: Record<KanbanColumn, number> = {
 const springy = { type: "spring", stiffness: 550, damping: 42 } as const;
 
 export function App() {
+	// Non-null in a detached window: this window is pinned to one project and
+	// hides the project switcher; null in the main multi-project dashboard.
+	const boundProjectId = useMemo(() => window.ateam.window.boundProjectId(), []);
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
 	const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
 	const [tasksByProject, setTasksByProject] = useState<Record<string, TaskDTO[]>>({});
@@ -157,23 +161,44 @@ export function App() {
 
 	const loadProjects = useCallback(async () => {
 		const list = await window.ateam.projects.list();
-		setProjects(list);
-		setActiveProjectId((cur) => cur ?? list[0]?.id ?? null);
-	}, []);
+		// A detached window shows only its pinned project.
+		const scoped = boundProjectId ? list.filter((p) => p.id === boundProjectId) : list;
+		setProjects(scoped);
+		setActiveProjectId((cur) => boundProjectId ?? cur ?? scoped[0]?.id ?? null);
+	}, [boundProjectId]);
 
 	useEffect(() => {
 		void loadProjects();
 		void window.ateam.agents.list().then(setAgents);
-		const off = window.ateam.events.onTaskUpdated((updated) => {
+		// Upsert: replace a known task, or add one created in another window (so a
+		// project open in two windows stays consistent). Only for projects this
+		// window tracks — a detached window ignores other projects' tasks.
+		const offUpdated = window.ateam.events.onTaskUpdated((updated) => {
+			setTasksByProject((prev) => {
+				const list = prev[updated.projectId];
+				if (!list) return prev;
+				const nextList = list.some((t) => t.id === updated.id)
+					? list.map((t) => (t.id === updated.id ? updated : t))
+					: [...list, updated];
+				return { ...prev, [updated.projectId]: nextList };
+			});
+		});
+		// Removal (delete/cleanup) from any window — drop the card everywhere and
+		// clear the selection if it was pointing at the now-gone task.
+		const offRemoved = window.ateam.events.onTaskRemoved((taskId) => {
 			setTasksByProject((prev) => {
 				const next: Record<string, TaskDTO[]> = {};
 				for (const [pid, list] of Object.entries(prev)) {
-					next[pid] = list.map((t) => (t.id === updated.id ? updated : t));
+					next[pid] = list.filter((t) => t.id !== taskId);
 				}
 				return next;
 			});
+			setSelectedTaskId((cur) => (cur === taskId ? null : cur));
 		});
-		return off;
+		return () => {
+			offUpdated();
+			offRemoved();
+		};
 	}, [loadProjects]);
 
 	// Load the selected project's tasks whenever it changes.
@@ -186,6 +211,14 @@ export function App() {
 	useEffect(() => {
 		for (const p of projects) void loadTasks(p.id);
 	}, [projects, loadTasks]);
+
+	// A detached window takes its pinned project's name as the OS window title, so
+	// the windows are tellable apart across desktops/Spaces.
+	useEffect(() => {
+		if (!boundProjectId) return;
+		const p = projects.find((x) => x.id === boundProjectId);
+		if (p) document.title = p.name;
+	}, [boundProjectId, projects]);
 
 	// Highest-priority alert among a non-selected project's tasks.
 	const projectAlert = (pid: string): "needs_attention" | "review" | null => {
@@ -362,8 +395,11 @@ export function App() {
 									type="button"
 									key={p.id}
 									className={`rail-tile ${p.id === activeProjectId ? "active" : ""}`}
-									title={p.name}
+									title={boundProjectId ? p.name : `${p.name} — double-click to open in new window`}
 									onClick={() => selectProject(p.id)}
+									onDoubleClick={
+										boundProjectId ? undefined : () => window.ateam.window.openProject(p.id)
+									}
 								>
 									{p.name.charAt(0).toUpperCase()}
 									{alert && <span className={`corner pulse ${alert}`} />}
@@ -422,20 +458,40 @@ export function App() {
 							projects.map((p) => {
 								const alert = projectAlert(p.id);
 								return (
-									<button
-										type="button"
+									// Double-click (or the hover button) detaches the project into its
+									// own window. Row and open-button are siblings so the button's
+									// click can't nest inside the row button.
+									<div
 										key={p.id}
-										className={`proj ${p.id === activeProjectId ? "active" : ""}`}
-										onClick={() => selectProject(p.id)}
+										className="proj-row"
+										onDoubleClick={
+											boundProjectId ? undefined : () => window.ateam.window.openProject(p.id)
+										}
 									>
-										<span
-											className={`dot ${alert ? `alert ${alert}` : ""}`}
-											style={!alert && p.color ? { background: p.color } : undefined}
-										/>
-										<span className="proj-name" title={p.repoPath}>
-											{p.name}
-										</span>
-									</button>
+										<button
+											type="button"
+											className={`proj ${p.id === activeProjectId ? "active" : ""}`}
+											onClick={() => selectProject(p.id)}
+										>
+											<span
+												className={`dot ${alert ? `alert ${alert}` : ""}`}
+												style={!alert && p.color ? { background: p.color } : undefined}
+											/>
+											<span className="proj-name" title={p.repoPath}>
+												{p.name}
+											</span>
+										</button>
+										{!boundProjectId && (
+											<span className="proj-open">
+												<IconButton
+													icon={ExternalLink}
+													label="Open in new window"
+													size={14}
+													onClick={() => window.ateam.window.openProject(p.id)}
+												/>
+											</span>
+										)}
+									</div>
 								);
 							})}
 
