@@ -35,10 +35,14 @@ import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services
 export interface IpcContext {
 	services: Services;
 	sendTaskUpdated: (taskId: string) => void;
+	/** Broadcast a task removal to every window. */
+	sendTaskRemoved: (taskId: string) => void;
 	mergeQueue: MergeQueue;
 	loopRunner: LoopRunner;
 	/** Push the current loop list to the renderer. */
 	sendLoopsUpdated: () => void;
+	/** Detach a project into its own window (or focus its existing one). */
+	openProjectWindow: (projectId: string) => void;
 }
 
 /** Project display name from the repo's README H1 (md or HTML), if present. */
@@ -104,7 +108,15 @@ function stageImageOnClipboard(path: string | null): boolean {
 }
 
 export function registerIpc(ctx: IpcContext): void {
-	const { services, sendTaskUpdated, mergeQueue, loopRunner, sendLoopsUpdated } = ctx;
+	const {
+		services,
+		sendTaskUpdated,
+		sendTaskRemoved,
+		mergeQueue,
+		loopRunner,
+		sendLoopsUpdated,
+		openProjectWindow,
+	} = ctx;
 	const { db } = services;
 
 	// ---- projects ----
@@ -141,6 +153,10 @@ export function registerIpc(ctx: IpcContext): void {
 		repo.deleteProject(db, id);
 	});
 
+	ipcMain.handle(CH.windowOpenProject, async (_e, projectId: string) => {
+		openProjectWindow(projectId);
+	});
+
 	// ---- tasks ----
 	ipcMain.handle(CH.tasksList, async (_e, projectId: string) =>
 		repo.listTasks(db, projectId).map(toTaskDTO),
@@ -164,6 +180,9 @@ export function registerIpc(ctx: IpcContext): void {
 				baseBranch: created.baseBranch,
 				worktreePath: created.worktreePath,
 			});
+			// Broadcast so any other window showing this project gains the new card
+			// (renderers upsert). The caller also gets it — an idempotent upsert.
+			sendTaskUpdated(row.id);
 			return toTaskDTO(row);
 		},
 	);
@@ -185,6 +204,8 @@ export function registerIpc(ctx: IpcContext): void {
 				force: input.force,
 			});
 			repo.deleteTask(db, task.id);
+			// Drop the card from every window (not just the caller's).
+			sendTaskRemoved(task.id);
 		},
 	);
 
@@ -303,6 +324,7 @@ export function registerIpc(ctx: IpcContext): void {
 					force: false,
 				});
 				repo.deleteTask(db, task.id);
+				sendTaskRemoved(task.id);
 				removed.push({ id: task.id, name: task.name, branch: task.branch });
 			} catch (err) {
 				kept.push({ task, reason: errorMessage(err) });

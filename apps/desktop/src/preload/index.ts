@@ -82,6 +82,16 @@ const api: AteamApi = {
 			ipcRenderer.on(CH.evtTaskUpdated, handler);
 			return () => ipcRenderer.off(CH.evtTaskUpdated, handler);
 		},
+		onTaskRemoved: (cb: (taskId: string) => void) => {
+			const handler = (_: unknown, taskId: string) => cb(taskId);
+			ipcRenderer.on(CH.evtTaskRemoved, handler);
+			return () => ipcRenderer.off(CH.evtTaskRemoved, handler);
+		},
+	},
+	window: {
+		openProject: (projectId) => ipcRenderer.invoke(CH.windowOpenProject, projectId),
+		// The main process stamps ?projectId=<id> onto a detached window's URL.
+		boundProjectId: () => new URLSearchParams(window.location.search).get("projectId"),
 	},
 };
 
