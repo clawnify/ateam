@@ -67,6 +67,20 @@ cp "$DESKTOP_DIR/electron-builder.yml" "$STAGE/"
 echo "==> electron-builder (sign + notarize + dmg + zip)"
 ( cd "$STAGE" && ./node_modules/.bin/electron-builder --mac --arm64 )
 
+# 4b. Fail loudly if the packaged native module isn't arm64. npmRebuild is off
+#     (electron-builder trusts the prebuilt modules), and step 2's rebuild is
+#     skipped whenever the staging node_modules already exists — so a stale
+#     x86_64 better-sqlite3 in the cache silently ships an app that dlopen()s
+#     the wrong arch and launches with no window. This shipped as 0.1.24.
+NODE_MODULE="$STAGE/release/mac-arm64/Ateam.app/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+if ! file "$NODE_MODULE" | grep -q "arm64"; then
+  echo "ERROR: packaged better_sqlite3.node is not arm64 — refusing to ship." >&2
+  file "$NODE_MODULE" >&2
+  echo "Fix: wipe the staging dir so the arm64 rebuild reruns (rm -rf \"$STAGE/node_modules\")." >&2
+  exit 1
+fi
+echo "==> native module arch OK (arm64)"
+
 echo "==> Gatekeeper check"
 spctl -a -vv -t install "$STAGE/release/mac-arm64/Ateam.app" 2>&1 | tail -2
 

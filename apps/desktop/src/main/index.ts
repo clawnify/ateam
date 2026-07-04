@@ -522,6 +522,18 @@ app.whenReady().then(async () => {
 	app.on("activate", () => {
 		if (BrowserWindow.getAllWindows().length === 0) createWindow();
 	});
+}).catch((err) => {
+	// A startup failure (e.g. a native module built for the wrong CPU arch)
+	// would otherwise leave a live process with no window and no feedback —
+	// exactly the "click the app, nothing happens" symptom. Surface it and quit.
+	console.error("[ateam] startup failed:", err);
+	dialog.showErrorBox(
+		"Ateam failed to start",
+		`${APP_NAME} couldn't start and needs to close.\n\n${
+			err instanceof Error ? (err.stack ?? err.message) : String(err)
+		}`,
+	);
+	app.exit(1);
 });
 
 app.on("window-all-closed", () => {
