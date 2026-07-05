@@ -337,3 +337,6 @@ export interface AteamApi {
 		stageImagePath(path: string): Promise<boolean>;
 	};
 }
+
+// Transport-agnostic RPC framing + client (shared by every transport).
+export * from "./rpc";

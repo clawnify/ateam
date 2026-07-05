@@ -10,3 +10,5 @@ export type { Engine, EngineOptions } from "./engine";
 export { createDispatcher } from "./dispatcher";
 export type { Dispatcher } from "./dispatcher";
 export type { Services } from "./services";
+export { serveRpc } from "./rpc";
+export type { ServerTransport } from "./rpc";
