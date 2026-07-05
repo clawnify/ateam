@@ -1,8 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { Check, FileUp, ImageUp, Plus } from "lucide-react";
+import { FileUp, ImageUp, Plus } from "lucide-react";
 import { useEffect, useRef } from "react";
-import { IconButton } from "./IconButton";
 import { Menu } from "./Menu";
 
 /**
@@ -317,7 +316,9 @@ export function TerminalView({
 					]}
 				/>
 				{showDone && (
-					<IconButton icon={Check} label="Mark task Done" variant="primary" onClick={onDone} />
+					<button type="button" className="term-done primary" onClick={onDone}>
+						Done
+					</button>
 				)}
 			</div>
 		</div>
