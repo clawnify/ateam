@@ -1,0 +1,22 @@
+{
+  "name": "@ateam/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ateam/agents": "workspace:*",
+    "@ateam/db": "workspace:*",
+    "@ateam/git-core": "workspace:*",
+    "@ateam/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "drizzle-orm": "^0.38.4"
+  }
+}

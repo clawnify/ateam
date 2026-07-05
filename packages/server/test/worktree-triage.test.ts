@@ -3,7 +3,7 @@ import {
 	CONVERSATION_GAP_MS,
 	triageWorktree,
 	type WorktreeSignals,
-} from "../src/main/loops/worktree-triage";
+} from "../src/loops/worktree-triage";
 
 const NOW = 1_000_000_000_000;
 const HOUR = 3_600_000;

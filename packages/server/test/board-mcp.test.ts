@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type BoardHandlers, dispatchMcp } from "../src/main/hooks/board-mcp";
+import { type BoardHandlers, dispatchMcp } from "../src/hooks/board-mcp";
 
 // A fake board that records what it was called with.
 function fakeBoard() {

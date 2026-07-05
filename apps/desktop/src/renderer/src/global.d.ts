@@ -1,4 +1,4 @@
-import type { AteamApi } from "../../shared/types";
+import type { AteamApi } from "@ateam/protocol";
 
 declare global {
 	interface Window {

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AteamDb, Loop, LoopCadenceMode } from "@ateam/db";
 import { repo } from "@ateam/db";
-import type { LoopDTO } from "../../shared/types";
+import type { LoopDTO } from "@ateam/protocol";
 import type { MergeQueue } from "../merge-queue";
 import { getTemplate } from "./templates";
 import type { LoopCadence, LoopContext, LoopDefinition, LoopOutcome } from "./types";

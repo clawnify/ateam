@@ -1,5 +1,7 @@
-// Plain DTOs crossing the IPC boundary. Kept dependency-free so the renderer
-// never imports node/electron/db internals.
+// The Ateam wire contract: plain DTOs, channel names, event payloads, and the
+// AteamApi surface. Dependency-free by design so every consumer — the desktop
+// renderer, the Electron main process, and the (future) headless @ateam/server
+// over SSH — shares one definition without pulling in node/electron/db internals.
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 

@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import type { AteamDb } from "@ateam/db";
 import { bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
-import * as schema from "../../../packages/db/src/schema";
-import { LoopRunner } from "../src/main/loops/runner";
-import type { LoopDefinition } from "../src/main/loops/types";
+import * as schema from "../../db/src/schema";
+import { LoopRunner } from "../src/loops/runner";
+import type { LoopDefinition } from "../src/loops/types";
 
 function createTestDb(): AteamDb {
 	const sqlite = new Database(":memory:");

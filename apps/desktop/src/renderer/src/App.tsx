@@ -46,7 +46,7 @@ import type {
 	KanbanColumn,
 	ProjectDTO,
 	TaskDTO,
-} from "../../shared/types";
+} from "@ateam/protocol";
 import { AgentIcon } from "./components/AgentIcon";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { FileDiffView } from "./components/FileDiffView";

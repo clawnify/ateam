@@ -14,6 +14,8 @@ export default defineConfig({
 					"@ateam/db",
 					"@ateam/agents",
 					"@ateam/panes",
+					"@ateam/protocol",
+					"@ateam/server",
 				],
 			}),
 		],
@@ -28,7 +30,9 @@ export default defineConfig({
 		},
 	},
 	preload: {
-		plugins: [externalizeDepsPlugin()],
+		// Bundle @ateam/protocol (raw TS, and CH is used at runtime here); keep
+		// real npm deps externalized as usual.
+		plugins: [externalizeDepsPlugin({ exclude: ["@ateam/protocol"] })],
 		build: {
 			rollupOptions: {
 				input: { index: resolve(__dirname, "src/preload/index.ts") },

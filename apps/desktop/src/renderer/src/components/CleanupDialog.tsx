@@ -1,6 +1,6 @@
 import { MessageSquare, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { CleanupCandidate } from "../../../shared/types";
+import type { CleanupCandidate } from "@ateam/protocol";
 import { IconButton } from "./IconButton";
 import { TerminalView } from "./Terminal";
 

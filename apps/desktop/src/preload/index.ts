@@ -8,7 +8,7 @@ import {
 	type PtyDataEvent,
 	type PtyExitEvent,
 	type TaskDTO,
-} from "../shared/types";
+} from "@ateam/protocol";
 
 const api: AteamApi = {
 	projects: {

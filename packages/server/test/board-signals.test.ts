@@ -2,8 +2,8 @@ import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, it } from "bun:test";
 import { type AteamDb, bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
-import * as schema from "../../../packages/db/src/schema";
-import { applySetStatus } from "../src/main/loops/board-signals";
+import * as schema from "../../db/src/schema";
+import { applySetStatus } from "../src/loops/board-signals";
 
 function createTestDb(): AteamDb {
 	const sqlite = new Database(":memory:");

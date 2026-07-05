@@ -12,7 +12,7 @@
     },
     "apps/desktop": {
       "name": "@ateam/desktop",
-      "version": "0.1.13",
+      "version": "0.1.25",
       "dependencies": {
         "better-sqlite3": "^11.8.1",
         "electron-updater": "^6.8.3",
@@ -23,6 +23,8 @@
         "@ateam/db": "workspace:*",
         "@ateam/git-core": "workspace:*",
         "@ateam/panes": "workspace:*",
+        "@ateam/protocol": "workspace:*",
+        "@ateam/server": "workspace:*",
         "@electron/notarize": "^3.1.1",
         "@electron/rebuild": "^3.7.1",
         "@types/node": "^22.10.5",
@@ -73,6 +75,23 @@
       "name": "@ateam/panes",
       "version": "0.0.0",
     },
+    "packages/protocol": {
+      "name": "@ateam/protocol",
+      "version": "0.0.0",
+    },
+    "packages/server": {
+      "name": "@ateam/server",
+      "version": "0.0.0",
+      "dependencies": {
+        "@ateam/agents": "workspace:*",
+        "@ateam/db": "workspace:*",
+        "@ateam/git-core": "workspace:*",
+        "@ateam/protocol": "workspace:*",
+      },
+      "devDependencies": {
+        "drizzle-orm": "^0.38.4",
+      },
+    },
   },
   "packages": {
     "7zip-bin": ["7zip-bin@5.2.0", "", {}, "sha512-ukTPVhqG4jNzMro2qA9HSCSSVJN3aN7tlb+hfqYCt3ER0yWroeA2VR38MNrOHLQ/cVj+DaIMad0kFCtWWowh/A=="],
@@ -86,6 +105,10 @@
     "@ateam/git-core": ["@ateam/git-core@workspace:packages/git-core"],
 
     "@ateam/panes": ["@ateam/panes@workspace:packages/panes"],
+
+    "@ateam/protocol": ["@ateam/protocol@workspace:packages/protocol"],
+
+    "@ateam/server": ["@ateam/server@workspace:packages/server"],
 
     "@babel/code-frame": ["@babel/code-frame@7.29.7", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.29.7", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw=="],
 
