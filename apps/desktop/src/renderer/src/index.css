@@ -821,6 +821,11 @@ input {
 	color: var(--text-dim);
 	flex: none;
 }
+/* The expand button must fit inside the 26px bar. */
+.mc .tile .bar .iconbtn {
+	width: 20px;
+	height: 20px;
+}
 
 .empty {
 	margin: auto;

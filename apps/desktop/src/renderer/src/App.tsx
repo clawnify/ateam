@@ -309,6 +309,21 @@ export function App() {
 		setSelectedTaskId(id);
 		setPanelMode("side");
 	};
+	// Expanding a Mission Control tile opens that exact terminal full-width.
+	// `view` stays "mission", so collapsing or closing the panel lands back on
+	// the grid — while the same panel opened from the Board collapses to a
+	// side panel there.
+	const openFromMission = (task: TaskDTO, terminalId: string) => {
+		setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
+		setSelectedTaskId(task.id);
+		setPanelMode("full");
+	};
+	// Collapsing the full panel inside Mission Control means "back to the
+	// grid", not "shrink to a side panel" — there is no board to sit beside.
+	const collapseToMission = () => {
+		setSelectedTaskId(null);
+		setPanelMode("side");
+	};
 
 	const addProject = () =>
 		run(async () => {
@@ -595,7 +610,12 @@ export function App() {
 						</div>
 						<div
 							className={`tab ${view === "mission" ? "active" : ""}`}
-							onClick={() => setView("mission")}
+							onClick={() => {
+								// Same as Board: a full-width task covers this view, so
+								// clicking the tab means "show me Mission Control".
+								if (panelMode === "full") setSelectedTaskId(null);
+								setView("mission");
+							}}
 						>
 							Mission Control
 						</div>
@@ -607,7 +627,7 @@ export function App() {
 						</div>
 					</div>
 					<div className="spacer" />
-					{view === "mission" && (
+					{view === "mission" && !(selectedTask && panelMode === "full") && (
 						<div className="mclayout" role="group" aria-label="Layout">
 							{(
 								[
@@ -670,7 +690,26 @@ export function App() {
 							)}
 						</>
 					) : view === "mission" ? (
-						<MissionControl tasks={activeTasks} layout={mcLayout} />
+						selectedTask && panelMode === "full" ? (
+							<TaskPanel
+								task={selectedTask}
+								agents={agents}
+								mode={panelMode}
+								onSetMode={(m) => (m === "side" ? collapseToMission() : setPanelMode(m))}
+								collapseLabel="Back to Mission Control"
+								terminalId={termByTask[selectedTask.id] ?? null}
+								setTerminal={(tid) => setTermByTask((m) => ({ ...m, [selectedTask.id]: tid }))}
+								run={run}
+								ask={ask}
+								confirm={confirm}
+								reload={() => activeProjectId && loadTasks(activeProjectId)}
+								onClose={(taskId) =>
+									setSelectedTaskId((cur) => (taskId == null || cur === taskId ? null : cur))
+								}
+							/>
+						) : (
+							<MissionControl tasks={activeTasks} layout={mcLayout} onExpand={openFromMission} />
+						)
 					) : (
 						<LoopsPanel />
 					)}
@@ -794,6 +833,7 @@ function TaskPanel({
 	agents,
 	mode,
 	onSetMode,
+	collapseLabel = "Show beside the board",
 	terminalId,
 	setTerminal,
 	run,
@@ -806,6 +846,8 @@ function TaskPanel({
 	agents: AgentDTO[];
 	mode: "side" | "full";
 	onSetMode: (m: "side" | "full") => void;
+	/** Tooltip for the minimize button — where collapsing takes you. */
+	collapseLabel?: string;
 	terminalId: string | null;
 	setTerminal: (tid: string) => void;
 	run: (fn: () => Promise<void>) => Promise<void>;
@@ -919,7 +961,7 @@ function TaskPanel({
 						{mode === "full" ? (
 							<IconButton
 								icon={Minimize2}
-								label="Show beside the board"
+								label={collapseLabel}
 								onClick={() => setModeAndFocusTerm("side")}
 							/>
 						) : (
@@ -1119,7 +1161,15 @@ function TaskPanel({
 	);
 }
 
-function MissionControl({ tasks, layout }: { tasks: TaskDTO[]; layout: McLayout }) {
+function MissionControl({
+	tasks,
+	layout,
+	onExpand,
+}: {
+	tasks: TaskDTO[];
+	layout: McLayout;
+	onExpand: (task: TaskDTO, terminalId: string) => void;
+}) {
 	const [tiles, setTiles] = useState<{ task: TaskDTO; terminalId: string }[]>([]);
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
@@ -1161,9 +1211,15 @@ function MissionControl({ tasks, layout }: { tasks: TaskDTO[]; layout: McLayout 
 					<div className="bar">
 						<span>{task.name}</span>
 						<span className="muted">· {task.branch}</span>
-						{task.agentStatus && (
-							<span className={`tstatus ${task.agentStatus}`} style={{ marginLeft: "auto" }} />
-						)}
+						<span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+							{task.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
+							<IconButton
+								icon={Maximize2}
+								label="Expand to full width"
+								size={13}
+								onClick={() => onExpand(task, terminalId)}
+							/>
+						</span>
 					</div>
 					<TerminalView terminalId={terminalId} />
 				</div>
