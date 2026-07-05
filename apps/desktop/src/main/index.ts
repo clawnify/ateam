@@ -17,8 +17,22 @@ import { MergeQueue } from "./merge-queue";
 import { PtyClient } from "./pty/pty-client";
 import { type Services, toTaskDTO } from "./services";
 
-let win: BrowserWindow | null = null;
+// Every live window and the project it's pinned to: null = the main
+// multi-project dashboard, a projectId = a detached single-project window.
+// Multiplexing projects across windows lets you spread them over macOS Spaces.
+const windowProject = new Map<BrowserWindow, string | null>();
 let services: Services | null = null;
+
+/**
+ * Push an event to every live window. The renderers already filter by their own
+ * state (tasksByProject, mounted terminalIds), so a detached project window and
+ * the dashboard both stay consistent while each keeps only what it cares about.
+ */
+function broadcast(channel: string, ...args: unknown[]): void {
+	for (const w of windowProject.keys()) {
+		if (!w.isDestroyed()) w.webContents.send(channel, ...args);
+	}
+}
 
 const SMOKE = process.env.ATEAM_SMOKE === "1";
 
@@ -278,12 +292,18 @@ function buildAppMenu(): void {
 function sendTaskUpdated(taskId: string): void {
 	if (!services) return;
 	const task = repo.getTask(services.db, taskId);
-	if (task) win?.webContents.send(CH.evtTaskUpdated, toTaskDTO(task));
+	if (task) broadcast(CH.evtTaskUpdated, toTaskDTO(task));
+}
+
+// A task was deleted (single remove or cleanup) — tell every window to drop it,
+// so a stale card can't linger in another window showing the same project.
+function sendTaskRemoved(taskId: string): void {
+	broadcast(CH.evtTaskRemoved, taskId);
 }
 
 function sendLoopsUpdated(): void {
 	if (!services) return;
-	win?.webContents.send(CH.evtLoopsUpdated, services.loopRunner.describe());
+	broadcast(CH.evtLoopsUpdated, services.loopRunner.describe());
 }
 
 async function initServices(): Promise<Services> {
@@ -339,10 +359,12 @@ async function initServices(): Promise<Services> {
 		loopRunner,
 	};
 
-	// PTY output/exit → renderer.
-	pty.on("data", (e) => win?.webContents.send(CH.evtPtyData, e));
+	// PTY output/exit → renderer. shortcut: broadcast to every window; a detached
+	// window ignores terminals it hasn't mounted. If PTY throughput ever makes
+	// this wasteful, route by terminalId → session → project instead.
+	pty.on("data", (e) => broadcast(CH.evtPtyData, e));
 	pty.on("exit", (e) => {
-		win?.webContents.send(CH.evtPtyExit, e);
+		broadcast(CH.evtPtyExit, e);
 		// Record the exit in the DB so a session is never left looking "running"
 		// after its process is gone — the gap that previously stranded cards in
 		// the running column (the board reconciler is the backstop for exits we
@@ -440,8 +462,9 @@ async function initServices(): Promise<Services> {
 	return svc;
 }
 
-function createWindow(): void {
-	win = new BrowserWindow({
+// A detached window is pinned to `projectId`; the dashboard passes undefined.
+function createWindow(projectId?: string): BrowserWindow {
+	const win = new BrowserWindow({
 		width: 1400,
 		height: 900,
 		minWidth: 900,
@@ -455,16 +478,35 @@ function createWindow(): void {
 			contextIsolation: true,
 		},
 	});
+	windowProject.set(win, projectId ?? null);
 
+	// Pin the project by stamping the renderer URL; the preload reads it back via
+	// window.boundProjectId(). A hash keeps loadFile working (no querystring file).
+	const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
 	if (process.env.ELECTRON_RENDERER_URL) {
-		void win.loadURL(process.env.ELECTRON_RENDERER_URL);
+		void win.loadURL(`${process.env.ELECTRON_RENDERER_URL}${query}`);
 	} else {
-		void win.loadFile(join(__dirname, "../renderer/index.html"));
+		void win.loadFile(join(__dirname, "../renderer/index.html"), {
+			search: query || undefined,
+		});
 	}
 
 	win.on("closed", () => {
-		win = null;
+		windowProject.delete(win);
 	});
+	return win;
+}
+
+// Detach a project into its own window, or focus the one already showing it.
+function openProjectWindow(projectId: string): void {
+	for (const [w, pid] of windowProject) {
+		if (pid === projectId && !w.isDestroyed()) {
+			if (w.isMinimized()) w.restore();
+			w.focus();
+			return;
+		}
+	}
+	createWindow(projectId);
 }
 
 app.whenReady().then(async () => {
@@ -491,9 +533,11 @@ app.whenReady().then(async () => {
 	registerIpc({
 		services,
 		sendTaskUpdated,
+		sendTaskRemoved,
 		mergeQueue: services.mergeQueue,
 		loopRunner: services.loopRunner,
 		sendLoopsUpdated,
+		openProjectWindow,
 	});
 
 	if (SMOKE) {

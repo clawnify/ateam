@@ -255,6 +255,23 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* Project row = the selectable button + a hover-revealed "open in new window"
+   button overlaid at the right. */
+.proj-row {
+	position: relative;
+}
+.proj-open {
+	position: absolute;
+	right: 6px;
+	top: 50%;
+	transform: translateY(-50%);
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+.proj-row:hover .proj-open,
+.proj-open:focus-within {
+	opacity: 1;
+}
 
 /* tasks accordion: VSCode-explorer-style file rows */
 .tasks-head {
