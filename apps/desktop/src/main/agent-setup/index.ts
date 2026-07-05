@@ -210,6 +210,38 @@ export async function ensureCodexHooks(
 	await writeFile(file, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
 }
 
+/**
+ * Write a per-session MCP config pointing Claude at Ateam's board tools (served
+ * on the hook server's `/mcp` endpoint). The session's terminal id rides along
+ * as a header so `set_status` can tell a self-move (a session moving its OWN
+ * card) from an organizer move. Pass an empty `terminalId` for the board-level
+ * organizer, which is bound to no single task. Returns the file path to hand to
+ * `claude --mcp-config`.
+ */
+export async function ensureBoardMcpConfig(opts: {
+	hooksDir: string;
+	hookPort: number;
+	terminalId: string;
+}): Promise<string> {
+	const dir = join(opts.hooksDir, "mcp");
+	await mkdir(dir, { recursive: true });
+	const file = join(dir, `board-${opts.terminalId || "organizer"}.json`);
+	const config = {
+		mcpServers: {
+			ateam_board: {
+				type: "http",
+				url: `http://127.0.0.1:${opts.hookPort}/mcp`,
+				headers: { "x-ateam-terminal-id": opts.terminalId },
+			},
+		},
+	};
+	await writeFile(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+	return file;
+}
+
+/** The board tools, named for `claude --allowedTools`. */
+export const BOARD_MCP_TOOLS = ["mcp__ateam_board__get_board", "mcp__ateam_board__set_status"];
+
 /** Build the PTY environment for an agent session, injecting hook correlation. */
 export function buildAgentEnv(opts: {
 	terminalId: string;

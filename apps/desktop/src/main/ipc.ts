@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { agentCommand, getAgent, listAgents } from "@ateam/agents";
 import { repo } from "@ateam/db";
 import {
@@ -20,7 +18,7 @@ import {
 	trackingStatus,
 	updateFromBase,
 } from "@ateam/git-core";
-import { BrowserWindow, clipboard, dialog, ipcMain } from "electron";
+import { clipboard, dialog, ipcMain, nativeImage } from "electron";
 import {
 	CH,
 	type CreateLoopInput,
@@ -37,41 +35,14 @@ import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services
 export interface IpcContext {
 	services: Services;
 	sendTaskUpdated: (taskId: string) => void;
+	/** Broadcast a task removal to every window. */
+	sendTaskRemoved: (taskId: string) => void;
 	mergeQueue: MergeQueue;
 	loopRunner: LoopRunner;
 	/** Push the current loop list to the renderer. */
 	sendLoopsUpdated: () => void;
-}
-
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|svg)$/i;
-
-/**
- * Classify the clipboard for image paste. A copied *file* (Finder) is preferred
- * — paste its real path so the agent reads its contents, not its Finder icon.
- * A raw bitmap (e.g. a ⌘⌃⇧4 screenshot) falls back to "bitmap". Text present →
- * not an image (let it paste normally). Returns null when there's nothing to do.
- */
-function clipboardImageKind(): { kind: "file"; path: string } | { kind: "bitmap" } | null {
-	if (clipboard.readText().length > 0) return null;
-	const formats = clipboard.availableFormats();
-	// A file reference (image file copied in Finder): use its path directly.
-	const fileUrlFmt = formats.find((f) => /file-?url|filenames/i.test(f));
-	if (fileUrlFmt) {
-		const raw = clipboard.read(fileUrlFmt).trim().split(/\r?\n/)[0];
-		if (raw) {
-			try {
-				const path = raw.startsWith("file:") ? fileURLToPath(raw) : raw;
-				if (IMAGE_EXT.test(path)) return { kind: "file", path };
-			} catch {
-				/* not a usable file url */
-			}
-		}
-	}
-	// A real bitmap on the clipboard.
-	if (formats.some((f) => /image|png|tiff|jpeg/i.test(f))) {
-		return { kind: "bitmap" };
-	}
-	return null;
+	/** Detach a project into its own window (or focus its existing one). */
+	openProjectWindow: (projectId: string) => void;
 }
 
 /** Project display name from the repo's README H1 (md or HTML), if present. */
@@ -122,8 +93,30 @@ async function computeGitStatus(
 	};
 }
 
+/**
+ * Load an image file and put it on the clipboard as a real bitmap, so a
+ * following Ctrl+V hands the agent pixels — not a path, and not the generic
+ * file-type icon a raw clipboard read of a Finder file copy returns. Returns
+ * false when the path is missing or isn't a decodable image.
+ */
+function stageImageOnClipboard(path: string | null): boolean {
+	if (!path) return false;
+	const img = nativeImage.createFromPath(path);
+	if (img.isEmpty()) return false;
+	clipboard.writeImage(img);
+	return true;
+}
+
 export function registerIpc(ctx: IpcContext): void {
-	const { services, sendTaskUpdated, mergeQueue, loopRunner, sendLoopsUpdated } = ctx;
+	const {
+		services,
+		sendTaskUpdated,
+		sendTaskRemoved,
+		mergeQueue,
+		loopRunner,
+		sendLoopsUpdated,
+		openProjectWindow,
+	} = ctx;
 	const { db } = services;
 
 	// ---- projects ----
@@ -160,6 +153,10 @@ export function registerIpc(ctx: IpcContext): void {
 		repo.deleteProject(db, id);
 	});
 
+	ipcMain.handle(CH.windowOpenProject, async (_e, projectId: string) => {
+		openProjectWindow(projectId);
+	});
+
 	// ---- tasks ----
 	ipcMain.handle(CH.tasksList, async (_e, projectId: string) =>
 		repo.listTasks(db, projectId).map(toTaskDTO),
@@ -183,6 +180,9 @@ export function registerIpc(ctx: IpcContext): void {
 				baseBranch: created.baseBranch,
 				worktreePath: created.worktreePath,
 			});
+			// Broadcast so any other window showing this project gains the new card
+			// (renderers upsert). The caller also gets it — an idempotent upsert.
+			sendTaskUpdated(row.id);
 			return toTaskDTO(row);
 		},
 	);
@@ -204,11 +204,16 @@ export function registerIpc(ctx: IpcContext): void {
 				force: input.force,
 			});
 			repo.deleteTask(db, task.id);
+			// Drop the card from every window (not just the caller's).
+			sendTaskRemoved(task.id);
 		},
 	);
 
 	ipcMain.handle(CH.tasksSetColumn, async (_e, id: string, column: KanbanColumn) => {
 		const row = repo.updateTask(db, id, { column });
+		// Broadcast so every view (board, sidebar) reflects the move — e.g. the
+		// "Done" button under the terminal that sends a review task to merged.
+		sendTaskUpdated(id);
 		return toTaskDTO(row!);
 	});
 
@@ -319,6 +324,7 @@ export function registerIpc(ctx: IpcContext): void {
 					force: false,
 				});
 				repo.deleteTask(db, task.id);
+				sendTaskRemoved(task.id);
 				removed.push({ id: task.id, name: task.name, branch: task.branch });
 			} catch (err) {
 				kept.push({ task, reason: errorMessage(err) });
@@ -428,30 +434,6 @@ export function registerIpc(ctx: IpcContext): void {
 		return snapshot;
 	});
 
-	// Sync (rare, keypress-driven): does the clipboard hold an image-only
-	// payload (a bitmap or a copied image file, no text)? Drives the renderer's
-	// decision to intercept a paste as an image rather than text.
-	ipcMain.on(CH.utilClipboardHasImage, (e) => {
-		e.returnValue = clipboardImageKind() !== null;
-	});
-
-	// Resolve the clipboard image to a real file path the agent can read.
-	// Pasting a path (bracketed) beats sending Ctrl+V: the agent loads the
-	// file's actual bytes instead of letting its own clipboard read grab a
-	// file's generic Finder icon (the "blank PNG" bug).
-	ipcMain.handle(CH.utilClipboardImagePath, async () => {
-		const kind = clipboardImageKind();
-		if (kind?.kind === "file") return kind.path;
-		if (kind?.kind === "bitmap") {
-			const img = clipboard.readImage();
-			if (img.isEmpty()) return null;
-			const file = join(tmpdir(), `ateam-paste-${Date.now()}.png`);
-			writeFileSync(file, img.toPNG());
-			return file;
-		}
-		return null;
-	});
-
 	// Native file picker for the terminal toolbar's "+ → Files…" action; the
 	// renderer types the chosen paths into the PTY like a drag-and-drop would.
 	ipcMain.handle(CH.utilPickFiles, async () => {
@@ -461,6 +443,37 @@ export function registerIpc(ctx: IpcContext): void {
 		});
 		return res.canceled ? [] : res.filePaths;
 	});
+
+	// "+ → Attach image": open a picker, then stage the chosen image as a real
+	// bitmap on the clipboard so the renderer's following Ctrl+V hands the agent
+	// pixels, not a path or a file-icon.
+	//
+	// Always a picker — deliberately never sourced from the clipboard. Staging
+	// writes the image *to* the clipboard, so reading it back here would skip the
+	// picker on the next attach and re-stage the same image (you could never add a
+	// second, different one). Copied screenshots/images are attached via ⌘V paste,
+	// handled separately in the renderer's paste handler.
+	ipcMain.handle(CH.utilStageImage, async () => {
+		const res = await dialog.showOpenDialog({
+			properties: ["openFile"],
+			title: "Attach image",
+			filters: [
+				{
+					name: "Images",
+					extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic", "avif"],
+				},
+			],
+		});
+		return stageImageOnClipboard(res.canceled ? null : (res.filePaths[0] ?? null));
+	});
+
+	// Paste/drop of a copied image *file*: stage its bytes as a real bitmap so the
+	// renderer's following Ctrl+V attaches the pixels. Typing the path only
+	// attaches when the agent runs typed-path detection, and a bare Ctrl+V on a
+	// file copy grabs the file's generic icon — staging the bytes is the reliable
+	// path. Returns false (renderer then falls back to typing the path) if the
+	// file isn't a decodable image.
+	ipcMain.handle(CH.utilStageImagePath, async (_e, path: string) => stageImageOnClipboard(path));
 
 	// ---- agents ----
 	ipcMain.handle(CH.agentsList, async () => {
@@ -517,6 +530,7 @@ export function registerIpc(ctx: IpcContext): void {
 				yolo?: boolean;
 				resume?: boolean;
 				prompt?: string;
+				files?: string[];
 			},
 		) => {
 			const task = requireTask(services, input.taskId);
@@ -546,10 +560,18 @@ export function registerIpc(ctx: IpcContext): void {
 			// Run the agent in a login shell, then drop to an interactive shell so
 			// the pane stays usable after the agent exits. YOLO appends the bypass
 			// flag; resume relaunches the agent's most recent conversation here.
+			// Attached files ride along in the prompt as absolute paths under a
+			// header — the agent reads them with its own Read tool (nothing is
+			// copied into the worktree). Skip on resume, which ignores the prompt.
+			let prompt = input.prompt;
+			if (input.files?.length) {
+				const list = input.files.map((f) => `- ${f}`).join("\n");
+				prompt = prompt ? `${prompt}\n\nAttached files:\n${list}` : `Attached files:\n${list}`;
+			}
 			let agentCmd = agentCommand(agent, {
 				yolo: input.yolo,
 				resume: input.resume,
-				prompt: input.prompt,
+				prompt,
 			});
 			if (agent.id === "codex") {
 				// Codex has no hooks, but `notify` invokes a program with a JSON

@@ -180,6 +180,7 @@ export const CH = {
 	projectsRegister: "projects:register",
 	projectsList: "projects:list",
 	projectsRemove: "projects:remove",
+	windowOpenProject: "window:openProject",
 	tasksList: "tasks:list",
 	tasksCreate: "tasks:create",
 	tasksRemove: "tasks:remove",
@@ -201,9 +202,9 @@ export const CH = {
 	loopsCreate: "loops:create",
 	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
-	utilClipboardHasImage: "util:clipboardHasImage",
-	utilClipboardImagePath: "util:clipboardImagePath",
 	utilPickFiles: "util:pickFiles",
+	utilStageImage: "util:stageImage",
+	utilStageImagePath: "util:stageImagePath",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -215,6 +216,7 @@ export const CH = {
 	evtPtyData: "evt:pty:data",
 	evtPtyExit: "evt:pty:exit",
 	evtTaskUpdated: "evt:task:updated",
+	evtTaskRemoved: "evt:task:removed",
 	evtLoopsUpdated: "evt:loops:updated",
 } as const;
 
@@ -294,6 +296,8 @@ export interface AteamApi {
 			resume?: boolean;
 			/** Initial instruction handed to the agent at launch. */
 			prompt?: string;
+			/** Absolute paths to attach — appended to the prompt for the agent to read. */
+			files?: string[];
 		}): Promise<{ terminalId: string }>;
 		spawnShell(input: { taskId: string }): Promise<{ terminalId: string }>;
 		write(terminalId: string, data: string): void;
@@ -305,20 +309,47 @@ export interface AteamApi {
 		onExit(cb: (e: PtyExitEvent) => void): () => void;
 	};
 	events: {
+		/** A task was created or changed — upsert it (add if new, replace if known). */
 		onTaskUpdated(cb: (task: TaskDTO) => void): () => void;
+		/** A task was removed (delete or cleanup) — drop it from every window. */
+		onTaskRemoved(cb: (taskId: string) => void): () => void;
+	};
+	window: {
+		/**
+		 * Detach a project into its own OS window (to spread projects across
+		 * desktops/Spaces). If a window is already bound to this project it's
+		 * focused instead of duplicated.
+		 */
+		openProject(projectId: string): Promise<void>;
+		/**
+		 * The project this window is pinned to, or null for the main multi-project
+		 * dashboard. Read once at boot from the window's launch URL.
+		 */
+		boundProjectId(): string | null;
 	};
 	utils: {
-		/** Absolute filesystem path for a dragged-in File (Electron webUtils). */
-		pathForFile(file: File): string;
-		/** True when the clipboard holds an image and no text (sync). */
-		clipboardHasImage(): boolean;
 		/**
-		 * Resolve a clipboard image to a file path the agent can read: a copied
-		 * image file's own path, or a temp PNG written from a clipboard bitmap.
-		 * Null when the clipboard holds no image.
+		 * Absolute filesystem path for a File from a drop or paste (Electron
+		 * webUtils). Returns "" for a File with no backing path — e.g. a raw
+		 * clipboard bitmap (screenshot) Chromium synthesizes into a File.
 		 */
-		clipboardImagePath(): Promise<string | null>;
+		pathForFile(file: File): string;
 		/** Native open dialog; resolves to the chosen paths ([] on cancel). */
 		pickFiles(): Promise<string[]>;
+		/**
+		 * Open an image picker, then put the chosen image on the clipboard as a real
+		 * bitmap so a following Ctrl+V hands the agent pixels, not a Finder file-icon.
+		 * Always a picker (never read from the clipboard, which we just wrote to).
+		 * Resolves true when a bitmap was staged, false if the user cancelled or the
+		 * file wasn't a decodable image.
+		 */
+		stageClipboardImage(): Promise<boolean>;
+		/**
+		 * Put the image at `path` on the clipboard as a real bitmap (for a following
+		 * Ctrl+V), used when a copied/dropped image *file* is brought into a terminal.
+		 * Resolves false if the file isn't a decodable image, so the caller can fall
+		 * back to typing the path.
+		 */
+		stageImagePath(path: string): Promise<boolean>;
 	};
 }

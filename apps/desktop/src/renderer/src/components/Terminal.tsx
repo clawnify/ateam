@@ -1,7 +1,8 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { FileUp, Plus } from "lucide-react";
+import { Check, FileUp, ImageUp, Plus } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { IconButton } from "./IconButton";
 import { Menu } from "./Menu";
 
 /**
@@ -10,8 +11,10 @@ import { Menu } from "./Menu";
  * "typed path → [Image #N]" detection fires — that wants shell-style escaping,
  * not quoting.
  */
-const escapePath = (p: string) =>
-	p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1");
+const escapePath = (p: string) => p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1");
+
+/** Paths we attach as a staged bitmap rather than a typed path. */
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif|ico)$/i;
 
 /**
  * One xterm.js view bound to a main-process PTY by terminalId. Replays the
@@ -19,7 +22,17 @@ const escapePath = (p: string) =>
  * streams live output, and forwards keystrokes + resize back to the PTY.
  * A slim toolbar underneath offers a `+` menu (e.g. attach files by path).
  */
-export function TerminalView({ terminalId }: { terminalId: string }) {
+export function TerminalView({
+	terminalId,
+	showDone,
+	onDone,
+}: {
+	terminalId: string;
+	/** Show a "Done" action in the toolbar (e.g. task is in Review). */
+	showDone?: boolean;
+	/** Called when Done is clicked — the parent owns the status change. */
+	onDone?: () => void;
+}) {
 	const ref = useRef<HTMLDivElement>(null);
 	const termRef = useRef<Terminal | null>(null);
 
@@ -50,38 +63,15 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		const focusTerm = () => term.focus();
 		el.addEventListener("mousedown", focusTerm);
 
-		// Pasting an image: resolve it to a real file path and paste THAT
-		// (bracketed), so the agent loads the file's bytes. Sending Ctrl+V
-		// instead makes the agent do its own clipboard read, which grabs a
-		// copied file's generic Finder icon rather than its contents. The menu's
-		// Paste role fires a DOM `paste` event (the renderer never sees ⌘V's
-		// keydown — the menu owns that accelerator), intercepted here in capture
-		// phase before xterm's own textarea paste handler.
-		const onPaste = (e: Event) => {
-			if (!window.ateam.utils.clipboardHasImage()) return; // text → xterm
-			e.preventDefault();
-			e.stopPropagation();
-			void window.ateam.utils.clipboardImagePath().then((p) => {
-				if (p) {
-					term.paste(`${escapePath(p)} `);
-					term.focus();
-				}
-			});
-		};
-		el.addEventListener("paste", onPaste, true);
-
-		// Dropping files types their backslash-escaped paths straight to the PTY,
-		// exactly like a real terminal (iTerm/Terminal.app) does on a file drop.
+		// Type dropped files' backslash-escaped paths straight to the PTY, exactly
+		// like a real terminal (iTerm/Terminal.app) does on a file drop.
+		//
 		// This is deliberately NOT term.paste(): a paste arrives wrapped in
-		// bracketed-paste markers, which Claude Code treats as a literal text
-		// block and does NOT scan for a droppable file path — so the image never
-		// attaches and you're left with a literal path. Typed keystrokes are what
-		// trigger its "dropped path → [Image #N]" detection.
-		const onDragOver = (e: DragEvent) => e.preventDefault();
-		const onDrop = (e: DragEvent) => {
-			e.preventDefault();
-			const files = Array.from(e.dataTransfer?.files ?? []);
-			if (files.length === 0) return;
+		// bracketed-paste markers, which Claude Code treats as a literal text block
+		// and does NOT scan for a droppable file path — so the image never attaches
+		// and you're left with a literal path. Typed keystrokes are what trigger its
+		// "path → [Image #N]" detection.
+		const typeFilePaths = (files: File[]) => {
 			const paths = files
 				.map((f) => window.ateam.utils.pathForFile(f))
 				.filter(Boolean)
@@ -90,6 +80,63 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 				window.ateam.pty.write(terminalId, `${paths.join(" ")} `);
 				term.focus();
 			}
+		};
+
+		// Bring copied/dropped file(s) into the terminal. A single image file is
+		// attached by staging its real bitmap on the clipboard + Ctrl+V — the only
+		// reliable path: a bare Ctrl+V grabs a Finder file's generic icon, and a
+		// typed path only attaches when the agent runs typed-path detection (else it
+		// just leaves a literal path). Anything else (non-image, or multiple files)
+		// types the escaped path(s); so does an image we couldn't decode.
+		const attachFiles = (files: File[]) => {
+			const paths = files.map((f) => window.ateam.utils.pathForFile(f)).filter(Boolean);
+			const [only] = paths;
+			if (paths.length === 1 && only && IMAGE_RE.test(only)) {
+				void window.ateam.utils.stageImagePath(only).then((staged) => {
+					if (staged) {
+						window.ateam.pty.write(terminalId, "\x16");
+						term.focus();
+					} else {
+						typeFilePaths(files);
+					}
+				});
+				return;
+			}
+			typeFilePaths(files);
+		};
+
+		// Pasting an image. The menu's Paste role fires a DOM `paste` event with a
+		// populated clipboardData (the renderer never sees ⌘V's keydown — the menu
+		// owns that accelerator), intercepted here in capture phase before xterm's
+		// own textarea handler. We classify straight off the event — no IPC.
+		//
+		// Plain text pastes normally. A non-text payload splits two ways:
+		//   - a copied file (Finder) has a real path → attachFiles (a single image
+		//     is staged as a bitmap + Ctrl+V; other files type their path).
+		//   - a raw bitmap (screenshot) has no path → forward a bare Ctrl+V and let
+		//     the agent read the bitmap off the clipboard itself, like a raw
+		//     terminal. The agent renders its own "[Image #N]".
+		const onPaste = (e: ClipboardEvent) => {
+			const dt = e.clipboardData;
+			if (!dt || dt.getData("text/plain")) return; // text → xterm
+			if (dt.files.length === 0) return; // nothing image/file-like
+			e.preventDefault();
+			e.stopPropagation();
+			const files = Array.from(dt.files);
+			if (files.every((f) => window.ateam.utils.pathForFile(f))) {
+				attachFiles(files); // copied file(s) on disk
+			} else {
+				window.ateam.pty.write(terminalId, "\x16"); // bitmap → bare ⌃V
+				term.focus();
+			}
+		};
+		el.addEventListener("paste", onPaste, true);
+
+		// Dropping files behaves like pasting copied files.
+		const onDragOver = (e: DragEvent) => e.preventDefault();
+		const onDrop = (e: DragEvent) => {
+			e.preventDefault();
+			attachFiles(Array.from(e.dataTransfer?.files ?? []));
 		};
 		el.addEventListener("dragover", onDragOver);
 		el.addEventListener("drop", onDrop);
@@ -145,9 +192,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			term.write("", () => term.scrollToBottom());
 		});
 
-		const disposeInput = term.onData((d) =>
-			window.ateam.pty.write(terminalId, d),
-		);
+		const disposeInput = term.onData((d) => window.ateam.pty.write(terminalId, d));
 
 		// Resize handling. Layout toggles fire several ResizeObserver callbacks
 		// in quick succession (sometimes while the element is mid-layout at zero
@@ -166,11 +211,15 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		let raf = 0;
 		let lastCols = 0;
 		let lastRows = 0;
+		let lastW = 0;
+		let lastH = 0;
 		let wasHidden = false;
 		const syncSize = () => {
 			cancelAnimationFrame(raf);
 			raf = requestAnimationFrame(() => {
-				if (el.clientWidth === 0 || el.clientHeight === 0) {
+				const w = el.clientWidth;
+				const h = el.clientHeight;
+				if (w === 0 || h === 0) {
 					wasHidden = true;
 					return;
 				}
@@ -181,24 +230,33 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 				}
 				const justRevealed = wasHidden;
 				wasHidden = false;
-				if (term.cols === lastCols && term.rows === lastRows) {
-					// Same grid: fit() didn't trigger a repaint. If we just came
-					// back into view, redraw every row so content written while
-					// hidden isn't left missing until the next resize.
-					if (justRevealed) {
-						term.refresh(0, term.rows - 1);
-						term.scrollToBottom();
-					}
-					return;
+				const gridChanged = term.cols !== lastCols || term.rows !== lastRows;
+				const boxChanged = w !== lastW || h !== lastH;
+				lastW = w;
+				lastH = h;
+				if (gridChanged) {
+					lastCols = term.cols;
+					lastRows = term.rows;
+					window.ateam.pty.resize(terminalId, term.cols, term.rows);
 				}
-				lastCols = term.cols;
-				lastRows = term.rows;
-				window.ateam.pty.resize(terminalId, term.cols, term.rows);
-				term.scrollToBottom();
+				// Repaint whenever the box changed, not just when the grid did: fit()
+				// is a no-op on a sub-row resize (or a width change within the same
+				// cols), but the DOM renderer can still be left with stale geometry —
+				// which makes the visible height look wrong and mouse selection miss
+				// until a remount. A forced refresh keeps it in sync without one.
+				if (gridChanged || boxChanged || justRevealed) {
+					term.refresh(0, term.rows - 1);
+				}
+				if (gridChanged || justRevealed) term.scrollToBottom();
 			});
 		};
 		const ro = new ResizeObserver(syncSize);
 		ro.observe(el);
+		// A ResizeObserver on the absolutely-positioned host can miss a window
+		// resize (its box tracks the containing block, and a reflow that ends at the
+		// same size never fires), so also re-fit on the window's own resize.
+		const onWinResize = () => syncSize();
+		window.addEventListener("resize", onWinResize);
 		syncSize();
 
 		return () => {
@@ -210,6 +268,7 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 			window.removeEventListener("blur", onWinBlur);
 			window.removeEventListener("focus", onWinFocus);
 			window.removeEventListener("ateam:focus-terminal", onFocusRequest);
+			window.removeEventListener("resize", onWinResize);
 			offData();
 			disposeInput.dispose();
 			ro.disconnect();
@@ -228,6 +287,18 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 		termRef.current?.focus();
 	};
 
+	// "+ → Attach image": main opens a picker and stages the chosen image as a
+	// bitmap on the clipboard, then we forward a bare Ctrl+V so the agent reads the
+	// pixels off the clipboard — the one path that attaches reliably, regardless of
+	// typed-path detection. Each click re-opens the picker, so you can add several
+	// different images one after another.
+	const attachImage = async () => {
+		if (await window.ateam.utils.stageClipboardImage()) {
+			window.ateam.pty.write(terminalId, "\x16");
+		}
+		termRef.current?.focus();
+	};
+
 	return (
 		<div className="term-shell">
 			{/* .term-area is the flex-sized box; .term is absolutely positioned to
@@ -240,8 +311,14 @@ export function TerminalView({ terminalId }: { terminalId: string }) {
 				<Menu
 					icon={Plus}
 					label="Add to terminal"
-					items={[{ label: "Files…", icon: FileUp, onClick: addFiles }]}
+					items={[
+						{ label: "Attach image", icon: ImageUp, onClick: attachImage },
+						{ label: "Files…", icon: FileUp, onClick: addFiles },
+					]}
 				/>
+				{showDone && (
+					<IconButton icon={Check} label="Mark task Done" variant="primary" onClick={onDone} />
+				)}
 			</div>
 		</div>
 	);

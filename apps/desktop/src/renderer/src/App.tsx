@@ -10,6 +10,7 @@ import {
 	ChevronRight,
 	Columns2,
 	Database,
+	ExternalLink,
 	FilePen,
 	FlaskConical,
 	FolderPlus,
@@ -108,6 +109,9 @@ const STATUS_RANK: Record<KanbanColumn, number> = {
 const springy = { type: "spring", stiffness: 550, damping: 42 } as const;
 
 export function App() {
+	// Non-null in a detached window: this window is pinned to one project and
+	// hides the project switcher; null in the main multi-project dashboard.
+	const boundProjectId = useMemo(() => window.ateam.window.boundProjectId(), []);
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
 	const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
 	const [tasksByProject, setTasksByProject] = useState<Record<string, TaskDTO[]>>({});
@@ -157,23 +161,44 @@ export function App() {
 
 	const loadProjects = useCallback(async () => {
 		const list = await window.ateam.projects.list();
-		setProjects(list);
-		setActiveProjectId((cur) => cur ?? list[0]?.id ?? null);
-	}, []);
+		// A detached window shows only its pinned project.
+		const scoped = boundProjectId ? list.filter((p) => p.id === boundProjectId) : list;
+		setProjects(scoped);
+		setActiveProjectId((cur) => boundProjectId ?? cur ?? scoped[0]?.id ?? null);
+	}, [boundProjectId]);
 
 	useEffect(() => {
 		void loadProjects();
 		void window.ateam.agents.list().then(setAgents);
-		const off = window.ateam.events.onTaskUpdated((updated) => {
+		// Upsert: replace a known task, or add one created in another window (so a
+		// project open in two windows stays consistent). Only for projects this
+		// window tracks — a detached window ignores other projects' tasks.
+		const offUpdated = window.ateam.events.onTaskUpdated((updated) => {
+			setTasksByProject((prev) => {
+				const list = prev[updated.projectId];
+				if (!list) return prev;
+				const nextList = list.some((t) => t.id === updated.id)
+					? list.map((t) => (t.id === updated.id ? updated : t))
+					: [...list, updated];
+				return { ...prev, [updated.projectId]: nextList };
+			});
+		});
+		// Removal (delete/cleanup) from any window — drop the card everywhere and
+		// clear the selection if it was pointing at the now-gone task.
+		const offRemoved = window.ateam.events.onTaskRemoved((taskId) => {
 			setTasksByProject((prev) => {
 				const next: Record<string, TaskDTO[]> = {};
 				for (const [pid, list] of Object.entries(prev)) {
-					next[pid] = list.map((t) => (t.id === updated.id ? updated : t));
+					next[pid] = list.filter((t) => t.id !== taskId);
 				}
 				return next;
 			});
+			setSelectedTaskId((cur) => (cur === taskId ? null : cur));
 		});
-		return off;
+		return () => {
+			offUpdated();
+			offRemoved();
+		};
 	}, [loadProjects]);
 
 	// Load the selected project's tasks whenever it changes.
@@ -186,6 +211,14 @@ export function App() {
 	useEffect(() => {
 		for (const p of projects) void loadTasks(p.id);
 	}, [projects, loadTasks]);
+
+	// A detached window takes its pinned project's name as the OS window title, so
+	// the windows are tellable apart across desktops/Spaces.
+	useEffect(() => {
+		if (!boundProjectId) return;
+		const p = projects.find((x) => x.id === boundProjectId);
+		if (p) document.title = p.name;
+	}, [boundProjectId, projects]);
 
 	// Highest-priority alert among a non-selected project's tasks.
 	const projectAlert = (pid: string): "needs_attention" | "review" | null => {
@@ -321,7 +354,13 @@ export function App() {
 	// Create the task, open it in the current panel mode (side when on the
 	// board, full when already full-width), and launch the chosen agent with
 	// the prompt as its first instruction.
-	const composeTask = (input: { name: string; prompt: string; agentId: string; yolo: boolean }) =>
+	const composeTask = (input: {
+		name: string;
+		prompt: string;
+		agentId: string;
+		yolo: boolean;
+		files: string[];
+	}) =>
 		run(async () => {
 			if (!activeProjectId) return;
 			setComposerOpen(false);
@@ -340,6 +379,7 @@ export function App() {
 				agentId: input.agentId,
 				yolo: input.yolo,
 				prompt: input.prompt || undefined,
+				files: input.files.length ? input.files : undefined,
 			});
 			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		});
@@ -370,8 +410,11 @@ export function App() {
 									type="button"
 									key={p.id}
 									className={`rail-tile ${p.id === activeProjectId ? "active" : ""}`}
-									title={p.name}
+									title={boundProjectId ? p.name : `${p.name} — double-click to open in new window`}
 									onClick={() => selectProject(p.id)}
+									onDoubleClick={
+										boundProjectId ? undefined : () => window.ateam.window.openProject(p.id)
+									}
 								>
 									{p.name.charAt(0).toUpperCase()}
 									{alert && <span className={`corner pulse ${alert}`} />}
@@ -430,20 +473,40 @@ export function App() {
 							projects.map((p) => {
 								const alert = projectAlert(p.id);
 								return (
-									<button
-										type="button"
+									// Double-click (or the hover button) detaches the project into its
+									// own window. Row and open-button are siblings so the button's
+									// click can't nest inside the row button.
+									<div
 										key={p.id}
-										className={`proj ${p.id === activeProjectId ? "active" : ""}`}
-										onClick={() => selectProject(p.id)}
+										className="proj-row"
+										onDoubleClick={
+											boundProjectId ? undefined : () => window.ateam.window.openProject(p.id)
+										}
 									>
-										<span
-											className={`dot ${alert ? `alert ${alert}` : ""}`}
-											style={!alert && p.color ? { background: p.color } : undefined}
-										/>
-										<span className="proj-name" title={p.repoPath}>
-											{p.name}
-										</span>
-									</button>
+										<button
+											type="button"
+											className={`proj ${p.id === activeProjectId ? "active" : ""}`}
+											onClick={() => selectProject(p.id)}
+										>
+											<span
+												className={`dot ${alert ? `alert ${alert}` : ""}`}
+												style={!alert && p.color ? { background: p.color } : undefined}
+											/>
+											<span className="proj-name" title={p.repoPath}>
+												{p.name}
+											</span>
+										</button>
+										{!boundProjectId && (
+											<span className="proj-open">
+												<IconButton
+													icon={ExternalLink}
+													label="Open in new window"
+													size={14}
+													onClick={() => window.ateam.window.openProject(p.id)}
+												/>
+											</span>
+										)}
+									</div>
 								);
 							})}
 
@@ -535,7 +598,7 @@ export function App() {
 				<div className="topbar">
 					<div className="tabs">
 						<div
-							className={`tab ${view === "board" ? "active" : ""}`}
+							className={`tab ${view === "board" && !(selectedTask && panelMode === "full") ? "active" : ""}`}
 							onClick={() => {
 								// A full-width task hides the board — clicking "Board" while
 								// one is open means "show me the board", so deselect it.
@@ -621,10 +684,8 @@ export function App() {
 									confirm={confirm}
 									reload={() => activeProjectId && loadTasks(activeProjectId)}
 									onClose={(taskId) =>
-							setSelectedTaskId((cur) =>
-								taskId == null || cur === taskId ? null : cur,
-							)
-						}
+										setSelectedTaskId((cur) => (taskId == null || cur === taskId ? null : cur))
+									}
 								/>
 							)}
 						</>
@@ -815,28 +876,46 @@ function TaskPanel({
 		refreshDiff();
 	}, [refreshDiff]);
 
-	// Re-attach to a surviving daemon session when (re)opening this task.
+	const launch = useCallback(
+		(yolo: boolean, resume = false, agent = agentId) =>
+			run(async () => {
+				const { terminalId: tid } = await window.ateam.pty.spawnAgent({
+					taskId: task.id,
+					agentId: agent,
+					yolo,
+					resume,
+				});
+				setTerminal(tid);
+			}),
+		[task.id, agentId, run, setTerminal],
+	);
+
+	// Re-attach to a surviving daemon session when (re)opening this task. If the
+	// session has ended while the task was still active work (running or awaiting
+	// input), resume the agent's last conversation automatically so reopening the
+	// task brings it back. Terminal columns (review/merged) are left alone — there
+	// a relaunch is a deliberate act via the Resume button, not a side effect of
+	// opening the task (and spawning would bounce the card back to "running").
+	const autoResumedRef = useRef<string | null>(null);
 	useEffect(() => {
 		if (terminalId) return;
 		let cancelled = false;
 		void window.ateam.pty.listForTask(task.id).then((sessions) => {
-			if (!cancelled && sessions[0]) setTerminal(sessions[0].terminalId);
+			if (cancelled) return;
+			if (sessions[0]) {
+				setTerminal(sessions[0].terminalId);
+			} else if (
+				(task.column === "running" || task.column === "needs_attention") &&
+				autoResumedRef.current !== task.id
+			) {
+				autoResumedRef.current = task.id;
+				void launch(false, true, task.agentId ?? agentId);
+			}
 		});
 		return () => {
 			cancelled = true;
 		};
-	}, [task.id, terminalId, setTerminal]);
-
-	const launch = (yolo: boolean, resume = false) =>
-		run(async () => {
-			const { terminalId: tid } = await window.ateam.pty.spawnAgent({
-				taskId: task.id,
-				agentId,
-				yolo,
-				resume,
-			});
-			setTerminal(tid);
-		});
+	}, [task.id, terminalId, task.column, task.agentId, agentId, setTerminal, launch]);
 
 	const shell = () =>
 		run(async () => {
@@ -920,7 +999,7 @@ function TaskPanel({
 				/>
 				<IconButton
 					icon={Zap}
-					label="Launch in YOLO mode — bypass all permissions"
+					label="Launch in auto mode"
 					onClick={() => launch(true)}
 				/>
 				<IconButton
@@ -1016,7 +1095,15 @@ function TaskPanel({
 				    changes view is open — just hide it. */}
 				<div className="term-wrap" style={{ display: changesOpen ? "none" : "flex" }}>
 					{terminalId ? (
-						<TerminalView terminalId={terminalId} />
+						<TerminalView
+							terminalId={terminalId}
+							showDone={task.column === "review"}
+							onDone={() =>
+								run(async () => {
+									await window.ateam.tasks.setColumn(task.id, "merged");
+								})
+							}
+						/>
 					) : (
 						<div className="term" style={{ display: "grid", placeItems: "center" }}>
 							<span className="muted">Launch an agent or shell to start a terminal</span>
