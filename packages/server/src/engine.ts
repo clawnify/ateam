@@ -5,7 +5,7 @@
 // to webContents) and the SSH server (which frames them as JSON-RPC
 // notifications) drive the exact same engine.
 import { EventEmitter } from "node:events";
-import { existsSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createDb, repo } from "@ateam/db";
@@ -81,6 +81,10 @@ function mapEventToColumn(eventType: string): KanbanColumn {
 export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	const { dataDir, daemonPath, execPath } = opts;
 	const emitter = new EventEmitter();
+
+	// Ensure the data dir exists. Electron's userData always does; a fresh
+	// server's ~/.ateam may not, and better-sqlite3 won't create parent dirs.
+	if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
 
 	// One-time migration from the pre-rename database filename.
 	const dbPath = join(dataDir, "ateam.sqlite");
