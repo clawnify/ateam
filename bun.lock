@@ -82,6 +82,9 @@
     "packages/server": {
       "name": "@ateam/server",
       "version": "0.0.0",
+      "bin": {
+        "ateam": "./src/cli.ts",
+      },
       "dependencies": {
         "@ateam/agents": "workspace:*",
         "@ateam/db": "workspace:*",
@@ -89,6 +92,7 @@
         "@ateam/protocol": "workspace:*",
       },
       "devDependencies": {
+        "@types/node": "^22.10.5",
         "drizzle-orm": "^0.38.4",
       },
     },
