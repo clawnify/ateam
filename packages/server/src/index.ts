@@ -12,3 +12,7 @@ export type { Dispatcher } from "./dispatcher";
 export type { Services } from "./services";
 export { serveRpc } from "./rpc";
 export type { ServerTransport } from "./rpc";
+export { sshClientTransport } from "./transport/ssh";
+export type { SshClient, SshOptions } from "./transport/ssh";
+export { socketClientTransport, socketServerTransport } from "./transport/socket";
+export { streamClientTransport, streamServerTransport } from "./transport/stream";
