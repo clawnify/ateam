@@ -220,10 +220,6 @@ export interface ConnectionDTO {
 	inSshConfig: boolean;
 	/** We've recorded at least one successful connection (has a saved record). */
 	known: boolean;
-	/** How the user connects: "ssh" (OpenSSH) or "tcp" (a direct socket, e.g. Tailscale). */
-	transport: "ssh" | "tcp";
-	/** "host:port" for a "tcp" connection; null for "ssh" (OpenSSH resolves it). */
-	endpoint: string | null;
 }
 
 // A worktree advised for cleanup, shown in the cleanup dialog with its terminal.

@@ -91,28 +91,3 @@ describe("recordConnection", () => {
 		expect(typeof h?.lastSeen).toBe("number");
 	});
 });
-
-describe("transport choice", () => {
-	it("surfaces a saved tcp host with its endpoint; ssh_config hosts stay ssh", () => {
-		const db = createTestDb();
-		const cfg = writeConfig("Host ssh-box\n  HostName 10.0.0.9\n");
-		// A Tailscale/tcp host the user added — not in ssh_config, carries an endpoint.
-		recordConnection(db, {
-			hostAlias: "tailnet-box",
-			transport: "tcp",
-			endpoint: "100.72.63.61:7420",
-			serverVersion: "1",
-			agentsAvailable: ["claude"],
-		});
-
-		const byAlias = Object.fromEntries(listConnections(db, cfg).map((c) => [c.alias, c]));
-
-		expect(byAlias["tailnet-box"]?.transport).toBe("tcp");
-		expect(byAlias["tailnet-box"]?.endpoint).toBe("100.72.63.61:7420");
-		expect(byAlias["tailnet-box"]?.inSshConfig).toBe(false);
-
-		// A host from ssh_config is inherently ssh, with no stored endpoint.
-		expect(byAlias["ssh-box"]?.transport).toBe("ssh");
-		expect(byAlias["ssh-box"]?.endpoint).toBeNull();
-	});
-});
