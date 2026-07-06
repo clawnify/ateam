@@ -8,25 +8,17 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { ConnectionDTO } from "@ateam/protocol";
 import { type AteamDb, type Host, repo } from "@ateam/db";
+
+// ConnectionDTO is a client↔renderer boundary DTO — its home is @ateam/protocol;
+// re-exported here so `listConnections`' callers keep importing it from the server.
+export type { ConnectionDTO } from "@ateam/protocol";
 
 /** A connectable destination parsed from ~/.ssh/config. */
 export interface SshHost {
 	alias: string;
 	hostName: string | null;
-}
-
-/** A row in the connections list: ssh_config presence merged with our metadata. */
-export interface ConnectionDTO {
-	alias: string;
-	hostName: string | null;
-	serverVersion: string | null;
-	agentsAvailable: string[] | null;
-	lastSeen: number | null;
-	/** Present in ~/.ssh/config right now (vs a saved record since removed from it). */
-	inSshConfig: boolean;
-	/** We've recorded at least one successful connection (has a saved record). */
-	known: boolean;
 }
 
 /** What a successful connection learned about a host, to cache for offline render. */

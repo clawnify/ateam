@@ -1,6 +1,6 @@
 import { clipboard, dialog, ipcMain, nativeImage } from "electron";
 import { CH } from "@ateam/protocol";
-import type { Dispatcher } from "@ateam/server";
+import type { Router } from "./backend";
 
 /**
  * Load an image file and put it on the clipboard as a real bitmap, so a
@@ -21,16 +21,18 @@ function stageImageOnClipboard(path: string | null): boolean {
 const SEND_CHANNELS = new Set<string>([CH.ptyWrite, CH.ptyResize]);
 
 /**
- * Bridge Electron IPC to the transport-agnostic engine dispatcher. Every engine
- * method flows through `dispatcher.handle`; only the handful of handlers that
- * need Electron's native dialog/clipboard live here directly.
+ * Bridge Electron IPC to the active engine backend. Every engine method flows
+ * through `router.handle` — which routes to whichever backend (local in-process,
+ * or a remote host over SSH) is currently active, so channels are registered once
+ * and never re-bound on a connection swap. Only the handful of handlers that need
+ * Electron's native dialog/clipboard live here directly.
  */
-export function registerIpc(dispatcher: Dispatcher): void {
-	for (const method of dispatcher.methods) {
+export function registerIpc(router: Router): void {
+	for (const method of router.methods) {
 		if (SEND_CHANNELS.has(method)) {
-			ipcMain.on(method, (_e, ...args: unknown[]) => void dispatcher.handle(method, args));
+			ipcMain.on(method, (_e, ...args: unknown[]) => void router.handle(method, args));
 		} else {
-			ipcMain.handle(method, (_e, ...args: unknown[]) => dispatcher.handle(method, args));
+			ipcMain.handle(method, (_e, ...args: unknown[]) => router.handle(method, args));
 		}
 	}
 

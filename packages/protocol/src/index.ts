@@ -202,6 +202,26 @@ export interface DirListingDTO {
 	entries: DirEntryDTO[];
 }
 
+/**
+ * A row in the connections list: an ssh_config alias enriched with Ateam's own
+ * last-known metadata for that host. Rendered by the client's connection picker;
+ * produced by `@ateam/server`'s `listConnections`. A boundary DTO (server writes,
+ * renderer reads), so it lives here rather than in the server package — the
+ * ssh_config parse-shape (`SshHost`) and write-shape (`ConnectionRecord`) stay
+ * server-internal.
+ */
+export interface ConnectionDTO {
+	alias: string;
+	hostName: string | null;
+	serverVersion: string | null;
+	agentsAvailable: string[] | null;
+	lastSeen: number | null;
+	/** Present in ~/.ssh/config right now (vs a saved record since removed from it). */
+	inSshConfig: boolean;
+	/** We've recorded at least one successful connection (has a saved record). */
+	known: boolean;
+}
+
 // A worktree advised for cleanup, shown in the cleanup dialog with its terminal.
 export interface CleanupCandidate {
 	id: string;

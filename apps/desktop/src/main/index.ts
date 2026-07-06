@@ -3,9 +3,9 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, dialog, Menu } from "electron";
 import { autoUpdater } from "electron-updater";
-import { CH } from "@ateam/protocol";
-import { createDispatcher, createEngine, type Engine } from "@ateam/server";
+import { createEngine, type Engine } from "@ateam/server";
 import { APP_NAME } from "./app-name";
+import { createHost, registerHostIpc } from "./host";
 import { registerIpc } from "./ipc";
 
 let win: BrowserWindow | null = null;
@@ -308,12 +308,12 @@ app.whenReady().then(async () => {
 		daemonPath: join(__dirname, "daemon.js"),
 		execPath: process.execPath,
 	});
-	// Forward the engine's transport-agnostic events to the renderer.
-	engine.on("taskUpdated", (task) => win?.webContents.send(CH.evtTaskUpdated, task));
-	engine.on("loopsUpdated", (loops) => win?.webContents.send(CH.evtLoopsUpdated, loops));
-	engine.on("ptyData", (e) => win?.webContents.send(CH.evtPtyData, e));
-	engine.on("ptyExit", (e) => win?.webContents.send(CH.evtPtyExit, e));
-	registerIpc(createDispatcher(engine));
+	// The local engine is the default backend; the host swaps in a remote one (over
+	// SSH) on connect and re-points the IPC bridge + event forwarding at it. Binding
+	// the engine's events to the renderer is the host's job now (see createHost).
+	const host = createHost({ localEngine: engine, getWin: () => win });
+	registerIpc(host.router);
+	registerHostIpc(host);
 
 	if (SMOKE) {
 		// Headless boot check: prove the engine inits (db, hook server, notify

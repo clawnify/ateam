@@ -10,6 +10,7 @@
     "src/main/**/*.ts",
     "src/daemon/**/*.ts",
     "src/preload/**/*.ts",
+    "src/shared/**/*.ts",
     "electron.vite.config.ts"
   ]
 }

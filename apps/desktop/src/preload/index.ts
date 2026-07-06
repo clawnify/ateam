@@ -9,6 +9,7 @@ import {
 	type TaskDTO,
 } from "@ateam/protocol";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { type AteamHost, HOST_CH, type HostStatus } from "../shared/host";
 
 const api: AteamApi = {
 	projects: {
@@ -90,3 +91,18 @@ const api: AteamApi = {
 };
 
 contextBridge.exposeInMainWorld("ateam", api);
+
+// The connection-control surface (which engine drives the app) — separate from
+// window.ateam (the engine itself). See apps/desktop/src/shared/host.ts.
+const host: AteamHost = {
+	list: () => ipcRenderer.invoke(HOST_CH.list),
+	connect: (alias) => ipcRenderer.invoke(HOST_CH.connect, alias),
+	current: () => ipcRenderer.invoke(HOST_CH.current),
+	onChanged: (cb: (status: HostStatus) => void) => {
+		const handler = (_: unknown, status: HostStatus) => cb(status);
+		ipcRenderer.on(HOST_CH.evtChanged, handler);
+		return () => ipcRenderer.off(HOST_CH.evtChanged, handler);
+	},
+};
+
+contextBridge.exposeInMainWorld("ateamHost", host);
