@@ -1,6 +1,9 @@
-// Standalone PTY daemon. Runs as a DETACHED process (the Electron binary
-// launched with ELECTRON_RUN_AS_NODE=1 so node-pty's native module matches the
-// arm64 ABI) and outlives the app, so terminals/agents survive an app restart.
+// Standalone PTY daemon — part of @ateam/server's PTY subsystem (alongside
+// pty-client.ts). Runs as a DETACHED process that outlives its parent, so
+// terminals/agents survive a restart. The desktop bundles it and runs it via the
+// Electron binary as node (ELECTRON_RUN_AS_NODE=1, matching node-pty's ABI); the
+// server dist runs the same file under plain Node on the box. Host-agnostic: it
+// speaks only node + node-pty + a headless xterm, never Electron.
 //
 // Protocol: newline-delimited JSON over a unix socket. Terminal bytes are
 // base64-encoded in the `data` field. Clients connect, (re)attach by listing
@@ -17,16 +20,14 @@
 // retained window every new view attaches with paste broken (newlines arrive as
 // Enters instead of one bracketed block).
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
-import net from "node:net";
-import { connect as netConnect } from "node:net";
+import net, { connect as netConnect } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { Terminal } from "@xterm/headless";
 import * as pty from "node-pty";
 
-const SOCK =
-	process.env.ATEAM_PTY_SOCK || join(homedir(), ".ateam", "pty-daemon.sock");
+const SOCK = process.env.ATEAM_PTY_SOCK || join(homedir(), ".ateam", "pty-daemon.sock");
 const SCROLLBACK = 5000; // lines of scrollback the emulator (and snapshot) keeps
 const IDLE_EXIT_MS = 10 * 60 * 1000; // exit if no sessions for 10 min
 
@@ -129,9 +130,7 @@ function spawnSession(m: {
 function handleMessage(sock: net.Socket, m: Record<string, unknown>): void {
 	switch (m.t) {
 		case "spawn":
-			spawnSession(
-				m as unknown as Parameters<typeof spawnSession>[0],
-			);
+			spawnSession(m as unknown as Parameters<typeof spawnSession>[0]);
 			break;
 		case "write":
 			sessions.get(m.terminalId as string)?.proc.write(unb64(m.data as string));
@@ -167,9 +166,7 @@ function handleMessage(sock: net.Socket, m: Record<string, unknown>): void {
 		case "snapshot": {
 			const s = sessions.get(m.terminalId as string);
 			const reply = (data: string, seq: number) =>
-				sock.write(
-					`${JSON.stringify({ t: "snapshot", id: m.id, data: b64(data), seq })}\n`,
-				);
+				sock.write(`${JSON.stringify({ t: "snapshot", id: m.id, data: b64(data), seq })}\n`);
 			if (!s) {
 				reply("", 0);
 				break;
