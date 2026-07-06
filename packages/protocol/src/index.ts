@@ -340,3 +340,6 @@ export interface AteamApi {
 
 // Transport-agnostic RPC framing + client (shared by every transport).
 export * from "./rpc";
+// Client-side binding of the AteamApi surface over an RpcClient.
+export { buildAteamApi } from "./client-api";
+export type { NativeClientApi } from "./client-api";
