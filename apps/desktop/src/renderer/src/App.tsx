@@ -229,6 +229,9 @@ export function App() {
 		return null;
 	};
 
+	// The project a detached window is pinned to (for its static header).
+	const boundProject = boundProjectId ? (projects.find((p) => p.id === boundProjectId) ?? null) : null;
+
 	const activeTasks = activeProjectId ? (tasksByProject[activeProjectId] ?? []) : [];
 	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
 	// "Active" tasks for the sidebar list = everything not yet merged/done.
@@ -453,24 +456,38 @@ export function App() {
 					</>
 				) : (
 					<>
-						{/* PROJECTS accordion */}
-						<div className="section-head">
-							<button
-								type="button"
-								className="section-toggle"
-								onClick={() => setProjectsCollapsed((c) => !c)}
-							>
-								{projectsCollapsed ? (
-									<ChevronRight size={14} strokeWidth={2} />
-								) : (
-									<ChevronDown size={14} strokeWidth={2} />
-								)}
-								<span>Projects</span>
-							</button>
-							<IconButton icon={FolderPlus} label="Add project" onClick={addProject} />
-						</div>
-						{!projectsCollapsed &&
-							projects.map((p) => {
+						{/* A detached window IS one project — show a static header, not a
+						    switchable one-item list. The dashboard keeps the full accordion. */}
+						{boundProjectId ? (
+							<div className="proj-header">
+								<span
+									className="dot"
+									style={boundProject?.color ? { background: boundProject.color } : undefined}
+								/>
+								<span className="proj-name" title={boundProject?.repoPath}>
+									{boundProject?.name ?? "…"}
+								</span>
+							</div>
+						) : (
+							<>
+								{/* PROJECTS accordion */}
+								<div className="section-head">
+									<button
+										type="button"
+										className="section-toggle"
+										onClick={() => setProjectsCollapsed((c) => !c)}
+									>
+										{projectsCollapsed ? (
+											<ChevronRight size={14} strokeWidth={2} />
+										) : (
+											<ChevronDown size={14} strokeWidth={2} />
+										)}
+										<span>Projects</span>
+									</button>
+									<IconButton icon={FolderPlus} label="Add project" onClick={addProject} />
+								</div>
+								{!projectsCollapsed &&
+									projects.map((p) => {
 								const alert = projectAlert(p.id);
 								return (
 									// Double-click (or the hover button) detaches the project into its
@@ -479,9 +496,7 @@ export function App() {
 									<div
 										key={p.id}
 										className="proj-row"
-										onDoubleClick={
-											boundProjectId ? undefined : () => window.ateam.window.openProject(p.id)
-										}
+										onDoubleClick={() => window.ateam.window.openProject(p.id)}
 									>
 										<button
 											type="button"
@@ -496,19 +511,19 @@ export function App() {
 												{p.name}
 											</span>
 										</button>
-										{!boundProjectId && (
-											<span className="proj-open">
-												<IconButton
-													icon={ExternalLink}
-													label="Open in new window"
-													size={14}
-													onClick={() => window.ateam.window.openProject(p.id)}
-												/>
-											</span>
-										)}
+										<span className="proj-open">
+											<IconButton
+												icon={ExternalLink}
+												label="Open in new window"
+												size={14}
+												onClick={() => window.ateam.window.openProject(p.id)}
+											/>
+										</span>
 									</div>
 								);
 							})}
+							</>
+						)}
 
 						{/* TASKS accordion — active tasks of the selected project */}
 						<div className="section-head tasks-head">

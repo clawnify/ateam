@@ -255,6 +255,25 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* Detached-window identity header: the project this window is pinned to,
+   shown as a static title (not a switchable list). */
+.proj-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 14px 6px;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+}
+.proj-header .dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--text-dim);
+	flex: none;
+}
+
 /* Project row = the selectable button + a hover-revealed "open in new window"
    button overlaid at the right. */
 .proj-row {
