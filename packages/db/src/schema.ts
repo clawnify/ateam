@@ -227,15 +227,13 @@ export const boardChanges = sqliteTable(
 );
 
 /**
- * Remote hosts the client can drive an engine on, keyed by an alias (the natural
- * PK). We persist Ateam's own metadata — the last handshake version, which agents
- * the box has, and when it was last reached. `transport` records how the user
- * chose to connect: "ssh" (OpenSSH owns hostname/port/keys — resolved from
- * ~/.ssh/config at connect time, so `endpoint` stays null) or "tcp" (a direct
- * socket to the daemon's TCP listener, typically over Tailscale — there's no
- * ssh_config to own it, so we store the `endpoint` host:port here). Doubles as the
- * offline cache: the connections list renders every known host from here without
- * opening N live connections. Client-only state — the engine never reads this table.
+ * Remote hosts the client can drive an engine on, keyed by their `~/.ssh/config`
+ * alias (unique there, so it's the natural PK). We persist ONLY Ateam's own
+ * metadata — the last handshake version, which agents the box has, and when it
+ * was last reached — never connection details (hostname/port/keys/jumphosts stay
+ * OpenSSH's job). This doubles as the offline cache: the connections list renders
+ * every known host from here without opening N live SSH connections. Client-only
+ * state — the engine never reads this table.
  */
 export const hosts = sqliteTable(
 	"hosts",
@@ -245,10 +243,6 @@ export const hosts = sqliteTable(
 		agentsAvailable: text("agents_available", { mode: "json" }).$type<string[]>(),
 		lastSeen: integer("last_seen"),
 		createdAt: epochMs("created_at"),
-		/** How to connect: "ssh" (default) or "tcp". Null in old rows → treat as ssh. */
-		transport: text("transport").$type<"ssh" | "tcp">(),
-		/** "host:port" for a tcp connection (e.g. the Tailscale IP); null for ssh. */
-		endpoint: text("endpoint"),
 	},
 	(t) => [index("hosts_last_seen_idx").on(t.lastSeen)],
 );
