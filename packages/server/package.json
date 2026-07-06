@@ -8,6 +8,7 @@
   "exports": { ".": "./src/index.ts" },
   "bin": { "ateam": "./src/cli.ts" },
   "scripts": {
+    "build": "bun run scripts/build.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
