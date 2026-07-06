@@ -87,6 +87,21 @@ const api: AteamApi = {
 			ipcRenderer.on(CH.evtTaskUpdated, handler);
 			return () => ipcRenderer.off(CH.evtTaskUpdated, handler);
 		},
+		onTaskRemoved: (cb: (taskId: string) => void) => {
+			const handler = (_: unknown, taskId: string) => cb(taskId);
+			ipcRenderer.on(CH.evtTaskRemoved, handler);
+			return () => ipcRenderer.off(CH.evtTaskRemoved, handler);
+		},
+	},
+	window: {
+		openProject: (projectId) => ipcRenderer.invoke(CH.windowOpenProject, projectId),
+		// The main process stamps ?projectId=<id> onto a detached window's URL. The
+		// preload runs in the renderer world, so `location` exists at runtime; this
+		// project is node-typed (no DOM lib), so reach it through globalThis.
+		boundProjectId: () =>
+			new URLSearchParams(
+				(globalThis as { location?: { search: string } }).location?.search ?? "",
+			).get("projectId"),
 	},
 };
 

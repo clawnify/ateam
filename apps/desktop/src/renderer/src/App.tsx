@@ -10,6 +10,7 @@ import {
 	ChevronRight,
 	Columns2,
 	Database,
+	ExternalLink,
 	FilePen,
 	FlaskConical,
 	FolderPlus,
@@ -108,6 +109,9 @@ const STATUS_RANK: Record<KanbanColumn, number> = {
 const springy = { type: "spring", stiffness: 550, damping: 42 } as const;
 
 export function App() {
+	// Non-null in a detached window: this window is pinned to one project and
+	// hides the project switcher; null in the main multi-project dashboard.
+	const boundProjectId = useMemo(() => window.ateam.window.boundProjectId(), []);
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
 	const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
 	const [tasksByProject, setTasksByProject] = useState<Record<string, TaskDTO[]>>({});
@@ -157,23 +161,44 @@ export function App() {
 
 	const loadProjects = useCallback(async () => {
 		const list = await window.ateam.projects.list();
-		setProjects(list);
-		setActiveProjectId((cur) => cur ?? list[0]?.id ?? null);
-	}, []);
+		// A detached window shows only its pinned project.
+		const scoped = boundProjectId ? list.filter((p) => p.id === boundProjectId) : list;
+		setProjects(scoped);
+		setActiveProjectId((cur) => boundProjectId ?? cur ?? scoped[0]?.id ?? null);
+	}, [boundProjectId]);
 
 	useEffect(() => {
 		void loadProjects();
 		void window.ateam.agents.list().then(setAgents);
-		const off = window.ateam.events.onTaskUpdated((updated) => {
+		// Upsert: replace a known task, or add one created in another window (so a
+		// project open in two windows stays consistent). Only for projects this
+		// window tracks — a detached window ignores other projects' tasks.
+		const offUpdated = window.ateam.events.onTaskUpdated((updated) => {
+			setTasksByProject((prev) => {
+				const list = prev[updated.projectId];
+				if (!list) return prev;
+				const nextList = list.some((t) => t.id === updated.id)
+					? list.map((t) => (t.id === updated.id ? updated : t))
+					: [...list, updated];
+				return { ...prev, [updated.projectId]: nextList };
+			});
+		});
+		// Removal (delete/cleanup) from any window — drop the card everywhere and
+		// clear the selection if it was pointing at the now-gone task.
+		const offRemoved = window.ateam.events.onTaskRemoved((taskId) => {
 			setTasksByProject((prev) => {
 				const next: Record<string, TaskDTO[]> = {};
 				for (const [pid, list] of Object.entries(prev)) {
-					next[pid] = list.map((t) => (t.id === updated.id ? updated : t));
+					next[pid] = list.filter((t) => t.id !== taskId);
 				}
 				return next;
 			});
+			setSelectedTaskId((cur) => (cur === taskId ? null : cur));
 		});
-		return off;
+		return () => {
+			offUpdated();
+			offRemoved();
+		};
 	}, [loadProjects]);
 
 	// Load the selected project's tasks whenever it changes.
@@ -187,6 +212,14 @@ export function App() {
 		for (const p of projects) void loadTasks(p.id);
 	}, [projects, loadTasks]);
 
+	// A detached window takes its pinned project's name as the OS window title, so
+	// the windows are tellable apart across desktops/Spaces.
+	useEffect(() => {
+		if (!boundProjectId) return;
+		const p = projects.find((x) => x.id === boundProjectId);
+		if (p) document.title = p.name;
+	}, [boundProjectId, projects]);
+
 	// Highest-priority alert among a non-selected project's tasks.
 	const projectAlert = (pid: string): "needs_attention" | "review" | null => {
 		if (pid === activeProjectId) return null;
@@ -195,6 +228,9 @@ export function App() {
 		if (list.some((t) => t.column === "review")) return "review";
 		return null;
 	};
+
+	// The project a detached window is pinned to (for its static header).
+	const boundProject = boundProjectId ? (projects.find((p) => p.id === boundProjectId) ?? null) : null;
 
 	const activeTasks = activeProjectId ? (tasksByProject[activeProjectId] ?? []) : [];
 	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
@@ -274,6 +310,21 @@ export function App() {
 	};
 	const selectFromBoard = (id: string) => {
 		setSelectedTaskId(id);
+		setPanelMode("side");
+	};
+	// Expanding a Mission Control tile opens that exact terminal full-width.
+	// `view` stays "mission", so collapsing or closing the panel lands back on
+	// the grid — while the same panel opened from the Board collapses to a
+	// side panel there.
+	const openFromMission = (task: TaskDTO, terminalId: string) => {
+		setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
+		setSelectedTaskId(task.id);
+		setPanelMode("full");
+	};
+	// Collapsing the full panel inside Mission Control means "back to the
+	// grid", not "shrink to a side panel" — there is no board to sit beside.
+	const collapseToMission = () => {
+		setSelectedTaskId(null);
 		setPanelMode("side");
 	};
 
@@ -362,8 +413,11 @@ export function App() {
 									type="button"
 									key={p.id}
 									className={`rail-tile ${p.id === activeProjectId ? "active" : ""}`}
-									title={p.name}
+									title={boundProjectId ? p.name : `${p.name} — double-click to open in new window`}
 									onClick={() => selectProject(p.id)}
+									onDoubleClick={
+										boundProjectId ? undefined : () => window.ateam.window.openProject(p.id)
+									}
 								>
 									{p.name.charAt(0).toUpperCase()}
 									{alert && <span className={`corner pulse ${alert}`} />}
@@ -402,42 +456,74 @@ export function App() {
 					</>
 				) : (
 					<>
-						{/* PROJECTS accordion */}
-						<div className="section-head">
-							<button
-								type="button"
-								className="section-toggle"
-								onClick={() => setProjectsCollapsed((c) => !c)}
-							>
-								{projectsCollapsed ? (
-									<ChevronRight size={14} strokeWidth={2} />
-								) : (
-									<ChevronDown size={14} strokeWidth={2} />
-								)}
-								<span>Projects</span>
-							</button>
-							<IconButton icon={FolderPlus} label="Add project" onClick={addProject} />
-						</div>
-						{!projectsCollapsed &&
-							projects.map((p) => {
-								const alert = projectAlert(p.id);
-								return (
+						{/* A detached window IS one project — show a static header, not a
+						    switchable one-item list. The dashboard keeps the full accordion. */}
+						{boundProjectId ? (
+							<div className="proj-header">
+								<span
+									className="dot"
+									style={boundProject?.color ? { background: boundProject.color } : undefined}
+								/>
+								<span className="proj-name" title={boundProject?.repoPath}>
+									{boundProject?.name ?? "…"}
+								</span>
+							</div>
+						) : (
+							<>
+								{/* PROJECTS accordion */}
+								<div className="section-head">
 									<button
 										type="button"
-										key={p.id}
-										className={`proj ${p.id === activeProjectId ? "active" : ""}`}
-										onClick={() => selectProject(p.id)}
+										className="section-toggle"
+										onClick={() => setProjectsCollapsed((c) => !c)}
 									>
-										<span
-											className={`dot ${alert ? `alert ${alert}` : ""}`}
-											style={!alert && p.color ? { background: p.color } : undefined}
-										/>
-										<span className="proj-name" title={p.repoPath}>
-											{p.name}
-										</span>
+										{projectsCollapsed ? (
+											<ChevronRight size={14} strokeWidth={2} />
+										) : (
+											<ChevronDown size={14} strokeWidth={2} />
+										)}
+										<span>Projects</span>
 									</button>
+									<IconButton icon={FolderPlus} label="Add project" onClick={addProject} />
+								</div>
+								{!projectsCollapsed &&
+									projects.map((p) => {
+								const alert = projectAlert(p.id);
+								return (
+									// Double-click (or the hover button) detaches the project into its
+									// own window. Row and open-button are siblings so the button's
+									// click can't nest inside the row button.
+									<div
+										key={p.id}
+										className="proj-row"
+										onDoubleClick={() => window.ateam.window.openProject(p.id)}
+									>
+										<button
+											type="button"
+											className={`proj ${p.id === activeProjectId ? "active" : ""}`}
+											onClick={() => selectProject(p.id)}
+										>
+											<span
+												className={`dot ${alert ? `alert ${alert}` : ""}`}
+												style={!alert && p.color ? { background: p.color } : undefined}
+											/>
+											<span className="proj-name" title={p.repoPath}>
+												{p.name}
+											</span>
+										</button>
+										<span className="proj-open">
+											<IconButton
+												icon={ExternalLink}
+												label="Open in new window"
+												size={14}
+												onClick={() => window.ateam.window.openProject(p.id)}
+											/>
+										</span>
+									</div>
 								);
 							})}
+							</>
+						)}
 
 						{/* TASKS accordion — active tasks of the selected project */}
 						<div className="section-head tasks-head">
@@ -539,7 +625,12 @@ export function App() {
 						</div>
 						<div
 							className={`tab ${view === "mission" ? "active" : ""}`}
-							onClick={() => setView("mission")}
+							onClick={() => {
+								// Same as Board: a full-width task covers this view, so
+								// clicking the tab means "show me Mission Control".
+								if (panelMode === "full") setSelectedTaskId(null);
+								setView("mission");
+							}}
 						>
 							Mission Control
 						</div>
@@ -551,7 +642,7 @@ export function App() {
 						</div>
 					</div>
 					<div className="spacer" />
-					{view === "mission" && (
+					{view === "mission" && !(selectedTask && panelMode === "full") && (
 						<div className="mclayout" role="group" aria-label="Layout">
 							{(
 								[
@@ -614,7 +705,26 @@ export function App() {
 							)}
 						</>
 					) : view === "mission" ? (
-						<MissionControl tasks={activeTasks} layout={mcLayout} />
+						selectedTask && panelMode === "full" ? (
+							<TaskPanel
+								task={selectedTask}
+								agents={agents}
+								mode={panelMode}
+								onSetMode={(m) => (m === "side" ? collapseToMission() : setPanelMode(m))}
+								collapseLabel="Back to Mission Control"
+								terminalId={termByTask[selectedTask.id] ?? null}
+								setTerminal={(tid) => setTermByTask((m) => ({ ...m, [selectedTask.id]: tid }))}
+								run={run}
+								ask={ask}
+								confirm={confirm}
+								reload={() => activeProjectId && loadTasks(activeProjectId)}
+								onClose={(taskId) =>
+									setSelectedTaskId((cur) => (taskId == null || cur === taskId ? null : cur))
+								}
+							/>
+						) : (
+							<MissionControl tasks={activeTasks} layout={mcLayout} onExpand={openFromMission} />
+						)
 					) : (
 						<LoopsPanel />
 					)}
@@ -738,6 +848,7 @@ function TaskPanel({
 	agents,
 	mode,
 	onSetMode,
+	collapseLabel = "Show beside the board",
 	terminalId,
 	setTerminal,
 	run,
@@ -750,6 +861,8 @@ function TaskPanel({
 	agents: AgentDTO[];
 	mode: "side" | "full";
 	onSetMode: (m: "side" | "full") => void;
+	/** Tooltip for the minimize button — where collapsing takes you. */
+	collapseLabel?: string;
 	terminalId: string | null;
 	setTerminal: (tid: string) => void;
 	run: (fn: () => Promise<void>) => Promise<void>;
@@ -863,7 +976,7 @@ function TaskPanel({
 						{mode === "full" ? (
 							<IconButton
 								icon={Minimize2}
-								label="Show beside the board"
+								label={collapseLabel}
 								onClick={() => setModeAndFocusTerm("side")}
 							/>
 						) : (
@@ -1063,7 +1176,15 @@ function TaskPanel({
 	);
 }
 
-function MissionControl({ tasks, layout }: { tasks: TaskDTO[]; layout: McLayout }) {
+function MissionControl({
+	tasks,
+	layout,
+	onExpand,
+}: {
+	tasks: TaskDTO[];
+	layout: McLayout;
+	onExpand: (task: TaskDTO, terminalId: string) => void;
+}) {
 	const [tiles, setTiles] = useState<{ task: TaskDTO; terminalId: string }[]>([]);
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
@@ -1105,9 +1226,15 @@ function MissionControl({ tasks, layout }: { tasks: TaskDTO[]; layout: McLayout 
 					<div className="bar">
 						<span>{task.name}</span>
 						<span className="muted">· {task.branch}</span>
-						{task.agentStatus && (
-							<span className={`tstatus ${task.agentStatus}`} style={{ marginLeft: "auto" }} />
-						)}
+						<span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+							{task.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
+							<IconButton
+								icon={Maximize2}
+								label="Expand to full width"
+								size={13}
+								onClick={() => onExpand(task, terminalId)}
+							/>
+						</span>
 					</div>
 					<TerminalView terminalId={terminalId} />
 				</div>

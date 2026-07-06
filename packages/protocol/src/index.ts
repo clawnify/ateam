@@ -240,6 +240,7 @@ export const CH = {
 	projectsRegister: "projects:register",
 	projectsList: "projects:list",
 	projectsRemove: "projects:remove",
+	windowOpenProject: "window:openProject",
 	tasksList: "tasks:list",
 	tasksCreate: "tasks:create",
 	tasksRemove: "tasks:remove",
@@ -278,6 +279,7 @@ export const CH = {
 	evtPtyData: "evt:pty:data",
 	evtPtyExit: "evt:pty:exit",
 	evtTaskUpdated: "evt:task:updated",
+	evtTaskRemoved: "evt:task:removed",
 	evtLoopsUpdated: "evt:loops:updated",
 } as const;
 
@@ -379,7 +381,23 @@ export interface AteamApi {
 		onExit(cb: (e: PtyExitEvent) => void): () => void;
 	};
 	events: {
+		/** A task was created or changed — upsert it (add if new, replace if known). */
 		onTaskUpdated(cb: (task: TaskDTO) => void): () => void;
+		/** A task was removed (delete or cleanup) — drop it from every window. */
+		onTaskRemoved(cb: (taskId: string) => void): () => void;
+	};
+	window: {
+		/**
+		 * Detach a project into its own OS window (to spread projects across
+		 * desktops/Spaces). If a window is already bound to this project it's
+		 * focused instead of duplicated.
+		 */
+		openProject(projectId: string): Promise<void>;
+		/**
+		 * The project this window is pinned to, or null for the main multi-project
+		 * dashboard. Read once at boot from the window's launch URL.
+		 */
+		boundProjectId(): string | null;
 	};
 	utils: {
 		/**

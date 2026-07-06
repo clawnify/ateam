@@ -6,8 +6,8 @@
 import type { RpcClient } from "@ateam/protocol";
 import { createDispatcher, type Engine } from "@ateam/server";
 
-/** The four engine push-events forwarded to the renderer. */
-export type BackendEvent = "taskUpdated" | "loopsUpdated" | "ptyData" | "ptyExit";
+/** The engine push-events forwarded to the renderer. */
+export type BackendEvent = "taskUpdated" | "taskRemoved" | "loopsUpdated" | "ptyData" | "ptyExit";
 
 export interface Backend {
 	readonly kind: "local" | "remote";

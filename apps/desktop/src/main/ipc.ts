@@ -20,14 +20,20 @@ function stageImageOnClipboard(path: string | null): boolean {
 // than `invoke` — they take no reply, so they bridge to ipcMain.on.
 const SEND_CHANNELS = new Set<string>([CH.ptyWrite, CH.ptyResize]);
 
+/** Desktop-native handlers that manage the OS, not the engine (windows, dialogs). */
+export interface NativeHandlers {
+	/** Detach a project into its own window (or focus its existing one). */
+	openProjectWindow: (projectId: string) => void;
+}
+
 /**
  * Bridge Electron IPC to the active engine backend. Every engine method flows
  * through `router.handle` — which routes to whichever backend (local in-process,
  * or a remote host over SSH) is currently active, so channels are registered once
- * and never re-bound on a connection swap. Only the handful of handlers that need
- * Electron's native dialog/clipboard live here directly.
+ * and never re-bound on a connection swap. Only the handful of handlers that touch
+ * the desktop OS itself (native dialog/clipboard, window management) live here.
  */
-export function registerIpc(router: Router): void {
+export function registerIpc(router: Router, native: NativeHandlers): void {
 	for (const method of router.methods) {
 		if (SEND_CHANNELS.has(method)) {
 			ipcMain.on(method, (_e, ...args: unknown[]) => void router.handle(method, args));
@@ -36,13 +42,19 @@ export function registerIpc(router: Router): void {
 		}
 	}
 
-	// ---- client-native handlers (need Electron dialog/clipboard) ----
+	// ---- client-native handlers (need the desktop OS, not the engine) ----
 	ipcMain.handle(CH.projectsPick, async () => {
 		const res = await dialog.showOpenDialog({
 			properties: ["openDirectory"],
 			title: "Select a git repository",
 		});
 		return res.canceled ? null : (res.filePaths[0] ?? null);
+	});
+
+	// Detach a project into its own OS window. Not an engine method — it drives
+	// BrowserWindows, which only the desktop host has.
+	ipcMain.handle(CH.windowOpenProject, async (_e, projectId: string) => {
+		native.openProjectWindow(projectId);
 	});
 
 	// Native file picker for the terminal toolbar's "+ → Files…" action; the

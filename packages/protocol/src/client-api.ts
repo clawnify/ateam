@@ -56,6 +56,10 @@ export interface NativeClientApi {
 	pickFiles(): Promise<string[]>;
 	stageClipboardImage(): Promise<boolean>;
 	stageImagePath(path: string): Promise<boolean>;
+	// Multi-window is a host-OS concern (an engine can't open the client's windows),
+	// so the window surface is client-native too. A single-window client stubs these.
+	openProject(projectId: string): Promise<void>;
+	boundProjectId(): string | null;
 }
 
 /** Build the full AteamApi over an RpcClient, delegating client-local bits to `native`. */
@@ -122,6 +126,11 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		},
 		events: {
 			onTaskUpdated: (cb) => rpc.on("taskUpdated", (p) => cb(p as TaskDTO)),
+			onTaskRemoved: (cb) => rpc.on("taskRemoved", (p) => cb(p as string)),
+		},
+		window: {
+			openProject: native.openProject,
+			boundProjectId: native.boundProjectId,
 		},
 		utils: {
 			pathForFile: native.pathForFile,

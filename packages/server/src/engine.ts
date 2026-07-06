@@ -44,6 +44,7 @@ export interface EngineOptions {
  *  `win.webContents.send(...)` calls. */
 interface EngineEventMap {
 	taskUpdated: [TaskDTO];
+	taskRemoved: [string];
 	loopsUpdated: [LoopDTO[]];
 	ptyData: [PtyDataEvent];
 	ptyExit: [PtyExitEvent];
@@ -54,6 +55,8 @@ export interface Engine {
 	on<K extends keyof EngineEventMap>(event: K, listener: (...args: EngineEventMap[K]) => void): () => void;
 	/** Re-read a task and emit taskUpdated (used across handlers + loops). */
 	sendTaskUpdated(taskId: string): void;
+	/** Emit taskRemoved so every client drops the deleted task's card. */
+	sendTaskRemoved(taskId: string): void;
 	/** Emit the current loop list. */
 	sendLoopsUpdated(): void;
 	/** Connect to (or launch) the detached PTY daemon and learn live sessions. */
@@ -264,6 +267,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			return () => emitter.off(event, listener as (...a: unknown[]) => void);
 		},
 		sendTaskUpdated,
+		sendTaskRemoved(taskId: string) {
+			emitter.emit("taskRemoved", taskId);
+		},
 		sendLoopsUpdated() {
 			emitter.emit("loopsUpdated", loopRunner.describe());
 		},

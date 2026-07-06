@@ -8,8 +8,22 @@ import { APP_NAME } from "./app-name";
 import { createHost, registerHostIpc } from "./host";
 import { registerIpc } from "./ipc";
 
-let win: BrowserWindow | null = null;
+// Every live window and the project it's pinned to: null = the main
+// multi-project dashboard, a projectId = a detached single-project window.
+// Multiplexing projects across windows lets you spread them over macOS Spaces.
+const windowProject = new Map<BrowserWindow, string | null>();
 let engine: Engine | null = null;
+
+/**
+ * Push an event to every live window. The renderers already filter by their own
+ * state (tasksByProject, mounted terminalIds), so a detached project window and
+ * the dashboard both stay consistent while each keeps only what it cares about.
+ */
+function broadcast(channel: string, ...args: unknown[]): void {
+	for (const w of windowProject.keys()) {
+		if (!w.isDestroyed()) w.webContents.send(channel, ...args);
+	}
+}
 
 const SMOKE = process.env.ATEAM_SMOKE === "1";
 
@@ -254,8 +268,9 @@ function buildAppMenu(): void {
 	Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function createWindow(): void {
-	win = new BrowserWindow({
+// A detached window is pinned to `projectId`; the dashboard passes undefined.
+function createWindow(projectId?: string): BrowserWindow {
+	const win = new BrowserWindow({
 		width: 1400,
 		height: 900,
 		minWidth: 900,
@@ -269,16 +284,35 @@ function createWindow(): void {
 			contextIsolation: true,
 		},
 	});
+	windowProject.set(win, projectId ?? null);
 
+	// Pin the project by stamping the renderer URL; the preload reads it back via
+	// window.boundProjectId(). A hash keeps loadFile working (no querystring file).
+	const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
 	if (process.env.ELECTRON_RENDERER_URL) {
-		void win.loadURL(process.env.ELECTRON_RENDERER_URL);
+		void win.loadURL(`${process.env.ELECTRON_RENDERER_URL}${query}`);
 	} else {
-		void win.loadFile(join(__dirname, "../renderer/index.html"));
+		void win.loadFile(join(__dirname, "../renderer/index.html"), {
+			search: query || undefined,
+		});
 	}
 
 	win.on("closed", () => {
-		win = null;
+		windowProject.delete(win);
 	});
+	return win;
+}
+
+// Detach a project into its own window, or focus the one already showing it.
+function openProjectWindow(projectId: string): void {
+	for (const [w, pid] of windowProject) {
+		if (pid === projectId && !w.isDestroyed()) {
+			if (w.isMinimized()) w.restore();
+			w.focus();
+			return;
+		}
+	}
+	createWindow(projectId);
 }
 
 app.whenReady().then(async () => {
@@ -310,9 +344,10 @@ app.whenReady().then(async () => {
 	});
 	// The local engine is the default backend; the host swaps in a remote one (over
 	// SSH) on connect and re-points the IPC bridge + event forwarding at it. Binding
-	// the engine's events to the renderer is the host's job now (see createHost).
-	const host = createHost({ localEngine: engine, getWin: () => win });
-	registerIpc(host.router);
+	// the engine's events to every window is the host's job now (see createHost);
+	// window management (detaching a project) is desktop-native, passed to registerIpc.
+	const host = createHost({ localEngine: engine, broadcast });
+	registerIpc(host.router, { openProjectWindow });
 	registerHostIpc(host);
 
 	if (SMOKE) {

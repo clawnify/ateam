@@ -255,6 +255,42 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* Detached-window identity header: the project this window is pinned to,
+   shown as a static title (not a switchable list). */
+.proj-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 14px 6px;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+}
+.proj-header .dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--text-dim);
+	flex: none;
+}
+
+/* Project row = the selectable button + a hover-revealed "open in new window"
+   button overlaid at the right. */
+.proj-row {
+	position: relative;
+}
+.proj-open {
+	position: absolute;
+	right: 6px;
+	top: 50%;
+	transform: translateY(-50%);
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+.proj-row:hover .proj-open,
+.proj-open:focus-within {
+	opacity: 1;
+}
 
 /* tasks accordion: VSCode-explorer-style file rows */
 .tasks-head {
@@ -579,6 +615,17 @@ input {
 	flex: none;
 }
 
+/* "Done" action: compact so it clears the toolbar's top/bottom edges,
+   pushed to the far right of the bar. */
+.term-done {
+	margin-left: auto;
+	padding: 1px 10px;
+	font-size: 11px;
+	font-weight: 500;
+	line-height: 18px;
+	border-radius: 5px;
+}
+
 /* +N -N stat on the right of the actions bar; opens the changes view */
 .diffstat {
 	display: inline-flex;
@@ -792,6 +839,11 @@ input {
 	font-size: 11px;
 	color: var(--text-dim);
 	flex: none;
+}
+/* The expand button must fit inside the 26px bar. */
+.mc .tile .bar .iconbtn {
+	width: 20px;
+	height: 20px;
 }
 
 .empty {

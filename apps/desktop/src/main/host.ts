@@ -3,7 +3,6 @@
 // forwarding of that backend's push-events to the renderer. Connecting to a remote
 // host opens an SSH transport, handshakes (gating the protocol version), caches the
 // result, and re-points the active backend + event stream at it.
-import type { BrowserWindow } from "electron";
 import { ipcMain } from "electron";
 import {
 	CH,
@@ -30,9 +29,10 @@ const REMOTE_ATTACH = "bash -lc 'exec ateam attach --stdio'";
 // error, and the UI must not wait forever. A live daemon replies in well under this.
 const CONNECT_TIMEOUT_MS = 20_000;
 
-/** The four push-events forwarded from the active backend to the renderer. */
+/** The push-events forwarded from the active backend to every window. */
 const FORWARDED: { event: BackendEvent; channel: string }[] = [
 	{ event: "taskUpdated", channel: CH.evtTaskUpdated },
+	{ event: "taskRemoved", channel: CH.evtTaskRemoved },
 	{ event: "loopsUpdated", channel: CH.evtLoopsUpdated },
 	{ event: "ptyData", channel: CH.evtPtyData },
 	{ event: "ptyExit", channel: CH.evtPtyExit },
@@ -50,11 +50,11 @@ export interface Host {
 export interface HostDeps {
 	/** The in-process engine — the default backend and the connections-registry db owner. */
 	localEngine: Engine;
-	/** The window to forward events to (may be null before it's created). */
-	getWin: () => BrowserWindow | null;
+	/** Push a channel + args to every live window (main-process multi-window fan-out). */
+	broadcast: (channel: string, ...args: unknown[]) => void;
 }
 
-export function createHost({ localEngine, getWin }: HostDeps): Host {
+export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	const db = localEngine.services.db;
 	const local = localBackend(localEngine);
 
@@ -66,7 +66,7 @@ export function createHost({ localEngine, getWin }: HostDeps): Host {
 
 	function bindEvents(backend: Backend): () => void {
 		const offs = FORWARDED.map(({ event, channel }) =>
-			backend.on(event, (payload) => getWin()?.webContents.send(channel, payload)),
+			backend.on(event, (payload) => broadcast(channel, payload)),
 		);
 		return () => {
 			for (const off of offs) off();
@@ -86,9 +86,7 @@ export function createHost({ localEngine, getWin }: HostDeps): Host {
 		active = next;
 		activeAlias = alias;
 		unbindEvents = bindEvents(next);
-		void statusOf(next, alias).then((status) =>
-			getWin()?.webContents.send(HOST_CH.evtChanged, status),
-		);
+		void statusOf(next, alias).then((status) => broadcast(HOST_CH.evtChanged, status));
 	}
 
 	async function connect(alias: string | null): Promise<HostStatus> {

@@ -207,6 +207,9 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				baseBranch: created.baseBranch,
 				worktreePath: created.worktreePath,
 			});
+			// Broadcast so any other window showing this project gains the new card
+			// (renderers upsert). The caller also gets it — an idempotent upsert.
+			engine.sendTaskUpdated(row.id);
 			return toTaskDTO(row);
 		},
 		[CH.tasksRemove]: async (input: { id: string; deleteBranch?: boolean; force?: boolean }) => {
@@ -224,6 +227,8 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				force: input.force,
 			});
 			repo.deleteTask(db, task.id);
+			// Drop the card from every window (not just the caller's).
+			engine.sendTaskRemoved(task.id);
 		},
 		[CH.tasksSetColumn]: async (id: string, column: KanbanColumn) => {
 			const row = repo.updateTask(db, id, { column });
@@ -300,6 +305,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 						force: false,
 					});
 					repo.deleteTask(db, task.id);
+					engine.sendTaskRemoved(task.id);
 					removed.push({ id: task.id, name: task.name, branch: task.branch });
 				} catch (err) {
 					kept.push({ task, reason: errorMessage(err) });
