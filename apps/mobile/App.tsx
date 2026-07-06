@@ -3,9 +3,12 @@
 // structural signature (labeled eyebrow zones · chips for facts vs tinted badges
 // for signals · monochrome chrome, color reserved for status · engineered numbers
 // · borders not shadows · no emoji) — NOT its brand theme (coral / light canvas).
-// Preview scope: mock data. Transport is always SSH; the host shown is the box's
-// Tailscale IP. Live wiring (buildAteamApi over an SSH ClientTransport) is next.
-import { ScrollView, StatusBar, StyleSheet, Text, useColorScheme, View } from "react-native";
+// Connection model = ALWAYS SSH: a host is Label · IP/Hostname · Port · Username ·
+// Key (Termius's model); the IP is just what you point at the box's Tailscale
+// address. Preview scope: mock data; live SSH wiring (buildAteamApi over a
+// native-SSH ClientTransport) is next.
+import { useState } from "react";
+import { Pressable, ScrollView, StatusBar, StyleSheet, Text, useColorScheme, View } from "react-native";
 
 const C = {
 	bg: "#0b0d10",
@@ -21,7 +24,6 @@ const C = {
 	green: "#67cd8b",
 };
 
-// Status tints (color over a low-opacity wash of itself — the dark-mode badge rule).
 const TINT: Record<string, string> = {
 	[C.amber]: "rgba(230,169,75,0.14)",
 	[C.teal]: "rgba(53,209,192,0.14)",
@@ -49,7 +51,6 @@ const TASKS: Task[] = [
 	{ name: "Remote fs picker", column: "merged", agent: "claude", branch: "feat/fs-listdir", note: "merged · PR #45" },
 ];
 
-// Fact → chip: neutral, bordered, sunken fill. Never colored.
 function Chip({ children }: { children: string }) {
 	return (
 		<View style={styles.chip}>
@@ -60,7 +61,6 @@ function Chip({ children }: { children: string }) {
 	);
 }
 
-// Signal → badge: tinted wash + colored text, pill radius.
 function Badge({ children, tint }: { children: string; tint: string }) {
 	return (
 		<View style={[styles.badge, { backgroundColor: TINT[tint] ?? C.sunken }]}>
@@ -72,7 +72,6 @@ function Badge({ children, tint }: { children: string; tint: string }) {
 }
 
 function AgentTag({ agent }: { agent: string }) {
-	// Identity, not status — monochrome, so color stays reserved for signals.
 	return (
 		<View style={styles.agentTag}>
 			<Text style={styles.agentInitial}>{agent[0]?.toUpperCase()}</Text>
@@ -97,14 +96,83 @@ function TaskCard({ task, tint }: { task: Task; tint: string }) {
 	);
 }
 
-export default function App() {
-	useColorScheme(); // reserved: theme-aware later
+// ── Connection screen — one SSH target, Termius-modeled (no transport toggle) ──
 
+function FieldRow({
+	label,
+	value,
+	keyChip,
+	last,
+}: {
+	label: string;
+	value: string;
+	keyChip?: boolean;
+	last?: boolean;
+}) {
+	return (
+		<View style={[styles.fieldRow, !last && styles.fieldDivider]}>
+			<Text style={styles.fieldLabel}>{label}</Text>
+			{keyChip ? (
+				<View style={styles.keyChip}>
+					<Text style={styles.keyChipText}>{value}</Text>
+				</View>
+			) : (
+				<Text style={styles.fieldValue}>{value}</Text>
+			)}
+		</View>
+	);
+}
+
+function ConnectionScreen({ onConnect }: { onConnect: () => void }) {
 	return (
 		<View style={styles.root}>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
+			<View style={styles.navBar}>
+				<View style={styles.monogram}>
+					<Text style={styles.monogramText}>A</Text>
+				</View>
+				<Text style={styles.navTitle}>New connection</Text>
+				<View style={styles.spacer} />
+				<Pressable style={styles.connectBtn} onPress={onConnect} hitSlop={6}>
+					<Text style={styles.connectBtnText}>Connect</Text>
+				</Pressable>
+			</View>
 
-			{/* Toolbar */}
+			<ScrollView contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
+				<View style={styles.eyebrowRow}>
+					<View style={[styles.tick, { backgroundColor: C.teal }]} />
+					<Text style={styles.eyebrow}>Host</Text>
+				</View>
+				<View style={styles.formCard}>
+					<FieldRow label="Label" value="hetzner-devbox" />
+					<FieldRow label="IP or Hostname" value="100.72.63.61" />
+					<FieldRow label="Port" value="22" last />
+				</View>
+
+				<View style={[styles.eyebrowRow, { marginTop: 22 }]}>
+					<View style={[styles.tick, { backgroundColor: C.teal }]} />
+					<Text style={styles.eyebrow}>Credentials</Text>
+				</View>
+				<View style={styles.formCard}>
+					<FieldRow label="Username" value="pallaoro" />
+					<FieldRow label="SSH Key" value="ED25519" keyChip last />
+				</View>
+
+				<Text style={styles.formNote}>
+					Always SSH. The IP is the box's Tailscale address — same user, same key. Tailscale just
+					changes the address you connect to.
+				</Text>
+			</ScrollView>
+		</View>
+	);
+}
+
+// ── Board screen ──
+
+function BoardScreen({ onOpenConnection }: { onOpenConnection: () => void }) {
+	return (
+		<View style={styles.root}>
+			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
 			<View style={styles.header}>
 				<View style={styles.brandRow}>
 					<View style={styles.monogram}>
@@ -112,18 +180,16 @@ export default function App() {
 					</View>
 					<Text style={styles.brand}>Ateam</Text>
 					<View style={styles.spacer} />
-					<View style={styles.connPill}>
+					<Pressable style={styles.connPill} onPress={onOpenConnection} hitSlop={6}>
 						<View style={styles.connDot} />
 						<Text style={styles.connText}>hetzner-devbox</Text>
-					</View>
+					</Pressable>
 				</View>
 				<Text style={styles.connMeta}>
-					SSH ·{" "}
-					<Text style={styles.connHost}>pallaoro@100.72.63.61</Text> · claude
+					SSH · <Text style={styles.connHost}>pallaoro@100.72.63.61</Text> · claude
 				</Text>
 			</View>
 
-			{/* Board — one eyebrow-labeled zone per column */}
 			<ScrollView style={styles.board} contentContainerStyle={styles.boardContent} showsVerticalScrollIndicator={false}>
 				{COLUMNS.map((col) => {
 					const tasks = TASKS.filter((t) => t.column === col.key);
@@ -147,10 +213,32 @@ export default function App() {
 	);
 }
 
+export default function App() {
+	useColorScheme(); // reserved: theme-aware later
+	// First run opens on the connection form (no saved host yet); Connect → board.
+	const [view, setView] = useState<"connect" | "board">("connect");
+	return view === "connect" ? (
+		<ConnectionScreen onConnect={() => setView("board")} />
+	) : (
+		<BoardScreen onOpenConnection={() => setView("connect")} />
+	);
+}
+
 const styles = StyleSheet.create({
 	root: { flex: 1, backgroundColor: C.bg, paddingTop: 60 },
 
+	// header / nav
 	header: { paddingHorizontal: 18, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: C.line },
+	navBar: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 10,
+		paddingHorizontal: 18,
+		paddingBottom: 14,
+		borderBottomWidth: 1,
+		borderBottomColor: C.line,
+	},
+	navTitle: { color: C.ink, fontSize: 17, fontWeight: "700", letterSpacing: -0.2 },
 	brandRow: { flexDirection: "row", alignItems: "center", gap: 10 },
 	monogram: {
 		width: 30,
@@ -165,6 +253,8 @@ const styles = StyleSheet.create({
 	monogramText: { color: C.teal, fontSize: 16, fontWeight: "800" },
 	brand: { color: C.ink, fontSize: 20, fontWeight: "700", letterSpacing: -0.3 },
 	spacer: { flex: 1 },
+	connectBtn: { backgroundColor: C.teal, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
+	connectBtnText: { color: "#04211d", fontSize: 13, fontWeight: "800" },
 	connPill: {
 		flexDirection: "row",
 		alignItems: "center",
@@ -181,29 +271,35 @@ const styles = StyleSheet.create({
 	connMeta: { color: C.muted, fontSize: 12, marginTop: 12 },
 	connHost: { color: C.ink, fontVariant: ["tabular-nums"] },
 
+	// eyebrow
+	eyebrowRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10, paddingLeft: 2 },
+	tick: { width: 3, height: 12, borderRadius: 2 },
+	eyebrow: { color: C.muted, fontSize: 11, fontWeight: "600", textTransform: "uppercase", letterSpacing: 1.1 },
+	eyebrowCount: { color: C.faint, fontSize: 11, fontWeight: "600", fontVariant: ["tabular-nums"] },
+
+	// connection form
+	formContent: { padding: 16, paddingTop: 20, paddingBottom: 40 },
+	formCard: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.line, borderRadius: 10 },
+	fieldRow: {
+		flexDirection: "row",
+		alignItems: "center",
+		justifyContent: "space-between",
+		paddingHorizontal: 14,
+		paddingVertical: 14,
+		gap: 12,
+	},
+	fieldDivider: { borderBottomWidth: 1, borderBottomColor: C.line },
+	fieldLabel: { color: C.muted, fontSize: 14 },
+	fieldValue: { color: C.ink, fontSize: 14, fontVariant: ["tabular-nums"], flexShrink: 1, textAlign: "right" },
+	keyChip: { backgroundColor: C.sunken, borderWidth: 1, borderColor: C.line, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+	keyChipText: { color: C.teal, fontSize: 12, fontWeight: "600", letterSpacing: 0.3 },
+	formNote: { color: C.faint, fontSize: 12, lineHeight: 18, marginTop: 18, paddingHorizontal: 2 },
+
+	// board
 	board: { flex: 1 },
 	boardContent: { padding: 16, paddingBottom: 40 },
 	zone: { marginBottom: 22 },
-	eyebrowRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10, paddingLeft: 2 },
-	tick: { width: 3, height: 12, borderRadius: 2 },
-	eyebrow: {
-		color: C.muted,
-		fontSize: 11,
-		fontWeight: "600",
-		textTransform: "uppercase",
-		letterSpacing: 1.1,
-	},
-	eyebrowCount: { color: C.faint, fontSize: 11, fontWeight: "600", fontVariant: ["tabular-nums"] },
-
-	card: {
-		backgroundColor: C.surface,
-		borderWidth: 1,
-		borderColor: C.line,
-		borderLeftWidth: 3,
-		borderRadius: 8,
-		padding: 12,
-		marginBottom: 8,
-	},
+	card: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.line, borderLeftWidth: 3, borderRadius: 8, padding: 12, marginBottom: 8 },
 	cardTop: { flexDirection: "row", alignItems: "flex-start", gap: 9 },
 	agentTag: {
 		width: 22,
@@ -218,18 +314,9 @@ const styles = StyleSheet.create({
 	agentInitial: { color: C.muted, fontSize: 11, fontWeight: "700" },
 	cardName: { color: C.ink, fontSize: 15, fontWeight: "600", flex: 1, lineHeight: 20 },
 	cardMeta: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" },
-
-	chip: {
-		backgroundColor: C.sunken,
-		borderWidth: 1,
-		borderColor: C.line,
-		borderRadius: 6,
-		paddingHorizontal: 7,
-		paddingVertical: 3,
-	},
+	chip: { backgroundColor: C.sunken, borderWidth: 1, borderColor: C.line, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
 	chipText: { color: C.muted, fontSize: 11, fontVariant: ["tabular-nums"] },
 	badge: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
 	badgeText: { fontSize: 11, fontWeight: "600" },
-
 	footnote: { color: C.faint, fontSize: 11, textAlign: "center", marginTop: 8 },
 });
