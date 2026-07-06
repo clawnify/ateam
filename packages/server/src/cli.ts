@@ -56,7 +56,10 @@ async function runDaemon(): Promise<void> {
 		/* best-effort */
 	}
 
-	const server = createServer((sock: Socket) => {
+	// allowHalfOpen: a one-shot client that sends a request then closes its write
+	// side (EOF) must still receive the reply — without this the socket's read-end
+	// 'end' auto-closes the write-end, dropping the response mid-flight.
+	const server = createServer({ allowHalfOpen: true }, (sock: Socket) => {
 		// Each client gets its own serveRpc over one connection; the engine (and
 		// its PTY sessions) is shared and outlives any single client.
 		serveRpc(engine, dispatcher, socketServerTransport(sock));
