@@ -127,6 +127,15 @@ export function bootstrap(db: SqliteExecutor): void {
 			created_at INTEGER
 		);
 		CREATE INDEX IF NOT EXISTS board_changes_task_idx ON board_changes (task_id);
+
+			CREATE TABLE IF NOT EXISTS hosts (
+				host_alias TEXT PRIMARY KEY,
+				server_version TEXT,
+				agents_available TEXT,
+				last_seen INTEGER,
+				created_at INTEGER
+			);
+			CREATE INDEX IF NOT EXISTS hosts_last_seen_idx ON hosts (last_seen);
 	`);
 
 	// Migrations for databases created before a column existed. SQLite has no
