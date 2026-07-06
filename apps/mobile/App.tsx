@@ -81,7 +81,7 @@ function AgentTag({ agent }: { agent: string }) {
 
 function TaskCard({ task, tint }: { task: Task; tint: string }) {
 	return (
-		<View style={[styles.card, { borderLeftColor: tint }]}>
+		<View style={styles.card}>
 			<View style={styles.cardTop}>
 				<AgentTag agent={task.agent} />
 				<Text style={styles.cardName} numberOfLines={2}>
@@ -215,8 +215,8 @@ function BoardScreen({ onOpenConnection }: { onOpenConnection: () => void }) {
 
 export default function App() {
 	useColorScheme(); // reserved: theme-aware later
-	// First run opens on the connection form (no saved host yet); Connect → board.
-	const [view, setView] = useState<"connect" | "board">("connect");
+	// Board is home; tapping the connection pill opens the SSH host form.
+	const [view, setView] = useState<"connect" | "board">("board");
 	return view === "connect" ? (
 		<ConnectionScreen onConnect={() => setView("board")} />
 	) : (
@@ -299,7 +299,7 @@ const styles = StyleSheet.create({
 	board: { flex: 1 },
 	boardContent: { padding: 16, paddingBottom: 40 },
 	zone: { marginBottom: 22 },
-	card: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.line, borderLeftWidth: 3, borderRadius: 8, padding: 12, marginBottom: 8 },
+	card: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.line, borderRadius: 8, padding: 12, marginBottom: 8 },
 	cardTop: { flexDirection: "row", alignItems: "flex-start", gap: 9 },
 	agentTag: {
 		width: 22,
