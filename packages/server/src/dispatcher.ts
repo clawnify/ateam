@@ -31,6 +31,7 @@ import {
 	type GitStatusSnapshot,
 	type KanbanColumn,
 	type MergeStrategy,
+	PROTOCOL_VERSION,
 } from "@ateam/protocol";
 import { buildAgentEnv, ensureClaudeHooks, ensureCodexHooks } from "./agent-setup";
 import type { Engine } from "./engine";
@@ -372,6 +373,17 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				description: a.description,
 				available: a.available,
 			}));
+		},
+
+		// ---- system: connect-time handshake ----
+		// The client calls this first over a fresh transport and checks
+		// protocolVersion before trusting the rest of the surface (see serverHandshake).
+		[CH.systemHello]: async () => {
+			const agents = await listAgents();
+			return {
+				protocolVersion: PROTOCOL_VERSION,
+				agents: agents.filter((a) => a.available).map((a) => a.id),
+			};
 		},
 
 		// ---- fs / util: server-side, remote-native (browse + attach on the

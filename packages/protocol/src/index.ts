@@ -3,6 +3,16 @@
 // renderer, the Electron main process, and the (future) headless @ateam/server
 // over SSH — shares one definition without pulling in node/electron/db internals.
 
+/**
+ * Wire-contract version. A client checks it on connect (via `system:hello`) and
+ * refuses/warns on mismatch, so a version-skewed remote fails cleanly at the
+ * handshake instead of cryptically mid-call ("Unknown method"/corrupt shape).
+ * BUMP THIS on any breaking change to CH methods, their args, or DTO shapes.
+ * Monotonic integer — deliberately not the npm version (workspaces are 0.0.0 and
+ * the daemon is bundled, so package.json is neither meaningful nor readable here).
+ */
+export const PROTOCOL_VERSION = 1;
+
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
 export type AgentStatus = "idle" | "running" | "awaiting_input" | "stopped";
@@ -164,6 +174,16 @@ export interface CleanupReport {
 	kept: CleanupSkip[];
 }
 
+/**
+ * The connect-time handshake reply (`system:hello`): the engine's protocol
+ * version for the compatibility check, and which agents its box actually has.
+ */
+export interface SystemInfo {
+	protocolVersion: number;
+	/** Ids of agents installed + available on the engine's machine. */
+	agents: string[];
+}
+
 // A subdirectory in a remote-fs listing (the repo picker over RPC).
 export interface DirEntryDTO {
 	name: string;
@@ -221,6 +241,7 @@ export const CH = {
 	loopsCreate: "loops:create",
 	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
+	systemHello: "system:hello",
 	fsListDir: "fs:listDir",
 	utilPickFiles: "util:pickFiles",
 	utilStageImage: "util:stageImage",
@@ -377,6 +398,6 @@ export interface AteamApi {
 
 export type { NativeClientApi } from "./client-api";
 // Client-side binding of the AteamApi surface over an RpcClient.
-export { buildAteamApi } from "./client-api";
+export { buildAteamApi, serverHandshake } from "./client-api";
 // Transport-agnostic RPC framing + client (shared by every transport).
 export * from "./rpc";

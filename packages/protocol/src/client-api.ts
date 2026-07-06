@@ -27,11 +27,22 @@ import type {
 	PtyExitEvent,
 	PtySnapshot,
 	SessionDTO,
+	SystemInfo,
 	TaskDTO,
 	UpdateResultDTO,
 } from "./index";
 import { CH } from "./index";
 import type { RpcClient } from "./rpc";
+
+/**
+ * The connect-time handshake: ask the engine its protocol version + agents. Call
+ * this on the raw RpcClient BEFORE building the full api, and compare
+ * `info.protocolVersion` against `PROTOCOL_VERSION` to gate a version-skewed
+ * remote. It's a low-level connect primitive, deliberately not on AteamApi.
+ */
+export function serverHandshake(rpc: RpcClient): Promise<SystemInfo> {
+	return rpc.call(CH.systemHello) as Promise<SystemInfo>;
+}
 
 /**
  * The client-local slice of AteamApi — methods that touch the *client's* OS, not
