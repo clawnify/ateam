@@ -18,11 +18,10 @@
 // JS. Wire that up when standing the first server; the logic below is runtime-
 // agnostic.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, realpathSync, unlinkSync } from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createDispatcher } from "./dispatcher";
 import { createEngine } from "./engine";
 import { serveRpc } from "./rpc";
@@ -30,21 +29,20 @@ import { socketServerTransport } from "./transport/socket";
 
 const SOCK = process.env.ATEAM_RPC_SOCK ?? join(homedir(), ".ateam", "rpc.sock");
 
+// Absolute path to THIS running cli.js. Do NOT use import.meta.url: the bundler
+// inlines it to the BUILD-TIME source path (the build host's filesystem), so the
+// daemon paths derived from it would point at a machine that isn't this one. The
+// executing script's own path (realpath-resolved, so a `bin` symlink still lands
+// in the dist dir beside daemon.js) is what's portable across boxes.
+const SELF = process.argv[1] ? realpathSync(process.argv[1]) : "";
+
 async function runDaemon(): Promise<void> {
 	const dataDir = process.env.ATEAM_DATA_DIR ?? join(homedir(), ".ateam");
 	// The PTY daemon bundle (node-pty + xterm). Shipped beside the ateam bin on
 	// the server; overridable for dev.
-	const ptyDaemon =
-		process.env.ATEAM_PTY_DAEMON ?? join(dirname(fileURLToPath(import.meta.url)), "daemon.js");
+	const ptyDaemon = process.env.ATEAM_PTY_DAEMON ?? join(dirname(SELF), "daemon.js");
 
 	const engine = await createEngine({ dataDir, daemonPath: ptyDaemon, execPath: process.execPath });
-	// Best-effort: serve RPC (git/tasks/board) even if the PTY daemon isn't up
-	// yet — agent spawning reconnects lazily, mirroring the desktop.
-	try {
-		await engine.connectPty();
-	} catch (err) {
-		console.error(`[ateam] PTY daemon connect failed: ${(err as Error).message}`);
-	}
 	engine.startLoops();
 	const dispatcher = createDispatcher(engine);
 
@@ -68,32 +66,63 @@ async function runDaemon(): Promise<void> {
 		process.exit(1);
 	});
 	server.listen(SOCK, () => console.log(`[ateam] daemon listening at ${SOCK}`));
+
+	// Connect to the PTY daemon in the BACKGROUND — don't block RPC on it. The
+	// git/tasks/board surface serves immediately (a client's handshake shouldn't
+	// wait out the PTY connect), and agent spawning reconnects lazily (PtyClient
+	// respawns/reconnects on demand). Awaiting here is what previously stalled a
+	// fresh box's first attach past its retry window.
+	void engine.connectPty().catch((err) => {
+		console.error(`[ateam] PTY daemon connect failed: ${(err as Error).message}`);
+	});
 }
 
 function runAttach(): void {
-	const relay = (spawnedDaemon: boolean): void => {
+	let spawnedDaemon = false;
+	let retries = 0;
+	const relay = (): void => {
 		const sock = connect(SOCK);
 		sock.once("connect", () => {
 			process.stdin.pipe(sock);
 			sock.pipe(process.stdout);
 			process.stdin.on("end", () => sock.end());
+			// Only a close AFTER we've actually connected ends the relay. Registering
+			// this at the socket level would fire on every FAILED connect too (each
+			// connect error emits 'error' THEN 'close'), exiting before the retry runs.
+			sock.on("close", () => process.exit(0));
 		});
 		sock.once("error", (err: NodeJS.ErrnoException) => {
-			if (err.code === "ECONNREFUSED" && !spawnedDaemon) {
-				// No daemon yet — start one detached and retry once.
-				spawn(process.execPath, [fileURLToPath(import.meta.url), "daemon"], {
-					detached: true,
-					stdio: "ignore",
-				}).unref();
-				setTimeout(() => relay(true), 500);
-				return;
+			// Both mean "no live daemon here": ECONNREFUSED = stale socket, nothing
+			// listening; ENOENT = socket file absent (a fresh box's first attach).
+			const noDaemon = err.code === "ECONNREFUSED" || err.code === "ENOENT";
+			if (noDaemon) {
+				if (!spawnedDaemon) {
+					spawnedDaemon = true;
+					// Start one detached, then poll until it's listening — first-run
+					// startup (native module load + engine setup) takes a variable
+					// moment, so retry with backoff rather than a single fixed wait.
+					// Route its output to a log file: a detached daemon with no logs is
+					// undebuggable on a remote box (and this is where its startup errors
+					// surface).
+					const dataDir = dirname(SOCK);
+					if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+					const log = openSync(join(dataDir, "daemon.log"), "a");
+					spawn(process.execPath, [SELF, "daemon"], {
+						detached: true,
+						stdio: ["ignore", log, log],
+					}).unref();
+				}
+				if (retries < 40) {
+					retries++;
+					setTimeout(relay, 250); // up to ~10s for the daemon to come up
+					return;
+				}
 			}
 			console.error(`[ateam] attach failed: ${err.message}`);
 			process.exit(1);
 		});
-		sock.on("close", () => process.exit(0));
 	};
-	relay(false);
+	relay();
 }
 
 const cmd = process.argv[2];
