@@ -37,6 +37,17 @@ const SOCK = process.env.ATEAM_RPC_SOCK ?? join(homedir(), ".ateam", "rpc.sock")
 const SELF = process.argv[1] ? realpathSync(process.argv[1]) : "";
 
 async function runDaemon(): Promise<void> {
+	// Single-instance guard: if a daemon already serves SOCK, bow out — do NOT
+	// steal it. The old code blindly unlink()'d the socket then listen()'d, on the
+	// false premise that a live daemon would trip EADDRINUSE; but unlinking the file
+	// is exactly what defeats that guard, so a second `ateam daemon` silently
+	// supplanted the first — orphaning its engine, live PTY sessions, and SQLite
+	// writer. Probe by connecting first: only a live listener should stop us.
+	if (await isDaemonLive(SOCK)) {
+		console.log(`[ateam] a daemon is already listening at ${SOCK}; nothing to do`);
+		return;
+	}
+
 	const dataDir = process.env.ATEAM_DATA_DIR ?? join(homedir(), ".ateam");
 	// The PTY daemon bundle (node-pty + xterm). Shipped beside the ateam bin on
 	// the server; overridable for dev.
@@ -48,8 +59,8 @@ async function runDaemon(): Promise<void> {
 
 	const dir = dirname(SOCK);
 	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-	// Clear a stale socket file; if a daemon were actually live, listen() below
-	// would EADDRINUSE and we'd exit rather than steal its socket.
+	// The probe found no live daemon, so any socket file here is stale (a crashed
+	// daemon leaves the file behind) — remove it so listen() can bind.
 	try {
 		if (existsSync(SOCK)) unlinkSync(SOCK);
 	} catch {
@@ -64,19 +75,52 @@ async function runDaemon(): Promise<void> {
 		// its PTY sessions) is shared and outlives any single client.
 		serveRpc(engine, dispatcher, socketServerTransport(sock));
 	});
-	server.on("error", (err) => {
+	server.on("error", (err: NodeJS.ErrnoException) => {
+		// Lost a startup race: another daemon bound SOCK between our probe and
+		// listen(). If it's live, bow out cleanly instead of dying with an error.
+		if (err.code === "EADDRINUSE") {
+			void isDaemonLive(SOCK).then((live) => {
+				if (live) {
+					console.log(`[ateam] another daemon won the socket; exiting`);
+					process.exit(0);
+				}
+				console.error(`[ateam] ${SOCK} is busy but no daemon answers`);
+				process.exit(1);
+			});
+			return;
+		}
 		console.error(`[ateam] daemon error: ${err.message}`);
 		process.exit(1);
 	});
-	server.listen(SOCK, () => console.log(`[ateam] daemon listening at ${SOCK}`));
+	server.listen(SOCK, () => {
+		console.log(`[ateam] daemon listening at ${SOCK}`);
+		// Connect the PTY daemon in the BACKGROUND, and only once we own the socket:
+		// don't block RPC on it (git/tasks/board serves immediately; agent spawning
+		// reconnects lazily), and a daemon that bowed out never spawns a stray PTY
+		// daemon. Awaiting here previously stalled a fresh box's first attach.
+		void engine.connectPty().catch((err) => {
+			console.error(`[ateam] PTY daemon connect failed: ${(err as Error).message}`);
+		});
+	});
+}
 
-	// Connect to the PTY daemon in the BACKGROUND — don't block RPC on it. The
-	// git/tasks/board surface serves immediately (a client's handshake shouldn't
-	// wait out the PTY connect), and agent spawning reconnects lazily (PtyClient
-	// respawns/reconnects on demand). Awaiting here is what previously stalled a
-	// fresh box's first attach past its retry window.
-	void engine.connectPty().catch((err) => {
-		console.error(`[ateam] PTY daemon connect failed: ${(err as Error).message}`);
+/**
+ * Is a daemon already listening on `sock`? Connect-probe: a successful connect
+ * means a live listener owns it; ECONNREFUSED means a stale socket file (crashed
+ * daemon, no listener); ENOENT means no file at all. Only a live listener should
+ * stop a new daemon from starting.
+ */
+function isDaemonLive(sock: string): Promise<boolean> {
+	return new Promise((resolve) => {
+		const probe = connect(sock);
+		probe.once("connect", () => {
+			probe.destroy();
+			resolve(true);
+		});
+		probe.once("error", () => {
+			probe.destroy();
+			resolve(false);
+		});
 	});
 }
 
