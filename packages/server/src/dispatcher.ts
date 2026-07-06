@@ -4,8 +4,9 @@
 // ipcMain handlers; the desktop now adapts ipcMain → handle(), and the SSH
 // server will adapt a JSON-RPC channel → handle(). One body, many transports.
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 import { agentCommand, getAgent, listAgents } from "@ateam/agents";
 import { repo } from "@ateam/db";
 import {
@@ -26,6 +27,7 @@ import {
 import {
 	CH,
 	type CreateLoopInput,
+	type DirEntryDTO,
 	type GitStatusSnapshot,
 	type KanbanColumn,
 	type MergeStrategy,
@@ -370,6 +372,43 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				description: a.description,
 				available: a.available,
 			}));
+		},
+
+		// ---- fs / util: server-side, remote-native (browse + attach on the
+		// engine's machine, not the client's — the SSH client is on another box) ----
+		[CH.fsListDir]: async (path?: string) => {
+			// The engine runs as the user (over SSH, in the daemon); browsing its own
+			// filesystem is the same access the SSH session already has — no new grant.
+			const dir = path ? resolve(path) : homedir();
+			const entries: DirEntryDTO[] = [];
+			for (const d of readdirSync(dir, { withFileTypes: true })) {
+				const full = join(dir, d.name);
+				let isDir = d.isDirectory();
+				// Follow symlinks-to-dirs (home dirs often symlink project folders);
+				// skip broken links rather than fail the whole listing.
+				if (!isDir && d.isSymbolicLink()) {
+					try {
+						isDir = statSync(full).isDirectory();
+					} catch {
+						continue;
+					}
+				}
+				if (!isDir) continue;
+				entries.push({ name: d.name, path: full, isRepo: existsSync(join(full, ".git")) });
+			}
+			entries.sort((a, b) => a.name.localeCompare(b.name));
+			const parent = dirname(dir);
+			return { path: dir, parent: parent === dir ? null : parent, entries };
+		},
+		[CH.utilWriteImageBytes]: async (base64: string, ext?: string) => {
+			const safeExt = (ext ?? "png").replace(/[^a-z0-9]/gi, "").toLowerCase() || "png";
+			const dir = join(services.userDataDir, "attachments");
+			if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+			// Random name: an attachment is handed to the agent immediately; the engine
+			// prunes this dir on startup so temp images never accumulate unboundedly.
+			const file = join(dir, `${randomUUID()}.${safeExt}`);
+			writeFileSync(file, Buffer.from(base64, "base64"));
+			return file;
 		},
 
 		// ---- loops (periodic reconcilers) ----

@@ -164,6 +164,24 @@ export interface CleanupReport {
 	kept: CleanupSkip[];
 }
 
+// A subdirectory in a remote-fs listing (the repo picker over RPC).
+export interface DirEntryDTO {
+	name: string;
+	/** Absolute path on the engine's machine. */
+	path: string;
+	/** True when the directory holds a `.git` (a git repo root). */
+	isRepo: boolean;
+}
+/** One directory's worth of subdirectories, for navigating the engine's fs. */
+export interface DirListingDTO {
+	/** The resolved absolute directory that was listed. */
+	path: string;
+	/** Its parent directory, or null at the filesystem root. */
+	parent: string | null;
+	/** Subdirectories, sorted by name. */
+	entries: DirEntryDTO[];
+}
+
 // A worktree advised for cleanup, shown in the cleanup dialog with its terminal.
 export interface CleanupCandidate {
 	id: string;
@@ -203,9 +221,11 @@ export const CH = {
 	loopsCreate: "loops:create",
 	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
+	fsListDir: "fs:listDir",
 	utilPickFiles: "util:pickFiles",
 	utilStageImage: "util:stageImage",
 	utilStageImagePath: "util:stageImagePath",
+	utilWriteImageBytes: "util:writeImageBytes",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -279,6 +299,15 @@ export interface AteamApi {
 	agents: {
 		list(): Promise<AgentDTO[]>;
 	};
+	fs: {
+		/**
+		 * Browse a directory on the *engine's* machine (the server, when remote) to
+		 * pick a repo — the transport-native replacement for the local folder dialog,
+		 * which would browse the wrong machine over SSH. Defaults to the engine's home
+		 * dir; entries are subdirectories, each flagged when it holds a `.git`.
+		 */
+		listDir(path?: string): Promise<DirListingDTO>;
+	};
 	loops: {
 		list(): Promise<LoopDTO[]>;
 		setEnabled(id: string, enabled: boolean): Promise<LoopDTO[]>;
@@ -335,11 +364,19 @@ export interface AteamApi {
 		 * back to typing the path.
 		 */
 		stageImagePath(path: string): Promise<boolean>;
+		/**
+		 * Write raw image bytes (base64) to a temp file on the *engine's* machine and
+		 * return its absolute path. The remote counterpart of clipboard staging: a
+		 * headless server has no GUI clipboard, so an attached/pasted image is handed
+		 * to the agent as a file path (typed into the PTY or appended to its prompt)
+		 * instead of a bitmap on the clipboard. `ext` sets the extension (default "png").
+		 */
+		writeImageBytes(base64: string, ext?: string): Promise<string>;
 	};
 }
 
-// Transport-agnostic RPC framing + client (shared by every transport).
-export * from "./rpc";
+export type { NativeClientApi } from "./client-api";
 // Client-side binding of the AteamApi surface over an RpcClient.
 export { buildAteamApi } from "./client-api";
-export type { NativeClientApi } from "./client-api";
+// Transport-agnostic RPC framing + client (shared by every transport).
+export * from "./rpc";

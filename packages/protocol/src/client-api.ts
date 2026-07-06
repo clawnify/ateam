@@ -15,6 +15,7 @@ import type {
 	CleanupReport,
 	CreateLoopInput,
 	DiffResultDTO,
+	DirListingDTO,
 	GitStatusSnapshot,
 	KanbanColumn,
 	LoopDTO,
@@ -82,6 +83,9 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		agents: {
 			list: () => call<AgentDTO[]>(CH.agentsList),
 		},
+		fs: {
+			listDir: (path) => call<DirListingDTO>(CH.fsListDir, [path]),
+		},
 		loops: {
 			list: () => call<LoopDTO[]>(CH.loopsList),
 			setEnabled: (id, enabled) => call<LoopDTO[]>(CH.loopsSetEnabled, [id, enabled]),
@@ -113,6 +117,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			pickFiles: native.pickFiles,
 			stageClipboardImage: native.stageClipboardImage,
 			stageImagePath: native.stageImagePath,
+			writeImageBytes: (base64, ext) => call<string>(CH.utilWriteImageBytes, [base64, ext]),
 		},
 	};
 }

@@ -1,4 +1,3 @@
-import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
 	type AteamApi,
 	CH,
@@ -9,6 +8,7 @@ import {
 	type PtyExitEvent,
 	type TaskDTO,
 } from "@ateam/protocol";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 const api: AteamApi = {
 	projects: {
@@ -37,6 +37,9 @@ const api: AteamApi = {
 	},
 	agents: {
 		list: () => ipcRenderer.invoke(CH.agentsList),
+	},
+	fs: {
+		listDir: (path) => ipcRenderer.invoke(CH.fsListDir, path),
 	},
 	loops: {
 		list: () => ipcRenderer.invoke(CH.loopsList),
@@ -75,6 +78,7 @@ const api: AteamApi = {
 		pickFiles: () => ipcRenderer.invoke(CH.utilPickFiles),
 		stageClipboardImage: () => ipcRenderer.invoke(CH.utilStageImage),
 		stageImagePath: (path) => ipcRenderer.invoke(CH.utilStageImagePath, path),
+		writeImageBytes: (base64, ext) => ipcRenderer.invoke(CH.utilWriteImageBytes, base64, ext),
 	},
 	events: {
 		onTaskUpdated: (cb: (task: TaskDTO) => void) => {
