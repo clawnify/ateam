@@ -26,6 +26,10 @@ export interface ConnectionRecord {
 	hostAlias: string;
 	serverVersion?: string | null;
 	agentsAvailable?: string[] | null;
+	/** The chosen transport (set when creating a "tcp" host; ssh hosts stay default). */
+	transport?: "ssh" | "tcp";
+	/** "host:port" for a tcp host (the Tailscale endpoint); null/omitted for ssh. */
+	endpoint?: string | null;
 }
 
 const DEFAULT_SSH_CONFIG = join(homedir(), ".ssh", "config");
@@ -91,6 +95,9 @@ export function listConnections(db: AteamDb, configPath?: string): ConnectionDTO
 			lastSeen: rec?.lastSeen ?? null,
 			inSshConfig: true,
 			known: rec != null,
+			// A host from ssh_config is inherently an SSH connection.
+			transport: "ssh",
+			endpoint: null,
 		});
 	}
 	for (const rec of saved.values()) {
@@ -103,6 +110,10 @@ export function listConnections(db: AteamDb, configPath?: string): ConnectionDTO
 			lastSeen: rec.lastSeen,
 			inSshConfig: false,
 			known: true,
+			// A saved-only host is usually a tcp/Tailscale connection the user added;
+			// default to ssh for legacy rows written before the column existed.
+			transport: rec.transport ?? "ssh",
+			endpoint: rec.endpoint ?? null,
 		});
 	}
 	// Recently-reached first; never-connected (null lastSeen) after, ties by alias.
@@ -124,5 +135,7 @@ export function recordConnection(db: AteamDb, rec: ConnectionRecord): Host {
 	};
 	if (rec.serverVersion !== undefined) patch.serverVersion = rec.serverVersion;
 	if (rec.agentsAvailable !== undefined) patch.agentsAvailable = rec.agentsAvailable;
+	if (rec.transport !== undefined) patch.transport = rec.transport;
+	if (rec.endpoint !== undefined) patch.endpoint = rec.endpoint;
 	return repo.upsertHost(db, patch);
 }
