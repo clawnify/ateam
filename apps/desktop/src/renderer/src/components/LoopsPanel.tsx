@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle2, Play, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { LoopDTO, LoopTemplateDTO, ProjectDTO } from "../../../shared/types";
+import type { LoopDTO, LoopTemplateDTO, ProjectDTO } from "@ateam/protocol";
 
 /** "in 45s" / "in 2m" / "now", or "—" when no next run is scheduled. */
 function untilLabel(nextRunAt: number | null, now: number): string {

@@ -4,6 +4,8 @@ import {
 	agentSessions,
 	type BoardChange,
 	boardChanges,
+	type Host,
+	hosts,
 	type Loop,
 	loops,
 	type NewBoardChange,
@@ -171,5 +173,30 @@ export const repo = {
 			.orderBy(desc(boardChanges.createdAt))
 			.all();
 		return opts.limit ? rows.slice(0, opts.limit) : rows;
+	},
+
+	// ---- hosts (remote connections; client-only) ----
+	/** Insert or update a host record by its ssh_config alias. */
+	upsertHost(db: AteamDb, h: Partial<Host> & { hostAlias: string }): Host {
+		const existing = db.select().from(hosts).where(eq(hosts.hostAlias, h.hostAlias)).get();
+		if (existing) {
+			db.update(hosts).set(h).where(eq(hosts.hostAlias, h.hostAlias)).run();
+			return db.select().from(hosts).where(eq(hosts.hostAlias, h.hostAlias)).get() as Host;
+		}
+		return db.insert(hosts).values(h).returning().get();
+	},
+
+	/** All known hosts, most-recently-reached first (nulls — never connected — last). */
+	listHosts(db: AteamDb): Host[] {
+		return db.select().from(hosts).orderBy(desc(hosts.lastSeen)).all();
+	},
+
+	getHost(db: AteamDb, hostAlias: string): Host | undefined {
+		return db.select().from(hosts).where(eq(hosts.hostAlias, hostAlias)).get();
+	},
+
+	/** Forget a host — drops only our metadata; ~/.ssh/config is untouched. */
+	deleteHost(db: AteamDb, hostAlias: string): void {
+		db.delete(hosts).where(eq(hosts.hostAlias, hostAlias)).run();
 	},
 };

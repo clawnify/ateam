@@ -1,5 +1,17 @@
-// Plain DTOs crossing the IPC boundary. Kept dependency-free so the renderer
-// never imports node/electron/db internals.
+// The Ateam wire contract: plain DTOs, channel names, event payloads, and the
+// AteamApi surface. Dependency-free by design so every consumer — the desktop
+// renderer, the Electron main process, and the (future) headless @ateam/server
+// over SSH — shares one definition without pulling in node/electron/db internals.
+
+/**
+ * Wire-contract version. A client checks it on connect (via `system:hello`) and
+ * refuses/warns on mismatch, so a version-skewed remote fails cleanly at the
+ * handshake instead of cryptically mid-call ("Unknown method"/corrupt shape).
+ * BUMP THIS on any breaking change to CH methods, their args, or DTO shapes.
+ * Monotonic integer — deliberately not the npm version (workspaces are 0.0.0 and
+ * the daemon is bundled, so package.json is neither meaningful nor readable here).
+ */
+export const PROTOCOL_VERSION = 1;
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
@@ -162,6 +174,54 @@ export interface CleanupReport {
 	kept: CleanupSkip[];
 }
 
+/**
+ * The connect-time handshake reply (`system:hello`): the engine's protocol
+ * version for the compatibility check, and which agents its box actually has.
+ */
+export interface SystemInfo {
+	protocolVersion: number;
+	/** Ids of agents installed + available on the engine's machine. */
+	agents: string[];
+}
+
+// A subdirectory in a remote-fs listing (the repo picker over RPC).
+export interface DirEntryDTO {
+	name: string;
+	/** Absolute path on the engine's machine. */
+	path: string;
+	/** True when the directory holds a `.git` (a git repo root). */
+	isRepo: boolean;
+}
+/** One directory's worth of subdirectories, for navigating the engine's fs. */
+export interface DirListingDTO {
+	/** The resolved absolute directory that was listed. */
+	path: string;
+	/** Its parent directory, or null at the filesystem root. */
+	parent: string | null;
+	/** Subdirectories, sorted by name. */
+	entries: DirEntryDTO[];
+}
+
+/**
+ * A row in the connections list: an ssh_config alias enriched with Ateam's own
+ * last-known metadata for that host. Rendered by the client's connection picker;
+ * produced by `@ateam/server`'s `listConnections`. A boundary DTO (server writes,
+ * renderer reads), so it lives here rather than in the server package — the
+ * ssh_config parse-shape (`SshHost`) and write-shape (`ConnectionRecord`) stay
+ * server-internal.
+ */
+export interface ConnectionDTO {
+	alias: string;
+	hostName: string | null;
+	serverVersion: string | null;
+	agentsAvailable: string[] | null;
+	lastSeen: number | null;
+	/** Present in ~/.ssh/config right now (vs a saved record since removed from it). */
+	inSshConfig: boolean;
+	/** We've recorded at least one successful connection (has a saved record). */
+	known: boolean;
+}
+
 // A worktree advised for cleanup, shown in the cleanup dialog with its terminal.
 export interface CleanupCandidate {
 	id: string;
@@ -202,9 +262,12 @@ export const CH = {
 	loopsCreate: "loops:create",
 	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
+	systemHello: "system:hello",
+	fsListDir: "fs:listDir",
 	utilPickFiles: "util:pickFiles",
 	utilStageImage: "util:stageImage",
 	utilStageImagePath: "util:stageImagePath",
+	utilWriteImageBytes: "util:writeImageBytes",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -279,6 +342,15 @@ export interface AteamApi {
 	agents: {
 		list(): Promise<AgentDTO[]>;
 	};
+	fs: {
+		/**
+		 * Browse a directory on the *engine's* machine (the server, when remote) to
+		 * pick a repo — the transport-native replacement for the local folder dialog,
+		 * which would browse the wrong machine over SSH. Defaults to the engine's home
+		 * dir; entries are subdirectories, each flagged when it holds a `.git`.
+		 */
+		listDir(path?: string): Promise<DirListingDTO>;
+	};
 	loops: {
 		list(): Promise<LoopDTO[]>;
 		setEnabled(id: string, enabled: boolean): Promise<LoopDTO[]>;
@@ -351,5 +423,19 @@ export interface AteamApi {
 		 * back to typing the path.
 		 */
 		stageImagePath(path: string): Promise<boolean>;
+		/**
+		 * Write raw image bytes (base64) to a temp file on the *engine's* machine and
+		 * return its absolute path. The remote counterpart of clipboard staging: a
+		 * headless server has no GUI clipboard, so an attached/pasted image is handed
+		 * to the agent as a file path (typed into the PTY or appended to its prompt)
+		 * instead of a bitmap on the clipboard. `ext` sets the extension (default "png").
+		 */
+		writeImageBytes(base64: string, ext?: string): Promise<string>;
 	};
 }
+
+export type { NativeClientApi } from "./client-api";
+// Client-side binding of the AteamApi surface over an RpcClient.
+export { buildAteamApi, serverHandshake } from "./client-api";
+// Transport-agnostic RPC framing + client (shared by every transport).
+export * from "./rpc";

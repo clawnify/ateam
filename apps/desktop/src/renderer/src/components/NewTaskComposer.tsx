@@ -1,6 +1,6 @@
 import { ArrowUp, Paperclip, X, Zap } from "lucide-react";
 import { useState } from "react";
-import type { AgentDTO } from "../../../shared/types";
+import type { AgentDTO } from "@ateam/protocol";
 
 /** Last path segment, for a compact chip label. */
 function baseName(p: string): string {

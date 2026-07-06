@@ -1,4 +1,3 @@
-import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
 	type AteamApi,
 	CH,
@@ -8,7 +7,9 @@ import {
 	type PtyDataEvent,
 	type PtyExitEvent,
 	type TaskDTO,
-} from "../shared/types";
+} from "@ateam/protocol";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { type AteamHost, HOST_CH, type HostStatus } from "../shared/host";
 
 const api: AteamApi = {
 	projects: {
@@ -37,6 +38,9 @@ const api: AteamApi = {
 	},
 	agents: {
 		list: () => ipcRenderer.invoke(CH.agentsList),
+	},
+	fs: {
+		listDir: (path) => ipcRenderer.invoke(CH.fsListDir, path),
 	},
 	loops: {
 		list: () => ipcRenderer.invoke(CH.loopsList),
@@ -75,6 +79,7 @@ const api: AteamApi = {
 		pickFiles: () => ipcRenderer.invoke(CH.utilPickFiles),
 		stageClipboardImage: () => ipcRenderer.invoke(CH.utilStageImage),
 		stageImagePath: (path) => ipcRenderer.invoke(CH.utilStageImagePath, path),
+		writeImageBytes: (base64, ext) => ipcRenderer.invoke(CH.utilWriteImageBytes, base64, ext),
 	},
 	events: {
 		onTaskUpdated: (cb: (task: TaskDTO) => void) => {
@@ -90,9 +95,29 @@ const api: AteamApi = {
 	},
 	window: {
 		openProject: (projectId) => ipcRenderer.invoke(CH.windowOpenProject, projectId),
-		// The main process stamps ?projectId=<id> onto a detached window's URL.
-		boundProjectId: () => new URLSearchParams(window.location.search).get("projectId"),
+		// The main process stamps ?projectId=<id> onto a detached window's URL. The
+		// preload runs in the renderer world, so `location` exists at runtime; this
+		// project is node-typed (no DOM lib), so reach it through globalThis.
+		boundProjectId: () =>
+			new URLSearchParams(
+				(globalThis as { location?: { search: string } }).location?.search ?? "",
+			).get("projectId"),
 	},
 };
 
 contextBridge.exposeInMainWorld("ateam", api);
+
+// The connection-control surface (which engine drives the app) — separate from
+// window.ateam (the engine itself). See apps/desktop/src/shared/host.ts.
+const host: AteamHost = {
+	list: () => ipcRenderer.invoke(HOST_CH.list),
+	connect: (alias) => ipcRenderer.invoke(HOST_CH.connect, alias),
+	current: () => ipcRenderer.invoke(HOST_CH.current),
+	onChanged: (cb: (status: HostStatus) => void) => {
+		const handler = (_: unknown, status: HostStatus) => cb(status);
+		ipcRenderer.on(HOST_CH.evtChanged, handler);
+		return () => ipcRenderer.off(HOST_CH.evtChanged, handler);
+	},
+};
+
+contextBridge.exposeInMainWorld("ateamHost", host);

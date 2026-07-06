@@ -1,27 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createDb, repo } from "@ateam/db";
 import { app, BrowserWindow, dialog, Menu } from "electron";
 import { autoUpdater } from "electron-updater";
-import { type AgentStatus, CH, type KanbanColumn, type MergeStrategy } from "../shared/types";
-import { ensureGhShim, ensureNotifyScript } from "./agent-setup";
+import { createEngine, type Engine } from "@ateam/server";
 import { APP_NAME } from "./app-name";
-import { type HookEvent, HookServer, type MergeRequestEvent } from "./hooks/hook-server";
+import { createHost, registerHostIpc } from "./host";
 import { registerIpc } from "./ipc";
-import { createBoardReconciler } from "./loops/board-reconciler";
-import { applySetStatus, buildBoardView } from "./loops/board-signals";
-import { LoopRunner } from "./loops/runner";
-import { MergeQueue } from "./merge-queue";
-import { PtyClient } from "./pty/pty-client";
-import { type Services, toTaskDTO } from "./services";
 
 // Every live window and the project it's pinned to: null = the main
 // multi-project dashboard, a projectId = a detached single-project window.
 // Multiplexing projects across windows lets you spread them over macOS Spaces.
 const windowProject = new Map<BrowserWindow, string | null>();
-let services: Services | null = null;
+let engine: Engine | null = null;
 
 /**
  * Push an event to every live window. The renderers already filter by their own
@@ -35,18 +26,6 @@ function broadcast(channel: string, ...args: unknown[]): void {
 }
 
 const SMOKE = process.env.ATEAM_SMOKE === "1";
-
-function mapEventToStatus(eventType: string): AgentStatus {
-	if (eventType === "PermissionRequest") return "awaiting_input";
-	if (eventType === "Stop") return "idle";
-	return "running";
-}
-
-function mapEventToColumn(eventType: string): KanbanColumn {
-	if (eventType === "PermissionRequest") return "needs_attention";
-	if (eventType === "Stop") return "review";
-	return "running";
-}
 
 /**
  * GUI apps on macOS launch with a minimal PATH (/usr/bin:/bin:…), so agent
@@ -289,179 +268,6 @@ function buildAppMenu(): void {
 	Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function sendTaskUpdated(taskId: string): void {
-	if (!services) return;
-	const task = repo.getTask(services.db, taskId);
-	if (task) broadcast(CH.evtTaskUpdated, toTaskDTO(task));
-}
-
-// A task was deleted (single remove or cleanup) — tell every window to drop it,
-// so a stale card can't linger in another window showing the same project.
-function sendTaskRemoved(taskId: string): void {
-	broadcast(CH.evtTaskRemoved, taskId);
-}
-
-function sendLoopsUpdated(): void {
-	if (!services) return;
-	broadcast(CH.evtLoopsUpdated, services.loopRunner.describe());
-}
-
-async function initServices(): Promise<Services> {
-	const userDataDir = app.getPath("userData");
-	// One-time migration from the pre-rename database filename.
-	const dbPath = join(userDataDir, "ateam.sqlite");
-	if (!existsSync(dbPath) && existsSync(join(userDataDir, "grove.sqlite"))) {
-		for (const suffix of ["", "-wal", "-shm"]) {
-			const old = join(userDataDir, `grove.sqlite${suffix}`);
-			if (existsSync(old)) renameSync(old, `${dbPath}${suffix}`);
-		}
-	}
-	const db = createDb(dbPath);
-	// The detached PTY daemon survives app restarts; out/main/daemon.js is run via
-	// the Electron binary as node (ELECTRON_RUN_AS_NODE) so node-pty's ABI matches.
-	const pty = new PtyClient(
-		join(__dirname, "daemon.js"),
-		join(homedir(), ".ateam", "pty-daemon.sock"),
-		process.execPath,
-	);
-	const hooks = new HookServer();
-	const hookPort = await hooks.start(repo.getSettings(db).hookPort ?? undefined);
-	const notifyScriptPath = await ensureNotifyScript(userDataDir);
-	await ensureGhShim(userDataDir);
-	const hooksDir = join(userDataDir, "hooks");
-	repo.updateSettings(db, { hookPort });
-
-	const mergeQueue = new MergeQueue({ db, onTaskUpdated: sendTaskUpdated });
-	const loopRunner = new LoopRunner({
-		db,
-		onTaskUpdated: sendTaskUpdated,
-		log: (line) => console.log(line),
-		mergeQueue,
-	});
-	loopRunner.register(createBoardReconciler());
-
-	// Board Organizer tools: the organizer loop's headless `claude -p` turn reads
-	// the board and proposes moves through these, guarded by validateSetStatus.
-	hooks.setBoardHandlers({
-		get: () => buildBoardView(db),
-		setStatus: async (req) => applySetStatus(db, req, sendTaskUpdated),
-	});
-
-	const svc: Services = {
-		db,
-		pty,
-		hooks,
-		userDataDir,
-		hooksDir,
-		notifyScriptPath,
-		hookPort,
-		mergeQueue,
-		loopRunner,
-	};
-
-	// PTY output/exit → renderer. shortcut: broadcast to every window; a detached
-	// window ignores terminals it hasn't mounted. If PTY throughput ever makes
-	// this wasteful, route by terminalId → session → project instead.
-	pty.on("data", (e) => broadcast(CH.evtPtyData, e));
-	pty.on("exit", (e) => {
-		broadcast(CH.evtPtyExit, e);
-		// Record the exit in the DB so a session is never left looking "running"
-		// after its process is gone — the gap that previously stranded cards in
-		// the running column (the board reconciler is the backstop for exits we
-		// miss entirely, e.g. while the app was closed).
-		const session = repo.getSessionByTerminal(db, e.terminalId);
-		if (!session) return;
-		if (session.exitedAt == null) {
-			repo.updateSession(db, session.id, {
-				status: "stopped",
-				exitedAt: Date.now(),
-			});
-		}
-		const task = repo.getTask(db, session.taskId);
-		if (task && task.column === "running") {
-			repo.updateTask(db, task.id, {
-				agentStatus: "stopped",
-				column:
-					task.prNumber != null || (task.gitStatus?.ahead ?? 0) > 0 ? "review" : "needs_attention",
-				isUnread: true,
-			});
-			sendTaskUpdated(task.id);
-		}
-	});
-
-	// Agent status hooks → update session/task, drive the kanban column.
-	hooks.on("hook", (e: HookEvent) => {
-		const session = repo.getSessionByTerminal(db, e.terminalId);
-		if (!session) return;
-		const status = mapEventToStatus(e.eventType);
-		repo.updateSession(db, session.id, {
-			status,
-			lastEventAt: Date.now(),
-		});
-		// "Working" fires on every tool use — too chatty for the append-only
-		// event log; it only needs to drive status/column.
-		if (e.eventType !== "Working") {
-			repo.recordEvent(db, {
-				sessionId: session.id,
-				terminalId: e.terminalId,
-				eventType: e.eventType,
-				rawAgentSessionId: e.sessionId ?? null,
-			});
-		}
-		const task = repo.getTask(db, session.taskId);
-		if (task) {
-			const column = mapEventToColumn(e.eventType);
-			// Subagents fire PreToolUse too, so a Working event must never mask a
-			// pending question — only an explicit user reply (UserReply), Stop, or
-			// a fresh Start may move a task out of needs_attention.
-			if (e.eventType === "Working" && task.column === "needs_attention") {
-				return;
-			}
-			// Skip no-op Working updates so the renderer isn't pinged per tool use.
-			if (e.eventType === "Working" && task.column === column && task.agentStatus === status) {
-				return;
-			}
-			repo.updateTask(db, task.id, {
-				agentStatus: status,
-				column,
-				lastEventAt: Date.now(),
-				// Working/Start mean the user just interacted or launched — the
-				// task isn't "unread"; Stop/PermissionRequest are news for them.
-				isUnread: e.eventType === "Stop" || e.eventType === "PermissionRequest",
-			});
-			sendTaskUpdated(task.id);
-		}
-	});
-
-	// Agent ran `gh pr merge` in its terminal → the gh shim routed it here.
-	// Resolve the task from the terminal and enqueue, so terminal merges and the
-	// in-app Merge button share one serialized queue per base branch.
-	hooks.on("merge-request", (e: MergeRequestEvent) => {
-		const session = repo.getSessionByTerminal(db, e.terminalId);
-		if (!session) return;
-		const task = repo.getTask(db, session.taskId);
-		if (!task) return;
-		const project = repo.getProject(db, task.projectId);
-		if (!project) return;
-		const settings = repo.getSettings(db);
-		const requested = e.strategy ?? "";
-		const strategy = (
-			["merge", "squash", "rebase"].includes(requested)
-				? requested
-				: (settings.defaultMergeStrategy ?? "squash")
-		) as MergeStrategy;
-		void mergeQueue.enqueue({
-			task,
-			repoPath: project.repoPath,
-			strategy,
-			updateStrategy: settings.defaultUpdateStrategy ?? "merge",
-			deleteRemoteBranch: settings.deleteRemoteBranchOnMerge ?? false,
-		});
-	});
-
-	return svc;
-}
-
 // A detached window is pinned to `projectId`; the dashboard passes undefined.
 function createWindow(projectId?: string): BrowserWindow {
 	const win = new BrowserWindow({
@@ -529,22 +335,26 @@ app.whenReady().then(async () => {
 		}
 	}
 
-	services = await initServices();
-	registerIpc({
-		services,
-		sendTaskUpdated,
-		sendTaskRemoved,
-		mergeQueue: services.mergeQueue,
-		loopRunner: services.loopRunner,
-		sendLoopsUpdated,
-		openProjectWindow,
+	engine = await createEngine({
+		dataDir: app.getPath("userData"),
+		// The detached PTY daemon (out/main/daemon.js) is run via the Electron
+		// binary as node (ELECTRON_RUN_AS_NODE) so node-pty's ABI matches.
+		daemonPath: join(__dirname, "daemon.js"),
+		execPath: process.execPath,
 	});
+	// The local engine is the default backend; the host swaps in a remote one (over
+	// SSH) on connect and re-points the IPC bridge + event forwarding at it. Binding
+	// the engine's events to every window is the host's job now (see createHost);
+	// window management (detaching a project) is desktop-native, passed to registerIpc.
+	const host = createHost({ localEngine: engine, broadcast });
+	registerIpc(host.router, { openProjectWindow });
+	registerHostIpc(host);
 
 	if (SMOKE) {
-		// Headless boot check: prove services init (db, hook server, notify
+		// Headless boot check: prove the engine inits (db, hook server, notify
 		// script) without opening a window or the daemon, then exit cleanly.
-		console.log(`ATEAM_READY hookPort=${services.hookPort}`);
-		services.hooks.stop();
+		console.log(`ATEAM_READY hookPort=${engine.services.hookPort}`);
+		engine.stopHooks();
 		app.exit(0);
 		return;
 	}
@@ -552,7 +362,7 @@ app.whenReady().then(async () => {
 	// Connect to (or launch) the PTY daemon and learn which sessions are still
 	// alive from a previous run, so the renderer can re-attach to them.
 	try {
-		await services.pty.connect();
+		await engine.connectPty();
 	} catch (err) {
 		console.error("[ateam] PTY daemon connect failed:", err);
 	}
@@ -561,7 +371,7 @@ app.whenReady().then(async () => {
 	buildAppMenu();
 	// Start the board reconciler (and any other registered loops) once the
 	// window exists, so the first pass can push corrections to the renderer.
-	services.loopRunner.start();
+	engine.startLoops();
 	setupAutoUpdate();
 	app.on("activate", () => {
 		if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -581,10 +391,8 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-	// Do NOT kill PTYs — the daemon keeps them alive across restarts. Just
-	// disconnect; the daemon stays running with the sessions.
-	services?.pty.disconnect();
-	services?.hooks.stop();
-	services?.loopRunner.stop();
+	// Do NOT kill PTYs — the daemon keeps them alive across restarts. engine.stop
+	// just disconnects the client and stops hooks/loops; the daemon stays running.
+	engine?.stop();
 	if (process.platform !== "darwin") app.quit();
 });

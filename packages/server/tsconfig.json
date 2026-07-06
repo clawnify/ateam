@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // A node-runtime package (net/child_process/…) with bun:test tests — needs
+  // both type roots. bun-types alone mistypes net.Server.
+  "compilerOptions": { "rootDir": ".", "types": ["node", "bun"] },
+  // Tests run under bun:test (not tsc), matching the desktop convention.
+  "include": ["src/**/*.ts"]
+}

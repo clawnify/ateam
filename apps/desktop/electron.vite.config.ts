@@ -14,6 +14,8 @@ export default defineConfig({
 					"@ateam/db",
 					"@ateam/agents",
 					"@ateam/panes",
+					"@ateam/protocol",
+					"@ateam/server",
 				],
 			}),
 		],
@@ -21,14 +23,19 @@ export default defineConfig({
 			rollupOptions: {
 				input: {
 					index: resolve(__dirname, "src/main/index.ts"),
-					// The detached PTY daemon, built alongside main → out/main/daemon.js
-					daemon: resolve(__dirname, "src/daemon/index.ts"),
+					// The detached PTY daemon, built alongside main → out/main/daemon.js.
+					// Source lives in @ateam/server (its PTY subsystem); the desktop and
+					// the server dist bundle the one file. node-pty/@xterm stay desktop
+					// deps too, so electron-rebuild + runtime resolution are unchanged.
+					daemon: resolve(__dirname, "../../packages/server/src/pty/daemon.ts"),
 				},
 			},
 		},
 	},
 	preload: {
-		plugins: [externalizeDepsPlugin()],
+		// Bundle @ateam/protocol (raw TS, and CH is used at runtime here); keep
+		// real npm deps externalized as usual.
+		plugins: [externalizeDepsPlugin({ exclude: ["@ateam/protocol"] })],
 		build: {
 			rollupOptions: {
 				input: { index: resolve(__dirname, "src/preload/index.ts") },

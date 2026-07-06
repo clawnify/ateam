@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type SetStatusRequest, validateSetStatus } from "../src/main/loops/board-organizer";
+import { type SetStatusRequest, validateSetStatus } from "../src/loops/board-organizer";
 
 const req = (over: Partial<SetStatusRequest>): SetStatusRequest => ({
 	taskId: "t1",

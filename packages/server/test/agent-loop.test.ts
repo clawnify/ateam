@@ -5,7 +5,7 @@ import {
 	decideContinuation,
 	HARD_MAX_ITERATIONS,
 	resolveMaxIterations,
-} from "../src/main/loops/agent-loop";
+} from "../src/loops/agent-loop";
 
 const cfg = (over: Partial<AgentLoopConfig> = {}): AgentLoopConfig => ({
 	prompt: "keep fixing failing tests",

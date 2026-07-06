@@ -226,6 +226,27 @@ export const boardChanges = sqliteTable(
 	(t) => [index("board_changes_task_idx").on(t.taskId)],
 );
 
+/**
+ * Remote hosts the client can drive an engine on, keyed by their `~/.ssh/config`
+ * alias (unique there, so it's the natural PK). We persist ONLY Ateam's own
+ * metadata — the last handshake version, which agents the box has, and when it
+ * was last reached — never connection details (hostname/port/keys/jumphosts stay
+ * OpenSSH's job). This doubles as the offline cache: the connections list renders
+ * every known host from here without opening N live SSH connections. Client-only
+ * state — the engine never reads this table.
+ */
+export const hosts = sqliteTable(
+	"hosts",
+	{
+		hostAlias: text("host_alias").primaryKey(),
+		serverVersion: text("server_version"),
+		agentsAvailable: text("agents_available", { mode: "json" }).$type<string[]>(),
+		lastSeen: integer("last_seen"),
+		createdAt: epochMs("created_at"),
+	},
+	(t) => [index("hosts_last_seen_idx").on(t.lastSeen)],
+);
+
 export { sql };
 
 export type Project = typeof projects.$inferSelect;
@@ -240,3 +261,5 @@ export type Loop = typeof loops.$inferSelect;
 export type NewLoop = typeof loops.$inferInsert;
 export type BoardChange = typeof boardChanges.$inferSelect;
 export type NewBoardChange = typeof boardChanges.$inferInsert;
+export type Host = typeof hosts.$inferSelect;
+export type NewHost = typeof hosts.$inferInsert;

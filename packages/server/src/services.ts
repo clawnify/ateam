@@ -1,5 +1,5 @@
 import type { AgentSession, AteamDb, Project, Task } from "@ateam/db";
-import type { ProjectDTO, SessionDTO, TaskDTO } from "../shared/types";
+import type { ProjectDTO, SessionDTO, TaskDTO } from "@ateam/protocol";
 import type { HookServer } from "./hooks/hook-server";
 import type { LoopRunner } from "./loops/runner";
 import type { MergeQueue } from "./merge-queue";
