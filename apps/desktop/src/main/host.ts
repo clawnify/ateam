@@ -1,11 +1,15 @@
 // The connection controller: which engine drives the app, and swapping between
 // them. Owns the always-alive local engine, the currently-active Backend, and the
 // forwarding of that backend's push-events to the renderer. Connecting to a remote
-// host opens an SSH transport, handshakes (gating the protocol version), caches the
-// result, and re-points the active backend + event stream at it.
+// host opens the connection's chosen transport — SSH (the `attach` relay over
+// OpenSSH) or a direct TCP socket (a Tailscale client to the daemon's TCP port) —
+// handshakes (gating the protocol version), caches the result, and re-points the
+// active backend + event stream at it.
+import { connect as netConnect } from "node:net";
 import { ipcMain } from "electron";
 import {
 	CH,
+	type ClientTransport,
 	createRpcClient,
 	PROTOCOL_VERSION,
 	type RpcClient,
@@ -16,6 +20,7 @@ import {
 	type Engine,
 	listConnections,
 	recordConnection,
+	socketClientTransport,
 	sshClientTransport,
 } from "@ateam/server";
 import { type Backend, type BackendEvent, localBackend, remoteBackend, type Router } from "./backend";
@@ -28,6 +33,34 @@ const REMOTE_ATTACH = "bash -lc 'exec ateam attach --stdio'";
 // Cap a connect: ssh can hang on an auth prompt or an unreachable host with no
 // error, and the UI must not wait forever. A live daemon replies in well under this.
 const CONNECT_TIMEOUT_MS = 20_000;
+
+/** Split "host:port" (or bracketed IPv6 "[fd7a::1]:7420") into its parts. */
+function parseEndpoint(endpoint: string): { host: string; port: number } {
+	const m = /^\[(.+)\]:(\d+)$/.exec(endpoint) ?? /^(.+):(\d+)$/.exec(endpoint);
+	const host = m?.[1];
+	const port = m?.[2];
+	if (!host || !port) throw new Error(`invalid endpoint "${endpoint}" — expected host:port`);
+	return { host, port: Number(port) };
+}
+
+/**
+ * Open the client transport for a connection's chosen method. Both feed the
+ * identical createRpcClient/buildAteamApi — only the byte pipe differs:
+ *  - "ssh": the proven `attach` relay over OpenSSH (keys/known_hosts are its job).
+ *  - "tcp": a direct socket to the daemon's TCP listener, typically over Tailscale
+ *           (WireGuard is the network trust boundary; no ssh subprocess needed).
+ * `dispose` tears down the pipe; the remote daemon + its PTY sessions live on.
+ */
+function openTransport(conn: ConnectionDTO): { transport: ClientTransport; dispose: () => void } {
+	if (conn.transport === "tcp") {
+		if (!conn.endpoint) throw new Error(`connection "${conn.alias}" has no TCP endpoint`);
+		const { host, port } = parseEndpoint(conn.endpoint);
+		const sock = netConnect(port, host);
+		return { transport: socketClientTransport(sock), dispose: () => sock.destroy() };
+	}
+	const client = sshClientTransport(conn.alias, [REMOTE_ATTACH]);
+	return { transport: client.transport, dispose: client.close };
+}
 
 /** The push-events forwarded from the active backend to every window. */
 const FORWARDED: { event: BackendEvent; channel: string }[] = [
@@ -95,17 +128,21 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			return statusOf(local, null);
 		}
 
-		const client = sshClientTransport(alias, [REMOTE_ATTACH]);
-		const rpc: RpcClient = createRpcClient(client.transport);
+		// The user's chosen transport for this host lives on its connection record.
+		const conn = listConnections(db).find((c) => c.alias === alias);
+		if (!conn) throw new Error(`unknown connection "${alias}"`);
+
+		const { transport, dispose } = openTransport(conn);
+		const rpc: RpcClient = createRpcClient(transport);
 		let info: SystemInfo;
 		try {
 			info = await withTimeout(rpc.call(CH.systemHello) as Promise<SystemInfo>, CONNECT_TIMEOUT_MS);
 		} catch (err) {
-			client.close();
+			dispose();
 			throw err;
 		}
 		if (info.protocolVersion !== PROTOCOL_VERSION) {
-			client.close();
+			dispose();
 			throw new Error(
 				`Protocol mismatch: "${alias}" speaks v${info.protocolVersion}, this app speaks v${PROTOCOL_VERSION}. Update the older side.`,
 			);
@@ -117,7 +154,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			agentsAvailable: info.agents,
 		});
 		// The remote's method set matches the local dispatcher's (same contract).
-		swap(remoteBackend(rpc, local.methods, client.close), alias);
+		swap(remoteBackend(rpc, local.methods, dispose), alias);
 		return { mode: "remote", alias, info };
 	}
 

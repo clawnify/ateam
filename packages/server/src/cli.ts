@@ -56,19 +56,52 @@ async function runDaemon(): Promise<void> {
 		/* best-effort */
 	}
 
+	// Each client gets its own serveRpc over one connection; the engine (and its
+	// PTY sessions) is shared and outlives any single client. The same handler
+	// serves every listener — a net.Socket is a net.Socket whether it arrived over
+	// the unix socket (a local `attach` relay / SSH) or a TCP port (a Tailscale
+	// client), so socketServerTransport is transport-agnostic here.
+	const onConnection = (sock: Socket): void => {
+		serveRpc(engine, dispatcher, socketServerTransport(sock));
+	};
+
 	// allowHalfOpen: a one-shot client that sends a request then closes its write
 	// side (EOF) must still receive the reply — without this the socket's read-end
 	// 'end' auto-closes the write-end, dropping the response mid-flight.
-	const server = createServer({ allowHalfOpen: true }, (sock: Socket) => {
-		// Each client gets its own serveRpc over one connection; the engine (and
-		// its PTY sessions) is shared and outlives any single client.
-		serveRpc(engine, dispatcher, socketServerTransport(sock));
-	});
+	const server = createServer({ allowHalfOpen: true }, onConnection);
 	server.on("error", (err) => {
 		console.error(`[ateam] daemon error: ${err.message}`);
 		process.exit(1);
 	});
 	server.listen(SOCK, () => console.log(`[ateam] daemon listening at ${SOCK}`));
+
+	// Optional TCP listener, for network clients that can't run `ateam attach`
+	// (the phone over Tailscale). Opt-in via env; the SAME onConnection serves it.
+	// This socket carries NO auth of its own — auth is the network's job (a
+	// Tailscale ACL, a private interface), exactly like the unix socket trusts
+	// filesystem perms. So we REFUSE a wildcard bind: exposing an unauthenticated
+	// engine on 0.0.0.0 would hand it to the whole network. Bind to an explicit
+	// private address (the Tailscale IP) only.
+	const tcpPort = process.env.ATEAM_TCP_PORT;
+	const tcpHost = process.env.ATEAM_TCP_HOST;
+	if (tcpPort) {
+		const port = Number(tcpPort);
+		if (!tcpHost || tcpHost === "0.0.0.0" || tcpHost === "::" || !Number.isInteger(port) || port <= 0) {
+			console.error(
+				"[ateam] refusing TCP listen: set ATEAM_TCP_HOST to an explicit private address " +
+					"(e.g. the Tailscale IP) and ATEAM_TCP_PORT to a port — never a wildcard bind",
+			);
+			process.exit(1);
+		}
+		const tcpServer = createServer({ allowHalfOpen: true }, onConnection);
+		tcpServer.on("error", (err) => {
+			console.error(`[ateam] TCP listener error: ${err.message}`);
+			process.exit(1);
+		});
+		tcpServer.listen(port, tcpHost, () =>
+			console.log(`[ateam] daemon also listening on tcp://${tcpHost}:${port}`),
+		);
+	}
 
 	// Connect to the PTY daemon in the BACKGROUND — don't block RPC on it. The
 	// git/tasks/board surface serves immediately (a client's handshake shouldn't

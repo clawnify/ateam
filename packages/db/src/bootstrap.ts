@@ -133,7 +133,9 @@ export function bootstrap(db: SqliteExecutor): void {
 				server_version TEXT,
 				agents_available TEXT,
 				last_seen INTEGER,
-				created_at INTEGER
+				created_at INTEGER,
+				transport TEXT DEFAULT 'ssh',
+				endpoint TEXT
 			);
 			CREATE INDEX IF NOT EXISTS hosts_last_seen_idx ON hosts (last_seen);
 	`);
@@ -151,6 +153,8 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE loops ADD COLUMN config TEXT",
 		"ALTER TABLE loops ADD COLUMN cadence_mode TEXT",
 		"ALTER TABLE loops ADD COLUMN interval_ms INTEGER",
+		"ALTER TABLE hosts ADD COLUMN transport TEXT DEFAULT 'ssh'",
+		"ALTER TABLE hosts ADD COLUMN endpoint TEXT",
 	]) {
 		try {
 			db.exec(sql);
