@@ -1,41 +1,42 @@
 // Ateam mobile — board + connection preview.
-// Design: Ateam's own dark/teal identity, applying the clawnify DESIGN-apps
-// structural signature (labeled eyebrow zones · chips for facts vs tinted badges
-// for signals · monochrome chrome, color reserved for status · engineered numbers
-// · borders not shadows · no emoji) — NOT its brand theme (coral / light canvas).
-// Connection model = ALWAYS SSH: a host is Label · IP/Hostname · Port · Username ·
-// Key (Termius's model); the IP is just what you point at the box's Tailscale
-// address. Preview scope: mock data; live SSH wiring (buildAteamApi over a
-// native-SSH ClientTransport) is next.
+// Theme = Ateam's real tokens (apps/desktop/src/renderer/src/index.css): near-black
+// #0c0c0e canvas, purple accent #7c5cff, ink/white primary action (a hue is never
+// the CTA), amber/blue/green status. Logo = the "mission-control tiling" mark from
+// apps/desktop/build/icon.svg, redrawn with Views. Structure follows the clawnify
+// DESIGN-apps signature (eyebrow zones · chips for facts vs tinted badges for
+// signals · monochrome chrome · no emoji). Connection = ALWAYS SSH (a host is
+// Label · IP/Hostname · Port · Username · Key; the IP is the box's Tailscale
+// address). Preview: mock data; live SSH wiring next.
 import { useState } from "react";
 import { Pressable, ScrollView, StatusBar, StyleSheet, Text, useColorScheme, View } from "react-native";
 
 const C = {
-	bg: "#0b0d10",
-	surface: "#14171c",
-	sunken: "#1a1e25",
-	line: "#242b35",
-	ink: "#e7ebf1",
-	muted: "#8b96a6",
-	faint: "#5a6472",
-	teal: "#35d1c0",
-	amber: "#e6a94b",
-	blue: "#6ea8fe",
-	green: "#67cd8b",
+	bg: "#0c0c0e",
+	surface: "#141418", // --bg-elev
+	sunken: "#1c1c22", // --bg-elev-2
+	line: "#2a2a33", // --border
+	ink: "#e6e6ea", // --text
+	muted: "#9a9aa6", // --text-dim
+	faint: "#6a6a75",
+	accent: "#7c5cff", // --accent (Ateam purple)
+	green: "#4ade80",
+	amber: "#fbbf24",
+	red: "#f87171",
+	blue: "#60a5fa",
 };
 
 const TINT: Record<string, string> = {
-	[C.amber]: "rgba(230,169,75,0.14)",
-	[C.teal]: "rgba(53,209,192,0.14)",
-	[C.blue]: "rgba(110,168,254,0.14)",
-	[C.green]: "rgba(103,205,139,0.14)",
-	[C.muted]: "rgba(139,150,166,0.12)",
+	[C.amber]: "rgba(251,191,36,0.13)",
+	[C.accent]: "rgba(124,92,255,0.16)",
+	[C.blue]: "rgba(96,165,250,0.14)",
+	[C.green]: "rgba(74,222,128,0.13)",
+	[C.muted]: "rgba(154,154,166,0.12)",
 };
 
 type Column = "needs_attention" | "running" | "review" | "todo" | "merged";
 const COLUMNS: { key: Column; label: string; tint: string }[] = [
 	{ key: "needs_attention", label: "Needs You", tint: C.amber },
-	{ key: "running", label: "In Progress", tint: C.teal },
+	{ key: "running", label: "In Progress", tint: C.accent },
 	{ key: "review", label: "Review", tint: C.blue },
 	{ key: "todo", label: "Backlog", tint: C.muted },
 	{ key: "merged", label: "Done", tint: C.green },
@@ -50,6 +51,20 @@ const TASKS: Task[] = [
 	{ name: "Rename daemon → engine", column: "todo", agent: "claude", branch: "chore/rename", note: "queued" },
 	{ name: "Remote fs picker", column: "merged", agent: "claude", branch: "feat/fs-listdir", note: "merged · PR #45" },
 ];
+
+// The Ateam logo mark: a wide top pane + two dimming squares (icon.svg), on a dark
+// tile. Redrawn with Views so it scales + themes with no native SVG dependency.
+function LogoMark() {
+	return (
+		<View style={styles.logo}>
+			<View style={styles.logoTop} />
+			<View style={styles.logoBottom}>
+				<View style={[styles.logoSq, { opacity: 0.85 }]} />
+				<View style={[styles.logoSq, { opacity: 0.6 }]} />
+			</View>
+		</View>
+	);
+}
 
 function Chip({ children }: { children: string }) {
 	return (
@@ -128,9 +143,7 @@ function ConnectionScreen({ onConnect }: { onConnect: () => void }) {
 		<View style={styles.root}>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
 			<View style={styles.navBar}>
-				<View style={styles.monogram}>
-					<Text style={styles.monogramText}>A</Text>
-				</View>
+				<LogoMark />
 				<Text style={styles.navTitle}>New connection</Text>
 				<View style={styles.spacer} />
 				<Pressable style={styles.connectBtn} onPress={onConnect} hitSlop={6}>
@@ -140,7 +153,7 @@ function ConnectionScreen({ onConnect }: { onConnect: () => void }) {
 
 			<ScrollView contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
 				<View style={styles.eyebrowRow}>
-					<View style={[styles.tick, { backgroundColor: C.teal }]} />
+					<View style={[styles.tick, { backgroundColor: C.accent }]} />
 					<Text style={styles.eyebrow}>Host</Text>
 				</View>
 				<View style={styles.formCard}>
@@ -150,7 +163,7 @@ function ConnectionScreen({ onConnect }: { onConnect: () => void }) {
 				</View>
 
 				<View style={[styles.eyebrowRow, { marginTop: 22 }]}>
-					<View style={[styles.tick, { backgroundColor: C.teal }]} />
+					<View style={[styles.tick, { backgroundColor: C.accent }]} />
 					<Text style={styles.eyebrow}>Credentials</Text>
 				</View>
 				<View style={styles.formCard}>
@@ -175,9 +188,7 @@ function BoardScreen({ onOpenConnection }: { onOpenConnection: () => void }) {
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
 			<View style={styles.header}>
 				<View style={styles.brandRow}>
-					<View style={styles.monogram}>
-						<Text style={styles.monogramText}>A</Text>
-					</View>
+					<LogoMark />
 					<Text style={styles.brand}>Ateam</Text>
 					<View style={styles.spacer} />
 					<Pressable style={styles.connPill} onPress={onOpenConnection} hitSlop={6}>
@@ -227,6 +238,23 @@ export default function App() {
 const styles = StyleSheet.create({
 	root: { flex: 1, backgroundColor: C.bg, paddingTop: 60 },
 
+	// logo mark (icon.svg redrawn)
+	logo: {
+		width: 32,
+		height: 32,
+		borderRadius: 9,
+		backgroundColor: "#26262e",
+		borderWidth: 1,
+		borderColor: C.line,
+		paddingHorizontal: 6,
+		paddingVertical: 6,
+		justifyContent: "center",
+		gap: 2.5,
+	},
+	logoTop: { height: 9, borderRadius: 1.5, backgroundColor: C.ink },
+	logoBottom: { flexDirection: "row", gap: 2.5 },
+	logoSq: { flex: 1, height: 8, borderRadius: 1.5, backgroundColor: "#ffffff" },
+
 	// header / nav
 	header: { paddingHorizontal: 18, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: C.line },
 	navBar: {
@@ -240,21 +268,11 @@ const styles = StyleSheet.create({
 	},
 	navTitle: { color: C.ink, fontSize: 17, fontWeight: "700", letterSpacing: -0.2 },
 	brandRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-	monogram: {
-		width: 30,
-		height: 30,
-		borderRadius: 8,
-		backgroundColor: C.sunken,
-		borderWidth: 1,
-		borderColor: C.line,
-		alignItems: "center",
-		justifyContent: "center",
-	},
-	monogramText: { color: C.teal, fontSize: 16, fontWeight: "800" },
 	brand: { color: C.ink, fontSize: 20, fontWeight: "700", letterSpacing: -0.3 },
 	spacer: { flex: 1 },
-	connectBtn: { backgroundColor: C.teal, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
-	connectBtnText: { color: "#04211d", fontSize: 13, fontWeight: "800" },
+	// Primary action = ink/white (a hue is never the CTA — Ateam + clawnify).
+	connectBtn: { backgroundColor: C.ink, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
+	connectBtnText: { color: "#15151a", fontSize: 13, fontWeight: "800" },
 	connPill: {
 		flexDirection: "row",
 		alignItems: "center",
@@ -291,8 +309,8 @@ const styles = StyleSheet.create({
 	fieldDivider: { borderBottomWidth: 1, borderBottomColor: C.line },
 	fieldLabel: { color: C.muted, fontSize: 14 },
 	fieldValue: { color: C.ink, fontSize: 14, fontVariant: ["tabular-nums"], flexShrink: 1, textAlign: "right" },
-	keyChip: { backgroundColor: C.sunken, borderWidth: 1, borderColor: C.line, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
-	keyChipText: { color: C.teal, fontSize: 12, fontWeight: "600", letterSpacing: 0.3 },
+	keyChip: { backgroundColor: TINT[C.accent], borderWidth: 1, borderColor: "rgba(124,92,255,0.4)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+	keyChipText: { color: C.accent, fontSize: 12, fontWeight: "600", letterSpacing: 0.3 },
 	formNote: { color: C.faint, fontSize: 12, lineHeight: 18, marginTop: 18, paddingHorizontal: 2 },
 
 	// board
