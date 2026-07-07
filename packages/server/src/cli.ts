@@ -22,10 +22,14 @@ import { existsSync, mkdirSync, openSync, realpathSync, unlinkSync } from "node:
 import { connect, createServer, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { WebSocketServer } from "ws";
+import type { Dispatcher } from "./dispatcher";
 import { createDispatcher } from "./dispatcher";
+import type { Engine } from "./engine";
 import { createEngine } from "./engine";
 import { serveRpc } from "./rpc";
 import { socketServerTransport } from "./transport/socket";
+import { wsServerTransport } from "./transport/ws";
 
 const SOCK = process.env.ATEAM_RPC_SOCK ?? join(homedir(), ".ateam", "rpc.sock");
 
@@ -102,6 +106,46 @@ async function runDaemon(): Promise<void> {
 			console.error(`[ateam] PTY daemon connect failed: ${(err as Error).message}`);
 		});
 	});
+
+	maybeStartWsListener(engine, dispatcher);
+}
+
+/**
+ * Opt-in WebSocket listener, for network clients that can't run `ateam attach`
+ * over SSH — the phone over Tailscale (React Native has no child `ssh`, but ships
+ * a WebSocket). OFF by default: the box stays listener-free and the desktop's
+ * SSH-only path is unchanged unless ATEAM_WS_ADDR is set.
+ *
+ * This socket carries NO auth of its own — auth is the network's job (a Tailscale
+ * ACL / a private interface), exactly as the unix socket trusts filesystem perms.
+ * So we REFUSE a wildcard bind: exposing an unauthenticated engine on 0.0.0.0
+ * would hand it to the whole network. Bind to an explicit private address (the
+ * Tailscale IP) only. Same guard the reverted TCP listener used.
+ */
+function maybeStartWsListener(engine: Engine, dispatcher: Dispatcher): void {
+	const addr = process.env.ATEAM_WS_ADDR;
+	if (!addr) return;
+	const lastColon = addr.lastIndexOf(":");
+	const host = lastColon > 0 ? addr.slice(0, lastColon) : "";
+	const port = Number(addr.slice(lastColon + 1));
+	if (!host || host === "0.0.0.0" || host === "::" || !Number.isInteger(port) || port <= 0) {
+		console.error(
+			"[ateam] refusing WS listen: set ATEAM_WS_ADDR to <host>:<port> where host is an " +
+				"explicit private address (e.g. the Tailscale IP) — never a wildcard (0.0.0.0/::)",
+		);
+		process.exit(1);
+	}
+	const wss = new WebSocketServer({ host, port });
+	wss.on("connection", (sock) => {
+		// Each client gets its own serveRpc; the engine (and its PTY sessions) is
+		// shared and outlives any single client — same contract as the socket path.
+		serveRpc(engine, dispatcher, wsServerTransport(sock));
+	});
+	wss.on("error", (err: Error) => {
+		console.error(`[ateam] WS listener error: ${err.message}`);
+		process.exit(1);
+	});
+	wss.on("listening", () => console.log(`[ateam] daemon also listening on ws://${host}:${port}`));
 }
 
 /**

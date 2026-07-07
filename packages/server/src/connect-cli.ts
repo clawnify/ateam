@@ -18,7 +18,7 @@
 // / node-pty) and runs under plain bun/node.
 //
 //   bun packages/server/src/connect-cli.ts [alias] [--task <id>] [--terminal <id>] [--key <path>]
-//   default alias: hetzner-devbox
+//   default alias: devbox
 import { homedir } from "node:os";
 import {
 	type AteamApi,
@@ -62,7 +62,7 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-	const args: Args = { alias: "hetzner-devbox" };
+	const args: Args = { alias: "devbox" };
 	const rest = argv.slice(2);
 	for (let i = 0; i < rest.length; i++) {
 		const tok = rest[i];

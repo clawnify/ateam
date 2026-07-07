@@ -439,3 +439,6 @@ export type { NativeClientApi } from "./client-api";
 export { buildAteamApi, serverHandshake } from "./client-api";
 // Transport-agnostic RPC framing + client (shared by every transport).
 export * from "./rpc";
+export type { WsClient } from "./ws";
+// WebSocket ClientTransport over the platform-global WebSocket (browser / RN / Bun).
+export { wsClientTransport } from "./ws";
