@@ -366,6 +366,8 @@ export interface AteamApi {
 			agentId: string;
 			yolo?: boolean;
 			resume?: boolean;
+			/** Launch the agent's own multi-agent board (e.g. `claude agents`) in the worktree. */
+			agentMode?: boolean;
 			/** Initial instruction handed to the agent at launch. */
 			prompt?: string;
 			/** Absolute paths to attach — appended to the prompt for the agent to read. */

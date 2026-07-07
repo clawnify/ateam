@@ -465,6 +465,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			agentId: string;
 			yolo?: boolean;
 			resume?: boolean;
+			agentMode?: boolean;
 			prompt?: string;
 			files?: string[];
 		}) => {
@@ -503,7 +504,13 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				const list = input.files.map((f) => `- ${f}`).join("\n");
 				prompt = prompt ? `${prompt}\n\nAttached files:\n${list}` : `Attached files:\n${list}`;
 			}
-			let agentCmd = agentCommand(agent, { yolo: input.yolo, resume: input.resume, prompt });
+			let agentCmd = agentCommand(agent, {
+				yolo: input.yolo,
+				resume: input.resume,
+				agentMode: input.agentMode,
+				cwd: task.worktreePath,
+				prompt,
+			});
 			if (agent.id === "codex") {
 				// Codex has no hooks, but `notify` invokes a program with a JSON
 				// payload on turn completion — our script maps it to Stop. Injected

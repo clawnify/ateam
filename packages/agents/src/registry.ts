@@ -26,6 +26,12 @@ export interface AgentDefinition {
 	 * pick a session back up after the agent process ended (e.g. app restart).
 	 */
 	resumeCommand?: string;
+	/**
+	 * "Agent mode" command — the tool's autonomous multi-agent surface (e.g.
+	 * Claude Code's `claude agents` board), launched in the task's worktree.
+	 * Omitted for agents without one.
+	 */
+	agentsCommand?: string;
 	/** How an initial task prompt is delivered (if supported). */
 	promptTransport?: PromptTransport;
 }
@@ -43,12 +49,12 @@ export const AGENTS = [
 		command: "claude",
 		yoloFlag: "--permission-mode auto",
 		resumeCommand: "claude --continue",
+		agentsCommand: "claude agents",
 	},
 	{
 		id: "codex",
 		label: "Codex",
-		description:
-			"OpenAI's coding agent for reading, modifying, and running code across tasks.",
+		description: "OpenAI's coding agent for reading, modifying, and running code across tasks.",
 		bin: "codex",
 		command: "codex",
 		yoloFlag: "--dangerously-bypass-approvals-and-sandbox",
@@ -64,13 +70,28 @@ export const AGENTS = [
 	},
 ] as const satisfies readonly AgentDefinition[];
 
-/** Build the launch command line for an agent (YOLO and/or resume variants). */
+/** Build the launch command line for an agent (YOLO, resume, or agent-mode variants). */
 export function agentCommand(
 	agent: AgentDefinition,
-	opts: { yolo?: boolean; resume?: boolean; prompt?: string } = {},
+	opts: {
+		yolo?: boolean;
+		resume?: boolean;
+		agentMode?: boolean;
+		/** Working dir to scope agent mode to (the task's worktree). */
+		cwd?: string;
+		prompt?: string;
+	} = {},
 ): string {
-	const base =
-		opts.resume && agent.resumeCommand ? agent.resumeCommand : agent.command;
+	// Agent mode launches the tool's own multi-agent board (interactive — it takes
+	// the task description itself), so it ignores the prompt/resume variants. The
+	// board is NOT scoped by the process cwd — it needs an explicit `--cwd` to
+	// filter to this worktree (e.g. `claude agents --cwd <worktree>`).
+	if (opts.agentMode && agent.agentsCommand) {
+		const cwd = opts.cwd ? ` --cwd '${opts.cwd.replace(/'/g, `'\\''`)}'` : "";
+		const base = `${agent.agentsCommand}${cwd}`;
+		return opts.yolo && agent.yoloFlag ? `${base} ${agent.yoloFlag}` : base;
+	}
+	const base = opts.resume && agent.resumeCommand ? agent.resumeCommand : agent.command;
 	const cmd = opts.yolo && agent.yoloFlag ? `${base} ${agent.yoloFlag}` : base;
 	if (!opts.prompt) return cmd;
 	// Single-quoted for the login shell; claude/codex take the prompt as a
