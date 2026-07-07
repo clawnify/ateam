@@ -723,7 +723,12 @@ export function App() {
 								}
 							/>
 						) : (
-							<MissionControl tasks={activeTasks} layout={mcLayout} onExpand={openFromMission} />
+							<MissionControl
+								tasks={activeTasks}
+								order={orderedSidebarTasks.map((t) => t.id)}
+								layout={mcLayout}
+								onExpand={openFromMission}
+							/>
 						)
 					) : (
 						<LoopsPanel />
@@ -1178,16 +1183,25 @@ function TaskPanel({
 
 function MissionControl({
 	tasks,
+	order,
 	layout,
 	onExpand,
 }: {
 	tasks: TaskDTO[];
+	order: string[];
 	layout: McLayout;
 	onExpand: (task: TaskDTO, terminalId: string) => void;
 }) {
 	const [tiles, setTiles] = useState<{ task: TaskDTO; terminalId: string }[]>([]);
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
+
+	// Snapshot the sidebar's ordering the moment we land here, so tiles come up
+	// in the same order the tasks list is showing — but freeze it: while you're
+	// watching, terminals must not shuffle under you (e.g. "sort by updated"
+	// would otherwise reorder live as agents emit events). Tasks that gain a
+	// session after we landed (not in the snapshot) sort to the end.
+	const [rank] = useState(() => new Map(order.map((id, i) => [id, i])));
 
 	useEffect(() => {
 		let cancelled = false;
@@ -1197,6 +1211,13 @@ function MissionControl({
 				const sessions = await window.ateam.pty.listForTask(t.id);
 				for (const s of sessions) collected.push({ task: t, terminalId: s.terminalId });
 			}
+			// Stable sort by the frozen sidebar order; V8's stable sort keeps a
+			// task's own sessions (and any equal-rank ties) in encounter order.
+			collected.sort(
+				(a, b) =>
+					(rank.get(a.task.id) ?? Number.MAX_SAFE_INTEGER) -
+					(rank.get(b.task.id) ?? Number.MAX_SAFE_INTEGER),
+			);
 			if (!cancelled) setTiles(collected);
 		};
 		void refresh();
@@ -1205,7 +1226,7 @@ function MissionControl({
 			cancelled = true;
 			clearInterval(id);
 		};
-	}, []);
+	}, [rank]);
 
 	if (tiles.length === 0) {
 		return (
