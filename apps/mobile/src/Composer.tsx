@@ -7,7 +7,7 @@
 
 import type { AgentDTO } from "@ateam/protocol";
 import { useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { AgentIcon } from "./AgentIcon";
 
 const C = {
@@ -53,6 +53,8 @@ export function Composer({
 	);
 	const [yolo, setYolo] = useState(false);
 	const [agentMode, setAgentMode] = useState(false);
+	const [pickerOpen, setPickerOpen] = useState(false);
+	const current = pickable.find((a) => a.id === agentId) ?? pickable[0];
 
 	// Always need something: a prompt (normal) or a task name (agent mode).
 	const canSubmit = !busy && text.trim().length > 0;
@@ -83,20 +85,37 @@ export function Composer({
 				editable={!busy}
 			/>
 			<View style={styles.row}>
-				{/* Agent picker — tappable chips (few agents, no dropdown needed). */}
-				{pickable.map((a) => (
-					<Pressable
-						key={a.id}
-						style={[styles.chip, agentId === a.id && styles.chipOn]}
-						onPress={() => setAgentId(a.id)}
-						hitSlop={4}
-					>
-						<AgentIcon agentId={a.id} size={14} />
-						<Text style={[styles.chipText, agentId === a.id && styles.chipTextOn]}>
-							{a.label.replace(/ Code$/, "")}
-						</Text>
+				{/* Agent picker: show only the current agent; tap to open the popover. */}
+				<Pressable style={styles.chip} onPress={() => setPickerOpen(true)} hitSlop={4}>
+					<AgentIcon agentId={current?.id} size={14} />
+					<Text style={styles.chipTextOn}>{current?.label.replace(/ Code$/, "") ?? "Agent"}</Text>
+					{pickable.length > 1 ? <Text style={styles.caret}>▾</Text> : null}
+				</Pressable>
+				<Modal
+					visible={pickerOpen}
+					transparent
+					animationType="fade"
+					onRequestClose={() => setPickerOpen(false)}
+				>
+					<Pressable style={styles.backdrop} onPress={() => setPickerOpen(false)}>
+						<View style={styles.popover}>
+							{pickable.map((a) => (
+								<Pressable
+									key={a.id}
+									style={styles.popRow}
+									onPress={() => {
+										setAgentId(a.id);
+										setPickerOpen(false);
+									}}
+								>
+									<AgentIcon agentId={a.id} size={16} />
+									<Text style={styles.popText}>{a.label}</Text>
+									{a.id === agentId ? <Text style={styles.popCheck}>✓</Text> : null}
+								</Pressable>
+							))}
+						</View>
 					</Pressable>
-				))}
+				</Modal>
 				<View style={styles.spacer} />
 				{/* Auto mode (yolo) */}
 				<Pressable
@@ -135,9 +154,36 @@ const styles = StyleSheet.create({
 		backgroundColor: C.surface,
 		paddingHorizontal: 12,
 		paddingTop: 10,
-		paddingBottom: 12,
+		// Extra bottom padding clears the iOS home indicator so the mode buttons
+		// aren't hidden behind it.
+		paddingBottom: 34,
 		gap: 8,
 	},
+	// agent popover
+	backdrop: {
+		flex: 1,
+		backgroundColor: "rgba(0,0,0,0.5)",
+		justifyContent: "flex-end",
+		padding: 16,
+		paddingBottom: 90,
+	},
+	popover: {
+		backgroundColor: C.surface,
+		borderWidth: 1,
+		borderColor: C.line,
+		borderRadius: 12,
+		paddingVertical: 6,
+	},
+	popRow: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 10,
+		paddingHorizontal: 14,
+		paddingVertical: 12,
+	},
+	popText: { color: C.ink, fontSize: 15, flex: 1 },
+	popCheck: { color: C.ink, fontSize: 15, fontWeight: "700" },
+	caret: { color: C.muted, fontSize: 10, marginLeft: 2 },
 	input: {
 		color: C.ink,
 		fontSize: 15,

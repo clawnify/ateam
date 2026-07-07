@@ -21,6 +21,9 @@ class ExpoSwifttermView: ExpoView {
     terminal.nativeBackgroundColor = .black
     terminal.nativeForegroundColor = UIColor(white: 0.9, alpha: 1)
     terminal.backgroundColor = .black
+    // Drop SwiftTerm's built-in accessory bar (esc/tab/arrows) — we render our own
+    // shortcut toolbar in RN, so this is just the plain iPhone keyboard.
+    terminal.inputAccessoryView = nil
 
     // Auto Layout (not a hand-set frame) so the terminal's own layoutSubviews fires
     // with real bounds → processSizeChange computes the grid + renders.

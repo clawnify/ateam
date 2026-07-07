@@ -55,7 +55,23 @@ export async function connect(url: string): Promise<Connection> {
 			`Protocol mismatch: box speaks v${info.protocolVersion}, app speaks v${PROTOCOL_VERSION}. Update the older side.`,
 		);
 	}
-	return { api: buildAteamApi(rpc, mobileNative), info, close: client.close };
+
+	// Keepalive: a WS over Tailscale on a phone goes half-open on NAT/WireGuard idle
+	// timeout with no close event — a later RPC then hangs forever. A periodic cheap
+	// call (system:hello) keeps outbound traffic flowing so the mapping stays live.
+	// 15s is well under typical NAT/WireGuard (25s) timeouts. Cleared on close.
+	const keepalive = setInterval(() => {
+		void serverHandshake(rpc).catch(() => {});
+	}, 15_000);
+
+	return {
+		api: buildAteamApi(rpc, mobileNative),
+		info,
+		close: () => {
+			clearInterval(keepalive);
+			client.close();
+		},
+	};
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
