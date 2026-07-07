@@ -150,7 +150,9 @@ export function TerminalScreen({
 			} else if (msg.type === "ready") {
 				// xterm is mounted: size the PTY, paint its current screen, then flush
 				// any chunks that streamed in while we were setting up.
-				if (msg.cols && msg.rows) api.pty.resize(id, msg.cols, msg.rows);
+				const cols = msg.cols ?? 80;
+				const rows = msg.rows ?? 24;
+				api.pty.resize(id, cols, rows);
 				try {
 					const snap = await api.pty.snapshot(id);
 					if (snap.data) inject(snap.data);
@@ -165,6 +167,14 @@ export function TerminalScreen({
 					buffered.current = [];
 					applied.current = true;
 				}
+				// Force a full repaint. A same-size reattach fires no SIGWINCH, so a
+				// running full-screen TUI (Claude Code) never redraws its live UI — you
+				// see only the replayed scrollback, missing the input box/footer. Jiggle
+				// the size (rows-1 → rows) to trigger SIGWINCH; the TUI then repaints
+				// everything from scratch (authoritative — better than trusting the
+				// serialized snapshot for alt-screen content).
+				setTimeout(() => api.pty.resize(id, cols, Math.max(1, rows - 1)), 80);
+				setTimeout(() => api.pty.resize(id, cols, rows), 200);
 			}
 		},
 		[api, terminalId, inject],
