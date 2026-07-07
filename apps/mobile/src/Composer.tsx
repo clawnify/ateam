@@ -8,6 +8,7 @@
 import type { AgentDTO } from "@ateam/protocol";
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { AgentIcon } from "./AgentIcon";
 
 const C = {
 	surface: "#141418",
@@ -90,6 +91,7 @@ export function Composer({
 						onPress={() => setAgentId(a.id)}
 						hitSlop={4}
 					>
+						<AgentIcon agentId={a.id} size={14} />
 						<Text style={[styles.chipText, agentId === a.id && styles.chipTextOn]}>
 							{a.label.replace(/ Code$/, "")}
 						</Text>
@@ -159,6 +161,8 @@ const styles = StyleSheet.create({
 	row: { flexDirection: "row", alignItems: "center", gap: 6 },
 	spacer: { flex: 1 },
 	chip: {
+		flexDirection: "row",
+		gap: 5,
 		paddingHorizontal: 10,
 		height: 30,
 		borderRadius: 8,

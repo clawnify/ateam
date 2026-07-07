@@ -3,10 +3,14 @@
 // size→resize) — only the renderer changes. SwiftTerm is a native UIScrollView, so
 // scroll / selection / copy are native (the whole reason for the swap). Kept
 // separate from TerminalScreen so the webview path stays intact while we evaluate.
+
+import type { AteamApi, PtyDataEvent, TaskDTO } from "@ateam/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
-import type { AteamApi, PtyDataEvent, TaskDTO } from "@ateam/protocol";
-import { type SwiftTermHandle, SwiftTermView } from "../modules/expo-swiftterm/src/ExpoSwifttermView";
+import {
+	type SwiftTermHandle,
+	SwiftTermView,
+} from "../modules/expo-swiftterm/src/ExpoSwifttermView";
 
 const C = {
 	bg: "#0c0c0e",
@@ -130,7 +134,12 @@ export function NativeTerminalScreen({
 				<View style={[styles.dot, { backgroundColor: status === "error" ? C.red : C.accent }]} />
 			</View>
 			{terminalId ? (
-				<SwiftTermView style={styles.term} onInput={onInput} onSizeChange={onSizeChange} ref={termRef} />
+				<SwiftTermView
+					style={styles.term}
+					onInput={onInput}
+					onSizeChange={onSizeChange}
+					ref={termRef}
+				/>
 			) : (
 				<View style={styles.center}>
 					{status === "error" ? (

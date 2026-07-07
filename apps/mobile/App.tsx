@@ -24,6 +24,7 @@ import {
 	useColorScheme,
 	View,
 } from "react-native";
+import { AgentIcon } from "./src/AgentIcon";
 import { Composer, type ComposerSubmit } from "./src/Composer";
 import { type Connection, connect } from "./src/connection";
 import { NativeTerminalScreen } from "./src/NativeTerminalScreen";
@@ -114,9 +115,14 @@ function Badge({ children, tint }: { children: string; tint: string }) {
 }
 
 function AgentTag({ agent }: { agent: string }) {
+	const known = agent === "claude" || agent === "codex" || agent === "opencode";
 	return (
 		<View style={styles.agentTag}>
-			<Text style={styles.agentInitial}>{agent[0]?.toUpperCase() ?? "·"}</Text>
+			{known ? (
+				<AgentIcon agentId={agent} size={14} />
+			) : (
+				<Text style={styles.agentInitial}>{agent[0]?.toUpperCase() ?? "·"}</Text>
+			)}
 		</View>
 	);
 }
