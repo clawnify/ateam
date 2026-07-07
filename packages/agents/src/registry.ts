@@ -73,15 +73,23 @@ export const AGENTS = [
 /** Build the launch command line for an agent (YOLO, resume, or agent-mode variants). */
 export function agentCommand(
 	agent: AgentDefinition,
-	opts: { yolo?: boolean; resume?: boolean; agentMode?: boolean; prompt?: string } = {},
+	opts: {
+		yolo?: boolean;
+		resume?: boolean;
+		agentMode?: boolean;
+		/** Working dir to scope agent mode to (the task's worktree). */
+		cwd?: string;
+		prompt?: string;
+	} = {},
 ): string {
 	// Agent mode launches the tool's own multi-agent board (interactive — it takes
 	// the task description itself), so it ignores the prompt/resume variants. The
-	// PTY already spawns in the task's worktree, so no --cwd is needed.
+	// board is NOT scoped by the process cwd — it needs an explicit `--cwd` to
+	// filter to this worktree (e.g. `claude agents --cwd <worktree>`).
 	if (opts.agentMode && agent.agentsCommand) {
-		return opts.yolo && agent.yoloFlag
-			? `${agent.agentsCommand} ${agent.yoloFlag}`
-			: agent.agentsCommand;
+		const cwd = opts.cwd ? ` --cwd '${opts.cwd.replace(/'/g, `'\\''`)}'` : "";
+		const base = `${agent.agentsCommand}${cwd}`;
+		return opts.yolo && agent.yoloFlag ? `${base} ${agent.yoloFlag}` : base;
 	}
 	const base = opts.resume && agent.resumeCommand ? agent.resumeCommand : agent.command;
 	const cmd = opts.yolo && agent.yoloFlag ? `${base} ${agent.yoloFlag}` : base;

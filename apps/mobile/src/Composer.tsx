@@ -60,17 +60,23 @@ export function Composer({
 
 	return (
 		<View style={styles.wrap}>
-			<TextInput
-				style={styles.input}
-				placeholder={
-					agentMode ? "Describe the task (optional in agent mode)…" : "What do you want to do?"
-				}
-				placeholderTextColor={C.faint}
-				value={prompt}
-				onChangeText={setPrompt}
-				multiline
-				editable={!busy}
-			/>
+			{/* Agent mode drives its own interactive board — no prompt is passed, so
+			    hide the textarea and show a hint instead. */}
+			{agentMode ? (
+				<Text style={styles.agentHint}>
+					Agent mode — opens the tool's multi-agent board scoped to this project's worktree.
+				</Text>
+			) : (
+				<TextInput
+					style={styles.input}
+					placeholder="What do you want to do?"
+					placeholderTextColor={C.faint}
+					value={prompt}
+					onChangeText={setPrompt}
+					multiline
+					editable={!busy}
+				/>
+			)}
 			<View style={styles.row}>
 				{/* Agent picker — tappable chips (few agents, no dropdown needed). */}
 				{pickable.map((a) => (
@@ -137,6 +143,17 @@ const styles = StyleSheet.create({
 		paddingVertical: 10,
 		minHeight: 40,
 		maxHeight: 120,
+	},
+	agentHint: {
+		color: C.faint,
+		fontSize: 13,
+		lineHeight: 18,
+		backgroundColor: C.sunken,
+		borderWidth: 1,
+		borderColor: C.line,
+		borderRadius: 10,
+		paddingHorizontal: 12,
+		paddingVertical: 10,
 	},
 	row: { flexDirection: "row", alignItems: "center", gap: 6 },
 	spacer: { flex: 1 },

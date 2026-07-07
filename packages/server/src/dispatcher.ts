@@ -508,6 +508,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				yolo: input.yolo,
 				resume: input.resume,
 				agentMode: input.agentMode,
+				cwd: task.worktreePath,
 				prompt,
 			});
 			if (agent.id === "codex") {

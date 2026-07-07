@@ -57,10 +57,34 @@ html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hi
   window.__termWrite = function (s) { term.write(s); };
   window.__termFit = function () { refit(); };
   window.__termFocus = function () { term.focus(); };
+  // Blur the hidden textarea → iOS dismisses the keyboard, revealing the full terminal.
+  window.__termBlur = function () {
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  };
 
   // webview → RN
   term.onData(function (d) { post({ type: "input", data: d }); });
   window.addEventListener("resize", refit);
+
+  // Touch scrollback: xterm only scrolls on wheel events (none on touch), so map a
+  // vertical drag to term.scrollLines. A drag scrolls; a tap (no real movement)
+  // focuses to bring the keyboard back after it was dismissed.
+  var el = document.getElementById("term");
+  var startY = 0, lastY = 0, moved = false;
+  var CELL = 17; // ~fontSize 12 line height; good enough for touch scroll feel
+  el.addEventListener("touchstart", function (e) {
+    startY = lastY = e.touches[0].clientY; moved = false;
+  }, { passive: true });
+  el.addEventListener("touchmove", function (e) {
+    var y = e.touches[0].clientY;
+    var dy = lastY - y;
+    if (Math.abs(y - startY) > 6) moved = true;
+    var lines = (dy / CELL) | 0;
+    if (lines !== 0) { term.scrollLines(lines); lastY = y; }
+  }, { passive: true });
+  el.addEventListener("touchend", function () {
+    if (!moved) term.focus(); // a tap (not a scroll) re-opens the keyboard
+  });
 
   // First paint: fit, then tell RN we're ready (it snapshots + streams from here).
   setTimeout(function () {

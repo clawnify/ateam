@@ -506,7 +506,11 @@ export default function App() {
 			if (!api || !selectedProjectId) return;
 			setCreating(true);
 			try {
-				const name = titleFromPrompt(input.prompt) || (input.agentMode ? "agent session" : "task");
+				// Agent mode has no prompt to name from — stamp a unique time so the
+				// worktree branch doesn't collide with a previous "agents" task.
+				const name =
+					titleFromPrompt(input.prompt) ||
+					(input.agentMode ? `agents ${new Date().toTimeString().slice(0, 8)}` : "task");
 				const task = await api.tasks.create({ projectId: selectedProjectId, name });
 				await api.pty.spawnAgent({
 					taskId: task.id,

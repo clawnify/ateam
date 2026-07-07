@@ -213,6 +213,13 @@ export function TerminalScreen({
 				<Text style={styles.title} numberOfLines={1}>
 					{task.name}
 				</Text>
+				<Pressable
+					style={styles.kbdBtn}
+					onPress={() => webRef.current?.injectJavaScript("window.__termBlur();true;")}
+					hitSlop={8}
+				>
+					<Text style={styles.kbdText}>Hide ⌨</Text>
+				</Pressable>
 				<View style={[styles.dot, { backgroundColor: statusColor(status) }]} />
 			</View>
 
@@ -285,6 +292,17 @@ const styles = StyleSheet.create({
 	closeBtn: { paddingVertical: 4, paddingRight: 4 },
 	closeText: { color: C.accent, fontSize: 15, fontWeight: "600" },
 	title: { color: C.ink, fontSize: 15, fontWeight: "700", flex: 1 },
+	kbdBtn: {
+		paddingHorizontal: 10,
+		height: 28,
+		borderRadius: 7,
+		backgroundColor: C.sunken,
+		borderWidth: 1,
+		borderColor: C.line,
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	kbdText: { color: C.muted, fontSize: 12, fontWeight: "600" },
 	dot: { width: 8, height: 8, borderRadius: 4 },
 	termWrap: { flex: 1, backgroundColor: "#000" },
 	web: { flex: 1, backgroundColor: "#000" },
