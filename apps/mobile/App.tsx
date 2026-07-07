@@ -24,6 +24,7 @@ import {
 	View,
 } from "react-native";
 import { type Connection, connect } from "./src/connection";
+import { TerminalScreen } from "./src/TerminalScreen";
 
 const C = {
 	bg: "#0c0c0e",
@@ -113,9 +114,9 @@ function AgentTag({ agent }: { agent: string }) {
 	);
 }
 
-function TaskCard({ task, tint }: { task: TaskDTO; tint: string }) {
+function TaskCard({ task, tint, onOpen }: { task: TaskDTO; tint: string; onOpen: () => void }) {
 	return (
-		<View style={styles.card}>
+		<Pressable style={styles.card} onPress={onOpen} hitSlop={2}>
 			<View style={styles.cardTop}>
 				<AgentTag agent={task.agentId ?? "·"} />
 				<Text style={styles.cardName} numberOfLines={2}>
@@ -126,7 +127,7 @@ function TaskCard({ task, tint }: { task: TaskDTO; tint: string }) {
 				<Chip>{task.branch}</Chip>
 				<Badge tint={tint}>{taskNote(task)}</Badge>
 			</View>
-		</View>
+		</Pressable>
 	);
 }
 
@@ -250,6 +251,7 @@ function BoardScreen({
 	loading,
 	onOpenConnection,
 	onRefresh,
+	onOpenTask,
 }: {
 	host: string;
 	agents: string[];
@@ -257,6 +259,7 @@ function BoardScreen({
 	loading: boolean;
 	onOpenConnection: () => void;
 	onRefresh: () => void;
+	onOpenTask: (task: TaskDTO) => void;
 }) {
 	return (
 		<View style={styles.root}>
@@ -305,7 +308,7 @@ function BoardScreen({
 									<Text style={styles.eyebrowCount}>{inCol.length}</Text>
 								</View>
 								{inCol.map((t) => (
-									<TaskCard key={t.id} task={t} tint={col.tint} />
+									<TaskCard key={t.id} task={t} tint={col.tint} onOpen={() => onOpenTask(t)} />
 								))}
 							</View>
 						);
@@ -329,6 +332,7 @@ export default function App() {
 	const [tasks, setTasks] = useState<TaskDTO[]>([]);
 	const [agents, setAgents] = useState<string[]>([]);
 	const [loading, setLoading] = useState(false);
+	const [openTask, setOpenTask] = useState<TaskDTO | null>(null);
 	const conn = useRef<Connection | null>(null);
 
 	// Pull the whole board: every project's tasks, flattened. Sorted newest-active
@@ -385,6 +389,14 @@ export default function App() {
 		}
 	}, [host, port, refresh]);
 
+	// A tapped task opens its live terminal; the engine api comes from the live
+	// connection. Overlays the board (which stays mounted behind it).
+	if (openTask && conn.current) {
+		return (
+			<TerminalScreen api={conn.current.api} task={openTask} onClose={() => setOpenTask(null)} />
+		);
+	}
+
 	return view === "connect" ? (
 		<ConnectionScreen
 			host={host}
@@ -403,6 +415,7 @@ export default function App() {
 			loading={loading}
 			onOpenConnection={() => setView("connect")}
 			onRefresh={refresh}
+			onOpenTask={setOpenTask}
 		/>
 	);
 }
