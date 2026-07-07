@@ -12,6 +12,12 @@ public class ExpoSwifttermModule: Module {
       AsyncFunction("feed") { (view: ExpoSwifttermView, text: String) in
         view.feed(text)
       }
+      AsyncFunction("blurKeyboard") { (view: ExpoSwifttermView) in
+        view.blurKeyboard()
+      }
+      AsyncFunction("focusKeyboard") { (view: ExpoSwifttermView) in
+        view.focusKeyboard()
+      }
     }
   }
 }

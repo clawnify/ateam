@@ -6,7 +6,15 @@
 
 import type { AteamApi, PtyDataEvent, TaskDTO } from "@ateam/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+	ActivityIndicator,
+	KeyboardAvoidingView,
+	Platform,
+	Pressable,
+	StyleSheet,
+	Text,
+	View,
+} from "react-native";
 import {
 	type SwiftTermHandle,
 	SwiftTermView,
@@ -123,7 +131,10 @@ export function NativeTerminalScreen({
 	);
 
 	return (
-		<View style={styles.root}>
+		<KeyboardAvoidingView
+			style={styles.root}
+			behavior={Platform.OS === "ios" ? "padding" : undefined}
+		>
 			<View style={styles.header}>
 				<Pressable onPress={onClose} hitSlop={8}>
 					<Text style={styles.back}>‹ Board</Text>
@@ -131,6 +142,13 @@ export function NativeTerminalScreen({
 				<Text style={styles.title} numberOfLines={1}>
 					{task.name}
 				</Text>
+				<Pressable
+					style={styles.kbdBtn}
+					onPress={() => termRef.current?.blurKeyboard()}
+					hitSlop={8}
+				>
+					<Text style={styles.kbdText}>Hide ⌨</Text>
+				</Pressable>
 				<View style={[styles.dot, { backgroundColor: status === "error" ? C.red : C.accent }]} />
 			</View>
 			{terminalId ? (
@@ -152,7 +170,7 @@ export function NativeTerminalScreen({
 					)}
 				</View>
 			)}
-		</View>
+		</KeyboardAvoidingView>
 	);
 }
 
@@ -169,6 +187,17 @@ const styles = StyleSheet.create({
 	},
 	back: { color: C.accent, fontSize: 15, fontWeight: "600" },
 	title: { color: C.ink, fontSize: 15, fontWeight: "700", flex: 1 },
+	kbdBtn: {
+		paddingHorizontal: 10,
+		height: 28,
+		borderRadius: 7,
+		backgroundColor: "#1c1c22",
+		borderWidth: 1,
+		borderColor: C.line,
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	kbdText: { color: C.muted, fontSize: 12, fontWeight: "600" },
 	dot: { width: 8, height: 8, borderRadius: 4 },
 	term: { flex: 1, backgroundColor: "#000" },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },

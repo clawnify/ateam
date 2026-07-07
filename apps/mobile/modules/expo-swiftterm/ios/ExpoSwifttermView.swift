@@ -39,6 +39,11 @@ class ExpoSwifttermView: ExpoView {
     terminal.feed(text: text)
   }
 
+  // Keyboard control (SwiftTerm is a first responder; it has no keyboard-avoidance
+  // of its own, so the RN side resizes the view and toggles focus).
+  func blurKeyboard() { _ = terminal.resignFirstResponder() }
+  func focusKeyboard() { _ = terminal.becomeFirstResponder() }
+
   var cols: Int { terminal.getTerminal().cols }
   var rows: Int { terminal.getTerminal().rows }
 }
