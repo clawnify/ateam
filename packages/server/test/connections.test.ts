@@ -17,9 +17,9 @@ describe("readSshHosts", () => {
 		const cfg = writeConfig(
 			[
 				"# a comment",
-				"Host hetzner-devbox",
-				"  HostName 100.72.63.61",
-				"  User pallaoro",
+				"Host devbox",
+				"  HostName 100.64.0.1",
+				"  User dev",
 				"",
 				"Host prod staging",
 				"  HostName example.com",
@@ -30,8 +30,8 @@ describe("readSshHosts", () => {
 		);
 		const hosts = readSshHosts(cfg);
 		// Wildcard `*` stanza excluded; multi-alias stanza yields both, sharing HostName.
-		expect(hosts.map((h) => h.alias)).toEqual(["hetzner-devbox", "prod", "staging"]);
-		expect(hosts.find((h) => h.alias === "hetzner-devbox")?.hostName).toBe("100.72.63.61");
+		expect(hosts.map((h) => h.alias)).toEqual(["devbox", "prod", "staging"]);
+		expect(hosts.find((h) => h.alias === "devbox")?.hostName).toBe("100.64.0.1");
 		expect(hosts.find((h) => h.alias === "prod")?.hostName).toBe("example.com");
 		expect(hosts.find((h) => h.alias === "staging")?.hostName).toBe("example.com");
 	});

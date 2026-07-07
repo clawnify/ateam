@@ -20,7 +20,9 @@ import { fileURLToPath } from "node:url";
 
 const serverRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const dist = join(serverRoot, "dist");
-const EXTERNAL = ["better-sqlite3", "node-pty"]; // native — installed on the box
+// native — installed on the box; the last two are `ws`'s OPTIONAL native speedups
+// (it try/catch-requires them and falls back to pure JS), so leave them unbundled.
+const EXTERNAL = ["better-sqlite3", "node-pty", "bufferutil", "utf-8-validate"];
 
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
