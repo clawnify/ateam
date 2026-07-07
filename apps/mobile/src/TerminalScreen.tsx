@@ -69,6 +69,8 @@ export function TerminalScreen({
 	const buffered = useRef<PtyDataEvent[]>([]);
 	const applied = useRef(false);
 	const lastSeq = useRef(-1);
+	// Pending redraw timers, cleared on unmount so we never resize a dead PTY.
+	const redrawTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
 	const inject = useCallback((data: string) => {
 		// injectJavaScript evals a JS string; JSON.stringify makes `data` a safe
@@ -128,6 +130,7 @@ export function TerminalScreen({
 			cancelled = true;
 			offData();
 			offExit();
+			for (const t of redrawTimers.current) clearTimeout(t);
 			// Detach only — the session (and the running agent) lives on.
 		};
 	}, [api, task.id, inject]);
@@ -173,8 +176,16 @@ export function TerminalScreen({
 				// the size (rows-1 → rows) to trigger SIGWINCH; the TUI then repaints
 				// everything from scratch (authoritative — better than trusting the
 				// serialized snapshot for alt-screen content).
-				setTimeout(() => api.pty.resize(id, cols, Math.max(1, rows - 1)), 80);
-				setTimeout(() => api.pty.resize(id, cols, rows), 200);
+				//
+				// The gaps are deliberately generous: a heavy TUI needs time to process
+				// each SIGWINCH and finish its redraw before the next size lands, or the
+				// second resize interrupts a mid-flight repaint and the input box comes
+				// back partial. Let it settle, shrink, let THAT redraw finish, then grow.
+				for (const t of redrawTimers.current) clearTimeout(t);
+				redrawTimers.current = [
+					setTimeout(() => api.pty.resize(id, cols, Math.max(1, rows - 1)), 350),
+					setTimeout(() => api.pty.resize(id, cols, rows), 900),
+				];
 			}
 		},
 		[api, terminalId, inject],

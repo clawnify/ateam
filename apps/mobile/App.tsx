@@ -1,19 +1,20 @@
 // Ateam mobile — a thin remote for a box running the Ateam engine. The phone
 // opens a WebSocket to the box's opt-in `ateam` WS listener (over Tailscale),
 // handshakes, and drives the SAME engine the desktop does via the shared
-// @ateam/protocol contract (see src/connection.ts). The board below is LIVE:
-// projects/tasks come from the engine and taskUpdated pushes keep it fresh.
+// @ateam/protocol contract (see src/connection.ts). The board is LIVE and the
+// composer creates + launches tasks on the box; tapping a task opens its terminal.
 //
 // Theme = Ateam's real tokens (apps/desktop/src/renderer/src/index.css): near-black
-// #0c0c0e canvas, purple accent #7c5cff, ink/white primary action (a hue is never
-// the CTA), amber/blue/green status. Logo = the "mission-control tiling" mark from
-// apps/desktop/build/icon.svg, redrawn with Views. Connection = ALWAYS a WebSocket
-// to a Tailscale address (RN can't spawn ssh; WireGuard is the auth boundary).
-
-import type { ProjectDTO, TaskDTO } from "@ateam/protocol";
+// #0c0c0e canvas, purple accent #7c5cff, ink/white primary action, amber/blue/green
+// status. Connection = ALWAYS a WebSocket to a Tailscale address (RN can't spawn
+// ssh; WireGuard is the auth boundary).
+import type { AgentDTO, ProjectDTO, TaskDTO } from "@ateam/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
+	KeyboardAvoidingView,
+	Modal,
+	Platform,
 	Pressable,
 	ScrollView,
 	StatusBar,
@@ -23,18 +24,20 @@ import {
 	useColorScheme,
 	View,
 } from "react-native";
+import { Composer, type ComposerSubmit } from "./src/Composer";
 import { type Connection, connect } from "./src/connection";
+import { loadConnection, saveConnection } from "./src/storage";
 import { TerminalScreen } from "./src/TerminalScreen";
 
 const C = {
 	bg: "#0c0c0e",
-	surface: "#141418", // --bg-elev
-	sunken: "#1c1c22", // --bg-elev-2
-	line: "#2a2a33", // --border
-	ink: "#e6e6ea", // --text
-	muted: "#9a9aa6", // --text-dim
+	surface: "#141418",
+	sunken: "#1c1c22",
+	line: "#2a2a33",
+	ink: "#e6e6ea",
+	muted: "#9a9aa6",
 	faint: "#6a6a75",
-	accent: "#7c5cff", // --accent (Ateam purple)
+	accent: "#7c5cff",
 	green: "#4ade80",
 	amber: "#fbbf24",
 	red: "#f87171",
@@ -50,8 +53,6 @@ const TINT: Record<string, string> = {
 	[C.red]: "rgba(248,113,113,0.14)",
 };
 
-// Column keys match @ateam/protocol's KanbanColumn exactly, so a live TaskDTO's
-// `column` drops straight into the right zone.
 const COLUMNS: { key: TaskDTO["column"]; label: string; tint: string }[] = [
 	{ key: "needs_attention", label: "Needs You", tint: C.amber },
 	{ key: "running", label: "In Progress", tint: C.accent },
@@ -60,8 +61,6 @@ const COLUMNS: { key: TaskDTO["column"]; label: string; tint: string }[] = [
 	{ key: "merged", label: "Done", tint: C.green },
 ];
 
-// A short status line for a card, derived from the live task (mirrors the desktop's
-// signal priority: a pending question first, then agent state, then git/PR facts).
 function taskNote(t: TaskDTO): string {
 	if (t.column === "needs_attention") return "awaiting your input";
 	if (t.agentStatus === "running") return "running";
@@ -72,8 +71,11 @@ function taskNote(t: TaskDTO): string {
 	return t.agentStatus ?? "idle";
 }
 
-// The Ateam logo mark: a wide top pane + two dimming squares (icon.svg), on a dark
-// tile. Redrawn with Views so it scales + themes with no native SVG dependency.
+/** Readable task name from the prompt's first words (mirrors the desktop). */
+function titleFromPrompt(p: string): string {
+	return p.trim().split(/\s+/).slice(0, 6).join(" ").slice(0, 60);
+}
+
 function LogoMark() {
 	return (
 		<View style={styles.logo}>
@@ -131,7 +133,62 @@ function TaskCard({ task, tint, onOpen }: { task: TaskDTO; tint: string; onOpen:
 	);
 }
 
-// ── Connection screen — one WebSocket target (host = the box's Tailscale IP) ──
+// ── Project dropdown — centered in the board header ──
+
+function ProjectDropdown({
+	projects,
+	selectedId,
+	onSelect,
+}: {
+	projects: ProjectDTO[];
+	selectedId: string | null;
+	onSelect: (id: string) => void;
+}) {
+	const [open, setOpen] = useState(false);
+	const selected = projects.find((p) => p.id === selectedId);
+	return (
+		<>
+			<Pressable style={styles.projPill} onPress={() => setOpen(true)} hitSlop={6}>
+				<Text style={styles.projName} numberOfLines={1}>
+					{selected?.name ?? "No project"}
+				</Text>
+				<Text style={styles.projCaret}>▾</Text>
+			</Pressable>
+			<Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+				<Pressable style={styles.modalBackdrop} onPress={() => setOpen(false)}>
+					<View style={styles.modalCard}>
+						{projects.length === 0 ? (
+							<Text style={styles.modalEmpty}>No projects on this box</Text>
+						) : (
+							projects.map((p) => (
+								<Pressable
+									key={p.id}
+									style={styles.modalRow}
+									onPress={() => {
+										onSelect(p.id);
+										setOpen(false);
+									}}
+								>
+									<View
+										style={[
+											styles.modalDot,
+											{ backgroundColor: p.id === selectedId ? C.accent : "transparent" },
+										]}
+									/>
+									<Text style={styles.modalRowText} numberOfLines={1}>
+										{p.name}
+									</Text>
+								</Pressable>
+							))
+						)}
+					</View>
+				</Pressable>
+			</Modal>
+		</>
+	);
+}
+
+// ── Connection screen — the box's WebSocket target; back/Disconnect when live ──
 
 function Field({
 	label,
@@ -171,7 +228,10 @@ function ConnectionScreen({
 	setHost,
 	setPort,
 	onConnect,
+	onBack,
+	onDisconnect,
 	connecting,
+	connected,
 	error,
 }: {
 	host: string;
@@ -179,15 +239,24 @@ function ConnectionScreen({
 	setHost: (t: string) => void;
 	setPort: (t: string) => void;
 	onConnect: () => void;
+	onBack: () => void;
+	onDisconnect: () => void;
 	connecting: boolean;
+	connected: boolean;
 	error: string | null;
 }) {
 	return (
 		<View style={styles.root}>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
 			<View style={styles.navBar}>
-				<LogoMark />
-				<Text style={styles.navTitle}>New connection</Text>
+				{connected ? (
+					<Pressable onPress={onBack} hitSlop={8}>
+						<Text style={styles.backText}>‹ Board</Text>
+					</Pressable>
+				) : (
+					<LogoMark />
+				)}
+				<Text style={styles.navTitle}>{connected ? "Connection" : "New connection"}</Text>
 				<View style={styles.spacer} />
 				<Pressable
 					style={[styles.connectBtn, connecting && styles.connectBtnBusy]}
@@ -198,7 +267,7 @@ function ConnectionScreen({
 					{connecting ? (
 						<ActivityIndicator color="#15151a" size="small" />
 					) : (
-						<Text style={styles.connectBtnText}>Connect</Text>
+						<Text style={styles.connectBtnText}>{connected ? "Reconnect" : "Connect"}</Text>
 					)}
 				</Pressable>
 			</View>
@@ -231,74 +300,88 @@ function ConnectionScreen({
 					</View>
 				) : null}
 
+				{connected ? (
+					<Pressable style={styles.disconnectBtn} onPress={onDisconnect} hitSlop={6}>
+						<Text style={styles.disconnectText}>Disconnect</Text>
+					</Pressable>
+				) : null}
+
 				<Text style={styles.formNote}>
 					The phone opens a WebSocket to your box's `ateam` listener over Tailscale — WireGuard is
 					the encryption and the auth boundary. Enable it on the box with{" "}
-					<Text style={styles.mono}>ATEAM_WS_ADDR=&lt;tailscale-ip&gt;:&lt;port&gt;</Text> (never a
-					wildcard bind).
+					<Text style={styles.mono}>ATEAM_WS_ADDR=&lt;tailscale-ip&gt;:&lt;port&gt;</Text>.
 				</Text>
 			</ScrollView>
 		</View>
 	);
 }
 
-// ── Board screen — LIVE tasks from the connected engine ──
+// ── Board screen — status dot (left) · project dropdown (center) · composer ──
 
 function BoardScreen({
-	host,
+	connColor,
+	projects,
+	selectedProjectId,
+	onSelectProject,
 	agents,
 	tasks,
 	loading,
+	creating,
 	onOpenConnection,
-	onRefresh,
 	onOpenTask,
+	onCreate,
 }: {
-	host: string;
-	agents: string[];
+	connColor: string;
+	projects: ProjectDTO[];
+	selectedProjectId: string | null;
+	onSelectProject: (id: string) => void;
+	agents: AgentDTO[];
 	tasks: TaskDTO[];
 	loading: boolean;
+	creating: boolean;
 	onOpenConnection: () => void;
-	onRefresh: () => void;
 	onOpenTask: (task: TaskDTO) => void;
+	onCreate: (input: ComposerSubmit) => void;
 }) {
+	const shown = tasks.filter((t) => t.projectId === selectedProjectId);
 	return (
-		<View style={styles.root}>
+		<KeyboardAvoidingView
+			style={styles.root}
+			behavior={Platform.OS === "ios" ? "padding" : undefined}
+		>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
-			<View style={styles.header}>
-				<View style={styles.brandRow}>
-					<LogoMark />
-					<Text style={styles.brand}>Ateam</Text>
-					<View style={styles.spacer} />
-					<Pressable style={styles.connPill} onPress={onOpenConnection} hitSlop={6}>
-						<View style={styles.connDot} />
-						<Text style={styles.connText} numberOfLines={1}>
-							{host}
-						</Text>
-					</Pressable>
+			<View style={styles.boardHeader}>
+				<Pressable style={styles.statusHit} onPress={onOpenConnection} hitSlop={10}>
+					<View style={[styles.statusDot, { backgroundColor: connColor }]} />
+				</Pressable>
+				<View style={styles.headerCenter}>
+					<ProjectDropdown
+						projects={projects}
+						selectedId={selectedProjectId}
+						onSelect={onSelectProject}
+					/>
 				</View>
-				<Text style={styles.connMeta}>
-					WS · <Text style={styles.connHost}>{host}</Text> ·{" "}
-					{agents.length ? agents.join(", ") : "no agents"}
-				</Text>
+				<View style={styles.statusHit} />
 			</View>
 
 			<ScrollView
 				style={styles.board}
 				contentContainerStyle={styles.boardContent}
 				showsVerticalScrollIndicator={false}
+				keyboardShouldPersistTaps="handled"
 			>
-				{loading && tasks.length === 0 ? (
+				{loading && shown.length === 0 ? (
 					<View style={styles.centerPad}>
 						<ActivityIndicator color={C.accent} />
 						<Text style={styles.footnote}>loading board…</Text>
 					</View>
-				) : tasks.length === 0 ? (
+				) : shown.length === 0 ? (
 					<View style={styles.centerPad}>
-						<Text style={styles.footnote}>no tasks on this box yet</Text>
+						<Text style={styles.footnote}>no tasks yet — start one below</Text>
 					</View>
 				) : (
 					COLUMNS.map((col) => {
-						const inCol = tasks.filter((t) => t.column === col.key);
+						const inCol = shown.filter((t) => t.column === col.key);
 						if (inCol.length === 0) return null;
 						return (
 							<View key={col.key} style={styles.zone}>
@@ -314,11 +397,10 @@ function BoardScreen({
 						);
 					})
 				)}
-				<Pressable onPress={onRefresh} hitSlop={8}>
-					<Text style={styles.footnote}>tap to refresh</Text>
-				</Pressable>
 			</ScrollView>
-		</View>
+
+			<Composer agents={agents} busy={creating} onSubmit={onCreate} />
+		</KeyboardAvoidingView>
 	);
 }
 
@@ -328,22 +410,36 @@ export default function App() {
 	const [host, setHost] = useState("");
 	const [port, setPort] = useState("8787");
 	const [connecting, setConnecting] = useState(false);
+	const [connected, setConnected] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [tasks, setTasks] = useState<TaskDTO[]>([]);
-	const [agents, setAgents] = useState<string[]>([]);
+	const [projects, setProjects] = useState<ProjectDTO[]>([]);
+	const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [loading, setLoading] = useState(false);
+	const [creating, setCreating] = useState(false);
 	const [openTask, setOpenTask] = useState<TaskDTO | null>(null);
 	const conn = useRef<Connection | null>(null);
 
-	// Pull the whole board: every project's tasks, flattened. Sorted newest-active
-	// first so the freshest work leads each column.
+	// Prefill the last box on launch, so a restart/reinstall doesn't lose the IP.
+	useEffect(() => {
+		void loadConnection().then((saved) => {
+			if (saved) {
+				setHost(saved.host);
+				setPort(saved.port);
+			}
+		});
+	}, []);
+
 	const refresh = useCallback(async () => {
 		const api = conn.current?.api;
 		if (!api) return;
 		setLoading(true);
 		try {
-			const projects: ProjectDTO[] = await api.projects.list();
-			const perProject = await Promise.all(projects.map((p) => api.tasks.list(p.id)));
+			const projs: ProjectDTO[] = await api.projects.list();
+			setProjects(projs);
+			setSelectedProjectId((cur) => cur ?? projs[0]?.id ?? null);
+			const perProject = await Promise.all(projs.map((p) => api.tasks.list(p.id)));
 			const all = perProject.flat().sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0));
 			setTasks(all);
 		} finally {
@@ -378,44 +474,95 @@ export default function App() {
 			conn.current?.close();
 			const c = await connect(`ws://${host.trim()}:${port.trim() || "8787"}`);
 			conn.current = c;
-			setAgents(c.info.agents);
+			await saveConnection({ host: host.trim(), port: port.trim() || "8787" });
+			setConnected(true);
+			void c.api.agents.list().then(setAgents);
 			setView("board");
 			await refresh();
 		} catch (err) {
 			conn.current = null;
+			setConnected(false);
 			setError(err instanceof Error ? err.message : String(err));
 		} finally {
 			setConnecting(false);
 		}
 	}, [host, port, refresh]);
 
-	// A tapped task opens its live terminal; the engine api comes from the live
-	// connection. Overlays the board (which stays mounted behind it).
+	const onDisconnect = useCallback(() => {
+		conn.current?.close();
+		conn.current = null;
+		setConnected(false);
+		setTasks([]);
+		setProjects([]);
+		setSelectedProjectId(null);
+		setView("connect");
+	}, []);
+
+	// Composer submit: create a task in the selected project, launch the agent,
+	// and open its terminal (which attaches to the just-spawned session).
+	const onCreate = useCallback(
+		async (input: ComposerSubmit) => {
+			const api = conn.current?.api;
+			if (!api || !selectedProjectId) return;
+			setCreating(true);
+			try {
+				const name = titleFromPrompt(input.prompt) || (input.agentMode ? "agent session" : "task");
+				const task = await api.tasks.create({ projectId: selectedProjectId, name });
+				await api.pty.spawnAgent({
+					taskId: task.id,
+					agentId: input.agentId,
+					yolo: input.yolo,
+					agentMode: input.agentMode,
+					prompt: input.prompt || undefined,
+				});
+				setTasks((prev) => [task, ...prev.filter((t) => t.id !== task.id)]);
+				setOpenTask(task);
+			} catch (err) {
+				setError(err instanceof Error ? err.message : String(err));
+			} finally {
+				setCreating(false);
+			}
+		},
+		[selectedProjectId],
+	);
+
+	// A tapped task opens its live terminal (api comes from the live connection).
 	if (openTask && conn.current) {
 		return (
 			<TerminalScreen api={conn.current.api} task={openTask} onClose={() => setOpenTask(null)} />
 		);
 	}
 
-	return view === "connect" ? (
-		<ConnectionScreen
-			host={host}
-			port={port}
-			setHost={setHost}
-			setPort={setPort}
-			onConnect={onConnect}
-			connecting={connecting}
-			error={error}
-		/>
-	) : (
+	if (view === "connect") {
+		return (
+			<ConnectionScreen
+				host={host}
+				port={port}
+				setHost={setHost}
+				setPort={setPort}
+				onConnect={onConnect}
+				onBack={() => setView("board")}
+				onDisconnect={onDisconnect}
+				connecting={connecting}
+				connected={connected}
+				error={error}
+			/>
+		);
+	}
+
+	return (
 		<BoardScreen
-			host={host}
+			connColor={connected ? C.green : C.faint}
+			projects={projects}
+			selectedProjectId={selectedProjectId}
+			onSelectProject={setSelectedProjectId}
 			agents={agents}
 			tasks={tasks}
 			loading={loading}
+			creating={creating}
 			onOpenConnection={() => setView("connect")}
-			onRefresh={refresh}
 			onOpenTask={setOpenTask}
+			onCreate={onCreate}
 		/>
 	);
 }
@@ -423,7 +570,7 @@ export default function App() {
 const styles = StyleSheet.create({
 	root: { flex: 1, backgroundColor: C.bg, paddingTop: 60 },
 
-	// logo mark (icon.svg redrawn)
+	// logo mark (icon.svg redrawn) — connection screen only
 	logo: {
 		width: 32,
 		height: 32,
@@ -440,13 +587,60 @@ const styles = StyleSheet.create({
 	logoBottom: { flexDirection: "row", gap: 2.5 },
 	logoSq: { flex: 1, height: 8, borderRadius: 1.5, backgroundColor: "#ffffff" },
 
-	// header / nav
-	header: {
-		paddingHorizontal: 18,
-		paddingBottom: 14,
+	// board header: [status dot] [project dropdown centered] [spacer]
+	boardHeader: {
+		flexDirection: "row",
+		alignItems: "center",
+		paddingHorizontal: 14,
+		paddingBottom: 12,
 		borderBottomWidth: 1,
 		borderBottomColor: C.line,
 	},
+	statusHit: { width: 44, alignItems: "flex-start", justifyContent: "center" },
+	statusDot: { width: 12, height: 12, borderRadius: 6 },
+	headerCenter: { flex: 1, alignItems: "center" },
+	projPill: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 6,
+		backgroundColor: C.sunken,
+		borderWidth: 1,
+		borderColor: C.line,
+		paddingHorizontal: 14,
+		paddingVertical: 7,
+		borderRadius: 999,
+		maxWidth: 240,
+	},
+	projName: { color: C.ink, fontSize: 14, fontWeight: "700", letterSpacing: -0.2 },
+	projCaret: { color: C.muted, fontSize: 11 },
+
+	// project dropdown modal
+	modalBackdrop: {
+		flex: 1,
+		backgroundColor: "rgba(0,0,0,0.5)",
+		paddingTop: 100,
+		alignItems: "center",
+	},
+	modalCard: {
+		width: 280,
+		backgroundColor: C.surface,
+		borderWidth: 1,
+		borderColor: C.line,
+		borderRadius: 12,
+		paddingVertical: 6,
+	},
+	modalEmpty: { color: C.muted, fontSize: 13, textAlign: "center", paddingVertical: 16 },
+	modalRow: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 10,
+		paddingHorizontal: 14,
+		paddingVertical: 12,
+	},
+	modalDot: { width: 7, height: 7, borderRadius: 4 },
+	modalRowText: { color: C.ink, fontSize: 15, flex: 1 },
+
+	// connection nav
 	navBar: {
 		flexDirection: "row",
 		alignItems: "center",
@@ -457,36 +651,18 @@ const styles = StyleSheet.create({
 		borderBottomColor: C.line,
 	},
 	navTitle: { color: C.ink, fontSize: 17, fontWeight: "700", letterSpacing: -0.2 },
-	brandRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-	brand: { color: C.ink, fontSize: 20, fontWeight: "700", letterSpacing: -0.3 },
+	backText: { color: C.accent, fontSize: 15, fontWeight: "600" },
 	spacer: { flex: 1 },
-	// Primary action = ink/white (a hue is never the CTA — Ateam + clawnify).
 	connectBtn: {
 		backgroundColor: C.ink,
 		paddingHorizontal: 16,
 		paddingVertical: 8,
 		borderRadius: 8,
-		minWidth: 74,
+		minWidth: 84,
 		alignItems: "center",
 	},
 	connectBtnBusy: { opacity: 0.7 },
 	connectBtnText: { color: "#15151a", fontSize: 13, fontWeight: "800" },
-	connPill: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: 6,
-		backgroundColor: C.sunken,
-		borderWidth: 1,
-		borderColor: C.line,
-		paddingHorizontal: 10,
-		paddingVertical: 5,
-		borderRadius: 999,
-		maxWidth: 180,
-	},
-	connDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.green },
-	connText: { color: C.muted, fontSize: 12, fontWeight: "600" },
-	connMeta: { color: C.muted, fontSize: 12, marginTop: 12 },
-	connHost: { color: C.ink, fontVariant: ["tabular-nums"] },
 
 	// eyebrow
 	eyebrowRow: {
@@ -536,12 +712,21 @@ const styles = StyleSheet.create({
 		marginTop: 16,
 	},
 	errorText: { color: C.red, fontSize: 13, lineHeight: 18 },
+	disconnectBtn: {
+		marginTop: 20,
+		borderWidth: 1,
+		borderColor: "rgba(248,113,113,0.4)",
+		borderRadius: 10,
+		paddingVertical: 12,
+		alignItems: "center",
+	},
+	disconnectText: { color: C.red, fontSize: 14, fontWeight: "700" },
 	formNote: { color: C.faint, fontSize: 12, lineHeight: 18, marginTop: 18, paddingHorizontal: 2 },
 	mono: { color: C.muted, fontVariant: ["tabular-nums"] },
 
 	// board
 	board: { flex: 1 },
-	boardContent: { padding: 16, paddingBottom: 40 },
+	boardContent: { padding: 16, paddingBottom: 24 },
 	centerPad: { alignItems: "center", paddingVertical: 48, gap: 12 },
 	zone: { marginBottom: 22 },
 	card: {
