@@ -1,0 +1,7 @@
+{
+  "name": "expo-swiftterm",
+  "version": "1.0.0",
+  "description": "Native SwiftTerm terminal view (Ateam mobile)",
+  "main": "src/ExpoSwifttermView.tsx",
+  "private": true
+}

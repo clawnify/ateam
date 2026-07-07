@@ -12,23 +12,18 @@ class ExpoSwifttermView: ExpoView {
   let onInput = EventDispatcher() // user keystrokes/selection → { data }
   let onSizeChange = EventDispatcher() // TUI needs cols/rows → { cols, rows }
 
-  private var didFeedBanner = false
-
   required init(appContext: AppContext? = nil) {
     terminal = TerminalView(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
     super.init(appContext: appContext)
     clipsToBounds = true
     backgroundColor = .black
     terminal.terminalDelegate = self
-    // Explicit dark theme so text is visible regardless of the default palette.
     terminal.nativeBackgroundColor = .black
     terminal.nativeForegroundColor = UIColor(white: 0.9, alpha: 1)
     terminal.backgroundColor = .black
 
-    // Pin with Auto Layout (NOT manual frame-setting) so the terminal's OWN
-    // layoutSubviews fires with real bounds — that's what calls processSizeChange
-    // to compute the grid and render. A nested subview with a hand-set frame
-    // doesn't reliably trigger it (the cause of the black screen).
+    // Auto Layout (not a hand-set frame) so the terminal's own layoutSubviews fires
+    // with real bounds → processSizeChange computes the grid + renders.
     terminal.translatesAutoresizingMaskIntoConstraints = false
     addSubview(terminal)
     NSLayoutConstraint.activate([
@@ -37,17 +32,6 @@ class ExpoSwifttermView: ExpoView {
       terminal.leadingAnchor.constraint(equalTo: leadingAnchor),
       terminal.trailingAnchor.constraint(equalTo: trailingAnchor),
     ])
-  }
-
-  override func layoutSubviews() {
-    super.layoutSubviews()
-    guard bounds.width > 0, bounds.height > 0, !didFeedBanner else { return }
-    didFeedBanner = true
-    // Feed on the next runloop (after the terminal has laid out + sized its grid),
-    // exactly like SwiftTerm's own SwiftUI wrapper seeds startup data.
-    DispatchQueue.main.async { [weak self] in
-      self?.terminal.feed(text: "\u{1b}[32mSwiftTerm native ✓\u{1b}[0m\r\nnative scroll · select · copy\r\n$ ")
-    }
   }
 
   // Called from JS (via the module's `feed` function) with raw PTY text.

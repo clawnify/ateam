@@ -6,8 +6,12 @@ Pod::Spec.new do |s|
   s.author         = ''
   s.homepage       = 'https://docs.expo.dev/modules/'
   s.license        = { :type => 'MIT' }
+  # MUST be <= the app's IPHONEOS_DEPLOYMENT_TARGET (15.1). A higher value makes
+  # Expo autolinking's `supports_platform?` filter drop this module from the
+  # generated provider — so the native view never registers and the RN component
+  # is "not found" (black screen). SwiftTerm itself supports iOS 13+.
   s.platforms      = {
-    :ios => '16.4'
+    :ios => '15.1'
   }
   s.source         = { git: '' }
   s.static_framework = true
