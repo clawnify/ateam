@@ -296,6 +296,21 @@ input {
 .tasks-head {
 	margin-top: 4px;
 }
+.tasknode-row {
+	position: relative;
+}
+.task-del {
+	position: absolute;
+	right: 6px;
+	top: 50%;
+	transform: translateY(-50%);
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+.tasknode-row:hover .task-del,
+.task-del:focus-within {
+	opacity: 1;
+}
 .tasknode {
 	display: flex;
 	align-items: center;
