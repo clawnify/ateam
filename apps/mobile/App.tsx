@@ -26,8 +26,13 @@ import {
 } from "react-native";
 import { Composer, type ComposerSubmit } from "./src/Composer";
 import { type Connection, connect } from "./src/connection";
+import { NativeTerminalScreen } from "./src/NativeTerminalScreen";
 import { loadConnection, saveConnection } from "./src/storage";
 import { TerminalScreen } from "./src/TerminalScreen";
+
+// SPIKE flag: evaluate the native SwiftTerm terminal (native scroll/select/copy)
+// vs the xterm-in-webview one. Flip back to false to fall back to the webview.
+const USE_NATIVE_TERMINAL = true;
 
 const C = {
 	bg: "#0c0c0e",
@@ -529,9 +534,8 @@ export default function App() {
 
 	// A tapped task opens its live terminal (api comes from the live connection).
 	if (openTask && conn.current) {
-		return (
-			<TerminalScreen api={conn.current.api} task={openTask} onClose={() => setOpenTask(null)} />
-		);
+		const Term = USE_NATIVE_TERMINAL ? NativeTerminalScreen : TerminalScreen;
+		return <Term api={conn.current.api} task={openTask} onClose={() => setOpenTask(null)} />;
 	}
 
 	if (view === "connect") {
