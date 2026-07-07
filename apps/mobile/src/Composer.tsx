@@ -21,7 +21,10 @@ const C = {
 };
 
 export interface ComposerSubmit {
+	/** The agent's first instruction (normal mode). Empty in agent mode. */
 	prompt: string;
+	/** Explicit task/worktree name — set in agent mode, where there's no prompt to derive one from. */
+	name?: string;
 	agentId: string;
 	yolo: boolean;
 	agentMode: boolean;
@@ -41,42 +44,43 @@ export function Composer({
 	const pickable = agents.length
 		? agents
 		: [{ id: "claude", label: "Claude Code", available: true } as AgentDTO];
-	const [prompt, setPrompt] = useState("");
+	// One field, two roles: the agent's first instruction (normal), or the task
+	// name (agent mode, which drives its own interactive board with no prompt).
+	const [text, setText] = useState("");
 	const [agentId, setAgentId] = useState(
 		pickable.find((a) => a.available)?.id ?? pickable[0]?.id ?? "claude",
 	);
 	const [yolo, setYolo] = useState(false);
 	const [agentMode, setAgentMode] = useState(false);
 
-	// Agent mode takes the task interactively on its own board, so a prompt is
-	// optional there; otherwise a prompt (or at least something) is required.
-	const canSubmit = !busy && (agentMode || prompt.trim().length > 0);
+	// Always need something: a prompt (normal) or a task name (agent mode).
+	const canSubmit = !busy && text.trim().length > 0;
 
 	const submit = () => {
 		if (!canSubmit) return;
-		onSubmit({ prompt: prompt.trim(), agentId, yolo, agentMode });
-		setPrompt("");
+		const value = text.trim();
+		onSubmit(
+			agentMode
+				? { prompt: "", name: value, agentId, yolo, agentMode: true }
+				: { prompt: value, agentId, yolo, agentMode: false },
+		);
+		setText("");
 	};
 
 	return (
 		<View style={styles.wrap}>
-			{/* Agent mode drives its own interactive board — no prompt is passed, so
-			    hide the textarea and show a hint instead. */}
-			{agentMode ? (
-				<Text style={styles.agentHint}>
-					Agent mode — opens the tool's multi-agent board scoped to this project's worktree.
-				</Text>
-			) : (
-				<TextInput
-					style={styles.input}
-					placeholder="What do you want to do?"
-					placeholderTextColor={C.faint}
-					value={prompt}
-					onChangeText={setPrompt}
-					multiline
-					editable={!busy}
-				/>
-			)}
+			{/* Agent mode passes no prompt — but we still need to name the worktree, so
+			    the field becomes an explicit task-name input (clearly labelled). */}
+			{agentMode ? <Text style={styles.fieldLabel}>TASK NAME</Text> : null}
+			<TextInput
+				style={styles.input}
+				placeholder={agentMode ? "Name this task (its worktree branch)" : "What do you want to do?"}
+				placeholderTextColor={C.faint}
+				value={text}
+				onChangeText={setText}
+				multiline={!agentMode}
+				editable={!busy}
+			/>
 			<View style={styles.row}>
 				{/* Agent picker — tappable chips (few agents, no dropdown needed). */}
 				{pickable.map((a) => (
@@ -144,16 +148,13 @@ const styles = StyleSheet.create({
 		minHeight: 40,
 		maxHeight: 120,
 	},
-	agentHint: {
-		color: C.faint,
-		fontSize: 13,
-		lineHeight: 18,
-		backgroundColor: C.sunken,
-		borderWidth: 1,
-		borderColor: C.line,
-		borderRadius: 10,
-		paddingHorizontal: 12,
-		paddingVertical: 10,
+	fieldLabel: {
+		color: C.accent,
+		fontSize: 10,
+		fontWeight: "700",
+		letterSpacing: 1.1,
+		paddingLeft: 2,
+		marginBottom: -2,
 	},
 	row: { flexDirection: "row", alignItems: "center", gap: 6 },
 	spacer: { flex: 1 },

@@ -506,11 +506,8 @@ export default function App() {
 			if (!api || !selectedProjectId) return;
 			setCreating(true);
 			try {
-				// Agent mode has no prompt to name from — stamp a unique time so the
-				// worktree branch doesn't collide with a previous "agents" task.
-				const name =
-					titleFromPrompt(input.prompt) ||
-					(input.agentMode ? `agents ${new Date().toTimeString().slice(0, 8)}` : "task");
+				// Agent mode supplies an explicit name; normal mode derives it from the prompt.
+				const name = input.name?.trim() || titleFromPrompt(input.prompt) || "task";
 				const task = await api.tasks.create({ projectId: selectedProjectId, name });
 				await api.pty.spawnAgent({
 					taskId: task.id,

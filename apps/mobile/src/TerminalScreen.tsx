@@ -13,6 +13,7 @@ import type { AteamApi, PtyDataEvent, TaskDTO } from "@ateam/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
+	Keyboard,
 	KeyboardAvoidingView,
 	Platform,
 	Pressable,
@@ -200,6 +201,21 @@ export function TerminalScreen({
 		},
 		[api, terminalId],
 	);
+
+	// The visible terminal area changes when the keyboard shows/hides — refit so
+	// the TUI is always sized to what's on screen (its input box stays visible and
+	// nothing is clipped under the keyboard). A short delay lets layout settle.
+	useEffect(() => {
+		const refit = () => {
+			setTimeout(() => webRef.current?.injectJavaScript("window.__termFit();true;"), 120);
+		};
+		const show = Keyboard.addListener("keyboardDidShow", refit);
+		const hide = Keyboard.addListener("keyboardDidHide", refit);
+		return () => {
+			show.remove();
+			hide.remove();
+		};
+	}, []);
 
 	return (
 		<KeyboardAvoidingView
