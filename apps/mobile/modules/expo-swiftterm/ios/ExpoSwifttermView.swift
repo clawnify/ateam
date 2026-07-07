@@ -15,8 +15,6 @@ class ExpoSwifttermView: ExpoView {
   private var didFeedBanner = false
 
   required init(appContext: AppContext? = nil) {
-    // Start with a real (non-zero) frame so the terminal computes a valid grid
-    // immediately — feeding into a 0×0 terminal (frame .zero) renders nothing.
     terminal = TerminalView(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
     super.init(appContext: appContext)
     clipsToBounds = true
@@ -26,18 +24,29 @@ class ExpoSwifttermView: ExpoView {
     terminal.nativeBackgroundColor = .black
     terminal.nativeForegroundColor = UIColor(white: 0.9, alpha: 1)
     terminal.backgroundColor = .black
+
+    // Pin with Auto Layout (NOT manual frame-setting) so the terminal's OWN
+    // layoutSubviews fires with real bounds — that's what calls processSizeChange
+    // to compute the grid and render. A nested subview with a hand-set frame
+    // doesn't reliably trigger it (the cause of the black screen).
+    terminal.translatesAutoresizingMaskIntoConstraints = false
     addSubview(terminal)
+    NSLayoutConstraint.activate([
+      terminal.topAnchor.constraint(equalTo: topAnchor),
+      terminal.bottomAnchor.constraint(equalTo: bottomAnchor),
+      terminal.leadingAnchor.constraint(equalTo: leadingAnchor),
+      terminal.trailingAnchor.constraint(equalTo: trailingAnchor),
+    ])
   }
 
   override func layoutSubviews() {
     super.layoutSubviews()
-    guard bounds.width > 0, bounds.height > 0 else { return }
-    terminal.frame = bounds
-    // Feed the render-proof banner only once the view actually has a size (so it
-    // lands in a real grid, not a 0×0 one). Removed once the live stream is trusted.
-    if !didFeedBanner {
-      didFeedBanner = true
-      terminal.feed(text: "\u{1b}[32mSwiftTerm native ✓\u{1b}[0m\r\nnative scroll · select · copy\r\n$ ")
+    guard bounds.width > 0, bounds.height > 0, !didFeedBanner else { return }
+    didFeedBanner = true
+    // Feed on the next runloop (after the terminal has laid out + sized its grid),
+    // exactly like SwiftTerm's own SwiftUI wrapper seeds startup data.
+    DispatchQueue.main.async { [weak self] in
+      self?.terminal.feed(text: "\u{1b}[32mSwiftTerm native ✓\u{1b}[0m\r\nnative scroll · select · copy\r\n$ ")
     }
   }
 
