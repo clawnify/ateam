@@ -354,6 +354,30 @@ export function App() {
 		if (activeProjectId) setComposerOpen(true);
 	};
 
+	// Delete a task (and its worktree) straight from the sidebar. Confirm first,
+	// then reuse the same remove + force-fallback flow as the task panel menu.
+	// The onTaskRemoved event listener drops the row and clears the selection.
+	const deleteTask = (t: TaskDTO) =>
+		run(async () => {
+			const ok = await confirm(
+				"Delete task?",
+				`Permanently delete "${t.name}" and its worktree? This can't be undone.`,
+			);
+			if (!ok) return;
+			try {
+				await window.ateam.tasks.remove({ id: t.id, deleteBranch: true });
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				if (!/modified or untracked|not fully merged|use --force/i.test(msg)) throw e;
+				const force = await confirm(
+					"Force delete?",
+					"This worktree has uncommitted/untracked changes or an unmerged branch. Delete it anyway?",
+				);
+				if (!force) return;
+				await window.ateam.tasks.remove({ id: t.id, deleteBranch: true, force: true });
+			}
+		});
+
 	// Create the task, open it in the current panel mode (side when on the
 	// board, full when already full-width), and launch the chosen agent with
 	// the prompt as its first instruction.
@@ -588,6 +612,7 @@ export function App() {
 												task={t}
 												selected={t.id === selectedTaskId}
 												onClick={() => openTask(t)}
+												onDelete={() => deleteTask(t)}
 											/>
 										</Reorder.Item>
 									))}
@@ -601,6 +626,7 @@ export function App() {
 											task={t}
 											selected={t.id === selectedTaskId}
 											onClick={() => openTask(t)}
+											onDelete={() => deleteTask(t)}
 										/>
 									</motion.div>
 								))
@@ -765,24 +791,37 @@ function TaskRow({
 	task: t,
 	selected,
 	onClick,
+	onDelete,
 }: {
 	task: TaskDTO;
 	selected: boolean;
 	onClick: () => void;
+	onDelete: () => void;
 }) {
 	const Icon = taskIcon(t.name);
+	// Row and delete button are siblings so the trash click can't nest inside
+	// the row button (same pattern as proj-row / proj-open above).
 	return (
-		<button type="button" className={`tasknode ${selected ? "selected" : ""}`} onClick={onClick}>
-			{t.agentId ? (
-				<span className="ticon">
-					<AgentIcon agentId={t.agentId} size={14} />
-				</span>
-			) : (
-				<Icon className="ticon" size={14} strokeWidth={1.75} />
-			)}
-			<span className="tname">{t.name}</span>
-			{t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />}
-		</button>
+		<div className="tasknode-row">
+			<button
+				type="button"
+				className={`tasknode ${selected ? "selected" : ""}`}
+				onClick={onClick}
+			>
+				{t.agentId ? (
+					<span className="ticon">
+						<AgentIcon agentId={t.agentId} size={14} />
+					</span>
+				) : (
+					<Icon className="ticon" size={14} strokeWidth={1.75} />
+				)}
+				<span className="tname">{t.name}</span>
+				{t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />}
+			</button>
+			<span className="task-del">
+				<IconButton icon={Trash2} label="Delete task" variant="danger" size={14} onClick={onDelete} />
+			</span>
+		</div>
 	);
 }
 
