@@ -28,6 +28,7 @@ import { AgentIcon } from "./src/AgentIcon";
 import { Composer, type ComposerSubmit } from "./src/Composer";
 import { type Connection, connect } from "./src/connection";
 import { NativeTerminalScreen } from "./src/NativeTerminalScreen";
+import { ProjectBrowser } from "./src/ProjectBrowser";
 import { loadConnection, saveConnection } from "./src/storage";
 import { TerminalScreen } from "./src/TerminalScreen";
 
@@ -150,10 +151,12 @@ function ProjectDropdown({
 	projects,
 	selectedId,
 	onSelect,
+	onAddProject,
 }: {
 	projects: ProjectDTO[];
 	selectedId: string | null;
 	onSelect: (id: string) => void;
+	onAddProject: () => void;
 }) {
 	const [open, setOpen] = useState(false);
 	const selected = projects.find((p) => p.id === selectedId);
@@ -168,30 +171,36 @@ function ProjectDropdown({
 			<Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
 				<Pressable style={styles.modalBackdrop} onPress={() => setOpen(false)}>
 					<View style={styles.modalCard}>
-						{projects.length === 0 ? (
-							<Text style={styles.modalEmpty}>No projects on this box</Text>
-						) : (
-							projects.map((p) => (
-								<Pressable
-									key={p.id}
-									style={styles.modalRow}
-									onPress={() => {
-										onSelect(p.id);
-										setOpen(false);
-									}}
-								>
-									<View
-										style={[
-											styles.modalDot,
-											{ backgroundColor: p.id === selectedId ? C.accent : "transparent" },
-										]}
-									/>
-									<Text style={styles.modalRowText} numberOfLines={1}>
-										{p.name}
-									</Text>
-								</Pressable>
-							))
-						)}
+						{projects.map((p) => (
+							<Pressable
+								key={p.id}
+								style={styles.modalRow}
+								onPress={() => {
+									onSelect(p.id);
+									setOpen(false);
+								}}
+							>
+								<View
+									style={[
+										styles.modalDot,
+										{ backgroundColor: p.id === selectedId ? C.accent : "transparent" },
+									]}
+								/>
+								<Text style={styles.modalRowText} numberOfLines={1}>
+									{p.name}
+								</Text>
+							</Pressable>
+						))}
+						<Pressable
+							style={styles.modalRow}
+							onPress={() => {
+								setOpen(false);
+								onAddProject();
+							}}
+						>
+							<Text style={styles.modalAdd}>＋</Text>
+							<Text style={[styles.modalRowText, { color: C.accent }]}>Add project…</Text>
+						</Pressable>
 					</View>
 				</Pressable>
 			</Modal>
@@ -341,6 +350,7 @@ function BoardScreen({
 	onOpenConnection,
 	onOpenTask,
 	onCreate,
+	onAddProject,
 }: {
 	connColor: string;
 	projects: ProjectDTO[];
@@ -353,6 +363,7 @@ function BoardScreen({
 	onOpenConnection: () => void;
 	onOpenTask: (task: TaskDTO) => void;
 	onCreate: (input: ComposerSubmit) => void;
+	onAddProject: () => void;
 }) {
 	const shown = tasks.filter((t) => t.projectId === selectedProjectId);
 	return (
@@ -370,6 +381,7 @@ function BoardScreen({
 						projects={projects}
 						selectedId={selectedProjectId}
 						onSelect={onSelectProject}
+						onAddProject={onAddProject}
 					/>
 				</View>
 				<View style={styles.statusHit} />
@@ -430,6 +442,7 @@ export default function App() {
 	const [loading, setLoading] = useState(false);
 	const [creating, setCreating] = useState(false);
 	const [openTask, setOpenTask] = useState<TaskDTO | null>(null);
+	const [browserOpen, setBrowserOpen] = useState(false);
 	const conn = useRef<Connection | null>(null);
 
 	const refresh = useCallback(async () => {
@@ -573,19 +586,34 @@ export default function App() {
 	}
 
 	return (
-		<BoardScreen
-			connColor={connected ? C.green : C.faint}
-			projects={projects}
-			selectedProjectId={selectedProjectId}
-			onSelectProject={setSelectedProjectId}
-			agents={agents}
-			tasks={tasks}
-			loading={loading}
-			creating={creating}
-			onOpenConnection={() => setView("connect")}
-			onOpenTask={setOpenTask}
-			onCreate={onCreate}
-		/>
+		<>
+			<BoardScreen
+				connColor={connected ? C.green : C.faint}
+				projects={projects}
+				selectedProjectId={selectedProjectId}
+				onSelectProject={setSelectedProjectId}
+				agents={agents}
+				tasks={tasks}
+				loading={loading}
+				creating={creating}
+				onOpenConnection={() => setView("connect")}
+				onOpenTask={setOpenTask}
+				onCreate={onCreate}
+				onAddProject={() => setBrowserOpen(true)}
+			/>
+			{conn.current ? (
+				<ProjectBrowser
+					api={conn.current.api}
+					visible={browserOpen}
+					onClose={() => setBrowserOpen(false)}
+					onRegistered={(project) => {
+						setBrowserOpen(false);
+						setSelectedProjectId(project.id);
+						void refresh();
+					}}
+				/>
+			) : null}
+		</>
 	);
 }
 
@@ -661,6 +689,7 @@ const styles = StyleSheet.create({
 	},
 	modalDot: { width: 7, height: 7, borderRadius: 4 },
 	modalRowText: { color: C.ink, fontSize: 15, flex: 1 },
+	modalAdd: { color: C.accent, fontSize: 15, width: 7, textAlign: "center", fontWeight: "700" },
 
 	// connection nav
 	navBar: {
