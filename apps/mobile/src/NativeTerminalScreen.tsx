@@ -33,9 +33,14 @@ const C = {
 };
 
 // TUI control bytes the soft keyboard can't send (our own bar — SwiftTerm's is off).
+// PgUp/PgDn drive the TUI's OWN scroll (Claude Code scrolls its conversation on
+// PageUp/PageDown in every mode) — the reliable way to scroll a full-screen agent,
+// vs the emulator scrollback (empty on an alt-screen).
 const KEYS: { label: string; bytes: string }[] = [
 	{ label: "esc", bytes: "\x1b" },
 	{ label: "⇧tab", bytes: "\x1b[Z" },
+	{ label: "PgUp", bytes: "\x1b[5~" },
+	{ label: "PgDn", bytes: "\x1b[6~" },
 	{ label: "/", bytes: "/" },
 	{ label: "←", bytes: "\x1b[D" },
 	{ label: "↑", bytes: "\x1b[A" },
