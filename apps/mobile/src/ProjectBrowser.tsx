@@ -5,15 +5,7 @@
 
 import type { AteamApi, DirListingDTO, ProjectDTO } from "@ateam/protocol";
 import { useCallback, useEffect, useState } from "react";
-import {
-	ActivityIndicator,
-	Modal,
-	Pressable,
-	ScrollView,
-	StyleSheet,
-	Text,
-	View,
-} from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 const C = {
 	bg: "#0c0c0e",
@@ -29,12 +21,10 @@ const C = {
 
 export function ProjectBrowser({
 	api,
-	visible,
 	onClose,
 	onRegistered,
 }: {
 	api: AteamApi;
-	visible: boolean;
 	onClose: () => void;
 	onRegistered: (project: ProjectDTO) => void;
 }) {
@@ -58,10 +48,10 @@ export function ProjectBrowser({
 		[api],
 	);
 
-	// Start at the box's home dir when the browser opens.
+	// Start at the box's home dir when the browser mounts.
 	useEffect(() => {
-		if (visible) void load();
-	}, [visible, load]);
+		void load();
+	}, [load]);
 
 	const register = useCallback(
 		async (path: string) => {
@@ -80,65 +70,63 @@ export function ProjectBrowser({
 	);
 
 	return (
-		<Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-			<View style={styles.root}>
-				<View style={styles.header}>
-					<Pressable onPress={onClose} hitSlop={8}>
-						<Text style={styles.cancel}>Cancel</Text>
-					</Pressable>
-					<Text style={styles.title}>Add project</Text>
-					<View style={{ width: 54 }} />
-				</View>
-
-				<Text style={styles.path} numberOfLines={1}>
-					{listing?.path ?? "…"}
-				</Text>
-
-				{error ? <Text style={styles.err}>{error}</Text> : null}
-
-				{loading && !listing ? (
-					<View style={styles.center}>
-						<ActivityIndicator color={C.ink} />
-					</View>
-				) : (
-					<ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
-						{listing?.parent ? (
-							<Pressable style={styles.row} onPress={() => load(listing.parent ?? undefined)}>
-								<Text style={styles.up}>‹</Text>
-								<Text style={styles.name}>..</Text>
-							</Pressable>
-						) : null}
-						{listing?.entries.length === 0 ? (
-							<Text style={styles.empty}>no subfolders</Text>
-						) : (
-							listing?.entries.map((e) => (
-								<Pressable key={e.path} style={styles.row} onPress={() => load(e.path)}>
-									<Text style={styles.folder}>{e.isRepo ? "◆" : "▸"}</Text>
-									<Text style={styles.name} numberOfLines={1}>
-										{e.name}
-									</Text>
-									{e.isRepo ? (
-										<Pressable
-											style={styles.addBtn}
-											onPress={() => register(e.path)}
-											disabled={busyPath === e.path}
-											hitSlop={6}
-										>
-											{busyPath === e.path ? (
-												<ActivityIndicator color="#15151a" size="small" />
-											) : (
-												<Text style={styles.addText}>Add</Text>
-											)}
-										</Pressable>
-									) : null}
-								</Pressable>
-							))
-						)}
-					</ScrollView>
-				)}
-				<Text style={styles.hint}>◆ = a git repo you can add · tap a folder to open it</Text>
+		<View style={styles.root}>
+			<View style={styles.header}>
+				<Pressable onPress={onClose} hitSlop={8}>
+					<Text style={styles.cancel}>Cancel</Text>
+				</Pressable>
+				<Text style={styles.title}>Add project</Text>
+				<View style={{ width: 54 }} />
 			</View>
-		</Modal>
+
+			<Text style={styles.path} numberOfLines={1}>
+				{listing?.path ?? "…"}
+			</Text>
+
+			{error ? <Text style={styles.err}>{error}</Text> : null}
+
+			{loading && !listing ? (
+				<View style={styles.center}>
+					<ActivityIndicator color={C.ink} />
+				</View>
+			) : (
+				<ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+					{listing?.parent ? (
+						<Pressable style={styles.row} onPress={() => load(listing.parent ?? undefined)}>
+							<Text style={styles.up}>‹</Text>
+							<Text style={styles.name}>..</Text>
+						</Pressable>
+					) : null}
+					{listing?.entries.length === 0 ? (
+						<Text style={styles.empty}>no subfolders</Text>
+					) : (
+						listing?.entries.map((e) => (
+							<Pressable key={e.path} style={styles.row} onPress={() => load(e.path)}>
+								<Text style={styles.folder}>{e.isRepo ? "◆" : "▸"}</Text>
+								<Text style={styles.name} numberOfLines={1}>
+									{e.name}
+								</Text>
+								{e.isRepo ? (
+									<Pressable
+										style={styles.addBtn}
+										onPress={() => register(e.path)}
+										disabled={busyPath === e.path}
+										hitSlop={6}
+									>
+										{busyPath === e.path ? (
+											<ActivityIndicator color="#15151a" size="small" />
+										) : (
+											<Text style={styles.addText}>Add</Text>
+										)}
+									</Pressable>
+								) : null}
+							</Pressable>
+						))
+					)}
+				</ScrollView>
+			)}
+			<Text style={styles.hint}>◆ = a git repo you can add · tap a folder to open it</Text>
+		</View>
 	);
 }
 

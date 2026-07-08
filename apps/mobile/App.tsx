@@ -568,6 +568,22 @@ export default function App() {
 		return <Term api={conn.current.api} task={openTask} onClose={() => setOpenTask(null)} />;
 	}
 
+	// The project browser is a full-screen view-swap (NOT a nested modal — presenting
+	// a modal while the dropdown modal dismisses deadlocks iOS and freezes the app).
+	if (browserOpen && conn.current) {
+		return (
+			<ProjectBrowser
+				api={conn.current.api}
+				onClose={() => setBrowserOpen(false)}
+				onRegistered={(project) => {
+					setBrowserOpen(false);
+					setSelectedProjectId(project.id);
+					void refresh();
+				}}
+			/>
+		);
+	}
+
 	if (view === "connect") {
 		return (
 			<ConnectionScreen
@@ -586,34 +602,20 @@ export default function App() {
 	}
 
 	return (
-		<>
-			<BoardScreen
-				connColor={connected ? C.green : C.faint}
-				projects={projects}
-				selectedProjectId={selectedProjectId}
-				onSelectProject={setSelectedProjectId}
-				agents={agents}
-				tasks={tasks}
-				loading={loading}
-				creating={creating}
-				onOpenConnection={() => setView("connect")}
-				onOpenTask={setOpenTask}
-				onCreate={onCreate}
-				onAddProject={() => setBrowserOpen(true)}
-			/>
-			{conn.current ? (
-				<ProjectBrowser
-					api={conn.current.api}
-					visible={browserOpen}
-					onClose={() => setBrowserOpen(false)}
-					onRegistered={(project) => {
-						setBrowserOpen(false);
-						setSelectedProjectId(project.id);
-						void refresh();
-					}}
-				/>
-			) : null}
-		</>
+		<BoardScreen
+			connColor={connected ? C.green : C.faint}
+			projects={projects}
+			selectedProjectId={selectedProjectId}
+			onSelectProject={setSelectedProjectId}
+			agents={agents}
+			tasks={tasks}
+			loading={loading}
+			creating={creating}
+			onOpenConnection={() => setView("connect")}
+			onOpenTask={setOpenTask}
+			onCreate={onCreate}
+			onAddProject={() => setBrowserOpen(true)}
+		/>
 	);
 }
 
