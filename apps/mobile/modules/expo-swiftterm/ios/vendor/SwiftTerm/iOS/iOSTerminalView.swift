@@ -879,7 +879,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         case .changed:
             ateamScrollAccum += gestureRecognizer.translation(in: self).y
             gestureRecognizer.setTranslation(.zero, in: self)
-            let step = max(70, bounds.height / 5)
+            // Points of finger travel per page key — smaller = more scroll per drag.
+            // ~1/14 of the view height ≈ a short flick per page.
+            let step = max(28, bounds.height / 14)
             while ateamScrollAccum >= step { ateamScrollAccum -= step; send(pageUp) }    // drag down → older
             while ateamScrollAccum <= -step { ateamScrollAccum += step; send(pageDown) } // drag up → newer
         default:
