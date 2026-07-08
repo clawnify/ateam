@@ -28,6 +28,7 @@ import { AgentIcon } from "./src/AgentIcon";
 import { Composer, type ComposerSubmit } from "./src/Composer";
 import { type Connection, connect } from "./src/connection";
 import { NativeTerminalScreen } from "./src/NativeTerminalScreen";
+import { ProjectBrowser } from "./src/ProjectBrowser";
 import { loadConnection, saveConnection } from "./src/storage";
 import { TerminalScreen } from "./src/TerminalScreen";
 
@@ -150,10 +151,12 @@ function ProjectDropdown({
 	projects,
 	selectedId,
 	onSelect,
+	onAddProject,
 }: {
 	projects: ProjectDTO[];
 	selectedId: string | null;
 	onSelect: (id: string) => void;
+	onAddProject: () => void;
 }) {
 	const [open, setOpen] = useState(false);
 	const selected = projects.find((p) => p.id === selectedId);
@@ -168,30 +171,36 @@ function ProjectDropdown({
 			<Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
 				<Pressable style={styles.modalBackdrop} onPress={() => setOpen(false)}>
 					<View style={styles.modalCard}>
-						{projects.length === 0 ? (
-							<Text style={styles.modalEmpty}>No projects on this box</Text>
-						) : (
-							projects.map((p) => (
-								<Pressable
-									key={p.id}
-									style={styles.modalRow}
-									onPress={() => {
-										onSelect(p.id);
-										setOpen(false);
-									}}
-								>
-									<View
-										style={[
-											styles.modalDot,
-											{ backgroundColor: p.id === selectedId ? C.accent : "transparent" },
-										]}
-									/>
-									<Text style={styles.modalRowText} numberOfLines={1}>
-										{p.name}
-									</Text>
-								</Pressable>
-							))
-						)}
+						{projects.map((p) => (
+							<Pressable
+								key={p.id}
+								style={styles.modalRow}
+								onPress={() => {
+									onSelect(p.id);
+									setOpen(false);
+								}}
+							>
+								<View
+									style={[
+										styles.modalDot,
+										{ backgroundColor: p.id === selectedId ? C.accent : "transparent" },
+									]}
+								/>
+								<Text style={styles.modalRowText} numberOfLines={1}>
+									{p.name}
+								</Text>
+							</Pressable>
+						))}
+						<Pressable
+							style={styles.modalRow}
+							onPress={() => {
+								setOpen(false);
+								onAddProject();
+							}}
+						>
+							<Text style={styles.modalAdd}>＋</Text>
+							<Text style={[styles.modalRowText, { color: C.accent }]}>Add project…</Text>
+						</Pressable>
 					</View>
 				</Pressable>
 			</Modal>
@@ -341,6 +350,7 @@ function BoardScreen({
 	onOpenConnection,
 	onOpenTask,
 	onCreate,
+	onAddProject,
 }: {
 	connColor: string;
 	projects: ProjectDTO[];
@@ -353,6 +363,7 @@ function BoardScreen({
 	onOpenConnection: () => void;
 	onOpenTask: (task: TaskDTO) => void;
 	onCreate: (input: ComposerSubmit) => void;
+	onAddProject: () => void;
 }) {
 	const shown = tasks.filter((t) => t.projectId === selectedProjectId);
 	return (
@@ -370,6 +381,7 @@ function BoardScreen({
 						projects={projects}
 						selectedId={selectedProjectId}
 						onSelect={onSelectProject}
+						onAddProject={onAddProject}
 					/>
 				</View>
 				<View style={styles.statusHit} />
@@ -430,17 +442,8 @@ export default function App() {
 	const [loading, setLoading] = useState(false);
 	const [creating, setCreating] = useState(false);
 	const [openTask, setOpenTask] = useState<TaskDTO | null>(null);
+	const [browserOpen, setBrowserOpen] = useState(false);
 	const conn = useRef<Connection | null>(null);
-
-	// Prefill the last box on launch, so a restart/reinstall doesn't lose the IP.
-	useEffect(() => {
-		void loadConnection().then((saved) => {
-			if (saved) {
-				setHost(saved.host);
-				setPort(saved.port);
-			}
-		});
-	}, []);
 
 	const refresh = useCallback(async () => {
 		const api = conn.current?.api;
@@ -474,30 +477,51 @@ export default function App() {
 		return off;
 	}, [view]);
 
-	const onConnect = useCallback(async () => {
+	// The one connect path — used by the Connect button and the launch auto-connect.
+	const connectTo = useCallback(
+		async (h: string, p: string) => {
+			setConnecting(true);
+			setError(null);
+			try {
+				conn.current?.close();
+				const c = await connect(`ws://${h}:${p || "8787"}`);
+				conn.current = c;
+				await saveConnection({ host: h, port: p || "8787" });
+				setConnected(true);
+				void c.api.agents.list().then(setAgents);
+				setView("board");
+				await refresh();
+			} catch (err) {
+				conn.current = null;
+				setConnected(false);
+				setError(err instanceof Error ? err.message : String(err));
+			} finally {
+				setConnecting(false);
+			}
+		},
+		[refresh],
+	);
+
+	const onConnect = useCallback(() => {
 		if (!host.trim()) {
 			setError("Enter the box's Tailscale IP or hostname.");
 			return;
 		}
-		setConnecting(true);
-		setError(null);
-		try {
-			conn.current?.close();
-			const c = await connect(`ws://${host.trim()}:${port.trim() || "8787"}`);
-			conn.current = c;
-			await saveConnection({ host: host.trim(), port: port.trim() || "8787" });
-			setConnected(true);
-			void c.api.agents.list().then(setAgents);
-			setView("board");
-			await refresh();
-		} catch (err) {
-			conn.current = null;
-			setConnected(false);
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setConnecting(false);
-		}
-	}, [host, port, refresh]);
+		void connectTo(host.trim(), port.trim());
+	}, [host, port, connectTo]);
+
+	// On launch: prefill the last box and auto-reconnect to it, so reopening the app
+	// lands straight on the live board (no retyping/tapping). On failure it falls back
+	// to the connection screen with the error, fields prefilled.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on mount
+	useEffect(() => {
+		void loadConnection().then((saved) => {
+			if (!saved?.host) return;
+			setHost(saved.host);
+			setPort(saved.port);
+			void connectTo(saved.host, saved.port);
+		});
+	}, []);
 
 	const onDisconnect = useCallback(() => {
 		conn.current?.close();
@@ -544,6 +568,22 @@ export default function App() {
 		return <Term api={conn.current.api} task={openTask} onClose={() => setOpenTask(null)} />;
 	}
 
+	// The project browser is a full-screen view-swap (NOT a nested modal — presenting
+	// a modal while the dropdown modal dismisses deadlocks iOS and freezes the app).
+	if (browserOpen && conn.current) {
+		return (
+			<ProjectBrowser
+				api={conn.current.api}
+				onClose={() => setBrowserOpen(false)}
+				onRegistered={(project) => {
+					setBrowserOpen(false);
+					setSelectedProjectId(project.id);
+					void refresh();
+				}}
+			/>
+		);
+	}
+
 	if (view === "connect") {
 		return (
 			<ConnectionScreen
@@ -574,6 +614,7 @@ export default function App() {
 			onOpenConnection={() => setView("connect")}
 			onOpenTask={setOpenTask}
 			onCreate={onCreate}
+			onAddProject={() => setBrowserOpen(true)}
 		/>
 	);
 }
@@ -650,6 +691,7 @@ const styles = StyleSheet.create({
 	},
 	modalDot: { width: 7, height: 7, borderRadius: 4 },
 	modalRowText: { color: C.ink, fontSize: 15, flex: 1 },
+	modalAdd: { color: C.accent, fontSize: 15, width: 7, textAlign: "center", fontWeight: "700" },
 
 	// connection nav
 	navBar: {
