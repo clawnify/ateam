@@ -8,6 +8,7 @@ import type { AteamApi, PtyDataEvent, TaskDTO } from "@ateam/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
+	Keyboard,
 	KeyboardAvoidingView,
 	Platform,
 	Pressable,
@@ -70,6 +71,7 @@ export function NativeTerminalScreen({
 	const applied = useRef(false);
 	const lastSeq = useRef(-1);
 	const snapped = useRef(false);
+	const lastSize = useRef({ cols: 0, rows: 0 });
 
 	const feed = useCallback((data: string) => termRef.current?.feed(data), []);
 
@@ -140,6 +142,7 @@ export function NativeTerminalScreen({
 		async (cols: number, rows: number) => {
 			const id = terminalId;
 			if (!id) return;
+			lastSize.current = { cols, rows };
 			api.pty.resize(id, cols, rows);
 			if (snapped.current) return;
 			snapped.current = true;
@@ -167,6 +170,27 @@ export function NativeTerminalScreen({
 		},
 		[api, terminalId],
 	);
+
+	// The terminal grows/shrinks with the keyboard (KeyboardAvoidingView). A
+	// full-screen TUI (Claude agents) doesn't always repaint cleanly after the rapid
+	// resize animation, so once it settles, nudge a repaint: jiggle the size (rows-1
+	// → rows) to force a SIGWINCH-driven full redraw at the final dimensions.
+	useEffect(() => {
+		const settle = () =>
+			setTimeout(() => {
+				const id = terminalId;
+				const { cols, rows } = lastSize.current;
+				if (!id || !cols || !rows) return;
+				api.pty.resize(id, cols, Math.max(1, rows - 1));
+				setTimeout(() => api.pty.resize(id, cols, rows), 120);
+			}, 350);
+		const show = Keyboard.addListener("keyboardDidShow", settle);
+		const hide = Keyboard.addListener("keyboardDidHide", settle);
+		return () => {
+			show.remove();
+			hide.remove();
+		};
+	}, [api, terminalId]);
 
 	// Shortcut-bar key → write bytes. Input keys keep the keyboard up; scroll keys
 	// (PgUp/PgDn) must NOT pop the keyboard — you're reading, not typing.
