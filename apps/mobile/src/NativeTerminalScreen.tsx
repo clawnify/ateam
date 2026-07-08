@@ -36,11 +36,11 @@ const C = {
 // PgUp/PgDn drive the TUI's OWN scroll (Claude Code scrolls its conversation on
 // PageUp/PageDown in every mode) — the reliable way to scroll a full-screen agent,
 // vs the emulator scrollback (empty on an alt-screen).
-const KEYS: { label: string; bytes: string }[] = [
+const KEYS: { label: string; bytes: string; scroll?: boolean }[] = [
 	{ label: "esc", bytes: "\x1b" },
 	{ label: "⇧tab", bytes: "\x1b[Z" },
-	{ label: "PgUp", bytes: "\x1b[5~" },
-	{ label: "PgDn", bytes: "\x1b[6~" },
+	{ label: "PgUp", bytes: "\x1b[5~", scroll: true },
+	{ label: "PgDn", bytes: "\x1b[6~", scroll: true },
 	{ label: "/", bytes: "/" },
 	{ label: "←", bytes: "\x1b[D" },
 	{ label: "↑", bytes: "\x1b[A" },
@@ -165,12 +165,13 @@ export function NativeTerminalScreen({
 		[api, terminalId],
 	);
 
-	// Shortcut-bar key → write bytes + keep the keyboard focused.
+	// Shortcut-bar key → write bytes. Input keys keep the keyboard up; scroll keys
+	// (PgUp/PgDn) must NOT pop the keyboard — you're reading, not typing.
 	const send = useCallback(
-		(bytes: string) => {
+		(bytes: string, scroll?: boolean) => {
 			if (!terminalId) return;
 			api.pty.write(terminalId, bytes);
-			termRef.current?.focusKeyboard();
+			if (!scroll) termRef.current?.focusKeyboard();
 		},
 		[api, terminalId],
 	);
@@ -212,7 +213,12 @@ export function NativeTerminalScreen({
 						keyboardShouldPersistTaps="always"
 					>
 						{KEYS.map((k) => (
-							<Pressable key={k.label} style={styles.key} onPress={() => send(k.bytes)} hitSlop={4}>
+							<Pressable
+								key={k.label}
+								style={styles.key}
+								onPress={() => send(k.bytes, k.scroll)}
+								hitSlop={4}
+							>
 								<Text style={styles.keyText}>{k.label}</Text>
 							</Pressable>
 						))}

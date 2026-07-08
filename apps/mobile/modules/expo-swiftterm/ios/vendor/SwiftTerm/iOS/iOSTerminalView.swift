@@ -861,29 +861,29 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         imgView.tintColor = .white
     }
     
+    // ATEAM PATCH (re-apply on SwiftTerm bump): this gesture is only active when a
+    // TUI has mouse mode on (see mouseModeChanged). A full-screen agent (Claude Code)
+    // doesn't treat a forwarded mouse-drag as scroll — but DOES scroll on
+    // PageUp/PageDown in every mode. So map a vertical finger drag to page keys
+    // instead of forwarding mouse motion. Page-granular (the only scroll key TUIs
+    // universally honor); tune `step` for feel. Shell scrollback still works via the
+    // separate panSelectionHandler (mouse mode off).
+    var ateamScrollAccum: CGFloat = 0
     @objc func panMouseHandler (_ gestureRecognizer: UIPanGestureRecognizer){
         guard gestureRecognizer.view != nil else { return }
-        if allowMouseReporting && terminal.mouseMode != .off {
-            switch gestureRecognizer.state {
-            case .began:
-                // send the initial tap
-                if terminal.mouseMode.sendButtonPress() {
-                    sharedMouseEvent(gestureRecognizer: gestureRecognizer, release: false)
-                }
-            case .ended, .cancelled:
-                if terminal.mouseMode.sendButtonRelease() {
-                    sharedMouseEvent(gestureRecognizer: gestureRecognizer, release: true)
-                }
-            case .changed:
-                if terminal.mouseMode.sendButtonTracking() {
-                    let hit = calculateTapHit(gesture: gestureRecognizer)
-                    if let grid = hit.grid.toScreenCoordinate(from: terminal.displayBuffer) {
-                        terminal.sendMotion(buttonFlags: encodeFlags(release: false), x: grid.col, y: grid.row, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
-                    }
-                }
-            default:
-                break
-            }
+        let pageUp: [UInt8] = [0x1b, 0x5b, 0x35, 0x7e]   // ESC [ 5 ~
+        let pageDown: [UInt8] = [0x1b, 0x5b, 0x36, 0x7e] // ESC [ 6 ~
+        switch gestureRecognizer.state {
+        case .began:
+            ateamScrollAccum = 0
+        case .changed:
+            ateamScrollAccum += gestureRecognizer.translation(in: self).y
+            gestureRecognizer.setTranslation(.zero, in: self)
+            let step = max(70, bounds.height / 5)
+            while ateamScrollAccum >= step { ateamScrollAccum -= step; send(pageUp) }    // drag down → older
+            while ateamScrollAccum <= -step { ateamScrollAccum += step; send(pageDown) } // drag up → newer
+        default:
+            break
         }
     }
    
