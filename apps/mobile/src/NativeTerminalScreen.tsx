@@ -281,8 +281,17 @@ const styles = StyleSheet.create({
 	kbdText: { color: C.muted, fontSize: 12, fontWeight: "600" },
 	dot: { width: 8, height: 8, borderRadius: 4 },
 	term: { flex: 1, backgroundColor: "#000" },
-	keyBar: { maxHeight: 48, backgroundColor: C.surface, borderTopWidth: 1, borderTopColor: C.line },
-	keyBarContent: { alignItems: "center", gap: 8, paddingHorizontal: 10, paddingVertical: 7 },
+	// No maxHeight (it would clip the bottom padding). Horizontal scroll handles
+	// overflow when the keys don't fit the width. Extra bottom padding lifts the row
+	// off the iOS home indicator.
+	keyBar: { flexGrow: 0, backgroundColor: C.surface, borderTopWidth: 1, borderTopColor: C.line },
+	keyBarContent: {
+		alignItems: "center",
+		gap: 8,
+		paddingHorizontal: 10,
+		paddingTop: 8,
+		paddingBottom: 30,
+	},
 	key: {
 		minWidth: 44,
 		height: 34,

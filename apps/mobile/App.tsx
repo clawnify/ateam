@@ -432,16 +432,6 @@ export default function App() {
 	const [openTask, setOpenTask] = useState<TaskDTO | null>(null);
 	const conn = useRef<Connection | null>(null);
 
-	// Prefill the last box on launch, so a restart/reinstall doesn't lose the IP.
-	useEffect(() => {
-		void loadConnection().then((saved) => {
-			if (saved) {
-				setHost(saved.host);
-				setPort(saved.port);
-			}
-		});
-	}, []);
-
 	const refresh = useCallback(async () => {
 		const api = conn.current?.api;
 		if (!api) return;
@@ -474,30 +464,51 @@ export default function App() {
 		return off;
 	}, [view]);
 
-	const onConnect = useCallback(async () => {
+	// The one connect path — used by the Connect button and the launch auto-connect.
+	const connectTo = useCallback(
+		async (h: string, p: string) => {
+			setConnecting(true);
+			setError(null);
+			try {
+				conn.current?.close();
+				const c = await connect(`ws://${h}:${p || "8787"}`);
+				conn.current = c;
+				await saveConnection({ host: h, port: p || "8787" });
+				setConnected(true);
+				void c.api.agents.list().then(setAgents);
+				setView("board");
+				await refresh();
+			} catch (err) {
+				conn.current = null;
+				setConnected(false);
+				setError(err instanceof Error ? err.message : String(err));
+			} finally {
+				setConnecting(false);
+			}
+		},
+		[refresh],
+	);
+
+	const onConnect = useCallback(() => {
 		if (!host.trim()) {
 			setError("Enter the box's Tailscale IP or hostname.");
 			return;
 		}
-		setConnecting(true);
-		setError(null);
-		try {
-			conn.current?.close();
-			const c = await connect(`ws://${host.trim()}:${port.trim() || "8787"}`);
-			conn.current = c;
-			await saveConnection({ host: host.trim(), port: port.trim() || "8787" });
-			setConnected(true);
-			void c.api.agents.list().then(setAgents);
-			setView("board");
-			await refresh();
-		} catch (err) {
-			conn.current = null;
-			setConnected(false);
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setConnecting(false);
-		}
-	}, [host, port, refresh]);
+		void connectTo(host.trim(), port.trim());
+	}, [host, port, connectTo]);
+
+	// On launch: prefill the last box and auto-reconnect to it, so reopening the app
+	// lands straight on the live board (no retyping/tapping). On failure it falls back
+	// to the connection screen with the error, fields prefilled.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on mount
+	useEffect(() => {
+		void loadConnection().then((saved) => {
+			if (!saved?.host) return;
+			setHost(saved.host);
+			setPort(saved.port);
+			void connectTo(saved.host, saved.port);
+		});
+	}, []);
 
 	const onDisconnect = useCallback(() => {
 		conn.current?.close();

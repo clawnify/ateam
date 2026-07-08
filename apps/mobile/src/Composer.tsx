@@ -156,7 +156,7 @@ const styles = StyleSheet.create({
 		paddingTop: 10,
 		// Extra bottom padding clears the iOS home indicator so the mode buttons
 		// aren't hidden behind it.
-		paddingBottom: 34,
+		paddingBottom: 42,
 		gap: 8,
 	},
 	// agent popover
