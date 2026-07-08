@@ -9,6 +9,7 @@ import type { AgentDTO } from "@ateam/protocol";
 import { useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { AgentIcon } from "./AgentIcon";
+import { useKeyboardVisible } from "./useKeyboardVisible";
 
 const C = {
 	surface: "#141418",
@@ -55,6 +56,7 @@ export function Composer({
 	const [agentMode, setAgentMode] = useState(false);
 	const [pickerOpen, setPickerOpen] = useState(false);
 	const current = pickable.find((a) => a.id === agentId) ?? pickable[0];
+	const keyboardUp = useKeyboardVisible();
 
 	// Always need something: a prompt (normal) or a task name (agent mode).
 	const canSubmit = !busy && text.trim().length > 0;
@@ -71,7 +73,7 @@ export function Composer({
 	};
 
 	return (
-		<View style={styles.wrap}>
+		<View style={[styles.wrap, keyboardUp && styles.wrapKeyboard]}>
 			{/* Agent mode passes no prompt — but we still need to name the worktree, so
 			    the field becomes an explicit task-name input (clearly labelled). */}
 			{agentMode ? <Text style={styles.fieldLabel}>TASK NAME</Text> : null}
@@ -155,10 +157,12 @@ const styles = StyleSheet.create({
 		paddingHorizontal: 12,
 		paddingTop: 10,
 		// Extra bottom padding clears the iOS home indicator so the mode buttons
-		// aren't hidden behind it.
+		// aren't hidden behind it — but drop it when the keyboard is up (it already
+		// covers that area).
 		paddingBottom: 42,
 		gap: 8,
 	},
+	wrapKeyboard: { paddingBottom: 10 },
 	// agent popover
 	backdrop: {
 		flex: 1,

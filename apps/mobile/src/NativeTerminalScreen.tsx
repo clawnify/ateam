@@ -20,6 +20,7 @@ import {
 	type SwiftTermHandle,
 	SwiftTermView,
 } from "../modules/expo-swiftterm/src/ExpoSwifttermView";
+import { useKeyboardVisible } from "./useKeyboardVisible";
 
 const C = {
 	bg: "#0c0c0e",
@@ -39,14 +40,15 @@ const C = {
 const KEYS: { label: string; bytes: string; scroll?: boolean }[] = [
 	{ label: "esc", bytes: "\x1b" },
 	{ label: "⇧tab", bytes: "\x1b[Z" },
-	{ label: "PgUp", bytes: "\x1b[5~", scroll: true },
-	{ label: "PgDn", bytes: "\x1b[6~", scroll: true },
+	{ label: "⏎", bytes: "\r" },
 	{ label: "/", bytes: "/" },
 	{ label: "←", bytes: "\x1b[D" },
 	{ label: "↑", bytes: "\x1b[A" },
 	{ label: "↓", bytes: "\x1b[B" },
 	{ label: "→", bytes: "\x1b[C" },
 	{ label: "^C", bytes: "\x03" },
+	{ label: "PgUp", bytes: "\x1b[5~", scroll: true },
+	{ label: "PgDn", bytes: "\x1b[6~", scroll: true },
 ];
 
 export function NativeTerminalScreen({
@@ -62,6 +64,7 @@ export function NativeTerminalScreen({
 	const [terminalId, setTerminalId] = useState<string | null>(null);
 	const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
 	const [detail, setDetail] = useState("resolving session…");
+	const keyboardUp = useKeyboardVisible();
 
 	const buffered = useRef<PtyDataEvent[]>([]);
 	const applied = useRef(false);
@@ -209,7 +212,10 @@ export function NativeTerminalScreen({
 						horizontal
 						showsHorizontalScrollIndicator={false}
 						style={styles.keyBar}
-						contentContainerStyle={styles.keyBarContent}
+						contentContainerStyle={[
+							styles.keyBarContent,
+							keyboardUp && styles.keyBarContentKeyboard,
+						]}
 						keyboardShouldPersistTaps="always"
 					>
 						{KEYS.map((k) => (
@@ -292,6 +298,7 @@ const styles = StyleSheet.create({
 		paddingTop: 8,
 		paddingBottom: 30,
 	},
+	keyBarContentKeyboard: { paddingBottom: 8 },
 	key: {
 		minWidth: 44,
 		height: 34,
