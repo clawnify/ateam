@@ -234,8 +234,8 @@ export function App() {
 
 	const activeTasks = activeProjectId ? (tasksByProject[activeProjectId] ?? []) : [];
 	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
-	// "Active" tasks for the sidebar list = everything not yet merged/done.
-	const sidebarTasks = activeTasks.filter((t) => t.column !== "merged");
+	// Sidebar list shows all tasks, including merged/done ones.
+	const sidebarTasks = activeTasks;
 
 	// Sidebar ordering: by status (Review → Needs You → In Progress → Backlog),
 	// most-recently-updated first, or a hand-dragged custom order.
