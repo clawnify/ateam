@@ -692,13 +692,18 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     
     @objc func singleTap (_ gestureRecognizer: UITapGestureRecognizer)
     {
-        if isFirstResponder {
-            guard gestureRecognizer.view != nil else { return }
-                 
-            if gestureRecognizer.state != .ended {
-                return
-            }
+        guard gestureRecognizer.view != nil, gestureRecognizer.state == .ended else { return }
 
+        // ATEAM PATCH (re-apply on SwiftTerm bump): the keyboard follows the tap
+        // relative to the CURSOR — the universal "active input" location for any agent
+        // (Claude/Codex/OpenCode all keep their cursor in their input). Tap near the
+        // cursor row → show the keyboard; tap the output/history → dismiss it. No
+        // hardcoded per-agent layout.
+        let tapRow = calculateTapHit(gesture: gestureRecognizer).grid.row
+        let cursorRow = terminal.displayBuffer.y + terminal.displayBuffer.yDisp
+        let nearInput = abs(tapRow - cursorRow) < 4
+
+        if isFirstResponder {
             let tapHit = calculateTapHit(gesture: gestureRecognizer).grid
             if let result = linkForClick(at: tapHit, hasCommandModifier: commandActive) {
                 terminalDelegate?.requestOpenLink(source: self, link: result.link, params: result.params)
@@ -722,14 +727,16 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                     let location = gestureRecognizer.location(in: gestureRecognizer.view)
                     let tapLoc = calculateTapHit(gesture: gestureRecognizer).grid
                     let displayBuffer = terminal.displayBuffer
-                    let cursorRow = displayBuffer.y + displayBuffer.yDisp
                     if abs (tapLoc.col-displayBuffer.x) < 4 && abs (tapLoc.row - cursorRow) < 2 {
                         showContextMenu (forRegion: makeContextMenuRegionForTap (point: location), pos: tapLoc)
                     }
                 }
             }
             queuePendingDisplay()
-        } else {
+            // Tapped the output/history (not the input) → dismiss the keyboard.
+            if !nearInput { let _ = resignFirstResponder() }
+        } else if nearInput {
+            // Tapped in the input area while the keyboard is hidden → bring it up.
             let _ = becomeFirstResponder ()
         }
     }
