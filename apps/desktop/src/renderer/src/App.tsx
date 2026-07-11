@@ -31,6 +31,7 @@ import {
 	Rocket,
 	RotateCw,
 	Rows2,
+	Search,
 	Server,
 	Sparkles,
 	SquareTerminal,
@@ -40,7 +41,15 @@ import {
 	Zap,
 } from "lucide-react";
 import { motion, Reorder } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type CSSProperties,
+	type MouseEvent as ReactMouseEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type {
 	AgentDTO,
 	DiffResultDTO,
@@ -108,6 +117,10 @@ const STATUS_RANK: Record<KanbanColumn, number> = {
 
 const springy = { type: "spring", stiffness: 550, damping: 42 } as const;
 
+// Minimum (and default) expanded-sidebar width in px. The resizer never shrinks
+// below this; the upper bound is 50% of the window (see startSidebarResize).
+const MIN_SIDEBAR_W = 240;
+
 export function App() {
 	// Non-null in a detached window: this window is pinned to one project and
 	// hides the project switcher; null in the main multi-project dashboard.
@@ -135,12 +148,46 @@ export function App() {
 			return !r;
 		});
 	};
+	// Draggable sidebar width. Floor is the default 240px (can't shrink below
+	// what it is now); the 50%-of-window cap is enforced both here while dragging
+	// and in CSS (min(var(--sidebar-w), 50%)) so it survives window resizes.
+	const [sidebarWidth, setSidebarWidth] = useState(() => {
+		const saved = Number(localStorage.getItem("ateam.sidebarWidth"));
+		return Number.isFinite(saved) && saved >= MIN_SIDEBAR_W ? saved : MIN_SIDEBAR_W;
+	});
+	const startSidebarResize = (e: ReactMouseEvent) => {
+		e.preventDefault();
+		const startX = e.clientX;
+		const startW = sidebarWidth;
+		let latest = startW;
+		const onMove = (ev: MouseEvent) => {
+			const max = Math.round(window.innerWidth * 0.5);
+			latest = Math.min(max, Math.max(MIN_SIDEBAR_W, startW + (ev.clientX - startX)));
+			setSidebarWidth(latest);
+		};
+		const onUp = () => {
+			window.removeEventListener("mousemove", onMove);
+			window.removeEventListener("mouseup", onUp);
+			document.body.style.cursor = "";
+			document.body.style.userSelect = "";
+			localStorage.setItem("ateam.sidebarWidth", String(latest));
+		};
+		window.addEventListener("mousemove", onMove);
+		window.addEventListener("mouseup", onUp);
+		// Keep the resize cursor and suppress text selection for the whole drag.
+		document.body.style.cursor = "col-resize";
+		document.body.style.userSelect = "none";
+	};
 	const [taskSort, setTaskSortState] = useState<TaskSortMode>(
 		() => (localStorage.getItem("ateam.taskSort") as TaskSortMode) || "status",
 	);
 	const [customOrder, setCustomOrder] = useState<string[]>([]);
 	const [cleanupOpen, setCleanupOpen] = useState(false);
 	const [composerOpen, setComposerOpen] = useState(false);
+	// Free-text task filter driven by the centered search bar in the topbar.
+	// Filters the sidebar list and the board by task name; the selected task
+	// stays open even when it doesn't match, so searching never yanks it away.
+	const [taskQuery, setTaskQuery] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [info, setInfo] = useState<string | null>(null);
 	const [termByTask, setTermByTask] = useState<Record<string, string>>({});
@@ -273,6 +320,28 @@ export function App() {
 		}
 		return list;
 	}, [sidebarTasks, taskSort, customOrder]);
+
+	// Case-insensitive substring match across the task's name, branch, and
+	// description. Empty query matches all.
+	const query = taskQuery.trim().toLowerCase();
+	const matchesQuery = useCallback(
+		(t: TaskDTO) =>
+			query === "" ||
+			t.name.toLowerCase().includes(query) ||
+			t.branch.toLowerCase().includes(query) ||
+			(t.description?.toLowerCase().includes(query) ?? false),
+		[query],
+	);
+	// Sidebar and board both honor the search; Mission Control and the selected
+	// task deliberately don't (a live agent tile / open panel shouldn't vanish).
+	const visibleSidebarTasks = useMemo(
+		() => orderedSidebarTasks.filter(matchesQuery),
+		[orderedSidebarTasks, matchesQuery],
+	);
+	const filteredBoardTasks = useMemo(
+		() => activeTasks.filter(matchesQuery),
+		[activeTasks, matchesQuery],
+	);
 
 	// Each project remembers its last view (selected task, side/full, board vs
 	// mission) so switching back lands exactly where you left off.
@@ -416,7 +485,10 @@ export function App() {
 	};
 
 	return (
-		<div className={`app ${rail ? "rail" : ""}`}>
+		<div
+			className={`app ${rail ? "rail" : ""}`}
+			style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
+		>
 			<aside className={`sidebar ${rail ? "rail" : ""}`}>
 				{/* In rail mode the traffic lights own this strip; the toggle moves
 				    below them as the first tile. */}
@@ -458,7 +530,7 @@ export function App() {
 						>
 							<Plus size={16} strokeWidth={1.75} />
 						</button>
-						{orderedSidebarTasks.map((t) => {
+						{visibleSidebarTasks.map((t) => {
 							const Icon = taskIcon(t.name);
 							return (
 								<button
@@ -596,10 +668,12 @@ export function App() {
 						{!tasksCollapsed &&
 							(!activeProjectId ? (
 								<div className="tree-empty">Select a project</div>
-							) : orderedSidebarTasks.length === 0 ? (
-								<div className="tree-empty">No active tasks</div>
-							) : taskSort === "custom" ? (
+							) : visibleSidebarTasks.length === 0 ? (
+								<div className="tree-empty">{query ? "No matching tasks" : "No active tasks"}</div>
+							) : taskSort === "custom" && !query ? (
 								// Custom order: drag rows up/down; Motion animates the shuffle.
+								// Disabled while searching — reordering a filtered subset would
+								// drop the hidden tasks from the saved order.
 								<Reorder.Group
 									as="div"
 									axis="y"
@@ -620,7 +694,7 @@ export function App() {
 							) : (
 								// Sorted modes: layout animation glides rows to their new spot
 								// when a status change or update reorders them.
-								orderedSidebarTasks.map((t) => (
+								visibleSidebarTasks.map((t) => (
 									<motion.div key={t.id} layout transition={springy}>
 										<TaskRow
 											task={t}
@@ -634,6 +708,18 @@ export function App() {
 					</>
 				)}
 			</aside>
+
+			{/* Drag the sidebar/main divider to resize. Hidden in rail mode, which
+			    has a fixed width. */}
+			{!rail && (
+				<div
+					className="sidebar-resizer"
+					onMouseDown={startSidebarResize}
+					role="separator"
+					aria-orientation="vertical"
+					aria-label="Resize sidebar"
+				/>
+			)}
 
 			<main className="main">
 				<div className="topbar">
@@ -666,6 +752,28 @@ export function App() {
 						>
 							Loops
 						</div>
+					</div>
+					{/* Centered task search — absolutely centered in the topbar so the
+					    tabs on the left and action buttons on the right don't shift it. */}
+					<div className="task-search">
+						<Search size={14} strokeWidth={1.75} />
+						<input
+							type="text"
+							placeholder="Search tasks…"
+							value={taskQuery}
+							onChange={(e) => setTaskQuery(e.target.value)}
+							aria-label="Search tasks"
+						/>
+						{taskQuery && (
+							<button
+								type="button"
+								className="ts-clear"
+								aria-label="Clear search"
+								onClick={() => setTaskQuery("")}
+							>
+								<X size={13} strokeWidth={2} />
+							</button>
+						)}
 					</div>
 					<div className="spacer" />
 					{view === "mission" && !(selectedTask && panelMode === "full") && (
@@ -706,7 +814,7 @@ export function App() {
 						<>
 							{!(selectedTask && panelMode === "full") && (
 								<Board
-									tasks={activeTasks}
+									tasks={filteredBoardTasks}
 									selectedId={selectedTaskId}
 									onSelect={selectFromBoard}
 									onDeselect={() => setSelectedTaskId(null)}
