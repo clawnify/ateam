@@ -87,8 +87,12 @@ input {
 
 /* ---- layout ---- */
 .app {
+	position: relative;
 	display: grid;
-	grid-template-columns: 240px 1fr;
+	/* Sidebar width is user-draggable (see .sidebar-resizer). Floor is the
+	   default 240px (the resizer clamps the low end); the 50% cap is enforced
+	   here so it holds even when the window is resized smaller. */
+	grid-template-columns: min(var(--sidebar-w, 240px), 50%) 1fr;
 	/* A definite single row (not the implicit `auto`, which grows to its tallest
 	   child) so a long board column or a tall Mission Control grid stays bounded
 	   to the viewport — letting .content/.board/.mc scroll instead of overflowing
@@ -98,6 +102,20 @@ input {
 }
 .app.rail {
 	grid-template-columns: 56px 1fr;
+}
+
+/* Invisible drag strip sitting over the sidebar/main divider. No visible
+   chrome — just a col-resize hit area aligned to the current sidebar width. */
+.sidebar-resizer {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: min(var(--sidebar-w, 240px), 50%);
+	width: 8px;
+	margin-left: -4px;
+	cursor: col-resize;
+	z-index: 20;
+	-webkit-app-region: no-drag;
 }
 
 .sidebar {
@@ -379,6 +397,7 @@ input {
 	min-height: 0;
 }
 .topbar {
+	position: relative;
 	height: 44px;
 	display: flex;
 	align-items: center;
@@ -389,6 +408,59 @@ input {
 }
 .topbar > * {
 	-webkit-app-region: no-drag;
+}
+
+/* Centered task search. Absolutely centered so it stays put regardless of the
+   width of the tabs (left) or action buttons (right). */
+.task-search {
+	position: absolute;
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: min(340px, 32vw);
+	padding: 0 8px;
+	height: 28px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-elev);
+	color: var(--text-dim);
+}
+.task-search:focus-within {
+	border-color: var(--text);
+}
+.task-search input {
+	flex: 1;
+	min-width: 0;
+	width: auto;
+	border: none;
+	background: transparent;
+	padding: 0;
+	font-size: 13px;
+	color: var(--text);
+	/* Chromium hides the text caret on a rounded input inside the titlebar
+	   drag region — keep this field square so the caret renders. The rounded
+	   corners live on the wrapper above. */
+	border-radius: 0;
+}
+.task-search input:focus {
+	outline: none;
+}
+.task-search .ts-clear {
+	display: grid;
+	place-items: center;
+	padding: 2px;
+	/* Reset the global button chrome — this is an icon affordance, not a box. */
+	border: none;
+	background: transparent;
+	border-radius: 5px;
+	color: var(--text-dim);
+	cursor: pointer;
+}
+.task-search .ts-clear:hover {
+	background: var(--bg-elev-2);
+	color: var(--text);
 }
 .tabs {
 	display: flex;
