@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Ateam",
+    "name": "Ateam Go",
     "slug": "ateam",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -8,7 +8,7 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.ricalla.mobile",
+      "bundleIdentifier": "com.clawnify.ateam",
       "buildNumber": "1",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
