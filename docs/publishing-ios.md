@@ -26,10 +26,11 @@ Why (the full reasoning is in the `/scalable` ruling in chat, condensed here):
 1. **Apple Developer Program** — team **`X2VZX44YM2`** (the same Clawnify publishing
    team used for the macOS releases; your macOS Developer ID proves it's enrolled).
 2. **App Store Connect** → **My Apps → +** → new app:
-   - Platform: iOS · Bundle ID: **`com.ricalla.mobile`** · SKU: `ateam-mobile`.
-   - (The bundle ID is a personal `ricalla` namespace. If this should ship under
-     Clawnify, change `ios.bundleIdentifier` in `app.json` **before** creating the
-     App Store Connect record — renaming after is painful.)
+   - Platform: iOS · Bundle ID: **`com.clawnify.ateam`** · SKU: `ateam-mobile`.
+   - The bundle ID must first be registered as an App ID in **Certificates,
+     Identifiers & Profiles → Identifiers** (Explicit, no capabilities) under team
+     `X2VZX44YM2`, then it appears in the New App dialog's dropdown. It's permanent
+     once the app record exists.
 3. **Signing** — easiest is Xcode's *Automatically manage signing* with team
    `X2VZX44YM2`; it provisions the Apple Distribution cert + App Store profile.
 
