@@ -1244,6 +1244,141 @@ input {
 	background: rgba(248, 113, 113, 0.14);
 }
 
+/* ---- connection switcher (which engine drives the app) ---- */
+.conn-btn {
+	max-width: 200px;
+}
+.conn-btn > span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.conn-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--text-dim);
+	flex: none;
+}
+.conn-dot.on {
+	background: var(--green);
+	box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
+}
+.conn-pop {
+	padding: 6px;
+}
+.conn-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 4px 8px 6px;
+	font-size: 11px;
+	letter-spacing: 0.4px;
+	text-transform: uppercase;
+	color: var(--text-dim);
+}
+.conn-refresh {
+	display: inline-flex;
+	background: transparent;
+	border: none;
+	color: var(--text-dim);
+	cursor: pointer;
+	padding: 2px;
+	border-radius: 4px;
+}
+.conn-refresh:hover {
+	color: var(--text);
+	background: var(--bg-elev-2);
+}
+.conn-sep {
+	height: 1px;
+	background: var(--border);
+	margin: 4px 6px;
+}
+.conn-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	background: transparent;
+	border: none;
+	border-radius: 7px;
+	padding: 8px 10px;
+	color: var(--text);
+	cursor: pointer;
+	text-align: left;
+}
+.conn-row:hover {
+	background: var(--bg-elev-2);
+}
+.conn-row.active {
+	background: rgba(124, 92, 255, 0.12);
+}
+.conn-row:disabled {
+	cursor: default;
+}
+.conn-ico {
+	display: inline-flex;
+	color: var(--text-dim);
+	flex: none;
+}
+.conn-row.active .conn-ico {
+	color: var(--text);
+}
+.conn-txt {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	min-width: 0;
+	flex: 1;
+}
+.conn-title {
+	font-size: 13px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.conn-sub {
+	font-size: 11px;
+	color: var(--text-dim);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.conn-spin {
+	animation: spin 0.7s linear infinite;
+	color: var(--text-dim);
+	flex: none;
+}
+.conn-empty {
+	padding: 8px 10px 10px;
+	font-size: 12px;
+	color: var(--text-dim);
+	line-height: 1.5;
+}
+.conn-empty code {
+	font-size: 11px;
+	background: var(--bg-elev-2);
+	padding: 1px 4px;
+	border-radius: 4px;
+}
+.conn-error {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	margin: 6px 6px 2px;
+	padding: 7px 9px;
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--red);
+	background: rgba(248, 113, 113, 0.1);
+	border-radius: 6px;
+}
+.conn-error svg {
+	flex: none;
+	margin-top: 1px;
+}
+
 /* ---- collapsible sidebar section header ---- */
 .section-head {
 	display: flex;
