@@ -912,8 +912,9 @@ function TaskRow({
 	onDelete: () => void;
 }) {
 	const Icon = taskIcon(t.name);
-	// Row and delete button are siblings so the trash click can't nest inside
-	// the row button (same pattern as proj-row / proj-open above).
+	// Row and trailing slot are siblings so the trash click can't nest inside the
+	// row button (same pattern as proj-row / proj-open above). The status dot and
+	// delete button share the trailing slot and swap in place on hover.
 	return (
 		<div className="tasknode-row">
 			<button
@@ -929,9 +930,9 @@ function TaskRow({
 					<Icon className="ticon" size={14} strokeWidth={1.75} />
 				)}
 				<span className="tname">{t.name}</span>
-				{t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />}
 			</button>
-			<span className="task-del">
+			<span className="task-trail">
+				{t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />}
 				<IconButton icon={Trash2} label="Delete task" variant="danger" size={14} onClick={onDelete} />
 			</span>
 		</div>
