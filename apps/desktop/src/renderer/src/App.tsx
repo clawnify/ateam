@@ -50,6 +50,7 @@ import type {
 } from "@ateam/protocol";
 import { AgentIcon } from "./components/AgentIcon";
 import { CleanupDialog } from "./components/CleanupDialog";
+import { ConnectionSwitcher } from "./components/ConnectionSwitcher";
 import { FileDiffView } from "./components/FileDiffView";
 import { IconButton } from "./components/IconButton";
 import { LoopsPanel } from "./components/LoopsPanel";
@@ -205,6 +206,20 @@ export function App() {
 	useEffect(() => {
 		if (activeProjectId) void loadTasks(activeProjectId);
 	}, [activeProjectId, loadTasks]);
+
+	// Switching the active engine (this Mac ⇄ a remote box) means an entirely
+	// different set of projects/tasks/agents — every window is notified, so drop
+	// the current selection and reload from whichever engine is now driving.
+	useEffect(() => {
+		return window.ateamHost.onChanged(() => {
+			setSelectedTaskId(null);
+			setActiveProjectId(null);
+			setTasksByProject({});
+			setTermByTask({});
+			void loadProjects();
+			void window.ateam.agents.list().then(setAgents);
+		});
+	}, [loadProjects]);
 
 	// Load every project's tasks so non-selected projects can surface their
 	// attention state (pulsing dot); evtTaskUpdated keeps them fresh after.
@@ -699,6 +714,14 @@ export function App() {
 						<Plus size={14} strokeWidth={1.75} />
 						New task
 					</button>
+					{/* Which machine runs the agents — this Mac or a remote box over SSH/
+					    Tailscale. Global to the app, so only the main window drives it. */}
+					{!boundProjectId && (
+						<>
+							<span className="tb-divider" />
+							<ConnectionSwitcher />
+						</>
+					)}
 				</div>
 
 				<div className="content">
