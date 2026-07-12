@@ -40,7 +40,7 @@ Why (the full reasoning is in the `/scalable` ruling in chat, condensed here):
 
 | Field | Value | Becomes (native) |
 | --- | --- | --- |
-| `expo.name` | `Ateam` | `CFBundleDisplayName` (name under the icon) |
+| `expo.name` | `Ateam Go` | `CFBundleDisplayName` (name under the icon; matches the App Store name) |
 | `expo.version` | `1.0.0` | `CFBundleShortVersionString` (marketing version) |
 | `expo.ios.buildNumber` | `1` | `CFBundleVersion` (**must increase every upload**) |
 | `expo.ios.infoPlist.ITSAppUsesNonExemptEncryption` | `false` | skips the export-compliance prompt on every upload¹ |
