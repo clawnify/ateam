@@ -299,17 +299,36 @@ input {
 .tasknode-row {
 	position: relative;
 }
-.task-del {
+/* Trailing slot: the status dot and delete button occupy the same cell and swap
+   in place — dot at rest, trash on hover/focus — so neither covers the other. */
+.task-trail {
 	position: absolute;
 	right: 6px;
 	top: 50%;
 	transform: translateY(-50%);
-	opacity: 0;
+	display: grid;
+	place-items: center end;
+}
+.task-trail > * {
+	grid-area: 1 / 1;
 	transition: opacity 0.12s ease;
 }
-.tasknode-row:hover .task-del,
-.task-del:focus-within {
+/* Nudge the small dot off the very edge so it lands where it did before. */
+.task-trail .tstatus {
+	margin-right: 8px;
+}
+.task-trail .iconbtn {
+	opacity: 0;
+	pointer-events: none;
+}
+.tasknode-row:hover .task-trail .iconbtn,
+.task-trail:focus-within .iconbtn {
 	opacity: 1;
+	pointer-events: auto;
+}
+.tasknode-row:hover .task-trail .tstatus,
+.task-trail:focus-within .tstatus {
+	opacity: 0;
 }
 .tasknode {
 	display: flex;
