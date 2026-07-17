@@ -1,0 +1,20 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b3b44"/>
+      <stop offset="0.55" stop-color="#222227"/>
+      <stop offset="1" stop-color="#141417"/>
+    </linearGradient>
+  </defs>
+  <!-- iOS app icon: FULL-BLEED, opaque, no rounding/shadow — iOS applies its own
+       squircle mask. Same brand as the desktop icon (mission-control tiles), with
+       the macOS margin removed so the motif fills the masked icon. -->
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+  <!-- Motif scaled up ~1.35 and re-centred to fill the full-bleed canvas. Original
+       (in the 1024 squircle space): wide pane 252,197,520x360; two squares at y575. -->
+  <g transform="translate(512,512) scale(1.2) translate(-512,-511.5)">
+    <rect x="252" y="197" width="520" height="360" rx="5" fill="#e6e6ea"/>
+    <rect x="252" y="575" width="251" height="251" rx="5" fill="#ffffff" opacity="0.78"/>
+    <rect x="521" y="575" width="251" height="251" rx="5" fill="#ffffff" opacity="0.6"/>
+  </g>
+</svg>

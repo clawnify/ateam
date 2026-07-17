@@ -87,8 +87,12 @@ input {
 
 /* ---- layout ---- */
 .app {
+	position: relative;
 	display: grid;
-	grid-template-columns: 240px 1fr;
+	/* Sidebar width is user-draggable (see .sidebar-resizer). Floor is the
+	   default 240px (the resizer clamps the low end); the 50% cap is enforced
+	   here so it holds even when the window is resized smaller. */
+	grid-template-columns: min(var(--sidebar-w, 240px), 50%) 1fr;
 	/* A definite single row (not the implicit `auto`, which grows to its tallest
 	   child) so a long board column or a tall Mission Control grid stays bounded
 	   to the viewport — letting .content/.board/.mc scroll instead of overflowing
@@ -98,6 +102,20 @@ input {
 }
 .app.rail {
 	grid-template-columns: 56px 1fr;
+}
+
+/* Invisible drag strip sitting over the sidebar/main divider. No visible
+   chrome — just a col-resize hit area aligned to the current sidebar width. */
+.sidebar-resizer {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: min(var(--sidebar-w, 240px), 50%);
+	width: 8px;
+	margin-left: -4px;
+	cursor: col-resize;
+	z-index: 20;
+	-webkit-app-region: no-drag;
 }
 
 .sidebar {
@@ -299,17 +317,36 @@ input {
 .tasknode-row {
 	position: relative;
 }
-.task-del {
+/* Trailing slot: the status dot and delete button occupy the same cell and swap
+   in place — dot at rest, trash on hover/focus — so neither covers the other. */
+.task-trail {
 	position: absolute;
 	right: 6px;
 	top: 50%;
 	transform: translateY(-50%);
-	opacity: 0;
+	display: grid;
+	place-items: center end;
+}
+.task-trail > * {
+	grid-area: 1 / 1;
 	transition: opacity 0.12s ease;
 }
-.tasknode-row:hover .task-del,
-.task-del:focus-within {
+/* Nudge the small dot off the very edge so it lands where it did before. */
+.task-trail .tstatus {
+	margin-right: 8px;
+}
+.task-trail .iconbtn {
+	opacity: 0;
+	pointer-events: none;
+}
+.tasknode-row:hover .task-trail .iconbtn,
+.task-trail:focus-within .iconbtn {
 	opacity: 1;
+	pointer-events: auto;
+}
+.tasknode-row:hover .task-trail .tstatus,
+.task-trail:focus-within .tstatus {
+	opacity: 0;
 }
 .tasknode {
 	display: flex;
@@ -379,6 +416,7 @@ input {
 	min-height: 0;
 }
 .topbar {
+	position: relative;
 	height: 44px;
 	display: flex;
 	align-items: center;
@@ -389,6 +427,59 @@ input {
 }
 .topbar > * {
 	-webkit-app-region: no-drag;
+}
+
+/* Centered task search. Absolutely centered so it stays put regardless of the
+   width of the tabs (left) or action buttons (right). */
+.task-search {
+	position: absolute;
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: min(340px, 32vw);
+	padding: 0 8px;
+	height: 28px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-elev);
+	color: var(--text-dim);
+}
+.task-search:focus-within {
+	border-color: var(--text);
+}
+.task-search input {
+	flex: 1;
+	min-width: 0;
+	width: auto;
+	border: none;
+	background: transparent;
+	padding: 0;
+	font-size: 13px;
+	color: var(--text);
+	/* Chromium hides the text caret on a rounded input inside the titlebar
+	   drag region — keep this field square so the caret renders. The rounded
+	   corners live on the wrapper above. */
+	border-radius: 0;
+}
+.task-search input:focus {
+	outline: none;
+}
+.task-search .ts-clear {
+	display: grid;
+	place-items: center;
+	padding: 2px;
+	/* Reset the global button chrome — this is an icon affordance, not a box. */
+	border: none;
+	background: transparent;
+	border-radius: 5px;
+	color: var(--text-dim);
+	cursor: pointer;
+}
+.task-search .ts-clear:hover {
+	background: var(--bg-elev-2);
+	color: var(--text);
 }
 .tabs {
 	display: flex;
@@ -1151,6 +1242,141 @@ input {
 }
 .menu-item.danger:hover {
 	background: rgba(248, 113, 113, 0.14);
+}
+
+/* ---- connection switcher (which engine drives the app) ---- */
+.conn-btn {
+	max-width: 200px;
+}
+.conn-btn > span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.conn-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--text-dim);
+	flex: none;
+}
+.conn-dot.on {
+	background: var(--green);
+	box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
+}
+.conn-pop {
+	padding: 6px;
+}
+.conn-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 4px 8px 6px;
+	font-size: 11px;
+	letter-spacing: 0.4px;
+	text-transform: uppercase;
+	color: var(--text-dim);
+}
+.conn-refresh {
+	display: inline-flex;
+	background: transparent;
+	border: none;
+	color: var(--text-dim);
+	cursor: pointer;
+	padding: 2px;
+	border-radius: 4px;
+}
+.conn-refresh:hover {
+	color: var(--text);
+	background: var(--bg-elev-2);
+}
+.conn-sep {
+	height: 1px;
+	background: var(--border);
+	margin: 4px 6px;
+}
+.conn-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	background: transparent;
+	border: none;
+	border-radius: 7px;
+	padding: 8px 10px;
+	color: var(--text);
+	cursor: pointer;
+	text-align: left;
+}
+.conn-row:hover {
+	background: var(--bg-elev-2);
+}
+.conn-row.active {
+	background: rgba(124, 92, 255, 0.12);
+}
+.conn-row:disabled {
+	cursor: default;
+}
+.conn-ico {
+	display: inline-flex;
+	color: var(--text-dim);
+	flex: none;
+}
+.conn-row.active .conn-ico {
+	color: var(--text);
+}
+.conn-txt {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	min-width: 0;
+	flex: 1;
+}
+.conn-title {
+	font-size: 13px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.conn-sub {
+	font-size: 11px;
+	color: var(--text-dim);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.conn-spin {
+	animation: spin 0.7s linear infinite;
+	color: var(--text-dim);
+	flex: none;
+}
+.conn-empty {
+	padding: 8px 10px 10px;
+	font-size: 12px;
+	color: var(--text-dim);
+	line-height: 1.5;
+}
+.conn-empty code {
+	font-size: 11px;
+	background: var(--bg-elev-2);
+	padding: 1px 4px;
+	border-radius: 4px;
+}
+.conn-error {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	margin: 6px 6px 2px;
+	padding: 7px 9px;
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--red);
+	background: rgba(248, 113, 113, 0.1);
+	border-radius: 6px;
+}
+.conn-error svg {
+	flex: none;
+	margin-top: 1px;
 }
 
 /* ---- collapsible sidebar section header ---- */
