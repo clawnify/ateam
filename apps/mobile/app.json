@@ -6,6 +6,8 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "newArchEnabled": false,
+    "plugins": ["./plugins/withFmtConstevalFix"],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.clawnify.ateam",
