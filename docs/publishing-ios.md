@@ -52,34 +52,43 @@ release.
 ¹ Declares the app uses only standard/exempt encryption (OS-provided TLS/SSH/WebSocket —
 no custom crypto). Correct for Ateam; revisit if you ever add proprietary encryption.
 
-## Build & upload — Route A: local Xcode archive (recommended first)
+## Toolchain requirements (Xcode 26)
 
-Reuses the exact toolchain that already produces working device builds (SwiftTerm
-module, SDK-52 / Xcode-16.2 pinning):
+Apple requires builds made with **Xcode 26 / the iOS 26 SDK**. That needs **macOS ≥ 26**,
+and Xcode 26 splits several pieces into on-demand downloads — install them once:
+
+```bash
+sudo xcodebuild -license accept && sudo xcodebuild -runFirstLaunch
+xcodebuild -downloadPlatform iOS          # device platform (~8.5 GB) — separate from the SDK
+xcodebuild -downloadComponent MetalToolchain   # ~688 MB — the SwiftTerm .metal shaders need it
+```
+
+Build with **Node ≥ 20.19.4** (SDK 54 requirement). The repo already carries the SDK-54
+fixes: `.npmrc` (legacy-peer-deps), `plugins/withFmtConstevalFix.js` (fmt→C++17 for Xcode 26),
+`newArchEnabled: false` (keep legacy arch so SwiftTerm needs no Fabric rewrite), and a Metro
+config that resolves nested transitive deps.
+
+## Build & upload — Route A: local archive (proven)
 
 ```bash
 cd apps/mobile
-npx expo prebuild -p ios            # regenerate ios/ from app.json (SwiftTerm re-autolinks)
+# bump ios.buildNumber in app.json first (App Store Connect rejects a duplicate version+build)
+npx expo prebuild -p ios          # regenerate ios/ (applies the fmt plugin; SwiftTerm re-autolinks)
+( cd ios && pod install )         # ensure the fmt→C++17 Podfile change lands in the Pods project
 
-open ios/mobile.xcworkspace
-#  in Xcode:
-#   1. select scheme "mobile", destination "Any iOS Device (arm64)"
-#   2. Signing & Capabilities → team X2VZX44YM2, automatic signing
-#   3. Product ▸ Archive   (Release)
-#   4. Organizer opens → Distribute App ▸ App Store Connect ▸ Upload
-```
-
-Headless equivalent (for later CI):
-
-```bash
-xcodebuild -workspace ios/mobile.xcworkspace -scheme mobile \
+xcodebuild -workspace ios/AteamGo.xcworkspace -scheme AteamGo \
   -configuration Release -destination 'generic/platform=iOS' \
-  -archivePath build/Ateam.xcarchive archive
-xcodebuild -exportArchive -archivePath build/Ateam.xcarchive \
-  -exportOptionsPlist ios/ExportOptions.plist -exportPath build/export
-xcrun altool --upload-app -f build/export/mobile.ipa -t ios \
-  --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"   # App Store Connect API key
+  -archivePath build/AteamGo.xcarchive \
+  DEVELOPMENT_TEAM=X2VZX44YM2 CODE_SIGN_STYLE=Automatic -allowProvisioningUpdates archive
+xcodebuild -exportArchive -archivePath build/AteamGo.xcarchive \
+  -exportOptionsPlist ios/ExportOptions.plist -exportPath build/export -allowProvisioningUpdates
+xcrun altool --upload-app -f build/export/AteamGo.ipa -t ios \
+  --apiKey 5H64P4APJ8 --apiIssuer <issuer-id>   # Team API key in ~/.appstoreconnect/private_keys/
 ```
+
+`ios/ExportOptions.plist` (regenerate after `prebuild --clean`): `method` = `app-store-connect`,
+`teamID` = `X2VZX44YM2`, `signingStyle` = `automatic`. Automatic signing + `-allowProvisioningUpdates`
+mints the Apple Distribution cert on first run.
 
 ## Build & upload — Route B: EAS (scalable follow-up)
 
