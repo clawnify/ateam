@@ -30,22 +30,44 @@ const mobileNative: NativeClientApi = {
 export interface Connection {
 	api: AteamApi;
 	info: SystemInfo;
+	/** Fast liveness probe — a timed handshake. False if the socket is dead/half-open. */
+	ping(): Promise<boolean>;
 	/** Close the socket; the daemon and its live sessions live on. */
 	close(): void;
 }
 
+export interface ConnectOptions {
+	/**
+	 * Fired once when the socket drops on its OWN (network flip, box restart, NAT
+	 * reap) — NOT when the app calls `close()`. The app uses this to auto-reattach
+	 * to the still-alive daemon session. See the connectivity decision doc.
+	 */
+	onClose?: () => void;
+}
+
 const CONNECT_TIMEOUT_MS = 15_000;
+const PING_TIMEOUT_MS = 4_000;
 
 /** Connect to `ws://host:port` (the box's Tailscale address + WS port). */
-export async function connect(url: string): Promise<Connection> {
+export async function connect(url: string, opts: ConnectOptions = {}): Promise<Connection> {
 	const client = wsClientTransport(url);
 	const rpc = createRpcClient(client.transport);
+
+	// Distinguish an app-initiated close() from an unexpected drop: only the latter
+	// should trigger a reattach. Registered before the handshake so a drop mid-connect
+	// is still classified correctly (the throw path below sets `intentional`).
+	let intentional = false;
+	client.transport.onClose?.(() => {
+		if (!intentional) opts.onClose?.();
+	});
+
 	let info: SystemInfo;
 	try {
 		// A bad host / firewalled port leaves the socket hanging with no error, so
 		// cap the handshake — the UI must not wait forever on connect.
 		info = await withTimeout(serverHandshake(rpc), CONNECT_TIMEOUT_MS);
 	} catch (err) {
+		intentional = true; // a failed connect isn't a drop to reattach from
 		client.close();
 		throw err;
 	}
@@ -67,7 +89,13 @@ export async function connect(url: string): Promise<Connection> {
 	return {
 		api: buildAteamApi(rpc, mobileNative),
 		info,
+		ping: () =>
+			withTimeout(serverHandshake(rpc), PING_TIMEOUT_MS).then(
+				() => true,
+				() => false,
+			),
 		close: () => {
+			intentional = true;
 			clearInterval(keepalive);
 			client.close();
 		},
