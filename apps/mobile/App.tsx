@@ -12,6 +12,7 @@ import type { AgentDTO, ProjectDTO, TaskDTO } from "@ateam/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
+	AppState,
 	KeyboardAvoidingView,
 	Modal,
 	Platform,
@@ -445,6 +446,17 @@ export default function App() {
 	const [browserOpen, setBrowserOpen] = useState(false);
 	const conn = useRef<Connection | null>(null);
 
+	// Auto-reattach bookkeeping. `target` is the box we intend to stay connected to
+	// (set on connect, cleared on explicit Disconnect) — the trigger for reconnecting.
+	// `connGen` bumps on every successful (re)connect: it keys the open terminal so it
+	// remounts onto the fresh `api` and cleanly re-resolves its still-alive PTY session.
+	const target = useRef<{ host: string; port: string } | null>(null);
+	const [connGen, setConnGen] = useState(0);
+	const reconnectRef = useRef<() => void>(() => {});
+	const attempting = useRef(false);
+	const backoff = useRef(0);
+	const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 	const refresh = useCallback(async () => {
 		const api = conn.current?.api;
 		if (!api) return;
@@ -462,6 +474,9 @@ export default function App() {
 	}, []);
 
 	// Live updates: merge each pushed task in place (replace by id, or prepend if new).
+	// Re-subscribes on `connGen` too, so after an auto-reattach the stream binds to the
+	// fresh connection's api rather than the dead one's.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: connGen re-binds api after reconnect
 	useEffect(() => {
 		const api = conn.current?.api;
 		if (!api || view !== "board") return;
@@ -475,31 +490,111 @@ export default function App() {
 			});
 		});
 		return off;
-	}, [view]);
+	}, [view, connGen]);
 
-	// The one connect path — used by the Connect button and the launch auto-connect.
+	// The one connect path — used by the Connect button, the launch auto-connect, and
+	// the auto-reattach below. Returns whether it connected, so reconnect() can decide
+	// to retry. On success it records the `target` (so drops reattach) and bumps
+	// `connGen` (so the board + any open terminal rebind to the fresh api).
 	const connectTo = useCallback(
-		async (h: string, p: string) => {
+		async (h: string, p: string): Promise<boolean> => {
+			const port = p || "8787";
+			if (retryTimer.current) {
+				clearTimeout(retryTimer.current);
+				retryTimer.current = null;
+			}
 			setConnecting(true);
 			setError(null);
 			try {
 				conn.current?.close();
-				const c = await connect(`ws://${h}:${p || "8787"}`);
+				const c = await connect(`ws://${h}:${port}`, {
+					onClose: () => {
+						// This connection dropped on its own (network flip, box restart, NAT
+						// reap). If it's still the live one and we still want the box, reattach.
+						if (conn.current !== c || !target.current) return;
+						c.close(); // stop its keepalive; socket is already gone
+						conn.current = null;
+						setConnected(false);
+						backoff.current = 0;
+						reconnectRef.current();
+					},
+				});
 				conn.current = c;
-				await saveConnection({ host: h, port: p || "8787" });
+				target.current = { host: h, port };
+				backoff.current = 0;
+				await saveConnection({ host: h, port });
 				setConnected(true);
+				setConnGen((g) => g + 1);
 				void c.api.agents.list().then(setAgents);
 				setView("board");
 				await refresh();
+				return true;
 			} catch (err) {
 				conn.current = null;
 				setConnected(false);
 				setError(err instanceof Error ? err.message : String(err));
+				return false;
 			} finally {
 				setConnecting(false);
 			}
 		},
 		[refresh],
+	);
+
+	// Reattach to the intended box: try once, and on failure schedule a capped
+	// exponential backoff retry (1s → 15s) so a still-down box keeps getting picked up.
+	const reconnect = useCallback(async () => {
+		const t = target.current;
+		if (!t || attempting.current) return;
+		if (retryTimer.current) {
+			clearTimeout(retryTimer.current);
+			retryTimer.current = null;
+		}
+		attempting.current = true;
+		let ok = false;
+		try {
+			ok = await connectTo(t.host, t.port);
+		} finally {
+			attempting.current = false;
+		}
+		if (!ok && target.current) {
+			const delay = Math.min(15_000, 1_000 * 2 ** backoff.current);
+			backoff.current += 1;
+			retryTimer.current = setTimeout(() => {
+				retryTimer.current = null;
+				void reconnect();
+			}, delay);
+		}
+	}, [connectTo]);
+
+	// Break the connectTo ⇄ reconnect cycle: connectTo's onClose calls through this ref.
+	useEffect(() => {
+		reconnectRef.current = () => void reconnect();
+	}, [reconnect]);
+
+	// Reattach when the app returns to the foreground — the #1 case (app-switching). The
+	// socket iOS suspended in the background is usually dead with no close event, so probe
+	// it and only reconnect if the probe fails (avoids churning a still-live session).
+	useEffect(() => {
+		const sub = AppState.addEventListener("change", (s) => {
+			if (s !== "active" || !target.current || attempting.current) return;
+			void (async () => {
+				const alive = conn.current ? await conn.current.ping() : false;
+				if (!alive) {
+					backoff.current = 0;
+					void reconnect();
+				}
+			})();
+		});
+		return () => sub.remove();
+	}, [reconnect]);
+
+	// Cancel any pending retry on unmount.
+	useEffect(
+		() => () => {
+			if (retryTimer.current) clearTimeout(retryTimer.current);
+		},
+		[],
 	);
 
 	const onConnect = useCallback(() => {
@@ -524,6 +619,12 @@ export default function App() {
 	}, []);
 
 	const onDisconnect = useCallback(() => {
+		target.current = null; // intent: stay disconnected — no auto-reattach
+		if (retryTimer.current) {
+			clearTimeout(retryTimer.current);
+			retryTimer.current = null;
+		}
+		backoff.current = 0;
 		conn.current?.close();
 		conn.current = null;
 		setConnected(false);
@@ -565,7 +666,16 @@ export default function App() {
 	// A tapped task opens its live terminal (api comes from the live connection).
 	if (openTask && conn.current) {
 		const Term = USE_NATIVE_TERMINAL ? NativeTerminalScreen : TerminalScreen;
-		return <Term api={conn.current.api} task={openTask} onClose={() => setOpenTask(null)} />;
+		// key={connGen}: an auto-reattach swaps in a fresh api — remount so the terminal
+		// cleanly re-resolves (attach-if-live) its still-alive PTY on the new connection.
+		return (
+			<Term
+				key={connGen}
+				api={conn.current.api}
+				task={openTask}
+				onClose={() => setOpenTask(null)}
+			/>
+		);
 	}
 
 	// The project browser is a full-screen view-swap (NOT a nested modal — presenting
