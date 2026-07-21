@@ -5,6 +5,7 @@
 // separate from TerminalScreen so the webview path stays intact while we evaluate.
 
 import type { AteamApi, PtyDataEvent, TaskDTO } from "@ateam/protocol";
+import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
@@ -52,6 +53,17 @@ const KEYS: { label: string; bytes: string; scroll?: boolean }[] = [
 	{ label: "PgDn", bytes: "\x1b[6~", scroll: true },
 ];
 
+// Backslash-escape shell-special chars so a typed path survives the shell — same
+// convention the desktop terminal uses for dropped/attached file paths.
+const escapePath = (p: string) => p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1");
+
+// Best-effort file extension for the staged image (the server sanitizes it anyway).
+function extFromAsset(a: ImagePicker.ImagePickerAsset): string {
+	const fromMime = a.mimeType?.split("/")[1];
+	if (fromMime) return fromMime;
+	return a.uri.match(/\.([a-z0-9]+)$/i)?.[1] ?? "png";
+}
+
 export function NativeTerminalScreen({
 	api,
 	task,
@@ -65,6 +77,7 @@ export function NativeTerminalScreen({
 	const [terminalId, setTerminalId] = useState<string | null>(null);
 	const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
 	const [detail, setDetail] = useState("resolving session…");
+	const [attaching, setAttaching] = useState(false);
 	const keyboardUp = useKeyboardVisible();
 
 	const buffered = useRef<PtyDataEvent[]>([]);
@@ -203,6 +216,32 @@ export function NativeTerminalScreen({
 		[api, terminalId],
 	);
 
+	// Attach a photo/screenshot to the agent: pick → stage the bytes on the box
+	// (util.writeImageBytes) → TYPE the returned path into the PTY. Typed keystrokes
+	// (not a paste) are what trigger the agent's "path → [Image #N]" detection — same
+	// mechanism the desktop terminal uses on a file drop.
+	const attachImage = useCallback(async () => {
+		const id = terminalId;
+		if (!id || attaching) return;
+		try {
+			const res = await ImagePicker.launchImageLibraryAsync({
+				mediaTypes: ["images"],
+				base64: true,
+				quality: 0.9,
+			});
+			const asset = res.canceled ? null : res.assets[0];
+			if (!asset?.base64) return;
+			setAttaching(true);
+			const path = await api.utils.writeImageBytes(asset.base64, extFromAsset(asset));
+			api.pty.write(id, `${escapePath(path)} `);
+			termRef.current?.focusKeyboard();
+		} catch (err) {
+			setDetail(err instanceof Error ? err.message : "couldn't attach image");
+		} finally {
+			setAttaching(false);
+		}
+	}, [api, terminalId, attaching]);
+
 	return (
 		<KeyboardAvoidingView
 			style={styles.root}
@@ -242,6 +281,18 @@ export function NativeTerminalScreen({
 						]}
 						keyboardShouldPersistTaps="always"
 					>
+						<Pressable
+							style={[styles.key, styles.attachKey]}
+							onPress={attachImage}
+							disabled={attaching}
+							hitSlop={4}
+						>
+							{attaching ? (
+								<ActivityIndicator color={C.ink} size="small" />
+							) : (
+								<Text style={styles.attachKeyText}>＋img</Text>
+							)}
+						</Pressable>
 						{KEYS.map((k) => (
 							<Pressable
 								key={k.label}
@@ -335,6 +386,8 @@ const styles = StyleSheet.create({
 		justifyContent: "center",
 	},
 	keyText: { color: C.ink, fontSize: 14, fontWeight: "600" },
+	attachKey: { borderColor: "#3a3550", backgroundColor: "#221f30" },
+	attachKeyText: { color: "#b9a8ff", fontSize: 14, fontWeight: "700" },
 	retryBtn: {
 		marginTop: 8,
 		paddingHorizontal: 16,
