@@ -30,7 +30,12 @@ import { Composer, type ComposerSubmit } from "./src/Composer";
 import { type Connection, connect } from "./src/connection";
 import { NativeTerminalScreen } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
-import { loadConnection, saveConnection } from "./src/storage";
+import {
+	loadConnection,
+	loadSelectedProject,
+	saveConnection,
+	saveSelectedProject,
+} from "./src/storage";
 import { TerminalScreen } from "./src/TerminalScreen";
 
 // SPIKE flag: evaluate the native SwiftTerm terminal (native scroll/select/copy)
@@ -457,6 +462,10 @@ export default function App() {
 	const backoff = useRef(0);
 	const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+	// The project to restore on launch (loaded from storage before the first connect,
+	// so refresh() prefers it over project #1). Updated on every explicit pick.
+	const preferredProjectId = useRef<string | null>(null);
+
 	const refresh = useCallback(async () => {
 		const api = conn.current?.api;
 		if (!api) return;
@@ -464,7 +473,12 @@ export default function App() {
 		try {
 			const projs: ProjectDTO[] = await api.projects.list();
 			setProjects(projs);
-			setSelectedProjectId((cur) => cur ?? projs[0]?.id ?? null);
+			setSelectedProjectId((cur) => {
+				if (cur) return cur; // keep the live selection across refreshes/reconnects
+				const pref = preferredProjectId.current;
+				if (pref && projs.some((p) => p.id === pref)) return pref; // restore last pick
+				return projs[0]?.id ?? null; // fallback: first project (or none)
+			});
 			const perProject = await Promise.all(projs.map((p) => api.tasks.list(p.id)));
 			const all = perProject.flat().sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0));
 			setTasks(all);
@@ -605,17 +619,28 @@ export default function App() {
 		void connectTo(host.trim(), port.trim());
 	}, [host, port, connectTo]);
 
+	// Pick a project and remember it, so the next launch lands on it (not project #1).
+	const selectProject = useCallback((id: string) => {
+		preferredProjectId.current = id;
+		setSelectedProjectId(id);
+		void saveSelectedProject(id);
+	}, []);
+
 	// On launch: prefill the last box and auto-reconnect to it, so reopening the app
 	// lands straight on the live board (no retyping/tapping). On failure it falls back
 	// to the connection screen with the error, fields prefilled.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on mount
 	useEffect(() => {
-		void loadConnection().then((saved) => {
+		void (async () => {
+			// Load the remembered project BEFORE connecting, so the first refresh() restores
+			// it instead of racing to project #1.
+			const [saved, savedProject] = await Promise.all([loadConnection(), loadSelectedProject()]);
+			preferredProjectId.current = savedProject;
 			if (!saved?.host) return;
 			setHost(saved.host);
 			setPort(saved.port);
 			void connectTo(saved.host, saved.port);
-		});
+		})();
 	}, []);
 
 	const onDisconnect = useCallback(() => {
@@ -687,7 +712,7 @@ export default function App() {
 				onClose={() => setBrowserOpen(false)}
 				onRegistered={(project) => {
 					setBrowserOpen(false);
-					setSelectedProjectId(project.id);
+					selectProject(project.id);
 					void refresh();
 				}}
 			/>
@@ -716,7 +741,7 @@ export default function App() {
 			connColor={connected ? C.green : C.faint}
 			projects={projects}
 			selectedProjectId={selectedProjectId}
-			onSelectProject={setSelectedProjectId}
+			onSelectProject={selectProject}
 			agents={agents}
 			tasks={tasks}
 			loading={loading}
