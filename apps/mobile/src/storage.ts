@@ -5,6 +5,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const KEY = "ateam.connection";
 const PROJECT_KEY = "ateam.selectedProject";
+const PREVIEW_PORT_KEY = "ateam.previewPort";
 
 export interface SavedConnection {
 	host: string;
@@ -42,5 +43,22 @@ export async function saveSelectedProject(id: string): Promise<void> {
 		await AsyncStorage.setItem(PROJECT_KEY, id);
 	} catch {
 		/* best-effort — a failed persist just falls back to the first project */
+	}
+}
+
+/** Remember the dev-server port used for the on-box preview (defaults to 3000). */
+export async function loadPreviewPort(): Promise<string | null> {
+	try {
+		return await AsyncStorage.getItem(PREVIEW_PORT_KEY);
+	} catch {
+		return null;
+	}
+}
+
+export async function savePreviewPort(port: string): Promise<void> {
+	try {
+		await AsyncStorage.setItem(PREVIEW_PORT_KEY, port);
+	} catch {
+		/* best-effort — a failed persist just falls back to the default port */
 	}
 }
