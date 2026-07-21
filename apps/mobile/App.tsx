@@ -14,6 +14,7 @@ import {
 	ActivityIndicator,
 	AppState,
 	KeyboardAvoidingView,
+	Linking,
 	Modal,
 	Platform,
 	Pressable,
@@ -32,8 +33,10 @@ import { NativeTerminalScreen } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
 import {
 	loadConnection,
+	loadPreviewPort,
 	loadSelectedProject,
 	saveConnection,
+	savePreviewPort,
 	saveSelectedProject,
 } from "./src/storage";
 import { TerminalScreen } from "./src/TerminalScreen";
@@ -342,7 +345,65 @@ function ConnectionScreen({
 	);
 }
 
-// ── Board screen — status dot (left) · project dropdown (center) · composer ──
+// ── Dev-server preview — open http://<box>:<port> in the phone browser ──
+// No tunnel needed: the phone is already on the tailnet, so the box's dev server
+// is directly reachable at the same host we connected to. Port is user-set (default
+// 3000) and remembered. See issue #73.
+
+function PreviewModal({
+	visible,
+	host,
+	port,
+	setPort,
+	onOpen,
+	onClose,
+}: {
+	visible: boolean;
+	host: string | null;
+	port: string;
+	setPort: (t: string) => void;
+	onOpen: () => void;
+	onClose: () => void;
+}) {
+	return (
+		<Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+			<Pressable style={styles.modalBackdrop} onPress={onClose}>
+				{/* Inner Pressable swallows taps so touching the card doesn't dismiss it. */}
+				<Pressable style={styles.previewCard} onPress={() => {}}>
+					<Text style={styles.previewTitle}>Open preview</Text>
+					<Text style={styles.previewSub}>
+						Opens a dev server running on the box in your browser, over Tailscale.
+					</Text>
+					<View style={styles.previewUrlRow}>
+						<Text style={styles.previewUrlText} numberOfLines={1}>
+							http://{host ?? "—"}:
+						</Text>
+						<TextInput
+							style={styles.previewPortInput}
+							value={port}
+							onChangeText={setPort}
+							placeholder="3000"
+							placeholderTextColor={C.faint}
+							keyboardType="numeric"
+							autoFocus
+							selectTextOnFocus
+						/>
+					</View>
+					<Pressable
+						style={[styles.previewOpenBtn, !host && styles.previewOpenBtnDisabled]}
+						onPress={onOpen}
+						disabled={!host}
+						hitSlop={6}
+					>
+						<Text style={styles.previewOpenText}>Open in browser</Text>
+					</Pressable>
+				</Pressable>
+			</Pressable>
+		</Modal>
+	);
+}
+
+// ── Board screen — status dot (left) · project dropdown (center) · preview (right) ──
 
 function BoardScreen({
 	connColor,
@@ -357,6 +418,7 @@ function BoardScreen({
 	onOpenTask,
 	onCreate,
 	onAddProject,
+	onOpenPreview,
 }: {
 	connColor: string;
 	projects: ProjectDTO[];
@@ -370,6 +432,7 @@ function BoardScreen({
 	onOpenTask: (task: TaskDTO) => void;
 	onCreate: (input: ComposerSubmit) => void;
 	onAddProject: () => void;
+	onOpenPreview: () => void;
 }) {
 	const shown = tasks.filter((t) => t.projectId === selectedProjectId);
 	return (
@@ -390,7 +453,11 @@ function BoardScreen({
 						onAddProject={onAddProject}
 					/>
 				</View>
-				<View style={styles.statusHit} />
+				<Pressable style={styles.previewHit} onPress={onOpenPreview} hitSlop={10}>
+					<View style={styles.previewBtn}>
+						<Text style={styles.previewGlyph}>↗</Text>
+					</View>
+				</Pressable>
 			</View>
 
 			<ScrollView
@@ -449,6 +516,8 @@ export default function App() {
 	const [creating, setCreating] = useState(false);
 	const [openTask, setOpenTask] = useState<TaskDTO | null>(null);
 	const [browserOpen, setBrowserOpen] = useState(false);
+	const [previewOpen, setPreviewOpen] = useState(false);
+	const [previewPort, setPreviewPort] = useState("3000");
 	const conn = useRef<Connection | null>(null);
 
 	// Auto-reattach bookkeeping. `target` is the box we intend to stay connected to
@@ -626,6 +695,17 @@ export default function App() {
 		void saveSelectedProject(id);
 	}, []);
 
+	// Open the box's dev server in the phone browser. The box IP is exactly the host we
+	// connected to (already on the tailnet) — no tunnel, no discovery. Remember the port.
+	const openPreview = useCallback(() => {
+		const h = target.current?.host;
+		if (!h) return;
+		const p = previewPort.trim() || "3000";
+		void savePreviewPort(p);
+		setPreviewOpen(false);
+		void Linking.openURL(`http://${h}:${p}`);
+	}, [previewPort]);
+
 	// On launch: prefill the last box and auto-reconnect to it, so reopening the app
 	// lands straight on the live board (no retyping/tapping). On failure it falls back
 	// to the connection screen with the error, fields prefilled.
@@ -633,9 +713,14 @@ export default function App() {
 	useEffect(() => {
 		void (async () => {
 			// Load the remembered project BEFORE connecting, so the first refresh() restores
-			// it instead of racing to project #1.
-			const [saved, savedProject] = await Promise.all([loadConnection(), loadSelectedProject()]);
+			// it instead of racing to project #1. Preview port is a plain UI default.
+			const [saved, savedProject, savedPreviewPort] = await Promise.all([
+				loadConnection(),
+				loadSelectedProject(),
+				loadPreviewPort(),
+			]);
 			preferredProjectId.current = savedProject;
+			if (savedPreviewPort) setPreviewPort(savedPreviewPort);
 			if (!saved?.host) return;
 			setHost(saved.host);
 			setPort(saved.port);
@@ -737,20 +822,31 @@ export default function App() {
 	}
 
 	return (
-		<BoardScreen
-			connColor={connected ? C.green : C.faint}
-			projects={projects}
-			selectedProjectId={selectedProjectId}
-			onSelectProject={selectProject}
-			agents={agents}
-			tasks={tasks}
-			loading={loading}
-			creating={creating}
-			onOpenConnection={() => setView("connect")}
-			onOpenTask={setOpenTask}
-			onCreate={onCreate}
-			onAddProject={() => setBrowserOpen(true)}
-		/>
+		<>
+			<BoardScreen
+				connColor={connected ? C.green : C.faint}
+				projects={projects}
+				selectedProjectId={selectedProjectId}
+				onSelectProject={selectProject}
+				agents={agents}
+				tasks={tasks}
+				loading={loading}
+				creating={creating}
+				onOpenConnection={() => setView("connect")}
+				onOpenTask={setOpenTask}
+				onCreate={onCreate}
+				onAddProject={() => setBrowserOpen(true)}
+				onOpenPreview={() => setPreviewOpen(true)}
+			/>
+			<PreviewModal
+				visible={previewOpen}
+				host={target.current?.host ?? null}
+				port={previewPort}
+				setPort={setPreviewPort}
+				onOpen={openPreview}
+				onClose={() => setPreviewOpen(false)}
+			/>
+		</>
 	);
 }
 
@@ -786,6 +882,18 @@ const styles = StyleSheet.create({
 	statusHit: { width: 44, alignItems: "flex-start", justifyContent: "center" },
 	statusDot: { width: 12, height: 12, borderRadius: 6 },
 	headerCenter: { flex: 1, alignItems: "center" },
+	previewHit: { width: 44, alignItems: "flex-end", justifyContent: "center" },
+	previewBtn: {
+		width: 30,
+		height: 30,
+		borderRadius: 8,
+		backgroundColor: C.sunken,
+		borderWidth: 1,
+		borderColor: C.line,
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	previewGlyph: { color: C.ink, fontSize: 15, fontWeight: "700", marginTop: -1 },
 	projPill: {
 		flexDirection: "row",
 		alignItems: "center",
@@ -827,6 +935,47 @@ const styles = StyleSheet.create({
 	modalDot: { width: 7, height: 7, borderRadius: 4 },
 	modalRowText: { color: C.ink, fontSize: 15, flex: 1 },
 	modalAdd: { color: C.accent, fontSize: 15, width: 7, textAlign: "center", fontWeight: "700" },
+
+	// dev-server preview modal
+	previewCard: {
+		width: 300,
+		backgroundColor: C.surface,
+		borderWidth: 1,
+		borderColor: C.line,
+		borderRadius: 12,
+		padding: 16,
+	},
+	previewTitle: { color: C.ink, fontSize: 16, fontWeight: "700", letterSpacing: -0.2 },
+	previewSub: { color: C.muted, fontSize: 12, lineHeight: 17, marginTop: 6 },
+	previewUrlRow: {
+		flexDirection: "row",
+		alignItems: "center",
+		backgroundColor: C.sunken,
+		borderWidth: 1,
+		borderColor: C.line,
+		borderRadius: 8,
+		paddingHorizontal: 12,
+		paddingVertical: 4,
+		marginTop: 14,
+	},
+	previewUrlText: { color: C.muted, fontSize: 13, fontVariant: ["tabular-nums"], flexShrink: 1 },
+	previewPortInput: {
+		color: C.ink,
+		fontSize: 13,
+		fontVariant: ["tabular-nums"],
+		fontWeight: "700",
+		paddingVertical: 8,
+		minWidth: 56,
+	},
+	previewOpenBtn: {
+		backgroundColor: C.ink,
+		borderRadius: 8,
+		paddingVertical: 11,
+		alignItems: "center",
+		marginTop: 14,
+	},
+	previewOpenBtnDisabled: { opacity: 0.4 },
+	previewOpenText: { color: "#15151a", fontSize: 14, fontWeight: "800" },
 
 	// connection nav
 	navBar: {
