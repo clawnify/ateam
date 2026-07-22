@@ -59,7 +59,7 @@ describe("util:writeImageBytes (remote image attach)", () => {
 
 		const file = (await d.handle(CH.utilWriteImageBytes, [png.toString("base64")])) as string;
 
-		expect(file.startsWith(join(dataDir, "attachments"))).toBe(true);
+		expect(file.startsWith(join(tmpdir(), "ateam-attachments"))).toBe(true);
 		expect(file.endsWith(".png")).toBe(true);
 		expect(existsSync(file)).toBe(true);
 		expect(readFileSync(file).equals(png)).toBe(true);
@@ -71,6 +71,6 @@ describe("util:writeImageBytes (remote image attach)", () => {
 		const file = (await d.handle(CH.utilWriteImageBytes, ["", "../evil.jpg"])) as string;
 		// Non-alphanumerics stripped: "../evil.jpg" → "eviljpg"; no traversal survives.
 		expect(file.endsWith(".eviljpg")).toBe(true);
-		expect(file.startsWith(join(dataDir, "attachments"))).toBe(true);
+		expect(file.startsWith(join(tmpdir(), "ateam-attachments"))).toBe(true);
 	});
 });

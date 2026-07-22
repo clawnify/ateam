@@ -6,7 +6,7 @@
 // notifications) drive the exact same engine.
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDb, repo } from "@ateam/db";
 import type {
@@ -52,7 +52,10 @@ interface EngineEventMap {
 
 export interface Engine {
 	readonly services: Services;
-	on<K extends keyof EngineEventMap>(event: K, listener: (...args: EngineEventMap[K]) => void): () => void;
+	on<K extends keyof EngineEventMap>(
+		event: K,
+		listener: (...args: EngineEventMap[K]) => void,
+	): () => void;
 	/** Re-read a task and emit taskUpdated (used across handlers + loops). */
 	sendTaskUpdated(taskId: string): void;
 	/** Emit taskRemoved so every client drops the deleted task's card. */
@@ -99,10 +102,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	}
 	const db = createDb(dbPath);
 
-	// Prune stale image attachments (written by util:writeImageBytes when a remote
-	// client attaches an image) older than a week, so temp files never accumulate
+	// Prune stale image attachments (written by util:writeImageBytes to the OS temp dir
+	// when a client attaches an image) older than a week, so temp files never accumulate
 	// unboundedly. A path handed to an agent is read within the session it's given.
-	const attachmentsDir = join(dataDir, "attachments");
+	const attachmentsDir = join(tmpdir(), "ateam-attachments");
 	if (existsSync(attachmentsDir)) {
 		const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
 		for (const name of readdirSync(attachmentsDir)) {
