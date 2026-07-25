@@ -5,7 +5,7 @@
 // server will adapt a JSON-RPC channel → handle(). One body, many transports.
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { agentCommand, getAgent, listAgents } from "@ateam/agents";
 import { repo } from "@ateam/db";
@@ -420,7 +420,9 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 		[CH.utilWriteImageBytes]: async (base64: string, ext?: string) => {
 			const safeExt = (ext ?? "png").replace(/[^a-z0-9]/gi, "").toLowerCase() || "png";
-			const dir = join(services.userDataDir, "attachments");
+			// Stage in the OS temp dir (like Termius): transient, OS-cleaned, and readable
+			// by the agent running on this box. The engine also prunes it on startup.
+			const dir = join(tmpdir(), "ateam-attachments");
 			if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 			// Random name: an attachment is handed to the agent immediately; the engine
 			// prunes this dir on startup so temp images never accumulate unboundedly.
