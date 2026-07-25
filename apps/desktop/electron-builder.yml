@@ -22,6 +22,12 @@ publish:
   owner: clawnify
   repo: ateam
 mac:
+  # node-pty ships prebuilds for every platform/arch, but only ever loads the one
+  # matching the running process. Shipping its darwin-x64 pty.node + spawn-helper
+  # made macOS flag Ateam as an Intel app ("Support Ending for Intel-Based Apps"),
+  # so keep only this build's own arch and drop the rest as dead weight.
+  files:
+    - "!**/node_modules/node-pty/prebuilds/!(darwin-${arch}){,/**/*}"
   target:
     - target: dmg
       arch:
