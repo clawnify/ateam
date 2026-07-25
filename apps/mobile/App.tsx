@@ -77,6 +77,11 @@ const COLUMNS: { key: TaskDTO["column"]; label: string; tint: string }[] = [
 	{ key: "merged", label: "Done", tint: C.green },
 ];
 
+// Cap the phone-first content to a comfortable reading column and center it. A no-op
+// on iPhone (wider than any screen), it stops the board/composer/form from stretching
+// edge-to-edge on iPad. The terminal is intentionally exempt — more columns is better.
+const CONTENT_MAX = 720;
+
 function taskNote(t: TaskDTO): string {
 	if (t.column === "needs_attention") return "awaiting your input";
 	if (t.agentStatus === "running") return "running";
@@ -302,44 +307,46 @@ function ConnectionScreen({
 			</View>
 
 			<ScrollView contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
-				<View style={styles.eyebrowRow}>
-					<View style={[styles.tick, { backgroundColor: C.accent }]} />
-					<Text style={styles.eyebrow}>Box</Text>
-				</View>
-				<View style={styles.formCard}>
-					<Field
-						label="Tailscale IP or host"
-						value={host}
-						onChangeText={setHost}
-						placeholder="100.x.y.z"
-					/>
-					<Field
-						label="Port"
-						value={port}
-						onChangeText={setPort}
-						placeholder="8787"
-						keyboardType="numeric"
-						last
-					/>
-				</View>
-
-				{error ? (
-					<View style={styles.errorBox}>
-						<Text style={styles.errorText}>{error}</Text>
+				<View style={styles.contentColumn}>
+					<View style={styles.eyebrowRow}>
+						<View style={[styles.tick, { backgroundColor: C.accent }]} />
+						<Text style={styles.eyebrow}>Box</Text>
 					</View>
-				) : null}
+					<View style={styles.formCard}>
+						<Field
+							label="Tailscale IP or host"
+							value={host}
+							onChangeText={setHost}
+							placeholder="100.x.y.z"
+						/>
+						<Field
+							label="Port"
+							value={port}
+							onChangeText={setPort}
+							placeholder="8787"
+							keyboardType="numeric"
+							last
+						/>
+					</View>
 
-				{connected ? (
-					<Pressable style={styles.disconnectBtn} onPress={onDisconnect} hitSlop={6}>
-						<Text style={styles.disconnectText}>Disconnect</Text>
-					</Pressable>
-				) : null}
+					{error ? (
+						<View style={styles.errorBox}>
+							<Text style={styles.errorText}>{error}</Text>
+						</View>
+					) : null}
 
-				<Text style={styles.formNote}>
-					The phone opens a WebSocket to your box's `ateam` listener over Tailscale — WireGuard is
-					the encryption and the auth boundary. Enable it on the box with{" "}
-					<Text style={styles.mono}>ATEAM_WS_ADDR=&lt;tailscale-ip&gt;:&lt;port&gt;</Text>.
-				</Text>
+					{connected ? (
+						<Pressable style={styles.disconnectBtn} onPress={onDisconnect} hitSlop={6}>
+							<Text style={styles.disconnectText}>Disconnect</Text>
+						</Pressable>
+					) : null}
+
+					<Text style={styles.formNote}>
+						The phone opens a WebSocket to your box's `ateam` listener over Tailscale — WireGuard is
+						the encryption and the auth boundary. Enable it on the box with{" "}
+						<Text style={styles.mono}>ATEAM_WS_ADDR=&lt;tailscale-ip&gt;:&lt;port&gt;</Text>.
+					</Text>
+				</View>
 			</ScrollView>
 		</View>
 	);
@@ -466,33 +473,35 @@ function BoardScreen({
 				showsVerticalScrollIndicator={false}
 				keyboardShouldPersistTaps="handled"
 			>
-				{loading && shown.length === 0 ? (
-					<View style={styles.centerPad}>
-						<ActivityIndicator color={C.accent} />
-						<Text style={styles.footnote}>loading board…</Text>
-					</View>
-				) : shown.length === 0 ? (
-					<View style={styles.centerPad}>
-						<Text style={styles.footnote}>no tasks yet — start one below</Text>
-					</View>
-				) : (
-					COLUMNS.map((col) => {
-						const inCol = shown.filter((t) => t.column === col.key);
-						if (inCol.length === 0) return null;
-						return (
-							<View key={col.key} style={styles.zone}>
-								<View style={styles.eyebrowRow}>
-									<View style={[styles.tick, { backgroundColor: col.tint }]} />
-									<Text style={styles.eyebrow}>{col.label}</Text>
-									<Text style={styles.eyebrowCount}>{inCol.length}</Text>
+				<View style={styles.contentColumn}>
+					{loading && shown.length === 0 ? (
+						<View style={styles.centerPad}>
+							<ActivityIndicator color={C.accent} />
+							<Text style={styles.footnote}>loading board…</Text>
+						</View>
+					) : shown.length === 0 ? (
+						<View style={styles.centerPad}>
+							<Text style={styles.footnote}>no tasks yet — start one below</Text>
+						</View>
+					) : (
+						COLUMNS.map((col) => {
+							const inCol = shown.filter((t) => t.column === col.key);
+							if (inCol.length === 0) return null;
+							return (
+								<View key={col.key} style={styles.zone}>
+									<View style={styles.eyebrowRow}>
+										<View style={[styles.tick, { backgroundColor: col.tint }]} />
+										<Text style={styles.eyebrow}>{col.label}</Text>
+										<Text style={styles.eyebrowCount}>{inCol.length}</Text>
+									</View>
+									{inCol.map((t) => (
+										<TaskCard key={t.id} task={t} tint={col.tint} onOpen={() => onOpenTask(t)} />
+									))}
 								</View>
-								{inCol.map((t) => (
-									<TaskCard key={t.id} task={t} tint={col.tint} onOpen={() => onOpenTask(t)} />
-								))}
-							</View>
-						);
-					})
-				)}
+							);
+						})
+					)}
+				</View>
 			</ScrollView>
 
 			<Composer agents={agents} busy={creating} onSubmit={onCreate} />
@@ -1064,6 +1073,9 @@ const styles = StyleSheet.create({
 	// board
 	board: { flex: 1 },
 	boardContent: { padding: 16, paddingBottom: 24 },
+	// Centered, width-capped content column (see CONTENT_MAX) — keeps the phone layout
+	// from stretching on iPad; a no-op on iPhone.
+	contentColumn: { width: "100%", maxWidth: CONTENT_MAX, alignSelf: "center" },
 	centerPad: { alignItems: "center", paddingVertical: 48, gap: 12 },
 	zone: { marginBottom: 22 },
 	card: {
