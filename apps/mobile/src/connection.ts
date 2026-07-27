@@ -17,7 +17,7 @@ import {
 // A remote client owns no local dialogs or clipboard: folder-pick and image
 // attach flow over RPC (fs.listDir / util.writeImageBytes) instead, so this
 // client-native slice is inert here. Single-window, so the window surface stubs too.
-const mobileNative: NativeClientApi = {
+export const mobileNative: NativeClientApi = {
 	pathForFile: () => "",
 	pick: async () => null,
 	pickFiles: async () => [],

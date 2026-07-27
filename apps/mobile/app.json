@@ -19,7 +19,7 @@
 		"ios": {
 			"supportsTablet": true,
 			"bundleIdentifier": "com.clawnify.ateam",
-			"buildNumber": "4",
+			"buildNumber": "6",
 			"infoPlist": {
 				"ITSAppUsesNonExemptEncryption": false
 			}
