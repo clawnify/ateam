@@ -29,6 +29,7 @@ import {
 import { AgentIcon } from "./src/AgentIcon";
 import { Composer, type ComposerSubmit } from "./src/Composer";
 import { type Connection, connect } from "./src/connection";
+import { demoConnection } from "./src/demo";
 import { NativeTerminalScreen } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
 import {
@@ -264,6 +265,7 @@ function ConnectionScreen({
 	onConnect,
 	onBack,
 	onDisconnect,
+	onDemo,
 	connecting,
 	connected,
 	error,
@@ -275,6 +277,7 @@ function ConnectionScreen({
 	onConnect: () => void;
 	onBack: () => void;
 	onDisconnect: () => void;
+	onDemo: () => void;
 	connecting: boolean;
 	connected: boolean;
 	error: string | null;
@@ -328,6 +331,19 @@ function ConnectionScreen({
 							last
 						/>
 					</View>
+
+					{!connected ? (
+						<View style={styles.demoRow}>
+							<View style={styles.demoRule} />
+							<Text style={styles.demoOr}>or</Text>
+							<View style={styles.demoRule} />
+						</View>
+					) : null}
+					{!connected ? (
+						<Pressable style={styles.demoBtn} onPress={onDemo} hitSlop={6}>
+							<Text style={styles.demoText}>Try the demo — no box needed</Text>
+						</Pressable>
+					) : null}
 
 					{error ? (
 						<View style={styles.errorBox}>
@@ -697,6 +713,24 @@ export default function App() {
 		void connectTo(host.trim(), port.trim());
 	}, [host, port, connectTo]);
 
+	// Enter demo mode: a fully offline Connection (canned board + terminal). No box, no
+	// reattach, no saved connection — for App Review (guideline 2.1) and first-look onboarding.
+	const startDemo = useCallback(async () => {
+		target.current = null; // demo never reattaches
+		if (retryTimer.current) {
+			clearTimeout(retryTimer.current);
+			retryTimer.current = null;
+		}
+		conn.current?.close();
+		conn.current = demoConnection();
+		setConnected(true);
+		setError(null);
+		setConnGen((g) => g + 1);
+		void conn.current.api.agents.list().then(setAgents);
+		setView("board");
+		await refresh();
+	}, [refresh]);
+
 	// Pick a project and remember it, so the next launch lands on it (not project #1).
 	const selectProject = useCallback((id: string) => {
 		preferredProjectId.current = id;
@@ -823,6 +857,7 @@ export default function App() {
 				onConnect={onConnect}
 				onBack={() => setView("board")}
 				onDisconnect={onDisconnect}
+				onDemo={startDemo}
 				connecting={connecting}
 				connected={connected}
 				error={error}
@@ -1067,6 +1102,19 @@ const styles = StyleSheet.create({
 		alignItems: "center",
 	},
 	disconnectText: { color: C.red, fontSize: 14, fontWeight: "700" },
+	demoRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 20 },
+	demoRule: { flex: 1, height: 1, backgroundColor: C.line },
+	demoOr: { color: C.faint, fontSize: 12 },
+	demoBtn: {
+		marginTop: 14,
+		borderWidth: 1,
+		borderColor: C.line,
+		backgroundColor: C.surface,
+		borderRadius: 10,
+		paddingVertical: 13,
+		alignItems: "center",
+	},
+	demoText: { color: C.ink, fontSize: 14, fontWeight: "700" },
 	formNote: { color: C.faint, fontSize: 12, lineHeight: 18, marginTop: 18, paddingHorizontal: 2 },
 	mono: { color: C.muted, fontVariant: ["tabular-nums"] },
 
