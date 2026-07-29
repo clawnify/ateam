@@ -5,8 +5,8 @@
 <h1 align="center">Ateam</h1>
 
 <p align="center">
-  Local-first orchestration for a crew of AI coding agents — Claude Code,
-  OpenCode, and Codex — each isolated in its own git worktree.
+  Orchestrate a crew of AI coding agents — Claude Code, OpenCode, and
+  Codex — each isolated in its own git worktree.
 </p>
 
 <p align="center">
@@ -23,13 +23,13 @@
   <img src="./assets/screenshot-changes.png" alt="Ateam — task panel with the changes view: file list and a GitHub-style diff beside the board" width="900" />
 </p>
 
-A lean, **local-first** desktop app to orchestrate a crew of AI coding agents
+A lean desktop app to orchestrate a crew of AI coding agents
 (Claude Code, OpenCode, Codex) in parallel — each isolated in its own **git
 worktree**, organized by project, with built-in commit/push/pull/merge that
 **never disturbs another worktree's checkout**, and a Mission Control grid to
 watch several agents work at once.
 
-No login, no cloud. Identity and all GitHub operations come from the `gh` CLI.
+Identity and all GitHub operations come from the `gh` CLI.
 
 > **Install:** grab the signed & notarized DMG above (or any release from the
 > [Releases](https://github.com/clawnify/ateam/releases) page), drag Ateam to
