@@ -53,8 +53,11 @@ Identity and all GitHub operations come from the `gh` CLI.
 packages/git-core   Safe worktree + git engine (no Electron, fully unit-tested)
 packages/db         Local SQLite (Drizzle + better-sqlite3); bun:sqlite in tests
 packages/agents     Agent registry (claude/opencode/codex) + availability probe
+packages/protocol   Transport-agnostic RPC contract + client API (the shared wire)
+packages/server     Headless engine + daemon: run agents on a box over SSH / WebSocket
 packages/panes      Pane/split layout types
 apps/desktop        Electron + React app (main · preload · renderer)
+apps/mobile         iOS client (Expo / React Native) — drive a box from your phone
 ```
 
 ## Develop
