@@ -2,6 +2,7 @@
 	"expo": {
 		"name": "Ateam Go",
 		"slug": "ateam",
+		"scheme": "ateamgo",
 		"version": "1.0.0",
 		"orientation": "portrait",
 		"icon": "./assets/icon.png",
@@ -21,7 +22,8 @@
 			"bundleIdentifier": "com.clawnify.ateam",
 			"buildNumber": "6",
 			"infoPlist": {
-				"ITSAppUsesNonExemptEncryption": false
+				"ITSAppUsesNonExemptEncryption": false,
+				"NSLocalNetworkUsageDescription": "Ateam connects to a coding-agent server you run on your own machine or local network."
 			}
 		},
 		"android": {
