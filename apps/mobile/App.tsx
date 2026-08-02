@@ -771,6 +771,32 @@ export default function App() {
 		})();
 	}, []);
 
+	// Deep links, mainly for driving the app to a screen for App Store screenshots
+	// (xcrun simctl openurl ateamgo://demo[/task/<id>|/preview]). `ateamgo://demo`
+	// enters the offline demo; a trailing /task/<id> opens that task's terminal.
+	useEffect(() => {
+		const handle = (url: string | null): void => {
+			if (!url?.startsWith("ateamgo://demo")) return;
+			void (async () => {
+				await startDemo();
+				const api = conn.current?.api;
+				if (!api) return;
+				const taskId = url.match(/\/task\/([^/?#]+)/)?.[1];
+				if (taskId) {
+					const projs = await api.projects.list();
+					const all = (await Promise.all(projs.map((p) => api.tasks.list(p.id)))).flat();
+					const t = all.find((x) => x.id === taskId || x.slug === taskId);
+					if (t) setOpenTask(t);
+				} else if (url.includes("/preview")) {
+					setPreviewOpen(true);
+				}
+			})();
+		};
+		void Linking.getInitialURL().then(handle);
+		const sub = Linking.addEventListener("url", (e) => handle(e.url));
+		return () => sub.remove();
+	}, [startDemo]);
+
 	const onDisconnect = useCallback(() => {
 		target.current = null; // intent: stay disconnected — no auto-reattach
 		if (retryTimer.current) {
