@@ -50,7 +50,7 @@ posted at this URL.
 
 ## Contact
 
-Questions: **pallaororm@gmail.com**
+Questions: **_[set a support/privacy contact address before publishing — e.g. privacy@clawnify.com]_**
 
 ---
 
