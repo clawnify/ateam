@@ -72,6 +72,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		projects: {
 			pick: native.pick,
 			register: (repoPath, opts) => call<ProjectDTO>(CH.projectsRegister, [repoPath, opts]),
+			remoteUrl: (projectId) => call<string | null>(CH.projectsRemoteUrl, [projectId]),
 			list: () => call<ProjectDTO[]>(CH.projectsList),
 			remove: (id) => call<void>(CH.projectsRemove, [id]),
 		},

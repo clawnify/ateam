@@ -10,11 +10,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import { agentCommand, getAgent, listAgents } from "@ateam/agents";
 import { repo } from "@ateam/db";
 import {
+	cloneRepo,
 	commit,
 	detectMerged,
 	diff,
 	errorMessage,
 	fileDiff,
+	getOriginUrl,
 	createTask as gitCreateTask,
 	gitFor,
 	removeTask as gitRemoveTask,
@@ -180,6 +182,30 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				githubName: info.githubRepo?.name ?? null,
 			});
 			return toProjectDTO(row!);
+		},
+		[CH.projectsClone]: async (input: { cloneUrl: string }) => {
+			// Provision a repo onto THIS engine's machine (from its remote URL) so a task
+			// can run here. Dest ~/<repo-name> (derived from the URL); if it already
+			// exists, treat it as the repo (cloned before) and just register —
+			// upsertProject dedupes by repoPath, so a repeat provision is idempotent.
+			const name = basename(input.cloneUrl).replace(/\.git$/, "") || "repo";
+			const dest = join(homedir(), name);
+			if (!existsSync(dest)) {
+				await cloneRepo(input.cloneUrl, dest);
+			}
+			const info = await registerProject(dest);
+			const row = repo.upsertProject(db, {
+				repoPath: info.repoPath,
+				name: readmeTitle(info.repoPath) ?? basename(info.repoPath),
+				defaultBranch: info.defaultBranch,
+				githubOwner: info.githubRepo?.owner ?? null,
+				githubName: info.githubRepo?.name ?? null,
+			});
+			return toProjectDTO(row!);
+		},
+		[CH.projectsRemoteUrl]: async (projectId: string) => {
+			const project = requireProjectFor(services, projectId);
+			return getOriginUrl(project.repoPath);
 		},
 		[CH.projectsList]: async () =>
 			repo

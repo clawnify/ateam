@@ -1,3 +1,11 @@
+import type {
+	AgentDTO,
+	ConnectionDTO,
+	DiffResultDTO,
+	KanbanColumn,
+	ProjectDTO,
+	TaskDTO,
+} from "@ateam/protocol";
 import {
 	ArrowDownToLine,
 	ArrowUp,
@@ -50,16 +58,8 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type {
-	AgentDTO,
-	DiffResultDTO,
-	KanbanColumn,
-	ProjectDTO,
-	TaskDTO,
-} from "@ateam/protocol";
 import { AgentIcon } from "./components/AgentIcon";
 import { CleanupDialog } from "./components/CleanupDialog";
-import { ConnectionSwitcher } from "./components/ConnectionSwitcher";
 import { FileDiffView } from "./components/FileDiffView";
 import { IconButton } from "./components/IconButton";
 import { LoopsPanel } from "./components/LoopsPanel";
@@ -67,6 +67,7 @@ import { Menu } from "./components/Menu";
 import { NewTaskComposer } from "./components/NewTaskComposer";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
+import { type Alias, aliasLabel, type UnifiedProject, unifyProjects } from "./unify";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
 	{ key: "todo", label: "Backlog" },
@@ -127,6 +128,15 @@ export function App() {
 	// hides the project switcher; null in the main multi-project dashboard.
 	const boundProjectId = useMemo(() => window.ateam.window.boundProjectId(), []);
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
+	// projectId/taskId → owning engine alias (null = local). Learned by the main-process
+	// aggregate from every engine's reads; drives unification + per-task origin badges.
+	const [origins, setOrigins] = useState<Record<string, Alias>>({});
+	// The ~/.ssh/config boxes a task can be sent to run on (the composer's "Run on"
+	// list). Connecting + cloning the repo onto one happens at task-create time.
+	const [connections, setConnections] = useState<ConnectionDTO[]>([]);
+	// The active repo's `origin` remote URL (null = local-only). A task can go remote
+	// only if there's a remote to clone the project from onto the box.
+	const [activeRepoRemote, setActiveRepoRemote] = useState<string | null>(null);
 	const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
 	const [tasksByProject, setTasksByProject] = useState<Record<string, TaskDTO[]>>({});
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -208,11 +218,25 @@ export function App() {
 	}, []);
 
 	const loadProjects = useCallback(async () => {
+		// projects.list() merges every connected engine's projects (main/aggregate.ts);
+		// origins() then reports which engine owns each, learned during that same read.
 		const list = await window.ateam.projects.list();
-		// A detached window shows only its pinned project.
 		const scoped = boundProjectId ? list.filter((p) => p.id === boundProjectId) : list;
 		setProjects(scoped);
-		setActiveProjectId((cur) => boundProjectId ?? cur ?? scoped[0]?.id ?? null);
+		setOrigins(await window.ateamHost.origins());
+		setActiveProjectId((cur) => {
+			if (boundProjectId) return boundProjectId;
+			// Keep the current project only if it still exists (a box may have dropped).
+			if (cur && scoped.some((p) => p.id === cur)) return cur;
+			return scoped[0]?.id ?? null;
+		});
+		// Drop task buckets for projects that vanished (e.g. a disconnected box).
+		setTasksByProject((prev) => {
+			const live = new Set(scoped.map((p) => p.id));
+			const next: Record<string, TaskDTO[]> = {};
+			for (const [pid, tks] of Object.entries(prev)) if (live.has(pid)) next[pid] = tks;
+			return next;
+		});
 	}, [boundProjectId]);
 
 	useEffect(() => {
@@ -254,19 +278,26 @@ export function App() {
 		if (activeProjectId) void loadTasks(activeProjectId);
 	}, [activeProjectId, loadTasks]);
 
-	// Switching the active engine (this Mac ⇄ a remote box) means an entirely
-	// different set of projects/tasks/agents — every window is notified, so drop
-	// the current selection and reload from whichever engine is now driving.
+	// Engines are held concurrently now: connecting a box or dropping one doesn't
+	// swap the world, it changes which engines' projects are in the union. Reconcile
+	// additively — reload the merged projects/origins/agents WITHOUT wiping the
+	// current selection (loadProjects keeps the active project if it still exists and
+	// prunes tasks for any engine that vanished).
 	useEffect(() => {
-		return window.ateamHost.onChanged(() => {
-			setSelectedTaskId(null);
-			setActiveProjectId(null);
-			setTasksByProject({});
-			setTermByTask({});
+		return window.ateamHost.onConnectionsChanged(() => {
 			void loadProjects();
 			void window.ateam.agents.list().then(setAgents);
 		});
 	}, [loadProjects]);
+
+	// The ~/.ssh/config box list for the composer's "Run on" picker, kept fresh as
+	// boxes connect/disconnect (their lastSeen updates too).
+	useEffect(() => {
+		void window.ateamHost.list().then(setConnections);
+		return window.ateamHost.onConnectionsChanged(() => {
+			void window.ateamHost.list().then(setConnections);
+		});
+	}, []);
 
 	// Load every project's tasks so non-selected projects can surface their
 	// attention state (pulsing dot); evtTaskUpdated keeps them fresh after.
@@ -282,19 +313,77 @@ export function App() {
 		if (p) document.title = p.name;
 	}, [boundProjectId, projects]);
 
-	// Highest-priority alert among a non-selected project's tasks.
-	const projectAlert = (pid: string): "needs_attention" | "review" | null => {
-		if (pid === activeProjectId) return null;
-		const list = tasksByProject[pid] ?? [];
+	// Highest-priority alert among a non-selected card's tasks (across all its engines).
+	const cardAlert = (card: UnifiedProject): "needs_attention" | "review" | null => {
+		if (card.members.some((m) => m.projectId === activeProjectId)) return null;
+		const list = card.members.flatMap((m) => tasksByProject[m.projectId] ?? []);
 		if (list.some((t) => t.column === "needs_attention")) return "needs_attention";
 		if (list.some((t) => t.column === "review")) return "review";
 		return null;
 	};
 
 	// The project a detached window is pinned to (for its static header).
-	const boundProject = boundProjectId ? (projects.find((p) => p.id === boundProjectId) ?? null) : null;
+	const boundProject = boundProjectId
+		? (projects.find((p) => p.id === boundProjectId) ?? null)
+		: null;
 
-	const activeTasks = activeProjectId ? (tasksByProject[activeProjectId] ?? []) : [];
+	// Group the merged projects into one card per repo (same GitHub owner/name across
+	// engines), remembering each engine's projectId — the routing key for its tasks.
+	const unifiedProjects = useMemo(() => unifyProjects(projects, origins), [projects, origins]);
+	// The card the active project belongs to, and every engine holding that repo.
+	const activeCard = useMemo(
+		() =>
+			unifiedProjects.find((c) => c.members.some((m) => m.projectId === activeProjectId)) ?? null,
+		[unifiedProjects, activeProjectId],
+	);
+	const activeMembers = activeCard?.members ?? [];
+	// Which engine a task runs on = the engine that owns its project (tasks never
+	// migrate between engines, so origin is intrinsic to the projectId).
+	const originOf = useCallback((projectId: string): Alias => origins[projectId] ?? null, [origins]);
+
+	// "Run on" options for a new task: this Mac (if the repo is here) + every
+	// ~/.ssh/config box. A box clones the project from its git remote, so boxes are
+	// disabled for a repo with no remote (nothing to clone).
+	const activeRepoProjectId =
+		activeCard?.members.find((m) => m.alias === null)?.projectId ??
+		activeCard?.members[0]?.projectId ??
+		null;
+	// Fetch the active repo's remote from its owning engine whenever the card changes.
+	useEffect(() => {
+		if (!activeRepoProjectId) {
+			setActiveRepoRemote(null);
+			return;
+		}
+		let cancelled = false;
+		void window.ateam.projects.remoteUrl(activeRepoProjectId).then((url) => {
+			if (!cancelled) setActiveRepoRemote(url);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [activeRepoProjectId]);
+	const canRemote = activeRepoRemote !== null;
+	const hasLocalMember = activeMembers.some((m) => m.alias === null);
+	const composerEnvs = useMemo(() => {
+		// A box is runnable if it ALREADY has this repo (a member — no clone needed) or
+		// the repo has a remote we could clone onto it.
+		const memberAliases = new Set(activeMembers.map((m) => m.alias));
+		return [
+			{ alias: null as Alias, label: "Local", disabled: !hasLocalMember },
+			...connections.map((c) => ({
+				alias: c.alias,
+				label: c.alias,
+				disabled: !memberAliases.has(c.alias) && !canRemote,
+			})),
+		];
+	}, [connections, canRemote, hasLocalMember, activeMembers]);
+
+	// The active card's board unions tasks from every engine that has the repo.
+	const activeTasks = activeCard
+		? activeMembers.flatMap((m) => tasksByProject[m.projectId] ?? [])
+		: activeProjectId
+			? (tasksByProject[activeProjectId] ?? [])
+			: [];
 	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
 	// Sidebar list shows all tasks, including merged/done ones.
 	const sidebarTasks = activeTasks;
@@ -471,15 +560,53 @@ export function App() {
 		agentId: string;
 		yolo: boolean;
 		files: string[];
+		// Chosen environment: null = this Mac; an alias = that box. A box is connected
+		// and the repo cloned onto it (idempotent) before the task is created there.
+		alias: Alias;
 	}) =>
 		run(async () => {
-			if (!activeProjectId) return;
+			const card = activeCard;
+			if (!card) return;
 			setComposerOpen(false);
-			const task = await window.ateam.tasks.create({
-				projectId: activeProjectId,
-				name: input.name,
-			});
-			await loadTasks(activeProjectId);
+			// Resolve the engine's project row for this repo on the chosen environment.
+			let projectId: string;
+			if (input.alias === null) {
+				const localMember = card.members.find((m) => m.alias === null);
+				if (!localMember) {
+					setError("This repo isn't on your Mac.");
+					return;
+				}
+				projectId = localMember.projectId;
+			} else {
+				// If the box already has this repo (it's a member of the card, surfaced by
+				// aggregation), use it directly — no clone, no provision. This is the iOS
+				// path: the box already has its repos, you just create tasks against them.
+				const existing = card.members.find((m) => m.alias === input.alias);
+				if (existing) {
+					projectId = existing.projectId;
+				} else {
+					// First task on this box for this repo: it isn't here yet, so clone +
+					// register it from the repo's remote, then route the create to it.
+					if (!activeRepoRemote) {
+						setError("This repo has no git remote to clone onto a box.");
+						return;
+					}
+					setInfo(`Setting up ${card.name} on ${input.alias}…`);
+					let proj: ProjectDTO;
+					try {
+						proj = await window.ateamHost.provision(input.alias, { cloneUrl: activeRepoRemote });
+					} finally {
+						setInfo(null);
+					}
+					// Re-list so the aggregate learns proj.id → this box; then create routes there.
+					await loadProjects();
+					projectId = proj.id;
+				}
+			}
+			const task = await window.ateam.tasks.create({ projectId, name: input.name });
+			// The created task's project is a member of the active card, so its tasks
+			// are already unioned into the board once loaded.
+			await loadTasks(projectId);
 			setSelectedTaskId(task.id);
 			// Keep whatever panel mode the user is already in: if they're
 			// browsing the board (side), open the new task beside it; if they're
@@ -517,20 +644,27 @@ export function App() {
 							<PanelLeft size={16} strokeWidth={1.75} />
 						</button>
 						<div className="rail-divider" />
-						{projects.map((p) => {
-							const alert = projectAlert(p.id);
+						{unifiedProjects.map((card) => {
+							const alert = cardAlert(card);
+							const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+							if (!primary) return null;
+							const active = card.members.some((m) => m.projectId === activeProjectId);
 							return (
 								<button
 									type="button"
-									key={p.id}
-									className={`rail-tile ${p.id === activeProjectId ? "active" : ""}`}
-									title={boundProjectId ? p.name : `${p.name} — double-click to open in new window`}
-									onClick={() => selectProject(p.id)}
+									key={card.key}
+									className={`rail-tile ${active ? "active" : ""}`}
+									title={
+										boundProjectId ? card.name : `${card.name} — double-click to open in new window`
+									}
+									onClick={() => selectProject(primary.projectId)}
 									onDoubleClick={
-										boundProjectId ? undefined : () => window.ateam.window.openProject(p.id)
+										boundProjectId
+											? undefined
+											: () => window.ateam.window.openProject(primary.projectId)
 									}
 								>
-									{p.name.charAt(0).toUpperCase()}
+									{card.name.charAt(0).toUpperCase()}
 									{alert && <span className={`corner pulse ${alert}`} />}
 								</button>
 							);
@@ -598,41 +732,54 @@ export function App() {
 									<IconButton icon={FolderPlus} label="Add project" onClick={addProject} />
 								</div>
 								{!projectsCollapsed &&
-									projects.map((p) => {
-								const alert = projectAlert(p.id);
-								return (
-									// Double-click (or the hover button) detaches the project into its
-									// own window. Row and open-button are siblings so the button's
-									// click can't nest inside the row button.
-									<div
-										key={p.id}
-										className="proj-row"
-										onDoubleClick={() => window.ateam.window.openProject(p.id)}
-									>
-										<button
-											type="button"
-											className={`proj ${p.id === activeProjectId ? "active" : ""}`}
-											onClick={() => selectProject(p.id)}
-										>
-											<span
-												className={`dot ${alert ? `alert ${alert}` : ""}`}
-												style={!alert && p.color ? { background: p.color } : undefined}
-											/>
-											<span className="proj-name" title={p.repoPath}>
-												{p.name}
-											</span>
-										</button>
-										<span className="proj-open">
-											<IconButton
-												icon={ExternalLink}
-												label="Open in new window"
-												size={14}
-												onClick={() => window.ateam.window.openProject(p.id)}
-											/>
-										</span>
-									</div>
-								);
-							})}
+									unifiedProjects.map((card) => {
+										const alert = cardAlert(card);
+										// Selecting/detaching acts on the local copy if present, else the first.
+										const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+										if (!primary) return null;
+										const active = card.members.some((m) => m.projectId === activeProjectId);
+										// Show the environments this repo spans (Local · box) when it's on more
+										// than just this Mac — that's the multi-engine cue.
+										const multiEnv =
+											card.members.length > 1 || card.members.some((m) => m.alias !== null);
+										return (
+											// Double-click (or the hover button) detaches the project into its
+											// own window. Row and open-button are siblings so the button's
+											// click can't nest inside the row button.
+											<div
+												key={card.key}
+												className="proj-row"
+												onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
+											>
+												<button
+													type="button"
+													className={`proj ${active ? "active" : ""}`}
+													onClick={() => selectProject(primary.projectId)}
+												>
+													<span
+														className={`dot ${alert ? `alert ${alert}` : ""}`}
+														style={!alert && card.color ? { background: card.color } : undefined}
+													/>
+													<span className="proj-name" title={primary.project.repoPath}>
+														{card.name}
+													</span>
+													{multiEnv && (
+														<span className="proj-envs muted" style={{ fontSize: 10 }}>
+															{card.members.map((m) => aliasLabel(m.alias)).join(" · ")}
+														</span>
+													)}
+												</button>
+												<span className="proj-open">
+													<IconButton
+														icon={ExternalLink}
+														label="Open in new window"
+														size={14}
+														onClick={() => window.ateam.window.openProject(primary.projectId)}
+													/>
+												</span>
+											</div>
+										);
+									})}
 							</>
 						)}
 
@@ -822,14 +969,6 @@ export function App() {
 						<Plus size={14} strokeWidth={1.75} />
 						New task
 					</button>
-					{/* Which machine runs the agents — this Mac or a remote box over SSH/
-					    Tailscale. Global to the app, so only the main window drives it. */}
-					{!boundProjectId && (
-						<>
-							<span className="tb-divider" />
-							<ConnectionSwitcher />
-						</>
-					)}
 				</div>
 
 				<div className="content">
@@ -841,6 +980,12 @@ export function App() {
 									selectedId={selectedTaskId}
 									onSelect={selectFromBoard}
 									onDeselect={() => setSelectedTaskId(null)}
+									// Badge a card only when it runs on a box — Local is the default, so
+									// tagging it would be noise. `null` = no badge.
+									originLabel={(t) => {
+										const a = originOf(t.projectId);
+										return a ? aliasLabel(a) : null;
+									}}
 								/>
 							)}
 							{selectedTask && (
@@ -901,9 +1046,10 @@ export function App() {
 					onClose={() => setCleanupOpen(false)}
 				/>
 			)}
-			{composerOpen && activeProjectId && (
+			{composerOpen && activeCard && (
 				<NewTaskComposer
 					agents={agents}
+					environments={composerEnvs}
 					onClose={() => setComposerOpen(false)}
 					onCreate={composeTask}
 				/>
@@ -940,11 +1086,7 @@ function TaskRow({
 	// delete button share the trailing slot and swap in place on hover.
 	return (
 		<div className="tasknode-row">
-			<button
-				type="button"
-				className={`tasknode ${selected ? "selected" : ""}`}
-				onClick={onClick}
-			>
+			<button type="button" className={`tasknode ${selected ? "selected" : ""}`} onClick={onClick}>
 				{t.agentId ? (
 					<span className="ticon">
 						<AgentIcon agentId={t.agentId} size={14} />
@@ -956,7 +1098,13 @@ function TaskRow({
 			</button>
 			<span className="task-trail">
 				{t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />}
-				<IconButton icon={Trash2} label="Delete task" variant="danger" size={14} onClick={onDelete} />
+				<IconButton
+					icon={Trash2}
+					label="Delete task"
+					variant="danger"
+					size={14}
+					onClick={onDelete}
+				/>
 			</span>
 		</div>
 	);
@@ -967,11 +1115,14 @@ function Board({
 	selectedId,
 	onSelect,
 	onDeselect,
+	originLabel,
 }: {
 	tasks: TaskDTO[];
 	selectedId: string | null;
 	onSelect: (id: string) => void;
 	onDeselect: () => void;
+	/** Engine badge for a task (e.g. a box alias), or null to show none (Local). */
+	originLabel: (t: TaskDTO) => string | null;
 }) {
 	return (
 		// Clicking empty board space deselects; card clicks stopPropagation.
@@ -996,6 +1147,11 @@ function Board({
 							>
 								{t.agentStatus && <span className={`ring ${t.agentStatus}`} />}
 								<div className="name">{t.name}</div>
+								{originLabel(t) && (
+									<span className="card-env muted" style={{ fontSize: 10 }}>
+										{originLabel(t)}
+									</span>
+								)}
 								<div className="branch">{t.branch}</div>
 								<div className="meta">
 									{t.gitStatus && (
@@ -1188,11 +1344,7 @@ function TaskPanel({
 					label="Launch agent (asks before dangerous actions)"
 					onClick={() => launch(false)}
 				/>
-				<IconButton
-					icon={Zap}
-					label="Launch in auto mode"
-					onClick={() => launch(true)}
-				/>
+				<IconButton icon={Zap} label="Launch in auto mode" onClick={() => launch(true)} />
 				<IconButton
 					icon={History}
 					label="Resume the last conversation in this worktree"

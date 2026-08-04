@@ -15,6 +15,7 @@ const api: AteamApi = {
 	projects: {
 		pick: () => ipcRenderer.invoke(CH.projectsPick),
 		register: (repoPath, opts) => ipcRenderer.invoke(CH.projectsRegister, repoPath, opts),
+		remoteUrl: (projectId) => ipcRenderer.invoke(CH.projectsRemoteUrl, projectId),
 		list: () => ipcRenderer.invoke(CH.projectsList),
 		remove: (id) => ipcRenderer.invoke(CH.projectsRemove, id),
 	},
@@ -112,11 +113,14 @@ contextBridge.exposeInMainWorld("ateam", api);
 const host: AteamHost = {
 	list: () => ipcRenderer.invoke(HOST_CH.list),
 	connect: (alias) => ipcRenderer.invoke(HOST_CH.connect, alias),
-	current: () => ipcRenderer.invoke(HOST_CH.current),
-	onChanged: (cb: (status: HostStatus) => void) => {
-		const handler = (_: unknown, status: HostStatus) => cb(status);
-		ipcRenderer.on(HOST_CH.evtChanged, handler);
-		return () => ipcRenderer.off(HOST_CH.evtChanged, handler);
+	disconnect: (alias) => ipcRenderer.invoke(HOST_CH.disconnect, alias),
+	connected: () => ipcRenderer.invoke(HOST_CH.connected),
+	origins: () => ipcRenderer.invoke(HOST_CH.origins),
+	provision: (alias, input) => ipcRenderer.invoke(HOST_CH.provision, alias, input),
+	onConnectionsChanged: (cb: (connected: HostStatus[]) => void) => {
+		const handler = (_: unknown, connected: HostStatus[]) => cb(connected);
+		ipcRenderer.on(HOST_CH.evtConnectionsChanged, handler);
+		return () => ipcRenderer.off(HOST_CH.evtConnectionsChanged, handler);
 	},
 };
 
