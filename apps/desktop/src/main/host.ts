@@ -46,6 +46,15 @@ const REMOTE_ATTACH = "bash -lc 'exec ateam attach --stdio'";
 // Cap a connect: ssh can hang on an auth prompt or an unreachable host with no
 // error, and the UI must not wait forever. A live daemon replies in well under this.
 const CONNECT_TIMEOUT_MS = 20_000;
+// A WebSocket over Tailscale goes HALF-OPEN on NAT/WireGuard idle timeout (and on
+// laptop sleep) with no close event — and createRpcClient has no per-call timeout,
+// because it relies on onClose to reject in-flight calls. Without a health probe
+// the board would simply stop responding, silently and forever. So: ping, and treat
+// a failed ping as the close the socket never sent. 15s is well under the ~25s
+// typical NAT/WireGuard mapping timeout; the same interval the phone settled on.
+// SSH needs none of this — a dead ssh child exits and closes the pipe for real.
+const WS_PING_INTERVAL_MS = 15_000;
+const WS_PING_TIMEOUT_MS = 10_000;
 
 /** The push-events forwarded from every held backend to every window. */
 const FORWARDED: { event: BackendEvent; channel: string }[] = [
@@ -86,6 +95,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	const backends = new Map<string | null, Backend>([[null, local]]);
 	// Per-alias event unsubscribers, so disconnecting one box stops only its stream.
 	const unbinders = new Map<string | null, () => void>();
+	// Per-alias health probes (ws only) — cleared on disconnect so a dropped box
+	// stops pinging a socket nobody is listening to.
+	const probes = new Map<string, ReturnType<typeof setInterval>>();
 
 	// One aggregate over a LIVE backend array: connecting pushes onto it (so the
 	// learned id→engine registry survives), disconnecting rebuilds a fresh one (so a
@@ -178,13 +190,38 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		backends.set(alias, backend);
 		backendList.push(backend); // the live aggregate now fans out to it too
 		unbinders.set(alias, bindEvents(backend));
+		if (wire === "ws") probes.set(alias, startHealthProbe(alias, rpc));
 		broadcastConnections();
 		return { mode: "remote", alias, info };
+	}
+
+	/**
+	 * Keep a WebSocket honest. A half-open socket answers nothing and reports
+	 * nothing, so we ask it a cheap question on a timer: one unanswered ping means
+	 * the connection is gone, and we tear it down exactly as an explicit disconnect
+	 * would — disposing it, dropping it from the aggregate so no call routes into a
+	 * dead engine, and telling the renderer. A visible disconnect beats a board that
+	 * quietly stops working.
+	 */
+	function startHealthProbe(alias: string, rpc: RpcClient): ReturnType<typeof setInterval> {
+		const timer = setInterval(() => {
+			void withTimeout(rpc.call(CH.systemHello), WS_PING_TIMEOUT_MS).catch(() => {
+				if (backends.has(alias)) disconnect(alias);
+			});
+		}, WS_PING_INTERVAL_MS);
+		// Never hold the app open just to ping a box.
+		timer.unref?.();
+		return timer;
 	}
 
 	function disconnect(alias: string): void {
 		const backend = backends.get(alias);
 		if (!backend) return; // unknown alias / already gone (null never routes here — it's not a key)
+		const probe = probes.get(alias);
+		if (probe) {
+			clearInterval(probe);
+			probes.delete(alias);
+		}
 		unbinders.get(alias)?.();
 		unbinders.delete(alias);
 		backend.dispose();
