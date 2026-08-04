@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repo } from "@ateam/db";
 import { createTestDb } from "../../db/test/helpers/test-db";
-import { listConnections, readSshHosts, recordConnection } from "../src/connections";
+import {
+	endpointUrl,
+	listConnections,
+	readSshHosts,
+	recordConnection,
+	resolveTransport,
+} from "../src/connections";
 
 function writeConfig(content: string): string {
 	const p = join(mkdtempSync(join(tmpdir(), "ateam-ssh-")), "config");
@@ -145,5 +151,56 @@ describe("recordConnection", () => {
 		expect(h?.serverVersion).toBe("1.0.0");
 		expect(h?.agentsAvailable).toEqual(["claude", "codex"]);
 		expect(typeof h?.lastSeen).toBe("number");
+	});
+});
+
+describe("endpointUrl", () => {
+	it("accepts host:port forms and rejects ssh_config aliases", () => {
+		expect(endpointUrl("100.72.63.61:8787")).toBe("ws://100.72.63.61:8787");
+		expect(endpointUrl("box.tailnet.ts.net:8787")).toBe("ws://box.tailnet.ts.net:8787");
+		expect(endpointUrl("[fd7a::1]:8787")).toBe("ws://[fd7a::1]:8787");
+		// Aliases have no port, so they can never be mistaken for an endpoint.
+		expect(endpointUrl("hetzner-devbox")).toBeNull();
+		expect(endpointUrl("my.box.example.com")).toBeNull();
+		// Unbracketed IPv6 is ambiguous about where the port starts — reject it.
+		expect(endpointUrl("fd7a::1:8787")).toBeNull();
+		expect(endpointUrl("host:0")).toBeNull();
+		expect(endpointUrl("host:70000")).toBeNull();
+		expect(endpointUrl("host:ssh")).toBeNull();
+	});
+});
+
+describe("resolveTransport", () => {
+	const cfg = writeConfig(["Host devbox", "  HostName 100.64.0.1"].join("\n"));
+
+	it("reads an ssh_config alias as ssh and an endpoint as ws", () => {
+		const db = createTestDb();
+		expect(resolveTransport(db, "devbox", cfg)).toBe("ssh");
+		expect(resolveTransport(db, "100.72.63.61:8787", cfg)).toBe("ws");
+		expect(resolveTransport(db, "never-heard-of-it", cfg)).toBeNull();
+	});
+
+	it("lets a saved row win, so a connection keeps the wire it was made with", () => {
+		const db = createTestDb();
+		recordConnection(db, { hostAlias: "100.72.63.61:8787", transport: "ws" });
+		expect(resolveTransport(db, "100.72.63.61:8787", cfg)).toBe("ws");
+		// An alias that later appears in ssh_config doesn't silently change wire.
+		recordConnection(db, { hostAlias: "devbox", transport: "ssh" });
+		expect(resolveTransport(db, "devbox", cfg)).toBe("ssh");
+	});
+
+	it("defaults pre-existing rows to ssh — every one predates the ws transport", () => {
+		const db = createTestDb();
+		recordConnection(db, { hostAlias: "old-box" }); // no transport given
+		expect(repo.getHost(db, "old-box")?.transport).toBe("ssh");
+		expect(listConnections(db, cfg).find((c) => c.alias === "old-box")?.transport).toBe("ssh");
+	});
+
+	it("surfaces a saved ws endpoint in the list, flagged as not in ssh_config", () => {
+		const db = createTestDb();
+		recordConnection(db, { hostAlias: "100.72.63.61:8787", transport: "ws", agentsAvailable: ["claude"] });
+		const row = listConnections(db, cfg).find((c) => c.alias === "100.72.63.61:8787");
+		expect(row).toMatchObject({ transport: "ws", inSshConfig: false, known: true });
+		expect(listConnections(db, cfg).find((c) => c.alias === "devbox")?.transport).toBe("ssh");
 	});
 });

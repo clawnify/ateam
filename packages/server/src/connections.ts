@@ -1,19 +1,24 @@
 // Client-side connection manager: which remote hosts the user can drive an
-// engine on, plus Ateam's own last-known metadata for each. Connection details
-// (hostname/port/keys/jumphosts) stay in ~/.ssh/config — OpenSSH's job; we only
-// read the alias list from it and persist our metadata keyed by alias. Lives in
-// @ateam/server beside sshClientTransport (both are client primitives), and is
-// deliberately NOT on AteamApi — managing connections is a client concern *about*
-// choosing an engine, not something a remote engine serves.
+// engine on, plus Ateam's own last-known metadata for each. Two kinds, both keyed
+// by a single opaque alias:
+//
+//   ssh  an ~/.ssh/config alias. Connection details (hostname/port/keys/
+//        jumphosts) stay OpenSSH's job — we only read the alias list.
+//   ws   a `host:port` on the box's Tailscale address. There is no ssh_config to
+//        defer to, so the endpoint IS the alias; nothing extra is stored.
+//
+// Lives in @ateam/server beside sshClientTransport (both are client primitives),
+// and is deliberately NOT on AteamApi — managing connections is a client concern
+// *about* choosing an engine, not something a remote engine serves.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ConnectionDTO } from "@ateam/protocol";
+import type { ConnectionDTO, HostTransport } from "@ateam/protocol";
 import { type AteamDb, type Host, repo } from "@ateam/db";
 
 // ConnectionDTO is a client↔renderer boundary DTO — its home is @ateam/protocol;
 // re-exported here so `listConnections`' callers keep importing it from the server.
-export type { ConnectionDTO } from "@ateam/protocol";
+export type { ConnectionDTO, HostTransport } from "@ateam/protocol";
 
 /** A connectable destination parsed from ~/.ssh/config. */
 export interface SshHost {
@@ -28,11 +33,46 @@ export interface SshHost {
 /** What a successful connection learned about a host, to cache for offline render. */
 export interface ConnectionRecord {
 	hostAlias: string;
+	transport?: HostTransport;
 	serverVersion?: string | null;
 	agentsAvailable?: string[] | null;
 }
 
 const DEFAULT_SSH_CONFIG = join(homedir(), ".ssh", "config");
+
+/**
+ * Is `target` a Tailscale endpoint (`host:port`) rather than an ssh_config alias?
+ * Returns the `ws://` URL to dial, or null if it isn't one.
+ *
+ * The two namespaces don't collide in practice: OpenSSH `Host` patterns are
+ * whitespace-delimited tokens and a colon has no meaning there, while an endpoint
+ * must end in `:<port>`. IPv6 must be bracketed (`[100::1]:8787`) for the same
+ * reason a URL requires it — otherwise the last colon is ambiguous.
+ */
+export function endpointUrl(target: string): string | null {
+	const match = target.match(/^(\[[0-9a-fA-F:]+\]|[^:\s[\]]+):(\d{1,5})$/);
+	if (!match?.[1] || !match[2]) return null;
+	const port = Number(match[2]);
+	if (port < 1 || port > 65535) return null;
+	return `ws://${match[1]}:${port}`;
+}
+
+/**
+ * How to open `target`: a saved row's transport wins; otherwise an ssh_config
+ * alias is ssh, and anything shaped like an endpoint is ws. Deciding here rather
+ * than at the call site keeps `connect(alias)` a single-argument operation for
+ * every caller — the UI just passes what the user picked or typed.
+ */
+export function resolveTransport(
+	db: AteamDb,
+	target: string,
+	configPath?: string,
+): HostTransport | null {
+	const saved = repo.getHost(db, target);
+	if (saved) return saved.transport as HostTransport;
+	if (readSshHosts(configPath).some((h) => h.alias === target)) return "ssh";
+	return endpointUrl(target) ? "ws" : null;
+}
 
 /**
  * Parse `Host` aliases (and their HostName) from an ssh_config. Minimal by
@@ -140,6 +180,9 @@ export function listConnections(db: AteamDb, configPath?: string): ConnectionDTO
 		}
 		byAlias.set(canonical.alias, {
 			alias: canonical.alias,
+			// Everything folded here came out of ssh_config, so it is ssh by
+			// construction; a ws endpoint has no stanza and appears in the saved loop.
+			transport: "ssh",
 			hostName: canonical.hostName,
 			serverVersion: rec?.serverVersion ?? null,
 			agentsAvailable: rec?.agentsAvailable ?? null,
@@ -152,6 +195,7 @@ export function listConnections(db: AteamDb, configPath?: string): ConnectionDTO
 		if (absorbed.has(rec.hostAlias)) continue;
 		byAlias.set(rec.hostAlias, {
 			alias: rec.hostAlias,
+			transport: rec.transport as HostTransport,
 			hostName: null,
 			serverVersion: rec.serverVersion,
 			agentsAvailable: rec.agentsAvailable,
@@ -177,6 +221,7 @@ export function recordConnection(db: AteamDb, rec: ConnectionRecord): Host {
 		hostAlias: rec.hostAlias,
 		lastSeen: Date.now(),
 	};
+	if (rec.transport !== undefined) patch.transport = rec.transport;
 	if (rec.serverVersion !== undefined) patch.serverVersion = rec.serverVersion;
 	if (rec.agentsAvailable !== undefined) patch.agentsAvailable = rec.agentsAvailable;
 	return repo.upsertHost(db, patch);

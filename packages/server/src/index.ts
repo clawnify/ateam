@@ -6,8 +6,14 @@
 // (Electron ipcMain today, JSON-RPC over SSH next) forwards the engine's events
 // and adapts its own request channel to dispatcher.handle().
 
-export type { ConnectionDTO, ConnectionRecord, SshHost } from "./connections";
-export { listConnections, readSshHosts, recordConnection } from "./connections";
+export type { ConnectionDTO, ConnectionRecord, HostTransport, SshHost } from "./connections";
+export {
+	endpointUrl,
+	listConnections,
+	readSshHosts,
+	recordConnection,
+	resolveTransport,
+} from "./connections";
 export type { Dispatcher } from "./dispatcher";
 export { createDispatcher } from "./dispatcher";
 export type { Engine, EngineOptions } from "./engine";

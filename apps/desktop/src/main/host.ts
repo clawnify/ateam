@@ -2,26 +2,33 @@
 // local engine and holds any connected boxes CONCURRENTLY — one board unions their
 // tasks, each task's "environment" being the engine that owns it. Every call is
 // routed to the owning engine by createAggregate (main/aggregate.ts); every held
-// engine's push-events are forwarded to the renderer. Connecting to a box opens an
-// SSH transport (the `attach` relay over OpenSSH), handshakes (gating the protocol
-// version), and ADDS it — connecting never drops the others.
+// engine's push-events are forwarded to the renderer. Connecting to a box opens a
+// transport — the `attach` relay over OpenSSH, or a WebSocket to its Tailscale
+// listener — handshakes (gating the protocol version), and ADDS it: connecting
+// never drops the others.
 
 import {
 	CH,
+	type ClientTransport,
 	createRpcClient,
 	PROTOCOL_VERSION,
 	type ProjectDTO,
 	type RpcClient,
 	type SystemInfo,
+	wsClientTransport,
 } from "@ateam/protocol";
 import {
 	type ConnectionDTO,
 	type Engine,
+	endpointUrl,
+	type HostTransport,
 	listConnections,
 	recordConnection,
+	resolveTransport,
 	sshClientTransport,
 } from "@ateam/server";
 import { ipcMain } from "electron";
+import WebSocket from "ws";
 import { HOST_CH, type HostStatus } from "../shared/host";
 import { type Aggregate, createAggregate } from "./aggregate";
 import {
@@ -39,6 +46,15 @@ const REMOTE_ATTACH = "bash -lc 'exec ateam attach --stdio'";
 // Cap a connect: ssh can hang on an auth prompt or an unreachable host with no
 // error, and the UI must not wait forever. A live daemon replies in well under this.
 const CONNECT_TIMEOUT_MS = 20_000;
+// A WebSocket over Tailscale goes HALF-OPEN on NAT/WireGuard idle timeout (and on
+// laptop sleep) with no close event — and createRpcClient has no per-call timeout,
+// because it relies on onClose to reject in-flight calls. Without a health probe
+// the board would simply stop responding, silently and forever. So: ping, and treat
+// a failed ping as the close the socket never sent. 15s is well under the ~25s
+// typical NAT/WireGuard mapping timeout; the same interval the phone settled on.
+// SSH needs none of this — a dead ssh child exits and closes the pipe for real.
+const WS_PING_INTERVAL_MS = 15_000;
+const WS_PING_TIMEOUT_MS = 10_000;
 
 /** The push-events forwarded from every held backend to every window. */
 const FORWARDED: { event: BackendEvent; channel: string }[] = [
@@ -79,6 +95,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	const backends = new Map<string | null, Backend>([[null, local]]);
 	// Per-alias event unsubscribers, so disconnecting one box stops only its stream.
 	const unbinders = new Map<string | null, () => void>();
+	// Per-alias health probes (ws only) — cleared on disconnect so a dropped box
+	// stops pinging a socket nobody is listening to.
+	const probes = new Map<string, ReturnType<typeof setInterval>>();
 
 	// One aggregate over a LIVE backend array: connecting pushes onto it (so the
 	// learned id→engine registry survives), disconnecting rebuilds a fresh one (so a
@@ -110,13 +129,41 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		void connected().then((list) => broadcast(HOST_CH.evtConnectionsChanged, list));
 	}
 
+	/**
+	 * Open the wire to a box. Which wire is a property of the connection, not of
+	 * the call site: an ssh_config alias gets the `attach` relay over OpenSSH; a
+	 * `host:port` gets a WebSocket to the box's Tailscale listener.
+	 *
+	 * The `ws` constructor is injected because Electron's MAIN process is Node 20
+	 * (electron 34.5.8 → node 20.19.1), which has no global WebSocket — the
+	 * renderer and the phone do, the main process doesn't.
+	 */
+	function openTransport(
+		alias: string,
+		wire: HostTransport | null,
+	): { transport: ClientTransport; close(): void } {
+		if (wire === "ws") {
+			const url = endpointUrl(alias);
+			if (!url) throw new Error(`"${alias}" is not a host:port endpoint`);
+			return wsClientTransport(url, WebSocket as never);
+		}
+		if (wire === null) {
+			throw new Error(
+				`Unknown connection "${alias}" — add it to ~/.ssh/config, or give a Tailscale endpoint like 100.x.y.z:8787.`,
+			);
+		}
+		return sshClientTransport(alias, [REMOTE_ATTACH]);
+	}
+
 	async function connect(alias: string | null): Promise<HostStatus> {
 		// local is permanent; connecting to it (or to an already-held box) is a no-op.
 		if (alias === null) return statusOf(local, null);
 		const existing = backends.get(alias);
 		if (existing) return statusOf(existing, alias);
 
-		const client = sshClientTransport(alias, [REMOTE_ATTACH]);
+		// Resolve once: the same answer decides which wire to open AND what we save.
+		const wire = resolveTransport(db, alias);
+		const client = openTransport(alias, wire);
 		const rpc: RpcClient = createRpcClient(client.transport);
 		let info: SystemInfo;
 		try {
@@ -134,6 +181,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 
 		recordConnection(db, {
 			hostAlias: alias,
+			transport: wire ?? "ssh",
 			serverVersion: String(info.protocolVersion),
 			agentsAvailable: info.agents,
 		});
@@ -142,13 +190,38 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		backends.set(alias, backend);
 		backendList.push(backend); // the live aggregate now fans out to it too
 		unbinders.set(alias, bindEvents(backend));
+		if (wire === "ws") probes.set(alias, startHealthProbe(alias, rpc));
 		broadcastConnections();
 		return { mode: "remote", alias, info };
+	}
+
+	/**
+	 * Keep a WebSocket honest. A half-open socket answers nothing and reports
+	 * nothing, so we ask it a cheap question on a timer: one unanswered ping means
+	 * the connection is gone, and we tear it down exactly as an explicit disconnect
+	 * would — disposing it, dropping it from the aggregate so no call routes into a
+	 * dead engine, and telling the renderer. A visible disconnect beats a board that
+	 * quietly stops working.
+	 */
+	function startHealthProbe(alias: string, rpc: RpcClient): ReturnType<typeof setInterval> {
+		const timer = setInterval(() => {
+			void withTimeout(rpc.call(CH.systemHello), WS_PING_TIMEOUT_MS).catch(() => {
+				if (backends.has(alias)) disconnect(alias);
+			});
+		}, WS_PING_INTERVAL_MS);
+		// Never hold the app open just to ping a box.
+		timer.unref?.();
+		return timer;
 	}
 
 	function disconnect(alias: string): void {
 		const backend = backends.get(alias);
 		if (!backend) return; // unknown alias / already gone (null never routes here — it's not a key)
+		const probe = probes.get(alias);
+		if (probe) {
+			clearInterval(probe);
+			probes.delete(alias);
+		}
 		unbinders.get(alias)?.();
 		unbinders.delete(alias);
 		backend.dispose();
