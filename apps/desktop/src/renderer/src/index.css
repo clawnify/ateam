@@ -698,6 +698,52 @@ input {
 	inset: 0;
 	min-height: 0;
 }
+/* ⌘F find bar: floats over the terminal's top-right corner */
+.term-search {
+	position: absolute;
+	top: 6px;
+	right: 16px; /* clear xterm's scrollbar */
+	z-index: 5;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	padding: 3px 4px 3px 8px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	box-shadow: 0 4px 16px rgb(0 0 0 / 0.5);
+}
+.term-search-input {
+	width: 150px;
+	background: transparent;
+	border: none;
+	outline: none;
+	color: var(--text);
+	font-family: ui-monospace, Menlo, monospace;
+	font-size: 12px;
+}
+.term-search-input::placeholder {
+	color: var(--text-dim);
+}
+.term-search-count {
+	font-size: 11px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	margin-right: 2px;
+}
+.term-search button {
+	display: flex;
+	padding: 3px;
+	background: transparent;
+	border: none;
+	border-radius: 5px;
+	color: var(--text-dim);
+}
+.term-search button:hover {
+	background: var(--bg-elev-2);
+	color: var(--text);
+}
 /* panel body: terminal, or the changes view (files left · diff right) */
 .panel-body {
 	flex: 1;

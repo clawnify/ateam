@@ -1,8 +1,21 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
-import { FileUp, ImageUp, Plus } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { ChevronDown, ChevronUp, FileUp, ImageUp, Plus, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { Menu } from "./Menu";
+
+/**
+ * Highlight styles for ⌘F matches. Decorations only tint the background —
+ * the light-gray foreground stays as-is — so both colors are dark enough to
+ * keep the text readable: slate for matches, amber for the active one.
+ */
+const SEARCH_DECORATIONS = {
+	matchBackground: "#3a3f4a",
+	activeMatchBackground: "#6b5900",
+	matchOverviewRuler: "#6b7280",
+	activeMatchColorOverviewRuler: "#fbbf24",
+};
 
 /**
  * Backslash-escape a path so it survives being TYPED into a PTY. Drops and the
@@ -35,6 +48,13 @@ export function TerminalView({
 	const ref = useRef<HTMLDivElement>(null);
 	const termRef = useRef<Terminal | null>(null);
 
+	// ⌘F search over this terminal's scrollback (xterm SearchAddon).
+	const searchRef = useRef<SearchAddon | null>(null);
+	const searchInputRef = useRef<HTMLInputElement>(null);
+	const [searchOpen, setSearchOpen] = useState(false);
+	const [query, setQuery] = useState("");
+	const [results, setResults] = useState<{ index: number; count: number } | null>(null);
+
 	useEffect(() => {
 		const el = ref.current;
 		if (!el) return;
@@ -48,6 +68,12 @@ export function TerminalView({
 		});
 		const fit = new FitAddon();
 		term.loadAddon(fit);
+		const search = new SearchAddon();
+		term.loadAddon(search);
+		searchRef.current = search;
+		const offResults = search.onDidChangeResults((e) =>
+			setResults({ index: e.resultIndex, count: e.resultCount }),
+		);
 		term.open(el);
 		termRef.current = term;
 		try {
@@ -270,9 +296,15 @@ export function TerminalView({
 			window.removeEventListener("resize", onWinResize);
 			offData();
 			disposeInput.dispose();
+			offResults.dispose();
 			ro.disconnect();
+			searchRef.current = null;
 			termRef.current = null;
 			term.dispose();
+			// Search state is per-PTY: don't carry an open bar / stale count over
+			// when this view is rebound to a different terminal.
+			setSearchOpen(false);
+			setResults(null);
 		};
 	}, [terminalId]);
 
@@ -298,13 +330,97 @@ export function TerminalView({
 		termRef.current?.focus();
 	};
 
+	// ⌘F opens (or re-focuses) the search bar for THIS terminal only — keydown
+	// bubbles up from whichever element inside the shell has focus, so in
+	// Mission Control only the focused tile reacts. ⌘-combos never reach the
+	// PTY (xterm leaves them to the browser), so nothing is swallowed.
+	const onShellKeyDown = (e: React.KeyboardEvent) => {
+		if (e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "f") {
+			e.preventDefault();
+			setSearchOpen(true);
+			// select() rather than focus(): reopening with old text lets you type
+			// a fresh query straight away (autoFocus covers the first open).
+			requestAnimationFrame(() => searchInputRef.current?.select());
+		}
+	};
+
+	const findNext = () => {
+		if (query) searchRef.current?.findNext(query, { decorations: SEARCH_DECORATIONS });
+	};
+	const findPrev = () => {
+		if (query) searchRef.current?.findPrevious(query, { decorations: SEARCH_DECORATIONS });
+	};
+
+	const onSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+		const q = e.target.value;
+		setQuery(q);
+		if (q) {
+			// incremental: the current match grows with the query instead of
+			// jumping to the next occurrence on every keystroke.
+			searchRef.current?.findNext(q, { incremental: true, decorations: SEARCH_DECORATIONS });
+		} else {
+			searchRef.current?.clearDecorations();
+			setResults(null);
+		}
+	};
+
+	const closeSearch = () => {
+		setSearchOpen(false);
+		setResults(null);
+		searchRef.current?.clearDecorations();
+		termRef.current?.focus();
+	};
+
+	const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+		if (e.key === "Enter") {
+			e.preventDefault();
+			if (e.shiftKey) findPrev();
+			else findNext();
+		} else if (e.key === "Escape") {
+			e.preventDefault();
+			closeSearch();
+		}
+	};
+
 	return (
-		<div className="term-shell">
+		// biome-ignore lint/a11y/noStaticElementInteractions: shortcut listener, not an interactive element
+		<div className="term-shell" onKeyDown={onShellKeyDown}>
 			{/* .term-area is the flex-sized box; .term is absolutely positioned to
 			    fill it, so the xterm canvas can never prop the layout open — the
 			    available space drives the terminal size, not the other way round. */}
 			<div className="term-area">
 				<div className="term" ref={ref} />
+				{searchOpen && (
+					<div className="term-search">
+						<input
+							ref={searchInputRef}
+							className="term-search-input"
+							placeholder="Search"
+							value={query}
+							onChange={onSearchChange}
+							onKeyDown={onSearchKeyDown}
+							spellCheck={false}
+							// biome-ignore lint/a11y/noAutofocus: the bar only exists because the user asked to search
+							autoFocus
+						/>
+						<span className="term-search-count">
+							{query && results
+								? results.index >= 0
+									? `${results.index + 1}/${results.count}`
+									: `${results.count}`
+								: ""}
+						</span>
+						<button type="button" title="Previous match (⇧↵)" onClick={findPrev}>
+							<ChevronUp size={14} strokeWidth={1.75} />
+						</button>
+						<button type="button" title="Next match (↵)" onClick={findNext}>
+							<ChevronDown size={14} strokeWidth={1.75} />
+						</button>
+						<button type="button" title="Close (Esc)" onClick={closeSearch}>
+							<X size={14} strokeWidth={1.75} />
+						</button>
+					</div>
+				)}
 			</div>
 			<div className="term-toolbar">
 				<Menu
