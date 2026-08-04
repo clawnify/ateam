@@ -20,7 +20,7 @@ export function EnvironmentPicker({
 	value: string | null;
 	onChange: (alias: string | null) => void;
 }) {
-	const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+	const [pos, setPos] = useState<{ bottom: number; left: number } | null>(null);
 	const btnRef = useRef<HTMLButtonElement>(null);
 	const popRef = useRef<HTMLDivElement>(null);
 
@@ -31,10 +31,11 @@ export function EnvironmentPicker({
 	const open = () => {
 		const r = btnRef.current?.getBoundingClientRect();
 		if (!r) return;
-		const height = Math.min(environments.length * 46 + 44, 340);
 		const left = Math.max(8, Math.min(r.left, window.innerWidth - POP_W - 8));
-		// Open UPWARD — the composer footer sits low in the dialog.
-		setPos({ top: Math.max(8, r.top - height - 6), left });
+		// Anchor the popover's BOTTOM just above the button and let it grow UPWARD, so
+		// its edge sits next to the toggle no matter how many environments there are
+		// (estimating the height and offsetting from the top drifts as the list grows).
+		setPos({ bottom: window.innerHeight - r.top + 6, left });
 	};
 
 	useEffect(() => {
@@ -76,7 +77,19 @@ export function EnvironmentPicker({
 					<div
 						ref={popRef}
 						className="menu-pop conn-pop"
-						style={{ position: "fixed", top: pos.top, left: pos.left, width: POP_W, zIndex: 2000 }}
+						style={{
+							position: "fixed",
+							// Cancel .menu-pop's `top: calc(100% + 4px)` / `right: 0` — we anchor
+							// by the bottom-left instead, and a leftover `top` would push it off-screen.
+							top: "auto",
+							right: "auto",
+							bottom: pos.bottom,
+							left: pos.left,
+							width: POP_W,
+							maxHeight: "min(70vh, 420px)",
+							overflowY: "auto",
+							zIndex: 2000,
+						}}
 					>
 						<div className="conn-head">
 							<span>Run on</span>
