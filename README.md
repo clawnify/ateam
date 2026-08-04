@@ -58,6 +58,26 @@ packages/server     Headless engine + daemon: run agents on a box over SSH / Web
 packages/panes      Pane/split layout types
 apps/desktop        Electron + React app (main · preload · renderer)
 apps/mobile         iOS client (Expo / React Native) — drive a box from your phone
+skills/             Claude Code skills for Ateam users (installable, see below)
+```
+
+## Run your agents on a server
+
+Ateam is local-first, but the same desktop app can point at a Linux box that runs the
+agents while your Mac stays a thin UI — over SSH on your Tailscale network, with no
+public ports. On the box:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash
+```
+
+Full walkthrough, from a freshly bought VPS to a connected board:
+[`docs/online-ateam.md`](docs/online-ateam.md). If you use Claude Code, it can do the
+whole setup with you:
+
+```
+/plugin marketplace add clawnify/ateam
+/plugin install ateam@ateam
 ```
 
 ## Develop

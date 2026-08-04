@@ -13,6 +13,7 @@
   },
   "scripts": {
     "build": "bun run scripts/build.ts",
+    "build:release": "bun run scripts/build.ts && tar --no-xattrs -czf dist/ateam-server.tar.gz -C dist cli.js daemon.js package.json",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

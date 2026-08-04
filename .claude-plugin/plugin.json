@@ -1,0 +1,11 @@
+{
+	"name": "ateam",
+	"description": "Skills for running Ateam's agents on your own server.",
+	"version": "0.1.0",
+	"author": {
+		"name": "Clawnify",
+		"url": "https://github.com/clawnify"
+	},
+	"homepage": "https://github.com/clawnify/ateam",
+	"license": "GPL-3.0-or-later"
+}
