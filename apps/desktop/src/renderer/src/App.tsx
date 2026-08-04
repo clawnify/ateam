@@ -134,6 +134,10 @@ export function App() {
 	// The ~/.ssh/config boxes a task can be sent to run on (the composer's "Run on"
 	// list). Connecting + cloning the repo onto one happens at task-create time.
 	const [connections, setConnections] = useState<ConnectionDTO[]>([]);
+	// Which agents each connected engine actually has installed (its system:hello
+	// agents), keyed by alias ("local" for this Mac). Drives per-environment agent
+	// availability in the composer — you can only pick an agent the box really has.
+	const [envAgents, setEnvAgents] = useState<Record<string, string[]>>({});
 	// The active repo's `origin` remote URL (null = local-only). A task can go remote
 	// only if there's a remote to clone the project from onto the box.
 	const [activeRepoRemote, setActiveRepoRemote] = useState<string | null>(null);
@@ -290,13 +294,19 @@ export function App() {
 		});
 	}, [loadProjects]);
 
-	// The ~/.ssh/config box list for the composer's "Run on" picker, kept fresh as
-	// boxes connect/disconnect (their lastSeen updates too).
+	// The ~/.ssh/config box list for the composer's "Run on" picker + each connected
+	// engine's installed agents, kept fresh as boxes connect/disconnect.
 	useEffect(() => {
-		void window.ateamHost.list().then(setConnections);
-		return window.ateamHost.onConnectionsChanged(() => {
+		const load = () => {
 			void window.ateamHost.list().then(setConnections);
-		});
+			void window.ateamHost.connected().then((list) => {
+				const map: Record<string, string[]> = {};
+				for (const s of list) map[s.alias ?? "local"] = s.info.agents;
+				setEnvAgents(map);
+			});
+		};
+		load();
+		return window.ateamHost.onConnectionsChanged(load);
 	}, []);
 
 	// Load every project's tasks so non-selected projects can surface their
@@ -1050,6 +1060,7 @@ export function App() {
 				<NewTaskComposer
 					agents={agents}
 					environments={composerEnvs}
+					envAgents={envAgents}
 					onClose={() => setComposerOpen(false)}
 					onCreate={composeTask}
 				/>
