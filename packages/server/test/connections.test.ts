@@ -39,6 +39,26 @@ describe("readSshHosts", () => {
 	it("returns [] when the config file is missing", () => {
 		expect(readSshHosts(join(tmpdir(), "definitely-no-ssh-config-xyz"))).toEqual([]);
 	});
+
+	it("skips every name in a defaults block, including literal ones", () => {
+		// The block boxd writes verbatim: `boxd.sh` has no wildcard but is not a
+		// machine — it shares the line with patterns, so the stanza is defaults.
+		const cfg = writeConfig(
+			[
+				"Host *.boxd *.boxd.sh boxd.sh",
+				"    SetEnv BOXD_DEVICE_ID=abc",
+				"",
+				"Host mybox.boxd mybox.boxd.sh",
+				"    HostName mybox.boxd.sh",
+				"    Port 12836",
+				"    User boxd",
+			].join("\n"),
+		);
+		const hosts = readSshHosts(cfg);
+		expect(hosts.map((h) => h.alias)).toEqual(["mybox.boxd", "mybox.boxd.sh"]);
+		expect(hosts[0]?.port).toBe("12836");
+		expect(hosts[0]?.user).toBe("boxd");
+	});
 });
 
 describe("listConnections", () => {
@@ -72,6 +92,42 @@ describe("listConnections", () => {
 		// box-a (fresh lastSeen) first; box-b (never connected) last.
 		expect(conns[0]?.alias).toBe("box-a");
 		expect(conns.at(-1)?.alias).toBe("box-b");
+	});
+
+	it("collapses aliases that reach the same engine, keeping the shortest name", () => {
+		const db = createTestDb();
+		const cfg = writeConfig(
+			"Host mybox.boxd mybox.boxd.sh\n  HostName mybox.boxd.sh\n  Port 12836\n  User boxd\n",
+		);
+		// History was recorded under the alias that will be folded away — it must
+		// survive onto the canonical entry, not vanish or resurface as its own row.
+		repo.upsertHost(db, { hostAlias: "mybox.boxd.sh", lastSeen: 42, serverVersion: "2" });
+
+		const conns = listConnections(db, cfg);
+		expect(conns.map((c) => c.alias)).toEqual(["mybox.boxd"]);
+		expect(conns[0]?.known).toBe(true);
+		expect(conns[0]?.serverVersion).toBe("2");
+		expect(conns[0]?.lastSeen).toBe(42);
+	});
+
+	it("keeps boxes apart when only the port or the user differs", () => {
+		const db = createTestDb();
+		const cfg = writeConfig(
+			[
+				// boxd's real shape: one shared HostName, a port per machine.
+				"Host box-one\n  HostName proxy.boxd.sh\n  Port 10001\n  User boxd",
+				"Host box-two\n  HostName proxy.boxd.sh\n  Port 10002\n  User boxd",
+				// Same host and port, different account = a different ~/.ateam engine.
+				"Host shared-deploy\n  HostName vps.example.com\n  User deploy",
+				"Host shared-root\n  HostName vps.example.com\n  User root",
+			].join("\n\n"),
+		);
+		expect(listConnections(db, cfg).map((c) => c.alias).sort()).toEqual([
+			"box-one",
+			"box-two",
+			"shared-deploy",
+			"shared-root",
+		]);
 	});
 });
 
