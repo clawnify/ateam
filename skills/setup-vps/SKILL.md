@@ -16,10 +16,11 @@ with no public ports at all. Reference docs: `docs/online-ateam.md` in this repo
 
 Ask the user what they have, and don't assume:
 
-- **A box already, or shopping?** If shopping: Ubuntu 22.04/24.04, 4 GB RAM, 2 vCPU,
-  40 GB disk is the comfortable floor. Agents are the RAM consumer — roughly a
-  gigabyte per concurrent session, plus their project's own dev server and tests.
-  x86_64 and arm64 both work.
+- **A box already, or shopping?** If shopping: a recent Ubuntu LTS with 4 GB RAM,
+  2 vCPU, 40 GB disk is the comfortable floor — a Hetzner CX23 (x86) or CAX11 (Arm64),
+  or the equivalent elsewhere. Agents are the RAM consumer — roughly a gigabyte per
+  concurrent session, plus their project's own dev server and tests. x86_64 and arm64
+  both work.
 - **Can they SSH in as a non-root user?** Providers hand you `root`. Agents must not
   run as root — they get a login shell, git credentials, and a `gh` token.
 - **Is Tailscale already on their Mac?** If not, that's a prerequisite on *both* ends,

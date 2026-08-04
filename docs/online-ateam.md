@@ -39,10 +39,11 @@ and you re-attach to the same live sessions.
 Skip this if you already have a box you work on. Starting from a provider's
 "create server" screen:
 
-**Size it for agents, not for the app.** Ubuntu 22.04/24.04, **4 GB RAM, 2 vCPU,
-40 GB disk** is a comfortable starting point (a Hetzner CX22 or equivalent). Each
-concurrent agent session wants roughly a gigabyte, plus whatever your project's own
-dev server and test runs need. x86_64 and arm64 both work.
+**Size it for agents, not for the app.** A recent Ubuntu LTS with **4 GB RAM, 2 vCPU,
+40 GB disk** is a comfortable starting point — a Hetzner **CX23** (x86) or **CAX11**
+(Arm64), or the equivalent elsewhere. Each concurrent agent session wants roughly a
+gigabyte, plus whatever your project's own dev server and test runs need. x86_64 and
+arm64 both work.
 
 **Create a non-root user.** Agents run as this user, in its login shell, with its
 git and `gh` credentials — don't give them root.

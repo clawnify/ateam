@@ -71,6 +71,61 @@ public ports. On the box:
 curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash
 ```
 
+<details>
+<summary><b>Start to finish on a fresh Hetzner box</b></summary>
+
+Create a **CX23** (x86) or **CAX11** (Arm64) — both 2 vCPU / 4 GB / 40 GB — on
+Ubuntu, with your SSH key attached. Agents are what eat the RAM: roughly a gigabyte
+per concurrent session, plus whatever your project's dev server and tests need.
+
+**As `root`,** make a user for the agents and join the tailnet:
+
+```bash
+adduser --gecos "" you && usermod -aG sudo you
+install -d -m 700 -o you -g you /home/you/.ssh
+cp ~/.ssh/authorized_keys /home/you/.ssh/ && chown you:you /home/you/.ssh/authorized_keys
+
+curl -fsSL https://tailscale.com/install.sh | sh && tailscale up
+tailscale ip -4                       # → 100.x.y.z
+```
+
+**Reconnect as that user over the tailnet** — `ssh you@100.x.y.z` — and only once
+that works, close the public door. Allow the whole `tailscale0` interface, not just
+port 22: `ufw`'s default input policy is DROP, so a port-22-only rule would block the
+port the iOS app needs.
+
+```bash
+sudo ufw allow in on tailscale0 && sudo ufw deny 22 && sudo ufw enable
+```
+
+**Then set the box up for agents.** Ateam commits, pushes and opens PRs as this user,
+so it needs a real git identity and a logged-in `gh`:
+
+```bash
+sudo apt install -y git gh
+git config --global user.name "you" && git config --global user.email "you@example.com"
+git config --global init.defaultBranch main
+gh auth login                                     # device code — works over SSH
+
+curl -fsSL https://claude.ai/install.sh | bash    # then run `claude` once to log in
+
+curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash
+```
+
+The installer ends with a readiness report — every line should be `[ok]`. Finally, on
+your **Mac**, add the box to `~/.ssh/config` with `HostName 100.x.y.z` and pick it in
+Ateam's connection switcher.
+
+**Also using the iOS app?** The phone can't start a daemon the way the desktop does
+over SSH, so install a service to keep one running:
+
+```bash
+export ATEAM_WS_ADDR=100.x.y.z:8787               # the box's OWN Tailscale IP
+curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash -s -- --service
+```
+
+</details>
+
 Full walkthrough, from a freshly bought VPS to a connected board:
 [`docs/online-ateam.md`](docs/online-ateam.md). If you use Claude Code, it can do the
 whole setup with you:
