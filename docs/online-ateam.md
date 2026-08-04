@@ -211,6 +211,17 @@ tailnet, and make sure its VPN toggle is on. Then open Ateam Go, enter the box's
 Tailscale IP and port `8787`, and connect — the connection is remembered across
 launches. Allow the iOS **Local Network** prompt if it appears.
 
+**What still needs a computer.** Everything above — don't try to defer it. The phone
+has nothing to connect to until a daemon is listening, and once connected the app can
+only add a project by browsing the box for a repo that is **already cloned there**
+(`projects.register` rejects a path that isn't a git repo). Its terminal lives inside
+a task's worktree, so there is no free-standing shell to clone that first repo with.
+Do steps 0–4 in one SSH session.
+
+After that, the phone is enough: its terminal is a real login shell on the box, so
+re-logging into `claude` when a session expires, `gh auth refresh`, and cloning
+further repos all work from the app.
+
 Two things worth doing before you rely on this:
 
 - **Scope a Tailscale ACL** to just the devices that should reach the box. Every node

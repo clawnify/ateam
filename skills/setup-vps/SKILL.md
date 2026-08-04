@@ -177,6 +177,14 @@ toggle on. Then in Ateam Go enter the box's Tailscale IP and port `8787`. Allow 
 iOS Local Network prompt if it appears. (`ateamgo://demo` opens an offline demo — it
 does **not** configure a connection.)
 
+If the user asks whether they can skip the SSH steps and do the setup from the phone
+instead: **no, and say why.** The phone has nothing to connect to until a daemon is
+listening; the app adds a project only by browsing the box for an already-cloned repo
+(`projects.register` throws `NOT_A_REPO` otherwise); and its terminal only exists
+inside a task's worktree, so there's no shell to clone that first repo with. It's a
+five-minute SSH session, once. Afterwards the phone's terminal *is* a login shell on
+the box — re-auth, `gh auth refresh` and further clones are all fine from it.
+
 Say both of these out loud, don't bury them:
 
 - **Scope a Tailscale ACL** to the devices that should reach the box. Every tailnet
