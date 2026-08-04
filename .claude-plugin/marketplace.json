@@ -1,0 +1,17 @@
+{
+	"$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+	"name": "ateam",
+	"description": "Skills for Ateam — running its coding agents on your own server.",
+	"owner": {
+		"name": "Clawnify",
+		"url": "https://github.com/clawnify"
+	},
+	"plugins": [
+		{
+			"name": "ateam",
+			"description": "Prepare a Linux VPS to run Ateam's agents and connect the desktop app to it.",
+			"source": "./",
+			"category": "productivity"
+		}
+	]
+}
