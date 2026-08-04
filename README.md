@@ -78,14 +78,18 @@ Create a **CX23** (x86) or **CAX11** (Arm64) — both 2 vCPU / 4 GB / 40 GB — 
 Ubuntu, with your SSH key attached. Agents are what eat the RAM: roughly a gigabyte
 per concurrent session, plus whatever your project's dev server and tests need.
 
-**As `root`,** make a user for the agents and join the tailnet:
+**First, on your Mac:** install Tailscale ([tailscale.com/download](https://tailscale.com/download))
+and sign in. The box and — if you use it — your phone sign into that same account;
+that private network is what lets you close the server's public SSH port entirely.
+
+**Then as `root` on the box,** make a user for the agents and join the same tailnet:
 
 ```bash
 adduser --gecos "" you && usermod -aG sudo you
 install -d -m 700 -o you -g you /home/you/.ssh
 cp ~/.ssh/authorized_keys /home/you/.ssh/ && chown you:you /home/you/.ssh/authorized_keys
 
-curl -fsSL https://tailscale.com/install.sh | sh && tailscale up
+curl -fsSL https://tailscale.com/install.sh | sh && tailscale up   # opens a sign-in URL
 tailscale ip -4                       # → 100.x.y.z
 ```
 

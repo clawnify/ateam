@@ -23,8 +23,12 @@ Ask the user what they have, and don't assume:
   both work.
 - **Can they SSH in as a non-root user?** Providers hand you `root`. Agents must not
   run as root — they get a login shell, git credentials, and a `gh` token.
-- **Is Tailscale already on their Mac?** If not, that's a prerequisite on *both* ends,
-  and it's the thing that lets them close port 22 afterwards.
+- **Is Tailscale already on their Mac?** Check before anything else. Every device that
+  talks to the box — Mac, box, phone — needs Tailscale signed into the *same account*
+  ([tailscale.com/download](https://tailscale.com/download) for the Mac, the App Store
+  for iOS, the install script on the box). It's what lets them close port 22, and a
+  Mac that isn't on the tailnet simply can't reach the box afterwards. Easy to install
+  the box side and forget the Mac side, then wonder why SSH stopped working.
 - **Which agent CLIs do they want on the box** (e.g. `claude`)? Each needs its own
   interactive login there.
 
