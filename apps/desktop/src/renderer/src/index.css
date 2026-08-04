@@ -1073,6 +1073,12 @@ input {
 	color: var(--amber);
 	background: rgba(251, 191, 36, 0.12);
 }
+/* Keep the amber while hovering an already-active toggle — otherwise the generic
+   .iconbtn:hover (same specificity, later in the file) wins and hides that it's on. */
+.comp-yolo.active:hover {
+	color: var(--amber);
+	background: rgba(251, 191, 36, 0.18);
+}
 .comp-go {
 	width: 28px;
 	height: 28px;
