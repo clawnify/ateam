@@ -31,8 +31,15 @@ and you re-attach to the same live sessions.
 ## Prerequisites
 
 - A Linux box you can SSH into (Hetzner, EC2, a home server, …).
-- **Tailscale** installed on both the Mac and the box, joined to the **same tailnet**.
+- A free **[Tailscale](https://tailscale.com)** account. Every device that talks to the
+  box — your Mac, the box itself, your phone — installs Tailscale and signs into the
+  **same account**; that shared private network is what replaces opening ports.
 - The **Ateam desktop app** on your Mac.
+
+**Install Tailscale on your Mac first** ([tailscale.com/download](https://tailscale.com/download)
+— App Store or standalone), sign in, and leave it connected. Everything below assumes
+your Mac is on the tailnet; without it you won't be able to reach the box's `100.x`
+address at all once you've closed its public port.
 
 ## 0. Preparing a freshly bought VPS
 
@@ -124,7 +131,8 @@ SSH_FLAGS="-i ~/.ssh/mykey" packages/server/scripts/install-remote.sh you@your-b
 
 ## 2. Put the box on your tailnet
 
-Install Tailscale on the box and bring it up:
+Install Tailscale on the box and bring it up. `tailscale up` prints a URL — open it and
+sign in with the **same account** your Mac uses, or the two won't see each other:
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -132,6 +140,8 @@ sudo tailscale up
 ```
 
 Note the box's **tailnet IP** (`100.x.y.z`) or its MagicDNS name (`tailscale ip -4`).
+Check both ends agree with `tailscale status` — the box should appear in your Mac's
+list before you go further.
 
 ## 3. Add the box to `~/.ssh/config` (on your Mac)
 
