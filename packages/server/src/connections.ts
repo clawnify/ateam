@@ -24,6 +24,10 @@ export type { ConnectionDTO, HostTransport } from "@ateam/protocol";
 export interface SshHost {
 	alias: string;
 	hostName: string | null;
+	/** Explicit `Port`, if the stanza set one. null means OpenSSH's default (22). */
+	port: string | null;
+	/** Explicit `User`, if the stanza set one. Different user = different engine. */
+	user: string | null;
 }
 
 /** What a successful connection learned about a host, to cache for offline render. */
@@ -76,8 +80,15 @@ export function resolveTransport(
  * connectable alias list for the picker.
  *
  * shortcut: reads one config file; no `Include` expansion, no `Match` blocks.
- * Pattern aliases (containing * ? !) are skipped — they're templates, not
- * destinations. Add Include-following if users split their config across files.
+ * Add Include-following if users split their config across files.
+ *
+ * A stanza whose `Host` line contains ANY pattern (* ? !) is a defaults block —
+ * it configures other destinations rather than being one — so none of its names
+ * are offered, not even the literal ones sharing the line. That shape is common
+ * (`Host *` with a User/IdentityFile) and boxd writes one verbatim:
+ * `Host *.boxd *.boxd.sh boxd.sh`, where `boxd.sh` is not a machine. The cost is
+ * that a line genuinely mixing a destination with patterns loses the destination;
+ * that shape is rare, and mis-offering a non-destination is the worse failure.
  */
 export function readSshHosts(configPath: string = DEFAULT_SSH_CONFIG): SshHost[] {
 	let text: string;
@@ -87,7 +98,7 @@ export function readSshHosts(configPath: string = DEFAULT_SSH_CONFIG): SshHost[]
 		return []; // no ssh config yet — nothing to offer
 	}
 	const out: SshHost[] = [];
-	// Aliases of the stanza currently being parsed; a following HostName applies
+	// Aliases of the stanza currently being parsed; a following HostName/Port applies
 	// to all of them (`Host a b` shares options between a and b).
 	let stanza: SshHost[] = [];
 	for (const raw of text.split("\n")) {
@@ -99,34 +110,80 @@ export function readSshHosts(configPath: string = DEFAULT_SSH_CONFIG): SshHost[]
 		const value = match[2].trim();
 		if (key === "host") {
 			stanza = [];
-			for (const alias of value.split(/\s+/)) {
-				if (/[*?!]/.test(alias)) continue; // pattern, not a destination
-				const host: SshHost = { alias, hostName: null };
+			const aliases = value.split(/\s+/);
+			if (aliases.some((a) => /[*?!]/.test(a))) continue; // defaults block, not a destination
+			for (const alias of aliases) {
+				const host: SshHost = { alias, hostName: null, port: null, user: null };
 				out.push(host);
 				stanza.push(host);
 			}
 		} else if (key === "hostname") {
 			for (const host of stanza) host.hostName = value;
+		} else if (key === "port") {
+			for (const host of stanza) host.port = value;
+		} else if (key === "user") {
+			for (const host of stanza) host.user = value;
 		}
 	}
 	return out;
 }
 
 /**
- * The connections list: every ssh_config host, enriched with our saved metadata,
- * plus any saved host whose alias has since left the config (so it can still be
- * seen/forgotten). Renders entirely from local state — no live SSH connection.
+ * The engine an alias actually reaches, for collapsing aliases that are the same
+ * box. Keyed on User+HostName+Port because that triple — not the name — decides
+ * which daemon answers: boxd puts every machine behind ONE shared HostName and
+ * separates them by port, so HostName alone would merge unrelated boxes; and two
+ * users on one host have separate $HOME/.ateam databases, so they are separate
+ * engines. Aliases with no HostName resolve as themselves, so they key on their
+ * own name.
+ */
+function destinationKey(host: SshHost): string {
+	const dest = (host.hostName ?? host.alias).toLowerCase();
+	return `${host.user ?? ""}@${dest}:${host.port ?? "22"}`;
+}
+
+/**
+ * The connections list: every ssh_config destination, enriched with our saved
+ * metadata, plus any saved host whose alias has since left the config (so it can
+ * still be seen/forgotten). Renders entirely from local state — no live SSH
+ * connection.
+ *
+ * Aliases that dial the SAME destination collapse into one entry. This is not
+ * cosmetic: `host.ts` keys its backends by alias, so connecting to a box twice
+ * under two names opens two SSH children and two event subscriptions to one
+ * daemon, and every engine event — PTY output included — arrives twice.
  */
 export function listConnections(db: AteamDb, configPath?: string): ConnectionDTO[] {
 	const saved = new Map(repo.listHosts(db).map((h) => [h.hostAlias, h]));
 	const byAlias = new Map<string, ConnectionDTO>();
+	// Every alias folded into a canonical entry — none may resurface below as a
+	// "saved but no longer in the config" row, which would undo the collapse.
+	const absorbed = new Set<string>();
 
+	const groups = new Map<string, SshHost[]>();
 	for (const sh of readSshHosts(configPath)) {
-		const rec = saved.get(sh.alias);
-		byAlias.set(sh.alias, {
-			alias: sh.alias,
+		const group = groups.get(destinationKey(sh));
+		if (group) group.push(sh);
+		else groups.set(destinationKey(sh), [sh]);
+	}
+
+	for (const group of groups.values()) {
+		// Shortest name wins (`mybox.boxd` over `mybox.boxd.sh`); ties keep file order.
+		const canonical = group.reduce((a, b) => (b.alias.length < a.alias.length ? b : a));
+		// Metadata is keyed by alias, so a box previously reached under a now-folded
+		// name still has its history — keep the most recently seen of them.
+		let rec: Host | null = null;
+		for (const sh of group) {
+			absorbed.add(sh.alias);
+			const other = saved.get(sh.alias);
+			if (other && (other.lastSeen ?? 0) >= (rec?.lastSeen ?? 0)) rec = other;
+		}
+		byAlias.set(canonical.alias, {
+			alias: canonical.alias,
+			// Everything folded here came out of ssh_config, so it is ssh by
+			// construction; a ws endpoint has no stanza and appears in the saved loop.
 			transport: "ssh",
-			hostName: sh.hostName,
+			hostName: canonical.hostName,
 			serverVersion: rec?.serverVersion ?? null,
 			agentsAvailable: rec?.agentsAvailable ?? null,
 			lastSeen: rec?.lastSeen ?? null,
@@ -135,7 +192,7 @@ export function listConnections(db: AteamDb, configPath?: string): ConnectionDTO
 		});
 	}
 	for (const rec of saved.values()) {
-		if (byAlias.has(rec.hostAlias)) continue;
+		if (absorbed.has(rec.hostAlias)) continue;
 		byAlias.set(rec.hostAlias, {
 			alias: rec.hostAlias,
 			transport: rec.transport as HostTransport,

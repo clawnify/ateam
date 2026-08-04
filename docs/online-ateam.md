@@ -9,6 +9,12 @@ phone.
 The connection rides **SSH over [Tailscale](https://tailscale.com)**, so the box
 exposes **no public ports** — it's only reachable on your private tailnet.
 
+> **Renting a box instead?** [boxd](https://boxd.sh) microVMs work as an Ateam box too,
+> reached over boxd's own authenticated SSH proxy rather than a tailnet — see "Start to
+> finish on a boxd microVM" in the [README](../README.md#run-your-agents-on-a-server).
+> Everything below still applies except the Tailscale setup; note the **iOS app can't
+> use boxd**, since its kernel ships no TUN device for `tailscaled`.
+
 ## How it works
 
 ```

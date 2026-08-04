@@ -1,6 +1,6 @@
 import type { AgentDTO } from "@ateam/protocol";
 import { ArrowUp, Paperclip, X, Zap } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { type EnvOption, EnvironmentPicker } from "./EnvironmentPicker";
 
 /** Last path segment, for a compact chip label. */
@@ -30,6 +30,7 @@ function titleFromPrompt(p: string): string {
 export function NewTaskComposer({
 	agents,
 	environments,
+	envAgents,
 	onAdd,
 	onClose,
 	onCreate,
@@ -38,6 +39,9 @@ export function NewTaskComposer({
 	/** Where the task can run: this Mac + each ~/.ssh/config box. `alias` null = Local.
 	 *  A box is disabled when the repo can't run there (no GitHub identity to clone). */
 	environments: EnvOption[];
+	/** Agent ids each connected engine actually has, keyed by alias ("local" for this
+	 *  Mac). Lets the agent picker offer only what the chosen environment can run. */
+	envAgents: Record<string, string[]>;
 	/** Connect a Tailscale endpoint typed into the picker. */
 	onAdd?: (endpoint: string) => Promise<void>;
 	onClose: () => void;
@@ -60,6 +64,19 @@ export function NewTaskComposer({
 	const [alias, setAlias] = useState<string | null>(
 		environments.find((e) => !e.disabled)?.alias ?? null,
 	);
+
+	// Which agents the chosen environment actually has installed. Known only for a
+	// connected engine; when unknown, fall back to the catalog's own `available` flag.
+	const availOnEnv = envAgents[alias ?? "local"];
+	const isAvail = (a: AgentDTO) => (availOnEnv ? availOnEnv.includes(a.id) : a.available);
+
+	// Switching environment can strand the picked agent (not installed there) — drop
+	// to the first agent the new environment can actually run.
+	useEffect(() => {
+		if (!availOnEnv || availOnEnv.includes(agentId)) return;
+		const first = agents.find((a) => availOnEnv.includes(a.id));
+		if (first) setAgentId(first.id);
+	}, [availOnEnv, agentId, agents]);
 
 	const branch = slugify(name.trim() || titleFromPrompt(prompt));
 	const canSubmit = Boolean(name.trim() || prompt.trim() || files.length);
@@ -159,9 +176,9 @@ export function NewTaskComposer({
 						onChange={(e) => setAgentId(e.target.value)}
 					>
 						{agents.map((a) => (
-							<option key={a.id} value={a.id} disabled={!a.available}>
+							<option key={a.id} value={a.id} disabled={!isAvail(a)}>
 								{a.label}
-								{a.available ? "" : " (not installed)"}
+								{isAvail(a) ? "" : " (not installed)"}
 							</option>
 						))}
 					</select>
