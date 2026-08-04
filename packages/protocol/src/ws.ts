@@ -31,9 +31,15 @@ export interface WsClient {
  * address). Frames sent before the socket is OPEN are queued and flushed on open,
  * so the connect-time `system:hello` handshake is never dropped.
  */
-export function wsClientTransport(url: string): WsClient {
-	const Ctor = (globalThis as { WebSocket?: WebSocketCtor }).WebSocket;
-	if (!Ctor) throw new Error("no global WebSocket on this platform");
+export function wsClientTransport(url: string, impl?: WebSocketCtor): WsClient {
+	// `impl` is for platforms whose runtime has no global: Electron's MAIN process
+	// is Node 20 (verified: electron 34.5.8 → node 20.19.1, `typeof WebSocket` is
+	// "undefined"), so the desktop passes the `ws` package's constructor. Browsers,
+	// React Native and Bun all have the global and pass nothing.
+	const Ctor = impl ?? (globalThis as { WebSocket?: WebSocketCtor }).WebSocket;
+	if (!Ctor) {
+		throw new Error("no global WebSocket on this platform — pass an implementation (e.g. `ws`)");
+	}
 	const ws = new Ctor(url);
 
 	let open = false;

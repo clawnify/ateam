@@ -362,6 +362,12 @@ export function App() {
 			cancelled = true;
 		};
 	}, [activeRepoProjectId]);
+	// Connecting is what registers a Tailscale box: it resolves the endpoint, gates
+	// the protocol version, and only saves it on success — so a typo or an
+	// unreachable box leaves nothing behind to clean up.
+	const addTailscaleBox = useCallback(async (endpoint: string) => {
+		await window.ateamHost.connect(endpoint);
+	}, []);
 	const canRemote = activeRepoRemote !== null;
 	const hasLocalMember = activeMembers.some((m) => m.alias === null);
 	const composerEnvs = useMemo(() => {
@@ -374,6 +380,7 @@ export function App() {
 				alias: c.alias,
 				label: c.alias,
 				disabled: !memberAliases.has(c.alias) && !canRemote,
+				transport: c.transport,
 			})),
 		];
 	}, [connections, canRemote, hasLocalMember, activeMembers]);
@@ -1050,6 +1057,7 @@ export function App() {
 				<NewTaskComposer
 					agents={agents}
 					environments={composerEnvs}
+					onAdd={addTailscaleBox}
 					onClose={() => setComposerOpen(false)}
 					onCreate={composeTask}
 				/>

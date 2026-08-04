@@ -1,4 +1,4 @@
-import { Check, Laptop, Server } from "lucide-react";
+import { Check, Laptop, Plus, Server } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -6,20 +6,35 @@ import { createPortal } from "react-dom";
 // switcher used, moved into the New Task dialog. `null` alias = this Mac; a box alias
 // runs the task on that VPS (cloning the project there on first use). Disabled
 // options (no git remote to clone from) show why they can't be picked.
+//
+// SSH boxes arrive on their own — they're whatever is in ~/.ssh/config. A Tailscale
+// box has no such registry, so it's typed in once here; connecting is what saves it.
 
 const POP_W = 260;
 
-export type EnvOption = { alias: string | null; label: string; disabled: boolean };
+export type EnvOption = {
+	alias: string | null;
+	label: string;
+	disabled: boolean;
+	transport?: "ssh" | "ws";
+};
 
 export function EnvironmentPicker({
 	environments,
 	value,
 	onChange,
+	onAdd,
 }: {
 	environments: EnvOption[];
 	value: string | null;
 	onChange: (alias: string | null) => void;
+	/** Connect a Tailscale endpoint (`host:port`); rejects with a message to show. */
+	onAdd?: (endpoint: string) => Promise<void>;
 }) {
+	const [adding, setAdding] = useState(false);
+	const [endpoint, setEndpoint] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
 	const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 	const btnRef = useRef<HTMLButtonElement>(null);
 	const popRef = useRef<HTMLDivElement>(null);
@@ -52,6 +67,25 @@ export function EnvironmentPicker({
 		if (env.disabled) return;
 		onChange(env.alias);
 		close();
+	};
+
+	const submit = async () => {
+		const ep = endpoint.trim();
+		if (!ep || !onAdd || busy) return;
+		setBusy(true);
+		setError(null);
+		try {
+			await onAdd(ep);
+			// Connecting is what saves it, so only now is it a real option.
+			onChange(ep);
+			setEndpoint("");
+			setAdding(false);
+			close();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setBusy(false);
+		}
 	};
 
 	return (
@@ -98,13 +132,56 @@ export function EnvironmentPicker({
 								</span>
 								<span className="conn-txt">
 									<span className="conn-title">{env.label}</span>
-									{env.disabled && env.alias !== null && (
+									{env.disabled && env.alias !== null ? (
 										<span className="conn-sub">no git remote to clone</span>
-									)}
+									) : env.transport === "ws" ? (
+										<span className="conn-sub">Tailscale</span>
+									) : null}
 								</span>
 								{env.alias === value ? <Check size={15} strokeWidth={2.25} /> : null}
 							</button>
 						))}
+						{onAdd &&
+							(adding ? (
+								<div className="conn-add">
+									<input
+										// biome-ignore lint/a11y/noAutofocus: the row was just clicked to reveal this
+										autoFocus
+										className="conn-add-input"
+										placeholder="100.x.y.z:8787"
+										aria-label="Tailscale address and port"
+										value={endpoint}
+										disabled={busy}
+										onChange={(e) => setEndpoint(e.target.value)}
+										onKeyDown={(e) => {
+											if (e.key === "Enter") void submit();
+											if (e.key === "Escape") {
+												setAdding(false);
+												setError(null);
+											}
+										}}
+									/>
+									<span className="conn-sub">
+										{busy ? "Connecting…" : (error ?? "The box's Tailscale address")}
+									</span>
+								</div>
+							) : (
+								<button
+									type="button"
+									className="conn-row"
+									onClick={() => {
+										setAdding(true);
+										setError(null);
+									}}
+								>
+									<span className="conn-ico">
+										<Plus size={15} strokeWidth={1.75} />
+									</span>
+									<span className="conn-txt">
+										<span className="conn-title">Add a Tailscale box</span>
+									</span>
+								</button>
+							))}
 					</div>,
 					document.body,
 				)}

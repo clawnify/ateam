@@ -191,7 +191,10 @@ the box — re-auth, `gh auth refresh` and further clones are all fine from it.
 
 Say both of these out loud, don't bury them:
 
-- **Scope a Tailscale ACL** to the devices that should reach the box. Every tailnet
-  node can hit an open port by default, and this one is an unauthenticated engine.
+- **A Tailscale ACL is required, not advisable.** A new tailnet allows every device
+  to reach every other on every port, and the engine behind this one spawns shells —
+  so reaching it is a login on the box. Scope it in the tailnet policy file to the
+  devices that should have it before leaving the listener on. This applies only to
+  the WebSocket; SSH authenticates with a key no matter who can reach port 22.
 - **There's no app lock yet.** An unlocked stolen phone on the tailnet is shell
   access to the box.

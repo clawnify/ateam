@@ -1,7 +1,7 @@
 import type { AgentDTO } from "@ateam/protocol";
 import { ArrowUp, Paperclip, X, Zap } from "lucide-react";
 import { useState } from "react";
-import { EnvironmentPicker } from "./EnvironmentPicker";
+import { type EnvOption, EnvironmentPicker } from "./EnvironmentPicker";
 
 /** Last path segment, for a compact chip label. */
 function baseName(p: string): string {
@@ -30,13 +30,16 @@ function titleFromPrompt(p: string): string {
 export function NewTaskComposer({
 	agents,
 	environments,
+	onAdd,
 	onClose,
 	onCreate,
 }: {
 	agents: AgentDTO[];
 	/** Where the task can run: this Mac + each ~/.ssh/config box. `alias` null = Local.
 	 *  A box is disabled when the repo can't run there (no GitHub identity to clone). */
-	environments: { alias: string | null; label: string; disabled: boolean }[];
+	environments: EnvOption[];
+	/** Connect a Tailscale endpoint typed into the picker. */
+	onAdd?: (endpoint: string) => Promise<void>;
 	onClose: () => void;
 	onCreate: (input: {
 		name: string;
@@ -162,7 +165,12 @@ export function NewTaskComposer({
 							</option>
 						))}
 					</select>
-					<EnvironmentPicker environments={environments} value={alias} onChange={setAlias} />
+					<EnvironmentPicker
+						environments={environments}
+						value={alias}
+						onChange={setAlias}
+						onAdd={onAdd}
+					/>
 					<button
 						type="button"
 						className={`iconbtn comp-yolo ${yolo ? "active" : ""}`}

@@ -232,14 +232,32 @@ After that, the phone is enough: its terminal is a real login shell on the box, 
 re-logging into `claude` when a session expires, `gh auth refresh`, and cloning
 further repos all work from the app.
 
-Two things worth doing before you rely on this:
+### Write a Tailscale ACL — this one isn't optional
 
-- **Scope a Tailscale ACL** to just the devices that should reach the box. Every node
-  on your tailnet can reach an open port by default, and this port is an
-  unauthenticated engine.
-- **Understand what the phone holds.** There is no app lock yet, so an unlocked,
-  stolen phone on your tailnet is shell access to the box. Treat the tailnet as the
-  only thing standing between the two.
+A new tailnet's policy **allows every device to reach every other device on every
+port**; restricting that takes an explicit policy file. And this port isn't a
+read-only status page — the engine behind it spawns shells, so reaching it is a login
+on the box with your `gh` token and your repos.
+
+So before you leave the listener on, scope it in your
+[tailnet policy file](https://tailscale.com/kb/1018/acls) to just the devices that
+should have it — your phone and your Mac, not "anything I ever add to this tailnet":
+
+```jsonc
+{
+  "acls": [
+    { "action": "accept", "src": ["your@email"], "dst": ["tag:ateam-box:8787"] },
+  ],
+}
+```
+
+The SSH transport doesn't need this — OpenSSH authenticates with your key regardless
+of who can reach port 22. It's specific to the WebSocket, which deliberately has no
+auth of its own.
+
+**And know what the phone holds.** There's no app lock yet, so an unlocked, stolen
+phone on your tailnet is shell access to the box. Right now the tailnet is the only
+thing between the two.
 
 > **Without `--service`**, nothing re-launches the daemon after a reboot. That's fine
 > for desktop-only use — `ssh … ateam attach` starts one on demand — but it strands a

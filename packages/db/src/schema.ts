@@ -227,18 +227,27 @@ export const boardChanges = sqliteTable(
 );
 
 /**
- * Remote hosts the client can drive an engine on, keyed by their `~/.ssh/config`
- * alias (unique there, so it's the natural PK). We persist ONLY Ateam's own
- * metadata — the last handshake version, which agents the box has, and when it
- * was last reached — never connection details (hostname/port/keys/jumphosts stay
- * OpenSSH's job). This doubles as the offline cache: the connections list renders
- * every known host from here without opening N live SSH connections. Client-only
- * state — the engine never reads this table.
+ * Remote hosts the client can drive an engine on, keyed by `host_alias` — the
+ * connection's identity, whose meaning depends on `transport`:
+ *
+ *   ssh  the `~/.ssh/config` alias. Connection details (hostname/port/keys/
+ *        jumphosts) stay OpenSSH's job; we never store them.
+ *   ws   the `host:port` endpoint itself, on the box's Tailscale address. There
+ *        is no ssh_config to defer to, so the identity IS the endpoint — which
+ *        keeps this column a single opaque key either way, with no second
+ *        naming concept to keep unique or rename.
+ *
+ * Beyond that we persist only Ateam's own metadata — the last handshake version,
+ * which agents the box has, when it was last reached. This doubles as the offline
+ * cache: the connections list renders every known host from here without opening
+ * N live connections. Client-only state — the engine never reads this table.
  */
 export const hosts = sqliteTable(
 	"hosts",
 	{
 		hostAlias: text("host_alias").primaryKey(),
+		/** How to open it: "ssh" (an ssh_config alias) or "ws" (a host:port endpoint). */
+		transport: text("transport").notNull().default("ssh"),
 		serverVersion: text("server_version"),
 		agentsAvailable: text("agents_available", { mode: "json" }).$type<string[]>(),
 		lastSeen: integer("last_seen"),

@@ -215,8 +215,22 @@ export interface DirListingDTO {
  * ssh_config parse-shape (`SshHost`) and write-shape (`ConnectionRecord`) stay
  * server-internal.
  */
+/**
+ * How a client opens a connection to a box.
+ *
+ *   ssh  spawn `ssh <alias> ateam attach --stdio` — OpenSSH owns auth, and the
+ *        alias resolves in ~/.ssh/config. The default, and what a box exposes
+ *        with no extra listener.
+ *   ws   a WebSocket to the box's opt-in listener on its Tailscale address. The
+ *        socket carries no auth of its own — the tailnet is the boundary — so it
+ *        requires a Tailscale ACL scoping who may reach the port.
+ */
+export type HostTransport = "ssh" | "ws";
+
 export interface ConnectionDTO {
+	/** For `ssh`, the ~/.ssh/config alias. For `ws`, the `host:port` endpoint itself. */
 	alias: string;
+	transport: HostTransport;
 	hostName: string | null;
 	serverVersion: string | null;
 	agentsAvailable: string[] | null;
