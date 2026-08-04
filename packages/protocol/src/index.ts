@@ -11,7 +11,12 @@
  * Monotonic integer — deliberately not the npm version (workspaces are 0.0.0 and
  * the daemon is bundled, so package.json is neither meaningful nor readable here).
  */
-export const PROTOCOL_VERSION = 1;
+// v2 (0.1.32): added CH.projectsClone + CH.projectsRemoteUrl. Additive on the wire,
+// but the skew that actually happens is NEW CLIENT → OLD SERVER — the desktop
+// auto-updates, a box only changes when someone re-runs the installer. Without the
+// bump those clients pass the handshake and then fail deep in a feature with a raw
+// `Unknown method: projects:clone`; with it they get "update the older side" up front.
+export const PROTOCOL_VERSION = 2;
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
