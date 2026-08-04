@@ -1,6 +1,7 @@
+import type { AgentDTO } from "@ateam/protocol";
 import { ArrowUp, Paperclip, X, Zap } from "lucide-react";
 import { useState } from "react";
-import type { AgentDTO } from "@ateam/protocol";
+import { EnvironmentPicker } from "./EnvironmentPicker";
 
 /** Last path segment, for a compact chip label. */
 function baseName(p: string): string {
@@ -28,10 +29,14 @@ function titleFromPrompt(p: string): string {
  */
 export function NewTaskComposer({
 	agents,
+	environments,
 	onClose,
 	onCreate,
 }: {
 	agents: AgentDTO[];
+	/** Where the task can run: this Mac + each ~/.ssh/config box. `alias` null = Local.
+	 *  A box is disabled when the repo can't run there (no GitHub identity to clone). */
+	environments: { alias: string | null; label: string; disabled: boolean }[];
 	onClose: () => void;
 	onCreate: (input: {
 		name: string;
@@ -39,6 +44,7 @@ export function NewTaskComposer({
 		agentId: string;
 		yolo: boolean;
 		files: string[];
+		alias: string | null;
 	}) => void;
 }) {
 	const [name, setName] = useState("");
@@ -47,6 +53,10 @@ export function NewTaskComposer({
 	const [yolo, setYolo] = useState(false);
 	const [files, setFiles] = useState<string[]>([]);
 	const [dragging, setDragging] = useState(false);
+	// Default to the first runnable environment (Local, unless the repo isn't here).
+	const [alias, setAlias] = useState<string | null>(
+		environments.find((e) => !e.disabled)?.alias ?? null,
+	);
 
 	const branch = slugify(name.trim() || titleFromPrompt(prompt));
 	const canSubmit = Boolean(name.trim() || prompt.trim() || files.length);
@@ -70,7 +80,7 @@ export function NewTaskComposer({
 		if (!canSubmit) return;
 		const finalName =
 			name.trim() || titleFromPrompt(prompt) || `task ${new Date().toISOString().slice(0, 10)}`;
-		onCreate({ name: finalName, prompt: prompt.trim(), agentId, yolo, files });
+		onCreate({ name: finalName, prompt: prompt.trim(), agentId, yolo, files, alias });
 	};
 
 	const onKeys = (e: React.KeyboardEvent) => {
@@ -152,6 +162,7 @@ export function NewTaskComposer({
 							</option>
 						))}
 					</select>
+					<EnvironmentPicker environments={environments} value={alias} onChange={setAlias} />
 					<button
 						type="button"
 						className={`iconbtn comp-yolo ${yolo ? "active" : ""}`}
