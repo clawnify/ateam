@@ -5,6 +5,7 @@
 // separate from TerminalScreen so the webview path stays intact while we evaluate.
 
 import type { AteamApi, PtyDataEvent, TaskDTO } from "@ateam/protocol";
+import Feather from "@expo/vector-icons/Feather";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -281,16 +282,11 @@ export function NativeTerminalScreen({
 						]}
 						keyboardShouldPersistTaps="always"
 					>
-						<Pressable
-							style={[styles.key, styles.attachKey]}
-							onPress={attachImage}
-							disabled={attaching}
-							hitSlop={4}
-						>
+						<Pressable style={styles.key} onPress={attachImage} disabled={attaching} hitSlop={4}>
 							{attaching ? (
 								<ActivityIndicator color={C.ink} size="small" />
 							) : (
-								<Text style={styles.attachKeyText}>＋img</Text>
+								<Feather name="paperclip" size={16} color={C.ink} />
 							)}
 						</Pressable>
 						{KEYS.map((k) => (
@@ -386,8 +382,6 @@ const styles = StyleSheet.create({
 		justifyContent: "center",
 	},
 	keyText: { color: C.ink, fontSize: 14, fontWeight: "600" },
-	attachKey: { borderColor: "#3a3550", backgroundColor: "#221f30" },
-	attachKeyText: { color: "#b9a8ff", fontSize: 14, fontWeight: "700" },
 	retryBtn: {
 		marginTop: 8,
 		paddingHorizontal: 16,

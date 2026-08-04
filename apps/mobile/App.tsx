@@ -29,6 +29,7 @@ import {
 import { AgentIcon } from "./src/AgentIcon";
 import { Composer, type ComposerSubmit } from "./src/Composer";
 import { type Connection, connect } from "./src/connection";
+import { demoConnection } from "./src/demo";
 import { NativeTerminalScreen } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
 import {
@@ -76,6 +77,11 @@ const COLUMNS: { key: TaskDTO["column"]; label: string; tint: string }[] = [
 	{ key: "todo", label: "Backlog", tint: C.muted },
 	{ key: "merged", label: "Done", tint: C.green },
 ];
+
+// Cap the phone-first content to a comfortable reading column and center it. A no-op
+// on iPhone (wider than any screen), it stops the board/composer/form from stretching
+// edge-to-edge on iPad. The terminal is intentionally exempt — more columns is better.
+const CONTENT_MAX = 720;
 
 function taskNote(t: TaskDTO): string {
 	if (t.column === "needs_attention") return "awaiting your input";
@@ -259,6 +265,7 @@ function ConnectionScreen({
 	onConnect,
 	onBack,
 	onDisconnect,
+	onDemo,
 	connecting,
 	connected,
 	error,
@@ -270,6 +277,7 @@ function ConnectionScreen({
 	onConnect: () => void;
 	onBack: () => void;
 	onDisconnect: () => void;
+	onDemo: () => void;
 	connecting: boolean;
 	connected: boolean;
 	error: string | null;
@@ -302,44 +310,59 @@ function ConnectionScreen({
 			</View>
 
 			<ScrollView contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
-				<View style={styles.eyebrowRow}>
-					<View style={[styles.tick, { backgroundColor: C.accent }]} />
-					<Text style={styles.eyebrow}>Box</Text>
-				</View>
-				<View style={styles.formCard}>
-					<Field
-						label="Tailscale IP or host"
-						value={host}
-						onChangeText={setHost}
-						placeholder="100.x.y.z"
-					/>
-					<Field
-						label="Port"
-						value={port}
-						onChangeText={setPort}
-						placeholder="8787"
-						keyboardType="numeric"
-						last
-					/>
-				</View>
-
-				{error ? (
-					<View style={styles.errorBox}>
-						<Text style={styles.errorText}>{error}</Text>
+				<View style={styles.contentColumn}>
+					<View style={styles.eyebrowRow}>
+						<View style={[styles.tick, { backgroundColor: C.accent }]} />
+						<Text style={styles.eyebrow}>Box</Text>
 					</View>
-				) : null}
+					<View style={styles.formCard}>
+						<Field
+							label="Tailscale IP or host"
+							value={host}
+							onChangeText={setHost}
+							placeholder="100.x.y.z"
+						/>
+						<Field
+							label="Port"
+							value={port}
+							onChangeText={setPort}
+							placeholder="8787"
+							keyboardType="numeric"
+							last
+						/>
+					</View>
 
-				{connected ? (
-					<Pressable style={styles.disconnectBtn} onPress={onDisconnect} hitSlop={6}>
-						<Text style={styles.disconnectText}>Disconnect</Text>
-					</Pressable>
-				) : null}
+					{!connected ? (
+						<View style={styles.demoRow}>
+							<View style={styles.demoRule} />
+							<Text style={styles.demoOr}>or</Text>
+							<View style={styles.demoRule} />
+						</View>
+					) : null}
+					{!connected ? (
+						<Pressable style={styles.demoBtn} onPress={onDemo} hitSlop={6}>
+							<Text style={styles.demoText}>Try the demo — no box needed</Text>
+						</Pressable>
+					) : null}
 
-				<Text style={styles.formNote}>
-					The phone opens a WebSocket to your box's `ateam` listener over Tailscale — WireGuard is
-					the encryption and the auth boundary. Enable it on the box with{" "}
-					<Text style={styles.mono}>ATEAM_WS_ADDR=&lt;tailscale-ip&gt;:&lt;port&gt;</Text>.
-				</Text>
+					{error ? (
+						<View style={styles.errorBox}>
+							<Text style={styles.errorText}>{error}</Text>
+						</View>
+					) : null}
+
+					{connected ? (
+						<Pressable style={styles.disconnectBtn} onPress={onDisconnect} hitSlop={6}>
+							<Text style={styles.disconnectText}>Disconnect</Text>
+						</Pressable>
+					) : null}
+
+					<Text style={styles.formNote}>
+						The phone opens a WebSocket to your box's `ateam` listener over Tailscale — WireGuard is
+						the encryption and the auth boundary. Enable it on the box with{" "}
+						<Text style={styles.mono}>ATEAM_WS_ADDR=&lt;tailscale-ip&gt;:&lt;port&gt;</Text>.
+					</Text>
+				</View>
 			</ScrollView>
 		</View>
 	);
@@ -466,33 +489,35 @@ function BoardScreen({
 				showsVerticalScrollIndicator={false}
 				keyboardShouldPersistTaps="handled"
 			>
-				{loading && shown.length === 0 ? (
-					<View style={styles.centerPad}>
-						<ActivityIndicator color={C.accent} />
-						<Text style={styles.footnote}>loading board…</Text>
-					</View>
-				) : shown.length === 0 ? (
-					<View style={styles.centerPad}>
-						<Text style={styles.footnote}>no tasks yet — start one below</Text>
-					</View>
-				) : (
-					COLUMNS.map((col) => {
-						const inCol = shown.filter((t) => t.column === col.key);
-						if (inCol.length === 0) return null;
-						return (
-							<View key={col.key} style={styles.zone}>
-								<View style={styles.eyebrowRow}>
-									<View style={[styles.tick, { backgroundColor: col.tint }]} />
-									<Text style={styles.eyebrow}>{col.label}</Text>
-									<Text style={styles.eyebrowCount}>{inCol.length}</Text>
+				<View style={styles.contentColumn}>
+					{loading && shown.length === 0 ? (
+						<View style={styles.centerPad}>
+							<ActivityIndicator color={C.accent} />
+							<Text style={styles.footnote}>loading board…</Text>
+						</View>
+					) : shown.length === 0 ? (
+						<View style={styles.centerPad}>
+							<Text style={styles.footnote}>no tasks yet — start one below</Text>
+						</View>
+					) : (
+						COLUMNS.map((col) => {
+							const inCol = shown.filter((t) => t.column === col.key);
+							if (inCol.length === 0) return null;
+							return (
+								<View key={col.key} style={styles.zone}>
+									<View style={styles.eyebrowRow}>
+										<View style={[styles.tick, { backgroundColor: col.tint }]} />
+										<Text style={styles.eyebrow}>{col.label}</Text>
+										<Text style={styles.eyebrowCount}>{inCol.length}</Text>
+									</View>
+									{inCol.map((t) => (
+										<TaskCard key={t.id} task={t} tint={col.tint} onOpen={() => onOpenTask(t)} />
+									))}
 								</View>
-								{inCol.map((t) => (
-									<TaskCard key={t.id} task={t} tint={col.tint} onOpen={() => onOpenTask(t)} />
-								))}
-							</View>
-						);
-					})
-				)}
+							);
+						})
+					)}
+				</View>
 			</ScrollView>
 
 			<Composer agents={agents} busy={creating} onSubmit={onCreate} />
@@ -688,6 +713,24 @@ export default function App() {
 		void connectTo(host.trim(), port.trim());
 	}, [host, port, connectTo]);
 
+	// Enter demo mode: a fully offline Connection (canned board + terminal). No box, no
+	// reattach, no saved connection — for App Review (guideline 2.1) and first-look onboarding.
+	const startDemo = useCallback(async () => {
+		target.current = null; // demo never reattaches
+		if (retryTimer.current) {
+			clearTimeout(retryTimer.current);
+			retryTimer.current = null;
+		}
+		conn.current?.close();
+		conn.current = demoConnection();
+		setConnected(true);
+		setError(null);
+		setConnGen((g) => g + 1);
+		void conn.current.api.agents.list().then(setAgents);
+		setView("board");
+		await refresh();
+	}, [refresh]);
+
 	// Pick a project and remember it, so the next launch lands on it (not project #1).
 	const selectProject = useCallback((id: string) => {
 		preferredProjectId.current = id;
@@ -727,6 +770,32 @@ export default function App() {
 			void connectTo(saved.host, saved.port);
 		})();
 	}, []);
+
+	// Deep links, mainly for driving the app to a screen for App Store screenshots
+	// (xcrun simctl openurl ateamgo://demo[/task/<id>|/preview]). `ateamgo://demo`
+	// enters the offline demo; a trailing /task/<id> opens that task's terminal.
+	useEffect(() => {
+		const handle = (url: string | null): void => {
+			if (!url?.startsWith("ateamgo://demo")) return;
+			void (async () => {
+				await startDemo();
+				const api = conn.current?.api;
+				if (!api) return;
+				const taskId = url.match(/\/task\/([^/?#]+)/)?.[1];
+				if (taskId) {
+					const projs = await api.projects.list();
+					const all = (await Promise.all(projs.map((p) => api.tasks.list(p.id)))).flat();
+					const t = all.find((x) => x.id === taskId || x.slug === taskId);
+					if (t) setOpenTask(t);
+				} else if (url.includes("/preview")) {
+					setPreviewOpen(true);
+				}
+			})();
+		};
+		void Linking.getInitialURL().then(handle);
+		const sub = Linking.addEventListener("url", (e) => handle(e.url));
+		return () => sub.remove();
+	}, [startDemo]);
 
 	const onDisconnect = useCallback(() => {
 		target.current = null; // intent: stay disconnected — no auto-reattach
@@ -814,6 +883,7 @@ export default function App() {
 				onConnect={onConnect}
 				onBack={() => setView("board")}
 				onDisconnect={onDisconnect}
+				onDemo={startDemo}
 				connecting={connecting}
 				connected={connected}
 				error={error}
@@ -1058,12 +1128,28 @@ const styles = StyleSheet.create({
 		alignItems: "center",
 	},
 	disconnectText: { color: C.red, fontSize: 14, fontWeight: "700" },
+	demoRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 20 },
+	demoRule: { flex: 1, height: 1, backgroundColor: C.line },
+	demoOr: { color: C.faint, fontSize: 12 },
+	demoBtn: {
+		marginTop: 14,
+		borderWidth: 1,
+		borderColor: C.line,
+		backgroundColor: C.surface,
+		borderRadius: 10,
+		paddingVertical: 13,
+		alignItems: "center",
+	},
+	demoText: { color: C.ink, fontSize: 14, fontWeight: "700" },
 	formNote: { color: C.faint, fontSize: 12, lineHeight: 18, marginTop: 18, paddingHorizontal: 2 },
 	mono: { color: C.muted, fontVariant: ["tabular-nums"] },
 
 	// board
 	board: { flex: 1 },
 	boardContent: { padding: 16, paddingBottom: 24 },
+	// Centered, width-capped content column (see CONTENT_MAX) — keeps the phone layout
+	// from stretching on iPad; a no-op on iPhone.
+	contentColumn: { width: "100%", maxWidth: CONTENT_MAX, alignSelf: "center" },
 	centerPad: { alignItems: "center", paddingVertical: 48, gap: 12 },
 	zone: { marginBottom: 22 },
 	card: {

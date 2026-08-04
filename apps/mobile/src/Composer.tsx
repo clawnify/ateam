@@ -22,6 +22,9 @@ const C = {
 	amber: "#fbbf24",
 };
 
+// Match App's CONTENT_MAX: center + cap the composer content on iPad (no-op on iPhone).
+const CONTENT_MAX = 720;
+
 export interface ComposerSubmit {
 	/** The agent's first instruction (normal mode). Empty in agent mode. */
 	prompt: string;
@@ -74,82 +77,87 @@ export function Composer({
 
 	return (
 		<View style={[styles.wrap, keyboardUp && styles.wrapKeyboard]}>
-			{/* Agent mode passes no prompt — but we still need to name the worktree, so
+			<View style={styles.inner}>
+				{/* Agent mode passes no prompt — but we still need to name the worktree, so
 			    the field becomes an explicit task-name input (clearly labelled). */}
-			{agentMode ? <Text style={styles.fieldLabel}>TASK NAME</Text> : null}
-			<TextInput
-				style={styles.input}
-				placeholder={agentMode ? "Name this task (its worktree branch)" : "What do you want to do?"}
-				placeholderTextColor={C.faint}
-				value={text}
-				onChangeText={setText}
-				multiline={!agentMode}
-				editable={!busy}
-			/>
-			<View style={styles.row}>
-				{/* Agent picker: show only the current agent; tap to open the popover. */}
-				<Pressable style={styles.chip} onPress={() => setPickerOpen(true)} hitSlop={4}>
-					<AgentIcon agentId={current?.id} size={14} />
-					<Text style={styles.chipTextOn}>{current?.label.replace(/ Code$/, "") ?? "Agent"}</Text>
-					{pickable.length > 1 ? <Text style={styles.caret}>▾</Text> : null}
-				</Pressable>
-				<Modal
-					visible={pickerOpen}
-					transparent
-					animationType="fade"
-					onRequestClose={() => setPickerOpen(false)}
-				>
-					<Pressable style={styles.backdrop} onPress={() => setPickerOpen(false)}>
-						<View style={styles.popover}>
-							{pickable.map((a) => (
-								<Pressable
-									key={a.id}
-									style={styles.popRow}
-									onPress={() => {
-										setAgentId(a.id);
-										setPickerOpen(false);
-									}}
-								>
-									<AgentIcon agentId={a.id} size={16} />
-									<Text style={styles.popText}>{a.label}</Text>
-									{a.id === agentId ? <Text style={styles.popCheck}>✓</Text> : null}
-								</Pressable>
-							))}
-						</View>
+				{agentMode ? <Text style={styles.fieldLabel}>TASK NAME</Text> : null}
+				<TextInput
+					style={styles.input}
+					placeholder={
+						agentMode ? "Name this task (its worktree branch)" : "What do you want to do?"
+					}
+					placeholderTextColor={C.faint}
+					value={text}
+					onChangeText={setText}
+					multiline={!agentMode}
+					editable={!busy}
+				/>
+				<View style={styles.row}>
+					{/* Agent picker: show only the current agent; tap to open the popover. */}
+					<Pressable style={styles.chip} onPress={() => setPickerOpen(true)} hitSlop={4}>
+						<AgentIcon agentId={current?.id} size={14} />
+						<Text style={styles.chipTextOn}>{current?.label.replace(/ Code$/, "") ?? "Agent"}</Text>
+						{pickable.length > 1 ? <Text style={styles.caret}>▾</Text> : null}
 					</Pressable>
-				</Modal>
-				<View style={styles.spacer} />
-				{/* Auto mode (yolo) */}
-				<Pressable
-					style={[styles.mode, yolo && styles.modeAuto]}
-					onPress={() => setYolo((v) => !v)}
-					hitSlop={4}
-				>
-					<Text style={[styles.modeText, yolo && { color: C.amber }]}>auto</Text>
-				</Pressable>
-				{/* Agent mode (claude agents) */}
-				<Pressable
-					style={[styles.mode, agentMode && styles.modeAgents]}
-					onPress={() => setAgentMode((v) => !v)}
-					hitSlop={4}
-				>
-					<Text style={[styles.modeText, agentMode && { color: C.accent }]}>agents</Text>
-				</Pressable>
-				{/* Send */}
-				<Pressable
-					style={[styles.send, !canSubmit && styles.sendOff]}
-					onPress={submit}
-					disabled={!canSubmit}
-					hitSlop={6}
-				>
-					<Text style={styles.sendText}>↑</Text>
-				</Pressable>
+					<Modal
+						visible={pickerOpen}
+						transparent
+						animationType="fade"
+						onRequestClose={() => setPickerOpen(false)}
+					>
+						<Pressable style={styles.backdrop} onPress={() => setPickerOpen(false)}>
+							<View style={styles.popover}>
+								{pickable.map((a) => (
+									<Pressable
+										key={a.id}
+										style={styles.popRow}
+										onPress={() => {
+											setAgentId(a.id);
+											setPickerOpen(false);
+										}}
+									>
+										<AgentIcon agentId={a.id} size={16} />
+										<Text style={styles.popText}>{a.label}</Text>
+										{a.id === agentId ? <Text style={styles.popCheck}>✓</Text> : null}
+									</Pressable>
+								))}
+							</View>
+						</Pressable>
+					</Modal>
+					<View style={styles.spacer} />
+					{/* Auto mode (yolo) */}
+					<Pressable
+						style={[styles.mode, yolo && styles.modeAuto]}
+						onPress={() => setYolo((v) => !v)}
+						hitSlop={4}
+					>
+						<Text style={[styles.modeText, yolo && { color: C.amber }]}>auto</Text>
+					</Pressable>
+					{/* Agent mode (claude agents) */}
+					<Pressable
+						style={[styles.mode, agentMode && styles.modeAgents]}
+						onPress={() => setAgentMode((v) => !v)}
+						hitSlop={4}
+					>
+						<Text style={[styles.modeText, agentMode && { color: C.accent }]}>agents</Text>
+					</Pressable>
+					{/* Send */}
+					<Pressable
+						style={[styles.send, !canSubmit && styles.sendOff]}
+						onPress={submit}
+						disabled={!canSubmit}
+						hitSlop={6}
+					>
+						<Text style={styles.sendText}>↑</Text>
+					</Pressable>
+				</View>
 			</View>
 		</View>
 	);
 }
 
 const styles = StyleSheet.create({
+	inner: { width: "100%", maxWidth: CONTENT_MAX, alignSelf: "center" },
 	wrap: {
 		borderTopWidth: 1,
 		borderTopColor: C.line,
