@@ -130,6 +130,59 @@ curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server
 
 </details>
 
+<details>
+<summary><b>Start to finish on a boxd microVM</b></summary>
+
+<a href="https://boxd.sh"><img src="./assets/boxd.png" alt="boxd" width="99" /></a>
+
+[boxd](https://boxd.sh) rents persistent Linux microVMs that boot in milliseconds and
+already ship `git`, `gh`, `node`, `docker` and `claude` — so there's no user, firewall
+or Tailscale setup to do. Unlike the VPS recipe above, the box is reached over boxd's
+own authenticated SSH proxy rather than your tailnet.
+
+**On your Mac,** install the CLI and create a box:
+
+```bash
+curl -fsSL https://boxd.sh/downloads/install.sh | sh
+boxd auth login
+boxd new mybox
+```
+
+boxd writes the `mybox.boxd` host alias — hostname, port and key — straight into your
+`~/.ssh/config`, so `ssh mybox.boxd` works immediately and the box shows up in Ateam's
+connection switcher with nothing else to configure.
+
+**Then set the box up for agents,** over that alias. Ateam commits, pushes and opens
+PRs as this user, so it needs a real git identity and a logged-in `gh`:
+
+```bash
+ssh mybox.boxd 'git config --global user.name "you" && git config --global user.email "you@example.com"'
+ssh -t mybox.boxd 'gh auth login'      # device code — works over SSH
+ssh mybox.boxd 'gh auth setup-git'     # REQUIRED — see below
+ssh -t mybox.boxd claude               # `claude` is preinstalled; log in once, then exit
+
+ssh mybox.boxd 'curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash'
+```
+
+`gh auth setup-git` is the step that bites. `gh auth login` authenticates the `gh` CLI
+but leaves `git` itself without a credential helper, and Ateam provisions a project
+with `git clone` — so without it, adding a project to the box fails with
+`RPC connection closed` rather than a credential error.
+
+The readiness report ends with `[--] tailscale`. That one is expected here — boxd
+provides the private path itself.
+
+Finally, pick **`mybox.boxd`** in Ateam's connection switcher. boxd registers more
+than one alias per machine (`mybox.boxd`, `mybox.boxd.sh`, plus a shared `boxd.sh`
+defaults entry) — pick `mybox.boxd`; `boxd.sh` is not a machine.
+
+**The iOS app does not work with boxd.** The phone reaches a box over Tailscale, and
+boxd's kernel is built without a TUN device (`/lib/modules` is empty and `modprobe
+tun` fails), so `tailscaled` can't run in its normal mode. Use the VPS recipe above
+for the iOS app.
+
+</details>
+
 Full walkthrough, from a freshly bought VPS to a connected board:
 [`docs/online-ateam.md`](docs/online-ateam.md). If you use Claude Code, it can do the
 whole setup with you:
