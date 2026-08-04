@@ -7,10 +7,18 @@
 # that user's home and no step needs sudo. It is idempotent: re-running upgrades
 # the dist in place. Files are only ever created or overwritten, never removed.
 #
+# Options:
+#   --service       also install a `systemd --user` unit so the daemon survives
+#                   logout and reboot (required for the iOS app, which cannot
+#                   start a daemon on demand the way the desktop does over SSH)
+#
 # Env knobs:
 #   ATEAM_VERSION   release tag to install (default: the latest release)
 #   ATEAM_TARBALL   URL *or* local path to an ateam-server.tar.gz, bypassing the
 #                   release lookup (dev/air-gapped installs)
+#   ATEAM_WS_ADDR   <tailnet-ip>:<port> for the iOS app's WebSocket listener,
+#                   baked into the unit by --service. On a re-run without it, an
+#                   address already in the unit is kept rather than dropped.
 #
 # Node: the dist externalizes two native modules — better-sqlite3 and the
 # prebuilt node-pty fork — so the box needs a Node whose ABI both ship binaries
@@ -189,7 +197,18 @@ if [ "$WANT_SERVICE" = 1 ]; then
 		die "no systemd on this box — start 'ateam daemon' from your own init instead"
 	fi
 	UNIT_DIR="$HOME/.config/systemd/user"
+	UNIT="$UNIT_DIR/ateam.service"
 	mkdir -p "$UNIT_DIR"
+
+	# Upgrading IS re-running this script, and a phone user who doesn't re-export
+	# ATEAM_WS_ADDR would otherwise get a rewritten unit without it — silently
+	# removing the phone's only way in, with the daemon still apparently healthy.
+	# An explicit ATEAM_WS_ADDR always wins; otherwise inherit what's already there.
+	WS_ADDR="${ATEAM_WS_ADDR:-}"
+	if [ -z "$WS_ADDR" ] && [ -f "$UNIT" ]; then
+		WS_ADDR="$(sed -n 's/^Environment=ATEAM_WS_ADDR=//p' "$UNIT" | tail -1)"
+		if [ -n "$WS_ADDR" ]; then info "keeping ATEAM_WS_ADDR=$WS_ADDR from the existing unit"; fi
+	fi
 	{
 		echo '[Unit]'
 		echo 'Description=Ateam engine daemon'
@@ -208,12 +227,12 @@ if [ "$WANT_SERVICE" = 1 ]; then
 		# socket, and always-restart would turn that into a hot loop.
 		echo 'Restart=on-failure'
 		echo 'RestartSec=2'
-		if [ -n "${ATEAM_WS_ADDR:-}" ]; then echo "Environment=ATEAM_WS_ADDR=$ATEAM_WS_ADDR"; fi
+		if [ -n "$WS_ADDR" ]; then echo "Environment=ATEAM_WS_ADDR=$WS_ADDR"; fi
 		echo ''
 		echo '[Install]'
 		echo 'WantedBy=default.target'
-	} >"$UNIT_DIR/ateam.service"
-	info "wrote $UNIT_DIR/ateam.service"
+	} >"$UNIT"
+	info "wrote $UNIT"
 
 	# Keep the user manager alive with no login session, so the daemon comes back
 	# after a reboot. Unprivileged: polkit's set-self-linger allows this for your
