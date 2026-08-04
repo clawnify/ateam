@@ -238,6 +238,8 @@ export interface CleanupCandidate {
 export const CH = {
 	projectsPick: "projects:pick",
 	projectsRegister: "projects:register",
+	projectsClone: "projects:clone",
+	projectsRemoteUrl: "projects:remoteUrl",
 	projectsList: "projects:list",
 	projectsRemove: "projects:remove",
 	windowOpenProject: "window:openProject",
@@ -311,6 +313,12 @@ export interface AteamApi {
 		pick(): Promise<string | null>;
 		/** `init: true` runs `git init` + initial commit first (after asking). */
 		register(repoPath: string, opts?: { init?: boolean }): Promise<ProjectDTO>;
+		// NB: projects:clone (CH.projectsClone) is deliberately NOT on this surface —
+		// it must target a specific box, so it's driven by ateamHost.provision →
+		// backend.handle(CH.projectsClone) directly, never the id-routed aggregate.
+		/** The project's `origin` remote URL, or null if local-only. Decides whether a
+		 *  task can run on a box (needs a remote to clone). id-routed to the owner. */
+		remoteUrl(projectId: string): Promise<string | null>;
 		list(): Promise<ProjectDTO[]>;
 		remove(id: string): Promise<void>;
 	};

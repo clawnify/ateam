@@ -15,7 +15,13 @@ export type {
 export { detectMerged, mergeViaPR, prStatus, updateLocalMain } from "./merge";
 export type { GithubRepo, ProjectInfo } from "./project";
 
-export { detectDefaultBranch, initRepository, registerProject } from "./project";
+export {
+	cloneRepo,
+	detectDefaultBranch,
+	getOriginUrl,
+	initRepository,
+	registerProject,
+} from "./project";
 export { SerialQueue } from "./serial-queue";
 export type {
 	CommitInput,

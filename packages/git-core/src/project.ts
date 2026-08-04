@@ -2,8 +2,8 @@ import { execFile } from "node:child_process";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-import { gitFor, refExists } from "./git-client";
 import { GitCoreError } from "./errors";
+import { gitFor, refExists } from "./git-client";
 import { worktreesRootFor } from "./worktree-paths";
 
 const pexec = promisify(execFile);
@@ -36,18 +36,14 @@ export async function detectDefaultBranch(repoPath: string): Promise<string> {
 	const git = gitFor(repoPath);
 
 	try {
-		const ref = (
-			await git.raw(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
-		).trim();
+		const ref = (await git.raw(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])).trim();
 		if (ref) return ref.replace(/^origin\//, "");
 	} catch {
 		/* fall through */
 	}
 
 	try {
-		const ref = (
-			await git.raw(["rev-parse", "--abbrev-ref", "origin/HEAD"])
-		).trim();
+		const ref = (await git.raw(["rev-parse", "--abbrev-ref", "origin/HEAD"])).trim();
 		if (ref && ref !== "origin/HEAD") return ref.replace(/^origin\//, "");
 	} catch {
 		/* fall through */
@@ -93,10 +89,7 @@ async function detectGithubRepo(repoPath: string): Promise<GithubRepo | null> {
  * inside the repo (e.g. `<repo>/.ateam/worktrees` → `/.ateam/`). Returns null
  * when the root is outside the repo (sibling/global), where no exclude applies.
  */
-function excludeEntryFor(
-	repoPath: string,
-	worktreesRoot: string,
-): string | null {
+function excludeEntryFor(repoPath: string, worktreesRoot: string): string | null {
 	const rel = relative(repoPath, worktreesRoot);
 	if (!rel || rel.startsWith("..") || rel.includes(`..${sep}`)) return null;
 	const top = rel.split(sep)[0];
@@ -120,9 +113,7 @@ export async function ensureWorktreesIgnored(
 	const git = gitFor(repoPath);
 	let commonDir: string;
 	try {
-		commonDir = (
-			await git.raw(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-		).trim();
+		commonDir = (await git.raw(["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim();
 	} catch {
 		commonDir = resolve(repoPath, ".git");
 	}
@@ -162,10 +153,7 @@ export async function initRepository(repoPath: string): Promise<void> {
 	// Refuse to re-init an existing repo (or a folder inside one).
 	try {
 		await git.raw(["rev-parse", "--git-dir"]);
-		throw new GitCoreError(
-			"ALREADY_A_REPO",
-			`${abs} is already inside a git repository`,
-		);
+		throw new GitCoreError("ALREADY_A_REPO", `${abs} is already inside a git repository`);
 	} catch (err) {
 		if (err instanceof GitCoreError) throw err;
 		/* not a repo — good */
@@ -186,6 +174,45 @@ export async function initRepository(repoPath: string): Promise<void> {
 	} catch {
 		// Nothing staged (empty folder) — still need a commit for worktrees.
 		await git.raw(["commit", "--allow-empty", "-m", "Initial commit"]);
+	}
+}
+
+/** The `origin` remote URL of a repo, or null if it has none (local-only). This is
+ *  what decides whether a project can "become available remotely" — a task can run on
+ *  a box only if there's a remote to clone it from. */
+export async function getOriginUrl(repoPath: string): Promise<string | null> {
+	try {
+		const url = (await gitFor(repoPath).raw(["remote", "get-url", "origin"])).trim();
+		return url || null;
+	} catch {
+		return null; // no origin remote
+	}
+}
+
+/**
+ * Clone a repo onto THIS machine from its remote URL, so a task can run here. GitHub
+ * URLs go through `gh` (reuses its auth uniformly for private repos); anything else
+ * uses plain `git clone`. Used to provision a project onto a remote box. Throws
+ * GH_FAILED if the clone fails; `dest` must not already exist.
+ */
+export async function cloneRepo(cloneUrl: string, dest: string): Promise<void> {
+	if (!/^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/.test(cloneUrl)) {
+		throw new GitCoreError("INVALID_NAME", `Unsupported clone URL "${cloneUrl}"`);
+	}
+	// github.com/owner/name(.git) — capture owner/name to prefer `gh` (auth) for GitHub.
+	const gh = cloneUrl.match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+	try {
+		if (gh) {
+			await pexec("gh", ["repo", "clone", `${gh[1]}/${gh[2]}`, dest]);
+		} else {
+			await pexec("git", ["clone", cloneUrl, dest]);
+		}
+	} catch (err) {
+		throw new GitCoreError(
+			"GH_FAILED",
+			`Could not clone ${cloneUrl} (is git/gh installed and authenticated on that machine?)`,
+			err,
+		);
 	}
 }
 
