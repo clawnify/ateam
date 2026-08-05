@@ -22,6 +22,10 @@ export default defineConfig({
 		build: {
 			rollupOptions: {
 				input: {
+					// The entry point electron actually loads: a crash guard that
+					// require()s index.js at runtime. A separate input on purpose —
+					// bundled together, its try/catch could never see index's throw.
+					bootstrap: resolve(__dirname, "src/main/bootstrap.ts"),
 					index: resolve(__dirname, "src/main/index.ts"),
 					// The detached PTY daemon, built alongside main → out/main/daemon.js.
 					// Source lives in @ateam/server (its PTY subsystem); the desktop and
