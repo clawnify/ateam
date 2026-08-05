@@ -19,7 +19,9 @@ import { join } from "node:path";
 
 const BUNDLE_ID = "com.clawnify.ateam";
 const buildNumber = process.argv[2];
-const groups = process.argv.slice(3).length ? process.argv.slice(3) : ["External", "Ateam"];
+// Only EXTERNAL groups need explicit assignment; internal groups auto-receive every
+// processed build (the API rejects assigning a build to one). Default: External.
+const groups = process.argv.slice(3).length ? process.argv.slice(3) : ["External"];
 if (!buildNumber) {
 	console.error("usage: testflight-distribute.mjs <buildNumber> [group…]");
 	process.exit(2);
@@ -93,13 +95,20 @@ if (state !== "VALID") {
 console.log(`build ${buildNumber} processed (id ${buildId})`);
 
 const gs = await api(`/v1/betaGroups?limit=200`);
-const idByName = new Map((gs.body.data ?? []).map((g) => [g.attributes.name, g.id]));
+const byName = new Map(
+	(gs.body.data ?? []).map((g) => [g.attributes.name, { id: g.id, internal: g.attributes.isInternalGroup }]),
+);
 for (const name of groups) {
-	const gid = idByName.get(name);
-	if (!gid) {
+	const g = byName.get(name);
+	if (!g) {
 		console.error(`group "${name}" not found — skipping`);
 		continue;
 	}
+	if (g.internal) {
+		console.log(`"${name}" is internal — builds auto-distribute, no assignment needed`);
+		continue;
+	}
+	const gid = g.id;
 	if (process.env.DRY_RUN) {
 		console.log(`[dry-run] would add build ${buildNumber} to "${name}" (${gid})`);
 		continue;
