@@ -14,26 +14,28 @@ ELECTRON_VER="$(node -p "require('$DESKTOP_DIR/package.json').devDependencies.el
 BUILDER_VER="$(node -p "require('$DESKTOP_DIR/package.json').devDependencies['electron-builder']")"
 NOTARIZE_VER="$(node -p "require('$DESKTOP_DIR/package.json').devDependencies['@electron/notarize']")"
 REBUILD_VER="$(node -p "require('$DESKTOP_DIR/package.json').devDependencies['@electron/rebuild']")"
-SQLITE_VER="$(node -p "require('$DESKTOP_DIR/package.json').dependencies['better-sqlite3']")"
-PTY_VER="$(node -p "require('$DESKTOP_DIR/package.json').dependencies['node-pty']")"
 
 echo "==> Ateam $VERSION → staging at $STAGE"
 mkdir -p "$STAGE"
 
-# 1. Staging package.json (only runtime native deps live in node_modules; the
-#    rest is bundled into out/ by electron-vite). electron-updater is a runtime
-#    dep and MUST be present so the externalized require resolves.
-cat > "$STAGE/package.json" <<JSON
+# 1. Fresh production bundle. Built FIRST because the staging dependency list is
+#    derived from what the bundle actually require()s — see runtime-deps.mjs.
+echo "==> electron-vite build"
+( cd "$DESKTOP_DIR" && bunx --bun electron-vite build )
+
+# 2. Staging package.json. Only the packages the bundle leaves as external live
+#    in node_modules; everything else electron-vite inlined into out/. That set
+#    is read off the emitted code rather than hardcoded here — a stale hardcoded
+#    list is what shipped 0.1.35 without `ws` and crashed it on launch.
+DEPS="$(node "$DESKTOP_DIR/scripts/runtime-deps.mjs" --deps "$DESKTOP_DIR/out")"
+echo "==> runtime deps: $(node -p "Object.keys($DEPS).join(', ')")"
+cat > "$STAGE/package.json.next" <<JSON
 {
   "name": "ateam",
   "version": "$VERSION",
   "main": "out/main/index.js",
   "author": "Clawnify",
-  "dependencies": {
-    "better-sqlite3": "$SQLITE_VER",
-    "node-pty": "$PTY_VER",
-    "electron-updater": "$(node -p "require('$DESKTOP_DIR/package.json').dependencies['electron-updater']")"
-  },
+  "dependencies": $DEPS,
   "devDependencies": {
     "electron": "$ELECTRON_VER",
     "electron-builder": "$BUILDER_VER",
@@ -42,6 +44,13 @@ cat > "$STAGE/package.json" <<JSON
   }
 }
 JSON
+
+# A changed dependency set must force a reinstall — the completeness check below
+# only looks at the build toolchain and would happily reuse a node_modules that
+# predates a newly added runtime dep.
+DEPS_CHANGED=0
+if ! cmp -s "$STAGE/package.json.next" "$STAGE/package.json"; then DEPS_CHANGED=1; fi
+mv "$STAGE/package.json.next" "$STAGE/package.json"
 
 # Fail unless every compiled native module under $1 is a single-arch arm64
 # binary. Scans only `*/build/Release/*.node` — the electron-rebuild output that
@@ -70,14 +79,18 @@ assert_arm64_nodes() {
   return $bad
 }
 
-# 2. Install + rebuild native modules for Electron's arm64 ABI. Recreated when
-#    the install is missing or incomplete (e.g. a partial install left behind by
-#    a wiped/interrupted run) — checks for the actual binaries it needs.
+# 3. Install + rebuild native modules for Electron's arm64 ABI. A missing or
+#    incomplete install (e.g. left behind by a wiped/interrupted run) is wiped
+#    and redone; a merely changed dependency set only needs npm to reconcile,
+#    which keeps the ~100MB electron download out of the common path.
 if [ ! -x "$STAGE/node_modules/.bin/electron-builder" ] ||
    [ ! -x "$STAGE/node_modules/.bin/electron-rebuild" ] ||
    [ ! -d "$STAGE/node_modules/electron/dist" ]; then
   echo "==> npm install (first run / staging cleared or incomplete)"
   rm -rf "$STAGE/node_modules" "$STAGE/package-lock.json"
+  ( cd "$STAGE" && npm install --no-audit --no-fund )
+elif [ "$DEPS_CHANGED" -eq 1 ]; then
+  echo "==> npm install (runtime dependency set changed)"
   ( cd "$STAGE" && npm install --no-audit --no-fund )
 fi
 
@@ -95,18 +108,25 @@ if ! assert_arm64_nodes "$STAGE/node_modules/better-sqlite3" ||
   exit 1
 fi
 
-# 3. Fresh production bundle, copied into staging.
-echo "==> electron-vite build"
-( cd "$DESKTOP_DIR" && bunx --bun electron-vite build )
+# 4. Copy the bundle built in step 1 into staging.
 rm -rf "$STAGE/out" "$STAGE/build" "$STAGE/scripts" "$STAGE/electron-builder.yml" "$STAGE/release"
 cp -R "$DESKTOP_DIR/out" "$DESKTOP_DIR/build" "$DESKTOP_DIR/scripts" "$STAGE/"
 cp "$DESKTOP_DIR/electron-builder.yml" "$STAGE/"
 
-# 4. Sign + notarize + staple + dmg + zip (no target args: the yml declares both).
+# 5. Sign + notarize + staple + dmg + zip (no target args: the yml declares both).
 echo "==> electron-builder (sign + notarize + dmg + zip)"
 ( cd "$STAGE" && ./node_modules/.bin/electron-builder --mac --arm64 )
 
-# 4b. Hard gate: every native module packaged into the .app must be arm64.
+# 5a. Hard gate: every module the bundle require()s must exist in the .app.
+#     electron-builder prunes devDependencies and can drop a package entirely,
+#     so only reading the signed archive proves what actually made it in.
+echo "==> Runtime dependency check (every require() must resolve)"
+if ! node "$DESKTOP_DIR/scripts/runtime-deps.mjs" --verify-app \
+     "$DESKTOP_DIR/out" "$STAGE/release/mac-arm64/Ateam.app"; then
+  exit 1
+fi
+
+# 5b. Hard gate: every native module packaged into the .app must be arm64.
 #     Signing, notarization and the spctl check below are all arch-agnostic and
 #     will happily bless an x86_64 module that then dlopen()-crashes on every
 #     Apple Silicon Mac — so this is the last line of defense before publish.
