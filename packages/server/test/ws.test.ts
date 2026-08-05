@@ -85,3 +85,42 @@ describe("buildAteamApi over a real WebSocket (the phone's transport)", () => {
 		wss.close();
 	});
 });
+
+// The failure the desktop's health probe exists for. A WebSocket over Tailscale
+// goes HALF-OPEN on NAT/WireGuard idle timeout (or a laptop sleeping): the socket
+// stays "open", nothing is delivered, and no close event ever fires. Since
+// createRpcClient has no per-call timeout and relies on onClose to reject, an
+// unprobed client waits forever — the board silently stops responding.
+describe("a half-open WebSocket", () => {
+	it("never rejects on its own, so a timed probe is what detects it", async () => {
+		// A server that accepts the connection and then answers nothing, without
+		// ever closing — exactly what a dead NAT mapping looks like from the client.
+		const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+		wss.on("connection", () => {
+			/* deliberately silent: no reply, no close */
+		});
+		const { port } = wss.address() as AddressInfo;
+		const client = wsClientTransport(`ws://127.0.0.1:${port}`);
+		const rpc = createRpcClient(client.transport);
+
+		// Unprobed: still pending well after any real reply would have arrived.
+		let settled = false;
+		void rpc.call("system:hello").then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await new Promise((r) => setTimeout(r, 300));
+		expect(settled).toBe(false);
+
+		// Probed: the timeout is what turns silence into a failure we can act on.
+		const probe = new Promise((_res, rej) => setTimeout(() => rej(new Error("ping timeout")), 100));
+		await expect(Promise.race([rpc.call("system:hello"), probe])).rejects.toThrow("ping timeout");
+
+		client.close();
+		wss.close();
+	});
+});

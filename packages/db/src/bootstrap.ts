@@ -130,6 +130,7 @@ export function bootstrap(db: SqliteExecutor): void {
 
 			CREATE TABLE IF NOT EXISTS hosts (
 				host_alias TEXT PRIMARY KEY,
+				transport TEXT NOT NULL DEFAULT 'ssh',
 				server_version TEXT,
 				agents_available TEXT,
 				last_seen INTEGER,
@@ -151,6 +152,9 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE loops ADD COLUMN config TEXT",
 		"ALTER TABLE loops ADD COLUMN cadence_mode TEXT",
 		"ALTER TABLE loops ADD COLUMN interval_ms INTEGER",
+		// Every row that predates this column is an ssh_config alias — the only
+		// kind of connection that existed — so the default backfills correctly.
+		"ALTER TABLE hosts ADD COLUMN transport TEXT NOT NULL DEFAULT 'ssh'",
 	]) {
 		try {
 			db.exec(sql);

@@ -1323,6 +1323,26 @@ input {
 .conn-row:disabled {
 	cursor: default;
 }
+.conn-add {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	padding: 6px 10px 8px;
+}
+.conn-add-input {
+	width: 100%;
+	background: var(--bg-elev-2);
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	padding: 6px 8px;
+	color: var(--text);
+	font: inherit;
+	font-size: 13px;
+}
+.conn-add-input:focus {
+	outline: none;
+	border-color: var(--text);
+}
 .conn-ico {
 	display: inline-flex;
 	color: var(--text-dim);
