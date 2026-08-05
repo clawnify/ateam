@@ -1,12 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createEngine, type Engine } from "@ateam/server";
 import { app, BrowserWindow, dialog, Menu } from "electron";
 import { autoUpdater } from "electron-updater";
-import { createEngine, type Engine } from "@ateam/server";
 import { APP_NAME } from "./app-name";
 import { createHost, registerHostIpc } from "./host";
 import { registerIpc } from "./ipc";
+import { showStartupFailure } from "./startup-failure";
 
 // Every live window and the project it's pinned to: null = the main
 // multi-project dashboard, a projectId = a detached single-project window.
@@ -315,80 +316,79 @@ function openProjectWindow(projectId: string): void {
 	createWindow(projectId);
 }
 
-app.whenReady().then(async () => {
-	app.setName(APP_NAME);
-	adoptLoginShellPath();
+app
+	.whenReady()
+	.then(async () => {
+		app.setName(APP_NAME);
+		adoptLoginShellPath();
 
-	// Show the app icon in the macOS dock during dev (packaged builds use the
-	// .icns in build/). Best-effort: the icon lives at build/icon.png.
-	if (process.platform === "darwin" && app.dock) {
-		for (const p of [
-			join(process.cwd(), "build", "icon.png"),
-			join(__dirname, "../../build/icon.png"),
-		]) {
-			try {
-				app.dock.setIcon(p);
-				break;
-			} catch {
-				/* try next path */
+		// Show the app icon in the macOS dock during dev (packaged builds use the
+		// .icns in build/). Best-effort: the icon lives at build/icon.png.
+		if (process.platform === "darwin" && app.dock) {
+			for (const p of [
+				join(process.cwd(), "build", "icon.png"),
+				join(__dirname, "../../build/icon.png"),
+			]) {
+				try {
+					app.dock.setIcon(p);
+					break;
+				} catch {
+					/* try next path */
+				}
 			}
 		}
-	}
 
-	engine = await createEngine({
-		dataDir: app.getPath("userData"),
-		// The detached PTY daemon (out/main/daemon.js) is run via the Electron
-		// binary as node (ELECTRON_RUN_AS_NODE) so node-pty's ABI matches.
-		daemonPath: join(__dirname, "daemon.js"),
-		execPath: process.execPath,
+		engine = await createEngine({
+			dataDir: app.getPath("userData"),
+			// The detached PTY daemon (out/main/daemon.js) is run via the Electron
+			// binary as node (ELECTRON_RUN_AS_NODE) so node-pty's ABI matches.
+			daemonPath: join(__dirname, "daemon.js"),
+			execPath: process.execPath,
+		});
+		// The local engine is the default backend; the host swaps in a remote one (over
+		// SSH) on connect and re-points the IPC bridge + event forwarding at it. Binding
+		// the engine's events to every window is the host's job now (see createHost);
+		// window management (detaching a project) is desktop-native, passed to registerIpc.
+		const host = createHost({ localEngine: engine, broadcast });
+		registerIpc(host.router, { openProjectWindow });
+		registerHostIpc(host);
+
+		if (SMOKE) {
+			// Headless boot check: prove the engine inits (db, hook server, notify
+			// script) without opening a window or the daemon, then exit cleanly.
+			console.log(`ATEAM_READY hookPort=${engine.services.hookPort}`);
+			engine.stopHooks();
+			app.exit(0);
+			return;
+		}
+
+		// Connect to (or launch) the PTY daemon and learn which sessions are still
+		// alive from a previous run, so the renderer can re-attach to them.
+		try {
+			await engine.connectPty();
+		} catch (err) {
+			console.error("[ateam] PTY daemon connect failed:", err);
+		}
+
+		createWindow();
+		buildAppMenu();
+		// Start the board reconciler (and any other registered loops) once the
+		// window exists, so the first pass can push corrections to the renderer.
+		engine.startLoops();
+		setupAutoUpdate();
+		app.on("activate", () => {
+			if (BrowserWindow.getAllWindows().length === 0) createWindow();
+		});
+	})
+	.catch((err) => {
+		// A startup failure (e.g. a corrupt database, or schema DDL that throws)
+		// would otherwise leave a live process with no window and no feedback —
+		// exactly the "click the app, nothing happens" symptom. Unlike a load-time
+		// failure this one is usually data-dependent, so no build gate can prevent
+		// it; it is the branch that will keep firing, and it gets the same dialog
+		// and the same way out as bootstrap.ts's.
+		showStartupFailure(err, "startup");
 	});
-	// The local engine is the default backend; the host swaps in a remote one (over
-	// SSH) on connect and re-points the IPC bridge + event forwarding at it. Binding
-	// the engine's events to every window is the host's job now (see createHost);
-	// window management (detaching a project) is desktop-native, passed to registerIpc.
-	const host = createHost({ localEngine: engine, broadcast });
-	registerIpc(host.router, { openProjectWindow });
-	registerHostIpc(host);
-
-	if (SMOKE) {
-		// Headless boot check: prove the engine inits (db, hook server, notify
-		// script) without opening a window or the daemon, then exit cleanly.
-		console.log(`ATEAM_READY hookPort=${engine.services.hookPort}`);
-		engine.stopHooks();
-		app.exit(0);
-		return;
-	}
-
-	// Connect to (or launch) the PTY daemon and learn which sessions are still
-	// alive from a previous run, so the renderer can re-attach to them.
-	try {
-		await engine.connectPty();
-	} catch (err) {
-		console.error("[ateam] PTY daemon connect failed:", err);
-	}
-
-	createWindow();
-	buildAppMenu();
-	// Start the board reconciler (and any other registered loops) once the
-	// window exists, so the first pass can push corrections to the renderer.
-	engine.startLoops();
-	setupAutoUpdate();
-	app.on("activate", () => {
-		if (BrowserWindow.getAllWindows().length === 0) createWindow();
-	});
-}).catch((err) => {
-	// A startup failure (e.g. a native module built for the wrong CPU arch)
-	// would otherwise leave a live process with no window and no feedback —
-	// exactly the "click the app, nothing happens" symptom. Surface it and quit.
-	console.error("[ateam] startup failed:", err);
-	dialog.showErrorBox(
-		"Ateam failed to start",
-		`${APP_NAME} couldn't start and needs to close.\n\n${
-			err instanceof Error ? (err.stack ?? err.message) : String(err)
-		}`,
-	);
-	app.exit(1);
-});
 
 app.on("window-all-closed", () => {
 	// Do NOT kill PTYs — the daemon keeps them alive across restarts. engine.stop
