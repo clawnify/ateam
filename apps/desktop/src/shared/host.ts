@@ -20,6 +20,8 @@ export const HOST_CH = {
 	install: "host:install",
 	/** Create a box from scratch at a cloud provider, provision it, and connect. */
 	createBox: "host:createBox",
+	/** Install an agent's CLI on a connected box (streamed via evtInstallLog). */
+	installAgent: "host:installAgent",
 	/** Read/write the encrypted provider credentials (token + Tailscale auth key). */
 	secretsStatus: "host:secretsStatus",
 	saveSecrets: "host:saveSecrets",
@@ -51,6 +53,15 @@ export interface CreateBoxSpec {
 	hetznerToken?: string;
 	/** Overrides the saved Tailscale auth key for this run (and is then remembered). */
 	tailscaleAuthKey?: string;
+	/** Agent CLIs to preinstall on the box after the engine (by id, e.g. "claude"). */
+	agents?: string[];
+}
+
+/** Result of installing an agent's CLI on a box — the login the user runs next. */
+export interface InstallAgentResult {
+	agentId: string;
+	/** The OAuth login to run on the box to finish setup (undefined if none needed). */
+	loginCommand?: string;
 }
 
 /** A stage narration while a box is being created (no secrets, just the step). */
@@ -108,6 +119,9 @@ export interface AteamHost {
 	 *  Tailscale, installs the engine), then connect. Progress via onCreateProgress +
 	 *  onInstallLog; credentials fall back to the saved secrets. */
 	createBox(spec: CreateBoxSpec): Promise<HostStatus>;
+	/** Install an agent's CLI on a connected box (streamed via onInstallLog), then
+	 *  return the one-time OAuth login to run on the box. */
+	installAgent(alias: string, agentId: string): Promise<InstallAgentResult>;
 	/** Which provisioning secrets are already saved (booleans, never the values). */
 	secretsStatus(): Promise<SecretsStatus>;
 	/** Persist provider credentials (encrypted at rest). Empty string clears one. */

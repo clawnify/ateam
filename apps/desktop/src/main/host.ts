@@ -17,6 +17,7 @@ import {
 	type SystemInfo,
 	wsClientTransport,
 } from "@ateam/protocol";
+import { getAgent } from "@ateam/agents";
 import {
 	buildCloudInit,
 	type ConnectionDTO,
@@ -38,6 +39,7 @@ import {
 	type CreateProgressEvent,
 	HOST_CH,
 	type HostStatus,
+	type InstallAgentResult,
 	type InstallLogEvent,
 	type ProviderOptions,
 	type SecretsStatus,
@@ -108,6 +110,8 @@ export interface Host {
 	install(dest: string, opts?: { wsAddr?: string }): Promise<HostStatus>;
 	/** Create a box from scratch at a provider, provision it, and connect. */
 	createBox(spec: CreateBoxSpec): Promise<HostStatus>;
+	/** Install an agent's CLI on a connected box, streaming the log; returns the login step. */
+	installAgent(alias: string, agentId: string): Promise<InstallAgentResult>;
 	/** Which provisioning secrets are saved (booleans, never the values). */
 	secretsStatus(): SecretsStatus;
 	/** Persist provider credentials (encrypted). Returns the new saved-status. */
@@ -400,7 +404,42 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// Reuse the streamed installer (Gap A): it derives the box's tailnet IP into
 		// ATEAM_WS_ADDR (so the phone can connect) and connects on success.
 		progress("Installing the engine");
-		return install(boxAlias);
+		const status = await install(boxAlias);
+
+		// Preinstall any requested agent CLIs (best-effort — the box is usable without
+		// them, and the OAuth login is a separate step the user does after).
+		for (const agentId of spec.agents ?? []) {
+			progress(`Installing ${getAgent(agentId)?.label ?? agentId}`);
+			try {
+				await installAgent(boxAlias, agentId);
+			} catch (err) {
+				progress(
+					`Couldn't install ${agentId}: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+		}
+		return status;
+	}
+
+	async function installAgent(alias: string, agentId: string): Promise<InstallAgentResult> {
+		const agent = getAgent(agentId);
+		if (!agent?.install) throw new Error(`Don't know how to install "${agentId}".`);
+		if (!backends.has(alias)) throw new Error(`Not connected to "${alias}".`);
+		// Run the official installer in a login shell (PATH/profile set up), then confirm
+		// the binary is on the login PATH the daemon will actually spawn it from.
+		const remote = `bash -lc '${agent.install} && command -v ${agent.bin}'`;
+		const result = await sshExec(alias, remote, {
+			onData: (chunk) =>
+				broadcast(HOST_CH.evtInstallLog, { dest: alias, chunk } satisfies InstallLogEvent),
+		});
+		if (result.code !== 0) {
+			throw new Error(
+				`Installing ${agent.label} on "${alias}" failed (exit ${result.code ?? "on a signal"}) — it may have installed but not landed on the login PATH.`,
+			);
+		}
+		// The box's agent list now includes it — refresh so the composer's env-agents update.
+		broadcastConnections();
+		return { agentId, loginCommand: agent.loginCommand };
 	}
 
 	async function provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO> {
@@ -427,6 +466,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		provision,
 		install,
 		createBox,
+		installAgent,
 		secretsStatus,
 		saveSecrets,
 		providerOptions,
@@ -447,6 +487,9 @@ export function registerHostIpc(host: Host): void {
 		host.install(dest, opts),
 	);
 	ipcMain.handle(HOST_CH.createBox, (_e, spec: CreateBoxSpec) => host.createBox(spec));
+	ipcMain.handle(HOST_CH.installAgent, (_e, alias: string, agentId: string) =>
+		host.installAgent(alias, agentId),
+	);
 	ipcMain.handle(HOST_CH.secretsStatus, () => host.secretsStatus());
 	ipcMain.handle(
 		HOST_CH.saveSecrets,

@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { AgentDTO } from "@ateam/protocol";
 import type { ProviderOptions } from "../../../shared/host";
 import { HetznerLogo } from "./HetznerLogo";
 
@@ -29,6 +30,8 @@ export function CreateBoxDialog({
 	const [stages, setStages] = useState<string[]>([]);
 	const [log, setLog] = useState("");
 	const [error, setError] = useState<string | null>(null);
+	const [agents, setAgents] = useState<AgentDTO[]>([]);
+	const [preinstall, setPreinstall] = useState<string[]>([]);
 	const logRef = useRef<HTMLPreElement>(null);
 
 	const loadOptions = async () => {
@@ -51,6 +54,7 @@ export function CreateBoxDialog({
 			// A saved token means we can show real availability immediately.
 			if (s.hetznerToken) void loadOptions();
 		});
+		void window.ateam.agents.list().then(setAgents);
 		// biome-ignore lint/correctness/useExhaustiveDependencies: run once on open
 	}, []);
 	useEffect(() => {
@@ -92,6 +96,7 @@ export function CreateBoxDialog({
 				size,
 				hetznerToken: token.trim() || undefined,
 				tailscaleAuthKey: tsKey.trim() || undefined,
+				agents: preinstall.length ? preinstall : undefined,
 			});
 			// A created box is always a remote engine (never the local null alias).
 			if (status.alias) onDone(status.alias);
@@ -120,7 +125,10 @@ export function CreateBoxDialog({
 					<div className="cb-progress">
 						<ul className="cb-stages">
 							{stages.map((s, i) => (
-								<li key={`${i}-${s}`} className={i === stages.length - 1 && busy ? "active" : "done"}>
+								<li
+									key={`${i}-${s}`}
+									className={i === stages.length - 1 && busy ? "active" : "done"}
+								>
 									{s}
 								</li>
 							))}
@@ -168,7 +176,9 @@ export function CreateBoxDialog({
 								className="cb-input"
 								type="password"
 								value={token}
-								placeholder={saved.hetznerToken ? "saved ✓ — leave blank to reuse" : "paste your token"}
+								placeholder={
+									saved.hetznerToken ? "saved ✓ — leave blank to reuse" : "paste your token"
+								}
 								// A new token means a possibly different account — reload availability.
 								onChange={(e) => {
 									setToken(e.target.value);
@@ -182,7 +192,9 @@ export function CreateBoxDialog({
 								className="cb-input"
 								type="password"
 								value={tsKey}
-								placeholder={saved.tailscaleAuthKey ? "saved ✓ — leave blank to reuse" : "tskey-auth-…"}
+								placeholder={
+									saved.tailscaleAuthKey ? "saved ✓ — leave blank to reuse" : "tskey-auth-…"
+								}
 								onChange={(e) => setTsKey(e.target.value)}
 							/>
 						</label>
@@ -205,7 +217,11 @@ export function CreateBoxDialog({
 								</label>
 								<label className="cb-row">
 									<span>Size</span>
-									<select className="cb-input" value={size} onChange={(e) => setSize(e.target.value)}>
+									<select
+										className="cb-input"
+										value={size}
+										onChange={(e) => setSize(e.target.value)}
+									>
 										{availableSizes.map((s) => (
 											<option key={s.slug} value={s.slug}>
 												{s.label}
@@ -213,6 +229,28 @@ export function CreateBoxDialog({
 										))}
 									</select>
 								</label>
+								{agents.length > 0 && (
+									<div className="cb-row">
+										<span>Preinstall agents (optional)</span>
+										<div className="cb-agents">
+											{agents.map((a) => (
+												<label key={a.id} className="cb-agent">
+													<input
+														type="checkbox"
+														checked={preinstall.includes(a.id)}
+														onChange={(e) =>
+															setPreinstall((cur) =>
+																e.target.checked ? [...cur, a.id] : cur.filter((id) => id !== a.id),
+															)
+														}
+													/>
+													{a.label}
+												</label>
+											))}
+										</div>
+										<span className="cb-sub">You sign in (OAuth) on the box afterward.</span>
+									</div>
+								)}
 								{error && <div className="cb-error">{error}</div>}
 								<button type="button" className="cb-create" onClick={() => void run()}>
 									Create box

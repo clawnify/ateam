@@ -1,6 +1,7 @@
 import type { AgentDTO } from "@ateam/protocol";
 import { ArrowUp, Paperclip, X, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
+import { AgentPicker } from "./AgentPicker";
 import { type EnvOption, EnvironmentPicker } from "./EnvironmentPicker";
 
 /** Last path segment, for a compact chip label. */
@@ -33,6 +34,7 @@ export function NewTaskComposer({
 	envAgents,
 	onAdd,
 	onInstall,
+	onInstallAgent,
 	onClose,
 	onCreate,
 }: {
@@ -47,6 +49,12 @@ export function NewTaskComposer({
 	onAdd?: (endpoint: string) => Promise<void>;
 	/** Set up a fresh box over SSH (install engine + connect) from the picker. */
 	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<void>;
+	/** Install a coding agent's CLI on the selected box, streamed; returns the login step. */
+	onInstallAgent?: (
+		alias: string,
+		agentId: string,
+		onLog: (chunk: string) => void,
+	) => Promise<{ loginCommand?: string }>;
 	onClose: () => void;
 	onCreate: (input: {
 		name: string;
@@ -71,7 +79,10 @@ export function NewTaskComposer({
 	// Which agents the chosen environment actually has installed. Known only for a
 	// connected engine; when unknown, fall back to the catalog's own `available` flag.
 	const availOnEnv = envAgents[alias ?? "local"];
-	const isAvail = (a: AgentDTO) => (availOnEnv ? availOnEnv.includes(a.id) : a.available);
+	const isAvail = (id: string) => {
+		const a = agents.find((x) => x.id === id);
+		return availOnEnv ? availOnEnv.includes(id) : (a?.available ?? false);
+	};
 
 	// Switching environment can strand the picked agent (not installed there) — drop
 	// to the first agent the new environment can actually run.
@@ -173,18 +184,14 @@ export function NewTaskComposer({
 					>
 						<Paperclip size={16} strokeWidth={1.75} />
 					</button>
-					<select
-						className="agent-select"
+					<AgentPicker
+						agents={agents}
 						value={agentId}
-						onChange={(e) => setAgentId(e.target.value)}
-					>
-						{agents.map((a) => (
-							<option key={a.id} value={a.id} disabled={!isAvail(a)}>
-								{a.label}
-								{isAvail(a) ? "" : " (not installed)"}
-							</option>
-						))}
-					</select>
+						onChange={setAgentId}
+						isAvailable={isAvail}
+						alias={alias}
+						onInstallAgent={onInstallAgent}
+					/>
 					<EnvironmentPicker
 						environments={environments}
 						value={alias}

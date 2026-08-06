@@ -185,7 +185,7 @@ export function EnvironmentPicker({
 								<span className="conn-txt">
 									<span className="conn-title">{env.label}</span>
 									{env.disabled && env.alias !== null ? (
-										<span className="conn-sub">no git remote to clone</span>
+										<span className="conn-sub">repo needs a git remote to run here</span>
 									) : env.transport === "ws" ? (
 										<span className="conn-sub">Tailscale</span>
 									) : null}
