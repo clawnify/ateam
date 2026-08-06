@@ -22,6 +22,8 @@ export const HOST_CH = {
 	createBox: "host:createBox",
 	/** Install an agent's CLI on a connected box (streamed via evtInstallLog). */
 	installAgent: "host:installAgent",
+	/** Probe a connected box's task-readiness (gh installed/signed-in, git identity). */
+	boxReadiness: "host:boxReadiness",
 	/** Read/write the encrypted provider credentials (token + Tailscale auth key). */
 	secretsStatus: "host:secretsStatus",
 	saveSecrets: "host:saveSecrets",
@@ -55,6 +57,15 @@ export interface CreateBoxSpec {
 	tailscaleAuthKey?: string;
 	/** Agent CLIs to preinstall on the box after the engine (by id, e.g. "claude"). */
 	agents?: string[];
+}
+
+/** A connected box's task-readiness — what a task needs beyond the engine. */
+export interface BoxReadiness {
+	/** GitHub CLI: installed on the box, and signed in (so it can clone private repos). */
+	gh: { installed: boolean; signedIn: boolean; login?: string };
+	/** The git commit identity (derived from the GitHub login once signed in). */
+	gitName?: string;
+	gitEmail?: string;
 }
 
 /** Result of installing an agent's CLI on a box — the login the user runs next. */
@@ -122,6 +133,9 @@ export interface AteamHost {
 	/** Install an agent's CLI on a connected box (streamed via onInstallLog), then
 	 *  return the one-time OAuth login to run on the box. */
 	installAgent(alias: string, agentId: string): Promise<InstallAgentResult>;
+	/** Probe a connected box's task-readiness (also derives the git identity once the
+	 *  box is signed into GitHub). */
+	boxReadiness(alias: string): Promise<BoxReadiness>;
 	/** Which provisioning secrets are already saved (booleans, never the values). */
 	secretsStatus(): Promise<SecretsStatus>;
 	/** Persist provider credentials (encrypted at rest). Empty string clears one. */

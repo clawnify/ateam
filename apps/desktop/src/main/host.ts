@@ -35,6 +35,7 @@ import { app, ipcMain } from "electron";
 import WebSocket from "ws";
 import { join } from "node:path";
 import {
+	type BoxReadiness,
 	type CreateBoxSpec,
 	type CreateProgressEvent,
 	HOST_CH,
@@ -71,6 +72,28 @@ const INSTALL_URL =
 // Default WebSocket port baked into a provisioned box's Tailscale listener (matches
 // the picker's placeholder). The listener only exists if the box is on Tailscale.
 const WS_DEFAULT_PORT = 8787;
+
+// Probe a box's task-readiness (base64'd over SSH to dodge quoting) and self-heal the
+// git identity: once the box is signed into GitHub, derive name+email from the account
+// — `gh auth login` authenticates but does NOT set the commit identity. `\\(` becomes
+// `\(` in the string so jq gets its interpolation syntax.
+const READINESS_PROBE = `GH=$(command -v gh || true)
+SIGNED=0; LOGIN=""
+if [ -n "$GH" ] && "$GH" auth status >/dev/null 2>&1; then
+	SIGNED=1
+	LOGIN=$("$GH" api user -q .login 2>/dev/null || true)
+	if [ -z "$(git config --global user.name || true)" ] || [ -z "$(git config --global user.email || true)" ]; then
+		N=$("$GH" api user -q '.name // .login' 2>/dev/null || true)
+		E=$("$GH" api user -q '"\\(.id)+\\(.login)@users.noreply.github.com"' 2>/dev/null || true)
+		[ -n "$N" ] && git config --global user.name "$N"
+		[ -n "$E" ] && git config --global user.email "$E"
+	fi
+fi
+echo "gh_installed=$([ -n "$GH" ] && echo 1 || echo 0)"
+echo "gh_signed_in=$SIGNED"
+echo "gh_login=$LOGIN"
+echo "git_name=$(git config --global user.name || true)"
+echo "git_email=$(git config --global user.email || true)"`;
 // Cap a connect: ssh can hang on an auth prompt or an unreachable host with no
 // error, and the UI must not wait forever. A live daemon replies in well under this.
 const CONNECT_TIMEOUT_MS = 20_000;
@@ -112,6 +135,8 @@ export interface Host {
 	createBox(spec: CreateBoxSpec): Promise<HostStatus>;
 	/** Install an agent's CLI on a connected box, streaming the log; returns the login step. */
 	installAgent(alias: string, agentId: string): Promise<InstallAgentResult>;
+	/** Probe a connected box's task-readiness (and self-heal git identity once signed in). */
+	boxReadiness(alias: string): Promise<BoxReadiness>;
 	/** Which provisioning secrets are saved (booleans, never the values). */
 	secretsStatus(): SecretsStatus;
 	/** Persist provider credentials (encrypted). Returns the new saved-status. */
@@ -442,6 +467,30 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return { agentId, loginCommand: agent.loginCommand };
 	}
 
+	async function boxReadiness(alias: string): Promise<BoxReadiness> {
+		if (!backends.has(alias)) throw new Error(`Not connected to "${alias}".`);
+		const b64 = Buffer.from(READINESS_PROBE).toString("base64");
+		let out = "";
+		const r = await sshExec(alias, `echo ${b64} | base64 -d | bash -ls`, {
+			onData: (chunk) => {
+				out += chunk;
+			},
+		});
+		if (r.code !== 0) {
+			throw new Error(`Couldn't read "${alias}" readiness (ssh exited ${r.code ?? "on a signal"}).`);
+		}
+		const val = (k: string) => out.match(new RegExp(`^${k}=(.*)$`, "m"))?.[1]?.trim() ?? "";
+		return {
+			gh: {
+				installed: val("gh_installed") === "1",
+				signedIn: val("gh_signed_in") === "1",
+				login: val("gh_login") || undefined,
+			},
+			gitName: val("git_name") || undefined,
+			gitEmail: val("git_email") || undefined,
+		};
+	}
+
 	async function provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO> {
 		// Provisioning targets a SPECIFIC engine — the aggregate routes by learned id,
 		// but there's no id on the box yet, so call that backend's clone directly.
@@ -467,6 +516,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		install,
 		createBox,
 		installAgent,
+		boxReadiness,
 		secretsStatus,
 		saveSecrets,
 		providerOptions,
@@ -490,6 +540,7 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.installAgent, (_e, alias: string, agentId: string) =>
 		host.installAgent(alias, agentId),
 	);
+	ipcMain.handle(HOST_CH.boxReadiness, (_e, alias: string) => host.boxReadiness(alias));
 	ipcMain.handle(HOST_CH.secretsStatus, () => host.secretsStatus());
 	ipcMain.handle(
 		HOST_CH.saveSecrets,

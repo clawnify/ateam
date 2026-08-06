@@ -1903,12 +1903,22 @@ input {
 	display: flex;
 	flex-direction: column;
 }
+.agent-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding-right: 8px;
+}
+.agent-row > .conn-row {
+	flex: 1;
+	min-width: 0;
+}
 .agent-install-btn {
 	display: inline-flex;
 	align-items: center;
 	gap: 5px;
-	align-self: flex-start;
-	margin: 0 10px 6px 34px;
+	flex: none;
+	margin: 0;
 	background: var(--bg-elev-2);
 	border: 1px solid var(--border);
 	border-radius: 6px;
@@ -1956,4 +1966,51 @@ input {
 	font-size: 13px;
 	color: var(--text);
 	cursor: pointer;
+}
+
+.cb-ready {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.cb-ready-title {
+	font-size: 13px;
+	color: var(--text);
+}
+.cb-ready-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.cb-ready-list li {
+	font-size: 13px;
+	color: var(--text-dim);
+	padding-left: 18px;
+	position: relative;
+}
+.cb-ready-list li.done {
+	color: var(--text);
+}
+.cb-ready-list li.done::before {
+	content: "\2713";
+	position: absolute;
+	left: 0;
+	color: var(--text);
+}
+.cb-ready-list li.todo::before {
+	content: "\2192";
+	position: absolute;
+	left: 0;
+	color: var(--text-dim);
+}
+.cb-ready-list code {
+	font-family: ui-monospace, Menlo, monospace;
+	font-size: 12px;
+	color: var(--text);
+	background: var(--bg-elev-2);
+	padding: 1px 5px;
+	border-radius: 4px;
 }

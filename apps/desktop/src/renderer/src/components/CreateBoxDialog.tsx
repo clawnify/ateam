@@ -1,7 +1,14 @@
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AgentDTO } from "@ateam/protocol";
-import type { ProviderOptions } from "../../../shared/host";
+import type { BoxReadiness, ProviderOptions } from "../../../shared/host";
+
+// The one-time OAuth login per agent (mirrors the registry; the renderer can't import it).
+const AGENT_LOGIN: Record<string, string> = {
+	claude: "claude login",
+	codex: "codex login",
+	opencode: "opencode auth login",
+};
 import { HetznerLogo } from "./HetznerLogo";
 
 // "Create a box" — Ateam stands up a fresh VPS at a provider, generates the SSH key,
@@ -32,7 +39,23 @@ export function CreateBoxDialog({
 	const [error, setError] = useState<string | null>(null);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [preinstall, setPreinstall] = useState<string[]>([]);
+	// After a box is created + connected: its readiness (gh/identity) + installed agents.
+	const [readyAlias, setReadyAlias] = useState<string | null>(null);
+	const [readyBox, setReadyBox] = useState<BoxReadiness | null>(null);
+	const [readyAgents, setReadyAgents] = useState<string[]>([]);
+	const [checking, setChecking] = useState(false);
 	const logRef = useRef<HTMLPreElement>(null);
+
+	const checkReadiness = async (alias: string) => {
+		setChecking(true);
+		try {
+			setReadyBox(await window.ateamHost.boxReadiness(alias));
+		} catch {
+			// A probe failure just leaves the checklist partial — not worth blocking on.
+		} finally {
+			setChecking(false);
+		}
+	};
 
 	const loadOptions = async () => {
 		setLoadingOpts(true);
@@ -98,8 +121,13 @@ export function CreateBoxDialog({
 				tailscaleAuthKey: tsKey.trim() || undefined,
 				agents: preinstall.length ? preinstall : undefined,
 			});
-			// A created box is always a remote engine (never the local null alias).
-			if (status.alias) onDone(status.alias);
+			// Created + connected (always a remote engine). Show what's left to make it
+			// task-ready (GitHub sign-in, agent logins) instead of closing blind.
+			if (status.alias) {
+				setReadyAlias(status.alias);
+				setReadyAgents(status.info.agents);
+				void checkReadiness(status.alias);
+			}
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -139,7 +167,55 @@ export function CreateBoxDialog({
 							</pre>
 						)}
 						{error && <div className="cb-error">{error}</div>}
-						{!busy && (
+						{!busy && readyAlias ? (
+							<div className="cb-ready">
+								<div className="cb-ready-title">
+									Box created — finish these in the box’s terminal:
+								</div>
+								<ul className="cb-ready-list">
+									<li className="done">Engine + Tailscale</li>
+									<li className={readyBox?.gh.signedIn ? "done" : "todo"}>
+										{readyBox?.gh.signedIn
+											? `GitHub signed in${readyBox.gh.login ? ` as ${readyBox.gh.login}` : ""}`
+											: "GitHub — sign in: "}
+										{!readyBox?.gh.signedIn ? <code>gh auth login</code> : null}
+									</li>
+									<li className={readyBox?.gitName ? "done" : "todo"}>
+										{readyBox?.gitName
+											? `git identity (${readyBox.gitName})`
+											: "git identity — sets automatically after GitHub sign-in"}
+									</li>
+									{readyAgents.length === 0 ? (
+										<li className="todo">
+											no coding agent yet — install one from the agent picker
+										</li>
+									) : (
+										readyAgents.map((a) => (
+											<li key={a} className="todo">
+												{a} — sign in: <code>{AGENT_LOGIN[a] ?? `${a} login`}</code>
+											</li>
+										))
+									)}
+								</ul>
+								<div className="cb-actions">
+									<button
+										type="button"
+										className="cb-back"
+										disabled={checking}
+										onClick={() => readyAlias && void checkReadiness(readyAlias)}
+									>
+										{checking ? "Checking…" : "Recheck"}
+									</button>
+									<button
+										type="button"
+										className="cb-create"
+										onClick={() => readyAlias && onDone(readyAlias)}
+									>
+										Done
+									</button>
+								</div>
+							</div>
+						) : !busy ? (
 							<div className="cb-actions">
 								<button
 									type="button"
@@ -155,7 +231,7 @@ export function CreateBoxDialog({
 									Try again
 								</button>
 							</div>
-						)}
+						) : null}
 					</div>
 				) : (
 					<div className="cb-form">

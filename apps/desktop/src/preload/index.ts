@@ -126,6 +126,7 @@ const host: AteamHost = {
 	install: (dest, opts) => ipcRenderer.invoke(HOST_CH.install, dest, opts),
 	createBox: (spec) => ipcRenderer.invoke(HOST_CH.createBox, spec),
 	installAgent: (alias, agentId) => ipcRenderer.invoke(HOST_CH.installAgent, alias, agentId),
+	boxReadiness: (alias) => ipcRenderer.invoke(HOST_CH.boxReadiness, alias),
 	secretsStatus: () => ipcRenderer.invoke(HOST_CH.secretsStatus),
 	saveSecrets: (patch) => ipcRenderer.invoke(HOST_CH.saveSecrets, patch),
 	providerOptions: (token) => ipcRenderer.invoke(HOST_CH.providerOptions, token),
