@@ -38,7 +38,9 @@ button {
 	border-radius: 7px;
 	padding: 5px 10px;
 	cursor: pointer;
-	transition: background 0.12s, border-color 0.12s;
+	transition:
+		background 0.12s,
+		border-color 0.12s;
 }
 button:hover {
 	background: #25252e;
@@ -1143,7 +1145,9 @@ input {
 	color: var(--text-dim);
 	cursor: pointer;
 	position: relative;
-	transition: background 0.1s, color 0.1s;
+	transition:
+		background 0.1s,
+		color 0.1s;
 }
 .iconbtn:hover {
 	background: var(--bg-elev-2);
@@ -1716,4 +1720,34 @@ input {
 .loop-del:hover {
 	color: var(--red);
 	border-color: var(--red);
+}
+
+.conn-install-log {
+	margin: 4px 0 2px;
+	max-height: 140px;
+	overflow-y: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 11px;
+	line-height: 1.45;
+	color: var(--text-dim);
+	background: var(--bg-elev-2);
+	border-radius: 6px;
+	padding: 6px 8px;
+}
+.conn-install-go {
+	align-self: flex-start;
+	margin-top: 2px;
+	background: var(--bg-elev-2);
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	padding: 5px 12px;
+	color: var(--text);
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+.conn-install-go:hover {
+	border-color: var(--text);
 }

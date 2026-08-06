@@ -38,3 +38,41 @@ export function sshClientTransport(
 	const transport = streamClientTransport(child.stdout, child.stdin);
 	return { transport, child, close: () => child.kill() };
 }
+
+export interface SshExecResult {
+	/** Remote command exit code; null if the ssh child was killed by a signal. */
+	code: number | null;
+}
+
+export interface SshExecOptions extends SshOptions {
+	/** Called with each stdout/stderr chunk as UTF-8 text, in arrival order. */
+	onData?: (chunk: string) => void;
+}
+
+/**
+ * Run a one-shot `command` on `host` over SSH and stream its combined
+ * stdout+stderr, resolving with the remote exit code. Unlike sshClientTransport
+ * (a persistent RPC relay), this is for provisioning-style commands whose OUTPUT
+ * is the point — piping an installer to the box and showing its progress.
+ *
+ * `command` is passed as a single ssh argument (ssh space-joins remote args, so a
+ * `bash -lc '…'` must arrive whole). BatchMode=yes fails fast on a missing key
+ * rather than hanging on a prompt the desktop can't answer (stdin is closed) —
+ * these boxes authenticate with the user's ssh-agent/keys, same as `attach`.
+ */
+export function sshExec(
+	host: string,
+	command: string,
+	opts: SshExecOptions = {},
+): Promise<SshExecResult> {
+	return new Promise((resolve, reject) => {
+		const child = spawn("ssh", ["-o", "BatchMode=yes", ...(opts.sshFlags ?? []), host, command], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const emit = (b: Buffer) => opts.onData?.(b.toString("utf8"));
+		child.stdout?.on("data", emit);
+		child.stderr?.on("data", emit);
+		child.on("error", reject);
+		child.on("close", (code) => resolve({ code }));
+	});
+}

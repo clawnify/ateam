@@ -16,8 +16,19 @@ export const HOST_CH = {
 	origins: "host:origins",
 	/** Clone+register a repo onto a specific box (connect it first). */
 	provision: "host:provision",
+	/** Install the ateam engine on a reachable SSH box, then connect to it. */
+	install: "host:install",
 	evtConnectionsChanged: "evt:host:connections",
+	/** Streamed installer output (stdout+stderr) during host:install. */
+	evtInstallLog: "evt:host:install-log",
 } as const;
+
+/** One chunk of installer output, tagged with the destination it came from. */
+export interface InstallLogEvent {
+	/** The SSH destination being set up (ssh_config alias or user@host). */
+	dest: string;
+	chunk: string;
+}
 
 /** Which engine is driving the app right now. */
 export interface HostStatus {
@@ -47,6 +58,12 @@ export interface AteamHost {
 	/** Connect the box if needed, then clone+register a repo ON it from its remote URL
 	 *  (so a task can run there). Returns the box's project row for that repo. */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;
+	/** Install the ateam engine on a fresh box over SSH (idempotent; sets up the
+	 *  phone's WebSocket listener too), then connect. `dest` is an ssh_config alias
+	 *  or `user@host`. Progress streams via onInstallLog. */
+	install(dest: string, opts?: { wsAddr?: string }): Promise<HostStatus>;
 	/** Fires with the full connected set whenever an engine is added or removed. */
 	onConnectionsChanged(cb: (connected: HostStatus[]) => void): () => void;
+	/** Subscribe to installer output during install(); returns an unsubscribe. */
+	onInstallLog(cb: (e: InstallLogEvent) => void): () => void;
 }

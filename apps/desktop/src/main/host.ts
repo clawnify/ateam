@@ -26,10 +26,11 @@ import {
 	recordConnection,
 	resolveTransport,
 	sshClientTransport,
+	sshExec,
 } from "@ateam/server";
 import { ipcMain } from "electron";
 import WebSocket from "ws";
-import { HOST_CH, type HostStatus } from "../shared/host";
+import { HOST_CH, type HostStatus, type InstallLogEvent } from "../shared/host";
 import { type Aggregate, createAggregate } from "./aggregate";
 import {
 	type Backend,
@@ -43,6 +44,13 @@ import {
 // must arrive as a single element): a login shell (agent-CLI PATH) execing the
 // attach relay. Proven live against the Hetzner box.
 const REMOTE_ATTACH = "bash -lc 'exec ateam attach --stdio'";
+// The canonical box installer, reused verbatim (single source of truth for how a
+// box is set up — the same script the docs tell users to curl by hand).
+const INSTALL_URL =
+	"https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh";
+// Default WebSocket port baked into a provisioned box's Tailscale listener (matches
+// the picker's placeholder). The listener only exists if the box is on Tailscale.
+const WS_DEFAULT_PORT = 8787;
 // Cap a connect: ssh can hang on an auth prompt or an unreachable host with no
 // error, and the UI must not wait forever. A live daemon replies in well under this.
 const CONNECT_TIMEOUT_MS = 20_000;
@@ -77,6 +85,9 @@ export interface Host {
 	origins(): Record<string, string | null>;
 	/** Connect the box if needed, then clone+register a repo ON it (from its remote URL). */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;
+	/** Install the ateam engine on a reachable SSH box (idempotent), streaming the
+	 *  installer's output, then connect. `dest` is an ssh_config alias or user@host. */
+	install(dest: string, opts?: { wsAddr?: string }): Promise<HostStatus>;
 }
 
 export interface HostDeps {
@@ -242,6 +253,44 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return out;
 	}
 
+	async function install(dest: string, opts?: { wsAddr?: string }): Promise<HostStatus> {
+		// Already set up and held — installing again would just re-run the (idempotent)
+		// script for no reason; hand back its status.
+		const existing = backends.get(dest);
+		if (existing) return statusOf(existing, dest);
+
+		const wsAddr = opts?.wsAddr?.trim();
+		// A caller-supplied address is interpolated into a remote shell command, so it
+		// must be EXACTLY a host:port endpoint — never anything that could break the pipe.
+		if (wsAddr && !endpointUrl(wsAddr)) throw new Error(`"${wsAddr}" is not a host:port endpoint`);
+
+		// Reuse install.sh verbatim. With an explicit address, bake it in; otherwise
+		// derive the box's OWN tailnet IP on the box, so the phone's WebSocket listener
+		// is set up automatically when the box is on Tailscale. An empty ATEAM_WS_ADDR
+		// means "daemon service only, no listener" — install.sh treats it as unset.
+		const pipeline = wsAddr
+			? `curl -fsSL ${INSTALL_URL} | ATEAM_WS_ADDR=${wsAddr} bash -s -- --service`
+			: // Single-quoted JS so the shell's ${ip:+…} parameter expansion stays literal.
+				"ip=$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | head -1 || true); " +
+				`curl -fsSL ${INSTALL_URL} ` +
+				'| ATEAM_WS_ADDR="${ip:+$ip:' +
+				WS_DEFAULT_PORT +
+				'}" bash -s -- --service';
+
+		const result = await sshExec(dest, `bash -lc '${pipeline}'`, {
+			onData: (chunk) =>
+				broadcast(HOST_CH.evtInstallLog, { dest, chunk } satisfies InstallLogEvent),
+		});
+		if (result.code !== 0) {
+			throw new Error(`Setup of "${dest}" failed — ssh exited ${result.code ?? "on a signal"}.`);
+		}
+
+		// We just reached the box over SSH, so its transport is ssh — seed that row so
+		// connect() resolves it even when `dest` is a user@host with no ssh_config entry.
+		recordConnection(db, { hostAlias: dest, transport: "ssh" });
+		return connect(dest);
+	}
+
 	async function provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO> {
 		// Provisioning targets a SPECIFIC engine — the aggregate routes by learned id,
 		// but there's no id on the box yet, so call that backend's clone directly.
@@ -264,6 +313,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		connected,
 		origins,
 		provision,
+		install,
 	};
 }
 
@@ -276,6 +326,9 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.origins, () => host.origins());
 	ipcMain.handle(HOST_CH.provision, (_e, alias: string, input: { cloneUrl: string }) =>
 		host.provision(alias, input),
+	);
+	ipcMain.handle(HOST_CH.install, (_e, dest: string, opts?: { wsAddr?: string }) =>
+		host.install(dest, opts),
 	);
 }
 
