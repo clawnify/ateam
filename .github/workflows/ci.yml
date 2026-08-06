@@ -1,0 +1,34 @@
+name: CI
+
+# Runs on every PR (incl. external forks — read-only token, no secrets) and on
+# pushes to main. This is the check the "Protect" ruleset requires before merge,
+# so external contributions can't land on main with failing types/lint/tests.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: bun install --frozen-lockfile
+      # git-core's initRepository tests make real commits, which need an identity;
+      # a fresh runner has none (developer machines do, via global git config).
+      - name: Configure git identity for tests
+        run: |
+          git config --global user.email "ci@clawnify.dev"
+          git config --global user.name "Ateam CI"
+      - run: bun run typecheck
+      # `lint` (biome) is intentionally omitted: biome's native binary doesn't
+      # resolve cleanly yet. Add `bun run lint` here once that's fixed.
+      - run: bun test
