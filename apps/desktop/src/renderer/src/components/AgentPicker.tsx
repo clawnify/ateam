@@ -162,10 +162,7 @@ export function AgentPicker({
 										</pre>
 									) : null}
 									{loginFor?.agentId === a.id ? (
-										<div className="agent-login">
-											Installed ✓ — sign in on the box:{" "}
-											<code>{loginFor.command ?? `${a.id} login`}</code>
-										</div>
+										<div className="agent-login">Installed ✓ — it signs in on first use.</div>
 									) : null}
 								</div>
 							);
