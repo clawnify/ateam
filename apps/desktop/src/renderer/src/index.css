@@ -1889,3 +1889,71 @@ input {
 	opacity: 0.5;
 	cursor: default;
 }
+
+/* Agent picker (install missing agents on a box) */
+.agent-missing {
+	font-size: 10px;
+	color: var(--text-dim);
+	background: var(--bg-elev-2);
+	border-radius: 5px;
+	padding: 1px 5px;
+	margin-left: 4px;
+}
+.agent-item {
+	display: flex;
+	flex-direction: column;
+}
+.agent-install-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	align-self: flex-start;
+	margin: 0 10px 6px 34px;
+	background: var(--bg-elev-2);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 3px 9px;
+	color: var(--text);
+	font: inherit;
+	font-size: 11px;
+	cursor: pointer;
+}
+.agent-install-btn:hover {
+	border-color: var(--text);
+}
+.agent-install-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.agent-login {
+	font-size: 11px;
+	color: var(--text-dim);
+	padding: 0 10px 8px 34px;
+	line-height: 1.45;
+}
+.agent-login code {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	color: var(--text);
+	background: var(--bg-elev-2);
+	padding: 1px 5px;
+	border-radius: 4px;
+}
+.agent-error {
+	font-size: 11px;
+	color: #e5645a;
+	padding: 4px 10px 8px;
+}
+
+.cb-agents {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px 14px;
+}
+.cb-agent {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 13px;
+	color: var(--text);
+	cursor: pointer;
+}

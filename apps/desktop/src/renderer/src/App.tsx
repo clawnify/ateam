@@ -391,6 +391,20 @@ export function App() {
 			off();
 		}
 	}, []);
+	// Install a coding agent's CLI on a connected box (streamed via the same install log).
+	const installAgentOnBox = useCallback(
+		async (alias: string, agentId: string, onLog: (chunk: string) => void) => {
+			const off = window.ateamHost.onInstallLog((e) => {
+				if (e.dest === alias) onLog(e.chunk);
+			});
+			try {
+				return await window.ateamHost.installAgent(alias, agentId);
+			} finally {
+				off();
+			}
+		},
+		[],
+	);
 	const canRemote = activeRepoRemote !== null;
 	const hasLocalMember = activeMembers.some((m) => m.alias === null);
 	const composerEnvs = useMemo(() => {
@@ -1083,6 +1097,7 @@ export function App() {
 					envAgents={envAgents}
 					onAdd={addTailscaleBox}
 					onInstall={installBox}
+					onInstallAgent={installAgentOnBox}
 					onClose={() => setComposerOpen(false)}
 					onCreate={composeTask}
 				/>

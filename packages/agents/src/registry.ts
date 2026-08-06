@@ -34,6 +34,11 @@ export interface AgentDefinition {
 	agentsCommand?: string;
 	/** How an initial task prompt is delivered (if supported). */
 	promptTransport?: PromptTransport;
+	/** Non-interactive command that installs this agent's CLI on a box (run in a
+	 *  login shell over SSH). Omitted if we don't know how to install it. */
+	install?: string;
+	/** The one-time OAuth login the user runs on the box after install (browser flow). */
+	loginCommand?: string;
 }
 
 // Registry of the supported agent CLIs. Command lines and the YOLO bypass
@@ -50,6 +55,8 @@ export const AGENTS = [
 		yoloFlag: "--permission-mode auto",
 		resumeCommand: "claude --continue",
 		agentsCommand: "claude agents",
+		install: "curl -fsSL https://claude.ai/install.sh | bash",
+		loginCommand: "claude login",
 	},
 	{
 		id: "codex",
@@ -59,6 +66,8 @@ export const AGENTS = [
 		command: "codex",
 		yoloFlag: "--dangerously-bypass-approvals-and-sandbox",
 		resumeCommand: "codex resume --last",
+		install: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+		loginCommand: "codex login",
 	},
 	{
 		id: "opencode",
@@ -67,6 +76,8 @@ export const AGENTS = [
 		bin: "opencode",
 		command: "opencode",
 		resumeCommand: "opencode --continue",
+		install: "curl -fsSL https://opencode.ai/install | bash",
+		loginCommand: "opencode auth login",
 	},
 ] as const satisfies readonly AgentDefinition[];
 
