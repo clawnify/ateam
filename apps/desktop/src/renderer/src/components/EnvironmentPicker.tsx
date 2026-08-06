@@ -1,4 +1,4 @@
-import { Check, Cloud, Download, Laptop, Plus, Server } from "lucide-react";
+import { Check, Cloud, Laptop, Network, Plus, Server } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CreateBoxDialog } from "./CreateBoxDialog";
@@ -8,8 +8,10 @@ import { CreateBoxDialog } from "./CreateBoxDialog";
 // runs the task on that VPS (cloning the project there on first use). Disabled
 // options (no git remote to clone from) show why they can't be picked.
 //
-// SSH boxes arrive on their own — they're whatever is in ~/.ssh/config. A Tailscale
-// box has no such registry, so it's typed in once here; connecting is what saves it.
+// Ways to add a box (create one on Hetzner, set one up over SSH, or connect a Tailscale
+// endpoint) live behind one "Add a remote connection" row so the list stays short — it
+// expands to the methods on click. SSH boxes otherwise arrive on their own (whatever is
+// in ~/.ssh/config); a Tailscale box has no such registry, so it's typed in once here.
 
 const POP_W = 260;
 
@@ -36,18 +38,17 @@ export function EnvironmentPicker({
 	 *  installer's output; resolves once the box is set up and connected. */
 	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<void>;
 }) {
-	const [adding, setAdding] = useState(false);
+	// The add-a-connection section: "" collapsed → "menu" (the methods) → a chosen
+	// method's inline form. "Create a new box" opens a modal instead (too big for here).
+	const [addMode, setAddMode] = useState<"" | "menu" | "ssh" | "tailscale">("");
 	const [endpoint, setEndpoint] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [pos, setPos] = useState<{ bottom: number; left: number } | null>(null);
-	// The "Set up a box over SSH" flow: an SSH destination, then a live installer log.
-	const [setup, setSetup] = useState(false);
 	const [dest, setDest] = useState("");
 	const [installing, setInstalling] = useState(false);
 	const [log, setLog] = useState("");
 	const [installError, setInstallError] = useState<string | null>(null);
-	// The "Create a new box" flow opens a modal (too much for the popover).
 	const [creating, setCreating] = useState(false);
 	const btnRef = useRef<HTMLButtonElement>(null);
 	const popRef = useRef<HTMLDivElement>(null);
@@ -56,7 +57,10 @@ export function EnvironmentPicker({
 	const isRemote = value !== null;
 	const label = environments.find((e) => e.alias === value)?.label ?? "Local";
 
-	const close = () => setPos(null);
+	const close = () => {
+		setPos(null);
+		setAddMode("");
+	};
 	const open = () => {
 		const r = btnRef.current?.getBoundingClientRect();
 		if (!r) return;
@@ -94,7 +98,6 @@ export function EnvironmentPicker({
 			// Connecting is what saves it, so only now is it a real option.
 			onChange(ep);
 			setEndpoint("");
-			setAdding(false);
 			close();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
@@ -119,7 +122,6 @@ export function EnvironmentPicker({
 			// install() sets the box up AND connects it — select it and close.
 			onChange(d);
 			setDest("");
-			setSetup(false);
 			close();
 		} catch (err) {
 			setInstallError(err instanceof Error ? err.message : String(err));
@@ -193,8 +195,74 @@ export function EnvironmentPicker({
 								{env.alias === value ? <Check size={15} strokeWidth={2.25} /> : null}
 							</button>
 						))}
-						{onAdd &&
-							(adding ? (
+						{(onAdd || onInstall) &&
+							(addMode === "" ? (
+								<button type="button" className="conn-row" onClick={() => setAddMode("menu")}>
+									<span className="conn-ico">
+										<Plus size={15} strokeWidth={1.75} />
+									</span>
+									<span className="conn-txt">
+										<span className="conn-title">Add a remote connection</span>
+									</span>
+								</button>
+							) : addMode === "menu" ? (
+								<>
+									{onInstall && (
+										<button
+											type="button"
+											className="conn-row"
+											onClick={() => {
+												setCreating(true);
+												close();
+											}}
+										>
+											<span className="conn-ico">
+												<Cloud size={15} strokeWidth={1.75} />
+											</span>
+											<span className="conn-txt">
+												<span className="conn-title">Create a new box</span>
+												<span className="conn-sub">Spin up a VPS on Hetzner</span>
+											</span>
+										</button>
+									)}
+									{onInstall && (
+										<button
+											type="button"
+											className="conn-row"
+											onClick={() => {
+												setAddMode("ssh");
+												setInstallError(null);
+											}}
+										>
+											<span className="conn-ico">
+												<Server size={15} strokeWidth={1.75} />
+											</span>
+											<span className="conn-txt">
+												<span className="conn-title">Set up a box over SSH</span>
+												<span className="conn-sub">Install the engine on a box you have</span>
+											</span>
+										</button>
+									)}
+									{onAdd && (
+										<button
+											type="button"
+											className="conn-row"
+											onClick={() => {
+												setAddMode("tailscale");
+												setError(null);
+											}}
+										>
+											<span className="conn-ico">
+												<Network size={15} strokeWidth={1.75} />
+											</span>
+											<span className="conn-txt">
+												<span className="conn-title">Add a Tailscale box</span>
+												<span className="conn-sub">Connect one already on your tailnet</span>
+											</span>
+										</button>
+									)}
+								</>
+							) : addMode === "tailscale" ? (
 								<div className="conn-add">
 									<input
 										// biome-ignore lint/a11y/noAutofocus: the row was just clicked to reveal this
@@ -208,7 +276,7 @@ export function EnvironmentPicker({
 										onKeyDown={(e) => {
 											if (e.key === "Enter") void submit();
 											if (e.key === "Escape") {
-												setAdding(false);
+												setAddMode("menu");
 												setError(null);
 											}
 										}}
@@ -218,24 +286,6 @@ export function EnvironmentPicker({
 									</span>
 								</div>
 							) : (
-								<button
-									type="button"
-									className="conn-row"
-									onClick={() => {
-										setAdding(true);
-										setError(null);
-									}}
-								>
-									<span className="conn-ico">
-										<Plus size={15} strokeWidth={1.75} />
-									</span>
-									<span className="conn-txt">
-										<span className="conn-title">Add a Tailscale box</span>
-									</span>
-								</button>
-							))}
-						{onInstall &&
-							(setup ? (
 								<div className="conn-add">
 									<input
 										// biome-ignore lint/a11y/noAutofocus: the row was just clicked to reveal this
@@ -249,7 +299,7 @@ export function EnvironmentPicker({
 										onKeyDown={(e) => {
 											if (e.key === "Enter") void submitInstall();
 											if (e.key === "Escape" && !installing) {
-												setSetup(false);
+												setAddMode("menu");
 												setInstallError(null);
 											}
 										}}
@@ -274,42 +324,7 @@ export function EnvironmentPicker({
 										</button>
 									)}
 								</div>
-							) : (
-								<button
-									type="button"
-									className="conn-row"
-									onClick={() => {
-										setSetup(true);
-										setInstallError(null);
-									}}
-								>
-									<span className="conn-ico">
-										<Download size={15} strokeWidth={1.75} />
-									</span>
-									<span className="conn-txt">
-										<span className="conn-title">Set up a box over SSH</span>
-										<span className="conn-sub">Install the engine on a fresh box</span>
-									</span>
-								</button>
 							))}
-						{onInstall && (
-							<button
-								type="button"
-								className="conn-row"
-								onClick={() => {
-									setCreating(true);
-									close();
-								}}
-							>
-								<span className="conn-ico">
-									<Cloud size={15} strokeWidth={1.75} />
-								</span>
-								<span className="conn-txt">
-									<span className="conn-title">Create a new box</span>
-									<span className="conn-sub">Spin up a VPS on Hetzner</span>
-								</span>
-							</button>
-						)}
 					</div>,
 					document.body,
 				)}
