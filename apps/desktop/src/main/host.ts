@@ -18,9 +18,11 @@ import {
 	wsClientTransport,
 } from "@ateam/protocol";
 import {
+	buildCloudInit,
 	type ConnectionDTO,
 	type Engine,
 	endpointUrl,
+	hetznerProvider,
 	type HostTransport,
 	listConnections,
 	recordConnection,
@@ -28,10 +30,26 @@ import {
 	sshClientTransport,
 	sshExec,
 } from "@ateam/server";
-import { ipcMain } from "electron";
+import { app, ipcMain } from "electron";
 import WebSocket from "ws";
-import { HOST_CH, type HostStatus, type InstallLogEvent } from "../shared/host";
+import { join } from "node:path";
+import {
+	type CreateBoxSpec,
+	type CreateProgressEvent,
+	HOST_CH,
+	type HostStatus,
+	type InstallLogEvent,
+	type ProviderOptions,
+	type SecretsStatus,
+} from "../shared/host";
 import { type Aggregate, createAggregate } from "./aggregate";
+import {
+	createSecretStore,
+	generateBoxKey,
+	writeSshConfigEntry,
+	waitForSsh,
+	waitForTailscale,
+} from "./box-setup";
 import {
 	type Backend,
 	type BackendEvent,
@@ -88,6 +106,14 @@ export interface Host {
 	/** Install the ateam engine on a reachable SSH box (idempotent), streaming the
 	 *  installer's output, then connect. `dest` is an ssh_config alias or user@host. */
 	install(dest: string, opts?: { wsAddr?: string }): Promise<HostStatus>;
+	/** Create a box from scratch at a provider, provision it, and connect. */
+	createBox(spec: CreateBoxSpec): Promise<HostStatus>;
+	/** Which provisioning secrets are saved (booleans, never the values). */
+	secretsStatus(): SecretsStatus;
+	/** Persist provider credentials (encrypted). Returns the new saved-status. */
+	saveSecrets(patch: { hetznerToken?: string; tailscaleAuthKey?: string }): SecretsStatus;
+	/** The provider's real regions + sizes for the given token (or the saved one). */
+	providerOptions(token?: string): Promise<ProviderOptions>;
 }
 
 export interface HostDeps {
@@ -291,6 +317,92 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return connect(dest);
 	}
 
+	// The encrypted provider-credentials store, created lazily (needs app to be ready).
+	let secretsStore: ReturnType<typeof createSecretStore> | null = null;
+	const secrets = () =>
+		(secretsStore ??= createSecretStore(join(app.getPath("userData"), "provider-secrets.enc")));
+
+	function secretsStatus(): SecretsStatus {
+		const s = secrets().load();
+		return { hetznerToken: !!s.hetznerToken, tailscaleAuthKey: !!s.tailscaleAuthKey };
+	}
+
+	function saveSecrets(patch: { hetznerToken?: string; tailscaleAuthKey?: string }): SecretsStatus {
+		secrets().save(patch);
+		return secretsStatus();
+	}
+
+	function providerOptions(token?: string): Promise<ProviderOptions> {
+		const t = (token || secrets().load().hetznerToken || "").trim();
+		if (!t) throw new Error("Enter your Hetzner API token to load regions and sizes.");
+		return hetznerProvider.fetchOptions(t);
+	}
+
+	/** A DNS-label alias from a free-text box name (also the Tailscale hostname). */
+	function sanitizeName(raw: string): string {
+		const s = raw
+			.toLowerCase()
+			.replace(/[^a-z0-9-]+/g, "-")
+			.replace(/^-+|-+$/g, "")
+			.slice(0, 63)
+			.replace(/-+$/g, "");
+		if (!s) throw new Error("Please give the box a name (letters, digits, or dashes).");
+		return s;
+	}
+
+	async function createBox(spec: CreateBoxSpec): Promise<HostStatus> {
+		const alias = sanitizeName(spec.name);
+		const saved = secrets().load();
+		const token = (spec.hetznerToken || saved.hetznerToken || "").trim();
+		const tsKey = (spec.tailscaleAuthKey || saved.tailscaleAuthKey || "").trim();
+		if (!token) throw new Error("A Hetzner API token is required.");
+		if (!tsKey) throw new Error("A Tailscale auth key is required.");
+		// Remember whatever we used, so the next box needs no re-entry.
+		secrets().save({ hetznerToken: token, tailscaleAuthKey: tsKey });
+
+		const progress = (stage: string) =>
+			broadcast(HOST_CH.evtCreateProgress, { alias, stage } satisfies CreateProgressEvent);
+
+		progress("Generating an SSH key");
+		const { publicKey, privateKeyPath } = generateBoxKey(app.getPath("userData"), alias);
+		const cloudInit = buildCloudInit({
+			hostname: alias,
+			sshPublicKey: publicKey,
+			tailscaleAuthKey: tsKey,
+		});
+
+		const server = await hetznerProvider.createServer({
+			token,
+			name: alias,
+			region: spec.region,
+			size: spec.size,
+			sshPublicKey: publicKey,
+			cloudInit,
+			onProgress: progress,
+		});
+
+		progress("Configuring SSH access");
+		// The alias may be suffixed to dodge a pre-existing ~/.ssh/config entry, so use
+		// what was actually written for every subsequent SSH (never the raw name).
+		const boxAlias = writeSshConfigEntry(alias, server.publicIp, privateKeyPath);
+
+		progress("Waiting for the box to boot");
+		await waitForSsh(boxAlias);
+
+		progress("Joining Tailscale");
+		const onTailnet = await waitForTailscale(boxAlias);
+		if (!onTailnet) {
+			progress(
+				"Tailscale didn't come up — installing anyway; the phone won't connect until it's fixed",
+			);
+		}
+
+		// Reuse the streamed installer (Gap A): it derives the box's tailnet IP into
+		// ATEAM_WS_ADDR (so the phone can connect) and connects on success.
+		progress("Installing the engine");
+		return install(boxAlias);
+	}
+
 	async function provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO> {
 		// Provisioning targets a SPECIFIC engine — the aggregate routes by learned id,
 		// but there's no id on the box yet, so call that backend's clone directly.
@@ -314,6 +426,10 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		origins,
 		provision,
 		install,
+		createBox,
+		secretsStatus,
+		saveSecrets,
+		providerOptions,
 	};
 }
 
@@ -330,6 +446,13 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.install, (_e, dest: string, opts?: { wsAddr?: string }) =>
 		host.install(dest, opts),
 	);
+	ipcMain.handle(HOST_CH.createBox, (_e, spec: CreateBoxSpec) => host.createBox(spec));
+	ipcMain.handle(HOST_CH.secretsStatus, () => host.secretsStatus());
+	ipcMain.handle(
+		HOST_CH.saveSecrets,
+		(_e, patch: { hetznerToken?: string; tailscaleAuthKey?: string }) => host.saveSecrets(patch),
+	);
+	ipcMain.handle(HOST_CH.providerOptions, (_e, token?: string) => host.providerOptions(token));
 }
 
 /** Reject (and clean up) if a promise doesn't settle in time. */

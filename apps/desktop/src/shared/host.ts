@@ -18,9 +18,18 @@ export const HOST_CH = {
 	provision: "host:provision",
 	/** Install the ateam engine on a reachable SSH box, then connect to it. */
 	install: "host:install",
+	/** Create a box from scratch at a cloud provider, provision it, and connect. */
+	createBox: "host:createBox",
+	/** Read/write the encrypted provider credentials (token + Tailscale auth key). */
+	secretsStatus: "host:secretsStatus",
+	saveSecrets: "host:saveSecrets",
+	/** The provider's live catalog (regions + sizes) for the given/saved token. */
+	providerOptions: "host:providerOptions",
 	evtConnectionsChanged: "evt:host:connections",
 	/** Streamed installer output (stdout+stderr) during host:install. */
 	evtInstallLog: "evt:host:install-log",
+	/** Staged progress while creating a box (host:createBox). */
+	evtCreateProgress: "evt:host:create-progress",
 } as const;
 
 /** One chunk of installer output, tagged with the destination it came from. */
@@ -28,6 +37,39 @@ export interface InstallLogEvent {
 	/** The SSH destination being set up (ssh_config alias or user@host). */
 	dest: string;
 	chunk: string;
+}
+
+/** What to create at the provider. Credentials fall back to the saved secrets. */
+export interface CreateBoxSpec {
+	/** Box name → ssh_config alias + Tailscale hostname (sanitized to a DNS label). */
+	name: string;
+	/** Provider location slug (e.g. Hetzner `fsn1`). */
+	region: string;
+	/** Provider server-type slug (e.g. Hetzner `cx22`). */
+	size: string;
+	/** Overrides the saved Hetzner token for this run (and is then remembered). */
+	hetznerToken?: string;
+	/** Overrides the saved Tailscale auth key for this run (and is then remembered). */
+	tailscaleAuthKey?: string;
+}
+
+/** A stage narration while a box is being created (no secrets, just the step). */
+export interface CreateProgressEvent {
+	alias: string;
+	stage: string;
+}
+
+/** Whether each provisioning secret is already saved (never the value itself). */
+export interface SecretsStatus {
+	hetznerToken: boolean;
+	tailscaleAuthKey: boolean;
+}
+
+/** The provider's live catalog, fetched with the token so it reflects real availability. */
+export interface ProviderOptions {
+	locations: { slug: string; label: string }[];
+	/** `locations` = the slugs a size is available in (empty = unknown → offer anywhere). */
+	serverTypes: { slug: string; label: string; locations: string[] }[];
 }
 
 /** Which engine is driving the app right now. */
@@ -62,8 +104,20 @@ export interface AteamHost {
 	 *  phone's WebSocket listener too), then connect. `dest` is an ssh_config alias
 	 *  or `user@host`. Progress streams via onInstallLog. */
 	install(dest: string, opts?: { wsAddr?: string }): Promise<HostStatus>;
+	/** Create a box from scratch at a cloud provider (generates the SSH key, joins
+	 *  Tailscale, installs the engine), then connect. Progress via onCreateProgress +
+	 *  onInstallLog; credentials fall back to the saved secrets. */
+	createBox(spec: CreateBoxSpec): Promise<HostStatus>;
+	/** Which provisioning secrets are already saved (booleans, never the values). */
+	secretsStatus(): Promise<SecretsStatus>;
+	/** Persist provider credentials (encrypted at rest). Empty string clears one. */
+	saveSecrets(patch: { hetznerToken?: string; tailscaleAuthKey?: string }): Promise<SecretsStatus>;
+	/** The provider's real regions + sizes for the given token (or the saved one). */
+	providerOptions(token?: string): Promise<ProviderOptions>;
 	/** Fires with the full connected set whenever an engine is added or removed. */
 	onConnectionsChanged(cb: (connected: HostStatus[]) => void): () => void;
-	/** Subscribe to installer output during install(); returns an unsubscribe. */
+	/** Subscribe to installer output during install()/createBox(); returns an unsubscribe. */
 	onInstallLog(cb: (e: InstallLogEvent) => void): () => void;
+	/** Subscribe to box-creation stage narration; returns an unsubscribe. */
+	onCreateProgress(cb: (e: CreateProgressEvent) => void): () => void;
 }
