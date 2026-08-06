@@ -152,22 +152,35 @@ boxd writes the `mybox.boxd` host alias — hostname, port and key — straight 
 `~/.ssh/config`, so `ssh mybox.boxd` works immediately and the box shows up in Ateam's
 connection switcher with nothing else to configure.
 
+**Give boxd access to your repos once, on your Mac** — not per box:
+
+```bash
+boxd manage integrations connect github
+```
+
+boxd's images ship a git credential helper wired in `/etc/gitconfig`
+(`helper = boxd`), so every machine — and every fork of one — gets authenticated git
+without a token ever being written inside the VM. Disconnecting revokes it centrally.
+**Don't run `gh auth setup-git` on a boxd box:** it writes a *global* helper that
+resets the inherited chain, replacing boxd's with its own.
+
 **Then set the box up for agents,** over that alias. Ateam commits, pushes and opens
-PRs as this user, so it needs a real git identity and a logged-in `gh`:
+PRs as this user, so it needs a git identity, and a logged-in `gh` for the PR and
+merge-queue operations that go through the `gh` API rather than git:
 
 ```bash
 ssh mybox.boxd 'git config --global user.name "you" && git config --global user.email "you@example.com"'
 ssh -t mybox.boxd 'gh auth login'      # device code — works over SSH
-ssh mybox.boxd 'gh auth setup-git'     # REQUIRED — see below
 ssh -t mybox.boxd claude               # `claude` is preinstalled; log in once, then exit
 
 ssh mybox.boxd 'curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash'
 ```
 
-`gh auth setup-git` is the step that bites. `gh auth login` authenticates the `gh` CLI
-but leaves `git` itself without a credential helper, and Ateam provisions a project
-with `git clone` — so without it, adding a project to the box fails with
-`RPC connection closed` rather than a credential error.
+Public repos clone with no credentials at all; the setup above is what private repos
+need. If adding a project fails with `RPC connection closed`, that's not a credential
+problem — a missing credential fails fast and loudly with
+`could not read Username for 'https://github.com'`. Check the desktop app is up to
+date instead; a client older than the box's protocol version drops the connection.
 
 The readiness report ends with `[--] tailscale`. That one is expected here — boxd
 provides the private path itself.

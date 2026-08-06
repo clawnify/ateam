@@ -33,7 +33,7 @@ cat > "$STAGE/package.json.next" <<JSON
 {
   "name": "ateam",
   "version": "$VERSION",
-  "main": "out/main/index.js",
+  "main": "out/main/bootstrap.js",
   "author": "Clawnify",
   "dependencies": $DEPS,
   "devDependencies": {
