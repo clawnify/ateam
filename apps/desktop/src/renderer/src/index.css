@@ -1751,3 +1751,141 @@ input {
 .conn-install-go:hover {
 	border-color: var(--text);
 }
+
+/* Create-a-box dialog */
+.dialog.createbox {
+	width: 420px;
+	max-width: calc(100vw - 80px);
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.cb-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--text);
+}
+.cb-title {
+	font-size: 15px;
+	font-weight: 600;
+}
+.cb-sub {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.cb-x {
+	margin-left: auto;
+}
+.cb-form,
+.cb-progress {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.cb-row {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.cb-row > span {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.cb-input {
+	width: 100%;
+	background: var(--bg-elev-2);
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	padding: 7px 9px;
+	color: var(--text);
+	font: inherit;
+	font-size: 13px;
+}
+.cb-input:focus {
+	outline: none;
+	border-color: var(--text);
+}
+.cb-error {
+	font-size: 12px;
+	color: #e5645a;
+}
+.cb-create {
+	background: var(--text);
+	color: var(--bg);
+	border: none;
+	border-radius: 8px;
+	padding: 9px 14px;
+	font: inherit;
+	font-weight: 600;
+	font-size: 13px;
+	cursor: pointer;
+}
+.cb-create:hover {
+	opacity: 0.9;
+}
+.cb-hint {
+	font-size: 11px;
+	color: var(--text-dim);
+	line-height: 1.45;
+}
+.cb-stages {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+}
+.cb-stages li {
+	font-size: 13px;
+	color: var(--text-dim);
+	padding-left: 18px;
+	position: relative;
+}
+.cb-stages li.done::before {
+	content: "✓";
+	position: absolute;
+	left: 0;
+	color: var(--text);
+}
+.cb-stages li.active {
+	color: var(--text);
+}
+.cb-stages li.active::before {
+	content: "…";
+	position: absolute;
+	left: 0;
+}
+.cb-log {
+	margin: 0;
+	max-height: 180px;
+	overflow-y: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 11px;
+	line-height: 1.45;
+	color: var(--text-dim);
+	background: var(--bg-elev-2);
+	border-radius: 6px;
+	padding: 8px 10px;
+}
+.cb-actions {
+	display: flex;
+	gap: 8px;
+}
+.cb-back {
+	background: var(--bg-elev-2);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 9px 14px;
+	color: var(--text);
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+}
+.cb-create:disabled {
+	opacity: 0.5;
+	cursor: default;
+}

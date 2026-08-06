@@ -9,7 +9,13 @@ import {
 	type TaskDTO,
 } from "@ateam/protocol";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { type AteamHost, HOST_CH, type HostStatus, type InstallLogEvent } from "../shared/host";
+import {
+	type AteamHost,
+	type CreateProgressEvent,
+	HOST_CH,
+	type HostStatus,
+	type InstallLogEvent,
+} from "../shared/host";
 
 const api: AteamApi = {
 	projects: {
@@ -118,6 +124,10 @@ const host: AteamHost = {
 	origins: () => ipcRenderer.invoke(HOST_CH.origins),
 	provision: (alias, input) => ipcRenderer.invoke(HOST_CH.provision, alias, input),
 	install: (dest, opts) => ipcRenderer.invoke(HOST_CH.install, dest, opts),
+	createBox: (spec) => ipcRenderer.invoke(HOST_CH.createBox, spec),
+	secretsStatus: () => ipcRenderer.invoke(HOST_CH.secretsStatus),
+	saveSecrets: (patch) => ipcRenderer.invoke(HOST_CH.saveSecrets, patch),
+	providerOptions: (token) => ipcRenderer.invoke(HOST_CH.providerOptions, token),
 	onConnectionsChanged: (cb: (connected: HostStatus[]) => void) => {
 		const handler = (_: unknown, connected: HostStatus[]) => cb(connected);
 		ipcRenderer.on(HOST_CH.evtConnectionsChanged, handler);
@@ -127,6 +137,11 @@ const host: AteamHost = {
 		const handler = (_: unknown, e: InstallLogEvent) => cb(e);
 		ipcRenderer.on(HOST_CH.evtInstallLog, handler);
 		return () => ipcRenderer.off(HOST_CH.evtInstallLog, handler);
+	},
+	onCreateProgress: (cb: (e: CreateProgressEvent) => void) => {
+		const handler = (_: unknown, e: CreateProgressEvent) => cb(e);
+		ipcRenderer.on(HOST_CH.evtCreateProgress, handler);
+		return () => ipcRenderer.off(HOST_CH.evtCreateProgress, handler);
 	},
 };
 

@@ -1,6 +1,7 @@
-import { Check, Download, Laptop, Plus, Server } from "lucide-react";
+import { Check, Cloud, Download, Laptop, Plus, Server } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { CreateBoxDialog } from "./CreateBoxDialog";
 
 // The task's "Run on" control — the pill + popover style the global connection
 // switcher used, moved into the New Task dialog. `null` alias = this Mac; a box alias
@@ -46,6 +47,8 @@ export function EnvironmentPicker({
 	const [installing, setInstalling] = useState(false);
 	const [log, setLog] = useState("");
 	const [installError, setInstallError] = useState<string | null>(null);
+	// The "Create a new box" flow opens a modal (too much for the popover).
+	const [creating, setCreating] = useState(false);
 	const btnRef = useRef<HTMLButtonElement>(null);
 	const popRef = useRef<HTMLDivElement>(null);
 	const logRef = useRef<HTMLPreElement>(null);
@@ -289,7 +292,37 @@ export function EnvironmentPicker({
 									</span>
 								</button>
 							))}
+						{onInstall && (
+							<button
+								type="button"
+								className="conn-row"
+								onClick={() => {
+									setCreating(true);
+									close();
+								}}
+							>
+								<span className="conn-ico">
+									<Cloud size={15} strokeWidth={1.75} />
+								</span>
+								<span className="conn-txt">
+									<span className="conn-title">Create a new box</span>
+									<span className="conn-sub">Spin up a VPS on Hetzner</span>
+								</span>
+							</button>
+						)}
 					</div>,
+					document.body,
+				)}
+			{creating &&
+				createPortal(
+					<CreateBoxDialog
+						onClose={() => setCreating(false)}
+						onDone={(alias) => {
+							setCreating(false);
+							onChange(alias);
+							close();
+						}}
+					/>,
 					document.body,
 				)}
 		</>
