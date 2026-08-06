@@ -32,6 +32,7 @@ export function NewTaskComposer({
 	environments,
 	envAgents,
 	onAdd,
+	onInstall,
 	onClose,
 	onCreate,
 }: {
@@ -44,6 +45,8 @@ export function NewTaskComposer({
 	envAgents: Record<string, string[]>;
 	/** Connect a Tailscale endpoint typed into the picker. */
 	onAdd?: (endpoint: string) => Promise<void>;
+	/** Set up a fresh box over SSH (install engine + connect) from the picker. */
+	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<void>;
 	onClose: () => void;
 	onCreate: (input: {
 		name: string;
@@ -187,6 +190,7 @@ export function NewTaskComposer({
 						value={alias}
 						onChange={setAlias}
 						onAdd={onAdd}
+						onInstall={onInstall}
 					/>
 					<button
 						type="button"

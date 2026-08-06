@@ -135,6 +135,14 @@ SSH_FLAGS="-i ~/.ssh/mykey" packages/server/scripts/install-remote.sh you@your-b
 ```
 </details>
 
+> **Prefer the desktop app?** You can run this same installer over SSH without a
+> terminal: in the New Task dialog's **Run on** picker choose **Set up a box over
+> SSH** and give the box's `~/.ssh/config` alias (or `user@host`). Ateam installs
+> the server with `--service` and — when the box is already on Tailscale (step 2) —
+> sets `ATEAM_WS_ADDR` to its tailnet IP so the iOS app works too, streams the
+> installer's log, and connects when it finishes. You still handle Tailscale (step 2)
+> and the readiness items (git identity, `gh`, an agent CLI) yourself.
+
 ## 2. Put the box on your tailnet
 
 Install Tailscale on the box and bring it up. `tailscale up` prints a URL — open it and

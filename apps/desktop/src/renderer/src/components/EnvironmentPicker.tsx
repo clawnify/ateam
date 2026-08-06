@@ -1,4 +1,4 @@
-import { Check, Laptop, Plus, Server } from "lucide-react";
+import { Check, Download, Laptop, Plus, Server } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -24,20 +24,31 @@ export function EnvironmentPicker({
 	value,
 	onChange,
 	onAdd,
+	onInstall,
 }: {
 	environments: EnvOption[];
 	value: string | null;
 	onChange: (alias: string | null) => void;
 	/** Connect a Tailscale endpoint (`host:port`); rejects with a message to show. */
 	onAdd?: (endpoint: string) => Promise<void>;
+	/** Install the engine on a fresh SSH box (`alias` or `user@host`), streaming the
+	 *  installer's output; resolves once the box is set up and connected. */
+	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<void>;
 }) {
 	const [adding, setAdding] = useState(false);
 	const [endpoint, setEndpoint] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [pos, setPos] = useState<{ bottom: number; left: number } | null>(null);
+	// The "Set up a box over SSH" flow: an SSH destination, then a live installer log.
+	const [setup, setSetup] = useState(false);
+	const [dest, setDest] = useState("");
+	const [installing, setInstalling] = useState(false);
+	const [log, setLog] = useState("");
+	const [installError, setInstallError] = useState<string | null>(null);
 	const btnRef = useRef<HTMLButtonElement>(null);
 	const popRef = useRef<HTMLDivElement>(null);
+	const logRef = useRef<HTMLPreElement>(null);
 
 	const isRemote = value !== null;
 	const label = environments.find((e) => e.alias === value)?.label ?? "Local";
@@ -86,6 +97,31 @@ export function EnvironmentPicker({
 			setError(err instanceof Error ? err.message : String(err));
 		} finally {
 			setBusy(false);
+		}
+	};
+
+	// Keep the streaming installer log pinned to its newest line.
+	useEffect(() => {
+		if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+	}, [log]);
+
+	const submitInstall = async () => {
+		const d = dest.trim();
+		if (!d || !onInstall || installing) return;
+		setInstalling(true);
+		setInstallError(null);
+		setLog("");
+		try {
+			await onInstall(d, (chunk) => setLog((prev) => prev + chunk));
+			// install() sets the box up AND connects it — select it and close.
+			onChange(d);
+			setDest("");
+			setSetup(false);
+			close();
+		} catch (err) {
+			setInstallError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setInstalling(false);
 		}
 	};
 
@@ -192,6 +228,64 @@ export function EnvironmentPicker({
 									</span>
 									<span className="conn-txt">
 										<span className="conn-title">Add a Tailscale box</span>
+									</span>
+								</button>
+							))}
+						{onInstall &&
+							(setup ? (
+								<div className="conn-add">
+									<input
+										// biome-ignore lint/a11y/noAutofocus: the row was just clicked to reveal this
+										autoFocus
+										className="conn-add-input"
+										placeholder="ssh alias or user@host"
+										aria-label="SSH destination to set up"
+										value={dest}
+										disabled={installing}
+										onChange={(e) => setDest(e.target.value)}
+										onKeyDown={(e) => {
+											if (e.key === "Enter") void submitInstall();
+											if (e.key === "Escape" && !installing) {
+												setSetup(false);
+												setInstallError(null);
+											}
+										}}
+									/>
+									{log && (
+										<pre ref={logRef} className="conn-install-log">
+											{log}
+										</pre>
+									)}
+									<span className="conn-sub">
+										{installing
+											? "Setting up the box…"
+											: (installError ?? "Installs the engine over SSH, then connects")}
+									</span>
+									{!installing && (
+										<button
+											type="button"
+											className="conn-install-go"
+											onClick={() => void submitInstall()}
+										>
+											Set up
+										</button>
+									)}
+								</div>
+							) : (
+								<button
+									type="button"
+									className="conn-row"
+									onClick={() => {
+										setSetup(true);
+										setInstallError(null);
+									}}
+								>
+									<span className="conn-ico">
+										<Download size={15} strokeWidth={1.75} />
+									</span>
+									<span className="conn-txt">
+										<span className="conn-title">Set up a box over SSH</span>
+										<span className="conn-sub">Install the engine on a fresh box</span>
 									</span>
 								</button>
 							))}

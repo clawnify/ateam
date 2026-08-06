@@ -378,6 +378,19 @@ export function App() {
 	const addTailscaleBox = useCallback(async (endpoint: string) => {
 		await window.ateamHost.connect(endpoint);
 	}, []);
+	// Set up a fresh box over SSH: install() runs the (idempotent) installer on the
+	// box, streaming its output via onInstallLog, and connects on success. The
+	// onConnectionsChanged reconcile then folds the new box into the environment list.
+	const installBox = useCallback(async (dest: string, onLog: (chunk: string) => void) => {
+		const off = window.ateamHost.onInstallLog((e) => {
+			if (e.dest === dest) onLog(e.chunk);
+		});
+		try {
+			await window.ateamHost.install(dest);
+		} finally {
+			off();
+		}
+	}, []);
 	const canRemote = activeRepoRemote !== null;
 	const hasLocalMember = activeMembers.some((m) => m.alias === null);
 	const composerEnvs = useMemo(() => {
@@ -1069,6 +1082,7 @@ export function App() {
 					environments={composerEnvs}
 					envAgents={envAgents}
 					onAdd={addTailscaleBox}
+					onInstall={installBox}
 					onClose={() => setComposerOpen(false)}
 					onCreate={composeTask}
 				/>
