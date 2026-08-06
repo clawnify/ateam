@@ -116,7 +116,9 @@ export function writeSshConfigEntry(alias: string, hostName: string, identityFil
 		`Host ${used}`,
 		`    HostName ${hostName}`,
 		"    User ateam",
-		`    IdentityFile ${identityFile}`,
+		// Quote the path — macOS userData lives under "Application Support" (a space),
+		// and an unquoted IdentityFile makes OpenSSH reject the WHOLE config.
+		`    IdentityFile "${identityFile}"`,
 		"    StrictHostKeyChecking accept-new",
 		"",
 	].join("\n");
