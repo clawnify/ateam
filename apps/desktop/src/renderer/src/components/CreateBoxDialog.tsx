@@ -3,12 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import type { AgentDTO } from "@ateam/protocol";
 import type { BoxReadiness, ProviderOptions } from "../../../shared/host";
 
-// The one-time OAuth login per agent (mirrors the registry; the renderer can't import it).
-const AGENT_LOGIN: Record<string, string> = {
-	claude: "claude login",
-	codex: "codex login",
-	opencode: "opencode auth login",
-};
 import { HetznerLogo } from "./HetznerLogo";
 
 // "Create a box" — Ateam stands up a fresh VPS at a provider, generates the SSH key,
@@ -191,8 +185,8 @@ export function CreateBoxDialog({
 										</li>
 									) : (
 										readyAgents.map((a) => (
-											<li key={a} className="todo">
-												{a} — sign in: <code>{AGENT_LOGIN[a] ?? `${a} login`}</code>
+											<li key={a} className="done">
+												{a} installed
 											</li>
 										))
 									)}
