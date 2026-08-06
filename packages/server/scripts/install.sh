@@ -185,6 +185,30 @@ case "$HELLO" in
 *) die "handshake failed: ${HELLO:-<no reply>}" ;;
 esac
 
+# ------------------------------------------------------------------ gh ------
+
+# The GitHub CLI, so the box can clone/push your repos AND we can derive your git
+# identity from your account (below). Installed as a user-local binary — NO sudo:
+# some boxes have no passwordless sudo, and the rest of this script is sudo-free.
+# Non-fatal: a box with no gh can still run non-GitHub work.
+if ! bash -lc 'command -v gh' >/dev/null 2>&1; then
+	step "install the GitHub CLI (gh)"
+	GH_ARCH="$(uname -m)"
+	case "$GH_ARCH" in x86_64) GH_ARCH=amd64 ;; aarch64 | arm64) GH_ARCH=arm64 ;; esac
+	GH_TAG="$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)"
+	if [ -n "$GH_TAG" ]; then
+		GH_TMP="$(mktemp -d)"
+		if curl -fsSL "https://github.com/cli/cli/releases/download/${GH_TAG}/gh_${GH_TAG#v}_linux_${GH_ARCH}.tar.gz" |
+			tar -xz -C "$GH_TMP" 2>/dev/null; then
+			cp "$GH_TMP"/gh_*/bin/gh "$BIN_DIR/gh" && chmod +x "$BIN_DIR/gh"
+			info "gh installed ($("$BIN_DIR/gh" --version | head -1))"
+		else
+			info "could not download gh — clone/push will need it installed later"
+		fi
+		rm -rf "$GH_TMP"
+	fi
+fi
+
 # -------------------------------------------------------------- service ----
 
 # Opt-in (`install.sh --service`). Without it the daemon is started on demand by
@@ -264,17 +288,28 @@ step "readiness"
 have() { bash -lc "command -v $1" >/dev/null 2>&1; }
 mark() { [ "$1" = ok ] && printf '    [ok] %s\n' "$2" || printf '    [--] %s\n' "$2"; }
 
-if [ -n "$(git config --global user.email || true)" ] && [ -n "$(git config --global user.name || true)" ]; then
+# gh auth does NOT set your commit identity, so derive it from the authenticated
+# GitHub account — one `gh auth login` then covers BOTH clone/push access and the
+# commit author. Runs on any re-run after you've signed in.
+GH_BIN="$(bash -lc 'command -v gh' 2>/dev/null || true)"
+if { [ -z "$(git config --global user.name || true)" ] || [ -z "$(git config --global user.email || true)" ]; } &&
+	[ -n "$GH_BIN" ] && "$GH_BIN" auth status >/dev/null 2>&1; then
+	GH_NAME="$("$GH_BIN" api user -q '.name // .login' 2>/dev/null || true)"
+	GH_EMAIL="$("$GH_BIN" api user -q '"\(.id)+\(.login)@users.noreply.github.com"' 2>/dev/null || true)"
+	[ -n "$GH_NAME" ] && git config --global user.name "$GH_NAME"
+	[ -n "$GH_EMAIL" ] && git config --global user.email "$GH_EMAIL"
+fi
+if [ -n "$(git config --global user.name || true)" ] && [ -n "$(git config --global user.email || true)" ]; then
 	mark ok "git identity ($(git config --global user.name) <$(git config --global user.email)>)"
 else
-	mark no 'git identity — REQUIRED, agent commits fail without it:'
+	mark no 'git identity — set automatically once you `gh auth login`, or by hand:'
 	info '     git config --global user.name "you"; git config --global user.email "you@example.com"'
 fi
 
-if have gh && [ -n "$(gh auth token 2>/dev/null)" ]; then
-	mark ok "gh authenticated"
+if [ -n "$GH_BIN" ] && "$GH_BIN" auth status >/dev/null 2>&1; then
+	mark ok "GitHub signed in ($("$GH_BIN" api user -q .login 2>/dev/null))"
 else
-	mark no 'gh — needed for PRs and the merge queue:  gh auth login'
+	mark no 'GitHub — sign in so the box can clone your repos:  gh auth login'
 fi
 
 AGENTS=""
