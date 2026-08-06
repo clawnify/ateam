@@ -121,39 +121,41 @@ export function AgentPicker({
 							const canInstall = !avail && alias !== null && !!onInstallAgent;
 							return (
 								<div key={a.id} className="agent-item">
-									<button
-										type="button"
-										className={`conn-row ${a.id === value ? "active" : ""}`}
-										disabled={!avail}
-										onClick={() => {
-											if (!avail) return;
-											onChange(a.id);
-											close();
-										}}
-									>
-										<span className="conn-txt">
-											<span className="conn-title">{a.label}</span>
-											{!avail ? (
-												<span className="conn-sub">
-													{alias === null
-														? "not installed on this Mac"
-														: "not installed on this box"}
-												</span>
-											) : null}
-										</span>
-										{a.id === value && avail ? <Check size={15} strokeWidth={2.25} /> : null}
-									</button>
-									{canInstall ? (
+									<div className="agent-row">
 										<button
 											type="button"
-											className="agent-install-btn"
-											disabled={installing !== null}
-											onClick={() => void install(a.id)}
+											className={`conn-row ${a.id === value ? "active" : ""}`}
+											disabled={!avail}
+											onClick={() => {
+												if (!avail) return;
+												onChange(a.id);
+												close();
+											}}
 										>
-											<Download size={13} strokeWidth={1.75} />
-											{installing === a.id ? "Installing…" : "Install"}
+											<span className="conn-txt">
+												<span className="conn-title">{a.label}</span>
+												{!avail ? (
+													<span className="conn-sub">
+														{alias === null
+															? "not installed on this Mac"
+															: "not installed on this box"}
+													</span>
+												) : null}
+											</span>
+											{a.id === value && avail ? <Check size={15} strokeWidth={2.25} /> : null}
 										</button>
-									) : null}
+										{canInstall ? (
+											<button
+												type="button"
+												className="agent-install-btn"
+												disabled={installing !== null}
+												onClick={() => void install(a.id)}
+											>
+												<Download size={13} strokeWidth={1.75} />
+												{installing === a.id ? "Installing…" : "Install"}
+											</button>
+										) : null}
+									</div>
 									{installing === a.id && log ? (
 										<pre ref={logRef} className="conn-install-log">
 											{log}
