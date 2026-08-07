@@ -386,7 +386,8 @@ export function App() {
 			if (e.dest === dest) onLog(e.chunk);
 		});
 		try {
-			await window.ateamHost.install(dest);
+			// Return the box's status so the picker can show its readiness checklist.
+			return await window.ateamHost.install(dest);
 		} finally {
 			off();
 		}

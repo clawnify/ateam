@@ -1,6 +1,7 @@
 import type { AgentDTO } from "@ateam/protocol";
 import { ArrowUp, Paperclip, X, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { HostStatus } from "../../../shared/host";
 import { AgentPicker } from "./AgentPicker";
 import { type EnvOption, EnvironmentPicker } from "./EnvironmentPicker";
 
@@ -48,7 +49,7 @@ export function NewTaskComposer({
 	/** Connect a Tailscale endpoint typed into the picker. */
 	onAdd?: (endpoint: string) => Promise<void>;
 	/** Set up a fresh box over SSH (install engine + connect) from the picker. */
-	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<void>;
+	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<HostStatus>;
 	/** Install a coding agent's CLI on the selected box, streamed; returns the login step. */
 	onInstallAgent?: (
 		alias: string,

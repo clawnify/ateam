@@ -1,6 +1,8 @@
 import { Check, Cloud, Laptop, Network, Plus, Server } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { HostStatus } from "../../../shared/host";
+import { BoxReadinessChecklist } from "./BoxReadinessChecklist";
 import { CreateBoxDialog } from "./CreateBoxDialog";
 
 // The task's "Run on" control — the pill + popover style the global connection
@@ -36,11 +38,12 @@ export function EnvironmentPicker({
 	onAdd?: (endpoint: string) => Promise<void>;
 	/** Install the engine on a fresh SSH box (`alias` or `user@host`), streaming the
 	 *  installer's output; resolves once the box is set up and connected. */
-	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<void>;
+	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<HostStatus>;
 }) {
 	// The add-a-connection section: "" collapsed → "menu" (the methods) → a chosen
-	// method's inline form. "Create a new box" opens a modal instead (too big for here).
-	const [addMode, setAddMode] = useState<"" | "menu" | "ssh" | "tailscale">("");
+	// method's inline form → "ready" (the readiness checklist after an SSH set-up).
+	// "Create a new box" opens a modal instead (too big for here).
+	const [addMode, setAddMode] = useState<"" | "menu" | "ssh" | "tailscale" | "ready">("");
 	const [endpoint, setEndpoint] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -49,6 +52,9 @@ export function EnvironmentPicker({
 	const [installing, setInstalling] = useState(false);
 	const [log, setLog] = useState("");
 	const [installError, setInstallError] = useState<string | null>(null);
+	// The box a Set-up-over-SSH just produced — probed by the readiness checklist.
+	const [installedAlias, setInstalledAlias] = useState<string | null>(null);
+	const [installedAgents, setInstalledAgents] = useState<string[]>([]);
 	const [creating, setCreating] = useState(false);
 	const btnRef = useRef<HTMLButtonElement>(null);
 	const popRef = useRef<HTMLDivElement>(null);
@@ -118,11 +124,14 @@ export function EnvironmentPicker({
 		setInstallError(null);
 		setLog("");
 		try {
-			await onInstall(d, (chunk) => setLog((prev) => prev + chunk));
-			// install() sets the box up AND connects it — select it and close.
+			const status = await onInstall(d, (chunk) => setLog((prev) => prev + chunk));
+			// install() sets the box up AND connects it — select it right away (so clicking
+			// away can't strand the pick), then show its readiness checklist.
 			onChange(d);
 			setDest("");
-			close();
+			setInstalledAlias(d);
+			setInstalledAgents(status.info.agents);
+			setAddMode("ready");
 		} catch (err) {
 			setInstallError(err instanceof Error ? err.message : String(err));
 		} finally {
@@ -285,6 +294,15 @@ export function EnvironmentPicker({
 										{busy ? "Connecting…" : (error ?? "The box's Tailscale address")}
 									</span>
 								</div>
+							) : addMode === "ready" ? (
+								installedAlias && (
+									<BoxReadinessChecklist
+										alias={installedAlias}
+										agents={installedAgents}
+										title="Box set up — finish these in the box’s terminal:"
+										onDone={close}
+									/>
+								)
 							) : (
 								<div className="conn-add">
 									<input
