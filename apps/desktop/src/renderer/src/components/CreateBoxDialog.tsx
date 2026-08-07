@@ -1,8 +1,8 @@
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AgentDTO } from "@ateam/protocol";
-import type { BoxReadiness, ProviderOptions } from "../../../shared/host";
-
+import type { ProviderOptions } from "../../../shared/host";
+import { BoxReadinessChecklist } from "./BoxReadinessChecklist";
 import { HetznerLogo } from "./HetznerLogo";
 
 // "Create a box" — Ateam stands up a fresh VPS at a provider, generates the SSH key,
@@ -33,23 +33,11 @@ export function CreateBoxDialog({
 	const [error, setError] = useState<string | null>(null);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [preinstall, setPreinstall] = useState<string[]>([]);
-	// After a box is created + connected: its readiness (gh/identity) + installed agents.
+	// After a box is created + connected: the alias to probe + the agents it came with,
+	// which the readiness checklist below renders.
 	const [readyAlias, setReadyAlias] = useState<string | null>(null);
-	const [readyBox, setReadyBox] = useState<BoxReadiness | null>(null);
 	const [readyAgents, setReadyAgents] = useState<string[]>([]);
-	const [checking, setChecking] = useState(false);
 	const logRef = useRef<HTMLPreElement>(null);
-
-	const checkReadiness = async (alias: string) => {
-		setChecking(true);
-		try {
-			setReadyBox(await window.ateamHost.boxReadiness(alias));
-		} catch {
-			// A probe failure just leaves the checklist partial — not worth blocking on.
-		} finally {
-			setChecking(false);
-		}
-	};
 
 	const loadOptions = async () => {
 		setLoadingOpts(true);
@@ -120,7 +108,6 @@ export function CreateBoxDialog({
 			if (status.alias) {
 				setReadyAlias(status.alias);
 				setReadyAgents(status.info.agents);
-				void checkReadiness(status.alias);
 			}
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
@@ -162,53 +149,12 @@ export function CreateBoxDialog({
 						)}
 						{error && <div className="cb-error">{error}</div>}
 						{!busy && readyAlias ? (
-							<div className="cb-ready">
-								<div className="cb-ready-title">
-									Box created — finish these in the box’s terminal:
-								</div>
-								<ul className="cb-ready-list">
-									<li className="done">Engine + Tailscale</li>
-									<li className={readyBox?.gh.signedIn ? "done" : "todo"}>
-										{readyBox?.gh.signedIn
-											? `GitHub signed in${readyBox.gh.login ? ` as ${readyBox.gh.login}` : ""}`
-											: "GitHub — sign in: "}
-										{!readyBox?.gh.signedIn ? <code>gh auth login</code> : null}
-									</li>
-									<li className={readyBox?.gitName ? "done" : "todo"}>
-										{readyBox?.gitName
-											? `git identity (${readyBox.gitName})`
-											: "git identity — sets automatically after GitHub sign-in"}
-									</li>
-									{readyAgents.length === 0 ? (
-										<li className="todo">
-											no coding agent yet — install one from the agent picker
-										</li>
-									) : (
-										readyAgents.map((a) => (
-											<li key={a} className="done">
-												{a} installed
-											</li>
-										))
-									)}
-								</ul>
-								<div className="cb-actions">
-									<button
-										type="button"
-										className="cb-back"
-										disabled={checking}
-										onClick={() => readyAlias && void checkReadiness(readyAlias)}
-									>
-										{checking ? "Checking…" : "Recheck"}
-									</button>
-									<button
-										type="button"
-										className="cb-create"
-										onClick={() => readyAlias && onDone(readyAlias)}
-									>
-										Done
-									</button>
-								</div>
-							</div>
+							<BoxReadinessChecklist
+								alias={readyAlias}
+								agents={readyAgents}
+								title="Box created — finish these in the box’s terminal:"
+								onDone={() => onDone(readyAlias)}
+							/>
 						) : !busy ? (
 							<div className="cb-actions">
 								<button

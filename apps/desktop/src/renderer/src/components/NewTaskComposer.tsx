@@ -1,6 +1,7 @@
 import type { AgentDTO } from "@ateam/protocol";
 import { ArrowUp, Paperclip, X, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { HostStatus } from "../../../shared/host";
 import { AgentPicker } from "./AgentPicker";
 import { type EnvOption, EnvironmentPicker } from "./EnvironmentPicker";
 
@@ -48,7 +49,7 @@ export function NewTaskComposer({
 	/** Connect a Tailscale endpoint typed into the picker. */
 	onAdd?: (endpoint: string) => Promise<void>;
 	/** Set up a fresh box over SSH (install engine + connect) from the picker. */
-	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<void>;
+	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<HostStatus>;
 	/** Install a coding agent's CLI on the selected box, streamed; returns the login step. */
 	onInstallAgent?: (
 		alias: string,
@@ -71,10 +72,20 @@ export function NewTaskComposer({
 	const [yolo, setYolo] = useState(false);
 	const [files, setFiles] = useState<string[]>([]);
 	const [dragging, setDragging] = useState(false);
-	// Default to the first runnable environment (Local, unless the repo isn't here).
-	const [alias, setAlias] = useState<string | null>(
-		environments.find((e) => !e.disabled)?.alias ?? null,
-	);
+	// Remember the last-picked environment across tasks (and app restarts) so it isn't
+	// re-selected every time; fall back to the first runnable one (Local, unless the repo
+	// isn't here) when nothing valid is saved for this project. "__local__" = the Mac.
+	const [alias, setAliasState] = useState<string | null>(() => {
+		const saved = localStorage.getItem("ateam.runOn");
+		const savedAlias = saved === "__local__" ? null : saved;
+		const usable =
+			saved !== null && environments.some((e) => e.alias === savedAlias && !e.disabled);
+		return usable ? savedAlias : (environments.find((e) => !e.disabled)?.alias ?? null);
+	});
+	const setAlias = (a: string | null) => {
+		setAliasState(a);
+		localStorage.setItem("ateam.runOn", a === null ? "__local__" : a);
+	};
 
 	// Which agents the chosen environment actually has installed. Known only for a
 	// connected engine; when unknown, fall back to the catalog's own `available` flag.
