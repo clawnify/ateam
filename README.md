@@ -71,6 +71,15 @@ public ports. On the box:
 curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash
 ```
 
+**No box yet?** Ateam can create one for you — pick a region and size, and it provisions
+the VPS, generates the SSH key, joins Tailscale, and installs the engine, with no
+provider console or terminal to touch. The manual recipes below are for a box you
+already have.
+
+<p align="center">
+  <img src="./assets/screenshot-create-box.png" alt="Ateam — the Create a box dialog provisioning a Hetzner Cloud VPS: generating the SSH key, creating the server, joining Tailscale, and installing the engine, with the installer log streaming below" width="620" />
+</p>
+
 <details>
 <summary><b>Start to finish on a fresh Hetzner box</b></summary>
 
