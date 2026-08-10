@@ -73,8 +73,8 @@ curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server
 
 **No box yet?** Ateam can create one for you — pick a region and size, and it provisions
 the VPS, generates the SSH key, joins Tailscale, and installs the engine, with no
-provider console or terminal to touch. The manual recipes below are for a box you
-already have.
+provider console or terminal to touch. Or set the box up yourself with the recipes
+below — via a **box provider** like [boxd](https://boxd.sh), or your own VPS.
 
 <p align="center">
   <img src="./assets/screenshot-create-box.png" alt="Ateam — the Create a box dialog provisioning a Hetzner Cloud VPS: generating the SSH key, creating the server, joining Tailscale, and installing the engine, with the installer log streaming below" width="620" />
@@ -140,7 +140,14 @@ curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server
 </details>
 
 <details>
-<summary><b>Start to finish on a boxd microVM</b></summary>
+<summary><b>Use a box provider — boxd (and services like it)</b></summary>
+
+Some services create a box for you and write an SSH alias straight into your
+`~/.ssh/config`. Ateam offers any alias it finds there, so a box provider needs **no
+Ateam-side integration** — the recipe is always the same: create a box with the
+provider's CLI, run Ateam's `install.sh` on it over that alias, sign into `gh` and your
+agent, then pick the alias in the connection switcher. **[boxd](https://boxd.sh)** is the
+first such provider; the same steps fit any service that registers an ssh_config host.
 
 <a href="https://boxd.sh"><img src="./assets/boxd.png" alt="boxd" width="99" /></a>
 
