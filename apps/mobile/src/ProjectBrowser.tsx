@@ -5,7 +5,15 @@
 
 import type { AteamApi, DirListingDTO, ProjectDTO } from "@ateam/protocol";
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import {
+	ActivityIndicator,
+	Alert,
+	Pressable,
+	ScrollView,
+	StyleSheet,
+	Text,
+	View,
+} from "react-native";
 
 const C = {
 	bg: "#0c0c0e",
@@ -69,6 +77,37 @@ export function ProjectBrowser({
 		[api, onRegistered],
 	);
 
+	// Create a brand-new project folder in the current directory — the box has no native
+	// folder dialog for us to make one, so name it here and let register create + git-init
+	// it in one call ({ init: true }). The name is a single segment under the browsed dir.
+	const createHere = useCallback(() => {
+		const dir = listing?.path;
+		if (!dir) return;
+		Alert.prompt(
+			"New project",
+			`Create a folder in ${dir}`,
+			async (name) => {
+				const clean = (name ?? "").trim().replace(/^\/+|\/+$/g, "");
+				if (!clean || clean.includes("/") || clean === "." || clean === "..") {
+					setError("Enter a folder name — no slashes.");
+					return;
+				}
+				const path = `${dir.replace(/\/$/, "")}/${clean}`;
+				setBusyPath(path);
+				setError(null);
+				try {
+					const project = await api.projects.register(path, { init: true });
+					onRegistered(project);
+				} catch (e) {
+					setError(e instanceof Error ? e.message : String(e));
+				} finally {
+					setBusyPath(null);
+				}
+			},
+			"plain-text",
+		);
+	}, [api, listing?.path, onRegistered]);
+
 	return (
 		<View style={styles.root}>
 			<View style={styles.header}>
@@ -76,7 +115,9 @@ export function ProjectBrowser({
 					<Text style={styles.cancel}>Cancel</Text>
 				</Pressable>
 				<Text style={styles.title}>Add project</Text>
-				<View style={{ width: 54 }} />
+				<Pressable onPress={createHere} hitSlop={8} disabled={!listing}>
+					<Text style={styles.newBtn}>New</Text>
+				</Pressable>
 			</View>
 
 			<Text style={styles.path} numberOfLines={1}>
@@ -142,6 +183,7 @@ const styles = StyleSheet.create({
 		borderBottomColor: C.line,
 	},
 	cancel: { color: C.muted, fontSize: 15, width: 54 },
+	newBtn: { color: C.green, fontSize: 15, fontWeight: "700", width: 54, textAlign: "right" },
 	title: { color: C.ink, fontSize: 16, fontWeight: "700" },
 	path: {
 		color: C.faint,

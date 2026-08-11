@@ -45,8 +45,10 @@ export function registerIpc(router: Router, native: NativeHandlers): void {
 	// ---- client-native handlers (need the desktop OS, not the engine) ----
 	ipcMain.handle(CH.projectsPick, async () => {
 		const res = await dialog.showOpenDialog({
-			properties: ["openDirectory"],
-			title: "Select a git repository",
+			// `createDirectory` (macOS) shows the panel's "New Folder" button, so a brand-new
+			// project folder can be made right here; App.tsx then offers to `git init` it.
+			properties: ["openDirectory", "createDirectory"],
+			title: "Select or create a project folder",
 		});
 		return res.canceled ? null : (res.filePaths[0] ?? null);
 	});

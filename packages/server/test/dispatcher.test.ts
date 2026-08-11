@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
 import { type AteamDb, repo } from "@ateam/db";
 import { CH } from "@ateam/protocol";
@@ -80,5 +84,24 @@ describe("createDispatcher", () => {
 		const { engine } = makeEngine(createTestDb());
 		const d = createDispatcher(engine);
 		expect(await d.handle(CH.projectsList, [])).toEqual([]);
+	});
+
+	// A brand-new project from a client with no native folder dialog (the phone): the
+	// folder doesn't exist yet, so register+init must create it before git-initing.
+	it("creates the folder and inits a repo when registering a brand-new project", async () => {
+		const { engine } = makeEngine(createTestDb());
+		const d = createDispatcher(engine);
+		const base = await mkdtemp(join(tmpdir(), "ateam-newproj-"));
+		const path = join(base, "fresh-project"); // does not exist yet
+		expect(existsSync(path)).toBe(false);
+		try {
+			const project = (await d.handle(CH.projectsRegister, [path, { init: true }])) as {
+				name: string;
+			};
+			expect(existsSync(join(path, ".git"))).toBe(true); // created AND git-inited
+			expect(project.name).toBe("fresh-project");
+		} finally {
+			await rm(base, { recursive: true, force: true });
+		}
 	});
 });
