@@ -170,9 +170,14 @@ export function createDispatcher(engine: Engine): Dispatcher {
 	const handlers = {
 		// ---- projects ----
 		[CH.projectsRegister]: async (repoPath: string, opts?: { init?: boolean }) => {
-			// "Create a repository here instead" (GitHub-Desktop-style), after the
-			// renderer asked the user.
-			if (opts?.init) await initRepository(repoPath);
+			// "Create a repository here instead" (GitHub-Desktop-style), after the client
+			// asked the user. When the folder doesn't exist yet, create it first — a
+			// brand-new project from a client with no native folder dialog (the phone).
+			// Mirrors the clone handler below, which creates its dest before registering.
+			if (opts?.init) {
+				if (!existsSync(repoPath)) mkdirSync(repoPath);
+				await initRepository(repoPath);
+			}
 			const info = await registerProject(repoPath);
 			const row = repo.upsertProject(db, {
 				repoPath: info.repoPath,
