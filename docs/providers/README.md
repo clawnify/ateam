@@ -48,7 +48,13 @@ re-verified"* is useful; a stamp you can't stand behind is not.
 
 ### The logo
 
-`assets/providers/<id>.svg`, and it must be:
+**SVG, not PNG** — `assets/providers/<id>.svg`. One file covers every size the app
+draws (a ~16px row icon and a larger dialog mark), it's a text diff so reviewers can
+see exactly what's being shipped into the binary, and it can follow the theme. A
+raster mark needs several resolutions and bakes in a background that's wrong in one
+theme or the other.
+
+It must be:
 
 - **Square — 1:1.** A `viewBox` of `0 0 N N`, and if `width`/`height` are set at
   all, they must be equal. The app renders logos in fixed-size slots beside
@@ -56,11 +62,16 @@ re-verified"* is useful; a stamp you can't stand behind is not.
 - **Self-contained.** No `<script>`, no remote `href`/`url()` — it ships inside a
   desktop app under a strict CSP and has to render offline. Convert text to paths
   so it doesn't depend on an installed font.
-- **Legible on dark.** The app's UI is dark; a black-on-transparent mark disappears
-  into it.
-- **Under 20 KB.**
+- **Readable in both themes.** These render in a dark app *and* on GitHub, which
+  may be either. For a single-colour mark use `fill="currentColor"` and let the
+  host pick — hardcoded `white` or `black` disappears against half the backgrounds
+  it will meet. A multi-colour brand mark keeps its own colours.
+- **Under 20 KB.** For reference, the two shipped here are 381 and 448 bytes.
 - **Yours to give.** By submitting it you confirm the provider permits use of the
   mark in Ateam's UI and docs.
+
+If a provider genuinely has no vector mark, a **512×512 PNG** is accepted instead —
+same square rule, same licensing. Prefer the SVG.
 
 These are enforced by `scripts/provider-logos.test.ts`, which runs in `bun test` —
 so a non-square or non-self-contained logo fails CI rather than being noticed
