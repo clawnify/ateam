@@ -20,11 +20,12 @@ all. That's what the pages here record.
 
 | Provider | Kind | Desktop | iOS |
 | --- | --- | --- | --- |
-| [boxd](boxd.md) | persistent KVM microVMs | ✅ via boxd's SSH proxy | ⚠️ works, but needs manual Tailscale setup |
-| Your own VPS | Hetzner, EC2, a home server… | ✅ | ✅ | 
+| [Hetzner](hetzner.md) | VPS — Ateam can create one for you in-app | ✅ | ✅ |
+| [boxd](boxd.md) | persistent KVM microVMs, driven by their CLI | ✅ via boxd's SSH proxy | ⚠️ works, but needs manual Tailscale setup |
 
-For a VPS from scratch, see [`../online-ateam.md`](../online-ateam.md) — that's the
-reference walkthrough these pages assume you've skimmed.
+Any other VPS (EC2, a home server, …) works the same way as Hetzner without a page
+of its own — see [`../online-ateam.md`](../online-ateam.md), the reference
+walkthrough these pages assume you've skimmed.
 
 > **Not the same as "Create a box" in the app.** The desktop can *provision* a VPS
 > for you (currently Hetzner) via the `BoxProvider` interface in
@@ -35,18 +36,53 @@ reference walkthrough these pages assume you've skimmed.
 
 ## Adding a provider
 
-Open a PR with `docs/providers/<name>.md` using the template below, and add a row
-to the table above. Docs only — no code changes are needed or wanted.
+Open a PR with two files — `docs/providers/<id>.md` using the template below, and
+`assets/providers/<id>.svg` — and add a row to the table above. Docs and an asset;
+no code changes are needed or wanted.
 
-**Every page must carry a `Verified against` line.** These pages rot fast: ours
-was wrong within eight days of being written, and confidently-wrong setup
-instructions are worse than none, because people follow them. If you can't say
-when you last ran the steps, don't publish the page.
+**Every page must carry a `Verified against` line.** These pages rot fast: ours was
+wrong within eight days of being written, and confidently-wrong setup instructions
+are worse than none, because people follow them. If the steps haven't been run
+recently, say so in that line rather than omitting it — an explicit *"not
+re-verified"* is useful; a stamp you can't stand behind is not.
+
+### The logo
+
+**SVG, not PNG** — `assets/providers/<id>.svg`. One file covers every size the app
+draws (a ~16px row icon and a larger dialog mark), it's a text diff so reviewers can
+see exactly what's being shipped into the binary, and it can follow the theme. A
+raster mark needs several resolutions and bakes in a background that's wrong in one
+theme or the other.
+
+It must be:
+
+- **Square — 1:1.** A `viewBox` of `0 0 N N`, and if `width`/`height` are set at
+  all, they must be equal. The app renders logos in fixed-size slots beside
+  connections, so a wide mark either letterboxes into dead space or gets squashed.
+- **Self-contained.** No `<script>`, no remote `href`/`url()` — it ships inside a
+  desktop app under a strict CSP and has to render offline. Convert text to paths
+  so it doesn't depend on an installed font.
+- **Readable in both themes.** These render in a dark app *and* on GitHub, which
+  may be either. For a single-colour mark use `fill="currentColor"` and let the
+  host pick — hardcoded `white` or `black` disappears against half the backgrounds
+  it will meet. A multi-colour brand mark keeps its own colours.
+- **Under 20 KB.** For reference, the two shipped here are 381 and 448 bytes.
+- **Yours to give.** By submitting it you confirm the provider permits use of the
+  mark in Ateam's UI and docs.
+
+If a provider genuinely has no vector mark, a **512×512 PNG** is accepted instead —
+same square rule, same licensing. Prefer the SVG.
+
+These are enforced by `scripts/provider-logos.test.ts`, which runs in `bun test` —
+so a non-square or non-self-contained logo fails CI rather than being noticed
+later. `assets/providers/hetzner.svg` is the worked example.
 
 ### Template
 
 ```markdown
 # <Provider>
+
+<img src="../../assets/providers/<id>.svg" alt="<Provider>" width="48" />
 
 <One paragraph: what kind of box, what it costs, what's unusual about it.>
 

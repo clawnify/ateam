@@ -1,6 +1,6 @@
 # boxd
 
-<a href="https://boxd.sh"><img src="../../assets/boxd.png" alt="boxd" width="99" /></a>
+<a href="https://boxd.sh"><img src="../../assets/providers/boxd.svg" alt="boxd" width="48" /></a>
 
 [boxd](https://boxd.sh) rents persistent Linux microVMs — KVM, own kernel, real
 root — that boot in milliseconds and fork in ~160ms carrying disk, memory and
