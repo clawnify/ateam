@@ -146,69 +146,15 @@ Some services create a box for you and write an SSH alias straight into your
 `~/.ssh/config`. Ateam offers any alias it finds there, so a box provider needs **no
 Ateam-side integration** — the recipe is always the same: create a box with the
 provider's CLI, run Ateam's `install.sh` on it over that alias, sign into `gh` and your
-agent, then pick the alias in the connection switcher. **[boxd](https://boxd.sh)** is the
-first such provider; the same steps fit any service that registers an ssh_config host.
+agent, then pick the alias in the connection switcher.
+
+Per-provider recipes live in [`docs/providers/`](docs/providers/) — what's
+preinstalled, how git credentials work, whether the phone can reach it, and the
+gotchas. **[boxd](https://boxd.sh)** is the first one
+([recipe](docs/providers/boxd.md)); the same steps fit any service that registers an
+ssh_config host, and [adding one](docs/providers/#adding-a-provider) is a docs-only PR.
 
 <a href="https://boxd.sh"><img src="./assets/boxd.png" alt="boxd" width="99" /></a>
-
-[boxd](https://boxd.sh) rents persistent Linux microVMs that boot in milliseconds and
-already ship `git`, `gh`, `node`, `docker` and `claude` — so there's no user, firewall
-or Tailscale setup to do. Unlike the VPS recipe above, the box is reached over boxd's
-own authenticated SSH proxy rather than your tailnet.
-
-**On your Mac,** install the CLI and create a box:
-
-```bash
-curl -fsSL https://boxd.sh/downloads/install.sh | sh
-boxd auth login
-boxd new mybox
-```
-
-boxd writes the `mybox.boxd` host alias — hostname, port and key — straight into your
-`~/.ssh/config`, so `ssh mybox.boxd` works immediately and the box shows up in Ateam's
-connection switcher with nothing else to configure.
-
-**Give boxd access to your repos once, on your Mac** — not per box:
-
-```bash
-boxd manage integrations connect github
-```
-
-boxd's images ship a git credential helper wired in `/etc/gitconfig`
-(`helper = boxd`), so every machine — and every fork of one — gets authenticated git
-without a token ever being written inside the VM. Disconnecting revokes it centrally.
-**Don't run `gh auth setup-git` on a boxd box:** it writes a *global* helper that
-resets the inherited chain, replacing boxd's with its own.
-
-**Then set the box up for agents,** over that alias. Ateam commits, pushes and opens
-PRs as this user, so it needs a git identity, and a logged-in `gh` for the PR and
-merge-queue operations that go through the `gh` API rather than git:
-
-```bash
-ssh mybox.boxd 'git config --global user.name "you" && git config --global user.email "you@example.com"'
-ssh -t mybox.boxd 'gh auth login'      # device code — works over SSH
-ssh -t mybox.boxd claude               # `claude` is preinstalled; log in once, then exit
-
-ssh mybox.boxd 'curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash'
-```
-
-Public repos clone with no credentials at all; the setup above is what private repos
-need. If adding a project fails with `RPC connection closed`, that's not a credential
-problem — a missing credential fails fast and loudly with
-`could not read Username for 'https://github.com'`. Check the desktop app is up to
-date instead; a client older than the box's protocol version drops the connection.
-
-The readiness report ends with `[--] tailscale`. That one is expected here — boxd
-provides the private path itself.
-
-Finally, pick **`mybox.boxd`** in Ateam's connection switcher. boxd registers more
-than one alias per machine (`mybox.boxd`, `mybox.boxd.sh`, plus a shared `boxd.sh`
-defaults entry) — pick `mybox.boxd`; `boxd.sh` is not a machine.
-
-**The iOS app does not work with boxd.** The phone reaches a box over Tailscale, and
-boxd's kernel is built without a TUN device (`/lib/modules` is empty and `modprobe
-tun` fails), so `tailscaled` can't run in its normal mode. Use the VPS recipe above
-for the iOS app.
 
 </details>
 
