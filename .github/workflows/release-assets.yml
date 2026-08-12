@@ -1,0 +1,73 @@
+name: Release assets
+
+# Attaches `ateam-server.tar.gz` to a published release.
+#
+# The macOS app stays a manual build — Developer ID signing and notarization need
+# a local Mac and certs — and `gh release create` makes the tag and the release in
+# one step, so this hangs off `release: published` rather than a tag push.
+#
+# It automates the ONE asset that isn't an electron-builder output. The DMG, the
+# zip and latest-mac.yml all fall out of a single build, so they can't be
+# forgotten; the server tarball was a separate build + upload, and so it was the
+# only one that could go missing — which it did, on both v0.1.38 and v0.1.39.
+# `install.sh` fetches it from releases/latest/download/ateam-server.tar.gz, so
+# its absence 404s every remote-box install on every provider while the desktop
+# app updates normally and looks healthy.
+#
+# Safe to build on Linux: scripts/build.ts is pure Bun bundling with the native
+# modules (better-sqlite3, node-pty) externalized for the box to install itself.
+
+on:
+  release:
+    types: [published]
+  # Backfill a release that shipped without the asset — built from that tag, not
+  # from main, so the server matches the version it claims to be.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the server tarball to (e.g. v0.1.39)"
+        required: true
+
+permissions:
+  contents: write # uploading a release asset
+
+jobs:
+  server-tarball:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The TAG, never main's tip: main has usually moved past the release
+          # commit by the time anything runs, and shipping a server built from a
+          # later commit than the version claims is worse than shipping nothing.
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: bun install --frozen-lockfile
+      - run: bun run --filter @ateam/server build:release
+
+      # A bundle that silently produced nothing would still tar and upload
+      # cleanly, so check the payload before it becomes the published artifact.
+      - name: Sanity-check the tarball
+        run: |
+          for f in cli.js daemon.js package.json; do
+            tar -tzf packages/server/dist/ateam-server.tar.gz | grep -qx "$f" \
+              || { echo "::error::$f missing from ateam-server.tar.gz"; exit 1; }
+          done
+
+      - name: Attach ateam-server.tar.gz to the release
+        run: |
+          gh release upload "$TAG" packages/server/dist/ateam-server.tar.gz \
+            --clobber --repo "$GITHUB_REPOSITORY"
+
+      # install.sh fetches this exact asset name; a rename or a no-op upload would
+      # break every remote-box install, so assert it is actually on the release.
+      - name: Verify the asset is on the release
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | grep -qx 'ateam-server.tar.gz' \
+            || { echo "::error::ateam-server.tar.gz is not on $TAG"; exit 1; }
