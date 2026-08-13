@@ -419,6 +419,9 @@ export function App() {
 				label: c.alias,
 				disabled: !memberAliases.has(c.alias) && !canRemote,
 				transport: c.transport,
+				// `known` is only set by a successful connect, so a config alias we've
+				// never reached is one the engine has probably never been installed on.
+				needsSetup: !c.known,
 			})),
 		];
 	}, [connections, canRemote, hasLocalMember, activeMembers]);

@@ -22,6 +22,8 @@ export type EnvOption = {
 	label: string;
 	disabled: boolean;
 	transport?: "ssh" | "ws";
+	/** In ~/.ssh/config but never connected — so almost certainly has no engine yet. */
+	needsSetup?: boolean;
 };
 
 export function EnvironmentPicker({
@@ -90,6 +92,17 @@ export function EnvironmentPicker({
 
 	const pick = (env: EnvOption) => {
 		if (env.disabled) return;
+		// Every ~/.ssh/config alias is offered here, including boxes that have never
+		// run the engine — picking one of those used to just fail to connect. Send it
+		// to the set-up form with the destination filled in instead. Worst case the
+		// box IS already set up (installed by hand, never connected from this Mac):
+		// install.sh is idempotent and ends by connecting, so that path still works.
+		if (env.needsSetup && env.alias && env.transport !== "ws" && onInstall) {
+			setDest(env.alias);
+			setAddMode("ssh");
+			setInstallError(null);
+			return;
+		}
 		onChange(env.alias);
 		close();
 	};
@@ -197,6 +210,8 @@ export function EnvironmentPicker({
 									<span className="conn-title">{env.label}</span>
 									{env.disabled && env.alias !== null ? (
 										<span className="conn-sub">repo needs a git remote to run here</span>
+									) : env.needsSetup ? (
+										<span className="conn-sub">not set up — click to install the engine</span>
 									) : env.transport === "ws" ? (
 										<span className="conn-sub">Tailscale</span>
 									) : null}
