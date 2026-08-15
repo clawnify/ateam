@@ -185,6 +185,10 @@ ssh my-ateam-box "bash -lc 'ateam'"
    turns green and shows the host name.
 4. Work as usual — new tasks, agents, terminals, and git all run **on the box**.
 5. Switch back to your Mac anytime via **This Mac**.
+6. **Next launch it's already there.** Every box you've connected before is
+   reconnected in the background when Ateam starts, so a project's remote tasks are
+   on the board without picking anything first. A box that's asleep or unreachable
+   just shows as disconnected — the rest of the board never waits for it.
 
 ## 5. Same box, from the iOS app
 

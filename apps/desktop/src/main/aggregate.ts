@@ -30,6 +30,7 @@ const ENTITY = new Set<string>([
 	CH.tasksCleanupPreview,
 	CH.tasksCleanupCandidates,
 	CH.projectsRemove,
+	CH.projectsRemoteUrl, // projectId — a box's project has a box's remote
 	CH.gitCommit,
 	CH.gitPush,
 	CH.gitUpdate,
