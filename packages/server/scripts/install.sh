@@ -8,9 +8,12 @@
 # the dist in place. Files are only ever created or overwritten, never removed.
 #
 # Options:
-#   --service       also install a `systemd --user` unit so the daemon survives
-#                   logout and reboot (required for the iOS app, which cannot
-#                   start a daemon on demand the way the desktop does over SSH)
+#   --service       also install a systemd unit so the daemon survives logout,
+#                   reboot and an OOM kill (required for the iOS app, which cannot
+#                   start a daemon on demand the way the desktop does over SSH).
+#                   A SYSTEM unit where passwordless sudo is available, a `--user`
+#                   one otherwise — only the former can stop the kernel from
+#                   picking the daemon over the agents it supervises.
 #
 # Env knobs:
 #   ATEAM_VERSION   release tag to install (default: the latest release)
@@ -216,67 +219,161 @@ fi
 # the WebSocket only exists once a daemon is already running, and nothing brings
 # one back after a reboot.
 if [ "$WANT_SERVICE" = 1 ]; then
-	step "install the user service"
 	if ! command -v systemctl >/dev/null; then
 		die "no systemd on this box — start 'ateam daemon' from your own init instead"
 	fi
-	UNIT_DIR="$HOME/.config/systemd/user"
-	UNIT="$UNIT_DIR/ateam.service"
-	mkdir -p "$UNIT_DIR"
+
+	SYS_UNIT=/etc/systemd/system/ateam.service
+	USER_UNIT="$HOME/.config/systemd/user/ateam.service"
+
+	# A SYSTEM unit whenever we can escalate without a password, a user unit otherwise.
+	# A user unit cannot protect this daemon, for three reasons that only bite under
+	# memory pressure — exactly when you need it most:
+	#   1. `user@.service` ships OOMScoreAdjust=100, which every user service inherits.
+	#      That makes a ~40MB daemon a MORE attractive kernel OOM victim than the
+	#      400MB agents it supervises (they sit at 0). Precisely backwards.
+	#   2. A negative OOMScoreAdjust cannot fix that from a user unit: lowering the
+	#      score needs CAP_SYS_RESOURCE, and systemd SILENTLY IGNORES the setting
+	#      rather than failing — the unit starts and the value never lands, so the
+	#      line reads as protection while doing nothing.
+	#   3. A user unit dies with the systemd user manager. If that manager is itself
+	#      OOM-killed, linger does NOT bring it back; only a new login does.
+	# The desktop survives all three — it re-launches a daemon over SSH on demand.
+	# THE PHONE CANNOT: the WebSocket only exists once a daemon is already running,
+	# so for the iOS app this is the difference between a 3s restart and a box that
+	# stays dark until someone opens a laptop.
+	if sudo -n true 2>/dev/null; then
+		SERVICE_SCOPE=system
+		UNIT="$SYS_UNIT"
+		SYSTEMCTL="sudo systemctl"
+		step "install the system service"
+	else
+		SERVICE_SCOPE=user
+		UNIT="$USER_UNIT"
+		SYSTEMCTL="systemctl --user"
+		step "install the user service"
+		mkdir -p "$(dirname "$UNIT")"
+	fi
 
 	# Upgrading IS re-running this script, and a phone user who doesn't re-export
 	# ATEAM_WS_ADDR would otherwise get a rewritten unit without it — silently
 	# removing the phone's only way in, with the daemon still apparently healthy.
-	# An explicit ATEAM_WS_ADDR always wins; otherwise inherit what's already there.
+	# An explicit ATEAM_WS_ADDR always wins; otherwise inherit whichever unit has
+	# one — including the OTHER scope's, so a user→system upgrade keeps the address.
 	WS_ADDR="${ATEAM_WS_ADDR:-}"
-	if [ -z "$WS_ADDR" ] && [ -f "$UNIT" ]; then
-		WS_ADDR="$(sed -n 's/^Environment=ATEAM_WS_ADDR=//p' "$UNIT" | tail -1)"
-		if [ -n "$WS_ADDR" ]; then info "keeping ATEAM_WS_ADDR=$WS_ADDR from the existing unit"; fi
+	if [ -z "$WS_ADDR" ]; then
+		for u in "$UNIT" "$SYS_UNIT" "$USER_UNIT"; do
+			[ -f "$u" ] || continue
+			WS_ADDR="$(sed -n 's/^Environment=ATEAM_WS_ADDR=//p' "$u" | tail -1)"
+			if [ -n "$WS_ADDR" ]; then
+				info "keeping ATEAM_WS_ADDR=$WS_ADDR from $u"
+				break
+			fi
+		done
 	fi
-	{
+
+	emit_unit() {
 		echo '[Unit]'
 		echo 'Description=Ateam engine daemon'
+		if [ "$SERVICE_SCOPE" = system ]; then
+			# The WS listener binds the Tailscale IP, so that address must exist
+			# before the bind. If it doesn't the daemon exits and the restart loop
+			# below retries until Tailscale is up. (Meaningless in a user unit:
+			# network-online.target lives in the SYSTEM manager, not the user one.)
+			echo 'Wants=network-online.target'
+			echo 'After=network-online.target tailscaled.service'
+		fi
+		# systemd gives up PERMANENTLY after 5 starts in 10s by default. A burst of
+		# OOM kills exhausts that budget, and then nothing ever restarts the daemon
+		# — the phone's only ingress stays down until a human logs in. Retry forever.
+		echo 'StartLimitIntervalSec=0'
 		echo ''
 		echo '[Service]'
 		# A LOGIN shell: agent CLIs are discovered with `which` against this
 		# process's own PATH, and a bare unit PATH resolves none of them.
 		echo "ExecStart=/bin/bash -lc 'exec ateam daemon'"
-		echo 'WorkingDirectory=%h'
+		if [ "$SERVICE_SCOPE" = system ]; then
+			echo "User=$(id -un)"
+			# NOT %h: in a system unit that expands to root's home, not User='s.
+			echo "WorkingDirectory=$HOME"
+			# What every distro already does for control-plane daemons (udevd -1000,
+			# dbus -900, journald -250). This one owns the box's only phone ingress,
+			# so the kernel should reap a 400MB agent before it. System scope only —
+			# see the note above on why this line is worthless in a user unit.
+			echo 'OOMScoreAdjust=-500'
+		else
+			echo 'WorkingDirectory=%h'
+		fi
 		# The PTY daemon is a DETACHED child holding every live agent session.
 		# `detached` escapes the process group, NOT the cgroup — under the default
 		# KillMode=control-group a restart would kill every running agent. Kill
 		# only the main process so sessions survive, exactly as they do today.
 		echo 'KillMode=process'
 		# NOT `always`: `ateam daemon` exits 0 when another daemon already owns the
-		# socket, and always-restart would turn that into a hot loop.
+		# socket, and always-restart would turn that into a hot loop — one that
+		# StartLimitIntervalSec=0 above would never brake. An OOM kill is a SIGKILL,
+		# which counts as a failure, so self-healing is unaffected.
 		echo 'Restart=on-failure'
 		echo 'RestartSec=2'
 		if [ -n "$WS_ADDR" ]; then echo "Environment=ATEAM_WS_ADDR=$WS_ADDR"; fi
 		echo ''
 		echo '[Install]'
-		echo 'WantedBy=default.target'
-	} >"$UNIT"
+		if [ "$SERVICE_SCOPE" = system ]; then
+			echo 'WantedBy=multi-user.target'
+		else
+			echo 'WantedBy=default.target'
+		fi
+	}
+	if [ "$SERVICE_SCOPE" = system ]; then
+		emit_unit | sudo tee "$UNIT" >/dev/null
+	else
+		emit_unit >"$UNIT"
+	fi
 	info "wrote $UNIT"
 
-	# Keep the user manager alive with no login session, so the daemon comes back
-	# after a reboot. Unprivileged: polkit's set-self-linger allows this for your
-	# OWN user (set-user-linger, for someone else's, is the one needing admin).
-	loginctl enable-linger 2>/dev/null || info "could not enable linger — the service won't start on boot"
-	systemctl --user daemon-reload
-	systemctl --user enable ateam.service >/dev/null 2>&1 || true
+	# Upgrading an older install: the user unit must stop owning the socket, or the
+	# two race for it. Live agents are unaffected — they sit outside this unit's
+	# cgroup and the PTY daemon holding them is never touched.
+	if [ "$SERVICE_SCOPE" = system ] && [ -f "$USER_UNIT" ]; then
+		if systemctl --user is-active --quiet ateam.service 2>/dev/null ||
+			systemctl --user is-enabled --quiet ateam.service 2>/dev/null; then
+			info "migrating the existing user service to a system service"
+			systemctl --user disable --now ateam.service >/dev/null 2>&1 || true
+		fi
+	fi
+
+	if [ "$SERVICE_SCOPE" = user ]; then
+		# Keep the user manager alive with no login session, so the daemon comes back
+		# after a reboot. Unprivileged: polkit's set-self-linger allows this for your
+		# OWN user (set-user-linger, for someone else's, is the one needing admin).
+		loginctl enable-linger 2>/dev/null || info "could not enable linger — the service won't start on boot"
+	fi
+	$SYSTEMCTL daemon-reload
+	$SYSTEMCTL enable ateam.service >/dev/null 2>&1 || true
 
 	# Never kill a daemon out from under running agents. If one is already up
-	# outside systemd, hand over deliberately rather than silently.
-	if [ -S "$HOME/.ateam/rpc.sock" ] && ! systemctl --user is-active --quiet ateam.service; then
+	# outside systemd, hand over deliberately rather than silently. Test for a live
+	# PROCESS, not for the socket file: a crashed daemon leaves the file behind, and
+	# that stale socket would otherwise make this skip starting the service.
+	if pgrep -f 'ateam-app/cli\.js daemon' >/dev/null 2>&1 && ! $SYSTEMCTL is-active --quiet ateam.service; then
 		info "a daemon is already running outside systemd — enabled for next boot."
 		info "to hand it over now (agents keep running; the PTY daemon is untouched):"
-		info "     pkill -f 'ateam-app/cli.js daemon' && systemctl --user start ateam"
+		info "     pkill -f 'ateam-app/cli.js daemon' && $SYSTEMCTL start ateam"
 	else
-		systemctl --user start ateam.service
+		$SYSTEMCTL start ateam.service
 		sleep 2
-		systemctl --user is-active --quiet ateam.service &&
+		$SYSTEMCTL is-active --quiet ateam.service &&
 			info "service active; starts on boot" ||
-			die "service failed to start — systemctl --user status ateam"
+			die "service failed to start — $SYSTEMCTL status ateam"
+	fi
+
+	if [ "$SERVICE_SCOPE" = user ]; then
+		info ""
+		info "NOTE: installed as a USER service — no passwordless sudo on this box."
+		info "The daemon is then a preferred kernel OOM victim and dies with the"
+		info "systemd user manager, which only a new login restarts. The desktop"
+		info "recovers on its own over SSH; the iOS app cannot. Grant sudo and"
+		info "re-run this installer to upgrade it to a system service."
 	fi
 fi
 

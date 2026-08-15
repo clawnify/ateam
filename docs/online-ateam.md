@@ -120,7 +120,7 @@ Re-run the same command to upgrade. Three knobs, all optional:
 
 | Knob | Effect |
 | --- | --- |
-| `--service` | also install a `systemd --user` unit so the daemon survives logout and reboot (`… \| bash -s -- --service`). Required for the iOS app — see step 5. |
+| `--service` | also install a systemd unit so the daemon survives logout, reboot and an OOM kill (`… \| bash -s -- --service`). Required for the iOS app — see step 5. |
 | `ATEAM_VERSION=v0.1.30` | install a specific release instead of the latest |
 | `ATEAM_TARBALL=<url\|path>` | install from your own `ateam-server.tar.gz` (dev builds, air-gapped boxes) |
 
@@ -281,6 +281,44 @@ thing between the two.
 > for desktop-only use — `ssh … ateam attach` starts one on demand — but it strands a
 > phone, which has no way to start one. Install the service if you use the app.
 
+### Keeping the daemon alive
+
+The desktop and the phone fail very differently when the daemon dies, and it's worth
+knowing which one you're looking at. The desktop starts a daemon on demand over SSH,
+so it repairs the box just by connecting. The phone only has the WebSocket, which
+exists *only while a daemon is already running* — so the phone can't recover a box,
+it can only report that one is down. **If the desktop connects and the phone doesn't,
+suspect the daemon, not the app.** Tailscale showing green proves the network path,
+nothing about what's listening at the other end.
+
+The usual cause is memory. Agents are long-lived and hold 200–450 MB each, so a
+busy 4 GB box reaches the kernel's out-of-memory killer, which then picks a victim
+by score — and a systemd **user** service is scored as a *preferred* victim
+(`user@.service` sets `OOMScoreAdjust=100`, inherited by everything under it) while
+the far larger agents sit at 0. Worse, a user service dies with the systemd user
+manager: if that is killed too, `enable-linger` does not bring it back and only a
+new login does.
+
+So `--service` installs a **system** unit wherever it can escalate without a
+password, which is what the daemon actually is — the box's only ingress for the
+phone, on par with `sshd`. That unit sets `OOMScoreAdjust=-500` (the convention
+distros use for `udevd`, `dbus`, `journald`), so the kernel reaps an agent first,
+and `StartLimitIntervalSec=0`, so systemd never permanently gives up restarting
+after a burst of kills. On a box with no sudo you get the user unit instead, and
+the installer says so — it still can't be protected from the OOM killer, because
+lowering the score needs `CAP_SYS_RESOURCE` and systemd *silently ignores* the
+setting in a user unit rather than failing.
+
+Which one you have:
+
+```bash
+systemctl status ateam          # system unit
+systemctl --user status ateam   # user unit
+```
+
+Re-running the installer on a box that has gained sudo upgrades a user unit to a
+system one, carrying `ATEAM_WS_ADDR` across and leaving running agents untouched.
+
 ## Troubleshooting
 
 The connection menu surfaces the real error inline. Common ones:
@@ -293,7 +331,8 @@ The connection menu surfaces the real error inline. Common ones:
 | Board is empty after connecting | The box has no registered projects yet — add one from the box's filesystem via **Add project** (or register a repo path on the box). |
 | Agents run but commits fail | The box has no git identity — `git config --global user.name/user.email` (step 0). |
 | The agent picker is empty | The agent CLI isn't on the box's **login** PATH: `ssh <box> "bash -lc 'command -v claude'"`. |
-| The iOS app won't connect | In order: is Tailscale's VPN toggle on on the phone; is a daemon running at all (`systemctl --user status ateam`); does it say `also listening on ws://…` (if not it started before `ATEAM_WS_ADDR` was set — `systemctl --user restart ateam`); does `sudo ufw status` allow the **tailscale0 interface**, not just port 22. |
+| The iOS app won't connect (but the desktop does) | The daemon is down — the desktop restarts one over SSH just by connecting, so it hides this. Check `systemctl status ateam` (or `--user`, depending on the unit); if it was OOM-killed, `journalctl -u ateam \| grep oom` shows it. See [Keeping the daemon alive](#keeping-the-daemon-alive). |
+| The iOS app won't connect | In order: is Tailscale's VPN toggle on on the phone (green only proves the path, not that anything is listening); is a daemon running at all (`systemctl status ateam`, or `--user` for a user unit); does it say `also listening on ws://…` (if not it started before `ATEAM_WS_ADDR` was set — restart it); does `sudo ufw status` allow the **tailscale0 interface**, not just port 22. |
 
 ## Notes
 

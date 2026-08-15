@@ -97,6 +97,8 @@ sudo systemctl restart tailscaled
 sudo tailscale up --hostname=mybox        # prints a sign-in URL
 
 # keep the engine on loopback and let Tailscale bridge to it
+# (linger only matters if the installer falls back to a --user unit; with sudo
+#  available here it writes a system unit, which needs no login session at all)
 sudo loginctl enable-linger "$USER"
 ATEAM_WS_ADDR=127.0.0.1:8787 \
   curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash -s -- --service

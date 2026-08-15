@@ -160,16 +160,22 @@ export ATEAM_WS_ADDR=<box-tailnet-ip>:8787
 curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash -s -- --service
 ```
 
-The unit carries `ATEAM_WS_ADDR`, lingering keeps it alive across logout and reboot,
-and none of it needs sudo. A wildcard bind is refused and the daemon exits — the
-socket has no auth of its own, so the bind address must be the box's own `100.x`.
+The unit carries `ATEAM_WS_ADDR`. A wildcard bind is refused and the daemon exits —
+the socket has no auth of its own, so the bind address must be the box's own `100.x`.
+
+Where passwordless sudo exists the installer writes a **system** unit; otherwise a
+`--user` one kept alive by lingering. Prefer the system unit for any box a phone
+uses: only it can set `OOMScoreAdjust=-500`, without which the kernel kills this
+daemon *before* the far larger agents it supervises, and only the phone can't
+recover from that on its own. Check which you have with `systemctl status ateam`
+vs `systemctl --user status ateam`.
 
 If a daemon is already running outside systemd the installer will **not** kill it; it
 prints the handover instead. Running agents survive it:
 
 ```bash
-pkill -f 'ateam-app/cli.js daemon' && systemctl --user start ateam
-systemctl --user restart ateam    # the restart command from here on
+pkill -f 'ateam-app/cli.js daemon' && systemctl start ateam   # --user for a user unit
+systemctl restart ateam    # the restart command from here on
 ```
 
 Don't reach for `pkill` afterwards — `systemctl --user restart` is the supported
