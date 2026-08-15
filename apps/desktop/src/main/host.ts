@@ -505,6 +505,22 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		handle: (method, args) => agg.handle(method, args),
 	};
 
+	// Rehydrate the board on launch. A box's tasks exist for the aggregate only while
+	// its engine is HELD, and a cold start holds none — which is why creating one
+	// remote task made all the others appear: that connect is what put the box back
+	// into the union. The `hosts` registry already remembers every box we've reached
+	// (`known`), so reconnect those. Detached and in parallel: the board must never
+	// wait on a box that's asleep, and each connect broadcasts its own arrival, which
+	// the renderer reconciles additively — so tasks fill in as engines answer.
+	for (const c of listConnections(db)) {
+		if (!c.known) continue;
+		void connect(c.alias).catch(() => {
+			// Unreachable, asleep, or version-mismatched. connect() already closed its
+			// own transport, and the connections list still renders the box from the
+			// offline cache, so leaving it disconnected is the honest outcome.
+		});
+	}
+
 	return {
 		router,
 		list: async (): Promise<ConnectionDTO[]> => listConnections(db),

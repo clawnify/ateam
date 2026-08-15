@@ -32,6 +32,7 @@ import {
 	type LucideIcon,
 	Maximize2,
 	Minimize2,
+	Monitor,
 	Palette,
 	PanelLeft,
 	Play,
@@ -812,8 +813,33 @@ export function App() {
 														{card.name}
 													</span>
 													{multiEnv && (
-														<span className="proj-envs muted" style={{ fontSize: 10 }}>
-															{card.members.map((m) => aliasLabel(m.alias)).join(" · ")}
+														// One icon per environment — a monitor for this Mac, a server per
+														// box — instead of the names, which crowded the row as soon as a
+														// repo spanned more than one box. The name is the hover title
+														// (and the accessible name, so the row still reads its
+														// environments aloud). Monitor, not Laptop: lucide draws Laptop
+														// only 15 units tall inside the 24-unit box against Server's 20,
+														// so the pair looked mismatched at the same `size`. Monitor is
+														// 18 and exactly as wide, which reads as even.
+														<span className="proj-envs">
+															{card.members.map((m) => {
+																const name = aliasLabel(m.alias);
+																return (
+																	<span
+																		key={m.alias ?? "local"}
+																		className="proj-env"
+																		title={name}
+																		role="img"
+																		aria-label={name}
+																	>
+																		{m.alias === null ? (
+																			<Monitor size={12} strokeWidth={1.75} aria-hidden="true" />
+																		) : (
+																			<Server size={12} strokeWidth={1.75} aria-hidden="true" />
+																		)}
+																	</span>
+																);
+															})}
 														</span>
 													)}
 												</button>

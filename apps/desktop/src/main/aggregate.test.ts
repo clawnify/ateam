@@ -39,6 +39,7 @@ function fixtures() {
 		[CH.ptySpawnShell]: () => ({ terminalId: "termB" }),
 		[CH.ptyWrite]: () => undefined,
 		[CH.tasksCreate]: () => ({ id: "tB-new" }),
+		[CH.projectsRemoteUrl]: () => "git@github.com:acme/on-the-box.git",
 	});
 	return { local, remote, agg: createAggregate([local, remote], local) };
 }
@@ -87,6 +88,18 @@ test("tasksCreate routes by projectId and the new task is owned by that engine",
 	};
 	expect(created.id).toBe("tB-new");
 	expect(agg.ownerOf.get("tB-new")).toBe(remote);
+});
+
+// Regression: projectsRemoteUrl takes a projectId but was missing from ENTITY, so
+// every remote project's remote-URL lookup asked the LOCAL engine, which doesn't
+// have that project — "Project not found: <id>". Invisible while boxes were only
+// connected by hand mid-session; on every launch once we reconnect known boxes.
+test("projectsRemoteUrl routes to the engine that owns the project", async () => {
+	const { local, remote, agg } = fixtures();
+	await agg.handle(CH.projectsList, []); // learns pB→remote
+	expect(await agg.handle(CH.projectsRemoteUrl, ["pB"])).toBe("git@github.com:acme/on-the-box.git");
+	expect(remote.calls).toContain(CH.projectsRemoteUrl);
+	expect(local.calls).not.toContain(CH.projectsRemoteUrl);
 });
 
 test("un-routable calls fall back to the local engine", async () => {

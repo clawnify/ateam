@@ -275,6 +275,19 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* The environments a repo spans, one icon each (laptop = this Mac, server = a
+   box). Never shrinks — the project name ellipsizes first, so the icons stay
+   readable however long the name is. */
+.proj-envs {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	flex: none;
+	color: var(--text-dim);
+}
+.proj-env {
+	display: inline-flex;
+}
 /* Detached-window identity header: the project this window is pinned to,
    shown as a static title (not a switchable list). */
 .proj-header {
