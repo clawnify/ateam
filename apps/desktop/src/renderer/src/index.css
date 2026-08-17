@@ -632,6 +632,18 @@ input {
 		opacity: 0.4;
 	}
 }
+/* Respect the OS "reduce motion" setting. The pulsing status dots are decoration —
+   the state each one signals is already carried by its colour — so they stop dead.
+   Spinners deliberately keep spinning: they are the only signal that work is in
+   flight, and freezing them would read as a hung app. */
+@media (prefers-reduced-motion: reduce) {
+	.rail-tile .corner.pulse,
+	.proj .dot.alert.needs_attention,
+	.proj .dot.alert.review,
+	.ring.awaiting_input {
+		animation: none;
+	}
+}
 
 /* ---- task panel ---- */
 .panel {
