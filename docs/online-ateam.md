@@ -343,3 +343,8 @@ The connection menu surfaces the real error inline. Common ones:
   worktrees; a WebSocket instead of SSH, both riding Tailscale.
 - **Sessions persist.** The daemon keeps agents and PTYs alive across disconnects;
   reconnecting re-attaches to the exact running sessions.
+- **A box that drops mid-session shows as disconnected too.** Sleep the Mac, flip
+  networks, or let the box go away and Ateam drops that box rather than leaving a dead
+  link on the board — the rest of the board keeps working, and reconnecting from the
+  same menu re-attaches to whatever kept running. SSH connections are held open with
+  keepalives so an unreachable box is noticed in ~45s instead of never.
