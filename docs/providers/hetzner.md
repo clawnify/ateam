@@ -49,8 +49,10 @@ providers, running `gh auth setup-git` here is harmless.
 curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash
 ```
 
-Add `-s -- --service` to install a `systemd --user` unit — required for the iOS app,
-which can't start a daemon on demand the way the desktop does over SSH.
+Add `-s -- --service` to install a systemd unit — required for the iOS app, which
+can't start a daemon on demand the way the desktop does over SSH. With passwordless
+sudo (what this box's cloud-init grants) you get a *system* unit, which also survives
+an out-of-memory kill; see [Keeping the daemon alive](../online-ateam.md#keeping-the-daemon-alive).
 
 ## Connect
 
