@@ -1604,28 +1604,48 @@ function MissionControl({
 	// session after we landed (not in the snapshot) sort to the end.
 	const [rank] = useState(() => new Map(order.map((id, i) => [id, i])));
 
+	// Sessions announce themselves, so this listens instead of polling. Both spawn
+	// paths broadcast taskUpdated and a dying PTY broadcasts ptyExit — including from
+	// a box, whose events the host forwards — so a timer could never learn anything
+	// first. It could only cost: listForTask is routed per task, so for box-owned
+	// tasks every pass was one SSH round-trip PER TASK, and the old 2.5s tick issued
+	// them in a serial await chain that could outlast its own interval.
 	useEffect(() => {
 		let cancelled = false;
-		const refresh = async () => {
-			const collected: { task: TaskDTO; terminalId: string }[] = [];
-			for (const t of tasksRef.current) {
-				const sessions = await window.ateam.pty.listForTask(t.id);
-				for (const s of sessions) collected.push({ task: t, terminalId: s.terminalId });
+		let inFlight = false;
+		const refresh = async (): Promise<void> => {
+			if (inFlight) return; // a slow box must not let passes pile up on each other
+			inFlight = true;
+			try {
+				const perTask = await Promise.all(
+					tasksRef.current.map(async (task) => ({
+						task,
+						sessions: await window.ateam.pty.listForTask(task.id),
+					})),
+				);
+				if (cancelled) return;
+				const collected = perTask.flatMap(({ task, sessions }) =>
+					sessions.map((s) => ({ task, terminalId: s.terminalId })),
+				);
+				// Stable sort by the frozen sidebar order; V8's stable sort keeps a
+				// task's own sessions (and any equal-rank ties) in encounter order.
+				collected.sort(
+					(a, b) =>
+						(rank.get(a.task.id) ?? Number.MAX_SAFE_INTEGER) -
+						(rank.get(b.task.id) ?? Number.MAX_SAFE_INTEGER),
+				);
+				setTiles(collected);
+			} finally {
+				inFlight = false;
 			}
-			// Stable sort by the frozen sidebar order; V8's stable sort keeps a
-			// task's own sessions (and any equal-rank ties) in encounter order.
-			collected.sort(
-				(a, b) =>
-					(rank.get(a.task.id) ?? Number.MAX_SAFE_INTEGER) -
-					(rank.get(b.task.id) ?? Number.MAX_SAFE_INTEGER),
-			);
-			if (!cancelled) setTiles(collected);
 		};
 		void refresh();
-		const id = setInterval(refresh, 2500);
+		const offUpdated = window.ateam.events.onTaskUpdated(() => void refresh());
+		const offExit = window.ateam.pty.onExit(() => void refresh());
 		return () => {
 			cancelled = true;
-			clearInterval(id);
+			offUpdated();
+			offExit();
 		};
 	}, [rank]);
 

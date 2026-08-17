@@ -584,6 +584,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				cwd: task.worktreePath,
 				env: { ...process.env },
 			});
+			// A new session IS a change to the task — say so, exactly as the agent
+			// spawn above does. Without this, a shell opened in one window is
+			// invisible to every other client until something else touches the task.
+			engine.sendTaskUpdated(task.id);
 			return { terminalId };
 		},
 		[CH.ptyWrite]: (terminalId: string, data: string) => {
