@@ -19,6 +19,15 @@ export interface SshOptions {
 	sshFlags?: string[];
 }
 
+// OpenSSH's own liveness check, in place of a second app-level probe. ServerAliveInterval
+// defaults to 0 — OFF (ssh_config(5)) — so a black-holed connection (laptop sleep, a
+// Tailscale flap, the box wedged) leaves the ssh child ALIVE with nothing coming back, and
+// every RPC through it pending forever. These are sent through the encrypted channel and
+// answered by sshd itself, so a silent long-running command (an installer, a big clone) is
+// never mistaken for a dead peer. 15 × 3 ≈ 45s to a real exit — which closes the pipe, and
+// a closed pipe is what makes the client drop the box (apps/desktop/src/main/host.ts).
+const KEEPALIVE = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
+
 /**
  * Open an RPC transport to `host` by running `remoteArgs` over SSH. `host` is an
  * ssh destination (`user@host`, or an ssh_config alias — ProxyJump/keys/known_hosts
@@ -29,7 +38,7 @@ export function sshClientTransport(
 	remoteArgs: string[],
 	opts: SshOptions = {},
 ): SshClient {
-	const child = spawn("ssh", [...(opts.sshFlags ?? []), host, ...remoteArgs], {
+	const child = spawn("ssh", [...KEEPALIVE, ...(opts.sshFlags ?? []), host, ...remoteArgs], {
 		stdio: ["pipe", "pipe", "inherit"],
 	});
 	if (!child.stdout || !child.stdin) {
@@ -66,9 +75,11 @@ export function sshExec(
 	opts: SshExecOptions = {},
 ): Promise<SshExecResult> {
 	return new Promise((resolve, reject) => {
-		const child = spawn("ssh", ["-o", "BatchMode=yes", ...(opts.sshFlags ?? []), host, command], {
-			stdio: ["ignore", "pipe", "pipe"],
-		});
+		const child = spawn(
+			"ssh",
+			["-o", "BatchMode=yes", ...KEEPALIVE, ...(opts.sshFlags ?? []), host, command],
+			{ stdio: ["ignore", "pipe", "pipe"] },
+		);
 		const emit = (b: Buffer) => opts.onData?.(b.toString("utf8"));
 		child.stdout?.on("data", emit);
 		child.stderr?.on("data", emit);

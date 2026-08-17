@@ -16,9 +16,19 @@
 // slice: hold N backends, route every call correctly, merge the board.
 import { CH } from "@ateam/protocol";
 import type { Backend } from "./backend";
+import { withTimeout } from "./timeout";
 
 /** Collection reads with no entity key — merge the results across every backend. */
 const MERGE = new Set<string>([CH.projectsList, CH.agentsList, CH.loopsList]);
+
+// A merge read is a SQLite select on every engine, so slowness here means the WIRE, not
+// the work: a box that's asleep, half-open, or wedged. The union must degrade to the
+// engines that answered — "the rest of the board never waits for it" — and NOT take the
+// whole board down with the one dead engine, which a bare Promise.all did twice over: it
+// hung forever on a stale backend (an RPC has no per-call timeout), and rejected the
+// entire list if one engine errored. Applies to merge reads only; entity calls still
+// wait as long as their work takes (a clone, a merge, an installer).
+const MERGE_TIMEOUT_MS = 10_000;
 
 /** Entity-scoped calls — route to the backend that owns the id in the args. */
 const ENTITY = new Set<string>([
@@ -106,16 +116,34 @@ export interface Aggregate {
  * writeImageBytes, handshake, loop mutations) to `fallback` — the local engine by
  * convention. `backends` should include `fallback`.
  */
-export function createAggregate(backends: readonly Backend[], fallback: Backend): Aggregate {
+export function createAggregate(
+	backends: readonly Backend[],
+	fallback: Backend,
+	opts: { mergeTimeoutMs?: number } = {},
+): Aggregate {
 	const reg = new Map<string, Backend>();
+	const mergeTimeoutMs = opts.mergeTimeoutMs ?? MERGE_TIMEOUT_MS;
 
 	async function handle(method: string, args: unknown[]): Promise<unknown> {
 		if (MERGE.has(method)) {
 			const results = await Promise.all(
 				backends.map(async (b) => {
-					const r = await b.handle(method, args);
-					learn(reg, b, r);
-					return r;
+					try {
+						// Promise.resolve: a backend may answer synchronously (the local engine's
+						// in-process handler), and only a real promise can be raced against a timer.
+						const r = await withTimeout(
+							Promise.resolve(b.handle(method, args)),
+							mergeTimeoutMs,
+							method,
+						);
+						learn(reg, b, r);
+						return r;
+					} catch {
+						// This engine contributes nothing to the union this time. Its ids stay
+						// learned, so a task already on the board keeps routing to it; the
+						// connection layer is what decides it's gone (host.ts).
+						return [];
+					}
 				}),
 			);
 			return merge(results);
