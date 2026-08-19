@@ -29,6 +29,12 @@ export interface Backend {
 export interface Router {
 	readonly methods: readonly string[];
 	handle(method: string, args: unknown[]): unknown | Promise<unknown>;
+	/** Invoke a method ON the engine that owns `ownerId` (local when unknown) — for
+	 *  calls whose own args carry no routable id, like staging an attachment on the
+	 *  machine whose agent will read it. */
+	handleFor(ownerId: string, method: string, args: unknown[]): Promise<unknown>;
+	/** Whether `ownerId` lives on a box or the local engine ("local" when unknown). */
+	ownerKind(ownerId: string): "local" | "remote";
 }
 
 /** The in-process engine: a dispatcher over it, its own events. Never disposed. */

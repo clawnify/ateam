@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
+import { extname } from "node:path";
+import { type AttachDelivery, CH } from "@ateam/protocol";
 import { clipboard, dialog, ipcMain, nativeImage } from "electron";
-import { CH } from "@ateam/protocol";
 import type { Router } from "./backend";
 
 /**
@@ -69,31 +71,74 @@ export function registerIpc(router: Router, native: NativeHandlers): void {
 		return res.canceled ? [] : res.filePaths;
 	});
 
-	// "+ → Attach image": open a picker, then stage the chosen image as a real
-	// bitmap on the clipboard so the renderer's following Ctrl+V hands the agent
-	// pixels, not a path or a file-icon.
+	// Deliver local image files to the terminal's agent, wherever it runs. The
+	// aggregate knows which engine owns each terminal, so this is where the local
+	// clipboard trick and the remote byte-push fork:
+	//   - agent on a box → the Mac's clipboard and files are invisible to it, so
+	//     ship each file's bytes over the engine RPC (util:writeImageBytes writes
+	//     a temp file box-side) and return those paths for the renderer to TYPE —
+	//     the same flow the iOS app proved against remote boxes.
+	//   - local agent, one image → stage a real bitmap on the clipboard for a
+	//     following Ctrl+V (pixels, not a path or a Finder file-icon).
+	//   - local agent, several images (or an undecodable one) → the clipboard
+	//     holds only one bitmap, so hand back the paths to type instead.
+	async function deliverImages(terminalId: string, paths: string[]): Promise<AttachDelivery> {
+		if (paths.length === 0) return { mode: "none" };
+		if (router.ownerKind(terminalId) === "remote") {
+			const remote: string[] = [];
+			for (const p of paths) {
+				try {
+					const base64 = readFileSync(p).toString("base64");
+					const ext = extname(p).slice(1);
+					const method = CH.utilWriteImageBytes;
+					remote.push((await router.handleFor(terminalId, method, [base64, ext])) as string);
+				} catch {
+					/* unreadable file or dropped wire — attach the ones that made it */
+				}
+			}
+			return remote.length ? { mode: "paths", paths: remote } : { mode: "none" };
+		}
+		const [only] = paths;
+		if (paths.length === 1 && only && stageImageOnClipboard(only)) return { mode: "ctrlv" };
+		return { mode: "paths", paths };
+	}
+
+	// Attach image files: explicit `paths` from a renderer drop/paste, or null for
+	// the "+ → Attach images" picker (multi-select, so several attach in one go).
 	//
-	// Always a picker — deliberately never sourced from the clipboard. Staging
-	// writes the image *to* the clipboard, so reading it back here would skip the
-	// picker on the next attach and re-stage the same image (you could never add a
-	// second, different one). Copied screenshots/images are attached via ⌘V paste,
-	// handled separately in the renderer's paste handler.
-	ipcMain.handle(CH.utilStageImage, async () => {
-		const res = await dialog.showOpenDialog({
-			properties: ["openFile"],
-			title: "Attach image",
-			filters: [
-				{
-					name: "Images",
-					extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic", "avif"],
-				},
-			],
-		});
-		return stageImageOnClipboard(res.canceled ? null : (res.filePaths[0] ?? null));
+	// Always a picker when null — deliberately never sourced from the clipboard.
+	// Staging writes the image *to* the clipboard, so reading it back here would
+	// skip the picker on the next attach and re-stage the same image (you could
+	// never add a second, different one). Copied screenshots/images are attached
+	// via ⌘V paste, handled separately in the renderer's paste handler.
+	ipcMain.handle(CH.utilAttachImages, async (_e, terminalId: string, paths: string[] | null) => {
+		let files = paths;
+		if (!files) {
+			const res = await dialog.showOpenDialog({
+				properties: ["openFile", "multiSelections"],
+				title: "Attach images",
+				filters: [
+					{
+						name: "Images",
+						extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic", "avif"],
+					},
+				],
+			});
+			files = res.canceled ? [] : res.filePaths;
+		}
+		return deliverImages(terminalId, files);
 	});
 
-	// Paste/drop of a copied image *file*: stage its bytes as a real bitmap so the
-	// renderer's following Ctrl+V attaches the pixels. Returns false (renderer
-	// then falls back to typing the path) if the file isn't a decodable image.
-	ipcMain.handle(CH.utilStageImagePath, async (_e, path: string) => stageImageOnClipboard(path));
+	// ⌘V of a raw bitmap (copied screenshot — no backing file). A local agent
+	// reads the Mac clipboard itself off a bare Ctrl+V; a box agent can't, so
+	// encode the clipboard image to PNG and push it like any other attachment.
+	ipcMain.handle(CH.utilAttachClipboardImage, async (_e, terminalId: string) => {
+		if (router.ownerKind(terminalId) !== "remote")
+			return { mode: "ctrlv" } satisfies AttachDelivery;
+		const img = clipboard.readImage();
+		if (img.isEmpty()) return { mode: "none" } satisfies AttachDelivery;
+		const base64 = img.toPNG().toString("base64");
+		const path = await router.handleFor(terminalId, CH.utilWriteImageBytes, [base64, "png"]);
+		return { mode: "paths", paths: [path as string] } satisfies AttachDelivery;
+	});
 }
