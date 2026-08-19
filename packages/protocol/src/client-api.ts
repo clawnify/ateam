@@ -11,6 +11,7 @@
 import type {
 	AgentDTO,
 	AteamApi,
+	AttachDelivery,
 	CleanupCandidate,
 	CleanupReport,
 	CreateLoopInput,
@@ -54,8 +55,8 @@ export interface NativeClientApi {
 	pathForFile(file: File): string;
 	pick(): Promise<string | null>;
 	pickFiles(): Promise<string[]>;
-	stageClipboardImage(): Promise<boolean>;
-	stageImagePath(path: string): Promise<boolean>;
+	attachImages(terminalId: string, paths: string[] | null): Promise<AttachDelivery>;
+	attachClipboardImage(terminalId: string): Promise<AttachDelivery>;
 	// Multi-window is a host-OS concern (an engine can't open the client's windows),
 	// so the window surface is client-native too. A single-window client stubs these.
 	openProject(projectId: string): Promise<void>;
@@ -136,8 +137,8 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		utils: {
 			pathForFile: native.pathForFile,
 			pickFiles: native.pickFiles,
-			stageClipboardImage: native.stageClipboardImage,
-			stageImagePath: native.stageImagePath,
+			attachImages: native.attachImages,
+			attachClipboardImage: native.attachClipboardImage,
 			writeImageBytes: (base64, ext) => call<string>(CH.utilWriteImageBytes, [base64, ext]),
 		},
 	};

@@ -132,3 +132,23 @@ test("an entity call with an unknown id falls back rather than throwing", async 
 	await agg.handle(CH.gitStatus, ["unknown-task"]);
 	expect(local.calls).toContain(CH.gitStatus);
 });
+
+// The image-attach fix: util:writeImageBytes carries no routable id in its args
+// (base64, ext), yet the temp file must land on the machine whose agent will read
+// it — so the desktop routes it explicitly by the owning terminal.
+test("handleFor routes an id-less call to the engine that owns the terminal", async () => {
+	const { local, remote, agg } = fixtures();
+	await agg.handle(CH.projectsList, []);
+	await agg.handle(CH.tasksList, ["pB"]);
+	await agg.handle(CH.ptySpawnShell, [{ taskId: "tB" }]); // learns termB→remote
+
+	await agg.handleFor("termB", CH.utilWriteImageBytes, ["aGk=", "png"]);
+	expect(remote.calls).toContain(CH.utilWriteImageBytes);
+	expect(local.calls).not.toContain(CH.utilWriteImageBytes);
+	expect(agg.ownerKindOf("termB")).toBe("remote");
+
+	// Unknown owner → the local fallback, like every other un-routable call.
+	await agg.handleFor("term-unknown", CH.utilWriteImageBytes, ["aGk=", "png"]);
+	expect(local.calls).toContain(CH.utilWriteImageBytes);
+	expect(agg.ownerKindOf("term-unknown")).toBe("local");
+});
