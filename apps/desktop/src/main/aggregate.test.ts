@@ -102,6 +102,25 @@ test("projectsRemoteUrl routes to the engine that owns the project", async () =>
 	expect(local.calls).not.toContain(CH.projectsRemoteUrl);
 });
 
+// Regression: a box whose wire died silently (laptop sleep, Tailscale flap) stayed in the
+// aggregate, and an RPC into it never settles — so `Promise.all` over the merge reads meant
+// the WHOLE board hung on the dead engine. It must degrade to the engines that answered.
+test("a merge read survives an engine that never answers", async () => {
+	const local = fake("local", { [CH.projectsList]: () => [{ id: "pA" }] });
+	const dead = fake("remote", { [CH.projectsList]: () => new Promise(() => {}) });
+	const agg = createAggregate([local, dead], local, { mergeTimeoutMs: 20 });
+	expect(await agg.handle(CH.projectsList, [])).toEqual([{ id: "pA" }]);
+});
+
+test("a merge read survives an engine that errors", async () => {
+	const local = fake("local", { [CH.projectsList]: () => [{ id: "pA" }] });
+	const broken = fake("remote", {
+		[CH.projectsList]: () => Promise.reject(new Error("RPC connection closed")),
+	});
+	const agg = createAggregate([local, broken], local);
+	expect(await agg.handle(CH.projectsList, [])).toEqual([{ id: "pA" }]);
+});
+
 test("un-routable calls fall back to the local engine", async () => {
 	const { local, agg } = fixtures();
 	await agg.handle(CH.projectsRegister, ["/repo", {}]);

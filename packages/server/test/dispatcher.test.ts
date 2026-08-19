@@ -19,7 +19,7 @@ function makeEngine(db: AteamDb) {
 	const engine = {
 		services: {
 			db,
-			pty: { has: () => false, kill() {}, write() {}, resize() {} },
+			pty: { has: () => false, kill() {}, write() {}, resize() {}, spawn() {} },
 			hooks: {},
 			mergeQueue: {},
 			loopRunner: { describe: () => [] },
@@ -46,6 +46,32 @@ describe("createDispatcher", () => {
 		expect(d.methods).not.toContain(CH.projectsPick);
 		expect(d.methods).not.toContain(CH.utilStageImage);
 		expect(d.methods).not.toContain(CH.utilStageImagePath);
+	});
+
+	// Mission Control listens for taskUpdated rather than polling every task's
+	// sessions, so a session that doesn't announce itself is invisible to other
+	// windows and to the phone. The agent spawn always broadcast; the shell spawn
+	// silently didn't.
+	it("broadcasts taskUpdated when a shell session is spawned", async () => {
+		const db = createTestDb();
+		const { engine, taskUpdated } = makeEngine(db);
+		const d = createDispatcher(engine);
+
+		const project = repo.upsertProject(db, { repoPath: "/r/b", name: "B", defaultBranch: "main" });
+		const task = repo.createTask(db, {
+			projectId: project!.id,
+			name: "open a shell",
+			slug: "open-a-shell",
+			branch: "open-a-shell",
+			baseBranch: "main",
+			worktreePath: "/r/b/.ateam/worktrees/open-a-shell",
+		});
+
+		const spawned = (await d.handle(CH.ptySpawnShell, [{ taskId: task.id }])) as {
+			terminalId: string;
+		};
+		expect(spawned.terminalId).toBeTruthy();
+		expect(taskUpdated).toContain(task.id);
 	});
 
 	it("throws on an unknown method", () => {
