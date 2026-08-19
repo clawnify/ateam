@@ -104,7 +104,7 @@ const autoMergeWhenGreen: LoopTemplate = {
 				if (task.mergeStatus) continue; // already queued/merging
 				eligible++;
 				const status = await prStatus(task.worktreePath);
-				if (status.state !== "OPEN") continue;
+				if (status.state !== "OPEN" || status.isDraft) continue;
 				if (status.checks === "pending") {
 					waiting++;
 					continue;
@@ -118,6 +118,8 @@ const autoMergeWhenGreen: LoopTemplate = {
 					strategy: (settings.defaultMergeStrategy ?? "squash") as MergeStrategy,
 					updateStrategy: settings.defaultUpdateStrategy ?? "merge",
 					deleteRemoteBranch: settings.deleteRemoteBranchOnMerge ?? false,
+					// This green verdict is from NOW; the job may run minutes later.
+					verifyChecksGreen: true,
 				});
 				merged++;
 			}
