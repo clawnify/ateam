@@ -552,6 +552,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	const router: Router = {
 		methods: local.methods,
 		handle: (method, args) => agg.handle(method, args),
+		handleFor: (ownerId, method, args) => agg.handleFor(ownerId, method, args),
+		ownerKind: (ownerId) => agg.ownerKindOf(ownerId),
 	};
 
 	// Rehydrate the board on launch. A box's tasks exist for the aggregate only while

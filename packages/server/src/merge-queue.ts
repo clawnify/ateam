@@ -1,6 +1,13 @@
 import type { AteamDb, MergeStatus, Task } from "@ateam/db";
 import { repo } from "@ateam/db";
-import { type MergeStrategy, mergeViaPR, SerialQueue, updateFromBase } from "@ateam/git-core";
+import {
+	type MergeStrategy,
+	mergeViaPR,
+	type PrStatus,
+	prStatus,
+	SerialQueue,
+	updateFromBase,
+} from "@ateam/git-core";
 
 export interface MergeJobInput {
 	task: Task;
@@ -9,13 +16,52 @@ export interface MergeJobInput {
 	/** How to absorb the (possibly just-merged) base before merging. */
 	updateStrategy: "merge" | "rebase";
 	deleteRemoteBranch: boolean;
+	/**
+	 * Re-verify checks are still green when the job leaves the queue. Set by the
+	 * auto-merge-when-green loop: its gate samples CI at ENQUEUE time, and the PR
+	 * can turn red (or gain commits) while queued behind other merges. Manual
+	 * merges (button / gh shim) leave this off — a human saying "merge" is an
+	 * explicit override, same as today.
+	 */
+	verifyChecksGreen?: boolean;
 }
 
 export type MergeJobResult =
 	| { ok: true; prNumber: number | null; prUrl: string | null }
 	| { ok: false; reason: "conflict"; conflicts: string[] }
 	| { ok: false; reason: "busy" }
+	| { ok: false; reason: "not-mergeable"; message: string }
 	| { ok: false; reason: "error"; message: string };
+
+/**
+ * Decide whether a queued merge job may proceed, from the PR's state as read
+ * the moment the job leaves the queue (the enqueue-time verdict may be stale).
+ *
+ * Always blocked: CLOSED (merging is pointless) and draft (GitHub rejects the
+ * merge, and letting it fail re-enqueues the job in an endless retry loop).
+ * MERGED proceeds — mergeViaPR detects it and just syncs the board. NONE
+ * proceeds — the button flow may be creating the branch's first PR.
+ *
+ * With `verifyChecksGreen` (loop-originated jobs), an OPEN PR must also still
+ * have passing checks and not be definitively CONFLICTING. UNKNOWN mergeability
+ * is transient (GitHub recomputing) and does not block.
+ */
+export function preMergeGate(
+	pr: PrStatus,
+	verifyChecksGreen: boolean,
+): { proceed: true } | { proceed: false; message: string } {
+	if (pr.state === "CLOSED") return { proceed: false, message: "PR is closed" };
+	if (pr.isDraft) return { proceed: false, message: "PR is a draft" };
+	if (verifyChecksGreen && pr.state === "OPEN") {
+		if (pr.checks !== "passing" || pr.mergeable === "CONFLICTING") {
+			return {
+				proceed: false,
+				message: `checks ${pr.checks}, mergeable ${pr.mergeable}`,
+			};
+		}
+	}
+	return { proceed: true };
+}
 
 export interface MergeQueueDeps {
 	db: AteamDb;
@@ -68,6 +114,19 @@ export class MergeQueue {
 	private async runJob(input: MergeJobInput): Promise<MergeJobResult> {
 		const { task, db } = { task: input.task, db: this.deps.db };
 		try {
+			// The PR may have changed while this job sat in the queue — re-read it
+			// before touching anything. Skipping here (instead of letting GitHub
+			// reject the merge later) keeps a drafted/closed PR from being endlessly
+			// re-enqueued with a base-update push on every pass.
+			const gate = preMergeGate(
+				await prStatus(task.worktreePath),
+				input.verifyChecksGreen === true,
+			);
+			if (!gate.proceed) {
+				this.setStatus(task.id, null);
+				return { ok: false, reason: "not-mergeable", message: gate.message };
+			}
+
 			// Absorb the base first. If an earlier queued merge just advanced it,
 			// this is where that lands; if the base is unchanged it's a clean no-op.
 			this.setStatus(task.id, "updating");

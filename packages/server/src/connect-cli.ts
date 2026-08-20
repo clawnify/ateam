@@ -48,8 +48,8 @@ const headlessNative: NativeClientApi = {
 	},
 	pick: async () => null,
 	pickFiles: async () => [],
-	stageClipboardImage: async () => false,
-	stageImagePath: async () => false,
+	attachImages: async () => ({ mode: "none" as const }),
+	attachClipboardImage: async () => ({ mode: "none" as const }),
 	openProject: async () => {},
 	boundProjectId: () => null,
 };

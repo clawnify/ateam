@@ -114,6 +114,12 @@ function merge(results: unknown[]): unknown[] {
 export interface Aggregate {
 	/** Route/merge one request across the held backends (drop-in for Router.handle). */
 	handle(method: string, args: unknown[]): Promise<unknown>;
+	/** Invoke a method ON the engine that owns `ownerId` (fallback when unknown) —
+	 *  for calls whose own args carry no routable id (e.g. util:writeImageBytes
+	 *  must land on the engine whose agent will read the file). */
+	handleFor(ownerId: string, method: string, args: unknown[]): Promise<unknown>;
+	/** Whether `ownerId` lives on a box or the local engine ("local" when unknown). */
+	ownerKindOf(ownerId: string): "local" | "remote";
 	/** The learned id→backend map (which environment owns each entity). Read-only use. */
 	readonly ownerOf: ReadonlyMap<string, Backend>;
 }
@@ -166,5 +172,14 @@ export function createAggregate(
 		return result;
 	}
 
-	return { handle, ownerOf: reg };
+	async function handleFor(ownerId: string, method: string, args: unknown[]): Promise<unknown> {
+		return (reg.get(ownerId) ?? fallback).handle(method, args);
+	}
+
+	return {
+		handle,
+		handleFor,
+		ownerKindOf: (ownerId) => (reg.get(ownerId) ?? fallback).kind,
+		ownerOf: reg,
+	};
 }
