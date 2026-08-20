@@ -84,8 +84,9 @@ const api: AteamApi = {
 	utils: {
 		pathForFile: (file) => webUtils.getPathForFile(file),
 		pickFiles: () => ipcRenderer.invoke(CH.utilPickFiles),
-		stageClipboardImage: () => ipcRenderer.invoke(CH.utilStageImage),
-		stageImagePath: (path) => ipcRenderer.invoke(CH.utilStageImagePath, path),
+		attachImages: (terminalId, paths) => ipcRenderer.invoke(CH.utilAttachImages, terminalId, paths),
+		attachClipboardImage: (terminalId) =>
+			ipcRenderer.invoke(CH.utilAttachClipboardImage, terminalId),
 		writeImageBytes: (base64, ext) => ipcRenderer.invoke(CH.utilWriteImageBytes, base64, ext),
 	},
 	events: {

@@ -39,8 +39,8 @@ const native: NativeClientApi = {
 	pathForFile: () => "",
 	pick: async () => null,
 	pickFiles: async () => [],
-	stageClipboardImage: async () => false,
-	stageImagePath: async () => false,
+	attachImages: async () => ({ mode: "none" as const }),
+	attachClipboardImage: async () => ({ mode: "none" as const }),
 };
 
 describe("buildAteamApi over a real WebSocket (the phone's transport)", () => {

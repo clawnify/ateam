@@ -1,15 +1,15 @@
+import { describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "bun:test";
 import { type AteamDb, repo } from "@ateam/db";
 import { CH } from "@ateam/protocol";
 // Reuse the db package's in-memory bun:sqlite test db (better-sqlite3 can't load
 // under Bun). Cross-package test helper — the DRY source of a test AteamDb.
 import { createTestDb } from "../../db/test/helpers/test-db";
-import type { Engine } from "../src/engine";
 import { createDispatcher } from "../src/dispatcher";
+import type { Engine } from "../src/engine";
 
 // A minimal fake Engine: a real in-memory db for the DB-backed handlers, stubs
 // for the pieces those handlers don't touch, and a spy on taskUpdated so we can
@@ -44,8 +44,8 @@ describe("createDispatcher", () => {
 		expect(d.methods).toContain(CH.ptyWrite);
 		// …and the Electron-only handlers are NOT (they live in the desktop shell).
 		expect(d.methods).not.toContain(CH.projectsPick);
-		expect(d.methods).not.toContain(CH.utilStageImage);
-		expect(d.methods).not.toContain(CH.utilStageImagePath);
+		expect(d.methods).not.toContain(CH.utilAttachImages);
+		expect(d.methods).not.toContain(CH.utilAttachClipboardImage);
 	});
 
 	// Mission Control listens for taskUpdated rather than polling every task's
