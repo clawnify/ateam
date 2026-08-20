@@ -1,14 +1,12 @@
-import type { Project } from "@ateam/db";
 import { repo } from "@ateam/db";
-import { type MergeStrategy, prStatus } from "@ateam/git-core";
 import type { LoopCadence, LoopContext, LoopOutcome } from "./types";
 
 /** A configurable parameter a user sets when creating a loop from a template. */
 export interface LoopTemplateParam {
 	key: string;
 	label: string;
-	type: "number" | "boolean";
-	default: number | boolean;
+	type: "number" | "boolean" | "string";
+	default: number | boolean | string;
 	help?: string;
 }
 
@@ -26,112 +24,64 @@ export interface LoopTemplate {
 	build(config: Record<string, unknown>): (ctx: LoopContext) => Promise<LoopOutcome>;
 }
 
-/** Projects in scope: just the configured one, or all when unscoped. */
-function scopedProjects(ctx: LoopContext, projectId?: string): Project[] {
-	if (projectId) {
-		const p = repo.getProject(ctx.db, projectId);
-		return p ? [p] : [];
-	}
-	return repo.listProjects(ctx.db);
+function str(v: unknown): string | undefined {
+	return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
-const MIN = 30_000;
-const MAX = 300_000;
-
 /**
- * PR CI watcher — read-only. For every task with an open PR, read the check
- * rollup; when checks fail, flag the card unread so you notice. Touches no
- * worktree and never moves a card on its own.
+ * Agent session — the one loop kind. On each tick it creates a fresh task in
+ * the loop's project (own branch + worktree, named "<loop> #<run>") and
+ * launches the chosen coding agent with the same prompt, exactly like typing
+ * it in the composer. A tick is skipped while the previous run's agent is
+ * still working, so slow runs never pile up worktrees. Because the loop row
+ * lives in one engine's database, WHERE it runs is simply where it was
+ * created — this Mac or a box.
  */
-const prCiWatcher: LoopTemplate = {
-	id: "pr-ci-watcher",
-	title: "PR CI watcher",
-	description:
-		"Watches open PRs and flags a task as unread when its CI checks fail. Read-only — never moves a card.",
-	defaultCadence: { mode: "self_paced", minMs: MIN, maxMs: MAX },
-	params: [],
+const agentSession: LoopTemplate = {
+	id: "agent-session",
+	title: "Agent session",
+	description: "Starts a coding-agent session with the same prompt in a fresh task, on a schedule.",
+	defaultCadence: { mode: "fixed", everyMs: 3_600_000 },
+	params: [
+		{ key: "prompt", label: "Prompt", type: "string", default: "" },
+		{ key: "agentId", label: "Agent", type: "string", default: "claude" },
+	],
 	build: (config) => async (ctx) => {
-		const projectId = config.projectId as string | undefined;
-		let failing = 0;
-		let pending = 0;
-		let checked = 0;
-		for (const project of scopedProjects(ctx, projectId)) {
-			for (const task of repo.listTasks(ctx.db, project.id)) {
-				if (task.column === "merged" || task.prNumber == null) continue;
-				checked++;
-				const status = await prStatus(task.worktreePath);
-				if (status.state !== "OPEN") continue;
-				if (status.checks === "pending") pending++;
-				if (status.checks === "failing") {
-					failing++;
-					if (!task.isUnread) {
-						repo.updateTask(ctx.db, task.id, { isUnread: true });
-						ctx.onTaskUpdated(task.id);
-					}
-				}
+		const prompt = str(config.prompt)?.trim();
+		const projectId = str(config.projectId);
+		const agentId = str(config.agentId) ?? "claude";
+		if (!prompt) throw new Error("Loop has no prompt");
+		if (!projectId) throw new Error("Loop has no project");
+		// The runner injects the row id so a run can read/update its own record.
+		const loopId = str(config.loopId);
+		const row = loopId ? repo.getLoop(ctx.db, loopId) : undefined;
+
+		// Never overlap runs: while the previous run's agent is still working
+		// (or waiting on the user), skip this tick instead of stacking tasks.
+		// Require a LIVE PTY, not just the persisted status — agentStatus can
+		// strand at "running" when the exit happened while the app was closed,
+		// and a status-only check would wedge the loop forever.
+		const lastTaskId = str(row?.config?.lastTaskId);
+		if (lastTaskId) {
+			const prev = repo.getTask(ctx.db, lastTaskId);
+			const activeStatus =
+				prev?.agentStatus === "running" || prev?.agentStatus === "awaiting_input";
+			if (prev && activeStatus && ctx.isTaskAgentLive(prev.id)) {
+				return { summary: `previous run still active (${prev.name}) — skipped` };
 			}
 		}
-		return {
-			summary: `${checked} PR(s): ${failing} failing, ${pending} pending`,
-			// Check often while something is in flight; relax when all settled.
-			nextDelayMs: pending > 0 ? MIN : MAX,
-		};
+
+		const runNumber = (row?.runs ?? 0) + 1;
+		const name = `${row?.name ?? "Loop"} #${runNumber}`;
+		const { taskId } = await ctx.startAgentRun({ projectId, name, agentId, prompt });
+		if (loopId && row) {
+			repo.updateLoop(ctx.db, loopId, { config: { ...row.config, lastTaskId: taskId } });
+		}
+		return { summary: `started ${name}` };
 	},
 };
 
-/**
- * Auto-merge when green — an ACTION template. For tasks in review with an open,
- * mergeable PR whose checks all pass, it enqueues a merge through the same
- * serialized merge queue (so these never race with manual merges either).
- * Only merges what the user explicitly put in review.
- */
-const autoMergeWhenGreen: LoopTemplate = {
-	id: "auto-merge-when-green",
-	title: "Auto-merge when green",
-	description:
-		"Merges review-column tasks whose PR is mergeable and all checks pass, via the merge queue. Only acts on cards you've moved to Review.",
-	defaultCadence: { mode: "self_paced", minMs: MIN, maxMs: MAX },
-	params: [],
-	build: (config) => async (ctx) => {
-		const projectId = config.projectId as string | undefined;
-		const settings = repo.getSettings(ctx.db);
-		let merged = 0;
-		let waiting = 0;
-		let eligible = 0;
-		for (const project of scopedProjects(ctx, projectId)) {
-			for (const task of repo.listTasks(ctx.db, project.id)) {
-				if (task.column !== "review" || task.prNumber == null) continue;
-				if (task.mergeStatus) continue; // already queued/merging
-				eligible++;
-				const status = await prStatus(task.worktreePath);
-				if (status.state !== "OPEN" || status.isDraft) continue;
-				if (status.checks === "pending") {
-					waiting++;
-					continue;
-				}
-				if (status.checks !== "passing" || status.mergeable !== "MERGEABLE") {
-					continue;
-				}
-				ctx.mergeQueue?.enqueue({
-					task,
-					repoPath: project.repoPath,
-					strategy: (settings.defaultMergeStrategy ?? "squash") as MergeStrategy,
-					updateStrategy: settings.defaultUpdateStrategy ?? "merge",
-					deleteRemoteBranch: settings.deleteRemoteBranchOnMerge ?? false,
-					// This green verdict is from NOW; the job may run minutes later.
-					verifyChecksGreen: true,
-				});
-				merged++;
-			}
-		}
-		return {
-			summary: `${eligible} in review: ${merged} merging, ${waiting} awaiting CI`,
-			nextDelayMs: waiting > 0 || merged > 0 ? MIN : MAX,
-		};
-	},
-};
-
-export const LOOP_TEMPLATES: LoopTemplate[] = [prCiWatcher, autoMergeWhenGreen];
+export const LOOP_TEMPLATES: LoopTemplate[] = [agentSession];
 
 export function getTemplate(id: string): LoopTemplate | undefined {
 	return LOOP_TEMPLATES.find((t) => t.id === id);

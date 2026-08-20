@@ -50,6 +50,13 @@ const ENTITY = new Set<string>([
 	CH.gitStatus,
 	CH.ptySpawnAgent, // {taskId}
 	CH.ptySpawnShell, // {taskId}
+	// Loops live on the engine that runs them — that's what makes a loop local
+	// or remote. Create routes by the target project's engine; the rest by the
+	// loop id learned from the merged loopsList.
+	CH.loopsCreate, // {projectId}
+	CH.loopsSetEnabled, // loop id
+	CH.loopsRunNow, // loop id
+	CH.loopsDelete, // loop id
 	CH.ptyListForTask, // taskId
 	CH.ptyWrite, // terminalId
 	CH.ptyResize,
@@ -119,8 +126,8 @@ export interface Aggregate {
 
 /**
  * Build an aggregate over `backends`, resolving un-routable calls (register, fs,
- * writeImageBytes, handshake, loop mutations) to `fallback` — the local engine by
- * convention. `backends` should include `fallback`.
+ * writeImageBytes, handshake) to `fallback` — the local engine by convention.
+ * `backends` should include `fallback`.
  */
 export function createAggregate(
 	backends: readonly Backend[],

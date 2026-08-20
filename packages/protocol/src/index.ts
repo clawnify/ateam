@@ -133,6 +133,11 @@ export interface LoopDTO {
 	projectId: string | null;
 	enabled: boolean;
 	cadence: "fixed" | "self_paced";
+	/** The prompt each run hands the agent (agent-session loops). */
+	prompt: string | null;
+	/** Which coding agent each run launches (agent-session loops). */
+	agentId: string | null;
+	intervalMs: number | null;
 	lastRunAt: number | null;
 	nextRunAt: number | null;
 	lastStatus: "ok" | "error" | "done" | null;
@@ -145,8 +150,8 @@ export interface LoopDTO {
 export interface LoopTemplateParamDTO {
 	key: string;
 	label: string;
-	type: "number" | "boolean";
-	default: number | boolean;
+	type: "number" | "boolean" | "string";
+	default: number | boolean | string;
 	help?: string;
 }
 export interface LoopTemplateDTO {

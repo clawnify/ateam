@@ -20,12 +20,12 @@ import type {
 } from "@ateam/protocol";
 import { ensureGhShim, ensureNotifyScript } from "./agent-setup";
 import { type HookEvent, HookServer, type MergeRequestEvent } from "./hooks/hook-server";
-import { createBoardReconciler } from "./loops/board-reconciler";
 import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
 import { PtyClient } from "./pty/pty-client";
 import { type Services, toTaskDTO } from "./services";
+import { createTaskInProject, spawnAgentInTask } from "./sessions";
 
 export interface EngineOptions {
 	/** Where the SQLite db, hooks, and notify script live (app userData or ~/.ateam). */
@@ -64,7 +64,7 @@ export interface Engine {
 	sendLoopsUpdated(): void;
 	/** Connect to (or launch) the detached PTY daemon and learn live sessions. */
 	connectPty(): Promise<void>;
-	/** Start the periodic reconciler loops. */
+	/** Start the user's scheduled loops (rebuilt from their persisted rows). */
 	startLoops(): void;
 	/** Detach the client and stop hooks/loops — never kills PTY sessions. */
 	stop(): void;
@@ -138,13 +138,27 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	repo.updateSettings(db, { hookPort });
 
 	const mergeQueue = new MergeQueue({ db, onTaskUpdated: sendTaskUpdated });
+	// Loops are user-created only; nothing is registered here. A loop tick
+	// starts an agent session through the same task-create + spawn path the
+	// composer uses. (`services` is declared just below and also holds this
+	// runner; loops only fire long after createEngine returns.)
 	const loopRunner = new LoopRunner({
 		db,
-		onTaskUpdated: sendTaskUpdated,
 		log: opts.log ?? ((line) => console.log(line)),
-		mergeQueue,
+		startAgentRun: async (input) => {
+			const task = await createTaskInProject(services, sendTaskUpdated, input);
+			await spawnAgentInTask(services, sendTaskUpdated, {
+				taskId: task.id,
+				agentId: input.agentId,
+				prompt: input.prompt,
+			});
+			return { taskId: task.id };
+		},
+		// Daemon ground truth — the persisted agentStatus can strand at "running"
+		// when an exit happened while the app was closed.
+		isTaskAgentLive: (taskId) =>
+			repo.listSessionsByTask(db, taskId).some((s) => pty.has(s.terminalId)),
 	});
-	loopRunner.register(createBoardReconciler());
 
 	// Board Organizer tools: the organizer loop's headless `claude -p` turn reads
 	// the board and proposes moves through these, guarded by validateSetStatus.
@@ -171,8 +185,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		emitter.emit("ptyExit", e);
 		// Record the exit in the DB so a session is never left looking "running"
 		// after its process is gone — the gap that previously stranded cards in
-		// the running column (the board reconciler is the backstop for exits we
-		// miss entirely, e.g. while the app was closed).
+		// the running column. Exits missed entirely (e.g. while the app was
+		// closed) have NO backstop since the board reconciler was removed; code
+		// that needs liveness must ask the PTY daemon (pty.has), not this status.
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
 		if (session.exitedAt == null) {

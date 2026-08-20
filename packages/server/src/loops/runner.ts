@@ -2,9 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { AteamDb, Loop, LoopCadenceMode } from "@ateam/db";
 import { repo } from "@ateam/db";
 import type { LoopDTO } from "@ateam/protocol";
-import type { MergeQueue } from "../merge-queue";
 import { getTemplate } from "./templates";
-import type { LoopCadence, LoopContext, LoopDefinition, LoopOutcome } from "./types";
+import type {
+	LoopCadence,
+	LoopContext,
+	LoopDefinition,
+	LoopOutcome,
+	StartAgentRunInput,
+} from "./types";
 
 interface Instance {
 	def: LoopDefinition;
@@ -16,10 +21,11 @@ interface Instance {
 
 export interface LoopRunnerDeps {
 	db: AteamDb;
-	onTaskUpdated: (taskId: string) => void;
 	log?: (line: string) => void;
-	/** Passed to action templates (e.g. auto-merge-when-green). */
-	mergeQueue?: MergeQueue;
+	/** Create a task + launch an agent with a prompt (the composer's flow). */
+	startAgentRun: (input: StartAgentRunInput) => Promise<{ taskId: string }>;
+	/** Whether a task still has a live agent PTY (daemon ground truth). */
+	isTaskAgentLive: (taskId: string) => boolean;
 }
 
 export interface CreateUserLoopInput {
@@ -33,11 +39,12 @@ export interface CreateUserLoopInput {
 }
 
 /**
- * Schedules and runs registered Loops. Definitions live in code; this owns
- * their lifecycle: instantiate (global loops on start, per-task loops via
- * `syncPerTask`), schedule with fixed or self-paced cadence, persist last-run
- * telemetry to the `loops` table, and never overlap a loop with itself. The UI
- * drives it through `list` / `setEnabled` / `runNow`.
+ * Schedules and runs Loops. Loops are user-created only — nothing registers a
+ * loop on the user's behalf; each one is a template instance (today: a
+ * scheduled agent session) persisted in the `loops` table. This owns their
+ * lifecycle: rebuild from rows on start, schedule with fixed or self-paced
+ * cadence, persist last-run telemetry, and never overlap a loop with itself.
+ * The UI drives it through `list` / `setEnabled` / `runNow`.
  */
 export class LoopRunner {
 	private readonly defs = new Map<string, LoopDefinition>();
@@ -46,6 +53,11 @@ export class LoopRunner {
 
 	constructor(private readonly deps: LoopRunnerDeps) {}
 
+	/**
+	 * Register a code-defined loop. NOTHING in the app calls this anymore —
+	 * loops are user-created only (see start()). Kept as the seam for tests and
+	 * for any future code loop, which must be a deliberate user opt-in.
+	 */
 	register(def: LoopDefinition): void {
 		this.defs.set(def.id, def);
 	}
@@ -54,16 +66,24 @@ export class LoopRunner {
 		return def.scope === "global" ? def.id : `${def.id}:${scopeKey}`;
 	}
 
-	/** Instantiate global + persisted user loops and schedule their first runs. */
+	/** Rebuild persisted user loops and schedule their first runs. */
 	start(): void {
 		if (this.started) return;
 		this.started = true;
-		// Rebuild user loops (template instances) from their persisted rows first,
-		// so they're registered before we instantiate everything.
 		for (const row of repo.listLoops(this.deps.db)) {
-			if (row.kind !== "user" || this.defs.has(row.id)) continue;
+			if (row.kind !== "user") {
+				// Builtin reconciler rows from earlier versions (board-reconciler
+				// etc.) — nothing registers those anymore; drop the stale row unless
+				// a def was registered for it (the test seam).
+				if (!this.defs.has(row.definitionId)) repo.deleteLoop(this.deps.db, row.id);
+				continue;
+			}
+			if (this.defs.has(row.id)) continue;
 			const def = this.defFromUserRow(row);
+			// A user row whose template left the catalog can never run again —
+			// prune it rather than list a ghost the UI can't do anything with.
 			if (def) this.defs.set(def.id, def);
+			else repo.deleteLoop(this.deps.db, row.id);
 		}
 		for (const def of this.defs.values()) {
 			if (def.scope === "global") this.ensureInstance(def);
@@ -78,6 +98,9 @@ export class LoopRunner {
 		const config = {
 			...(row.config ?? {}),
 			projectId: row.projectId ?? undefined,
+			// Its own row id, so a run can read/update its record (run count,
+			// lastTaskId) — see the agent-session template.
+			loopId: row.id,
 		};
 		const cadence: LoopCadence =
 			row.cadenceMode === "fixed" && row.intervalMs
@@ -161,22 +184,6 @@ export class LoopRunner {
 		if (opts.deleteRow) repo.deleteLoop(this.deps.db, loopId);
 	}
 
-	/**
-	 * Reconcile per-task instances of a definition to the given active task ids —
-	 * spin up loops for new tasks, tear down loops for tasks that are gone.
-	 */
-	syncPerTask(defId: string, activeTaskIds: string[]): void {
-		const def = this.defs.get(defId);
-		if (!def || def.scope !== "per_task") return;
-		const wanted = new Set(activeTaskIds);
-		for (const taskId of wanted) this.ensureInstance(def, taskId);
-		for (const inst of [...this.instances.values()]) {
-			if (inst.def.id === defId && inst.scopeKey && !wanted.has(inst.scopeKey)) {
-				this.removeInstance(inst.loopId, { deleteRow: true });
-			}
-		}
-	}
-
 	setEnabled(loopId: string, enabled: boolean): void {
 		repo.updateLoop(this.deps.db, loopId, {
 			enabled,
@@ -213,6 +220,7 @@ export class LoopRunner {
 	describe(): LoopDTO[] {
 		return this.list().map((row) => {
 			const def = this.defs.get(row.definitionId);
+			const cadence = def?.cadence;
 			return {
 				id: row.id,
 				definitionId: row.definitionId,
@@ -224,7 +232,10 @@ export class LoopRunner {
 				templateId: row.templateId ?? null,
 				projectId: row.projectId ?? null,
 				enabled: row.enabled,
-				cadence: def?.cadence.mode ?? "self_paced",
+				cadence: cadence?.mode ?? "self_paced",
+				prompt: typeof row.config?.prompt === "string" ? row.config.prompt : null,
+				agentId: typeof row.config?.agentId === "string" ? row.config.agentId : null,
+				intervalMs: row.intervalMs ?? (cadence?.mode === "fixed" ? cadence.everyMs : null),
 				lastRunAt: row.lastRunAt ?? null,
 				nextRunAt: row.nextRunAt ?? null,
 				lastStatus: row.lastStatus ?? null,
@@ -259,10 +270,9 @@ export class LoopRunner {
 		inst.running = true;
 		const ctx: LoopContext = {
 			db: this.deps.db,
-			scopeKey: inst.scopeKey,
-			onTaskUpdated: this.deps.onTaskUpdated,
 			log: (m) => this.deps.log?.(`[loop ${inst.loopId}] ${m}`),
-			mergeQueue: this.deps.mergeQueue,
+			startAgentRun: this.deps.startAgentRun,
+			isTaskAgentLive: this.deps.isTaskAgentLive,
 		};
 		let outcome: LoopOutcome = {};
 		let status: "ok" | "error" | "done" = "ok";
