@@ -1584,6 +1584,25 @@ input {
 ::-webkit-scrollbar-corner {
 	background: transparent;
 }
+/* Sidebar: thumb stays invisible until the pointer is over the sidebar. The
+   track keeps its width either way, so revealing it never shifts the list. */
+.sidebar {
+	scrollbar-color: transparent transparent;
+}
+.sidebar::-webkit-scrollbar-thumb {
+	background: transparent;
+}
+.sidebar:hover {
+	scrollbar-color: #2f2f37 transparent;
+}
+.sidebar:hover::-webkit-scrollbar-thumb {
+	background: #2f2f37;
+	background-clip: padding-box;
+}
+.sidebar:hover::-webkit-scrollbar-thumb:hover {
+	background: #41414c;
+	background-clip: padding-box;
+}
 
 /* ---- loops panel ---- */
 .loops {
