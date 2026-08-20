@@ -1,5 +1,4 @@
 import type { AteamDb } from "@ateam/db";
-import type { MergeQueue } from "../merge-queue";
 
 /** A global loop runs once for the whole app; a per-task loop runs per task. */
 export type LoopScope = "global" | "per_task";
@@ -13,17 +12,31 @@ export type LoopCadence =
 	| { mode: "fixed"; everyMs: number }
 	| { mode: "self_paced"; minMs: number; maxMs: number };
 
+/** What a loop run needs to start an agent session (see templates.ts). */
+export interface StartAgentRunInput {
+	projectId: string;
+	name: string;
+	agentId: string;
+	prompt: string;
+}
+
 /** Services and helpers handed to a loop on each run. */
 export interface LoopContext {
 	db: AteamDb;
-	/** Scope key — the taskId for per-task loops, undefined for global loops. */
-	scopeKey?: string;
-	/** Tell the renderer a task row changed (column / mergeStatus / pr fields). */
-	onTaskUpdated: (taskId: string) => void;
 	/** Emit a diagnostic line (prefixed with the loop id by the runner). */
 	log: (message: string) => void;
-	/** The merge queue, for action templates like auto-merge-when-green. */
-	mergeQueue?: MergeQueue;
+	/**
+	 * Create a fresh task in a project and launch a coding agent in it with the
+	 * given prompt — the composer's flow, wired in by the engine.
+	 */
+	startAgentRun: (input: StartAgentRunInput) => Promise<{ taskId: string }>;
+	/**
+	 * Whether a task still has a live agent PTY. Ground truth from the daemon —
+	 * unlike the persisted agentStatus, which can strand at "running" when an
+	 * exit happened while the app was closed. Guards must use this, or a stale
+	 * status would wedge a loop forever.
+	 */
+	isTaskAgentLive: (taskId: string) => boolean;
 }
 
 /** What a single loop run reports back to the runner. */
@@ -52,6 +65,6 @@ export interface LoopDefinition {
 	cadence: LoopCadence;
 	/** Whether a freshly-created instance starts enabled. Defaults to true. */
 	enabledByDefault?: boolean;
-	/** Run one reconcile pass. Throwing is caught and recorded as an error. */
+	/** Run one pass. Throwing is caught and recorded as an error. */
 	run(ctx: LoopContext): Promise<LoopOutcome>;
 }
