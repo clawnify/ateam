@@ -1722,13 +1722,19 @@ input {
 	min-width: 160px;
 }
 .loop-form-row select,
-.loop-form-row input {
+.loop-form-row input,
+.loop-form-row textarea {
 	background: var(--bg-elev-2);
 	border: 1px solid var(--border);
 	border-radius: 7px;
 	color: var(--text);
 	padding: 6px 8px;
 	font-size: 13px;
+}
+.loop-form-row textarea {
+	resize: vertical;
+	min-height: 56px;
+	font-family: inherit;
 }
 .loop-del {
 	display: inline-flex;

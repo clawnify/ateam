@@ -102,6 +102,25 @@ test("projectsRemoteUrl routes to the engine that owns the project", async () =>
 	expect(local.calls).not.toContain(CH.projectsRemoteUrl);
 });
 
+// Regression: a box whose wire died silently (laptop sleep, Tailscale flap) stayed in the
+// aggregate, and an RPC into it never settles — so `Promise.all` over the merge reads meant
+// the WHOLE board hung on the dead engine. It must degrade to the engines that answered.
+test("a merge read survives an engine that never answers", async () => {
+	const local = fake("local", { [CH.projectsList]: () => [{ id: "pA" }] });
+	const dead = fake("remote", { [CH.projectsList]: () => new Promise(() => {}) });
+	const agg = createAggregate([local, dead], local, { mergeTimeoutMs: 20 });
+	expect(await agg.handle(CH.projectsList, [])).toEqual([{ id: "pA" }]);
+});
+
+test("a merge read survives an engine that errors", async () => {
+	const local = fake("local", { [CH.projectsList]: () => [{ id: "pA" }] });
+	const broken = fake("remote", {
+		[CH.projectsList]: () => Promise.reject(new Error("RPC connection closed")),
+	});
+	const agg = createAggregate([local, broken], local);
+	expect(await agg.handle(CH.projectsList, [])).toEqual([{ id: "pA" }]);
+});
+
 test("un-routable calls fall back to the local engine", async () => {
 	const { local, agg } = fixtures();
 	await agg.handle(CH.projectsRegister, ["/repo", {}]);
@@ -112,4 +131,24 @@ test("an entity call with an unknown id falls back rather than throwing", async 
 	const { local, agg } = fixtures();
 	await agg.handle(CH.gitStatus, ["unknown-task"]);
 	expect(local.calls).toContain(CH.gitStatus);
+});
+
+// The image-attach fix: util:writeImageBytes carries no routable id in its args
+// (base64, ext), yet the temp file must land on the machine whose agent will read
+// it — so the desktop routes it explicitly by the owning terminal.
+test("handleFor routes an id-less call to the engine that owns the terminal", async () => {
+	const { local, remote, agg } = fixtures();
+	await agg.handle(CH.projectsList, []);
+	await agg.handle(CH.tasksList, ["pB"]);
+	await agg.handle(CH.ptySpawnShell, [{ taskId: "tB" }]); // learns termB→remote
+
+	await agg.handleFor("termB", CH.utilWriteImageBytes, ["aGk=", "png"]);
+	expect(remote.calls).toContain(CH.utilWriteImageBytes);
+	expect(local.calls).not.toContain(CH.utilWriteImageBytes);
+	expect(agg.ownerKindOf("termB")).toBe("remote");
+
+	// Unknown owner → the local fallback, like every other un-routable call.
+	await agg.handleFor("term-unknown", CH.utilWriteImageBytes, ["aGk=", "png"]);
+	expect(local.calls).toContain(CH.utilWriteImageBytes);
+	expect(agg.ownerKindOf("term-unknown")).toBe("local");
 });

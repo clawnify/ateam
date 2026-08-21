@@ -1,5 +1,15 @@
 # Agent-driven loops — design
 
+> **Superseded in part (2026-08-19).** Loops were re-scoped: a Loop is now
+> user-created only and means one thing — a schedule that starts a coding-agent
+> session with the same prompt in a fresh task, on the engine (local or box)
+> where it was created (`templates.ts` `agent-session`). The auto-running
+> reconciler loops (board-reconciler and the pr-ci-watcher /
+> auto-merge-when-green templates) were removed; nothing registers a loop on
+> the user's behalf. The board MCP tools (`board-signals.ts`,
+> `board-organizer.ts`, `worktree-triage.ts`) and the in-session continuation
+> brain (`agent-loop.ts`) below remain valid and in the tree.
+
 Status: **foundation landed** (`agent-loop.ts` + tests). Bindings pending.
 Grounded against primary-source docs 2026-07-03 (links inline).
 

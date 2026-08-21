@@ -1,3 +1,4 @@
+import type { AttachDelivery } from "@ateam/protocol";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { FileUp, ImageUp, Plus } from "lucide-react";
@@ -12,8 +13,19 @@ import { Menu } from "./Menu";
  */
 const escapePath = (p: string) => p.replace(/([ '"\\!$&*()[\]{};<>?#~`|])/g, "\\$1");
 
-/** Paths we attach as a staged bitmap rather than a typed path. */
+/** Paths we hand to the host's image-attach delivery rather than typing as-is. */
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif|ico)$/i;
+
+/**
+ * Act on the host's attach decision: forward a bare Ctrl+V (a bitmap was staged
+ * on the local clipboard), or TYPE the returned paths — box-side temp files when
+ * the agent runs on a box — as escaped keystrokes so path detection fires.
+ */
+const writeDelivery = (terminalId: string, d: AttachDelivery) => {
+	if (d.mode === "ctrlv") window.ateam.pty.write(terminalId, "\x16");
+	else if (d.mode === "paths" && d.paths.length)
+		window.ateam.pty.write(terminalId, `${d.paths.map(escapePath).join(" ")} `);
+};
 
 /**
  * One xterm.js view bound to a main-process PTY by terminalId. Replays the
@@ -81,23 +93,21 @@ export function TerminalView({
 			}
 		};
 
-		// Bring copied/dropped file(s) into the terminal. A single image file is
-		// attached by staging its real bitmap on the clipboard + Ctrl+V — the only
-		// reliable path: a bare Ctrl+V grabs a Finder file's generic icon, and a
-		// typed path only attaches when the agent runs typed-path detection (else it
-		// just leaves a literal path). Anything else (non-image, or multiple files)
-		// types the escaped path(s); so does an image we couldn't decode.
+		// Bring copied/dropped file(s) into the terminal. Image files (one or many)
+		// go through the host's attach delivery, which knows where the agent runs:
+		// a single local image is staged as a real bitmap + Ctrl+V (a bare Ctrl+V
+		// grabs a Finder file's generic icon), several local images come back as
+		// paths to type, and for an agent on a box the bytes are shipped over and
+		// the box-side temp paths come back instead — a typed Mac path would point
+		// at a file the box doesn't have. Non-images (or a mixed drop) type the
+		// escaped local path(s), like a real terminal.
 		const attachFiles = (files: File[]) => {
 			const paths = files.map((f) => window.ateam.utils.pathForFile(f)).filter(Boolean);
-			const [only] = paths;
-			if (paths.length === 1 && only && IMAGE_RE.test(only)) {
-				void window.ateam.utils.stageImagePath(only).then((staged) => {
-					if (staged) {
-						window.ateam.pty.write(terminalId, "\x16");
-						term.focus();
-					} else {
-						typeFilePaths(files);
-					}
+			if (paths.length && paths.every((p) => IMAGE_RE.test(p))) {
+				void window.ateam.utils.attachImages(terminalId, paths).then((d) => {
+					if (d.mode === "none") typeFilePaths(files);
+					else writeDelivery(terminalId, d);
+					term.focus();
 				});
 				return;
 			}
@@ -112,9 +122,10 @@ export function TerminalView({
 		// Plain text pastes normally. A non-text payload splits two ways:
 		//   - a copied file (Finder) has a real path → attachFiles (a single image
 		//     is staged as a bitmap + Ctrl+V; other files type their path).
-		//   - a raw bitmap (screenshot) has no path → forward a bare Ctrl+V and let
-		//     the agent read the bitmap off the clipboard itself, like a raw
-		//     terminal. The agent renders its own "[Image #N]".
+		//   - a raw bitmap (screenshot) has no path → the host decides: a local
+		//     agent gets a bare Ctrl+V and reads the bitmap off the clipboard
+		//     itself, like a raw terminal; an agent on a box (no shared clipboard)
+		//     gets the bitmap shipped over as a box-side temp file to type.
 		const onPaste = (e: ClipboardEvent) => {
 			const dt = e.clipboardData;
 			if (!dt || dt.getData("text/plain")) return; // text → xterm
@@ -125,8 +136,10 @@ export function TerminalView({
 			if (files.every((f) => window.ateam.utils.pathForFile(f))) {
 				attachFiles(files); // copied file(s) on disk
 			} else {
-				window.ateam.pty.write(terminalId, "\x16"); // bitmap → bare ⌃V
-				term.focus();
+				void window.ateam.utils.attachClipboardImage(terminalId).then((d) => {
+					writeDelivery(terminalId, d);
+					term.focus();
+				});
 			}
 		};
 		el.addEventListener("paste", onPaste, true);
@@ -286,15 +299,12 @@ export function TerminalView({
 		termRef.current?.focus();
 	};
 
-	// "+ → Attach image": main opens a picker and stages the chosen image as a
-	// bitmap on the clipboard, then we forward a bare Ctrl+V so the agent reads the
-	// pixels off the clipboard — the one path that attaches reliably, regardless of
-	// typed-path detection. Each click re-opens the picker, so you can add several
-	// different images one after another.
-	const attachImage = async () => {
-		if (await window.ateam.utils.stageClipboardImage()) {
-			window.ateam.pty.write(terminalId, "\x16");
-		}
+	// "+ → Attach images": main opens a multi-select picker and delivers the
+	// chosen images to wherever this terminal's agent runs — one local image is
+	// staged as a bitmap for our Ctrl+V, several (or any on a box) come back as
+	// paths to type. Each click re-opens the picker, so you can keep adding more.
+	const attachImages = async () => {
+		writeDelivery(terminalId, await window.ateam.utils.attachImages(terminalId, null));
 		termRef.current?.focus();
 	};
 
@@ -311,7 +321,7 @@ export function TerminalView({
 					icon={Plus}
 					label="Add to terminal"
 					items={[
-						{ label: "Attach image", icon: ImageUp, onClick: attachImage },
+						{ label: "Attach images", icon: ImageUp, onClick: attachImages },
 						{ label: "Files…", icon: FileUp, onClick: addFiles },
 					]}
 				/>

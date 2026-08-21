@@ -1,6 +1,6 @@
+import type { AgentDTO, LoopDTO, ProjectDTO } from "@ateam/protocol";
 import { AlertTriangle, CheckCircle2, Play, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { LoopDTO, LoopTemplateDTO, ProjectDTO } from "@ateam/protocol";
 
 /** "in 45s" / "in 2m" / "now", or "—" when no next run is scheduled. */
 function untilLabel(nextRunAt: number | null, now: number): string {
@@ -21,37 +21,63 @@ function agoLabel(lastRunAt: number | null, now: number): string {
 	return `${Math.round(s / 3600)}h ago`;
 }
 
-/** Inline form for instantiating a loop from a template. */
+/** "every 5m" / "every 2h". */
+function everyLabel(intervalMs: number | null): string {
+	if (intervalMs == null) return "";
+	const min = Math.round(intervalMs / 60_000);
+	return min < 60 ? `every ${min}m` : `every ${Math.round(min / 60)}h`;
+}
+
+// id → owning-engine alias (null/absent = this Mac), from the host's learned registry.
+type Origins = Record<string, string | null>;
+
+function envLabel(origins: Origins, id: string): string {
+	return origins[id] ?? "Local";
+}
+
+/** Inline form for creating a loop: a scheduled agent session on an environment. */
 function NewLoopForm({
-	templates,
 	projects,
+	agents,
+	origins,
 	onCreate,
 	onCancel,
 }: {
-	templates: LoopTemplateDTO[];
 	projects: ProjectDTO[];
+	agents: AgentDTO[];
+	origins: Origins;
 	onCreate: (loops: LoopDTO[]) => void;
 	onCancel: () => void;
 }) {
-	const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
 	const [name, setName] = useState("");
-	const [projectId, setProjectId] = useState("");
-	const [everyMin, setEveryMin] = useState("");
+	const [prompt, setPrompt] = useState("");
+	const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
+	const [agentId, setAgentId] = useState(agents.find((a) => a.available)?.id ?? "claude");
+	const [everyMin, setEveryMin] = useState("60");
 	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
 
-	const template = templates.find((t) => t.id === templateId);
+	const ready = prompt.trim() && projectId && Number(everyMin) >= 1;
 
 	const submit = async () => {
-		if (!templateId) return;
+		if (!ready) return;
 		setSaving(true);
+		setError(null);
 		try {
-			const loops = await window.ateam.loops.create({
-				templateId,
-				name: name.trim() || (template?.title ?? "Loop"),
-				projectId: projectId || undefined,
-				intervalMs: everyMin ? Number(everyMin) * 60_000 : undefined,
+			// The chosen project decides the environment: its engine (this Mac or a
+			// box) owns the loop and runs every session there.
+			await window.ateam.loops.create({
+				templateId: "agent-session",
+				name: name.trim() || "Loop",
+				projectId,
+				intervalMs: Number(everyMin) * 60_000,
+				config: { prompt: prompt.trim(), agentId },
 			});
-			onCreate(loops);
+			// Re-list rather than trust the call's return: the create ran on ONE
+			// engine and returns only its loops — the panel shows the merged view.
+			onCreate(await window.ateam.loops.list());
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
 		} finally {
 			setSaving(false);
 		}
@@ -62,32 +88,31 @@ function NewLoopForm({
 			<div className="loop-main">
 				<div className="loop-form-row">
 					<label>
-						Template
-						<select value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
-							{templates.map((t) => (
-								<option key={t.id} value={t.id}>
-									{t.title}
+						Name
+						<input
+							value={name}
+							placeholder="Nightly deps"
+							onChange={(e) => setName(e.target.value)}
+						/>
+					</label>
+					<label>
+						Agent
+						<select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+							{agents.map((a) => (
+								<option key={a.id} value={a.id}>
+									{a.label}
 								</option>
 							))}
 						</select>
 					</label>
-					<label>
-						Name
-						<input
-							value={name}
-							placeholder={template?.title ?? ""}
-							onChange={(e) => setName(e.target.value)}
-						/>
-					</label>
 				</div>
 				<div className="loop-form-row">
 					<label>
-						Project
+						Project · environment
 						<select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-							<option value="">All projects</option>
 							{projects.map((p) => (
 								<option key={p.id} value={p.id}>
-									{p.name}
+									{p.name} — {envLabel(origins, p.id)}
 								</option>
 							))}
 						</select>
@@ -98,15 +123,28 @@ function NewLoopForm({
 							type="number"
 							min={1}
 							value={everyMin}
-							placeholder="self-paced"
 							onChange={(e) => setEveryMin(e.target.value)}
 						/>
 					</label>
 				</div>
-				{template && <div className="loop-desc muted">{template.description}</div>}
+				<div className="loop-form-row">
+					<label>
+						Prompt — each run starts a fresh session with exactly this
+						<textarea
+							value={prompt}
+							placeholder="Update dependencies and open a PR."
+							onChange={(e) => setPrompt(e.target.value)}
+						/>
+					</label>
+				</div>
+				{error && (
+					<div className="loop-stat err">
+						<AlertTriangle size={13} /> {error}
+					</div>
+				)}
 			</div>
 			<div className="loop-actions">
-				<button type="button" className="navbtn" onClick={submit} disabled={saving || !templateId}>
+				<button type="button" className="navbtn" onClick={submit} disabled={saving || !ready}>
 					<Plus size={14} /> Create
 				</button>
 				<button type="button" className="navbtn" onClick={onCancel}>
@@ -118,24 +156,32 @@ function NewLoopForm({
 }
 
 /**
- * The Loops panel: lists every loop (built-in reconcilers + user-defined
- * template instances) with last-run summary, next-run countdown, enable
- * toggle, run-now, and (for user loops) delete. A "New loop" form instantiates
- * a template. Stays live via the loops:updated push event and a 1s tick.
+ * The Loops panel. A loop is deliberately user-created and nothing else: on its
+ * interval it starts the chosen coding agent in a fresh task with the same
+ * prompt, on the environment (this Mac or a box) where its project lives.
+ * Stays live via the loops:updated push event and a 1s tick.
  */
 export function LoopsPanel() {
 	const [loops, setLoops] = useState<LoopDTO[]>([]);
-	const [templates, setTemplates] = useState<LoopTemplateDTO[]>([]);
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
+	const [agents, setAgents] = useState<AgentDTO[]>([]);
+	const [origins, setOrigins] = useState<Origins>({});
 	const [busy, setBusy] = useState<string | null>(null);
 	const [creating, setCreating] = useState(false);
 	const [now, setNow] = useState(() => Date.now());
 
 	useEffect(() => {
-		void window.ateam.loops.list().then(setLoops);
-		void window.ateam.loops.templates().then(setTemplates);
-		void window.ateam.projects.list().then(setProjects);
-		const off = window.ateam.loops.onUpdated(setLoops);
+		// Load the merged lists first — the host learns which engine owns each id
+		// during those reads — then ask it for the origins map to label rows with.
+		void Promise.all([
+			window.ateam.loops.list().then(setLoops),
+			window.ateam.projects.list().then(setProjects),
+			window.ateam.agents.list().then((a) => setAgents(a.filter((x) => x.available))),
+		]).then(async () => setOrigins(await window.ateamHost.origins()));
+		// A mutation's return and the push event both carry ONE engine's loops;
+		// the panel shows the union across engines, so always re-list.
+		const refresh = () => void window.ateam.loops.list().then(setLoops);
+		const off = window.ateam.loops.onUpdated(refresh);
 		const tick = setInterval(() => setNow(Date.now()), 1000);
 		return () => {
 			off();
@@ -143,19 +189,23 @@ export function LoopsPanel() {
 		};
 	}, []);
 
+	const refresh = async () => setLoops(await window.ateam.loops.list());
 	const toggle = async (l: LoopDTO) => {
-		setLoops(await window.ateam.loops.setEnabled(l.id, !l.enabled));
+		await window.ateam.loops.setEnabled(l.id, !l.enabled);
+		await refresh();
 	};
 	const runNow = async (l: LoopDTO) => {
 		setBusy(l.id);
 		try {
-			setLoops(await window.ateam.loops.runNow(l.id));
+			await window.ateam.loops.runNow(l.id);
+			await refresh();
 		} finally {
 			setBusy(null);
 		}
 	};
 	const remove = async (l: LoopDTO) => {
-		setLoops(await window.ateam.loops.remove(l.id));
+		await window.ateam.loops.remove(l.id);
+		await refresh();
 	};
 
 	return (
@@ -167,22 +217,23 @@ export function LoopsPanel() {
 						type="button"
 						className="navbtn"
 						onClick={() => setCreating((c) => !c)}
-						disabled={templates.length === 0}
+						disabled={projects.length === 0}
 					>
 						<Plus size={14} /> New loop
 					</button>
 				</div>
 				<p className="muted">
-					Background reconcilers that keep the board honest. Built-ins run automatically; add your
-					own from a template. Each runs on its own cadence — tight while work is active, relaxed
-					when quiet.
+					A loop starts a coding-agent session with the same prompt on a schedule — each run is a
+					fresh task on the board, on this Mac or a box (wherever the loop's project lives). Loops
+					only exist when you create them.
 				</p>
 			</div>
 
 			{creating && (
 				<NewLoopForm
-					templates={templates}
 					projects={projects}
+					agents={agents}
+					origins={origins}
 					onCreate={(ls) => {
 						setLoops(ls);
 						setCreating(false);
@@ -191,19 +242,19 @@ export function LoopsPanel() {
 				/>
 			)}
 
-			{loops.length === 0 && !creating && <div className="empty">No loops registered.</div>}
+			{loops.length === 0 && !creating && <div className="empty">No loops. Create one.</div>}
 
 			{loops.map((l) => (
 				<div key={l.id} className={`loop-card ${l.enabled ? "" : "off"}`}>
 					<div className="loop-main">
 						<div className="loop-title">
 							<span>{l.title}</span>
-							{l.kind === "user" && <span className="loop-tag">custom</span>}
+							<span className="loop-tag">{envLabel(origins, l.id)}</span>
 							<span className="loop-cadence muted">
-								{l.cadence === "self_paced" ? "self-paced" : "fixed"}
+								{l.agentId ?? "claude"} · {everyLabel(l.intervalMs)}
 							</span>
 						</div>
-						<div className="loop-desc muted">{l.description}</div>
+						{l.prompt && <div className="loop-desc muted">{l.prompt}</div>}
 						<div className="loop-meta">
 							{l.lastStatus === "error" ? (
 								<span className="loop-stat err">
@@ -236,16 +287,14 @@ export function LoopsPanel() {
 							<input type="checkbox" checked={l.enabled} onChange={() => void toggle(l)} />
 							<span>{l.enabled ? "On" : "Off"}</span>
 						</label>
-						{l.kind === "user" && (
-							<button
-								type="button"
-								className="loop-del"
-								title="Delete this loop"
-								onClick={() => void remove(l)}
-							>
-								<Trash2 size={14} />
-							</button>
-						)}
+						<button
+							type="button"
+							className="loop-del"
+							title="Delete this loop"
+							onClick={() => void remove(l)}
+						>
+							<Trash2 size={14} />
+						</button>
 					</div>
 				</div>
 			))}

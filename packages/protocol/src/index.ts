@@ -133,6 +133,11 @@ export interface LoopDTO {
 	projectId: string | null;
 	enabled: boolean;
 	cadence: "fixed" | "self_paced";
+	/** The prompt each run hands the agent (agent-session loops). */
+	prompt: string | null;
+	/** Which coding agent each run launches (agent-session loops). */
+	agentId: string | null;
+	intervalMs: number | null;
 	lastRunAt: number | null;
 	nextRunAt: number | null;
 	lastStatus: "ok" | "error" | "done" | null;
@@ -145,8 +150,8 @@ export interface LoopDTO {
 export interface LoopTemplateParamDTO {
 	key: string;
 	label: string;
-	type: "number" | "boolean";
-	default: number | boolean;
+	type: "number" | "boolean" | "string";
+	default: number | boolean | string;
 	help?: string;
 }
 export interface LoopTemplateDTO {
@@ -286,8 +291,8 @@ export const CH = {
 	systemHello: "system:hello",
 	fsListDir: "fs:listDir",
 	utilPickFiles: "util:pickFiles",
-	utilStageImage: "util:stageImage",
-	utilStageImagePath: "util:stageImagePath",
+	utilAttachImages: "util:attachImages",
+	utilAttachClipboardImage: "util:attachClipboardImage",
 	utilWriteImageBytes: "util:writeImageBytes",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
@@ -325,6 +330,19 @@ export interface PtyExitEvent {
 	terminalId: string;
 	exitCode: number;
 }
+
+/**
+ * How the host delivered an image attach (utils.attachImages / attachClipboardImage):
+ * "ctrlv" — a bitmap is staged on the client clipboard; forward a Ctrl+V so the
+ * local agent reads the pixels itself. "paths" — TYPE these paths into the PTY
+ * (escaped keystrokes, not a paste) so the agent's typed-path detection attaches
+ * them; for a remote agent they are box-side temp files. "none" — nothing to do
+ * (cancelled picker, empty clipboard, or no file survived the transfer).
+ */
+export type AttachDelivery =
+	| { mode: "ctrlv" }
+	| { mode: "paths"; paths: string[] }
+	| { mode: "none" };
 
 // ---- the API surface exposed on window.ateam ----
 export interface AteamApi {
@@ -438,20 +456,23 @@ export interface AteamApi {
 		/** Native open dialog; resolves to the chosen paths ([] on cancel). */
 		pickFiles(): Promise<string[]>;
 		/**
-		 * Open an image picker, then put the chosen image on the clipboard as a real
-		 * bitmap so a following Ctrl+V hands the agent pixels, not a Finder file-icon.
-		 * Always a picker (never read from the clipboard, which we just wrote to).
-		 * Resolves true when a bitmap was staged, false if the user cancelled or the
-		 * file wasn't a decodable image.
+		 * Attach image files to the terminal's agent, wherever that agent runs.
+		 * `paths` are client-local image files (from a drop/paste); null opens a
+		 * multi-select image picker instead. The host decides the delivery: for a
+		 * local agent one image is staged on the clipboard as a real bitmap
+		 * ("ctrlv" — the caller forwards a Ctrl+V so the agent reads pixels, not a
+		 * Finder file-icon), while several images — or an agent on a box, which
+		 * can't see this machine's clipboard or files — come back as "paths" for
+		 * the caller to TYPE into the PTY (box-side temp paths when remote).
 		 */
-		stageClipboardImage(): Promise<boolean>;
+		attachImages(terminalId: string, paths: string[] | null): Promise<AttachDelivery>;
 		/**
-		 * Put the image at `path` on the clipboard as a real bitmap (for a following
-		 * Ctrl+V), used when a copied/dropped image *file* is brought into a terminal.
-		 * Resolves false if the file isn't a decodable image, so the caller can fall
-		 * back to typing the path.
+		 * Attach the raw bitmap currently on the client's clipboard (a copied
+		 * screenshot — no backing file). Local agents read the clipboard themselves
+		 * ("ctrlv"); for an agent on a box the bitmap is shipped over and comes
+		 * back as a box-side path to type. "none" when the clipboard has no image.
 		 */
-		stageImagePath(path: string): Promise<boolean>;
+		attachClipboardImage(terminalId: string): Promise<AttachDelivery>;
 		/**
 		 * Write raw image bytes (base64) to a temp file on the *engine's* machine and
 		 * return its absolute path. The remote counterpart of clipboard staging: a

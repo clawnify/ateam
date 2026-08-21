@@ -38,6 +38,9 @@ async function gh(args: string[], cwd: string): Promise<string> {
 		const { stdout } = await pexec("gh", args, {
 			cwd,
 			maxBuffer: 16 * 1024 * 1024,
+			// Every gh call here is a bounded API round-trip. Unbounded, one call
+			// stalled on a dead connection wedges the merge queue's serializer.
+			timeout: 120_000,
 		});
 		return stdout;
 	} catch (err) {
@@ -207,6 +210,8 @@ export interface PrStatus {
 	checks: "passing" | "failing" | "pending" | "none";
 	/** GitHub's mergeability verdict, when known. */
 	mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+	/** Draft PRs report `mergeable: MERGEABLE` yet GitHub refuses to merge them. */
+	isDraft: boolean;
 	prNumber: number | null;
 }
 
@@ -220,17 +225,19 @@ export async function prStatus(worktreePath: string): Promise<PrStatus> {
 		state: "NONE",
 		checks: "none",
 		mergeable: "UNKNOWN",
+		isDraft: false,
 		prNumber: null,
 	};
 	try {
 		const out = await gh(
-			["pr", "view", "--json", "number,state,mergeable,statusCheckRollup"],
+			["pr", "view", "--json", "number,state,mergeable,isDraft,statusCheckRollup"],
 			worktreePath,
 		);
 		const p = JSON.parse(out) as {
 			number?: number;
 			state?: string;
 			mergeable?: string;
+			isDraft?: boolean;
 			statusCheckRollup?: { status?: string; conclusion?: string; state?: string }[];
 		};
 		const rollup = p.statusCheckRollup ?? [];
@@ -253,7 +260,7 @@ export async function prStatus(worktreePath: string): Promise<PrStatus> {
 			p.state === "OPEN" || p.state === "MERGED" || p.state === "CLOSED" ? p.state : "NONE";
 		const mergeable =
 			p.mergeable === "MERGEABLE" || p.mergeable === "CONFLICTING" ? p.mergeable : "UNKNOWN";
-		return { state, checks, mergeable, prNumber: p.number ?? null };
+		return { state, checks, mergeable, isDraft: p.isDraft === true, prNumber: p.number ?? null };
 	} catch {
 		return none;
 	}

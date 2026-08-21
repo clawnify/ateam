@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { agentCommand, getAgent, listAgents } from "@ateam/agents";
+import { listAgents } from "@ateam/agents";
 import { repo } from "@ateam/db";
 import {
 	cloneRepo,
@@ -17,7 +17,6 @@ import {
 	errorMessage,
 	fileDiff,
 	getOriginUrl,
-	createTask as gitCreateTask,
 	gitFor,
 	removeTask as gitRemoveTask,
 	initRepository,
@@ -35,10 +34,10 @@ import {
 	type MergeStrategy,
 	PROTOCOL_VERSION,
 } from "@ateam/protocol";
-import { buildAgentEnv, ensureClaudeHooks, ensureCodexHooks } from "./agent-setup";
 import type { Engine } from "./engine";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
+import { createTaskInProject, type SpawnAgentInput, shell, spawnAgentInTask } from "./sessions";
 
 /** Project display name from the repo's README H1 (md or HTML), if present. */
 function readmeTitle(repoPath: string): string | null {
@@ -98,7 +97,6 @@ export interface Dispatcher {
 export function createDispatcher(engine: Engine): Dispatcher {
 	const { services } = engine;
 	const { db, mergeQueue, loopRunner } = services;
-	const shell = process.env.SHELL || "/bin/zsh";
 
 	// ---- cleanup: remove only merged + idle + clean worktrees ----
 	// A task is removable ONLY when it merged, has no live agent session, and its
@@ -223,24 +221,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		// ---- tasks ----
 		[CH.tasksList]: async (projectId: string) => repo.listTasks(db, projectId).map(toTaskDTO),
 		[CH.tasksCreate]: async (input: { projectId: string; name: string; baseBranch?: string }) => {
-			const project = requireProjectFor(services, input.projectId);
-			const created = await gitCreateTask({
-				repoPath: project.repoPath,
-				name: input.name,
-				baseBranch: input.baseBranch ?? project.defaultBranch ?? undefined,
-				worktreesRoot: project.worktreesRoot ?? undefined,
-			});
-			const row = repo.createTask(db, {
-				projectId: project.id,
-				name: input.name,
-				slug: created.slug,
-				branch: created.branch,
-				baseBranch: created.baseBranch,
-				worktreePath: created.worktreePath,
-			});
-			// Broadcast so any other window showing this project gains the new card
-			// (renderers upsert). The caller also gets it — an idempotent upsert.
-			engine.sendTaskUpdated(row.id);
+			const row = await createTaskInProject(services, engine.sendTaskUpdated, input);
 			return toTaskDTO(row);
 		},
 		[CH.tasksRemove]: async (input: { id: string; deleteBranch?: boolean; force?: boolean }) => {
@@ -462,7 +443,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			return file;
 		},
 
-		// ---- loops (periodic reconcilers) ----
+		// ---- loops (user-scheduled agent sessions) ----
 		[CH.loopsList]: () => loopRunner.describe(),
 		[CH.loopsSetEnabled]: (id: string, enabled: boolean) => {
 			loopRunner.setEnabled(id, enabled);
@@ -482,7 +463,16 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				params: t.params,
 			})),
 		[CH.loopsCreate]: (input: CreateLoopInput) => {
-			const loops = loopRunner.createUserLoop(input);
+			// A loop is a user-scheduled agent session: it needs a prompt, a project
+			// on THIS engine (that's what makes it local or remote), and an interval.
+			const prompt = typeof input.config?.prompt === "string" ? input.config.prompt.trim() : "";
+			if (!prompt) throw new Error("A loop needs a prompt");
+			if (!input.projectId) throw new Error("A loop needs a project");
+			requireProjectFor(services, input.projectId);
+			if (!input.intervalMs || input.intervalMs < 60_000) {
+				throw new Error("Loop interval must be at least 1 minute");
+			}
+			const loops = loopRunner.createUserLoop({ ...input, cadenceMode: "fixed" });
 			engine.sendLoopsUpdated();
 			return loops;
 		},
@@ -493,81 +483,8 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 
 		// ---- pty ----
-		[CH.ptySpawnAgent]: async (input: {
-			taskId: string;
-			agentId: string;
-			yolo?: boolean;
-			resume?: boolean;
-			agentMode?: boolean;
-			prompt?: string;
-			files?: string[];
-		}) => {
-			const task = requireTask(services, input.taskId);
-			const agent = getAgent(input.agentId);
-			if (!agent) throw new Error(`Unknown agent: ${input.agentId}`);
-
-			const terminalId = randomUUID();
-			repo.createSession(db, {
-				taskId: task.id,
-				agentId: agent.id,
-				terminalId,
-				cwd: task.worktreePath,
-			});
-
-			if (agent.id === "claude") {
-				await ensureClaudeHooks(task.worktreePath, services.notifyScriptPath);
-			} else if (agent.id === "codex") {
-				await ensureCodexHooks(task.worktreePath, services.notifyScriptPath);
-			}
-
-			const env = buildAgentEnv({
-				terminalId,
-				agentId: agent.id,
-				hookPort: services.hookPort,
-				hooksDir: services.hooksDir,
-			});
-			// Run the agent in a login shell, then drop to an interactive shell so
-			// the pane stays usable after the agent exits. YOLO appends the bypass
-			// flag; resume relaunches the agent's most recent conversation here.
-			// Attached files ride along in the prompt as absolute paths under a
-			// header — the agent reads them with its own Read tool (nothing is
-			// copied into the worktree). Skip on resume, which ignores the prompt.
-			let prompt = input.prompt;
-			if (input.files?.length) {
-				const list = input.files.map((f) => `- ${f}`).join("\n");
-				prompt = prompt ? `${prompt}\n\nAttached files:\n${list}` : `Attached files:\n${list}`;
-			}
-			let agentCmd = agentCommand(agent, {
-				yolo: input.yolo,
-				resume: input.resume,
-				agentMode: input.agentMode,
-				cwd: task.worktreePath,
-				prompt,
-			});
-			if (agent.id === "codex") {
-				// Codex has no hooks, but `notify` invokes a program with a JSON
-				// payload on turn completion — our script maps it to Stop. Injected
-				// per-launch via -c so the user's ~/.codex/config.toml is untouched.
-				const codexNotify = join(services.hooksDir, "codex-notify.sh");
-				agentCmd = agentCmd.replace(/^codex/, `codex -c 'notify=["sh","${codexNotify}"]'`);
-			}
-			const command = `${agentCmd}; exec ${shell} -l`;
-			services.pty.spawn({
-				terminalId,
-				shell,
-				args: ["-l", "-c", command],
-				cwd: task.worktreePath,
-				env,
-			});
-
-			repo.updateTask(db, task.id, {
-				column: "running",
-				agentStatus: "running",
-				agentId: agent.id,
-			});
-			engine.sendTaskUpdated(task.id);
-			return { terminalId };
-		},
+		[CH.ptySpawnAgent]: async (input: SpawnAgentInput) =>
+			spawnAgentInTask(services, engine.sendTaskUpdated, input),
 		[CH.ptySpawnShell]: async (input: { taskId: string }) => {
 			const task = requireTask(services, input.taskId);
 			const terminalId = randomUUID();

@@ -216,6 +216,10 @@ native modules.
   every agent via MCP, brokered through Composio/Arcade.
 - Session-history continuity across worktrees ("fork session").
 
+## Privacy
+
+Local-first, no backend, no analytics: see **[PRIVACY.md](./PRIVACY.md)**.
+
 ## License
 
 Dual-licensed: **[GPL-3.0-or-later](./LICENSE)** for open source use — or a

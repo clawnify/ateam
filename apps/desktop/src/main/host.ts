@@ -60,6 +60,7 @@ import {
 	type Router,
 	remoteBackend,
 } from "./backend";
+import { withTimeout } from "./timeout";
 
 // The one pre-quoted remote command (ssh space-joins remote args, so `bash -lc`
 // must arrive as a single element): a login shell (agent-CLI PATH) execing the
@@ -164,6 +165,13 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// Per-alias health probes (ws only) — cleared on disconnect so a dropped box
 	// stops pinging a socket nobody is listening to.
 	const probes = new Map<string, ReturnType<typeof setInterval>>();
+	// alias → the SystemInfo learned at handshake. A held engine's identity doesn't
+	// change while it's held (its agent list can, and installAgent refreshes it), so
+	// every status read answers from here instead of asking the box again. Asking was
+	// the bug: `connected()` is a system:hello PER BOX on every connect/disconnect/
+	// install, and an RPC never times out — so one stale box hung the whole list, and
+	// with it `connect()`'s already-held path and anything awaiting it.
+	const infos = new Map<string | null, SystemInfo>();
 
 	// One aggregate over a LIVE backend array: connecting pushes onto it (so the
 	// learned id→engine registry survives), disconnecting rebuilds a fresh one (so a
@@ -183,8 +191,36 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	unbinders.set(null, bindEvents(local));
 
 	async function statusOf(backend: Backend, alias: string | null): Promise<HostStatus> {
+		// The local engine is in-process — asking it can't hang, and its agent list changes
+		// under us (installing a CLI on the Mac), so always ask. A BOX is asked exactly once,
+		// at the handshake; `infos` serves every read after that. The fallback is unreachable
+		// (connect caches before it registers the backend) but capped rather than trusting.
+		if (alias !== null) {
+			const cached = infos.get(alias);
+			if (cached) return { mode: backend.kind, alias, info: cached };
+			await refreshInfo(alias);
+			const info = infos.get(alias);
+			if (!info) throw new Error(`Couldn't read "${alias}" status — it stopped answering.`);
+			return { mode: backend.kind, alias, info };
+		}
 		const info = (await backend.handle(CH.systemHello, [])) as SystemInfo;
 		return { mode: backend.kind, alias, info };
+	}
+
+	/** Re-read a held box's system:hello into the cache (its agent list changed). */
+	async function refreshInfo(alias: string): Promise<void> {
+		const backend = backends.get(alias);
+		if (!backend) return;
+		try {
+			const info = await withTimeout(
+				backend.handle(CH.systemHello, []) as Promise<SystemInfo>,
+				CONNECT_TIMEOUT_MS,
+			);
+			infos.set(alias, info);
+		} catch {
+			// Unreachable mid-refresh: keep the cached info. The probe (ws) or the wire's
+			// own close (ssh) is what decides a box is gone — never a stale agent list.
+		}
 	}
 
 	function connected(): Promise<HostStatus[]> {
@@ -253,9 +289,19 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		});
 		// The remote's method set matches the local dispatcher's (same contract).
 		const backend = remoteBackend(rpc, local.methods, client.close);
+		infos.set(alias, info); // cached before the backend is reachable — statusOf's invariant
 		backends.set(alias, backend);
 		backendList.push(backend); // the live aggregate now fans out to it too
 		unbinders.set(alias, bindEvents(backend));
+		// A closed wire must take its backend WITH it. Nothing else drops a dead engine:
+		// a call routed into one never settles (no per-call timeout), so it stayed on the
+		// board, green, swallowing every request — the exact opposite of the promise that
+		// "a box that's asleep or unreachable just shows as disconnected". Wire-agnostic
+		// on purpose: the ws probe below only catches a HALF-open socket, while a real
+		// close is all SSH ever gives us (the relay's ssh child exits).
+		client.transport.onClose?.(() => {
+			if (backends.get(alias) === backend) disconnect(alias);
+		});
 		if (wire === "ws") probes.set(alias, startHealthProbe(alias, rpc));
 		broadcastConnections();
 		return { mode: "remote", alias, info };
@@ -292,6 +338,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		unbinders.delete(alias);
 		backend.dispose();
 		backends.delete(alias);
+		infos.delete(alias);
 		const i = backendList.indexOf(backend);
 		if (i >= 0) backendList.splice(i, 1);
 		// Rebuild so the learned registry drops the gone engine's ids (no stale routing).
@@ -462,7 +509,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 				`Installing ${agent.label} on "${alias}" failed (exit ${result.code ?? "on a signal"}) — it may have installed but not landed on the login PATH.`,
 			);
 		}
-		// The box's agent list now includes it — refresh so the composer's env-agents update.
+		// The box's agent list now includes it — re-read the cached system:hello (it's what
+		// statusOf serves) so the composer's env-agents update.
+		await refreshInfo(alias);
 		broadcastConnections();
 		return { agentId, loginCommand: agent.loginCommand };
 	}
@@ -503,6 +552,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	const router: Router = {
 		methods: local.methods,
 		handle: (method, args) => agg.handle(method, args),
+		handleFor: (ownerId, method, args) => agg.handleFor(ownerId, method, args),
+		ownerKind: (ownerId) => agg.ownerKindOf(ownerId),
 	};
 
 	// Rehydrate the board on launch. A box's tasks exist for the aggregate only while
@@ -563,21 +614,4 @@ export function registerHostIpc(host: Host): void {
 		(_e, patch: { hetznerToken?: string; tailscaleAuthKey?: string }) => host.saveSecrets(patch),
 	);
 	ipcMain.handle(HOST_CH.providerOptions, (_e, token?: string) => host.providerOptions(token));
-}
-
-/** Reject (and clean up) if a promise doesn't settle in time. */
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-	return new Promise<T>((resolve, reject) => {
-		const timer = setTimeout(() => reject(new Error(`connection timed out after ${ms}ms`)), ms);
-		p.then(
-			(v) => {
-				clearTimeout(timer);
-				resolve(v);
-			},
-			(e) => {
-				clearTimeout(timer);
-				reject(e);
-			},
-		);
-	});
 }

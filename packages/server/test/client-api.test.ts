@@ -33,8 +33,8 @@ const native: NativeClientApi = {
 	pathForFile: () => "/native/path",
 	pick: async () => "/native/pick",
 	pickFiles: async () => ["/native/a"],
-	stageClipboardImage: async () => true,
-	stageImagePath: async () => false,
+	attachImages: async () => ({ mode: "ctrlv" as const }),
+	attachClipboardImage: async () => ({ mode: "none" as const }),
 };
 
 describe("buildAteamApi over a live serveRpc/dispatcher (the client's view)", () => {
@@ -83,7 +83,7 @@ describe("buildAteamApi over a live serveRpc/dispatcher (the client's view)", ()
 		expect(api.utils.pathForFile(new File([], "x"))).toBe("/native/path");
 		expect(await api.projects.pick()).toBe("/native/pick");
 		expect(await api.utils.pickFiles()).toEqual(["/native/a"]);
-		expect(await api.utils.stageClipboardImage()).toBe(true);
-		expect(await api.utils.stageImagePath("/x")).toBe(false);
+		expect(await api.utils.attachImages("t1", null)).toEqual({ mode: "ctrlv" });
+		expect(await api.utils.attachClipboardImage("t1")).toEqual({ mode: "none" });
 	});
 });
