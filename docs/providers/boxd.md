@@ -108,6 +108,16 @@ sudo tailscale serve --bg --tcp 8787 tcp://localhost:8787
 Then point the phone at `<tailnet-ip>:8787`. The engine only ever binds loopback,
 so it's reachable from your tailnet and nowhere else — the same posture as a VPS.
 
+**Turn auto-hibernate off on any box the phone uses.** boxd cold-snapshots an idle
+machine — the default is `auto_hibernate: 14400s`, four hours — which takes
+`tailscaled` down with it, and **the phone cannot wake it**: waking needs the boxd
+CLI or API, which the iOS app knows nothing about. Otherwise you open the app away
+from your desk and find a dead endpoint with no way to revive it.
+
+```bash
+boxd machine config set mybox auto-hibernate.timeout 0   # 0 disables
+```
+
 Two caveats: traffic relays through DERP rather than a direct path (fine for
 JSON-RPC, laggier for PTY output), and this is manual per box.
 
@@ -125,4 +135,9 @@ JSON-RPC, laggier for PTY output), and this is manual per box.
   database silently mis-route git operations and hide one fork's tasks. Delete it
   before `boxd snapshots save`, and log `gh` out first — forks inherit credentials
   too.
+- **A hibernated box looks like a Tailscale failure.** An idle machine hibernates by
+  default and its tailnet node goes `offline, last seen …`; the node is fine and its
+  key hasn't expired — there's simply no host running. `boxd machine wake <vm>` brings
+  it back, keeping its state and the *same* tailnet IP, and systemd restarts the
+  engine. See the iOS section for turning it off.
 - **`boxd snapshots save`**, not `create`.
