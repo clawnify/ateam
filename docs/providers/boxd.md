@@ -56,7 +56,11 @@ git config --global --unset-all credential.https://github.com.helper
 ```
 
 Still run `gh auth login`: Ateam's PR and merge-queue operations go through the
-`gh` API rather than git.
+`gh` API rather than git. Provisioning a project onto the box no longer requires
+it (since v0.1.42): the engine's clone falls back from `gh` to plain `git clone`,
+which rides boxd's credential helper — a bare box with only the GitHub
+integration connected can clone, because `GH_TOKEN` is injected into login
+shells only and the engine daemon never sees it.
 
 ## Install the engine
 
