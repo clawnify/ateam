@@ -8,7 +8,7 @@ running processes. The images already ship `git`, `gh`, `node`, `docker` and
 `claude`, so there's no user, firewall or Tailscale setup to do. Unlike a VPS, the
 box is reached over boxd's own authenticated SSH proxy rather than your tailnet.
 
-**Verified against** Ateam v0.1.39 · boxd CLI 0.2.5 · 2026-08-12
+**Verified against** Ateam v0.1.39 · boxd CLI 0.2.10 · 2026-08-25
 
 ## Create a box
 
@@ -80,14 +80,50 @@ plus a shared `boxd.sh` defaults entry). Ateam collapses aliases that reach the
 same engine, so you should see one entry — but if you're on an older build you'll
 see all three, and `boxd.sh` is not a machine.
 
+## Tailscale integration (org-level, shipped)
+
+boxd's proxy-based Tailscale integration has shipped
+([guide](https://docs.boxd.sh/guides/tailscale.md)). It works at the **edge**, not
+per VM: boxd's edge servers enrol as `boxd-proxy-*` devices in *your* tailnet, and
+every `*.boxd.sh` hostname you own — HTTPS, subdomain proxies, SSH aliases, raw
+port forwards — resolves only to tailnet addresses and routes through those nodes.
+Same hostnames, same TLS, nothing to install inside any VM. A personal Tailscale
+account works fine; "org" means your boxd org.
+
+Onboarding is not self-service:
+
+1. Email `contact@boxd.sh` with your boxd org name and a Tailscale auth key
+   (reusable, non-ephemeral, no tags) from your own admin console.
+2. Approve the `boxd-proxy-*` devices that appear in your tailnet and disable key
+   expiry on each (they otherwise expire after 180 days).
+3. Use machines as before: `curl https://myapp.boxd.sh`, `ssh myapp.boxd`.
+
+Caveats:
+
+- **All-or-nothing for the boxd org.** Every machine's hostnames become reachable
+  only from inside your tailnet — anything you shared publicly via a `*.boxd.sh`
+  URL stops resolving for outsiders. The boxd API/CLI stays reachable from
+  anywhere.
+- Org wildcard domains follow onto the tailnet; per-machine apex domains can't
+  (A-record conflict).
+- The auth key you hand over expires (90 days max); an expired key blocks boxd
+  from enrolling *new* edge capacity.
+- Corporate DNS with rebinding protection may strip the `100.64.0.0/10` answers —
+  use Tailscale's resolver.
+- Because traffic now enters through boxd's edge — the same path that wakes a
+  machine on inbound SSH/HTTPS — auto-hibernate should no longer strand the phone
+  the way the in-VM setup below does. *Unverified: this org isn't enrolled yet;
+  test wake-from-phone before relying on it.*
+
 ## iOS
 
-The phone reaches a box over a WebSocket on your tailnet, and a boxd VM **can't run
-`tailscaled` normally**: the kernel is monolithic with no TUN device (`/lib/modules`
-is empty and loading `tun` fails). boxd is building a proxy-based Tailscale
-integration — proxy nodes join *your* tailnet and route to your VMs — which will
-make this automatic. Until that ships, it works via Tailscale's
-**userspace-networking** mode, which needs no TUN:
+The phone reaches a box over a WebSocket on your tailnet. With the edge
+integration above enabled there is nothing to do per box — the engine's port is
+already tailnet-reachable through boxd's proxy. Without it, note that a boxd VM
+**can't run `tailscaled` normally**: the kernel is monolithic with no TUN device
+(`/lib/modules` is empty and loading `tun` fails). The fallback — and what runs on
+this org's boxes today — is Tailscale's **userspace-networking** mode, which needs
+no TUN:
 
 ```bash
 # on the box
