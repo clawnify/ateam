@@ -4,6 +4,7 @@ import type {
 	DiffResultDTO,
 	KanbanColumn,
 	ProjectDTO,
+	SessionDTO,
 	TaskDTO,
 } from "@ateam/protocol";
 import {
@@ -47,7 +48,6 @@ import {
 	Trash2,
 	Wrench,
 	X,
-	Zap,
 } from "lucide-react";
 import { motion, Reorder } from "motion/react";
 import {
@@ -65,9 +65,10 @@ import { FileDiffView } from "./components/FileDiffView";
 import { IconButton } from "./components/IconButton";
 import { LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
-import { NewTaskComposer } from "./components/NewTaskComposer";
+import { PromptComposer } from "./components/PromptComposer";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
+import { activeTerminal, sessionTabs } from "./session-tabs";
 import { type Alias, aliasLabel, type UnifiedProject, unifyProjects } from "./unify";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
@@ -206,7 +207,10 @@ export function App() {
 	const [taskQuery, setTaskQuery] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [info, setInfo] = useState<string | null>(null);
-	const [termByTask, setTermByTask] = useState<Record<string, string>>({});
+	// Which of a task's live sessions is showing in its panel — the active tab.
+	// The sessions themselves live in the PTY daemon; this is only the choice of
+	// which one to look at, and goes null when a task has none left.
+	const [termByTask, setTermByTask] = useState<Record<string, string | null>>({});
 	const { ui: promptUi, ask, confirm } = usePrompt();
 
 	const run = useCallback(async (fn: () => Promise<void>) => {
@@ -1066,6 +1070,9 @@ export function App() {
 								<TaskPanel
 									task={selectedTask}
 									agents={agents}
+									envAgents={envAgents}
+									alias={originOf(selectedTask.projectId)}
+									onInstallAgent={installAgentOnBox}
 									mode={panelMode}
 									onSetMode={setPanelMode}
 									terminalId={termByTask[selectedTask.id] ?? null}
@@ -1085,6 +1092,9 @@ export function App() {
 							<TaskPanel
 								task={selectedTask}
 								agents={agents}
+								envAgents={envAgents}
+								alias={originOf(selectedTask.projectId)}
+								onInstallAgent={installAgentOnBox}
 								mode={panelMode}
 								onSetMode={(m) => (m === "side" ? collapseToMission() : setPanelMode(m))}
 								collapseLabel="Back to Mission Control"
@@ -1121,7 +1131,7 @@ export function App() {
 				/>
 			)}
 			{composerOpen && activeCard && (
-				<NewTaskComposer
+				<PromptComposer
 					agents={agents}
 					environments={composerEnvs}
 					envAgents={envAgents}
@@ -1256,6 +1266,9 @@ function Board({
 function TaskPanel({
 	task,
 	agents,
+	envAgents,
+	alias,
+	onInstallAgent,
 	mode,
 	onSetMode,
 	collapseLabel = "Show beside the board",
@@ -1269,28 +1282,74 @@ function TaskPanel({
 }: {
 	task: TaskDTO;
 	agents: AgentDTO[];
+	/** Agent ids each engine actually has, keyed by alias ("local" for this Mac) —
+	 *  so the session composer only offers what this task's engine can run. */
+	envAgents: Record<string, string[]>;
+	/** The engine this task runs on; null = this Mac. */
+	alias: Alias;
+	/** Install a coding agent's CLI on the box, streamed (the agent picker's flow). */
+	onInstallAgent: (
+		alias: string,
+		agentId: string,
+		onLog: (chunk: string) => void,
+	) => Promise<{ loginCommand?: string }>;
 	mode: "side" | "full";
 	onSetMode: (m: "side" | "full") => void;
 	/** Tooltip for the minimize button — where collapsing takes you. */
 	collapseLabel?: string;
 	terminalId: string | null;
-	setTerminal: (tid: string) => void;
+	setTerminal: (tid: string | null) => void;
 	run: (fn: () => Promise<void>) => Promise<void>;
 	ask: (title: string, initial?: string) => Promise<string | null>;
 	confirm: (title: string, body?: string) => Promise<boolean>;
 	reload: () => void;
 	onClose: (taskId?: string) => void;
 }) {
-	const [agentId, setAgentId] = useState(agents.find((a) => a.available)?.id ?? "claude");
+	// Which agent a relaunch uses when nothing is chosen: the one already on this
+	// task, else the first installed. Picking a different one is the composer's job.
+	const fallbackAgentId = task.agentId ?? agents.find((a) => a.available)?.id ?? "claude";
+	const [sessionComposerOpen, setSessionComposerOpen] = useState(false);
 	const [diff, setDiff] = useState<DiffResultDTO | null>(null);
 	const [changesOpen, setChangesOpen] = useState(false);
 	const [viewFile, setViewFile] = useState<string | null>(null);
+	// This task's live PTY sessions — agents and shells alike. They ARE the tabs:
+	// the daemon already owns as many per task as you like, so there is nothing
+	// extra to persist. Tagged with the task they were read for, because the render
+	// right after you switch tasks still holds the previous task's list — reading
+	// that as this task's would put a foreign terminal in the panel. `null` means
+	// "not read yet", which the tab-fallback effect below must not mistake for
+	// "this task has no sessions".
+	const [loaded, setLoaded] = useState<{ taskId: string; sessions: SessionDTO[] } | null>(null);
+	const sessions = loaded?.taskId === task.id ? loaded.sessions : null;
 
 	// Selecting another task closes the changes view.
 	useEffect(() => {
 		setChangesOpen(false);
 		setViewFile(null);
 	}, [task.id]);
+
+	const refreshSessions = useCallback(async () => {
+		const taskId = task.id;
+		const live = await window.ateam.pty.listForTask(taskId);
+		// The engine hands these back latest-first; reverse so the strip reads
+		// oldest → newest — a new session then appends on the right instead of
+		// shuffling the tabs already open.
+		setLoaded({ taskId, sessions: live.reverse() });
+	}, [task.id]);
+
+	useEffect(() => {
+		void refreshSessions();
+		// A session opened in another window is announced as a task update (see the
+		// engine's spawn handlers), and one ending anywhere arrives as a pty exit.
+		const offUpdated = window.ateam.events.onTaskUpdated((t) => {
+			if (t.id === task.id) void refreshSessions();
+		});
+		const offExit = window.ateam.pty.onExit(() => void refreshSessions());
+		return () => {
+			offUpdated();
+			offExit();
+		};
+	}, [task.id, refreshSessions]);
 
 	const refreshDiff = useCallback(() => {
 		void window.ateam.git.diff(task.id).then(setDiff);
@@ -1302,7 +1361,7 @@ function TaskPanel({
 	}, [refreshDiff]);
 
 	const launch = useCallback(
-		(yolo: boolean, resume = false, agent = agentId) =>
+		(yolo: boolean, resume = false, agent = fallbackAgentId) =>
 			run(async () => {
 				const { terminalId: tid } = await window.ateam.pty.spawnAgent({
 					taskId: task.id,
@@ -1310,43 +1369,62 @@ function TaskPanel({
 					yolo,
 					resume,
 				});
+				await refreshSessions();
 				setTerminal(tid);
 			}),
-		[task.id, agentId, run, setTerminal],
+		[task.id, fallbackAgentId, run, setTerminal, refreshSessions],
 	);
 
-	// Re-attach to a surviving daemon session when (re)opening this task. If the
-	// session has ended while the task was still active work (running or awaiting
-	// input), resume the agent's last conversation automatically so reopening the
-	// task brings it back. Terminal columns (review/merged) are left alone — there
-	// a relaunch is a deliberate act via the Resume button, not a side effect of
-	// opening the task (and spawning would bounce the card back to "running").
+	// Keep the active tab pointed at something real. Covers (re)opening a task
+	// with surviving daemon sessions, and a session ending — its tab disappears
+	// and the newest survivor takes focus. With nothing left, resume the agent's
+	// last conversation if the task is still active work (running or awaiting
+	// input). Terminal columns (review/merged) are left alone — there a relaunch
+	// is a deliberate act via the Resume button, not a side effect of opening the
+	// task (and spawning would bounce the card back to "running").
 	const autoResumedRef = useRef<string | null>(null);
 	useEffect(() => {
-		if (terminalId) return;
-		let cancelled = false;
-		void window.ateam.pty.listForTask(task.id).then((sessions) => {
-			if (cancelled) return;
-			if (sessions[0]) {
-				setTerminal(sessions[0].terminalId);
-			} else if (
-				(task.column === "running" || task.column === "needs_attention") &&
-				autoResumedRef.current !== task.id
-			) {
-				autoResumedRef.current = task.id;
-				void launch(false, true, task.agentId ?? agentId);
-			}
+		if (!sessions) return; // list not read yet — don't judge the task by it
+		const next = activeTerminal(sessions, terminalId);
+		if (next !== terminalId) setTerminal(next);
+		if (next) return;
+		if (
+			(task.column === "running" || task.column === "needs_attention") &&
+			autoResumedRef.current !== task.id
+		) {
+			autoResumedRef.current = task.id;
+			void launch(false, true);
+		}
+	}, [task.id, task.column, sessions, terminalId, setTerminal, launch]);
+
+	// "+ → New agent session…": the task-creation composer minus name/branch/machine.
+	// Launches into THIS task's worktree, so the prompt, attachments, agent and YOLO
+	// all mean the same as they do on a new task — only the branch isn't new.
+	const composeSession = (input: {
+		prompt: string;
+		agentId: string;
+		yolo: boolean;
+		files: string[];
+	}) =>
+		run(async () => {
+			setSessionComposerOpen(false);
+			const { terminalId: tid } = await window.ateam.pty.spawnAgent({
+				taskId: task.id,
+				agentId: input.agentId,
+				yolo: input.yolo,
+				prompt: input.prompt || undefined,
+				files: input.files.length ? input.files : undefined,
+			});
+			await refreshSessions();
+			setTerminal(tid);
 		});
-		return () => {
-			cancelled = true;
-		};
-	}, [task.id, terminalId, task.column, task.agentId, agentId, setTerminal, launch]);
 
 	const shell = () =>
 		run(async () => {
 			const { terminalId: tid } = await window.ateam.pty.spawnShell({
 				taskId: task.id,
 			});
+			await refreshSessions();
 			setTerminal(tid);
 		});
 
@@ -1369,6 +1447,25 @@ function TaskPanel({
 		setChangesOpen(true);
 		if (!viewFile && diff?.files[0]) setViewFile(diff.files[0].path);
 	};
+
+	const tabs = sessionTabs(sessions ?? [], agents);
+
+	// Closing a tab kills its PTY — tabs are exactly the live sessions, so there
+	// is no "closed but still running" state to explain. Confirm first when the
+	// agent is mid-turn or holding a permission prompt, where a stray click would
+	// throw away work in progress.
+	const closeSession = (s: SessionDTO, label: string) =>
+		run(async () => {
+			if (s.status === "running" || s.status === "awaiting_input") {
+				const ok = await confirm(
+					`Close ${label}?`,
+					"This session is still working. Closing kills it, and anything mid-turn is lost.",
+				);
+				if (!ok) return;
+			}
+			await window.ateam.pty.kill(s.terminalId);
+			await refreshSessions();
+		});
 
 	// After toggling side/full, hand focus to the terminal so Enter goes to
 	// the agent — not back into the toggle button.
@@ -1405,32 +1502,56 @@ function TaskPanel({
 			</div>
 
 			<div className="actions">
-				<select
-					className="agent-select"
-					value={agentId}
-					onChange={(e) => setAgentId(e.target.value)}
-				>
-					{agents.map((a) => (
-						<option key={a.id} value={a.id} disabled={!a.available}>
-							{a.label}
-							{a.available ? "" : " (not installed)"}
-						</option>
+				{/* Left: this task's terminals, and the `+` that opens another. What kind
+				    of agent session you get is the composer's question, not a row of
+				    buttons — so the row stays legible however many tabs are open. */}
+				<div className="sess-tabs" role="tablist" aria-label="Sessions">
+					{tabs.map(({ session, label }) => (
+						<div
+							key={session.terminalId}
+							className={`sess-tab ${session.terminalId === terminalId ? "active" : ""}`}
+						>
+							<button
+								type="button"
+								role="tab"
+								aria-selected={session.terminalId === terminalId}
+								className="sess-tab-name"
+								title={label}
+								onClick={() => setTerminal(session.terminalId)}
+							>
+								{label}
+							</button>
+							<button
+								type="button"
+								className="sess-tab-close"
+								aria-label={`Close ${label}`}
+								title={`Close ${label}`}
+								onClick={() => closeSession(session, label)}
+							>
+								<X size={11} />
+							</button>
+						</div>
 					))}
-				</select>
-				<IconButton
-					icon={Play}
-					label="Launch agent (asks before dangerous actions)"
-					onClick={() => launch(false)}
-				/>
-				<IconButton icon={Zap} label="Launch in auto mode" onClick={() => launch(true)} />
-				<IconButton
-					icon={History}
-					label="Resume the last conversation in this worktree"
-					onClick={() => launch(false, true)}
-				/>
-				<IconButton icon={SquareTerminal} label="Open a shell" onClick={shell} />
+					<Menu
+						icon={Plus}
+						label="New tab"
+						items={[
+							{
+								label: "New agent session…",
+								icon: Play,
+								onClick: () => setSessionComposerOpen(true),
+							},
+							{ label: "Terminal", icon: SquareTerminal, onClick: shell },
+							{
+								label: "Resume last conversation",
+								icon: History,
+								onClick: () => launch(false, true),
+							},
+						]}
+					/>
+				</div>
 
-				<span className="tb-divider" />
+				<span className="spacer" />
 
 				<IconButton icon={GitCommitVertical} label="Commit all changes" onClick={commit} />
 				<IconButton
@@ -1499,7 +1620,6 @@ function TaskPanel({
 					]}
 				/>
 
-				<span className="spacer" />
 				<button
 					type="button"
 					className={`diffstat ${changesOpen ? "active" : ""}`}
@@ -1527,10 +1647,23 @@ function TaskPanel({
 						/>
 					) : (
 						<div className="term" style={{ display: "grid", placeItems: "center" }}>
-							<span className="muted">Launch an agent or shell to start a terminal</span>
+							<span className="muted">Open a tab with + to start a terminal</span>
 						</div>
 					)}
 				</div>
+
+				{sessionComposerOpen && (
+					<PromptComposer
+						agents={agents}
+						variant="session"
+						sessionAlias={alias}
+						defaultAgentId={fallbackAgentId}
+						envAgents={envAgents}
+						onInstallAgent={onInstallAgent}
+						onClose={() => setSessionComposerOpen(false)}
+						onCreate={composeSession}
+					/>
+				)}
 
 				{changesOpen && (
 					<div className="changes-view">
