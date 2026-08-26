@@ -1,4 +1,4 @@
-import { Check, Cloud, Laptop, Network, Plus, Server } from "lucide-react";
+import { Check, Cloud, Laptop, Network, Plus, Server, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { HostStatus } from "../../../shared/host";
@@ -32,6 +32,7 @@ export function EnvironmentPicker({
 	onChange,
 	onAdd,
 	onInstall,
+	onForget,
 }: {
 	environments: EnvOption[];
 	value: string | null;
@@ -41,6 +42,8 @@ export function EnvironmentPicker({
 	/** Install the engine on a fresh SSH box (`alias` or `user@host`), streaming the
 	 *  installer's output; resolves once the box is set up and connected. */
 	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<HostStatus>;
+	/** Remove a box from this list (disconnecting it first if connected). */
+	onForget?: (alias: string) => Promise<void>;
 }) {
 	// The add-a-connection section: "" collapsed → "menu" (the methods) → a chosen
 	// method's inline form → "ready" (the readiness checklist after an SSH set-up).
@@ -192,32 +195,54 @@ export function EnvironmentPicker({
 							<span>Run on</span>
 						</div>
 						{environments.map((env) => (
-							<button
+							<div
 								key={env.label}
-								type="button"
-								className={`conn-row ${env.alias === value ? "active" : ""}`}
-								disabled={env.disabled}
-								onClick={() => pick(env)}
+								className={`conn-row-wrap ${env.alias === value ? "active" : ""}`}
 							>
-								<span className="conn-ico">
-									{env.alias === null ? (
-										<Laptop size={15} strokeWidth={1.75} />
-									) : (
-										<Server size={15} strokeWidth={1.75} />
-									)}
-								</span>
-								<span className="conn-txt">
-									<span className="conn-title">{env.label}</span>
-									{env.disabled && env.alias !== null ? (
-										<span className="conn-sub">repo needs a git remote to run here</span>
-									) : env.needsSetup ? (
-										<span className="conn-sub">not set up — click to install the engine</span>
-									) : env.transport === "ws" ? (
-										<span className="conn-sub">Tailscale</span>
-									) : null}
-								</span>
-								{env.alias === value ? <Check size={15} strokeWidth={2.25} /> : null}
-							</button>
+								<button
+									type="button"
+									className={`conn-row ${env.alias === value ? "active" : ""}`}
+									disabled={env.disabled}
+									onClick={() => pick(env)}
+								>
+									<span className="conn-ico">
+										{env.alias === null ? (
+											<Laptop size={15} strokeWidth={1.75} />
+										) : (
+											<Server size={15} strokeWidth={1.75} />
+										)}
+									</span>
+									<span className="conn-txt">
+										<span className="conn-title">{env.label}</span>
+										{env.disabled && env.alias !== null ? (
+											<span className="conn-sub">repo needs a git remote to run here</span>
+										) : env.needsSetup ? (
+											<span className="conn-sub">not set up — click to install the engine</span>
+										) : env.transport === "ws" ? (
+											<span className="conn-sub">Tailscale</span>
+										) : null}
+									</span>
+									{env.alias === value ? <Check size={15} strokeWidth={2.25} /> : null}
+								</button>
+								{env.alias !== null && onForget && (
+									<button
+										type="button"
+										className="conn-forget"
+										title={`Remove ${env.label} from this list`}
+										aria-label={`Remove ${env.label} from this list`}
+										onClick={() => {
+											const alias = env.alias;
+											if (!alias) return;
+											// Removing the selected box falls back to Local; setting the
+											// box up again is the way to bring it back.
+											if (alias === value) onChange(null);
+											void onForget(alias);
+										}}
+									>
+										<X size={13} strokeWidth={2} />
+									</button>
+								)}
+							</div>
 						))}
 						{(onAdd || onInstall) &&
 							(addMode === "" ? (

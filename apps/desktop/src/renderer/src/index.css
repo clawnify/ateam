@@ -1404,6 +1404,48 @@ input {
 .conn-row:disabled {
 	cursor: default;
 }
+/* A picker row + its hover-revealed remove button (can't nest buttons). The wrap
+   owns the hover/active background so the highlight spans both. */
+.conn-row-wrap {
+	display: flex;
+	align-items: center;
+	border-radius: 7px;
+}
+.conn-row-wrap:hover {
+	background: var(--bg-elev-2);
+}
+.conn-row-wrap.active {
+	background: rgba(124, 92, 255, 0.12);
+}
+.conn-row-wrap > .conn-row,
+.conn-row-wrap > .conn-row:hover,
+.conn-row-wrap > .conn-row.active {
+	background: transparent;
+	min-width: 0;
+}
+.conn-forget {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	margin-right: 6px;
+	border: none;
+	border-radius: 5px;
+	background: transparent;
+	color: var(--text-dim);
+	cursor: pointer;
+	opacity: 0;
+}
+.conn-row-wrap:hover .conn-forget,
+.conn-forget:focus-visible {
+	opacity: 1;
+}
+.conn-forget:hover {
+	color: var(--text);
+	background: rgba(255, 255, 255, 0.08);
+}
 .conn-add {
 	display: flex;
 	flex-direction: column;

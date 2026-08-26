@@ -121,6 +121,7 @@ const host: AteamHost = {
 	list: () => ipcRenderer.invoke(HOST_CH.list),
 	connect: (alias) => ipcRenderer.invoke(HOST_CH.connect, alias),
 	disconnect: (alias) => ipcRenderer.invoke(HOST_CH.disconnect, alias),
+	forget: (alias) => ipcRenderer.invoke(HOST_CH.forget, alias),
 	connected: () => ipcRenderer.invoke(HOST_CH.connected),
 	origins: () => ipcRenderer.invoke(HOST_CH.origins),
 	provision: (alias, input) => ipcRenderer.invoke(HOST_CH.provision, alias, input),

@@ -175,6 +175,10 @@ Test it:
 ssh my-ateam-box "bash -lc 'ateam'"
 ```
 
+> Don't want a config host offered as a box? Hover its row in the **Run on** picker
+> and click the ✕ — it disappears from the list (your `~/.ssh/config` is never
+> edited), and setting the box up again brings it back.
+
 ## 4. Connect from the desktop app
 
 1. Open Ateam. Top-right of the toolbar is the **connection button** — it shows

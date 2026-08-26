@@ -383,6 +383,13 @@ export function App() {
 	const addTailscaleBox = useCallback(async (endpoint: string) => {
 		await window.ateamHost.connect(endpoint);
 	}, []);
+	// Remove a box from the "Run on" list. The main process disconnects it if held
+	// and forgets the saved record (an ssh_config alias is flagged hidden — the
+	// config file itself is never touched); the connections-changed broadcast then
+	// refreshes the list here. Setting the box up again brings it back.
+	const forgetBox = useCallback(async (alias: string) => {
+		await window.ateamHost.forget(alias);
+	}, []);
 	// Set up a fresh box over SSH: install() runs the (idempotent) installer on the
 	// box, streaming its output via onInstallLog, and connects on success. The
 	// onConnectionsChanged reconcile then folds the new box into the environment list.
@@ -1137,6 +1144,7 @@ export function App() {
 					envAgents={envAgents}
 					onAdd={addTailscaleBox}
 					onInstall={installBox}
+					onForget={forgetBox}
 					onInstallAgent={installAgentOnBox}
 					onClose={() => setComposerOpen(false)}
 					onCreate={composeTask}
