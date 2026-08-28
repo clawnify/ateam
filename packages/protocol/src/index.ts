@@ -16,7 +16,9 @@
 // auto-updates, a box only changes when someone re-runs the installer. Without the
 // bump those clients pass the handshake and then fail deep in a feature with a raw
 // `Unknown method: projects:clone`; with it they get "update the older side" up front.
-export const PROTOCOL_VERSION = 2;
+// v3: Loops pivot — user-created agent-session loops only + CH.loopsUpdate (edit a
+// loop in place). Same skew rationale as v2.
+export const PROTOCOL_VERSION = 3;
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
@@ -171,6 +173,20 @@ export interface CreateLoopInput {
 	enabled?: boolean;
 }
 
+/**
+ * Input for editing an existing user loop in place. Only the given fields
+ * change; `config` is merged over the stored config (so runtime keys like
+ * lastTaskId survive). The loop's project — and with it its environment — is
+ * fixed at creation: moving engines means delete + recreate. No projectId here
+ * also keeps the aggregate routing this call by the loop's own id.
+ */
+export interface UpdateLoopInput {
+	id: string;
+	name?: string;
+	intervalMs?: number;
+	config?: Record<string, unknown>;
+}
+
 export interface CleanupItem {
 	id: string;
 	name: string;
@@ -286,6 +302,7 @@ export const CH = {
 	loopsRunNow: "loops:runNow",
 	loopsTemplates: "loops:templates",
 	loopsCreate: "loops:create",
+	loopsUpdate: "loops:update",
 	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
 	systemHello: "system:hello",
@@ -402,6 +419,7 @@ export interface AteamApi {
 		runNow(id: string): Promise<LoopDTO[]>;
 		templates(): Promise<LoopTemplateDTO[]>;
 		create(input: CreateLoopInput): Promise<LoopDTO[]>;
+		update(input: UpdateLoopInput): Promise<LoopDTO[]>;
 		remove(id: string): Promise<LoopDTO[]>;
 		onUpdated(cb: (loops: LoopDTO[]) => void): () => void;
 	};

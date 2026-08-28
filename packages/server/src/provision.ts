@@ -127,7 +127,11 @@ async function hetznerCall(token: string, path: string, init?: RequestInit) {
 // the entry may be a slug string or an object keyed by `location`/`name`.
 function locationSlugsOf(st: { locations?: unknown[] }): string[] {
 	return (st.locations ?? [])
-		.map((l) => (typeof l === "string" ? l : ((l as { location?: string; name?: string })?.location ?? (l as { name?: string })?.name)))
+		.map((l) =>
+			typeof l === "string"
+				? l
+				: ((l as { location?: string; name?: string })?.location ?? (l as { name?: string })?.name),
+		)
 		.filter((s): s is string => typeof s === "string");
 }
 
@@ -154,7 +158,17 @@ export const hetznerProvider: BoxProvider = {
 				cores: Number(t.cores) || 0,
 			}))
 			.sort((a: { cores: number }, b: { cores: number }) => a.cores - b.cores)
-			.map(({ cores: _cores, ...rest }: { cores: number; slug: string; label: string; locations: string[] }) => rest);
+			.map(
+				({
+					cores: _cores,
+					...rest
+				}: {
+					cores: number;
+					slug: string;
+					label: string;
+					locations: string[];
+				}) => rest,
+			);
 		return { locations, serverTypes };
 	},
 

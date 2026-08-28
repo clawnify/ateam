@@ -56,6 +56,7 @@ const ENTITY = new Set<string>([
 	CH.loopsCreate, // {projectId}
 	CH.loopsSetEnabled, // loop id
 	CH.loopsRunNow, // loop id
+	CH.loopsUpdate, // {id}
 	CH.loopsDelete, // loop id
 	CH.ptyListForTask, // taskId
 	CH.ptyWrite, // terminalId

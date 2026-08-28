@@ -30,6 +30,7 @@ import type {
 	SessionDTO,
 	SystemInfo,
 	TaskDTO,
+	UpdateLoopInput,
 	UpdateResultDTO,
 } from "./index";
 import { CH } from "./index";
@@ -109,6 +110,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			runNow: (id) => call<LoopDTO[]>(CH.loopsRunNow, [id]),
 			templates: () => call<LoopTemplateDTO[]>(CH.loopsTemplates),
 			create: (input: CreateLoopInput) => call<LoopDTO[]>(CH.loopsCreate, [input]),
+			update: (input: UpdateLoopInput) => call<LoopDTO[]>(CH.loopsUpdate, [input]),
 			remove: (id) => call<LoopDTO[]>(CH.loopsDelete, [id]),
 			onUpdated: (cb) => rpc.on("loopsUpdated", (p) => cb(p as LoopDTO[])),
 		},
