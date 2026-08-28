@@ -23,6 +23,7 @@ import {
 	type ConnectionDTO,
 	type Engine,
 	endpointUrl,
+	forgetConnection,
 	hetznerProvider,
 	type HostTransport,
 	listConnections,
@@ -124,6 +125,8 @@ export interface Host {
 	list(): Promise<ConnectionDTO[]>;
 	connect(alias: string | null): Promise<HostStatus>;
 	disconnect(alias: string): void;
+	/** Remove a box from the connections list (disconnecting it first if held). */
+	forget(alias: string): void;
 	connected(): Promise<HostStatus[]>;
 	/** id → owning-engine alias (null = local), from the aggregate's learned registry. */
 	origins(): Record<string, string | null>;
@@ -343,6 +346,14 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		if (i >= 0) backendList.splice(i, 1);
 		// Rebuild so the learned registry drops the gone engine's ids (no stale routing).
 		agg = createAggregate(backendList, local);
+		broadcastConnections();
+	}
+
+	function forget(alias: string): void {
+		disconnect(alias); // no-op if not held; drops the live engine if it is
+		forgetConnection(db, alias);
+		// disconnect only broadcasts when the box was held — a never-connected row
+		// changes the list too, so always tell the renderer to re-read it.
 		broadcastConnections();
 	}
 
@@ -577,6 +588,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		list: async (): Promise<ConnectionDTO[]> => listConnections(db),
 		connect,
 		disconnect,
+		forget,
 		connected,
 		origins,
 		provision,
@@ -595,6 +607,7 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.list, () => host.list());
 	ipcMain.handle(HOST_CH.connect, (_e, alias: string | null) => host.connect(alias));
 	ipcMain.handle(HOST_CH.disconnect, (_e, alias: string) => host.disconnect(alias));
+	ipcMain.handle(HOST_CH.forget, (_e, alias: string) => host.forget(alias));
 	ipcMain.handle(HOST_CH.connected, () => host.connected());
 	ipcMain.handle(HOST_CH.origins, () => host.origins());
 	ipcMain.handle(HOST_CH.provision, (_e, alias: string, input: { cloneUrl: string }) =>

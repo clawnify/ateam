@@ -25,24 +25,44 @@ function titleFromPrompt(p: string): string {
 }
 
 /**
- * Prompt-first task creation: name is optional (live branch preview shows
- * what you'll get), the prompt is handed to the chosen agent as its first
- * instruction, and YOLO launches it permission-free.
+ * Prompt-first agent launch, in two variants over the same form.
+ *
+ *   "task"    creates a branch + worktree and launches there: name is optional
+ *             (the live branch preview shows what you'll get) and you choose
+ *             which machine runs it.
+ *   "session" opens another agent session inside a task that already exists —
+ *             same prompt, agent, attachments and YOLO, but no name and no
+ *             branch (it reuses the worktree), and no environment to pick
+ *             because the task already lives on one.
+ *
+ * Either way the prompt is handed to the chosen agent as its first instruction,
+ * and YOLO launches it permission-free.
  */
-export function NewTaskComposer({
+export function PromptComposer({
 	agents,
-	environments,
+	variant = "task",
+	sessionAlias,
+	defaultAgentId,
+	environments = [],
 	envAgents,
 	onAdd,
 	onInstall,
+	onForget,
 	onInstallAgent,
 	onClose,
 	onCreate,
 }: {
 	agents: AgentDTO[];
+	/** "task" creates a branch + worktree; "session" launches into one that exists. */
+	variant?: "task" | "session";
+	/** Session variant: the engine the task already runs on — not a choice here. */
+	sessionAlias?: string | null;
+	/** Preselect this agent (a task's existing agent) instead of the first available. */
+	defaultAgentId?: string;
 	/** Where the task can run: this Mac + each ~/.ssh/config box. `alias` null = Local.
-	 *  A box is disabled when the repo can't run there (no GitHub identity to clone). */
-	environments: EnvOption[];
+	 *  A box is disabled when the repo can't run there (no GitHub identity to clone).
+	 *  Unused by the session variant, which has no environment to choose. */
+	environments?: EnvOption[];
 	/** Agent ids each connected engine actually has, keyed by alias ("local" for this
 	 *  Mac). Lets the agent picker offer only what the chosen environment can run. */
 	envAgents: Record<string, string[]>;
@@ -50,6 +70,8 @@ export function NewTaskComposer({
 	onAdd?: (endpoint: string) => Promise<void>;
 	/** Set up a fresh box over SSH (install engine + connect) from the picker. */
 	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<HostStatus>;
+	/** Remove a box from the picker's list (disconnecting it first if connected). */
+	onForget?: (alias: string) => Promise<void>;
 	/** Install a coding agent's CLI on the selected box, streamed; returns the login step. */
 	onInstallAgent?: (
 		alias: string,
@@ -68,7 +90,10 @@ export function NewTaskComposer({
 }) {
 	const [name, setName] = useState("");
 	const [prompt, setPrompt] = useState("");
-	const [agentId, setAgentId] = useState(agents.find((a) => a.available)?.id ?? "claude");
+	const session = variant === "session";
+	const [agentId, setAgentId] = useState(
+		defaultAgentId ?? agents.find((a) => a.available)?.id ?? "claude",
+	);
 	const [yolo, setYolo] = useState(false);
 	const [files, setFiles] = useState<string[]>([]);
 	const [dragging, setDragging] = useState(false);
@@ -76,6 +101,8 @@ export function NewTaskComposer({
 	// re-selected every time; fall back to the first runnable one (Local, unless the repo
 	// isn't here) when nothing valid is saved for this project. "__local__" = the Mac.
 	const [alias, setAliasState] = useState<string | null>(() => {
+		// A session runs where its task already is; only a new task gets a choice.
+		if (session) return sessionAlias ?? null;
 		const saved = localStorage.getItem("ateam.runOn");
 		const savedAlias = saved === "__local__" ? null : saved;
 		const usable =
@@ -104,7 +131,10 @@ export function NewTaskComposer({
 	}, [availOnEnv, agentId, agents]);
 
 	const branch = slugify(name.trim() || titleFromPrompt(prompt));
-	const canSubmit = Boolean(name.trim() || prompt.trim() || files.length);
+	// A session has no name to fall back on — it needs something to say.
+	const canSubmit = Boolean(
+		session ? prompt.trim() || files.length : name.trim() || prompt.trim() || files.length,
+	);
 
 	// De-duped append, preserving order — the picker and drops both feed here.
 	const addFiles = (paths: string[]) =>
@@ -149,17 +179,19 @@ export function NewTaskComposer({
 				onDragLeave={() => setDragging(false)}
 				onDrop={onDrop}
 			>
-				<div className="comp-head">
-					<input
-						className="comp-name"
-						placeholder="Task name (optional)"
-						value={name}
-						onChange={(e) => setName(e.target.value)}
-					/>
-					<span className="branch-preview" title="Branch name">
-						{branch || "branch name"}
-					</span>
-				</div>
+				{!session && (
+					<div className="comp-head">
+						<input
+							className="comp-name"
+							placeholder="Task name (optional)"
+							value={name}
+							onChange={(e) => setName(e.target.value)}
+						/>
+						<span className="branch-preview" title="Branch name">
+							{branch || "branch name"}
+						</span>
+					</div>
+				)}
 				{/* biome-ignore lint/a11y/noAutofocus: composer should focus its prompt */}
 				<textarea
 					autoFocus
@@ -203,13 +235,16 @@ export function NewTaskComposer({
 						alias={alias}
 						onInstallAgent={onInstallAgent}
 					/>
-					<EnvironmentPicker
-						environments={environments}
-						value={alias}
-						onChange={setAlias}
-						onAdd={onAdd}
-						onInstall={onInstall}
-					/>
+					{!session && (
+						<EnvironmentPicker
+							environments={environments}
+							value={alias}
+							onChange={setAlias}
+							onAdd={onAdd}
+							onInstall={onInstall}
+							onForget={onForget}
+						/>
+					)}
 					<button
 						type="button"
 						className={`iconbtn comp-yolo ${yolo ? "active" : ""}`}
@@ -227,7 +262,11 @@ export function NewTaskComposer({
 						type="button"
 						className="comp-go"
 						disabled={!canSubmit}
-						title="Create task and launch the agent (⌘⏎)"
+						title={
+							session
+								? "Launch another agent session in this task (⌘⏎)"
+								: "Create task and launch the agent (⌘⏎)"
+						}
 						onClick={submit}
 					>
 						<ArrowUp size={15} strokeWidth={2.25} />
