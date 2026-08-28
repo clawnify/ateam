@@ -243,6 +243,11 @@ tailnet, and make sure its VPN toggle is on. Then open Ateam Go, enter the box's
 Tailscale IP and port `8787`, and connect — the connection is remembered across
 launches. Allow the iOS **Local Network** prompt if it appears.
 
+Before its first connection the app shows a one-time disclosure: what it sends, that it
+goes only to the box you name, and that the agents on that box talk to their own
+providers under your accounts. Agreeing is remembered; declining opens the offline demo
+instead, which connects to nothing.
+
 **What still needs a computer.** Everything above — don't try to defer it. The phone
 has nothing to connect to until a daemon is listening, and once connected the app can
 only add a project by browsing the box for a repo that is **already cloned there**
