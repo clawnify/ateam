@@ -680,16 +680,10 @@ input {
 }
 .panel .actions {
 	display: flex;
-	flex-wrap: wrap;
 	align-items: center;
 	gap: 2px;
 	padding: 6px 10px;
 	border-bottom: 1px solid var(--border);
-}
-.agent-select {
-	margin-right: 4px;
-	padding: 4px 6px;
-	font-size: 12px;
 }
 .term {
 	flex: 1;
@@ -725,6 +719,72 @@ input {
 	inset: 0;
 	min-height: 0;
 }
+/* Session tabs: one per live PTY on this task, agents and shells alike, plus the
+   `+` that opens another. Shares the actions row with the git shortcuts, so the
+   tabs are the half that shrinks and scrolls — the shortcuts stay put on the
+   right. `min-width: 0` is what lets this flex child shrink below its content. */
+.sess-tabs {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 0;
+	overflow-x: auto;
+	/* A horizontal scrollbar must not shove the row taller than the icons. */
+	scrollbar-width: none;
+}
+.sess-tabs::-webkit-scrollbar {
+	display: none;
+}
+/* The `+` never scrolls away with the tabs — it's how you make the next one. */
+.sess-tabs > :last-child {
+	position: sticky;
+	right: 0;
+	flex: none;
+	background: var(--bg);
+}
+.sess-tab {
+	display: flex;
+	align-items: center;
+	flex: none;
+	border-radius: 6px;
+	color: var(--text-dim);
+}
+.sess-tab:hover {
+	background: var(--bg-elev);
+}
+.sess-tab.active {
+	background: var(--bg-elev-2);
+	color: var(--text);
+}
+.sess-tab-name {
+	max-width: 140px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding: 3px 2px 3px 8px;
+	border: none;
+	background: transparent;
+	color: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+.sess-tab-close {
+	display: grid;
+	place-items: center;
+	padding: 2px;
+	margin-right: 4px;
+	border: none;
+	background: transparent;
+	border-radius: 4px;
+	color: inherit;
+	opacity: 0.5;
+	cursor: pointer;
+}
+.sess-tab-close:hover {
+	opacity: 1;
+	background: var(--bg-elev-2);
+}
+
 /* panel body: terminal, or the changes view (files left · diff right) */
 .panel-body {
 	flex: 1;
@@ -1230,14 +1290,6 @@ input {
 	box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
 }
 
-.tb-divider {
-	width: 1px;
-	height: 18px;
-	background: var(--border);
-	margin: 0 6px;
-	flex: none;
-}
-
 /* ---- overflow menu ---- */
 .menu {
 	position: relative;
@@ -1351,6 +1403,48 @@ input {
 }
 .conn-row:disabled {
 	cursor: default;
+}
+/* A picker row + its hover-revealed remove button (can't nest buttons). The wrap
+   owns the hover/active background so the highlight spans both. */
+.conn-row-wrap {
+	display: flex;
+	align-items: center;
+	border-radius: 7px;
+}
+.conn-row-wrap:hover {
+	background: var(--bg-elev-2);
+}
+.conn-row-wrap.active {
+	background: rgba(124, 92, 255, 0.12);
+}
+.conn-row-wrap > .conn-row,
+.conn-row-wrap > .conn-row:hover,
+.conn-row-wrap > .conn-row.active {
+	background: transparent;
+	min-width: 0;
+}
+.conn-forget {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	margin-right: 6px;
+	border: none;
+	border-radius: 5px;
+	background: transparent;
+	color: var(--text-dim);
+	cursor: pointer;
+	opacity: 0;
+}
+.conn-row-wrap:hover .conn-forget,
+.conn-forget:focus-visible {
+	opacity: 1;
+}
+.conn-forget:hover {
+	color: var(--text);
+	background: rgba(255, 255, 255, 0.08);
 }
 .conn-add {
 	display: flex;

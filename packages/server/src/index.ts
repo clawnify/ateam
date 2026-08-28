@@ -9,6 +9,7 @@
 export type { ConnectionDTO, ConnectionRecord, HostTransport, SshHost } from "./connections";
 export {
 	endpointUrl,
+	forgetConnection,
 	listConnections,
 	readSshHosts,
 	recordConnection,

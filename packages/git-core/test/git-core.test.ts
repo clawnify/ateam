@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import simpleGit from "simple-git";
 import {
+	cloneRepo,
 	commit,
 	createTask,
 	detectDefaultBranch,
@@ -403,5 +404,50 @@ describe("path safety", () => {
 	it("slugify neutralizes traversal characters", () => {
 		expect(slugify("../../evil")).toBe("evil");
 		expect(slugify("Add Auth!!")).toBe("add-auth");
+	});
+});
+
+describe("cloneRepo — gh fallback (no GitHub needed)", () => {
+	const GH_URL = "https://github.com/acme/demo.git";
+	let savedEnv: Record<string, string | undefined>;
+
+	// A fake `gh` that always fails (an unauthenticated gh, e.g. an engine
+	// process on a boxd box, where GH_TOKEN only exists in login shells), plus a
+	// git URL rewrite so the fallback `git clone` resolves to the local bare
+	// origin instead of the network.
+	beforeEach(async () => {
+		const bin = join(repo.dir, "fake-bin");
+		await mkdir(bin);
+		await writeFile(join(bin, "gh"), "#!/bin/sh\nexit 1\n");
+		await chmod(join(bin, "gh"), 0o755);
+		savedEnv = {
+			PATH: process.env.PATH,
+			GIT_CONFIG_COUNT: process.env.GIT_CONFIG_COUNT,
+			GIT_CONFIG_KEY_0: process.env.GIT_CONFIG_KEY_0,
+			GIT_CONFIG_VALUE_0: process.env.GIT_CONFIG_VALUE_0,
+		};
+		process.env.PATH = `${bin}:${process.env.PATH}`;
+		process.env.GIT_CONFIG_COUNT = "1";
+		process.env.GIT_CONFIG_KEY_0 = `url.${repo.origin}.insteadOf`;
+		process.env.GIT_CONFIG_VALUE_0 = GH_URL;
+	});
+	afterEach(() => {
+		for (const [key, value] of Object.entries(savedEnv)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	});
+
+	it("falls back to plain git clone when gh fails", async () => {
+		const dest = join(repo.dir, "cloned");
+		await cloneRepo(GH_URL, dest);
+		expect(existsSync(join(dest, "README.md"))).toBe(true);
+	});
+
+	it("throws GH_FAILED when git fails too", async () => {
+		process.env.GIT_CONFIG_KEY_0 = `url.${join(repo.dir, "nowhere.git")}.insteadOf`;
+		await expect(
+			cloneRepo(GH_URL, join(repo.dir, "cloned")),
+		).rejects.toMatchObject({ code: "GH_FAILED" });
 	});
 });
