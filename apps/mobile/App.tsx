@@ -28,15 +28,18 @@ import {
 } from "react-native";
 import { AgentIcon } from "./src/AgentIcon";
 import { Composer, type ComposerSubmit } from "./src/Composer";
+import { ConsentScreen } from "./src/ConsentScreen";
 import { type Connection, connect } from "./src/connection";
 import { demoConnection } from "./src/demo";
 import { NativeTerminalScreen } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
 import {
 	loadConnection,
+	loadConsent,
 	loadPreviewPort,
 	loadSelectedProject,
 	saveConnection,
+	saveConsent,
 	savePreviewPort,
 	saveSelectedProject,
 } from "./src/storage";
@@ -604,9 +607,23 @@ export default function App() {
 	// the auto-reattach below. Returns whether it connected, so reconnect() can decide
 	// to retry. On success it records the `target` (so drops reattach) and bumps
 	// `connGen` (so the board + any open terminal rebind to the fresh api).
+	// Consent state. A ref (not state) because connectTo reads it synchronously and must
+	// not be re-created when it flips, which would retrigger the effects that depend on it.
+	const consented = useRef(false);
+	const pendingConnect = useRef<{ host: string; port: string } | null>(null);
+	const [consentOpen, setConsentOpen] = useState(false);
+
 	const connectTo = useCallback(
 		async (h: string, p: string): Promise<boolean> => {
 			const port = p || "8787";
+			// Nothing leaves the phone until the disclosure has been accepted. Guarding
+			// HERE rather than on the Connect button covers every route in: the button,
+			// the launch reattach, and the drop-reconnect loop.
+			if (!consented.current) {
+				pendingConnect.current = { host: h, port };
+				setConsentOpen(true);
+				return false;
+			}
 			if (retryTimer.current) {
 				clearTimeout(retryTimer.current);
 				retryTimer.current = null;
@@ -731,6 +748,24 @@ export default function App() {
 		await refresh();
 	}, [refresh]);
 
+	// Accepting resumes whatever connection was interrupted, so Agree lands you on the
+	// board rather than back on a form you already filled in.
+	const onAgreeConsent = useCallback(() => {
+		consented.current = true;
+		setConsentOpen(false);
+		void saveConsent();
+		const pending = pendingConnect.current;
+		pendingConnect.current = null;
+		if (pending) void connectTo(pending.host, pending.port);
+	}, [connectTo]);
+
+	// Declining is not a dead end: the demo is offline, so it needs no consent at all.
+	const onDeclineConsent = useCallback(() => {
+		pendingConnect.current = null;
+		setConsentOpen(false);
+		void startDemo();
+	}, [startDemo]);
+
 	// Pick a project and remember it, so the next launch lands on it (not project #1).
 	const selectProject = useCallback((id: string) => {
 		preferredProjectId.current = id;
@@ -757,11 +792,15 @@ export default function App() {
 		void (async () => {
 			// Load the remembered project BEFORE connecting, so the first refresh() restores
 			// it instead of racing to project #1. Preview port is a plain UI default.
-			const [saved, savedProject, savedPreviewPort] = await Promise.all([
+			const [saved, savedProject, savedPreviewPort, agreed] = await Promise.all([
 				loadConnection(),
 				loadSelectedProject(),
 				loadPreviewPort(),
+				loadConsent(),
 			]);
+			// Read in the same batch as the connection, so the auto-reattach below can't
+			// race ahead of it and show the disclosure to someone who already accepted.
+			consented.current = agreed;
 			preferredProjectId.current = savedProject;
 			if (savedPreviewPort) setPreviewPort(savedPreviewPort);
 			if (!saved?.host) return;
@@ -871,6 +910,10 @@ export default function App() {
 				}}
 			/>
 		);
+	}
+
+	if (consentOpen) {
+		return <ConsentScreen onAgree={onAgreeConsent} onDemo={onDeclineConsent} />;
 	}
 
 	if (view === "connect") {
