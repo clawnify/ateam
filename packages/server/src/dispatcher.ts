@@ -33,6 +33,7 @@ import {
 	type KanbanColumn,
 	type MergeStrategy,
 	PROTOCOL_VERSION,
+	type UpdateLoopInput,
 } from "@ateam/protocol";
 import type { Engine } from "./engine";
 import { LOOP_TEMPLATES } from "./loops/templates";
@@ -473,6 +474,19 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				throw new Error("Loop interval must be at least 1 minute");
 			}
 			const loops = loopRunner.createUserLoop({ ...input, cadenceMode: "fixed" });
+			engine.sendLoopsUpdated();
+			return loops;
+		},
+		[CH.loopsUpdate]: (input: UpdateLoopInput) => {
+			// Same rules as create, applied to whichever fields are being changed.
+			if (input.config && "prompt" in input.config) {
+				const prompt = typeof input.config.prompt === "string" ? input.config.prompt.trim() : "";
+				if (!prompt) throw new Error("A loop needs a prompt");
+			}
+			if (input.intervalMs != null && input.intervalMs < 60_000) {
+				throw new Error("Loop interval must be at least 1 minute");
+			}
+			const loops = loopRunner.updateUserLoop(input);
 			engine.sendLoopsUpdated();
 			return loops;
 		},

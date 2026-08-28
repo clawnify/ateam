@@ -143,6 +143,38 @@ export class LoopRunner {
 		return this.describe();
 	}
 
+	/**
+	 * Edit a user loop in place: patch its row (config is merged over the stored
+	 * config so runtime keys like lastTaskId survive), rebuild the definition,
+	 * and reschedule from now with the new interval. Project/template are fixed
+	 * at creation — changing environment is delete + recreate.
+	 */
+	updateUserLoop(input: {
+		id: string;
+		name?: string;
+		intervalMs?: number;
+		config?: Record<string, unknown>;
+	}): LoopDTO[] {
+		const row = repo.getLoop(this.deps.db, input.id);
+		if (!row || row.kind !== "user") throw new Error(`Loop not found: ${input.id}`);
+		repo.updateLoop(this.deps.db, input.id, {
+			name: input.name ?? row.name,
+			intervalMs: input.intervalMs ?? row.intervalMs,
+			cadenceMode: "fixed",
+			config: { ...row.config, ...(input.config ?? {}) },
+		});
+		const updated = repo.getLoop(this.deps.db, input.id);
+		const def = updated && this.defFromUserRow(updated);
+		if (def) {
+			this.defs.set(def.id, def);
+			// Swap the running instance for one built on the new definition; keep
+			// the row. ensureInstance reschedules it (if enabled) from now.
+			this.removeInstance(input.id);
+			this.ensureInstance(def);
+		}
+		return this.describe();
+	}
+
 	/** Delete a user loop (instance, timer, and persisted row). */
 	deleteUserLoop(id: string): LoopDTO[] {
 		this.removeInstance(id, { deleteRow: true });
@@ -297,8 +329,10 @@ export class LoopRunner {
 			this.removeInstance(inst.loopId, { deleteRow: true });
 			return;
 		}
-		// Re-check liveness/enabled — the run may have disabled or removed us.
-		if (!this.instances.has(inst.loopId)) return;
+		// Re-check liveness/enabled — the run may have disabled or removed us, or
+		// an edit may have swapped in a REPLACEMENT instance (updateUserLoop);
+		// identity, not just presence, or both instances would keep timers.
+		if (this.instances.get(inst.loopId) !== inst) return;
 		const after = repo.getLoop(this.deps.db, inst.loopId);
 		if (!after?.enabled) return;
 		this.schedule(inst, this.nextDelay(inst.def, outcome));

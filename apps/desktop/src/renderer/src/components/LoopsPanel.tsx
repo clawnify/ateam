@@ -1,5 +1,15 @@
 import type { AgentDTO, LoopDTO, ProjectDTO } from "@ateam/protocol";
-import { AlertTriangle, CheckCircle2, Play, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import {
+	AlertTriangle,
+	Check,
+	CheckCircle2,
+	Pencil,
+	Play,
+	Plus,
+	RefreshCw,
+	Trash2,
+	X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 /** "in 45s" / "in 2m" / "now", or "—" when no next run is scheduled. */
@@ -35,27 +45,68 @@ function envLabel(origins: Origins, id: string): string {
 	return origins[id] ?? "Local";
 }
 
-/** Inline form for creating a loop: a scheduled agent session on an environment. */
-function NewLoopForm({
+// A half-written loop must survive a tab switch (the panel unmounts with the
+// tab). Drafts live at module scope, keyed by the loop being edited ("new" for
+// the create form), together with which form was open — restored on mount,
+// cleared only on save or an explicit Cancel.
+interface LoopDraft {
+	name: string;
+	prompt: string;
+	projectId: string;
+	agentId: string;
+	everyMin: string;
+}
+const drafts = new Map<string, LoopDraft>();
+const openForm = { creating: false, editingId: null as string | null };
+
+/**
+ * Inline form for a loop — a scheduled agent session on an environment. With
+ * `editing`, it patches that loop in place; the project (and so the
+ * environment) is fixed at creation — moving a loop means delete + recreate.
+ */
+function LoopForm({
+	editing,
 	projects,
 	agents,
 	origins,
-	onCreate,
+	onSaved,
 	onCancel,
 }: {
+	editing?: LoopDTO;
 	projects: ProjectDTO[];
 	agents: AgentDTO[];
 	origins: Origins;
-	onCreate: (loops: LoopDTO[]) => void;
+	onSaved: (loops: LoopDTO[]) => void;
 	onCancel: () => void;
 }) {
-	const [name, setName] = useState("");
-	const [prompt, setPrompt] = useState("");
-	const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
-	const [agentId, setAgentId] = useState(agents.find((a) => a.available)?.id ?? "claude");
-	const [everyMin, setEveryMin] = useState("60");
+	// Resume the surviving draft for this form, falling back to the loop being
+	// edited (or blank for a new one). Every change is mirrored back into the
+	// draft so a tab switch loses nothing.
+	const draftKey = editing?.id ?? "new";
+	const draft = drafts.get(draftKey);
+	const [name, setName] = useState(draft?.name ?? editing?.title ?? "");
+	const [prompt, setPrompt] = useState(draft?.prompt ?? editing?.prompt ?? "");
+	const [projectId, setProjectId] = useState(
+		draft?.projectId ?? editing?.projectId ?? projects[0]?.id ?? "",
+	);
+	const [agentId, setAgentId] = useState(
+		draft?.agentId ?? editing?.agentId ?? agents.find((a) => a.available)?.id ?? "claude",
+	);
+	const [everyMin, setEveryMin] = useState(
+		draft?.everyMin ??
+			(editing?.intervalMs ? String(Math.round(editing.intervalMs / 60_000)) : "60"),
+	);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+
+	useEffect(() => {
+		drafts.set(draftKey, { name, prompt, projectId, agentId, everyMin });
+	}, [draftKey, name, prompt, projectId, agentId, everyMin]);
+
+	const close = (done: () => void) => {
+		drafts.delete(draftKey);
+		done();
+	};
 
 	const ready = prompt.trim() && projectId && Number(everyMin) >= 1;
 
@@ -64,18 +115,28 @@ function NewLoopForm({
 		setSaving(true);
 		setError(null);
 		try {
-			// The chosen project decides the environment: its engine (this Mac or a
-			// box) owns the loop and runs every session there.
-			await window.ateam.loops.create({
-				templateId: "agent-session",
-				name: name.trim() || "Loop",
-				projectId,
-				intervalMs: Number(everyMin) * 60_000,
-				config: { prompt: prompt.trim(), agentId },
-			});
-			// Re-list rather than trust the call's return: the create ran on ONE
+			if (editing) {
+				await window.ateam.loops.update({
+					id: editing.id,
+					name: name.trim() || "Loop",
+					intervalMs: Number(everyMin) * 60_000,
+					config: { prompt: prompt.trim(), agentId },
+				});
+			} else {
+				// The chosen project decides the environment: its engine (this Mac or
+				// a box) owns the loop and runs every session there.
+				await window.ateam.loops.create({
+					templateId: "agent-session",
+					name: name.trim() || "Loop",
+					projectId,
+					intervalMs: Number(everyMin) * 60_000,
+					config: { prompt: prompt.trim(), agentId },
+				});
+			}
+			// Re-list rather than trust the call's return: the call ran on ONE
 			// engine and returns only its loops — the panel shows the merged view.
-			onCreate(await window.ateam.loops.list());
+			const loops = await window.ateam.loops.list();
+			close(() => onSaved(loops));
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -109,7 +170,12 @@ function NewLoopForm({
 				<div className="loop-form-row">
 					<label>
 						Project · environment
-						<select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+						<select
+							value={projectId}
+							disabled={!!editing}
+							title={editing ? "Fixed at creation — delete and recreate to move a loop" : undefined}
+							onChange={(e) => setProjectId(e.target.value)}
+						>
 							{projects.map((p) => (
 								<option key={p.id} value={p.id}>
 									{p.name} — {envLabel(origins, p.id)}
@@ -145,9 +211,10 @@ function NewLoopForm({
 			</div>
 			<div className="loop-actions">
 				<button type="button" className="navbtn" onClick={submit} disabled={saving || !ready}>
-					<Plus size={14} /> Create
+					{editing ? <Check size={14} /> : <Plus size={14} />}
+					{editing ? "Save" : "Create"}
 				</button>
-				<button type="button" className="navbtn" onClick={onCancel}>
+				<button type="button" className="navbtn" onClick={() => close(onCancel)}>
 					<X size={14} /> Cancel
 				</button>
 			</div>
@@ -167,7 +234,17 @@ export function LoopsPanel() {
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [origins, setOrigins] = useState<Origins>({});
 	const [busy, setBusy] = useState<string | null>(null);
-	const [creating, setCreating] = useState(false);
+	// Which form is open survives a tab switch, like the draft itself.
+	const [creating, setCreatingState] = useState(openForm.creating);
+	const [editingId, setEditingIdState] = useState<string | null>(openForm.editingId);
+	const setCreating = (v: boolean) => {
+		openForm.creating = v;
+		setCreatingState(v);
+	};
+	const setEditingId = (v: string | null) => {
+		openForm.editingId = v;
+		setEditingIdState(v);
+	};
 	const [now, setNow] = useState(() => Date.now());
 
 	useEffect(() => {
@@ -216,7 +293,7 @@ export function LoopsPanel() {
 					<button
 						type="button"
 						className="navbtn"
-						onClick={() => setCreating((c) => !c)}
+						onClick={() => setCreating(!creating)}
 						disabled={projects.length === 0}
 					>
 						<Plus size={14} /> New loop
@@ -230,11 +307,11 @@ export function LoopsPanel() {
 			</div>
 
 			{creating && (
-				<NewLoopForm
+				<LoopForm
 					projects={projects}
 					agents={agents}
 					origins={origins}
-					onCreate={(ls) => {
+					onSaved={(ls) => {
 						setLoops(ls);
 						setCreating(false);
 					}}
@@ -244,60 +321,86 @@ export function LoopsPanel() {
 
 			{loops.length === 0 && !creating && <div className="empty">No loops. Create one.</div>}
 
-			{loops.map((l) => (
-				<div key={l.id} className={`loop-card ${l.enabled ? "" : "off"}`}>
-					<div className="loop-main">
-						<div className="loop-title">
-							<span>{l.title}</span>
-							<span className="loop-tag">{envLabel(origins, l.id)}</span>
-							<span className="loop-cadence muted">
-								{l.agentId ?? "claude"} · {everyLabel(l.intervalMs)}
-							</span>
-						</div>
-						{l.prompt && <div className="loop-desc muted">{l.prompt}</div>}
-						<div className="loop-meta">
-							{l.lastStatus === "error" ? (
-								<span className="loop-stat err">
-									<AlertTriangle size={13} /> {l.lastError ?? "error"}
+			{loops.map((l) =>
+				editingId === l.id ? (
+					<LoopForm
+						key={l.id}
+						editing={l}
+						projects={projects}
+						agents={agents}
+						origins={origins}
+						onSaved={(ls) => {
+							setLoops(ls);
+							setEditingId(null);
+						}}
+						onCancel={() => setEditingId(null)}
+					/>
+				) : (
+					<div key={l.id} className={`loop-card ${l.enabled ? "" : "off"}`}>
+						<div className="loop-main">
+							<div className="loop-title">
+								<span>{l.title}</span>
+								<span className="loop-tag">{envLabel(origins, l.id)}</span>
+								<span className="loop-cadence muted">
+									{l.agentId ?? "claude"} · {everyLabel(l.intervalMs)}
 								</span>
-							) : (
-								<span className="loop-stat ok">
-									<CheckCircle2 size={13} />
-									{l.lastSummary ?? "not run yet"}
-								</span>
-							)}
-							<span className="muted">· ran {agoLabel(l.lastRunAt, now)}</span>
-							<span className="muted">· {l.runs} runs</span>
-							{l.enabled && <span className="muted">· next {untilLabel(l.nextRunAt, now)}</span>}
+							</div>
+							{l.prompt && <div className="loop-desc muted">{l.prompt}</div>}
+							<div className="loop-meta">
+								{l.lastStatus === "error" ? (
+									<span className="loop-stat err">
+										<AlertTriangle size={13} /> {l.lastError ?? "error"}
+									</span>
+								) : (
+									<span className="loop-stat ok">
+										<CheckCircle2 size={13} />
+										{l.lastSummary ?? "not run yet"}
+									</span>
+								)}
+								<span className="muted">· ran {agoLabel(l.lastRunAt, now)}</span>
+								<span className="muted">· {l.runs} runs</span>
+								{l.enabled && <span className="muted">· next {untilLabel(l.nextRunAt, now)}</span>}
+							</div>
 						</div>
-					</div>
 
-					<div className="loop-actions">
-						<button
-							type="button"
-							className="navbtn"
-							onClick={() => runNow(l)}
-							disabled={busy === l.id}
-							title="Run this loop now"
-						>
-							{busy === l.id ? <RefreshCw size={14} className="spin" /> : <Play size={14} />}
-							Run now
-						</button>
-						<label className="loop-toggle" title="Enable or pause this loop">
-							<input type="checkbox" checked={l.enabled} onChange={() => void toggle(l)} />
-							<span>{l.enabled ? "On" : "Off"}</span>
-						</label>
-						<button
-							type="button"
-							className="loop-del"
-							title="Delete this loop"
-							onClick={() => void remove(l)}
-						>
-							<Trash2 size={14} />
-						</button>
+						<div className="loop-actions">
+							<button
+								type="button"
+								className="navbtn"
+								onClick={() => runNow(l)}
+								disabled={busy === l.id}
+								title="Run this loop now"
+							>
+								{busy === l.id ? <RefreshCw size={14} className="spin" /> : <Play size={14} />}
+								Run now
+							</button>
+							<label className="loop-toggle" title="Enable or pause this loop">
+								<input type="checkbox" checked={l.enabled} onChange={() => void toggle(l)} />
+								<span>{l.enabled ? "On" : "Off"}</span>
+							</label>
+							<button
+								type="button"
+								className="loop-del loop-edit"
+								title="Edit this loop"
+								onClick={() => {
+									setCreating(false);
+									setEditingId(l.id);
+								}}
+							>
+								<Pencil size={14} />
+							</button>
+							<button
+								type="button"
+								className="loop-del"
+								title="Delete this loop"
+								onClick={() => void remove(l)}
+							>
+								<Trash2 size={14} />
+							</button>
+						</div>
 					</div>
-				</div>
-			))}
+				),
+			)}
 		</div>
 	);
 }

@@ -213,6 +213,56 @@ describe("LoopRunner", () => {
 		runner.stop();
 	});
 
+	it("updates a user loop in place, preserving runtime config keys", async () => {
+		const projectId = seedProject();
+		const started: StartAgentRunInput[] = [];
+		const runner = makeRunner(started);
+		runner.start();
+		const id = runner
+			.createUserLoop({
+				templateId: "agent-session",
+				name: "Nightly deps",
+				projectId,
+				config: { prompt: "update deps", agentId: "claude" },
+				intervalMs: 3_600_000,
+				cadenceMode: "fixed",
+			})
+			.find((l) => l.kind === "user")?.id as string;
+
+		// A run records lastTaskId into the config…
+		await runner.runNow(id);
+		expect(repo.getLoop(db, id)?.config?.lastTaskId).toBeTruthy();
+
+		// …which an edit must not wipe.
+		const loops = runner.updateUserLoop({
+			id,
+			name: "Weekly deps",
+			intervalMs: 7_200_000,
+			config: { prompt: "update deps weekly", agentId: "codex" },
+		});
+		const updated = loops.find((l) => l.id === id);
+		expect(updated).toMatchObject({
+			title: "Weekly deps",
+			prompt: "update deps weekly",
+			agentId: "codex",
+			intervalMs: 7_200_000,
+		});
+		expect(repo.getLoop(db, id)?.config?.lastTaskId).toBeTruthy();
+
+		// The next run uses the new prompt/agent.
+		await runner.runNow(id);
+		expect(started[1]).toMatchObject({ prompt: "update deps weekly", agentId: "codex" });
+		expect(started[1]?.name).toBe("Weekly deps #2");
+		runner.stop();
+	});
+
+	it("rejects updating an unknown loop", () => {
+		const runner = makeRunner();
+		runner.start();
+		expect(() => runner.updateUserLoop({ id: "nope", name: "x" })).toThrow(/Loop not found/);
+		runner.stop();
+	});
+
 	it("deletes a user loop and its row", () => {
 		const projectId = seedProject();
 		const runner = makeRunner();
