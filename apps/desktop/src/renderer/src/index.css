@@ -704,7 +704,7 @@ input {
 .card:hover .branch-slot.has-tags .tags {
 	opacity: 1;
 }
-.card .tag {
+.tag {
 	font-size: 9.5px;
 	line-height: 1;
 	letter-spacing: 0.02em;
@@ -757,6 +757,18 @@ input {
 .tname.unread-row {
 	color: var(--text);
 	font-weight: 600;
+}
+/* Sidebar chips: hover-only, same as the card's. Kept clear of the absolutely
+   positioned trailing slot (status dot / delete) by a right margin, and hidden
+   outright at rest so a resting row is exactly as it was. */
+.tasknode .row-tags {
+	display: none;
+	flex: none;
+	gap: 3px;
+	margin-right: 20px;
+}
+.tasknode-row:hover .tasknode .row-tags {
+	display: flex;
 }
 .ring {
 	position: absolute;

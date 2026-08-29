@@ -1296,6 +1296,7 @@ function TaskRow({
 	onDelete: () => void;
 }) {
 	const Icon = taskIcon(t.name);
+	const tags = tagsFor(t);
 	// Row and trailing slot are siblings so the trash click can't nest inside the
 	// row button (same pattern as proj-row / proj-open above). The status dot and
 	// delete button share the trailing slot and swap in place on hover.
@@ -1310,6 +1311,18 @@ function TaskRow({
 					<Icon className="ticon" size={14} strokeWidth={1.75} />
 				)}
 				<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
+				{/* Hover-only, like the card's. The name already ellipsizes, so it
+				    simply truncates further to make room and the row never changes
+				    height. */}
+				{tags.length > 0 && (
+					<span className="row-tags">
+						{tags.map((tag) => (
+							<span className="tag" key={tag}>
+								{tag}
+							</span>
+						))}
+					</span>
+				)}
 			</button>
 			<span className="task-trail">
 				{t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />}
