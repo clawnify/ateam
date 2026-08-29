@@ -6,6 +6,7 @@ import type {
 	LoopDTO,
 	ProjectDTO,
 	SessionDTO,
+	SessionHitDTO,
 	TaskDTO,
 } from "@ateam/protocol";
 import {
@@ -43,7 +44,6 @@ import {
 	Rocket,
 	RotateCw,
 	Rows2,
-	Search,
 	Server,
 	Sparkles,
 	SquareTerminal,
@@ -68,6 +68,7 @@ import { IconButton } from "./components/IconButton";
 import { LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
 import { PromptComposer } from "./components/PromptComposer";
+import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
 import { activeTerminal, sessionTabs } from "./session-tabs";
@@ -366,6 +367,17 @@ export function App() {
 		[unifiedProjects, activeProjectId],
 	);
 	const activeMembers = activeCard?.members ?? [];
+	// Session search runs on each engine that holds this repo: the transcripts
+	// live on the machine that ran the agent, so a box searches its own disk.
+	const searchProjectIds = useMemo(
+		() =>
+			activeMembers.length > 0
+				? activeMembers.map((m) => m.projectId)
+				: activeProjectId
+					? [activeProjectId]
+					: [],
+		[activeMembers, activeProjectId],
+	);
 	// Which engine a task runs on = the engine that owns its project (tasks never
 	// migrate between engines, so origin is intrinsic to the projectId).
 	const originOf = useCallback((projectId: string): Alias => origins[projectId] ?? null, [origins]);
@@ -582,6 +594,15 @@ export function App() {
 		setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		setSelectedTaskId(task.id);
 		setPanelMode("full");
+	};
+	// A session-search hit opens the task it ran in, and the exact terminal it
+	// ran in when that tab is still alive — the point of the search is to land
+	// back where the work happened, not merely near it.
+	const openSessionHit = (hit: SessionHitDTO) => {
+		const task = activeTasks.find((t) => t.id === hit.taskId);
+		if (!task) return;
+		if (hit.terminalId) setTermByTask((m) => ({ ...m, [task.id]: hit.terminalId }));
+		openTask(task);
 	};
 	// Collapsing the full panel inside Mission Control means "back to the
 	// grid", not "shrink to a side panel" — there is no board to sit beside.
@@ -1076,26 +1097,12 @@ export function App() {
 					</div>
 					{/* Centered task search — absolutely centered in the topbar so the
 					    tabs on the left and action buttons on the right don't shift it. */}
-					<div className="task-search">
-						<Search size={14} strokeWidth={1.75} />
-						<input
-							type="text"
-							placeholder="Search tasks…"
-							value={taskQuery}
-							onChange={(e) => setTaskQuery(e.target.value)}
-							aria-label="Search tasks"
-						/>
-						{taskQuery && (
-							<button
-								type="button"
-								className="ts-clear"
-								aria-label="Clear search"
-								onClick={() => setTaskQuery("")}
-							>
-								<X size={13} strokeWidth={2} />
-							</button>
-						)}
-					</div>
+					<TaskSearch
+						query={taskQuery}
+						onQuery={setTaskQuery}
+						projectIds={searchProjectIds}
+						onOpen={openSessionHit}
+					/>
 					<div className="spacer" />
 					{view === "mission" && !(selectedTask && panelMode === "full") && (
 						<div className="mclayout" role="group" aria-label="Layout">

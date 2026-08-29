@@ -28,6 +28,7 @@ import type {
 	PtyExitEvent,
 	PtySnapshot,
 	SessionDTO,
+	SessionHitDTO,
 	SystemInfo,
 	TaskDTO,
 	UpdateLoopInput,
@@ -100,6 +101,9 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		},
 		agents: {
 			list: () => call<AgentDTO[]>(CH.agentsList),
+		},
+		search: {
+			sessions: (input) => call<SessionHitDTO[]>(CH.searchSessions, [input]),
 		},
 		fs: {
 			listDir: (path) => call<DirListingDTO>(CH.fsListDir, [path]),

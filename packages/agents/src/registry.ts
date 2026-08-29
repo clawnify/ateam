@@ -39,6 +39,28 @@ export interface AgentDefinition {
 	install?: string;
 	/** The one-time OAuth login the user runs on the box after install (browser flow). */
 	loginCommand?: string;
+	/**
+	 * How to ask this agent ONE question non-interactively and read the answer
+	 * back as text — no PTY, no session, no tools. Ateam uses it for the small
+	 * model-shaped jobs inside the app itself (ranking session-search results),
+	 * so those stay on whatever agent the user already runs rather than hard-
+	 * wiring one vendor's CLI. Omitted for an agent with no such mode.
+	 */
+	headless?: HeadlessInvocation;
+}
+
+/** A one-shot, non-interactive call to an agent CLI. */
+export interface HeadlessInvocation {
+	/** Flags after the binary (the prompt is delivered separately). */
+	args: string[];
+	/** Where the prompt goes: piped on stdin, or appended as arguments. */
+	prompt: PromptTransport;
+	/**
+	 * Flag that writes the final assistant message to a file. Set it for CLIs
+	 * whose stdout carries progress chrome (Codex); when absent, stdout IS the
+	 * answer (Claude's `--output-format text`).
+	 */
+	lastMessageFlag?: string;
 }
 
 // Registry of the supported agent CLIs. Command lines and the YOLO bypass
@@ -57,6 +79,15 @@ export const AGENTS = [
 		agentsCommand: "claude agents",
 		install: "curl -fsSL https://claude.ai/install.sh | bash",
 		loginCommand: "claude login",
+		// --safe-mode drops hooks/CLAUDE.md/skills/MCP, --restricted drops the
+		// command-running tools: this asks a question, it does not do work in a
+		// repo. Both together take the call from ~50s to ~3s. Haiku because the
+		// job is ranking a shortlist someone else already built, and it is on
+		// the path of a UI keystroke.
+		headless: {
+			args: ["-p", "--safe-mode", "--restricted", "--model", "haiku", "--output-format", "text"],
+			prompt: "stdin",
+		},
 	},
 	{
 		id: "codex",
@@ -68,6 +99,14 @@ export const AGENTS = [
 		resumeCommand: "codex resume --last",
 		install: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
 		loginCommand: "codex login",
+		// `codex exec` streams its progress to stdout, so the answer is taken
+		// from --output-last-message instead. read-only sandbox + no git-repo
+		// requirement: the prompt is self-contained, there is nothing to touch.
+		headless: {
+			args: ["exec", "--skip-git-repo-check", "--sandbox", "read-only"],
+			prompt: "stdin",
+			lastMessageFlag: "--output-last-message",
+		},
 	},
 	{
 		id: "opencode",
@@ -78,6 +117,8 @@ export const AGENTS = [
 		resumeCommand: "opencode --continue",
 		install: "curl -fsSL https://opencode.ai/install | bash",
 		loginCommand: "opencode auth login",
+		// `opencode run` takes the message as positional arguments.
+		headless: { args: ["run"], prompt: "argv" },
 	},
 ] as const satisfies readonly AgentDefinition[];
 

@@ -18,7 +18,10 @@
 // `Unknown method: projects:clone`; with it they get "update the older side" up front.
 // v3: Loops pivot — user-created agent-session loops only + CH.loopsUpdate (edit a
 // loop in place). Same skew rationale as v2.
-export const PROTOCOL_VERSION = 3;
+// v4: added CH.searchSessions. Same reasoning again — a new desktop searching an
+// older box would otherwise get `Unknown method: search:sessions` from the search
+// box instead of "update the older side".
+export const PROTOCOL_VERSION = 4;
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
@@ -276,6 +279,28 @@ export interface CleanupCandidate {
 	agentStatus: AgentStatus | null;
 }
 
+/**
+ * One hit from session search: a past agent session that matched, joined back
+ * to the task it ran in. `terminalId` is present only when that session's tab
+ * is still live, which is what decides whether a click can focus the exact
+ * terminal or only open the task.
+ */
+export interface SessionHitDTO {
+	/** The harness's own session id — the handle its resume command takes. */
+	sessionId: string;
+	agentId: string;
+	taskId: string;
+	taskName: string;
+	branch: string | null;
+	terminalId: string | null;
+	startedAt: number | null;
+	endedAt: number | null;
+	/** The user's own words from the matching part of the session. */
+	excerpt: string;
+	/** The model's one-line reason, when the AI pass ran. */
+	why: string | null;
+}
+
 // ---- IPC channel names ----
 export const CH = {
 	projectsPick: "projects:pick",
@@ -307,6 +332,7 @@ export const CH = {
 	loopsUpdate: "loops:update",
 	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
+	searchSessions: "search:sessions",
 	systemHello: "system:hello",
 	fsListDir: "fs:listDir",
 	utilPickFiles: "util:pickFiles",
@@ -405,6 +431,15 @@ export interface AteamApi {
 	};
 	agents: {
 		list(): Promise<AgentDTO[]>;
+	};
+	search: {
+		/**
+		 * Find past agent sessions in this project by describing the work — the
+		 * question you would otherwise open a new session to ask. Without `ai`
+		 * it is an instant local rank; with it, the configured agent re-ranks
+		 * the shortlist and says why each one matched.
+		 */
+		sessions(input: { projectId: string; query: string; ai?: boolean }): Promise<SessionHitDTO[]>;
 	};
 	fs: {
 		/**

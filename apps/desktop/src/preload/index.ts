@@ -46,6 +46,9 @@ const api: AteamApi = {
 	agents: {
 		list: () => ipcRenderer.invoke(CH.agentsList),
 	},
+	search: {
+		sessions: (input) => ipcRenderer.invoke(CH.searchSessions, input),
+	},
 	fs: {
 		listDir: (path) => ipcRenderer.invoke(CH.fsListDir, path),
 	},
