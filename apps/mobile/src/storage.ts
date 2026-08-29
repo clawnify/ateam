@@ -62,3 +62,26 @@ export async function savePreviewPort(port: string): Promise<void> {
 		/* best-effort — a failed persist just falls back to the default port */
 	}
 }
+
+// The privacy disclosure the user accepted, stored as the policy's effective date
+// rather than a boolean: if PRIVACY.md materially changes, bump CONSENT_VERSION and
+// everyone is asked again instead of being silently carried over on an old consent.
+const CONSENT_KEY = "ateam.privacyConsent";
+export const CONSENT_VERSION = "2026-08-20";
+
+/** True only if this exact disclosure version was accepted. */
+export async function loadConsent(): Promise<boolean> {
+	try {
+		return (await AsyncStorage.getItem(CONSENT_KEY)) === CONSENT_VERSION;
+	} catch {
+		return false;
+	}
+}
+
+export async function saveConsent(): Promise<void> {
+	try {
+		await AsyncStorage.setItem(CONSENT_KEY, CONSENT_VERSION);
+	} catch {
+		/* best-effort: a failed persist just asks again next launch, never less safe */
+	}
+}

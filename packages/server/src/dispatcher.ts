@@ -33,10 +33,12 @@ import {
 	type KanbanColumn,
 	type MergeStrategy,
 	PROTOCOL_VERSION,
+	type UpdateLoopInput,
 } from "@ateam/protocol";
 import type { Engine } from "./engine";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
+import { searchSessions } from "./session-search";
 import { createTaskInProject, type SpawnAgentInput, shell, spawnAgentInTask } from "./sessions";
 
 /** Project display name from the repo's README H1 (md or HTML), if present. */
@@ -401,6 +403,13 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			}));
 		},
 
+		// ---- session search ----
+		// "Which session was I working on X?" answered here instead of in a new
+		// agent session. Engine-side on purpose: the transcripts live on the
+		// machine that ran the agent, so a box searches its own history.
+		[CH.searchSessions]: async (input: { projectId: string; query: string; ai?: boolean }) =>
+			searchSessions(services, input),
+
 		// ---- system: connect-time handshake ----
 		// The client calls this first over a fresh transport and checks
 		// protocolVersion before trusting the rest of the surface (see serverHandshake).
@@ -481,6 +490,19 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				throw new Error("Loop interval must be at least 1 minute");
 			}
 			const loops = loopRunner.createUserLoop({ ...input, cadenceMode: "fixed" });
+			engine.sendLoopsUpdated();
+			return loops;
+		},
+		[CH.loopsUpdate]: (input: UpdateLoopInput) => {
+			// Same rules as create, applied to whichever fields are being changed.
+			if (input.config && "prompt" in input.config) {
+				const prompt = typeof input.config.prompt === "string" ? input.config.prompt.trim() : "";
+				if (!prompt) throw new Error("A loop needs a prompt");
+			}
+			if (input.intervalMs != null && input.intervalMs < 60_000) {
+				throw new Error("Loop interval must be at least 1 minute");
+			}
+			const loops = loopRunner.updateUserLoop(input);
 			engine.sendLoopsUpdated();
 			return loops;
 		},

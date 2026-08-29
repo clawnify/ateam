@@ -47,6 +47,9 @@ const api: AteamApi = {
 	agents: {
 		list: () => ipcRenderer.invoke(CH.agentsList),
 	},
+	search: {
+		sessions: (input) => ipcRenderer.invoke(CH.searchSessions, input),
+	},
 	fs: {
 		listDir: (path) => ipcRenderer.invoke(CH.fsListDir, path),
 	},
@@ -56,6 +59,7 @@ const api: AteamApi = {
 		runNow: (id) => ipcRenderer.invoke(CH.loopsRunNow, id),
 		templates: () => ipcRenderer.invoke(CH.loopsTemplates),
 		create: (input) => ipcRenderer.invoke(CH.loopsCreate, input),
+		update: (input) => ipcRenderer.invoke(CH.loopsUpdate, input),
 		remove: (id) => ipcRenderer.invoke(CH.loopsDelete, id),
 		onUpdated: (cb: (loops: LoopDTO[]) => void) => {
 			const handler = (_: unknown, loops: LoopDTO[]) => cb(loops);
@@ -89,6 +93,8 @@ const api: AteamApi = {
 		attachClipboardImage: (terminalId) =>
 			ipcRenderer.invoke(CH.utilAttachClipboardImage, terminalId),
 		writeImageBytes: (base64, ext) => ipcRenderer.invoke(CH.utilWriteImageBytes, base64, ext),
+		openInEditor: (worktreePath, alias) =>
+			ipcRenderer.invoke(CH.utilOpenInEditor, worktreePath, alias),
 	},
 	events: {
 		onTaskUpdated: (cb: (task: TaskDTO) => void) => {
@@ -122,6 +128,7 @@ const host: AteamHost = {
 	list: () => ipcRenderer.invoke(HOST_CH.list),
 	connect: (alias) => ipcRenderer.invoke(HOST_CH.connect, alias),
 	disconnect: (alias) => ipcRenderer.invoke(HOST_CH.disconnect, alias),
+	forget: (alias) => ipcRenderer.invoke(HOST_CH.forget, alias),
 	connected: () => ipcRenderer.invoke(HOST_CH.connected),
 	origins: () => ipcRenderer.invoke(HOST_CH.origins),
 	provision: (alias, input) => ipcRenderer.invoke(HOST_CH.provision, alias, input),

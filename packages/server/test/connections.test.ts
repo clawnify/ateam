@@ -6,6 +6,7 @@ import { repo } from "@ateam/db";
 import { createTestDb } from "../../db/test/helpers/test-db";
 import {
 	endpointUrl,
+	forgetConnection,
 	listConnections,
 	readSshHosts,
 	recordConnection,
@@ -151,6 +152,52 @@ describe("recordConnection", () => {
 		expect(h?.serverVersion).toBe("1.0.0");
 		expect(h?.agentsAvailable).toEqual(["claude", "codex"]);
 		expect(typeof h?.lastSeen).toBe("number");
+	});
+});
+
+describe("forgetConnection", () => {
+	it("deletes a saved-only host outright", () => {
+		const db = createTestDb();
+		const cfg = writeConfig("Host devbox\n  HostName 10.0.0.1\n");
+		recordConnection(db, { hostAlias: "100.72.63.61:8787", transport: "ws" });
+
+		forgetConnection(db, "100.72.63.61:8787", cfg);
+		expect(repo.getHost(db, "100.72.63.61:8787")).toBeUndefined();
+		expect(listConnections(db, cfg).map((c) => c.alias)).toEqual(["devbox"]);
+	});
+
+	it("hides an ssh_config alias instead of deleting (the config would resurface it)", () => {
+		const db = createTestDb();
+		const cfg = writeConfig("Host devbox\n  HostName 10.0.0.1\nHost other\n  HostName 10.0.0.2\n");
+		recordConnection(db, { hostAlias: "devbox", serverVersion: "1" });
+
+		forgetConnection(db, "devbox", cfg);
+		expect(listConnections(db, cfg).map((c) => c.alias)).toEqual(["other"]);
+		// Also hides a never-connected config alias (no prior saved row).
+		forgetConnection(db, "other", cfg);
+		expect(listConnections(db, cfg)).toEqual([]);
+	});
+
+	it("hides a collapsed group by its canonical alias", () => {
+		const db = createTestDb();
+		const cfg = writeConfig(
+			"Host mybox.boxd mybox.boxd.sh\n  HostName mybox.boxd.sh\n  Port 12836\n  User boxd\n",
+		);
+		// History saved under the folded-away alias must not resurface after forgetting.
+		repo.upsertHost(db, { hostAlias: "mybox.boxd.sh", lastSeen: 42 });
+
+		forgetConnection(db, "mybox.boxd", cfg);
+		expect(listConnections(db, cfg)).toEqual([]);
+	});
+
+	it("reconnecting un-hides a forgotten host", () => {
+		const db = createTestDb();
+		const cfg = writeConfig("Host devbox\n  HostName 10.0.0.1\n");
+		forgetConnection(db, "devbox", cfg);
+		expect(listConnections(db, cfg)).toEqual([]);
+
+		recordConnection(db, { hostAlias: "devbox" });
+		expect(listConnections(db, cfg).map((c) => c.alias)).toEqual(["devbox"]);
 	});
 });
 

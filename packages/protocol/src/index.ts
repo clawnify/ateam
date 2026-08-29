@@ -16,11 +16,16 @@
 // auto-updates, a box only changes when someone re-runs the installer. Without the
 // bump those clients pass the handshake and then fail deep in a feature with a raw
 // `Unknown method: projects:clone`; with it they get "update the older side" up front.
-// v3: TaskDTO gained a required `triage` verdict (including the `stalled` bucket),
-// and CH.tasksMarkRead was added.
-// Both break NEW CLIENT → OLD SERVER: an old engine sends cards with no `triage`
-// (the board reads it on every card) and answers markRead with "Unknown method".
-export const PROTOCOL_VERSION = 3;
+// v3: Loops pivot — user-created agent-session loops only + CH.loopsUpdate (edit a
+// loop in place). Same skew rationale as v2.
+// v4: added CH.searchSessions. Same reasoning again — a new desktop searching an
+// older box would otherwise get `Unknown method: search:sessions` from the search
+// box instead of "update the older side".
+// v5: TaskDTO gained a required `triage` verdict (with the `stalled` bucket) and a
+// `tags` field, and CH.tasksMarkRead was added. Same skew again — an old engine
+// sends cards with no `triage`, which the board reads on EVERY card, and answers
+// markRead with "Unknown method".
+export const PROTOCOL_VERSION = 5;
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
@@ -172,6 +177,8 @@ export interface LoopDTO {
 	prompt: string | null;
 	/** Which coding agent each run launches (agent-session loops). */
 	agentId: string | null;
+	/** The loop's one persistent task — every run is a fresh session in it. */
+	taskId: string | null;
 	intervalMs: number | null;
 	lastRunAt: number | null;
 	nextRunAt: number | null;
@@ -204,6 +211,20 @@ export interface CreateLoopInput {
 	config?: Record<string, unknown>;
 	intervalMs?: number;
 	enabled?: boolean;
+}
+
+/**
+ * Input for editing an existing user loop in place. Only the given fields
+ * change; `config` is merged over the stored config (so runtime keys like
+ * lastTaskId survive). The loop's project — and with it its environment — is
+ * fixed at creation: moving engines means delete + recreate. No projectId here
+ * also keeps the aggregate routing this call by the loop's own id.
+ */
+export interface UpdateLoopInput {
+	id: string;
+	name?: string;
+	intervalMs?: number;
+	config?: Record<string, unknown>;
 }
 
 export interface CleanupItem {
@@ -293,6 +314,28 @@ export interface CleanupCandidate {
 	agentStatus: AgentStatus | null;
 }
 
+/**
+ * One hit from session search: a past agent session that matched, joined back
+ * to the task it ran in. `terminalId` is present only when that session's tab
+ * is still live, which is what decides whether a click can focus the exact
+ * terminal or only open the task.
+ */
+export interface SessionHitDTO {
+	/** The harness's own session id — the handle its resume command takes. */
+	sessionId: string;
+	agentId: string;
+	taskId: string;
+	taskName: string;
+	branch: string | null;
+	terminalId: string | null;
+	startedAt: number | null;
+	endedAt: number | null;
+	/** The user's own words from the matching part of the session. */
+	excerpt: string;
+	/** The model's one-line reason, when the AI pass ran. */
+	why: string | null;
+}
+
 // ---- IPC channel names ----
 export const CH = {
 	projectsPick: "projects:pick",
@@ -322,14 +365,17 @@ export const CH = {
 	loopsRunNow: "loops:runNow",
 	loopsTemplates: "loops:templates",
 	loopsCreate: "loops:create",
+	loopsUpdate: "loops:update",
 	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
+	searchSessions: "search:sessions",
 	systemHello: "system:hello",
 	fsListDir: "fs:listDir",
 	utilPickFiles: "util:pickFiles",
 	utilAttachImages: "util:attachImages",
 	utilAttachClipboardImage: "util:attachClipboardImage",
 	utilWriteImageBytes: "util:writeImageBytes",
+	utilOpenInEditor: "util:openInEditor",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -380,6 +426,13 @@ export type AttachDelivery =
 	| { mode: "paths"; paths: string[] }
 	| { mode: "none" };
 
+/**
+ * Outcome of handing a worktree to the user's own editor. `ok: false` carries a
+ * reason to show — the editor isn't installed, or the task's engine is reached by
+ * a `host:port` endpoint that Remote-SSH can't resolve.
+ */
+export type OpenInEditorResult = { ok: true } | { ok: false; reason: string };
+
 // ---- the API surface exposed on window.ateam ----
 export interface AteamApi {
 	projects: {
@@ -425,6 +478,15 @@ export interface AteamApi {
 	agents: {
 		list(): Promise<AgentDTO[]>;
 	};
+	search: {
+		/**
+		 * Find past agent sessions in this project by describing the work — the
+		 * question you would otherwise open a new session to ask. Without `ai`
+		 * it is an instant local rank; with it, the configured agent re-ranks
+		 * the shortlist and says why each one matched.
+		 */
+		sessions(input: { projectId: string; query: string; ai?: boolean }): Promise<SessionHitDTO[]>;
+	};
 	fs: {
 		/**
 		 * Browse a directory on the *engine's* machine (the server, when remote) to
@@ -440,6 +502,7 @@ export interface AteamApi {
 		runNow(id: string): Promise<LoopDTO[]>;
 		templates(): Promise<LoopTemplateDTO[]>;
 		create(input: CreateLoopInput): Promise<LoopDTO[]>;
+		update(input: UpdateLoopInput): Promise<LoopDTO[]>;
 		remove(id: string): Promise<LoopDTO[]>;
 		onUpdated(cb: (loops: LoopDTO[]) => void): () => void;
 	};
@@ -519,6 +582,15 @@ export interface AteamApi {
 		 * instead of a bitmap on the clipboard. `ext` sets the extension (default "png").
 		 */
 		writeImageBytes(base64: string, ext?: string): Promise<string>;
+		/**
+		 * Open a task's worktree in the user's own editor, on THIS machine. Client-native
+		 * (the editor is a desktop app, not something the engine can launch), so it never
+		 * routes to the engine: a task on a box is opened over VS Code's Remote-SSH using
+		 * the same ssh_config alias Ateam connects with. Optional — a client with no
+		 * desktop editor to hand off to (the phone) simply omits it, and callers hide the
+		 * affordance rather than offering one that can't work.
+		 */
+		openInEditor?(worktreePath: string, alias: string | null): Promise<OpenInEditorResult>;
 	};
 }
 

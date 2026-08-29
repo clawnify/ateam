@@ -149,19 +149,20 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	const loopRunner = new LoopRunner({
 		db,
 		log: opts.log ?? ((line) => console.log(line)),
-		startAgentRun: async (input) => {
-			const task = await createTaskInProject(services, sendTaskUpdated, input);
-			await spawnAgentInTask(services, sendTaskUpdated, {
-				taskId: task.id,
-				agentId: input.agentId,
-				prompt: input.prompt,
-			});
-			return { taskId: task.id };
+		sessions: {
+			createTask: async (input) => {
+				const task = await createTaskInProject(services, sendTaskUpdated, input);
+				return { taskId: task.id };
+			},
+			spawnAgent: (input) => spawnAgentInTask(services, sendTaskUpdated, input),
+			stopTaskSessions: (taskId) => {
+				for (const s of repo.listSessionsByTask(db, taskId)) pty.kill(s.terminalId);
+			},
+			// Daemon ground truth — the persisted agentStatus can strand at
+			// "running" when an exit happened while the app was closed.
+			isTaskAgentLive: (taskId) =>
+				repo.listSessionsByTask(db, taskId).some((s) => pty.has(s.terminalId)),
 		},
-		// Daemon ground truth — the persisted agentStatus can strand at "running"
-		// when an exit happened while the app was closed.
-		isTaskAgentLive: (taskId) =>
-			repo.listSessionsByTask(db, taskId).some((s) => pty.has(s.terminalId)),
 	});
 
 	// Board Organizer tools: the organizer loop's headless `claude -p` turn reads

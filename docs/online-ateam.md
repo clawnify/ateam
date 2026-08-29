@@ -175,6 +175,10 @@ Test it:
 ssh my-ateam-box "bash -lc 'ateam'"
 ```
 
+> Don't want a config host offered as a box? Hover its row in the **Run on** picker
+> and click the ✕ — it disappears from the list (your `~/.ssh/config` is never
+> edited), and setting the box up again brings it back.
+
 ## 4. Connect from the desktop app
 
 1. Open Ateam. Top-right of the toolbar is the **connection button** — it shows
@@ -238,6 +242,11 @@ deliberately left alone.
 tailnet, and make sure its VPN toggle is on. Then open Ateam Go, enter the box's
 Tailscale IP and port `8787`, and connect — the connection is remembered across
 launches. Allow the iOS **Local Network** prompt if it appears.
+
+Before its first connection the app shows a one-time disclosure: what it sends, that it
+goes only to the box you name, and that the agents on that box talk to their own
+providers under your accounts. Agreeing is remembered; declining opens the offline demo
+instead, which connects to nothing.
 
 **What still needs a computer.** Everything above — don't try to defer it. The phone
 has nothing to connect to until a daemon is listening, and once connected the app can

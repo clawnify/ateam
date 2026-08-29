@@ -13,8 +13,8 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ConnectionDTO, HostTransport } from "@ateam/protocol";
 import { type AteamDb, type Host, repo } from "@ateam/db";
+import type { ConnectionDTO, HostTransport } from "@ateam/protocol";
 
 // ConnectionDTO is a client↔renderer boundary DTO — its home is @ateam/protocol;
 // re-exported here so `listConnections`' callers keep importing it from the server.
@@ -173,11 +173,16 @@ export function listConnections(db: AteamDb, configPath?: string): ConnectionDTO
 		// Metadata is keyed by alias, so a box previously reached under a now-folded
 		// name still has its history — keep the most recently seen of them.
 		let rec: Host | null = null;
+		let hidden = false;
 		for (const sh of group) {
 			absorbed.add(sh.alias);
 			const other = saved.get(sh.alias);
+			if (other?.hidden) hidden = true;
 			if (other && (other.lastSeen ?? 0) >= (rec?.lastSeen ?? 0)) rec = other;
 		}
+		// Removed from the list by the user; every alias stays absorbed so none of
+		// the group's saved rows resurface in the saved-only loop below.
+		if (hidden) continue;
 		byAlias.set(canonical.alias, {
 			alias: canonical.alias,
 			// Everything folded here came out of ssh_config, so it is ssh by
@@ -192,7 +197,7 @@ export function listConnections(db: AteamDb, configPath?: string): ConnectionDTO
 		});
 	}
 	for (const rec of saved.values()) {
-		if (absorbed.has(rec.hostAlias)) continue;
+		if (absorbed.has(rec.hostAlias) || rec.hidden) continue;
 		byAlias.set(rec.hostAlias, {
 			alias: rec.hostAlias,
 			transport: rec.transport as HostTransport,
@@ -220,9 +225,28 @@ export function recordConnection(db: AteamDb, rec: ConnectionRecord): Host {
 	const patch: Partial<Host> & { hostAlias: string } = {
 		hostAlias: rec.hostAlias,
 		lastSeen: Date.now(),
+		// Reaching the box again is the way back in after a forget: setting it up (or
+		// connecting to it) un-hides it, so removal is never a dead end.
+		hidden: 0,
 	};
 	if (rec.transport !== undefined) patch.transport = rec.transport;
 	if (rec.serverVersion !== undefined) patch.serverVersion = rec.serverVersion;
 	if (rec.agentsAvailable !== undefined) patch.agentsAvailable = rec.agentsAvailable;
 	return repo.upsertHost(db, patch);
+}
+
+/**
+ * Remove a connection from the list. A row that exists only in our db (a ws
+ * endpoint, or a user@host set up directly) is deleted outright; an alias still
+ * in ~/.ssh/config would resurface on the next list, so it's flagged hidden
+ * instead — ssh_config stays OpenSSH's file, we never edit it. Either way,
+ * connecting to (or setting up) the box again brings it back: recordConnection
+ * clears the flag.
+ */
+export function forgetConnection(db: AteamDb, alias: string, configPath?: string): void {
+	if (readSshHosts(configPath).some((h) => h.alias === alias)) {
+		repo.upsertHost(db, { hostAlias: alias, hidden: 1 });
+	} else {
+		repo.deleteHost(db, alias);
+	}
 }

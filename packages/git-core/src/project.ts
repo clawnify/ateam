@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { GitCoreError } from "./errors";
@@ -203,7 +203,16 @@ export async function cloneRepo(cloneUrl: string, dest: string): Promise<void> {
 	const gh = cloneUrl.match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
 	try {
 		if (gh) {
-			await pexec("gh", ["repo", "clone", `${gh[1]}/${gh[2]}`, dest]);
+			try {
+				await pexec("gh", ["repo", "clone", `${gh[1]}/${gh[2]}`, dest]);
+			} catch {
+				// `gh` may be unauthenticated in this process even when git can
+				// clone: hosts like boxd inject GH_TOKEN into login shells only,
+				// while wiring a system-scope git credential helper that works
+				// from any process. Fall back to plain `git clone`.
+				await rm(dest, { recursive: true, force: true });
+				await pexec("git", ["clone", cloneUrl, dest]);
+			}
 		} else {
 			await pexec("git", ["clone", cloneUrl, dest]);
 		}

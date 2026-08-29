@@ -12,24 +12,18 @@ export type LoopCadence =
 	| { mode: "fixed"; everyMs: number }
 	| { mode: "self_paced"; minMs: number; maxMs: number };
 
-/** What a loop run needs to start an agent session (see templates.ts). */
-export interface StartAgentRunInput {
-	projectId: string;
-	name: string;
-	agentId: string;
-	prompt: string;
-}
-
-/** Services and helpers handed to a loop on each run. */
-export interface LoopContext {
-	db: AteamDb;
-	/** Emit a diagnostic line (prefixed with the loop id by the runner). */
-	log: (message: string) => void;
-	/**
-	 * Create a fresh task in a project and launch a coding agent in it with the
-	 * given prompt — the composer's flow, wired in by the engine.
-	 */
-	startAgentRun: (input: StartAgentRunInput) => Promise<{ taskId: string }>;
+/** The session capabilities a loop run gets, wired in by the engine. */
+export interface LoopSessionOps {
+	/** Create a task (branch + worktree + row) in a project — the composer's flow. */
+	createTask: (input: { projectId: string; name: string }) => Promise<{ taskId: string }>;
+	/** Launch a coding agent with a prompt in an existing task. */
+	spawnAgent: (input: {
+		taskId: string;
+		agentId: string;
+		prompt: string;
+	}) => Promise<{ terminalId: string }>;
+	/** Kill a task's live PTYs (the previous run's idle pane). */
+	stopTaskSessions: (taskId: string) => void;
 	/**
 	 * Whether a task still has a live agent PTY. Ground truth from the daemon —
 	 * unlike the persisted agentStatus, which can strand at "running" when an
@@ -37,6 +31,13 @@ export interface LoopContext {
 	 * status would wedge a loop forever.
 	 */
 	isTaskAgentLive: (taskId: string) => boolean;
+}
+
+/** Services and helpers handed to a loop on each run. */
+export interface LoopContext extends LoopSessionOps {
+	db: AteamDb;
+	/** Emit a diagnostic line (prefixed with the loop id by the runner). */
+	log: (message: string) => void;
 }
 
 /** What a single loop run reports back to the runner. */

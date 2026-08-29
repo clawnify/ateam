@@ -135,6 +135,7 @@ export function bootstrap(db: SqliteExecutor): void {
 				server_version TEXT,
 				agents_available TEXT,
 				last_seen INTEGER,
+				hidden INTEGER NOT NULL DEFAULT 0,
 				created_at INTEGER
 			);
 			CREATE INDEX IF NOT EXISTS hosts_last_seen_idx ON hosts (last_seen);
@@ -157,6 +158,7 @@ export function bootstrap(db: SqliteExecutor): void {
 		// Every row that predates this column is an ssh_config alias — the only
 		// kind of connection that existed — so the default backfills correctly.
 		"ALTER TABLE hosts ADD COLUMN transport TEXT NOT NULL DEFAULT 'ssh'",
+		"ALTER TABLE hosts ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
 	]) {
 		try {
 			db.exec(sql);

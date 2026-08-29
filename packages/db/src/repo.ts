@@ -113,6 +113,21 @@ export const repo = {
 		db.update(agentSessions).set(patch).where(eq(agentSessions.id, id)).run();
 	},
 
+	/**
+	 * The terminal a harness's OWN session id was seen on. Hook events carry the
+	 * agent's session id (`raw_agent_session_id`), which is the only link between
+	 * a transcript on disk and the PTY tab that produced it — session search uses
+	 * it to open the exact terminal a result came from.
+	 */
+	findTerminalByAgentSessionId(db: AteamDb, rawAgentSessionId: string) {
+		return db
+			.select({ terminalId: agentEvents.terminalId })
+			.from(agentEvents)
+			.where(eq(agentEvents.rawAgentSessionId, rawAgentSessionId))
+			.orderBy(desc(agentEvents.createdAt))
+			.get()?.terminalId;
+	},
+
 	recordEvent(
 		db: AteamDb,
 		e: {

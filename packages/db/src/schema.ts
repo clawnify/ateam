@@ -258,6 +258,10 @@ export const hosts = sqliteTable(
 		serverVersion: text("server_version"),
 		agentsAvailable: text("agents_available", { mode: "json" }).$type<string[]>(),
 		lastSeen: integer("last_seen"),
+		/** User removed it from the connections list. An ssh_config alias can't be
+		 *  deleted (the config would resurface it), so it's flagged instead; a later
+		 *  successful connection clears the flag. */
+		hidden: integer("hidden").notNull().default(0),
 		createdAt: epochMs("created_at"),
 	},
 	(t) => [index("hosts_last_seen_idx").on(t.lastSeen)],
