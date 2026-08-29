@@ -23,6 +23,7 @@ import {
 	Columns2,
 	Database,
 	ExternalLink,
+	FileCode,
 	FilePen,
 	FlaskConical,
 	FolderPlus,
@@ -1472,6 +1473,11 @@ function TaskPanel({
 	const [sessionComposerOpen, setSessionComposerOpen] = useState(false);
 	const [diff, setDiff] = useState<DiffResultDTO | null>(null);
 	const [changesOpen, setChangesOpen] = useState(false);
+	// The in-app editor (VS Code on the task's machine). Once loaded, the iframe
+	// stays mounted and is only hidden — unmounting would drop unsaved buffers.
+	const [editorSrc, setEditorSrc] = useState<string | null>(null);
+	const [editorOpen, setEditorOpen] = useState(false);
+	const [editorBusy, setEditorBusy] = useState<string | null>(null);
 	const [viewFile, setViewFile] = useState<string | null>(null);
 	// This task's live PTY sessions — agents and shells alike. They ARE the tabs:
 	// the daemon already owns as many per task as you like, so there is nothing
@@ -1628,6 +1634,7 @@ function TaskPanel({
 		}
 		refreshDiff();
 		setChangesOpen(true);
+		setEditorOpen(false);
 		if (!viewFile && diff?.files[0]) setViewFile(diff.files[0].path);
 	};
 
@@ -1737,6 +1744,51 @@ function TaskPanel({
 				<span className="spacer" />
 
 				<IconButton
+					icon={FileCode}
+					label={editorOpen ? "Back to terminal" : "Edit files (VS Code on the task's machine)"}
+					onClick={() => {
+						if (editorOpen) {
+							setEditorOpen(false);
+							return;
+						}
+						if (editorSrc) {
+							setEditorOpen(true);
+							setChangesOpen(false);
+							return;
+						}
+						void run(async () => {
+							let res = await window.ateam.editor.open(task.id);
+							if ("needsInstall" in res) {
+								// Inline coding is optional — nothing is installed without a yes.
+								const where = alias === null ? "this Mac" : `"${alias}"`;
+								const ok = await confirm(
+									"Install the inline editor?",
+									`Inline coding runs VS Code (code-server) on ${where} — a one-time, user-space install (~200 MB, no root). Install it now? It takes about a minute.`,
+								);
+								if (!ok) return;
+								setEditorOpen(true);
+								setChangesOpen(false);
+								setEditorBusy(`Installing the inline editor on ${where}…`);
+								try {
+									await window.ateam.editor.install(task.id);
+									res = await window.ateam.editor.open(task.id);
+									if ("needsInstall" in res)
+										throw new Error("Install finished but the editor is still missing.");
+								} catch (e) {
+									// Back to the terminal — a blank editor pane would hide it.
+									setEditorOpen(false);
+									throw e;
+								} finally {
+									setEditorBusy(null);
+								}
+							}
+							setEditorSrc(`${res.url}/?folder=${encodeURIComponent(task.worktreePath)}`);
+							setEditorOpen(true);
+							setChangesOpen(false);
+						});
+					}}
+				/>
+				<IconButton
 					icon={ExternalLink}
 					label={
 						alias === null
@@ -1833,7 +1885,10 @@ function TaskPanel({
 			<div className="panel-body">
 				{/* Keep the terminal mounted (xterm state survives) while the
 				    changes view is open — just hide it. */}
-				<div className="term-wrap" style={{ display: changesOpen ? "none" : "flex" }}>
+				<div
+					className="term-wrap"
+					style={{ display: changesOpen || editorOpen ? "none" : "flex" }}
+				>
 					{terminalId ? (
 						<TerminalView
 							terminalId={terminalId}
@@ -1862,6 +1917,19 @@ function TaskPanel({
 						onClose={() => setSessionComposerOpen(false)}
 						onCreate={composeSession}
 					/>
+				)}
+
+				{(editorSrc || editorBusy) && (
+					<div className="editor-wrap" style={{ display: editorOpen ? "flex" : "none" }}>
+						{/* VS Code web (code-server) on the task's engine, scoped to the worktree. */}
+						{editorSrc ? (
+							<iframe className="editor-frame" src={editorSrc} title="Editor" />
+						) : (
+							<div className="muted" style={{ display: "grid", placeItems: "center", flex: 1 }}>
+								{editorBusy}
+							</div>
+						)}
+					</div>
 				)}
 
 				{changesOpen && (
