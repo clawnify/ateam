@@ -4,8 +4,8 @@ import type { AteamDb } from "@ateam/db";
 import { bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
-import { LoopRunner, type LoopRunnerDeps } from "../src/loops/runner";
-import type { LoopDefinition, StartAgentRunInput } from "../src/loops/types";
+import { LoopRunner } from "../src/loops/runner";
+import type { LoopDefinition } from "../src/loops/types";
 
 function createTestDb(): AteamDb {
 	const sqlite = new Database(":memory:");
@@ -29,28 +29,48 @@ function makeDef(id: string, run: LoopDefinition["run"]): LoopDefinition {
 
 let db: AteamDb;
 
-/** Fake session starter: records calls and creates a real task row, so the
- *  agent-session template's previous-run liveness check sees real state. */
-function makeStartAgentRun(started: StartAgentRunInput[]): LoopRunnerDeps["startAgentRun"] {
-	return async (input) => {
-		started.push(input);
-		const task = repo.createTask(db, {
-			projectId: input.projectId,
-			name: input.name,
-			slug: `run-${started.length}`,
-			branch: `loop/run-${started.length}`,
-			baseBranch: "main",
-			worktreePath: `/tmp/loop-run-${started.length}`,
-		});
-		return { taskId: task.id };
-	};
+/** Everything the fake session layer records, for assertions. */
+interface SessionLog {
+	created: { projectId: string; name: string }[];
+	spawned: { taskId: string; agentId: string; prompt: string }[];
+	stopped: string[];
+	/** Task names that make the fake createTask throw (branch-collision sim). */
+	failNames: Set<string>;
+	liveTasks: Set<string>;
 }
 
-function makeRunner(started: StartAgentRunInput[] = [], liveTasks = new Set<string>()): LoopRunner {
+function makeLog(): SessionLog {
+	return { created: [], spawned: [], stopped: [], failNames: new Set(), liveTasks: new Set() };
+}
+
+/** Fake session ops: record calls and create real task rows, so the
+ *  agent-session template's liveness/link checks see real state. */
+function makeRunner(log: SessionLog = makeLog()): LoopRunner {
 	return new LoopRunner({
 		db,
-		startAgentRun: makeStartAgentRun(started),
-		isTaskAgentLive: (taskId) => liveTasks.has(taskId),
+		sessions: {
+			createTask: async (input) => {
+				if (log.failNames.has(input.name)) throw new Error(`branch exists: ${input.name}`);
+				log.created.push(input);
+				const task = repo.createTask(db, {
+					projectId: input.projectId,
+					name: input.name,
+					slug: `t-${log.created.length}`,
+					branch: `loop/t-${log.created.length}`,
+					baseBranch: "main",
+					worktreePath: `/tmp/loop-t-${log.created.length}`,
+				});
+				return { taskId: task.id };
+			},
+			spawnAgent: async (input) => {
+				log.spawned.push(input);
+				return { terminalId: `term-${log.spawned.length}` };
+			},
+			stopTaskSessions: (taskId) => {
+				log.stopped.push(taskId);
+			},
+			isTaskAgentLive: (taskId) => log.liveTasks.has(taskId),
+		},
 	});
 }
 
@@ -213,10 +233,10 @@ describe("LoopRunner", () => {
 		runner.stop();
 	});
 
-	it("updates a user loop in place, preserving runtime config keys", async () => {
+	it("updates a user loop in place, preserving the task link", async () => {
 		const projectId = seedProject();
-		const started: StartAgentRunInput[] = [];
-		const runner = makeRunner(started);
+		const log = makeLog();
+		const runner = makeRunner(log);
 		runner.start();
 		const id = runner
 			.createUserLoop({
@@ -229,9 +249,10 @@ describe("LoopRunner", () => {
 			})
 			.find((l) => l.kind === "user")?.id as string;
 
-		// A run records lastTaskId into the config…
+		// A run records the persistent task into the config…
 		await runner.runNow(id);
-		expect(repo.getLoop(db, id)?.config?.lastTaskId).toBeTruthy();
+		const taskId = repo.getLoop(db, id)?.config?.taskId as string;
+		expect(taskId).toBeTruthy();
 
 		// …which an edit must not wipe.
 		const loops = runner.updateUserLoop({
@@ -246,13 +267,16 @@ describe("LoopRunner", () => {
 			prompt: "update deps weekly",
 			agentId: "codex",
 			intervalMs: 7_200_000,
+			taskId,
 		});
-		expect(repo.getLoop(db, id)?.config?.lastTaskId).toBeTruthy();
 
-		// The next run uses the new prompt/agent.
+		// The next run uses the new prompt/agent, in the same task.
 		await runner.runNow(id);
-		expect(started[1]).toMatchObject({ prompt: "update deps weekly", agentId: "codex" });
-		expect(started[1]?.name).toBe("Weekly deps #2");
+		expect(log.spawned[1]).toMatchObject({
+			prompt: "update deps weekly",
+			agentId: "codex",
+			taskId,
+		});
 		runner.stop();
 	});
 
@@ -283,63 +307,102 @@ describe("LoopRunner", () => {
 	});
 
 	describe("agent-session template", () => {
-		it("each run starts a fresh task named after the loop and run number", async () => {
-			const projectId = seedProject();
-			const started: StartAgentRunInput[] = [];
-			const runner = makeRunner(started);
-			runner.start();
-			const id = runner
+		function seedLoop(runner: LoopRunner, projectId: string, name = "Nightly deps"): string {
+			return runner
 				.createUserLoop({
 					templateId: "agent-session",
-					name: "Nightly deps",
+					name,
 					projectId,
 					config: { prompt: "update deps", agentId: "codex" },
 				})
 				.find((l) => l.kind === "user")?.id as string;
+		}
+
+		it("owns one persistent task: first run creates it, later runs reuse it", async () => {
+			const projectId = seedProject();
+			const log = makeLog();
+			const runner = makeRunner(log);
+			runner.start();
+			const id = seedLoop(runner, projectId);
 
 			await runner.runNow(id);
-			expect(started).toHaveLength(1);
-			expect(started[0]).toMatchObject({
+			expect(log.created).toHaveLength(1);
+			expect(log.created[0]).toMatchObject({ projectId, name: "Nightly deps" });
+			const taskId = repo.getLoop(db, id)?.config?.taskId as string;
+			expect(log.spawned[0]).toMatchObject({ taskId, agentId: "codex", prompt: "update deps" });
+
+			// Previous run finished → the next tick reuses the SAME task: no new
+			// task, previous pane closed, fresh session spawned in place.
+			repo.updateTask(db, taskId, { agentStatus: "stopped" });
+			await runner.runNow(id);
+			expect(log.created).toHaveLength(1);
+			expect(log.stopped).toEqual([taskId]);
+			expect(log.spawned).toHaveLength(2);
+			expect(log.spawned[1]?.taskId).toBe(taskId);
+			runner.stop();
+		});
+
+		it("adopts a pre-persistent-era lastTaskId as the loop's task", async () => {
+			const projectId = seedProject();
+			const log = makeLog();
+			const runner = makeRunner(log);
+			runner.start();
+			const id = seedLoop(runner, projectId);
+			// Simulate a loop that ran under the old fresh-task-per-run model.
+			const old = repo.createTask(db, {
 				projectId,
-				agentId: "codex",
-				prompt: "update deps",
-				name: "Nightly deps #1",
+				name: "Nightly deps #7",
+				slug: "old-run",
+				branch: "old-run",
+				baseBranch: "main",
+				worktreePath: "/tmp/old-run",
 			});
+			const row = repo.getLoop(db, id);
+			repo.updateLoop(db, id, { config: { ...row?.config, lastTaskId: old.id } });
 
-			// Previous run's task is done → the next tick starts run #2.
-			repo.updateTask(db, repo.getLoop(db, id)?.config?.lastTaskId as string, {
-				agentStatus: "stopped",
-			});
 			await runner.runNow(id);
-			expect(started).toHaveLength(2);
-			expect(started[1]?.name).toBe("Nightly deps #2");
+			expect(log.created).toHaveLength(0); // reused, not recreated
+			expect(log.spawned[0]?.taskId).toBe(old.id);
+			expect(repo.getLoop(db, id)?.config?.taskId).toBe(old.id);
+			expect(repo.getLoop(db, id)?.config?.lastTaskId).toBeUndefined();
+			runner.stop();
+		});
+
+		it("recreates the task when it was cleaned up, with a collision fallback", async () => {
+			const projectId = seedProject();
+			const log = makeLog();
+			const runner = makeRunner(log);
+			runner.start();
+			const id = seedLoop(runner, projectId);
+
+			await runner.runNow(id);
+			const firstTaskId = repo.getLoop(db, id)?.config?.taskId as string;
+			// The task is removed (cleanup), and its branch lingers so the plain
+			// name collides — the loop must fall back to a suffixed name.
+			repo.deleteTask(db, firstTaskId);
+			log.failNames.add("Nightly deps");
+			await runner.runNow(id);
+			expect(log.created[1]?.name).toBe("Nightly deps 2");
+			expect(repo.getLoop(db, id)?.config?.taskId).not.toBe(firstTaskId);
 			runner.stop();
 		});
 
 		it("skips a tick while the previous run's agent is still working", async () => {
 			const projectId = seedProject();
-			const started: StartAgentRunInput[] = [];
-			const liveTasks = new Set<string>();
-			const runner = makeRunner(started, liveTasks);
+			const log = makeLog();
+			const runner = makeRunner(log);
 			runner.start();
-			const id = runner
-				.createUserLoop({
-					templateId: "agent-session",
-					name: "Nightly deps",
-					projectId,
-					config: { prompt: "update deps" },
-				})
-				.find((l) => l.kind === "user")?.id as string;
+			const id = seedLoop(runner, projectId);
 
 			await runner.runNow(id);
-			expect(started).toHaveLength(1);
-			// The spawned agent is still running (live PTY) → the next tick must
-			// not stack.
-			const lastTaskId = repo.getLoop(db, id)?.config?.lastTaskId as string;
-			repo.updateTask(db, lastTaskId, { agentStatus: "running" });
-			liveTasks.add(lastTaskId);
+			expect(log.spawned).toHaveLength(1);
+			// The agent is still running (live PTY) → the next tick must not stack.
+			const taskId = repo.getLoop(db, id)?.config?.taskId as string;
+			repo.updateTask(db, taskId, { agentStatus: "running" });
+			log.liveTasks.add(taskId);
 			await runner.runNow(id);
-			expect(started).toHaveLength(1);
+			expect(log.spawned).toHaveLength(1);
+			expect(log.stopped).toHaveLength(0); // a live pane is never killed
 			expect(repo.getLoop(db, id)?.lastSummary).toContain("skipped");
 			runner.stop();
 		});
@@ -349,25 +412,17 @@ describe("LoopRunner", () => {
 			// reconciler backstop anymore), but the daemon reports no live PTY —
 			// the loop must proceed, not skip forever.
 			const projectId = seedProject();
-			const started: StartAgentRunInput[] = [];
-			const runner = makeRunner(started); // nothing is live
+			const log = makeLog();
+			const runner = makeRunner(log); // nothing is live
 			runner.start();
-			const id = runner
-				.createUserLoop({
-					templateId: "agent-session",
-					name: "Nightly deps",
-					projectId,
-					config: { prompt: "update deps" },
-				})
-				.find((l) => l.kind === "user")?.id as string;
+			const id = seedLoop(runner, projectId);
 
 			await runner.runNow(id);
-			repo.updateTask(db, repo.getLoop(db, id)?.config?.lastTaskId as string, {
+			repo.updateTask(db, repo.getLoop(db, id)?.config?.taskId as string, {
 				agentStatus: "running",
 			});
 			await runner.runNow(id);
-			expect(started).toHaveLength(2);
-			expect(started[1]?.name).toBe("Nightly deps #2");
+			expect(log.spawned).toHaveLength(2);
 			runner.stop();
 		});
 

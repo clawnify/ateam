@@ -3,8 +3,10 @@ import type {
 	ConnectionDTO,
 	DiffResultDTO,
 	KanbanColumn,
+	LoopDTO,
 	ProjectDTO,
 	SessionDTO,
+	SessionHitDTO,
 	TaskDTO,
 } from "@ateam/protocol";
 import {
@@ -38,10 +40,10 @@ import {
 	PanelLeft,
 	Play,
 	Plus,
+	Repeat,
 	Rocket,
 	RotateCw,
 	Rows2,
-	Search,
 	Server,
 	Sparkles,
 	SquareTerminal,
@@ -66,6 +68,7 @@ import { IconButton } from "./components/IconButton";
 import { LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
 import { PromptComposer } from "./components/PromptComposer";
+import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
 import { activeTerminal, sessionTabs } from "./session-tabs";
@@ -158,6 +161,10 @@ export function App() {
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
+	const [loopsCollapsed, setLoopsCollapsed] = useState(true);
+	// Every engine's loops (merged), for the sidebar LOOPS section. Each loop
+	// owns one persistent task (loop.taskId); those tasks show under LOOPS.
+	const [loops, setLoops] = useState<LoopDTO[]>([]);
 	const [rail, setRail] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
 	const toggleRail = () => {
 		setRail((r) => {
@@ -251,6 +258,12 @@ export function App() {
 	useEffect(() => {
 		void loadProjects();
 		void window.ateam.agents.list().then(setAgents);
+		// Loops for the sidebar section. Always re-list on the push event — the
+		// event payload carries ONE engine's loops, the sidebar wants the union.
+		void window.ateam.loops.list().then(setLoops);
+		const offLoops = window.ateam.loops.onUpdated(
+			() => void window.ateam.loops.list().then(setLoops),
+		);
 		// Upsert: replace a known task, or add one created in another window (so a
 		// project open in two windows stays consistent). Only for projects this
 		// window tracks — a detached window ignores other projects' tasks.
@@ -277,6 +290,7 @@ export function App() {
 			setSelectedTaskId((cur) => (cur === taskId ? null : cur));
 		});
 		return () => {
+			offLoops();
 			offUpdated();
 			offRemoved();
 		};
@@ -296,6 +310,7 @@ export function App() {
 		return window.ateamHost.onConnectionsChanged(() => {
 			void loadProjects();
 			void window.ateam.agents.list().then(setAgents);
+			void window.ateam.loops.list().then(setLoops);
 		});
 	}, [loadProjects]);
 
@@ -352,6 +367,17 @@ export function App() {
 		[unifiedProjects, activeProjectId],
 	);
 	const activeMembers = activeCard?.members ?? [];
+	// Session search runs on each engine that holds this repo: the transcripts
+	// live on the machine that ran the agent, so a box searches its own disk.
+	const searchProjectIds = useMemo(
+		() =>
+			activeMembers.length > 0
+				? activeMembers.map((m) => m.projectId)
+				: activeProjectId
+					? [activeProjectId]
+					: [],
+		[activeMembers, activeProjectId],
+	);
 	// Which engine a task runs on = the engine that owns its project (tasks never
 	// migrate between engines, so origin is intrinsic to the projectId).
 	const originOf = useCallback((projectId: string): Alias => origins[projectId] ?? null, [origins]);
@@ -445,8 +471,23 @@ export function App() {
 			? (tasksByProject[activeProjectId] ?? [])
 			: [];
 	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
-	// Sidebar list shows all tasks, including merged/done ones.
-	const sidebarTasks = activeTasks;
+	// Loops of the active repo card (whichever engine holds them), and the task
+	// each one owns. Loop-owned tasks show under LOOPS, not again under TASKS
+	// (they stay on the board — it's the status surface).
+	const activeLoops = useMemo(() => {
+		const memberIds = new Set(activeMembers.map((m) => m.projectId));
+		return loops.filter((l) => l.projectId != null && memberIds.has(l.projectId));
+	}, [loops, activeMembers]);
+	const loopTaskIds = useMemo(() => {
+		const ids = new Set<string>();
+		for (const l of loops) if (l.taskId) ids.add(l.taskId);
+		return ids;
+	}, [loops]);
+	// Sidebar list shows all non-loop tasks, including merged/done ones.
+	const sidebarTasks = useMemo(
+		() => activeTasks.filter((t) => !loopTaskIds.has(t.id)),
+		[activeTasks, loopTaskIds],
+	);
 
 	// Sidebar ordering: by status (Review → Needs You → In Progress → Backlog),
 	// most-recently-updated first, or a hand-dragged custom order.
@@ -553,6 +594,15 @@ export function App() {
 		setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		setSelectedTaskId(task.id);
 		setPanelMode("full");
+	};
+	// A session-search hit opens the task it ran in, and the exact terminal it
+	// ran in when that tab is still alive — the point of the search is to land
+	// back where the work happened, not merely near it.
+	const openSessionHit = (hit: SessionHitDTO) => {
+		const task = activeTasks.find((t) => t.id === hit.taskId);
+		if (!task) return;
+		if (hit.terminalId) setTermByTask((m) => ({ ...m, [task.id]: hit.terminalId }));
+		openTask(task);
 	};
 	// Collapsing the full panel inside Mission Control means "back to the
 	// grid", not "shrink to a side panel" — there is no board to sit beside.
@@ -952,6 +1002,51 @@ export function App() {
 									</motion.div>
 								))
 							))}
+
+						{/* LOOPS accordion — the active repo's scheduled agent sessions.
+						    Each loop owns one persistent task; clicking a row opens that
+						    task's terminal (or the Loops tab before its first run).
+						    loops-side-head floats it to the sidebar's bottom while there
+						    is spare room; a long task list pushes it down naturally. */}
+						<div className="section-head tasks-head loops-side-head">
+							<button
+								type="button"
+								className="section-toggle"
+								onClick={() => setLoopsCollapsed((c) => !c)}
+							>
+								{loopsCollapsed ? (
+									<ChevronRight size={14} strokeWidth={2} />
+								) : (
+									<ChevronDown size={14} strokeWidth={2} />
+								)}
+								<span>Loops</span>
+							</button>
+							<IconButton
+								icon={Plus}
+								label="New loop"
+								onClick={() => setView("loops")}
+								disabled={!activeProjectId}
+							/>
+						</div>
+						{!loopsCollapsed &&
+							(activeLoops.length === 0 ? (
+								<div className="tree-empty">No loops</div>
+							) : (
+								activeLoops.map((l) => {
+									const task = l.taskId
+										? (activeTasks.find((t) => t.id === l.taskId) ?? null)
+										: null;
+									return (
+										<LoopRow
+											key={l.id}
+											loop={l}
+											task={task}
+											selected={task != null && task.id === selectedTaskId}
+											onClick={() => (task ? openTask(task) : setView("loops"))}
+										/>
+									);
+								})
+							))}
 					</>
 				)}
 			</aside>
@@ -1002,26 +1097,12 @@ export function App() {
 					</div>
 					{/* Centered task search — absolutely centered in the topbar so the
 					    tabs on the left and action buttons on the right don't shift it. */}
-					<div className="task-search">
-						<Search size={14} strokeWidth={1.75} />
-						<input
-							type="text"
-							placeholder="Search tasks…"
-							value={taskQuery}
-							onChange={(e) => setTaskQuery(e.target.value)}
-							aria-label="Search tasks"
-						/>
-						{taskQuery && (
-							<button
-								type="button"
-								className="ts-clear"
-								aria-label="Clear search"
-								onClick={() => setTaskQuery("")}
-							>
-								<X size={13} strokeWidth={2} />
-							</button>
-						)}
-					</div>
+					<TaskSearch
+						query={taskQuery}
+						onQuery={setTaskQuery}
+						projectIds={searchProjectIds}
+						onOpen={openSessionHit}
+					/>
 					<div className="spacer" />
 					{view === "mission" && !(selectedTask && panelMode === "full") && (
 						<div className="mclayout" role="group" aria-label="Layout">
@@ -1201,6 +1282,38 @@ function TaskRow({
 					size={14}
 					onClick={onDelete}
 				/>
+			</span>
+		</div>
+	);
+}
+
+/** Sidebar row for a loop — mirrors TaskRow, with the loop's task supplying
+ *  the status dot. A paused loop renders dimmed. */
+function LoopRow({
+	loop,
+	task,
+	selected,
+	onClick,
+}: {
+	loop: LoopDTO;
+	task: TaskDTO | null;
+	selected: boolean;
+	onClick: () => void;
+}) {
+	return (
+		<div className="tasknode-row">
+			<button
+				type="button"
+				className={`tasknode ${selected ? "selected" : ""} ${loop.enabled ? "" : "loop-paused"}`}
+				onClick={onClick}
+			>
+				<span className="ticon">
+					<Repeat size={14} strokeWidth={1.75} />
+				</span>
+				<span className="tname">{loop.title}</span>
+			</button>
+			<span className="task-trail">
+				{task?.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
 			</span>
 		</div>
 	);

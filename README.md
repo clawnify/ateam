@@ -204,7 +204,9 @@ extra sessions inside an existing task, many terminals per task as tabs (agent
 sessions or plain shells, side by side), agent spawning in PTYs (Claude Code,
 OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection,
 Mission Control grid, collapsible sidebar rail, image drag-drop & paste into
-agent terminals, safe cleanup of merged worktrees, and signed/notarized builds
+agent terminals, session search (describe past work in the topbar and jump back
+to the session that did it, reading Claude Code / Codex / OpenCode transcripts),
+safe cleanup of merged worktrees, and signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
 Electron main process is boot-verified with native modules.
 
