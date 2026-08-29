@@ -1451,15 +1451,15 @@ function Board({
 											</span>
 										)}
 										{t.prNumber && <span>PR #{t.prNumber}</span>}
-										{relativeAge(t.lastEventAt, Date.now()) && (
-											<span className="age">{relativeAge(t.lastEventAt, Date.now())}</span>
-										)}
-									</div>
-									{t.agentId && (
-										<span className="card-agent">
-											<AgentIcon agentId={t.agentId} size={15} />
+										{/* Age and agent icon share one right-aligned group: the icon used to
+									    be absolutely positioned and sat on top of the age label. */}
+										<span className="meta-end">
+											{relativeAge(t.lastEventAt, Date.now()) && (
+												<span className="age">{relativeAge(t.lastEventAt, Date.now())}</span>
+											)}
+											{t.agentId && <AgentIcon agentId={t.agentId} size={15} />}
 										</span>
-									)}
+									</div>
 								</motion.div>
 							);
 						})}
