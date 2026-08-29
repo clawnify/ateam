@@ -300,9 +300,9 @@ export function LoopsPanel() {
 					</button>
 				</div>
 				<p className="muted">
-					A loop starts a coding-agent session with the same prompt on a schedule — each run is a
-					fresh task on the board, on this Mac or a box (wherever the loop's project lives). Loops
-					only exist when you create them.
+					A loop starts a coding-agent session with the same prompt on a schedule. Each loop owns
+					one task (branch + worktree); every run is a fresh session in it, on this Mac or a box
+					(wherever the loop's project lives). Loops only exist when you create them.
 				</p>
 			</div>
 

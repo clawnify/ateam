@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, isNull } from "drizzle-orm";
 import {
 	agentEvents,
 	agentSessions,
@@ -100,6 +100,13 @@ export const repo = {
 			.where(eq(agentSessions.taskId, taskId))
 			.orderBy(desc(agentSessions.startedAt))
 			.all();
+	},
+
+	// Every session the db still believes is running, across all projects. The
+	// engine diffs this against the PTY daemon's live set on connect to find
+	// exits that happened while the app was closed (see pty/stranded.ts).
+	listOpenSessions(db: AteamDb) {
+		return db.select().from(agentSessions).where(isNull(agentSessions.exitedAt)).all();
 	},
 
 	updateSession(db: AteamDb, id: string, patch: Partial<typeof agentSessions.$inferInsert>) {
