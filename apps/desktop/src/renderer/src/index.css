@@ -432,6 +432,12 @@ input {
 }
 .topbar {
 	position: relative;
+	/* Above .panel (z-index 5) and the sidebar resizer (20), below overlays and
+	   dialogs. The bar itself never overlapped anything, but the session-search
+	   results hang out of it: .task-search is transformed, which makes it a
+	   stacking context, so the dropdown's own z-index orders it only INSIDE the
+	   search box. What decides whether it is visible is this layer. */
+	z-index: 25;
 	height: 44px;
 	display: flex;
 	align-items: center;
@@ -528,7 +534,6 @@ input {
 	top: calc(100% + 6px);
 	left: 0;
 	right: 0;
-	z-index: 30;
 	max-height: 60vh;
 	overflow-y: auto;
 	padding: 4px;
@@ -1478,6 +1483,12 @@ input {
 		color 0.1s;
 }
 .iconbtn:hover {
+	background: var(--bg-elev-2);
+	color: var(--text);
+}
+/* A toggle that's currently ON (e.g. the Editor view) — same treatment as the
+   diffstat toggle, so the way back out is visible rather than guessed. */
+.iconbtn.active {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
