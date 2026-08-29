@@ -35,6 +35,7 @@ import {
 	PROTOCOL_VERSION,
 	type UpdateLoopInput,
 } from "@ateam/protocol";
+import { createEditorHost, installCodeServer } from "./editor";
 import type { Engine } from "./engine";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
@@ -99,6 +100,8 @@ export interface Dispatcher {
 export function createDispatcher(engine: Engine): Dispatcher {
 	const { services } = engine;
 	const { db, mergeQueue, loopRunner } = services;
+	// Lazy: no code-server process exists until the first editor:open.
+	const editorHost = createEditorHost();
 
 	// ---- cleanup: remove only merged + idle + clean worktrees ----
 	// A task is removable ONLY when it merged, has no live agent session, and its
@@ -419,6 +422,21 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				protocolVersion: PROTOCOL_VERSION,
 				agents: agents.filter((a) => a.available).map((a) => a.id),
 			};
+		},
+
+		// ---- editor: the engine-side half of the in-app editor (code-server on
+		// THIS machine). taskId scopes it to an engine (and routes it there); the
+		// worktree itself is picked client-side via the URL's ?folder= param. ----
+		[CH.editorOpen]: async (taskId: string) => {
+			requireTask(services, taskId);
+			return editorHost.ensure();
+		},
+		// Consent-gated: clients call this only after the user said yes to a
+		// needsInstall answer. Long-running (a ~200MB download); RPC calls have no
+		// per-call timeout, so the client just awaits it.
+		[CH.editorInstall]: async (taskId: string) => {
+			requireTask(services, taskId);
+			await installCodeServer();
 		},
 
 		// ---- fs / util: server-side, remote-native (browse + attach on the

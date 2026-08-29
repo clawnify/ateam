@@ -350,7 +350,7 @@ app
 		// the engine's events to every window is the host's job now (see createHost);
 		// window management (detaching a project) is desktop-native, passed to registerIpc.
 		const host = createHost({ localEngine: engine, broadcast });
-		registerIpc(host.router, { openProjectWindow });
+		registerIpc(host.router, { openProjectWindow, editorUrl: host.editorUrl });
 		registerHostIpc(host);
 
 		if (SMOKE) {
