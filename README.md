@@ -175,6 +175,10 @@ bun run --filter @ateam/desktop rebuild   # native modules for Electron (arm64)
 bun run --filter @ateam/desktop dev        # launch the app (Electron + Vite HMR)
 ```
 
+The renderer's dev port is derived from the worktree path (and bound to
+`127.0.0.1`), so several worktrees can run `dev` side by side without serving
+each other's code. The URL is printed on startup.
+
 ## Test & typecheck
 
 ```bash
