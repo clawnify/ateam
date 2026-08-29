@@ -1497,6 +1497,12 @@ input {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
+/* A toggle that's currently ON (e.g. the Editor view) — same treatment as the
+   diffstat toggle, so the way back out is visible rather than guessed. */
+.iconbtn.active {
+	background: var(--bg-elev-2);
+	color: var(--text);
+}
 .iconbtn:disabled {
 	opacity: 0.3;
 	cursor: default;
