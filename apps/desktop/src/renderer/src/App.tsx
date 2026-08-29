@@ -13,44 +13,33 @@ import {
 	ArrowDownToLine,
 	ArrowUp,
 	ArrowUpDown,
-	BookOpen,
 	Brush,
-	Bug,
 	Check,
 	ChevronDown,
 	ChevronRight,
+	ChevronUp,
 	Columns2,
-	Database,
 	ExternalLink,
 	FileCode,
-	FilePen,
-	FlaskConical,
 	FolderPlus,
-	Gauge,
-	GitBranch,
 	GitCommitVertical,
 	GitMerge,
 	History,
 	LayoutGrid,
 	Lock,
 	LockOpen,
-	type LucideIcon,
 	Maximize2,
 	Minimize2,
 	Monitor,
-	Palette,
 	PanelLeft,
 	Play,
 	Plus,
 	Repeat,
-	Rocket,
 	RotateCw,
 	Rows2,
 	Server,
-	Sparkles,
 	SquareTerminal,
 	Trash2,
-	Wrench,
 	X,
 } from "lucide-react";
 import { motion, Reorder } from "motion/react";
@@ -74,6 +63,8 @@ import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
 import { activeTerminal, sessionTabs } from "./session-tabs";
+import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
+import { byWhatsNext, relativeAge } from "./triage-order";
 import { type Alias, aliasLabel, type UnifiedProject, unifyProjects } from "./unify";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
@@ -84,36 +75,18 @@ const COLUMNS: { key: KanbanColumn; label: string }[] = [
 	{ key: "merged", label: "Done" },
 ];
 
-// Pick an icon from what the task name suggests — like VSCode's file icons,
-// but inferred from intent. First keyword match wins; GitBranch is the default.
-const ICON_RULES: { icon: LucideIcon; re: RegExp }[] = [
-	{ icon: Bug, re: /\b(bug|fix|hotfix|patch|broken|crash|error)\b/i },
-	{ icon: BookOpen, re: /\b(readme|docs?|wiki|guide|changelog)\b/i },
-	{ icon: Lock, re: /\b(auth|login|signin|security|permission|token|oauth)\b/i },
-	{ icon: Palette, re: /\b(ui|ux|style|css|design|theme|button|layout|icon)\b/i },
-	{ icon: FlaskConical, re: /\b(test|spec|e2e|coverage)\b/i },
-	{ icon: Database, re: /\b(db|database|schema|migration|sql|drizzle|query)\b/i },
-	{ icon: Server, re: /\b(api|endpoint|server|backend|route|webhook)\b/i },
-	{ icon: Gauge, re: /\b(perf|performance|optimi|speed|cache|latency)\b/i },
-	{ icon: Wrench, re: /\b(refactor|cleanup|chore|tidy|rename|config|setup)\b/i },
-	{ icon: Rocket, re: /\b(release|deploy|launch|ship|publish)\b/i },
-	{ icon: Sparkles, re: /\b(feat|feature|add|new|implement|create)\b/i },
-	{ icon: FilePen, re: /\b(update|edit|change|tweak|copy|content)\b/i },
-];
-
-function taskIcon(name: string): LucideIcon {
-	for (const rule of ICON_RULES) if (rule.re.test(name)) return rule.icon;
-	return GitBranch;
-}
-
 // ---- sidebar task ordering ----
-type TaskSortMode = "status" | "updated" | "custom";
+type TaskSortMode = "next" | "status" | "updated" | "custom";
 
 // ---- mission control layout ----
 // How agent tiles are arranged: "grid" is a 2x2 overview (tiles half the
 // window wide and tall), "split" lays them side-by-side at full window
-// height, "stack" stacks them full-width. Extra tiles scroll downward.
+// height, "stack" stacks them full-width. Extra tiles go to further pages,
+// flipped via the bottom-right pager or Cmd/Ctrl+Alt+Up/Down.
 type McLayout = "grid" | "split" | "stack";
+
+// Tiles per page: how many terminals each layout actually shows at once.
+const MC_PAGE_SIZE: Record<McLayout, number> = { grid: 4, split: 2, stack: 1 };
 
 // Status order: what needs the user's eyes first.
 const STATUS_RANK: Record<KanbanColumn, number> = {
@@ -214,7 +187,7 @@ export function App() {
 		document.body.style.userSelect = "none";
 	};
 	const [taskSort, setTaskSortState] = useState<TaskSortMode>(
-		() => (localStorage.getItem("ateam.taskSort") as TaskSortMode) || "status",
+		() => (localStorage.getItem("ateam.taskSort") as TaskSortMode) || "next",
 	);
 	const [customOrder, setCustomOrder] = useState<string[]>([]);
 	const [cleanupOpen, setCleanupOpen] = useState(false);
@@ -523,7 +496,9 @@ export function App() {
 	};
 	const orderedSidebarTasks = useMemo(() => {
 		const list = [...sidebarTasks];
-		if (taskSort === "status") {
+		if (taskSort === "next") {
+			list.sort(byWhatsNext);
+		} else if (taskSort === "status") {
 			list.sort((a, b) => STATUS_RANK[a.column] - STATUS_RANK[b.column]);
 		} else if (taskSort === "updated") {
 			list.sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0));
@@ -544,14 +519,20 @@ export function App() {
 	);
 
 	// Case-insensitive substring match across the task's name, branch, and
-	// description. Empty query matches all.
+	// description. Empty query matches all. A leading `#` switches to a tag
+	// filter instead — "#bug" narrows the board to bug-tagged work, which is the
+	// whole point of having a cross-cutting axis.
 	const query = taskQuery.trim().toLowerCase();
 	const matchesQuery = useCallback(
-		(t: TaskDTO) =>
-			query === "" ||
-			t.name.toLowerCase().includes(query) ||
-			t.branch.toLowerCase().includes(query) ||
-			(t.description?.toLowerCase().includes(query) ?? false),
+		(t: TaskDTO) => {
+			if (query === "") return true;
+			if (query.startsWith("#")) return matchesTagQuery(query, t);
+			return (
+				t.name.toLowerCase().includes(query) ||
+				t.branch.toLowerCase().includes(query) ||
+				(t.description?.toLowerCase().includes(query) ?? false)
+			);
+		},
 		[query],
 	);
 	// Sidebar and board both honor the search; Mission Control and the selected
@@ -592,15 +573,29 @@ export function App() {
 		setPanelMode(mem?.mode ?? "side");
 		setView(mem?.view ?? "board");
 	};
+	// Opening a task IS reading it — the hooks set `isUnread` on Stop /
+	// PermissionRequest and nothing ever cleared it. Only explicit user
+	// selection clears it: restoring a remembered selection on a project
+	// switch must not silently mark things read the user never looked at.
+	const markRead = (id: string) => {
+		// Skip the round trip (and its broadcast) for a task already read.
+		const t = Object.values(tasksByProject)
+			.flat()
+			.find((x) => x.id === id);
+		if (!t?.isUnread) return;
+		void window.ateam.tasks.markRead(id).catch(() => {});
+	};
 	// From the sidebar → open full width. From the board → open on the side.
 	const openTask = (t: TaskDTO) => {
 		setActiveProjectId(t.projectId);
 		setSelectedTaskId(t.id);
+		markRead(t.id);
 		setPanelMode("full");
 		setView("board");
 	};
 	const selectFromBoard = (id: string) => {
 		setSelectedTaskId(id);
+		markRead(id);
 		setPanelMode("side");
 	};
 	// Expanding a Mission Control tile opens that exact terminal full-width.
@@ -610,6 +605,7 @@ export function App() {
 	const openFromMission = (task: TaskDTO, terminalId: string) => {
 		setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		setSelectedTaskId(task.id);
+		markRead(task.id);
 		setPanelMode("full");
 	};
 	// A session-search hit opens the task it ran in, and the exact terminal it
@@ -955,6 +951,11 @@ export function App() {
 									label="Order tasks"
 									items={[
 										{
+											label: "What's next",
+											icon: taskSort === "next" ? Check : undefined,
+											onClick: () => setTaskSort("next"),
+										},
+										{
 											label: "By status",
 											icon: taskSort === "status" ? Check : undefined,
 											onClick: () => setTaskSort("status"),
@@ -1234,6 +1235,7 @@ export function App() {
 						) : (
 							<MissionControl
 								tasks={activeTasks}
+								agents={agents}
 								order={sidebarOrderIds}
 								layout={mcLayout}
 								locked={mcLocked}
@@ -1307,7 +1309,7 @@ function TaskRow({
 				) : (
 					<Icon className="ticon" size={14} strokeWidth={1.75} />
 				)}
-				<span className="tname">{t.name}</span>
+				<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
 			</button>
 			<span className="task-trail">
 				{t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />}
@@ -1379,40 +1381,75 @@ function Board({
 						<h3>
 							{col.label} <span className="count">{items.length}</span>
 						</h3>
-						{items.map((t) => (
-							<motion.div
-								key={t.id}
-								layout
-								transition={springy}
-								className={`card ${t.id === selectedId ? "selected" : ""}`}
-								onClick={(e) => {
-									e.stopPropagation();
-									onSelect(t.id);
-								}}
-							>
-								{t.agentStatus && <span className={`ring ${t.agentStatus}`} />}
-								<div className="name">{t.name}</div>
-								{originLabel(t) && (
-									<span className="card-env muted" style={{ fontSize: 10 }}>
-										{originLabel(t)}
-									</span>
-								)}
-								<div className="branch">{t.branch}</div>
-								<div className="meta">
-									{t.gitStatus && (
-										<span>
-											↑{t.gitStatus.ahead} ↓{t.gitStatus.behind} · {t.gitStatus.dirty} changed
+						{items.map((t) => {
+							const tags = tagsFor(t);
+							return (
+								<motion.div
+									key={t.id}
+									layout
+									transition={springy}
+									className={`card ${t.id === selectedId ? "selected" : ""}`}
+									onClick={(e) => {
+										e.stopPropagation();
+										onSelect(t.id);
+									}}
+								>
+									{/* A stalled agent must not wear the live "running" ring — the card
+								    would contradict its own caption. */}
+									{t.agentStatus && (
+										<span
+											className={`ring ${t.triage.bucket === "stalled" ? "stalled" : t.agentStatus}`}
+										/>
+									)}
+									<div className="name">
+										{t.isUnread && <span className="unread" title="New since you last looked" />}
+										{t.name}
+									</div>
+									{originLabel(t) && (
+										<span className="card-env muted" style={{ fontSize: 10 }}>
+											{originLabel(t)}
 										</span>
 									)}
-									{t.prNumber && <span>PR #{t.prNumber}</span>}
-								</div>
-								{t.agentId && (
-									<span className="card-agent">
-										<AgentIcon agentId={t.agentId} size={15} />
-									</span>
-								)}
-							</motion.div>
-						))}
+									{/* Tags live in the branch's slot and appear only on hover (the
+								    branch is the most redundant line on the card, being a slug of the
+								    name). Sharing one fixed-height row means hovering never reflows
+								    the board. */}
+									<div className={`branch-slot ${tags.length ? "has-tags" : ""}`}>
+										<div className="branch">{t.branch}</div>
+										{tags.length > 0 && (
+											<div className="tags">
+												{tags.map((tag) => (
+													<span className="tag" key={tag}>
+														{tag}
+													</span>
+												))}
+											</div>
+										)}
+									</div>
+									{/* Why this card is where it is — the triage verdict that until now
+								    was computed on every refresh and shown only to the MCP tool. */}
+									<div className="triage" title={t.triage.reason}>
+										{t.triage.reason}
+									</div>
+									<div className="meta">
+										{t.gitStatus && (
+											<span>
+												↑{t.gitStatus.ahead} ↓{t.gitStatus.behind} · {t.gitStatus.dirty} changed
+											</span>
+										)}
+										{t.prNumber && <span>PR #{t.prNumber}</span>}
+										{relativeAge(t.lastEventAt, Date.now()) && (
+											<span className="age">{relativeAge(t.lastEventAt, Date.now())}</span>
+										)}
+									</div>
+									{t.agentId && (
+										<span className="card-agent">
+											<AgentIcon agentId={t.agentId} size={15} />
+										</span>
+									)}
+								</motion.div>
+							);
+						})}
 					</div>
 				);
 			})}
@@ -1488,7 +1525,7 @@ function TaskPanel({
 	useEffect(() => {
 		setChangesOpen(false);
 		setViewFile(null);
-	}, [task.id]);
+	}, []);
 
 	const refreshSessions = useCallback(async () => {
 		const taskId = task.id;
@@ -1802,7 +1839,11 @@ function TaskPanel({
 				/>
 				<IconButton
 					icon={ExternalLink}
-					label={alias === null ? "Open worktree in your editor" : `Open worktree in your editor (Remote-SSH: ${alias})`}
+					label={
+						alias === null
+							? "Open worktree in your editor"
+							: `Open worktree in your editor (Remote-SSH: ${alias})`
+					}
 					onClick={() =>
 						run(async () => {
 							// Optional on the API surface (the phone omits it) — the desktop
@@ -1992,20 +2033,71 @@ function TaskPanel({
 
 function MissionControl({
 	tasks,
+	agents,
 	order,
 	layout,
 	locked,
 	onExpand,
 }: {
 	tasks: TaskDTO[];
+	/** Agent catalog, for naming a session's tab the way the task panel does. */
+	agents: AgentDTO[];
 	order: string[];
 	layout: McLayout;
 	locked: boolean;
 	onExpand: (task: TaskDTO, terminalId: string) => void;
 }) {
-	const [tiles, setTiles] = useState<{ task: TaskDTO; terminalId: string }[]>([]);
+	// One tile per TASK, not per session: a task with an agent and two shells is
+	// one piece of work, and splaying it across three identically-titled tiles
+	// told you nothing. The tile shows one session at a time and its tabs switch
+	// between them. Creating and closing sessions stays in the task panel, where
+	// the + and the ✕ live; a tile is a viewport onto work that already exists.
+	const [tiles, setTiles] = useState<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
+	// Which session each tile is showing, when the viewer has picked one. Absent
+	// (or pointing at a session that has since died) falls back to activeTerminal.
+	const [shownByTask, setShownByTask] = useState<Record<string, string>>({});
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
+
+	// Pages instead of a scroll area: each layout shows a fixed number of tiles
+	// at once, and the rest live on further pages. "In view" is then a crisp
+	// set — exactly what the reorder-skip below needs.
+	const [page, setPage] = useState(0);
+	const pageSize = MC_PAGE_SIZE[layout];
+	const pageCount = Math.max(1, Math.ceil(tiles.length / pageSize));
+	// Clamp in-render (sessions can die, the layout can change page size) so a
+	// stale page never shows an empty grid, then sync the state.
+	const clampedPage = Math.min(page, pageCount - 1);
+	useEffect(() => {
+		if (page !== clampedPage) setPage(clampedPage);
+	}, [page, clampedPage]);
+	const pageRef = useRef(clampedPage);
+	pageRef.current = clampedPage;
+	const pageSizeRef = useRef(pageSize);
+	pageSizeRef.current = pageSize;
+	const pageCountRef = useRef(pageCount);
+	pageCountRef.current = pageCount;
+	// Last flip direction, read by the page transition so it slides the way a
+	// scroll would have gone.
+	const dirRef = useRef(0);
+	const flip = useCallback((d: number) => {
+		dirRef.current = d;
+		setPage((p) => Math.max(0, Math.min(pageCountRef.current - 1, p + d)));
+	}, []);
+	// Cmd/Ctrl+Alt+Up/Down flips pages. Capture phase so it wins over the
+	// focused xterm textarea; the combo is one no shell binding uses.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (!e.altKey || !(e.metaKey || e.ctrlKey)) return;
+			if (e.key === "ArrowDown") flip(1);
+			else if (e.key === "ArrowUp") flip(-1);
+			else return;
+			e.preventDefault();
+			e.stopPropagation();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, [flip]);
 
 	// Locked: snapshot the sidebar's ordering the moment we land here (or flip
 	// the lock on) and freeze it, so terminals never shuffle under you while
@@ -2023,37 +2115,57 @@ function MissionControl({
 	const rank = locked ? frozenRank : liveRank;
 
 	// The tile whose terminal currently has keyboard focus, i.e. the one the
-	// user is typing in. A ref, not state: focus alone must not reorder
-	// anything; it only matters at the moment a re-sort happens.
+	// user is typing in, keyed by task id. A ref, not state: focus alone must not
+	// reorder anything; it only matters at the moment a re-sort happens.
 	const focusedRef = useRef<string | null>(null);
-	// Latest unsorted session list, kept so a re-sort (order change, lock flip,
+	// Latest unsorted tile list, kept so a re-sort (order change, lock flip,
 	// blur) doesn't need a fresh round of listForTask calls.
-	const sessionsRef = useRef<{ task: TaskDTO; terminalId: string }[]>([]);
+	const sessionsRef = useRef<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
 	const rankRef = useRef(rank);
 	const lockedRef = useRef(locked);
 	lockedRef.current = locked;
 
-	// Sort the collected sessions by the active rank. When unlocked and a tile
-	// is focused, that tile keeps the slot it currently occupies on screen and
-	// everything else re-sorts around it.
+	// Sort the collected sessions by the active rank, with two visibility
+	// courtesies: a new order that only permutes the visible page is skipped
+	// there (see below), and while a tile is being typed in it keeps the slot
+	// it currently occupies on screen.
 	const resort = useCallback(() => {
 		const r = rankRef.current;
 		const next = [...sessionsRef.current];
-		// Stable sort; V8's stable sort keeps a task's own sessions (and any
-		// equal-rank ties) in encounter order.
+		// Stable sort; V8's stable sort keeps equal-rank ties in encounter order.
 		next.sort(
 			(a, b) =>
 				(r.get(a.task.id) ?? Number.MAX_SAFE_INTEGER) -
 				(r.get(b.task.id) ?? Number.MAX_SAFE_INTEGER),
 		);
 		setTiles((prev) => {
-			const focused = lockedRef.current ? null : focusedRef.current;
-			if (focused) {
-				const cur = prev.findIndex((t) => t.terminalId === focused);
-				const pinned = next.find((t) => t.terminalId === focused);
-				if (cur >= 0 && pinned) {
-					next.splice(next.indexOf(pinned), 1);
-					next.splice(Math.min(cur, next.length), 0, pinned);
+			// If the new order only permutes tiles already on the visible page,
+			// keep that page's arrangement: swapping terminals the user can
+			// already see gains nothing and yanks the one they're reading. The
+			// page re-orders only when its membership changes (a tile from
+			// another page earns a visible slot, or one of its own dies).
+			// Off-page tiles always take the new order, that move is invisible.
+			const start = pageRef.current * pageSizeRef.current;
+			const prevWin = prev.slice(start, start + pageSizeRef.current);
+			const nextWin = next.slice(start, start + pageSizeRef.current);
+			const sameSet =
+				prevWin.length === nextWin.length &&
+				prevWin.every((p) => nextWin.some((n) => n.task.id === p.task.id));
+			if (sameSet && prevWin.length > 0) {
+				// Keep the on-screen arrangement but take next's tile objects,
+				// which carry the freshly fetched task DTOs and session lists.
+				const fresh = new Map(nextWin.map((t) => [t.task.id, t]));
+				const kept = prevWin.map((t) => fresh.get(t.task.id) ?? t);
+				next.splice(start, kept.length, ...kept);
+			} else {
+				const focused = lockedRef.current ? null : focusedRef.current;
+				if (focused) {
+					const cur = prev.findIndex((t) => t.task.id === focused);
+					const pinned = next.find((t) => t.task.id === focused);
+					if (cur >= 0 && pinned) {
+						next.splice(next.indexOf(pinned), 1);
+						next.splice(Math.min(cur, next.length), 0, pinned);
+					}
 				}
 			}
 			// Keep the previous array when nothing moved so downstream renders
@@ -2091,9 +2203,11 @@ function MissionControl({
 					})),
 				);
 				if (cancelled) return;
-				sessionsRef.current = perTask.flatMap(({ task, sessions }) =>
-					sessions.map((s) => ({ task, terminalId: s.terminalId })),
-				);
+				// listForTask hands sessions back latest-first; reverse so the tabs
+				// read oldest to newest, exactly as they do in the task panel.
+				sessionsRef.current = perTask
+					.filter(({ sessions }) => sessions.length > 0)
+					.map(({ task, sessions }) => ({ task, sessions: [...sessions].reverse() }));
 				resort();
 			} finally {
 				inFlight = false;
@@ -2121,44 +2235,108 @@ function MissionControl({
 		);
 	}
 
+	const visible = tiles.slice(clampedPage * pageSize, clampedPage * pageSize + pageSize);
 	return (
-		<div className="mc" data-layout={layout}>
-			{tiles.map(({ task, terminalId }) => (
-				// biome-ignore lint/a11y/noStaticElementInteractions: focus/blur only observe where focus is; the tile itself isn't interactive
-				<div
-					key={terminalId}
-					className="tile"
-					// React's onFocus/onBlur bubble (focusin/focusout), so these fire
-					// when the xterm textarea inside the tile gains/loses focus.
-					onFocus={() => {
-						focusedRef.current = terminalId;
-					}}
-					onBlur={(e) => {
-						// Ignore focus moving within the same tile (e.g. from the bar's
-						// button to the terminal). Once focus truly leaves, the pin is
-						// released and the tile snaps back to its tasks-list slot.
-						if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-						if (focusedRef.current !== terminalId) return;
-						focusedRef.current = null;
-						resort();
-					}}
-				>
-					<div className="bar">
-						<span>{task.name}</span>
-						<span className="muted">· {task.branch}</span>
-						<span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-							{task.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
-							<IconButton
-								icon={Maximize2}
-								label="Expand to full width"
-								size={13}
-								onClick={() => onExpand(task, terminalId)}
-							/>
-						</span>
-					</div>
-					<TerminalView terminalId={terminalId} />
+		<div className="mc-wrap">
+			{/* Keyed by page: flipping remounts the grid, and TerminalView replays
+			    its ring-buffer snapshot on mount, so a page flip is a clean swap.
+			    The slide follows the flip direction, a "perfect scroll" to the
+			    next set of terminals. */}
+			<motion.div
+				key={clampedPage}
+				className="mc"
+				data-layout={layout}
+				initial={dirRef.current === 0 ? false : { y: dirRef.current * 32, opacity: 0.3 }}
+				animate={{ y: 0, opacity: 1 }}
+				transition={springy}
+			>
+				{visible.map(({ task, sessions }) => {
+					const shown = activeTerminal(sessions, shownByTask[task.id] ?? null);
+					if (!shown) return null; // a task with no live session is not a tile
+					const tabs = sessionTabs(sessions, agents);
+					return (
+						// biome-ignore lint/a11y/noStaticElementInteractions: focus/blur only observe where focus is; the tile itself isn't interactive
+						<div
+							key={task.id}
+							className="tile"
+							// React's onFocus/onBlur bubble (focusin/focusout), so these fire
+							// when the xterm textarea inside the tile gains/loses focus.
+							onFocus={() => {
+								focusedRef.current = task.id;
+							}}
+							onBlur={(e) => {
+								// Ignore focus moving within the same tile (e.g. from the bar's
+								// button to the terminal). Once focus truly leaves, the pin is
+								// released: if the pin was holding the tile away from an
+								// off-page slot it now moves there (an in-page permutation
+								// alone is skipped by resort anyway).
+								if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+								if (focusedRef.current !== task.id) return;
+								focusedRef.current = null;
+								resort();
+							}}
+						>
+							<div className="bar">
+								<span>{task.name}</span>
+								<span className="muted">· {task.branch}</span>
+								<span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+									{task.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
+									<IconButton
+										icon={Maximize2}
+										label="Expand to full width"
+										size={13}
+										onClick={() => onExpand(task, shown)}
+									/>
+								</span>
+							</div>
+							{/* Only worth the row when there is a choice to make. */}
+							{tabs.length > 1 && (
+								<div className="mc-tabs" role="tablist" aria-label={`${task.name} sessions`}>
+									{tabs.map(({ session, label }) => (
+										<button
+											key={session.terminalId}
+											type="button"
+											role="tab"
+											aria-selected={session.terminalId === shown}
+											className={`mc-tab ${session.terminalId === shown ? "active" : ""}`}
+											title={label}
+											onClick={() =>
+												setShownByTask((m) => ({ ...m, [task.id]: session.terminalId }))
+											}
+										>
+											{label}
+										</button>
+									))}
+								</div>
+							)}
+							<TerminalView terminalId={shown} />
+						</div>
+					);
+				})}
+			</motion.div>
+			{pageCount > 1 && (
+				<div className="mcpager">
+					<IconButton
+						icon={ChevronUp}
+						label="Previous terminals"
+						shortcut="⌘⌥↑"
+						size={14}
+						disabled={clampedPage === 0}
+						onClick={() => flip(-1)}
+					/>
+					<span className="count">
+						{clampedPage + 1}/{pageCount}
+					</span>
+					<IconButton
+						icon={ChevronDown}
+						label="Next terminals"
+						shortcut="⌘⌥↓"
+						size={14}
+						disabled={clampedPage === pageCount - 1}
+						onClick={() => flip(1)}
+					/>
 				</div>
-			))}
+			)}
 		</div>
 	);
 }

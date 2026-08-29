@@ -175,6 +175,10 @@ bun run --filter @ateam/desktop rebuild   # native modules for Electron (arm64)
 bun run --filter @ateam/desktop dev        # launch the app (Electron + Vite HMR)
 ```
 
+The renderer's dev port is derived from the worktree path (and bound to
+`127.0.0.1`), so several worktrees can run `dev` side by side without serving
+each other's code. The URL is printed on startup.
+
 ## Test & typecheck
 
 ```bash
@@ -203,7 +207,12 @@ composer (pick the agent and type the first instruction in one step) reused for
 extra sessions inside an existing task, many terminals per task as tabs (agent
 sessions or plain shells, side by side), agent spawning in PTYs (Claude Code,
 OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection,
+<<<<<<< HEAD
 Mission Control grid, collapsible sidebar rail, image drag-drop & paste into
+=======
+Mission Control grid (one tile per task, its sessions as read-only tabs),
+collapsible sidebar rail, image drag-drop & paste into
+>>>>>>> origin/main
 agent terminals, session search (describe past work in the topbar and jump back
 to the session that did it, reading Claude Code / Codex / OpenCode transcripts),
 safe cleanup of merged worktrees, and signed/notarized builds

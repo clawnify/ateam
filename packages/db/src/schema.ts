@@ -80,6 +80,13 @@ export const tasks = sqliteTable(
 		prState: text("pr_state").$type<PrState>(),
 		mergeStatus: text("merge_status").$type<MergeStatus>(),
 		gitStatus: text("git_status", { mode: "json" }).$type<GitStatusSnapshot>(),
+		/**
+		 * Model-assigned topic tags, written once shortly after the agent starts.
+		 * Stored rather than derived because a model's answer cannot be recomputed:
+		 * the keyword fallback in the renderer covers rows that predate this or
+		 * whose tagging call failed.
+		 */
+		tags: text("tags", { mode: "json" }).$type<string[]>(),
 		lastEventAt: integer("last_event_at"),
 		isUnread: integer("is_unread", { mode: "boolean" }).default(false),
 		createdBy: text("created_by")
