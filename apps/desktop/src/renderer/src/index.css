@@ -717,6 +717,7 @@ input {
 }
 .card .meta {
 	display: flex;
+	align-items: center;
 	gap: 8px;
 	margin-top: 8px;
 	font-size: 11px;
@@ -733,8 +734,14 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.card .meta .age {
+/* Age + agent icon, right-aligned as one group so the icon never lands on top
+   of the age label. */
+.card .meta .meta-end {
 	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	opacity: 0.9;
 }
 /* "Something happened here while you were away." White, not the purple accent,
    to match the selected-card border. */
@@ -776,12 +783,6 @@ input {
 .ring.stalled {
 	background: transparent;
 	border: 1.5px solid var(--text-dim);
-}
-.card-agent {
-	position: absolute;
-	right: 10px;
-	bottom: 8px;
-	opacity: 0.9;
 }
 @keyframes pulse {
 	0%,
