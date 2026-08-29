@@ -30,6 +30,7 @@ const api: AteamApi = {
 		create: (input) => ipcRenderer.invoke(CH.tasksCreate, input),
 		remove: (input) => ipcRenderer.invoke(CH.tasksRemove, input),
 		setColumn: (id, column: KanbanColumn) => ipcRenderer.invoke(CH.tasksSetColumn, id, column),
+		markRead: (id) => ipcRenderer.invoke(CH.tasksMarkRead, id),
 		cleanupPreview: (projectId) => ipcRenderer.invoke(CH.tasksCleanupPreview, projectId),
 		cleanup: (projectId) => ipcRenderer.invoke(CH.tasksCleanup, projectId),
 		cleanupCandidates: (projectId) => ipcRenderer.invoke(CH.tasksCleanupCandidates, projectId),
@@ -45,6 +46,13 @@ const api: AteamApi = {
 	},
 	agents: {
 		list: () => ipcRenderer.invoke(CH.agentsList),
+	},
+	editor: {
+		open: (taskId) => ipcRenderer.invoke(CH.editorOpenUrl, taskId),
+		install: (taskId) => ipcRenderer.invoke(CH.editorInstall, taskId),
+	},
+	search: {
+		sessions: (input) => ipcRenderer.invoke(CH.searchSessions, input),
 	},
 	fs: {
 		listDir: (path) => ipcRenderer.invoke(CH.fsListDir, path),
@@ -89,6 +97,8 @@ const api: AteamApi = {
 		attachClipboardImage: (terminalId) =>
 			ipcRenderer.invoke(CH.utilAttachClipboardImage, terminalId),
 		writeImageBytes: (base64, ext) => ipcRenderer.invoke(CH.utilWriteImageBytes, base64, ext),
+		openInEditor: (worktreePath, alias) =>
+			ipcRenderer.invoke(CH.utilOpenInEditor, worktreePath, alias),
 	},
 	events: {
 		onTaskUpdated: (cb: (task: TaskDTO) => void) => {

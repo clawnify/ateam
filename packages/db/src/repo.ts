@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, isNull } from "drizzle-orm";
 import {
 	agentEvents,
 	agentSessions,
@@ -102,8 +102,30 @@ export const repo = {
 			.all();
 	},
 
+	// Every session the db still believes is running, across all projects. The
+	// engine diffs this against the PTY daemon's live set on connect to find
+	// exits that happened while the app was closed (see pty/stranded.ts).
+	listOpenSessions(db: AteamDb) {
+		return db.select().from(agentSessions).where(isNull(agentSessions.exitedAt)).all();
+	},
+
 	updateSession(db: AteamDb, id: string, patch: Partial<typeof agentSessions.$inferInsert>) {
 		db.update(agentSessions).set(patch).where(eq(agentSessions.id, id)).run();
+	},
+
+	/**
+	 * The terminal a harness's OWN session id was seen on. Hook events carry the
+	 * agent's session id (`raw_agent_session_id`), which is the only link between
+	 * a transcript on disk and the PTY tab that produced it — session search uses
+	 * it to open the exact terminal a result came from.
+	 */
+	findTerminalByAgentSessionId(db: AteamDb, rawAgentSessionId: string) {
+		return db
+			.select({ terminalId: agentEvents.terminalId })
+			.from(agentEvents)
+			.where(eq(agentEvents.rawAgentSessionId, rawAgentSessionId))
+			.orderBy(desc(agentEvents.createdAt))
+			.get()?.terminalId;
 	},
 
 	recordEvent(

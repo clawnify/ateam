@@ -1,6 +1,30 @@
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+
+// Dev server address. Two hazards here, and only fixing both is enough.
+//
+// host: Vite binds "localhost" by default, which resolves to ::1 for the first
+// process and falls through to 127.0.0.1 for the second, so two worktrees can
+// BOTH "successfully" bind the same port. Neither bind fails, so strictPort
+// never fires (it is only an EADDRINUSE handler on its own listen). electron-vite
+// then points Electron at http://localhost:<port>, which resolves to whichever
+// of the two it likes, and you silently get another worktree's renderer with no
+// error anywhere. Pinning one address family makes a real clash a real EADDRINUSE.
+//
+// port: this repo is developed across dozens of worktrees at once, which is the
+// whole point of the product, so one fixed port would only move the pain to "the
+// second worktree cannot run dev at all". Derive a stable port from the worktree
+// path instead: the same worktree gets the same port every run, different
+// worktrees do not collide, and if two ever hash together the pinned host makes
+// it fail loudly rather than serve the wrong code.
+//
+// Not `strictPort: false`: Vite would hop to a free port but keeps the bound one
+// in a private field, never writing it back to config.server.port, which is the
+// field electron-vite reads to build ELECTRON_RENDERER_URL. Hopping would point
+// Electron at the port we did NOT get, guaranteeing the bug rather than risking it.
+const devPort = 5219 + (createHash("sha1").update(__dirname).digest().readUInt16BE(0) % 300);
 
 export default defineConfig({
 	main: {
@@ -48,10 +72,8 @@ export default defineConfig({
 	},
 	renderer: {
 		root: resolve(__dirname, "src/renderer"),
-		// Dedicated port so Ateam never collides with other local dev servers
-		// (e.g. another project on the default 5173). strictPort surfaces a clash
-		// instead of silently hopping to a different port.
-		server: { port: 5219, strictPort: true },
+		// Dev server address. See devPort above for why both halves matter.
+		server: { host: "127.0.0.1", port: devPort, strictPort: true },
 		resolve: {
 			alias: { "@": resolve(__dirname, "src/renderer/src") },
 		},

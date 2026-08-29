@@ -28,6 +28,7 @@ import type {
 	PtyExitEvent,
 	PtySnapshot,
 	SessionDTO,
+	SessionHitDTO,
 	SystemInfo,
 	TaskDTO,
 	UpdateLoopInput,
@@ -62,6 +63,10 @@ export interface NativeClientApi {
 	// so the window surface is client-native too. A single-window client stubs these.
 	openProject(projectId: string): Promise<void>;
 	boundProjectId(): string | null;
+	/** Resolve the in-app editor URL for a task — how a client REACHES the engine's
+	 *  editor is transport knowledge only the client has. Optional: a client without
+	 *  an editor surface omits it and AteamApi.editor.open rejects with guidance. */
+	editorOpen?(taskId: string): Promise<{ url: string } | { needsInstall: true }>;
 }
 
 /** Build the full AteamApi over an RpcClient, delegating client-local bits to `native`. */
@@ -83,6 +88,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			create: (input) => call<TaskDTO>(CH.tasksCreate, [input]),
 			remove: (input) => call<void>(CH.tasksRemove, [input]),
 			setColumn: (id, column: KanbanColumn) => call<TaskDTO>(CH.tasksSetColumn, [id, column]),
+			markRead: (id) => call<TaskDTO>(CH.tasksMarkRead, [id]),
 			cleanupPreview: (projectId) => call<CleanupReport>(CH.tasksCleanupPreview, [projectId]),
 			cleanupCandidates: (projectId) =>
 				call<CleanupCandidate[]>(CH.tasksCleanupCandidates, [projectId]),
@@ -100,6 +106,15 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		},
 		agents: {
 			list: () => call<AgentDTO[]>(CH.agentsList),
+		},
+		editor: {
+			open:
+				native.editorOpen ??
+				(() => Promise.reject(new Error("This client has no editor surface."))),
+			install: (taskId) => call<void>(CH.editorInstall, [taskId]),
+		},
+		search: {
+			sessions: (input) => call<SessionHitDTO[]>(CH.searchSessions, [input]),
 		},
 		fs: {
 			listDir: (path) => call<DirListingDTO>(CH.fsListDir, [path]),

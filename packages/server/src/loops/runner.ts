@@ -8,7 +8,7 @@ import type {
 	LoopContext,
 	LoopDefinition,
 	LoopOutcome,
-	StartAgentRunInput,
+	LoopSessionOps,
 } from "./types";
 
 interface Instance {
@@ -22,10 +22,8 @@ interface Instance {
 export interface LoopRunnerDeps {
 	db: AteamDb;
 	log?: (line: string) => void;
-	/** Create a task + launch an agent with a prompt (the composer's flow). */
-	startAgentRun: (input: StartAgentRunInput) => Promise<{ taskId: string }>;
-	/** Whether a task still has a live agent PTY (daemon ground truth). */
-	isTaskAgentLive: (taskId: string) => boolean;
+	/** Task/session capabilities handed through to each run (engine-wired). */
+	sessions: LoopSessionOps;
 }
 
 export interface CreateUserLoopInput {
@@ -267,6 +265,13 @@ export class LoopRunner {
 				cadence: cadence?.mode ?? "self_paced",
 				prompt: typeof row.config?.prompt === "string" ? row.config.prompt : null,
 				agentId: typeof row.config?.agentId === "string" ? row.config.agentId : null,
+				// The loop's persistent task (lastTaskId = pre-persistent-era key).
+				taskId:
+					typeof row.config?.taskId === "string"
+						? row.config.taskId
+						: typeof row.config?.lastTaskId === "string"
+							? row.config.lastTaskId
+							: null,
 				intervalMs: row.intervalMs ?? (cadence?.mode === "fixed" ? cadence.everyMs : null),
 				lastRunAt: row.lastRunAt ?? null,
 				nextRunAt: row.nextRunAt ?? null,
@@ -303,8 +308,7 @@ export class LoopRunner {
 		const ctx: LoopContext = {
 			db: this.deps.db,
 			log: (m) => this.deps.log?.(`[loop ${inst.loopId}] ${m}`),
-			startAgentRun: this.deps.startAgentRun,
-			isTaskAgentLive: this.deps.isTaskAgentLive,
+			...this.deps.sessions,
 		};
 		let outcome: LoopOutcome = {};
 		let status: "ok" | "error" | "done" = "ok";

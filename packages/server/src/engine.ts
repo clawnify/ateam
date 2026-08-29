@@ -24,6 +24,7 @@ import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
 import { PtyClient } from "./pty/pty-client";
+import { strandedSessions } from "./pty/stranded";
 import { type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
 
@@ -87,6 +88,9 @@ function mapEventToColumn(eventType: string): KanbanColumn {
 export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	const { dataDir, daemonPath, execPath } = opts;
 	const emitter = new EventEmitter();
+	// Captured before any session of this run can exist, so the reconcile below
+	// can tell "stranded by a previous run" from "spawning right now".
+	const engineStartedAt = Date.now();
 
 	// Ensure the data dir exists. Electron's userData always does; a fresh
 	// server's ~/.ateam may not, and better-sqlite3 won't create parent dirs.
@@ -145,19 +149,20 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	const loopRunner = new LoopRunner({
 		db,
 		log: opts.log ?? ((line) => console.log(line)),
-		startAgentRun: async (input) => {
-			const task = await createTaskInProject(services, sendTaskUpdated, input);
-			await spawnAgentInTask(services, sendTaskUpdated, {
-				taskId: task.id,
-				agentId: input.agentId,
-				prompt: input.prompt,
-			});
-			return { taskId: task.id };
+		sessions: {
+			createTask: async (input) => {
+				const task = await createTaskInProject(services, sendTaskUpdated, input);
+				return { taskId: task.id };
+			},
+			spawnAgent: (input) => spawnAgentInTask(services, sendTaskUpdated, input),
+			stopTaskSessions: (taskId) => {
+				for (const s of repo.listSessionsByTask(db, taskId)) pty.kill(s.terminalId);
+			},
+			// Daemon ground truth — the persisted agentStatus can strand at
+			// "running" when an exit happened while the app was closed.
+			isTaskAgentLive: (taskId) =>
+				repo.listSessionsByTask(db, taskId).some((s) => pty.has(s.terminalId)),
 		},
-		// Daemon ground truth — the persisted agentStatus can strand at "running"
-		// when an exit happened while the app was closed.
-		isTaskAgentLive: (taskId) =>
-			repo.listSessionsByTask(db, taskId).some((s) => pty.has(s.terminalId)),
 	});
 
 	// Board Organizer tools: the organizer loop's headless `claude -p` turn reads
@@ -179,33 +184,68 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		loopRunner,
 	};
 
+	// Record an agent's exit: close the session and file its card. Shared by the
+	// live exit event and the reconcile below so an exit we watched and an exit
+	// we slept through land the card in the same place.
+	//
+	// `markUnread` is the one thing they must NOT share. A live exit is real news
+	// ("your agent just finished"). The reconcile is a BACKFILL of bookkeeping we
+	// missed, possibly weeks ago — flagging all of it unread would drown the
+	// genuine news on a board that has hundreds of stranded cards, and claim the
+	// user hasn't seen work they have. Correcting the column is the value there.
+	const applyAgentExit = (
+		sessionId: string,
+		taskId: string,
+		exitedAt: number,
+		markUnread: boolean,
+	): void => {
+		repo.updateSession(db, sessionId, { status: "stopped", exitedAt });
+		const task = repo.getTask(db, taskId);
+		if (task && task.column === "running") {
+			repo.updateTask(db, task.id, {
+				agentStatus: "stopped",
+				column:
+					task.prNumber != null || (task.gitStatus?.ahead ?? 0) > 0 ? "review" : "needs_attention",
+				...(markUnread ? { isUnread: true } : {}),
+			});
+			sendTaskUpdated(task.id);
+		}
+	};
+
 	// PTY output/exit → emitted for the transport to forward.
 	pty.on("data", (e) => emitter.emit("ptyData", e));
 	pty.on("exit", (e) => {
 		emitter.emit("ptyExit", e);
 		// Record the exit in the DB so a session is never left looking "running"
 		// after its process is gone — the gap that previously stranded cards in
-		// the running column. Exits missed entirely (e.g. while the app was
-		// closed) have NO backstop since the board reconciler was removed; code
-		// that needs liveness must ask the PTY daemon (pty.has), not this status.
+		// the running column. Code that needs liveness must ask the PTY daemon
+		// (pty.has), not this status.
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
-		if (session.exitedAt == null) {
-			repo.updateSession(db, session.id, {
-				status: "stopped",
-				exitedAt: Date.now(),
-			});
+		if (session.exitedAt == null) applyAgentExit(session.id, session.taskId, Date.now(), true);
+	});
+
+	// The backstop for exits nobody watched. The daemon outlives the app, so an
+	// agent that finishes while the app is closed broadcasts to no one and is
+	// then dropped from the daemon's map — leaving its card in `running` for
+	// good. Every connect hands us the daemon's live set, which is exactly the
+	// evidence needed to close those out. See pty/stranded.ts for why this is
+	// scoped to sessions predating this engine.
+	pty.on("attached", (terminals: { terminalId: string }[]) => {
+		const live = new Set(terminals.map((t) => t.terminalId));
+		const open = repo.listOpenSessions(db);
+		const stranded = strandedSessions(open, live, engineStartedAt);
+		for (const s of stranded) {
+			// Best guess at when it died: we only know it was gone by now.
+			applyAgentExit(s.id, s.taskId, Date.now(), false);
 		}
-		const task = repo.getTask(db, session.taskId);
-		if (task && task.column === "running") {
-			repo.updateTask(db, task.id, {
-				agentStatus: "stopped",
-				column:
-					task.prNumber != null || (task.gitStatus?.ahead ?? 0) > 0 ? "review" : "needs_attention",
-				isUnread: true,
-			});
-			sendTaskUpdated(task.id);
-		}
+		// Always log: this is a bulk mutation of the board, so "it did nothing"
+		// has to be as visible as "it closed 700 cards". The desktop passes no
+		// `log`, so fall back to console like LoopRunner does.
+		const log = opts.log ?? ((line: string) => console.log(line));
+		log(
+			`[ateam] pty attach: ${live.size} live, ${open.length} open in db → closed ${stranded.length}`,
+		);
 	});
 
 	// Agent status hooks → update session/task, drive the kanban column.

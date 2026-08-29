@@ -48,6 +48,8 @@ const ENTITY = new Set<string>([
 	CH.gitDiff,
 	CH.gitFileDiff,
 	CH.gitStatus,
+	CH.editorOpen, // taskId — the editor lives on the task's engine
+	CH.editorInstall, // taskId — installs on that same engine
 	CH.ptySpawnAgent, // {taskId}
 	CH.ptySpawnShell, // {taskId}
 	// Loops live on the engine that runs them — that's what makes a loop local
@@ -58,6 +60,7 @@ const ENTITY = new Set<string>([
 	CH.loopsRunNow, // loop id
 	CH.loopsUpdate, // {id}
 	CH.loopsDelete, // loop id
+	CH.searchSessions, // {projectId} — a box searches the history on its own disk
 	CH.ptyListForTask, // taskId
 	CH.ptyWrite, // terminalId
 	CH.ptyResize,

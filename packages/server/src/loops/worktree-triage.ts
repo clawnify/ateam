@@ -36,6 +36,12 @@ export const CONVERSATION_GAP_MS = 4 * 60 * 1000;
 export interface WorktreeSignals {
 	/** Live agent process attached (pid alive)? Overrides everything → active. */
 	agentAlive?: boolean;
+	/**
+	 * The live agent is parked waiting on the USER (a permission prompt, a
+	 * question). Such an agent is legitimately silent for hours and must never be
+	 * called stalled — it is already filed as needs_attention.
+	 */
+	agentAwaitingInput?: boolean;
 	/** Worktree creation time. */
 	createdAtMs?: number | null;
 	/** `.git/worktrees/<n>/index` mtime — moves on git ops/commits. */
@@ -59,6 +65,7 @@ export interface WorktreeSignals {
 /** Buckets, ordered by urgency — the first that matches wins (as in the skill). */
 export type WorktreeBucket =
 	| "active" // recent activity or live agent — in-flight, do not touch
+	| "stalled" // claims to be running, but has not advanced in `recentHours`
 	| "uncommitted" // real dirty files
 	| "open_pr" // PR is OPEN
 	| "unmerged_no_pr" // commits ahead, not merged, not patch-equivalent
@@ -99,7 +106,26 @@ export function triageWorktree(s: WorktreeSignals, opts: TriageOptions): TriageR
 	const recentHours = opts.recentHours ?? DEFAULT_RECENT_HOURS;
 
 	// 1. Live agent or recent activity → in-flight. Never done.
+	//
+	// EXCEPT when the agent claims to be running and has stopped advancing. The
+	// PTY deliberately drops to a shell when the agent exits (sessions.ts), so a
+	// crashed or wedged agent leaves a live terminal behind and this check would
+	// otherwise call it healthy forever — the one case a liveness probe cannot
+	// see. Progress is measured by `transcriptMtimeMs` ALONE (the hook clock),
+	// never `lastActivityMs`: that folds in `gitStatus.updatedAt`, which the UI
+	// refreshes whenever a task panel is opened, so merely LOOKING at a wedged
+	// card would hide that it is wedged.
 	if (s.agentAlive) {
+		const progressAt = s.transcriptMtimeMs ?? s.createdAtMs ?? null;
+		const silentMs = progressAt == null ? 0 : opts.now - progressAt;
+		if (!s.agentAwaitingInput && silentMs >= recentHours * 3600_000) {
+			return {
+				bucket: "stalled",
+				done: false,
+				suggestedColumn: "needs_attention",
+				reason: `silent ${Math.round(silentMs / 3600_000)}h — may need restart`,
+			};
+		}
 		return { bucket: "active", done: false, suggestedColumn: null, reason: "live agent attached" };
 	}
 	const idleMs = opts.now - lastActivityMs(s);
