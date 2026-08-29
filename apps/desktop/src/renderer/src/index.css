@@ -1855,6 +1855,12 @@ input {
 .tasknode.loop-paused {
 	opacity: 0.5;
 }
+/* Float the LOOPS section to the sidebar's bottom while there's spare room;
+   once the task list overflows, the auto margin collapses and it simply
+   follows the content. */
+.loops-side-head {
+	margin-top: auto;
+}
 
 .conn-install-log {
 	margin: 4px 0 2px;

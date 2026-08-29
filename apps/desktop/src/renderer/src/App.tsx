@@ -160,7 +160,7 @@ export function App() {
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
-	const [loopsCollapsed, setLoopsCollapsed] = useState(false);
+	const [loopsCollapsed, setLoopsCollapsed] = useState(true);
 	// Every engine's loops (merged), for the sidebar LOOPS section. Each loop
 	// owns one persistent task (loop.taskId); those tasks show under LOOPS.
 	const [loops, setLoops] = useState<LoopDTO[]>([]);
@@ -984,8 +984,10 @@ export function App() {
 
 						{/* LOOPS accordion — the active repo's scheduled agent sessions.
 						    Each loop owns one persistent task; clicking a row opens that
-						    task's terminal (or the Loops tab before its first run). */}
-						<div className="section-head tasks-head">
+						    task's terminal (or the Loops tab before its first run).
+						    loops-side-head floats it to the sidebar's bottom while there
+						    is spare room; a long task list pushes it down naturally. */}
+						<div className="section-head tasks-head loops-side-head">
 							<button
 								type="button"
 								className="section-toggle"
