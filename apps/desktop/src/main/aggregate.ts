@@ -57,6 +57,7 @@ const ENTITY = new Set<string>([
 	CH.loopsSetEnabled, // loop id
 	CH.loopsRunNow, // loop id
 	CH.loopsDelete, // loop id
+	CH.searchSessions, // {projectId} — a box searches the history on its own disk
 	CH.ptyListForTask, // taskId
 	CH.ptyWrite, // terminalId
 	CH.ptyResize,
