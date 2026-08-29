@@ -339,6 +339,7 @@ export const CH = {
 	utilAttachImages: "util:attachImages",
 	utilAttachClipboardImage: "util:attachClipboardImage",
 	utilWriteImageBytes: "util:writeImageBytes",
+	utilOpenInEditor: "util:openInEditor",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -388,6 +389,13 @@ export type AttachDelivery =
 	| { mode: "ctrlv" }
 	| { mode: "paths"; paths: string[] }
 	| { mode: "none" };
+
+/**
+ * Outcome of handing a worktree to the user's own editor. `ok: false` carries a
+ * reason to show — the editor isn't installed, or the task's engine is reached by
+ * a `host:port` endpoint that Remote-SSH can't resolve.
+ */
+export type OpenInEditorResult = { ok: true } | { ok: false; reason: string };
 
 // ---- the API surface exposed on window.ateam ----
 export interface AteamApi {
@@ -536,6 +544,15 @@ export interface AteamApi {
 		 * instead of a bitmap on the clipboard. `ext` sets the extension (default "png").
 		 */
 		writeImageBytes(base64: string, ext?: string): Promise<string>;
+		/**
+		 * Open a task's worktree in the user's own editor, on THIS machine. Client-native
+		 * (the editor is a desktop app, not something the engine can launch), so it never
+		 * routes to the engine: a task on a box is opened over VS Code's Remote-SSH using
+		 * the same ssh_config alias Ateam connects with. Optional — a client with no
+		 * desktop editor to hand off to (the phone) simply omits it, and callers hide the
+		 * affordance rather than offering one that can't work.
+		 */
+		openInEditor?(worktreePath: string, alias: string | null): Promise<OpenInEditorResult>;
 	};
 }
 
