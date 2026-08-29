@@ -92,6 +92,9 @@ export interface TaskDTO {
 	/** Last agent/lifecycle activity (falls back to row update time). */
 	lastEventAt: number | null;
 	isUnread: boolean;
+	/** Model-assigned topic tags; null when none were generated (the client
+	 *  falls back to deriving them from the task's text). */
+	tags: string[] | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
 }

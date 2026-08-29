@@ -55,7 +55,7 @@ import { Menu } from "./components/Menu";
 import { NewTaskComposer } from "./components/NewTaskComposer";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
-import { matchesTagQuery, taskIcon, taskTags } from "./task-tags";
+import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge } from "./triage-order";
 import { type Alias, aliasLabel, type UnifiedProject, unifyProjects } from "./unify";
 
@@ -451,7 +451,7 @@ export function App() {
 	const matchesQuery = useCallback(
 		(t: TaskDTO) => {
 			if (query === "") return true;
-			if (query.startsWith("#")) return matchesTagQuery(query, t.name, t.description);
+			if (query.startsWith("#")) return matchesTagQuery(query, t);
 			return (
 				t.name.toLowerCase().includes(query) ||
 				t.branch.toLowerCase().includes(query) ||
@@ -1208,7 +1208,7 @@ function Board({
 							{col.label} <span className="count">{items.length}</span>
 						</h3>
 						{items.map((t) => {
-							const tags = taskTags(t.name, t.description);
+							const tags = tagsFor(t);
 							return (
 								<motion.div
 									key={t.id}

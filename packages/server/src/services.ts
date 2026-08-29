@@ -49,6 +49,7 @@ export function toTaskDTO(t: Task): TaskDTO {
 		gitStatus: t.gitStatus ?? null,
 		lastEventAt: t.lastEventAt ?? t.updatedAt ?? null,
 		isUnread: Boolean(t.isUnread),
+		tags: t.tags ?? null,
 		triage: triageTask(t),
 	};
 }

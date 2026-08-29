@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Bug, GitBranch, Rocket } from "lucide-react";
-import { MAX_TAGS, matchesTagQuery, TAG_RULES, taskIcon, taskTags } from "./task-tags";
+import { MAX_TAGS, matchesTagQuery, TAG_RULES, tagsFor, taskIcon, taskTags } from "./task-tags";
 
 test("a task carries every category its text matches, not just the first", () => {
 	expect(taskTags("fix the auth api")).toEqual(["bug", "auth", "api"]);
@@ -43,19 +43,40 @@ test("the icon is exactly the first tag's icon — one rule set, two readings", 
 });
 
 test("#tag search narrows as you type and matches any of a task's tags", () => {
-	const name = "fix the auth api";
-	expect(matchesTagQuery("#bug", name)).toBe(true);
-	expect(matchesTagQuery("#a", name)).toBe(true); // prefix: auth + api
-	expect(matchesTagQuery("#auth", name)).toBe(true);
-	expect(matchesTagQuery("#release", name)).toBe(false);
+	const t = { name: "fix the auth api" };
+	expect(matchesTagQuery("#bug", t)).toBe(true);
+	expect(matchesTagQuery("#a", t)).toBe(true); // prefix: auth + api
+	expect(matchesTagQuery("#auth", t)).toBe(true);
+	expect(matchesTagQuery("#release", t)).toBe(false);
 });
 
 test("a bare # matches everything, so typing it does not blank the board", () => {
-	expect(matchesTagQuery("#", "anything at all")).toBe(true);
+	expect(matchesTagQuery("#", { name: "anything at all" })).toBe(true);
 });
 
 test("#tag search reads the description too", () => {
-	expect(matchesTagQuery("#release", "users have to multitask", "we should deploy this")).toBe(
-		true,
-	);
+	expect(
+		matchesTagQuery("#release", {
+			name: "users have to multitask",
+			description: "we should deploy this",
+		}),
+	).toBe(true);
+});
+
+test("model tags win over the keyword reading of the same task", () => {
+	// Keywords would say "bug" here; the model looked at intent and said "perf".
+	const t = { name: "fix the slow board", tags: ["perf"] };
+	expect(tagsFor(t)).toEqual(["perf"]);
+	expect(matchesTagQuery("#perf", t)).toBe(true);
+	expect(matchesTagQuery("#bug", t)).toBe(false);
+});
+
+test("keywords carry a task the model never tagged", () => {
+	expect(tagsFor({ name: "fix the auth api", tags: null })).toEqual(["bug", "auth", "api"]);
+	expect(tagsFor({ name: "fix the auth api", tags: [] })).toEqual(["bug", "auth", "api"]);
+});
+
+test("model tags are capped like keyword ones", () => {
+	const t = { name: "whatever", tags: ["a", "b", "c", "d", "e"] };
+	expect(tagsFor(t).length).toBe(MAX_TAGS);
 });

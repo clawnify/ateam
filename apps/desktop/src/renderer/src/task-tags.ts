@@ -82,11 +82,29 @@ export function taskTags(name: string, description?: string | null): string[] {
 }
 
 /**
+ * The tags to show for a task: the model's, when it produced any, otherwise the
+ * keyword reading of its text. Model tags win because keywords miss roughly
+ * three quarters of real tasks; the fallback still covers every card created
+ * before tagging existed, and any card whose tagging call failed.
+ */
+export function tagsFor(task: {
+	name: string;
+	description?: string | null;
+	tags?: string[] | null;
+}): string[] {
+	if (task.tags?.length) return task.tags.slice(0, MAX_TAGS);
+	return taskTags(task.name, task.description);
+}
+
+/**
  * Does this task match a `#tag` search term? `#a` matches the `api` and `auth`
  * chips, so typing narrows as you go rather than only hitting on a full word.
  */
-export function matchesTagQuery(term: string, name: string, description?: string | null): boolean {
+export function matchesTagQuery(
+	term: string,
+	task: { name: string; description?: string | null; tags?: string[] | null },
+): boolean {
 	const wanted = term.replace(/^#/, "").toLowerCase();
 	if (!wanted) return true;
-	return taskTags(name, description).some((t) => t.startsWith(wanted));
+	return tagsFor(task).some((t) => t.startsWith(wanted));
 }
