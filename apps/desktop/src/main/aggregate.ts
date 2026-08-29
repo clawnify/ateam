@@ -48,6 +48,7 @@ const ENTITY = new Set<string>([
 	CH.gitDiff,
 	CH.gitFileDiff,
 	CH.gitStatus,
+	CH.editorOpen, // taskId — the editor lives on the task's engine
 	CH.ptySpawnAgent, // {taskId}
 	CH.ptySpawnShell, // {taskId}
 	// Loops live on the engine that runs them — that's what makes a loop local

@@ -64,6 +64,9 @@ const SEND_CHANNELS = new Set<string>([CH.ptyWrite, CH.ptyResize]);
 export interface NativeHandlers {
 	/** Detach a project into its own window (or focus its existing one). */
 	openProjectWindow: (projectId: string) => void;
+	/** Resolve the in-app editor URL for a task (starts it on the owning engine).
+	 *  Client-native because reaching the port is transport knowledge (host.ts). */
+	editorUrl: (taskId: string) => Promise<{ url: string }>;
 }
 
 /**
@@ -95,6 +98,8 @@ export function registerIpc(router: Router, native: NativeHandlers): void {
 
 	// Detach a project into its own OS window. Not an engine method — it drives
 	// BrowserWindows, which only the desktop host has.
+	ipcMain.handle(CH.editorOpenUrl, (_e, taskId: string) => native.editorUrl(taskId));
+
 	ipcMain.handle(CH.windowOpenProject, async (_e, projectId: string) => {
 		native.openProjectWindow(projectId);
 	});

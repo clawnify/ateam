@@ -11,6 +11,8 @@ import {
 	CH,
 	type ClientTransport,
 	createRpcClient,
+	DEFAULT_EDITOR_PORT,
+	type EditorEndpointDTO,
 	PROTOCOL_VERSION,
 	type ProjectDTO,
 	type RpcClient,
@@ -61,6 +63,7 @@ import {
 	type Router,
 	remoteBackend,
 } from "./backend";
+import { editorForwardFlags, editorLocalPort } from "./editor-tunnel";
 import { withTimeout } from "./timeout";
 
 // The one pre-quoted remote command (ssh space-joins remote args, so `bash -lc`
@@ -130,6 +133,9 @@ export interface Host {
 	connected(): Promise<HostStatus[]>;
 	/** id → owning-engine alias (null = local), from the aggregate's learned registry. */
 	origins(): Record<string, string | null>;
+	/** Start the in-app editor on the task's engine and resolve the URL THIS
+	 *  client loads for it (localhost, ssh forward, or tailnet endpoint). */
+	editorUrl(taskId: string): Promise<{ url: string }>;
 	/** Connect the box if needed, then clone+register a repo ON it (from its remote URL). */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;
 	/** Install the ateam engine on a reachable SSH box (idempotent), streaming the
@@ -257,7 +263,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 				`Unknown connection "${alias}" — add it to ~/.ssh/config, or give a Tailscale endpoint like 100.x.y.z:8787.`,
 			);
 		}
-		return sshClientTransport(alias, [REMOTE_ATTACH]);
+		// The editor forward rides the RPC child (idle forwards cost nothing), so
+		// the tunnel needs no lifecycle of its own — it dies with the connection.
+		return sshClientTransport(alias, [REMOTE_ATTACH], { sshFlags: editorForwardFlags(alias) });
 	}
 
 	async function connect(alias: string | null): Promise<HostStatus> {
@@ -583,6 +591,27 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		});
 	}
 
+	async function editorUrl(taskId: string): Promise<{ url: string }> {
+		// Ask the OWNING engine to have its editor up before deciding how to reach it.
+		const ep = (await agg.handleFor(taskId, CH.editorOpen, [taskId])) as EditorEndpointDTO;
+		const backend = agg.ownerOf.get(taskId);
+		if (!backend || backend.kind === "local") return { url: `http://127.0.0.1:${ep.port}` };
+		let alias: string | null = null;
+		for (const [a, b] of backends) if (b === backend) alias = a;
+		if (!alias) throw new Error("This task's box is no longer connected.");
+		const ws = endpointUrl(alias);
+		// A ws box is reached over the tailnet — the editor binds that same interface
+		// (editorBindHost), so the alias's own host is the editor's host.
+		if (ws) return { url: `http://${new URL(ws).hostname}:${ep.port}` };
+		// ssh: the forward was opened at connect time against the DEFAULT port; a box
+		// overriding ATEAM_EDITOR_PORT would answer somewhere the tunnel doesn't reach.
+		if (ep.port !== DEFAULT_EDITOR_PORT)
+			throw new Error(
+				`"${alias}" runs its editor on port ${ep.port}, but the ssh forward targets ${DEFAULT_EDITOR_PORT}. Unset ATEAM_EDITOR_PORT on the box.`,
+			);
+		return { url: `http://127.0.0.1:${editorLocalPort(alias)}` };
+	}
+
 	return {
 		router,
 		list: async (): Promise<ConnectionDTO[]> => listConnections(db),
@@ -591,6 +620,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		forget,
 		connected,
 		origins,
+		editorUrl,
 		provision,
 		install,
 		createBox,

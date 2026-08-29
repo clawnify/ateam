@@ -340,6 +340,8 @@ export const CH = {
 	utilAttachClipboardImage: "util:attachClipboardImage",
 	utilWriteImageBytes: "util:writeImageBytes",
 	utilOpenInEditor: "util:openInEditor",
+	editorOpen: "editor:open",
+	editorOpenUrl: "editor:openUrl",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -397,6 +399,20 @@ export type AttachDelivery =
  */
 export type OpenInEditorResult = { ok: true } | { ok: false; reason: string };
 
+/**
+ * The in-app editor's default port on the engine's machine (code-server). Shared
+ * between the engine (which binds it) and the desktop's SSH forward (which is
+ * opened at connect time, before the engine is asked) — so both sides must agree.
+ * shortcut: a box overriding ATEAM_EDITOR_PORT breaks the ssh path; carry the
+ * port in system:hello if that override ever matters.
+ */
+export const DEFAULT_EDITOR_PORT = 8390;
+
+/** Where the engine's embedded editor (code-server) answers, on ITS machine. */
+export interface EditorEndpointDTO {
+	port: number;
+}
+
 // ---- the API surface exposed on window.ateam ----
 export interface AteamApi {
 	projects: {
@@ -448,6 +464,15 @@ export interface AteamApi {
 		 * the shortlist and says why each one matched.
 		 */
 		sessions(input: { projectId: string; query: string; ai?: boolean }): Promise<SessionHitDTO[]>;
+	};
+	editor: {
+		/**
+		 * Start (or reuse) the in-app editor for this task's engine and resolve the
+		 * URL THIS client should load — tunneled for an SSH box, direct for a
+		 * Tailscale endpoint, localhost for the local engine. The page is VS Code
+		 * (code-server) on the task's machine; callers append ?folder=<worktree>.
+		 */
+		open(taskId: string): Promise<{ url: string }>;
 	};
 	fs: {
 		/**

@@ -931,6 +931,18 @@ input {
 }
 
 /* changes view: GitHub-Desktop layout — file list left, diff right */
+/* In-app editor (VS Code web in an iframe), filling the panel like the terminal. */
+.editor-wrap {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+}
+.editor-frame {
+	flex: 1;
+	border: 0;
+	background: #1e1e1e;
+}
+
 .changes-view {
 	flex: 1;
 	min-width: 0;
