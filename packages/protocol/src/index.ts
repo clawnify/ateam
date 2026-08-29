@@ -342,6 +342,7 @@ export const CH = {
 	utilOpenInEditor: "util:openInEditor",
 	editorOpen: "editor:open",
 	editorOpenUrl: "editor:openUrl",
+	editorInstall: "editor:install",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -413,6 +414,13 @@ export interface EditorEndpointDTO {
 	port: number;
 }
 
+/**
+ * editor:open's answer: the endpoint, or "code-server isn't installed here" —
+ * a state, not an error, so clients can front the install with a consent dialog
+ * instead of parsing an exception.
+ */
+export type EditorOpenResult = EditorEndpointDTO | { needsInstall: true };
+
 // ---- the API surface exposed on window.ateam ----
 export interface AteamApi {
 	projects: {
@@ -472,7 +480,13 @@ export interface AteamApi {
 		 * Tailscale endpoint, localhost for the local engine. The page is VS Code
 		 * (code-server) on the task's machine; callers append ?folder=<worktree>.
 		 */
-		open(taskId: string): Promise<{ url: string }>;
+		open(taskId: string): Promise<{ url: string } | { needsInstall: true }>;
+		/**
+		 * Install code-server on the task's engine (one-time, user-space, pinned
+		 * version). Call only after the user consented to a needsInstall answer.
+		 * Resolves when installed; a following open() starts it.
+		 */
+		install(taskId: string): Promise<void>;
 	};
 	fs: {
 		/**

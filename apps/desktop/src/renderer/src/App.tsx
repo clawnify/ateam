@@ -1437,6 +1437,7 @@ function TaskPanel({
 	// stays mounted and is only hidden — unmounting would drop unsaved buffers.
 	const [editorSrc, setEditorSrc] = useState<string | null>(null);
 	const [editorOpen, setEditorOpen] = useState(false);
+	const [editorBusy, setEditorBusy] = useState<string | null>(null);
 	const [viewFile, setViewFile] = useState<string | null>(null);
 	// This task's live PTY sessions — agents and shells alike. They ARE the tabs:
 	// the daemon already owns as many per task as you like, so there is nothing
@@ -1694,8 +1695,32 @@ function TaskPanel({
 							return;
 						}
 						void run(async () => {
-							const { url } = await window.ateam.editor.open(task.id);
-							setEditorSrc(`${url}/?folder=${encodeURIComponent(task.worktreePath)}`);
+							let res = await window.ateam.editor.open(task.id);
+							if ("needsInstall" in res) {
+								// Inline coding is optional — nothing is installed without a yes.
+								const where = alias === null ? "this Mac" : `"${alias}"`;
+								const ok = await confirm(
+									"Install the inline editor?",
+									`Inline coding runs VS Code (code-server) on ${where} — a one-time, user-space install (~200 MB, no root). Install it now? It takes about a minute.`,
+								);
+								if (!ok) return;
+								setEditorOpen(true);
+								setChangesOpen(false);
+								setEditorBusy(`Installing the inline editor on ${where}…`);
+								try {
+									await window.ateam.editor.install(task.id);
+									res = await window.ateam.editor.open(task.id);
+									if ("needsInstall" in res)
+										throw new Error("Install finished but the editor is still missing.");
+								} catch (e) {
+									// Back to the terminal — a blank editor pane would hide it.
+									setEditorOpen(false);
+									throw e;
+								} finally {
+									setEditorBusy(null);
+								}
+							}
+							setEditorSrc(`${res.url}/?folder=${encodeURIComponent(task.worktreePath)}`);
 							setEditorOpen(true);
 							setChangesOpen(false);
 						});
@@ -1828,10 +1853,16 @@ function TaskPanel({
 					/>
 				)}
 
-				{editorSrc && (
+				{(editorSrc || editorBusy) && (
 					<div className="editor-wrap" style={{ display: editorOpen ? "flex" : "none" }}>
 						{/* VS Code web (code-server) on the task's engine, scoped to the worktree. */}
-						<iframe className="editor-frame" src={editorSrc} title="Editor" />
+						{editorSrc ? (
+							<iframe className="editor-frame" src={editorSrc} title="Editor" />
+						) : (
+							<div className="muted" style={{ display: "grid", placeItems: "center", flex: 1 }}>
+								{editorBusy}
+							</div>
+						)}
 					</div>
 				)}
 

@@ -2,11 +2,15 @@
 // demand, serving every task worktree via VS Code web's ?folder= URL. The engine
 // only knows how to RUN it on its own machine; how a client reaches the port
 // (ssh forward, tailnet, localhost) is the client's transport knowledge.
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { DEFAULT_EDITOR_PORT, type EditorEndpointDTO } from "@ateam/protocol";
+import {
+	DEFAULT_EDITOR_PORT,
+	type EditorEndpointDTO,
+	type EditorOpenResult,
+} from "@ateam/protocol";
 
 /** Where the standalone install puts the binary (plus the usual system dirs). */
 const BIN_CANDIDATES = [
@@ -15,9 +19,28 @@ const BIN_CANDIDATES = [
 	"/opt/homebrew/bin/code-server",
 ];
 
-export const INSTALL_HINT =
-	"code-server isn't installed on this machine. Install it with: " +
-	"curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix=$HOME/.local";
+/** The build the Editor tab was tested against; installs are pinned to it so a
+ *  fleet of boxes doesn't drift. Bumped deliberately, with an Ateam release. */
+export const CODE_SERVER_VERSION = "4.135.0";
+
+/** The official standalone installer: user-space, no root, ~/.local prefix. */
+export const INSTALL_CMD =
+	"curl -fsSL https://code-server.dev/install.sh | " +
+	`sh -s -- --method=standalone --prefix=$HOME/.local --version ${CODE_SERVER_VERSION}`;
+
+/**
+ * Run the installer on THIS machine. Consent lives with the caller — engines
+ * only ever run this after a client relayed the user's yes.
+ */
+export function installCodeServer(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+	return new Promise((resolve, reject) => {
+		execFile("sh", ["-c", INSTALL_CMD], { timeout: 10 * 60_000 }, (err, _out, stderr) => {
+			if (!err && findCodeServer(env)) return resolve();
+			const tail = (stderr ?? "").trim().split("\n").slice(-3).join(" ");
+			reject(new Error(`code-server install failed${tail ? `: ${tail}` : ""}`));
+		});
+	});
+}
 
 /** Absolute path of the code-server binary, or null. `env` injectable for tests. */
 export function findCodeServer(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -74,14 +97,14 @@ export function preseedUserSettings(dataDir = join(homedir(), ".local", "share",
 }
 
 export interface EditorHost {
-	/** Start (or reuse) the editor; resolves when it answers HTTP. */
-	ensure(): Promise<EditorEndpointDTO>;
+	/** Start (or reuse) the editor; `needsInstall` when the binary is absent. */
+	ensure(): Promise<EditorOpenResult>;
 }
 
 export function createEditorHost(env: NodeJS.ProcessEnv = process.env): EditorHost {
 	const port = Number(env.ATEAM_EDITOR_PORT) || DEFAULT_EDITOR_PORT;
 	let child: ChildProcess | null = null;
-	let starting: Promise<EditorEndpointDTO> | null = null;
+	let starting: Promise<EditorOpenResult> | null = null;
 
 	async function waitReady(host: string): Promise<void> {
 		// code-server exposes /healthz without auth; poll until it answers.
@@ -99,9 +122,7 @@ export function createEditorHost(env: NodeJS.ProcessEnv = process.env): EditorHo
 		throw new Error(`The editor didn't answer on port ${port} within 15s.`);
 	}
 
-	function start(): Promise<EditorEndpointDTO> {
-		const bin = findCodeServer(env);
-		if (!bin) return Promise.reject(new Error(INSTALL_HINT));
+	function start(bin: string): Promise<EditorEndpointDTO> {
 		const host = editorBindHost(env);
 		preseedUserSettings();
 		const proc = spawn(
@@ -124,8 +145,10 @@ export function createEditorHost(env: NodeJS.ProcessEnv = process.env): EditorHo
 			// Alive child answering = reuse; a died child (crash, external kill)
 			// falls through to a fresh start.
 			if (child && child.exitCode === null) return Promise.resolve({ port });
+			const bin = findCodeServer(env);
+			if (!bin) return Promise.resolve({ needsInstall: true });
 			if (!starting) {
-				starting = start().finally(() => {
+				starting = start(bin).finally(() => {
 					starting = null;
 				});
 			}

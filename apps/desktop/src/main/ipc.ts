@@ -66,7 +66,7 @@ export interface NativeHandlers {
 	openProjectWindow: (projectId: string) => void;
 	/** Resolve the in-app editor URL for a task (starts it on the owning engine).
 	 *  Client-native because reaching the port is transport knowledge (host.ts). */
-	editorUrl: (taskId: string) => Promise<{ url: string }>;
+	editorUrl: (taskId: string) => Promise<{ url: string } | { needsInstall: true }>;
 }
 
 /**

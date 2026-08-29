@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { editorBindHost, findCodeServer, preseedUserSettings } from "../src/editor";
+import {
+	CODE_SERVER_VERSION,
+	editorBindHost,
+	findCodeServer,
+	INSTALL_CMD,
+	preseedUserSettings,
+} from "../src/editor";
 
 describe("editor: findCodeServer", () => {
 	test("env override wins when executable", () => {
@@ -50,5 +56,14 @@ describe("editor: preseedUserSettings", () => {
 		mkdirSync(dataDir, { recursive: true });
 		preseedUserSettings(dataDir);
 		expect(existsSync(join(dataDir, "User", "settings.json"))).toBe(true);
+	});
+});
+
+describe("editor: install command", () => {
+	test("official installer, standalone, user prefix, pinned version", () => {
+		expect(INSTALL_CMD).toContain("https://code-server.dev/install.sh");
+		expect(INSTALL_CMD).toContain("--method=standalone");
+		expect(INSTALL_CMD).toContain("--prefix=$HOME/.local");
+		expect(INSTALL_CMD).toContain(`--version ${CODE_SERVER_VERSION}`);
 	});
 });

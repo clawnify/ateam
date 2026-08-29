@@ -35,7 +35,7 @@ import {
 	PROTOCOL_VERSION,
 	type UpdateLoopInput,
 } from "@ateam/protocol";
-import { createEditorHost } from "./editor";
+import { createEditorHost, installCodeServer } from "./editor";
 import type { Engine } from "./engine";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
@@ -422,6 +422,13 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.editorOpen]: async (taskId: string) => {
 			requireTask(services, taskId);
 			return editorHost.ensure();
+		},
+		// Consent-gated: clients call this only after the user said yes to a
+		// needsInstall answer. Long-running (a ~200MB download); RPC calls have no
+		// per-call timeout, so the client just awaits it.
+		[CH.editorInstall]: async (taskId: string) => {
+			requireTask(services, taskId);
+			await installCodeServer();
 		},
 
 		// ---- fs / util: server-side, remote-native (browse + attach on the

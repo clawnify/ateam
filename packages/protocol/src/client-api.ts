@@ -66,7 +66,7 @@ export interface NativeClientApi {
 	/** Resolve the in-app editor URL for a task — how a client REACHES the engine's
 	 *  editor is transport knowledge only the client has. Optional: a client without
 	 *  an editor surface omits it and AteamApi.editor.open rejects with guidance. */
-	editorOpen?(taskId: string): Promise<{ url: string }>;
+	editorOpen?(taskId: string): Promise<{ url: string } | { needsInstall: true }>;
 }
 
 /** Build the full AteamApi over an RpcClient, delegating client-local bits to `native`. */
@@ -110,6 +110,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			open:
 				native.editorOpen ??
 				(() => Promise.reject(new Error("This client has no editor surface."))),
+			install: (taskId) => call<void>(CH.editorInstall, [taskId]),
 		},
 		search: {
 			sessions: (input) => call<SessionHitDTO[]>(CH.searchSessions, [input]),

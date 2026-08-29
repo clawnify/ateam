@@ -13,6 +13,7 @@ import {
 	createRpcClient,
 	DEFAULT_EDITOR_PORT,
 	type EditorEndpointDTO,
+	type EditorOpenResult,
 	PROTOCOL_VERSION,
 	type ProjectDTO,
 	type RpcClient,
@@ -134,8 +135,9 @@ export interface Host {
 	/** id → owning-engine alias (null = local), from the aggregate's learned registry. */
 	origins(): Record<string, string | null>;
 	/** Start the in-app editor on the task's engine and resolve the URL THIS
-	 *  client loads for it (localhost, ssh forward, or tailnet endpoint). */
-	editorUrl(taskId: string): Promise<{ url: string }>;
+	 *  client loads for it (localhost, ssh forward, or tailnet endpoint) — or
+	 *  report that the engine still needs code-server installed. */
+	editorUrl(taskId: string): Promise<{ url: string } | { needsInstall: true }>;
 	/** Connect the box if needed, then clone+register a repo ON it (from its remote URL). */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;
 	/** Install the ateam engine on a reachable SSH box (idempotent), streaming the
@@ -591,9 +593,11 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		});
 	}
 
-	async function editorUrl(taskId: string): Promise<{ url: string }> {
+	async function editorUrl(taskId: string): Promise<{ url: string } | { needsInstall: true }> {
 		// Ask the OWNING engine to have its editor up before deciding how to reach it.
-		const ep = (await agg.handleFor(taskId, CH.editorOpen, [taskId])) as EditorEndpointDTO;
+		const res = (await agg.handleFor(taskId, CH.editorOpen, [taskId])) as EditorOpenResult;
+		if ("needsInstall" in res) return res;
+		const ep: EditorEndpointDTO = res;
 		const backend = agg.ownerOf.get(taskId);
 		if (!backend || backend.kind === "local") return { url: `http://127.0.0.1:${ep.port}` };
 		let alias: string | null = null;
