@@ -139,6 +139,8 @@ export interface LoopDTO {
 	prompt: string | null;
 	/** Which coding agent each run launches (agent-session loops). */
 	agentId: string | null;
+	/** The loop's one persistent task — every run is a fresh session in it. */
+	taskId: string | null;
 	intervalMs: number | null;
 	lastRunAt: number | null;
 	nextRunAt: number | null;

@@ -1851,6 +1851,10 @@ input {
 	color: var(--text);
 	border-color: var(--text-dim);
 }
+/* Sidebar LOOPS row for a paused loop. */
+.tasknode.loop-paused {
+	opacity: 0.5;
+}
 
 .conn-install-log {
 	margin: 4px 0 2px;
