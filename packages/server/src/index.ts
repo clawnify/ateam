@@ -19,7 +19,6 @@ export type { Dispatcher } from "./dispatcher";
 export { createDispatcher } from "./dispatcher";
 export type { Engine, EngineOptions } from "./engine";
 export { createEngine } from "./engine";
-export type { ServerTransport } from "./rpc";
 export type { BoxProvider, CreatedServer, CreateServerInput, ProviderOptions } from "./provision";
 export {
 	buildCloudInit,
@@ -27,6 +26,7 @@ export {
 	HETZNER_SIZES,
 	hetznerProvider,
 } from "./provision";
+export type { ServerTransport } from "./rpc";
 export { serveRpc } from "./rpc";
 export type { Services } from "./services";
 export { socketClientTransport, socketServerTransport } from "./transport/socket";

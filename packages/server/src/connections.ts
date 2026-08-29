@@ -13,8 +13,8 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ConnectionDTO, HostTransport } from "@ateam/protocol";
 import { type AteamDb, type Host, repo } from "@ateam/db";
+import type { ConnectionDTO, HostTransport } from "@ateam/protocol";
 
 // ConnectionDTO is a client↔renderer boundary DTO — its home is @ateam/protocol;
 // re-exported here so `listConnections`' callers keep importing it from the server.

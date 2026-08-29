@@ -1933,6 +1933,11 @@ input {
 	color: var(--red);
 	border-color: var(--red);
 }
+/* Edit shares the icon-button base but hovers neutral, not destructive-red. */
+.loop-edit:hover {
+	color: var(--text);
+	border-color: var(--text-dim);
+}
 
 .conn-install-log {
 	margin: 4px 0 2px;
