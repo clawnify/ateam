@@ -30,12 +30,17 @@ export function sessionTabs(sessions: SessionDTO[], agents: AgentDTO[]): Session
 }
 
 /**
- * Which session the panel should be showing, given the live (oldest-first) list
- * and the tab currently picked. Keeps your pick while it's alive; when it dies —
- * or when a task is opened with sessions this window has never chosen between —
- * falls to the newest survivor. `null` means the task has no terminal left.
+ * Which session a view should be showing, given the live (oldest-first) list and
+ * the tab currently picked. Keeps your pick while it's alive. When it dies, or
+ * when a task is opened with sessions this view has never chosen between, it
+ * falls to the newest AGENT session, and only to a plain shell when the task has
+ * no agent at all: a terminal you opened to run one command is not what the task
+ * is about, so it should not become what you see just by being newest. `null`
+ * means the task has no terminal left.
  */
 export function activeTerminal(sessions: SessionDTO[], current: string | null): string | null {
 	if (current && sessions.some((s) => s.terminalId === current)) return current;
-	return sessions[sessions.length - 1]?.terminalId ?? null;
+	const agents = sessions.filter((s) => s.agentId !== "shell");
+	const pool = agents.length ? agents : sessions;
+	return pool[pool.length - 1]?.terminalId ?? null;
 }

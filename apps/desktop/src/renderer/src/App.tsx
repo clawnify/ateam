@@ -1235,6 +1235,7 @@ export function App() {
 						) : (
 							<MissionControl
 								tasks={activeTasks}
+								agents={agents}
 								order={sidebarOrderIds}
 								layout={mcLayout}
 								locked={mcLocked}
@@ -2025,18 +2026,29 @@ function TaskPanel({
 
 function MissionControl({
 	tasks,
+	agents,
 	order,
 	layout,
 	locked,
 	onExpand,
 }: {
 	tasks: TaskDTO[];
+	/** Agent catalog, for naming a session's tab the way the task panel does. */
+	agents: AgentDTO[];
 	order: string[];
 	layout: McLayout;
 	locked: boolean;
 	onExpand: (task: TaskDTO, terminalId: string) => void;
 }) {
-	const [tiles, setTiles] = useState<{ task: TaskDTO; terminalId: string }[]>([]);
+	// One tile per TASK, not per session: a task with an agent and two shells is
+	// one piece of work, and splaying it across three identically-titled tiles
+	// told you nothing. The tile shows one session at a time and its tabs switch
+	// between them. Creating and closing sessions stays in the task panel, where
+	// the + and the ✕ live; a tile is a viewport onto work that already exists.
+	const [tiles, setTiles] = useState<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
+	// Which session each tile is showing, when the viewer has picked one. Absent
+	// (or pointing at a session that has since died) falls back to activeTerminal.
+	const [shownByTask, setShownByTask] = useState<Record<string, string>>({});
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
 
@@ -2096,12 +2108,12 @@ function MissionControl({
 	const rank = locked ? frozenRank : liveRank;
 
 	// The tile whose terminal currently has keyboard focus, i.e. the one the
-	// user is typing in. A ref, not state: focus alone must not reorder
-	// anything; it only matters at the moment a re-sort happens.
+	// user is typing in, keyed by task id. A ref, not state: focus alone must not
+	// reorder anything; it only matters at the moment a re-sort happens.
 	const focusedRef = useRef<string | null>(null);
-	// Latest unsorted session list, kept so a re-sort (order change, lock flip,
+	// Latest unsorted tile list, kept so a re-sort (order change, lock flip,
 	// blur) doesn't need a fresh round of listForTask calls.
-	const sessionsRef = useRef<{ task: TaskDTO; terminalId: string }[]>([]);
+	const sessionsRef = useRef<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
 	const rankRef = useRef(rank);
 	const lockedRef = useRef(locked);
 	lockedRef.current = locked;
@@ -2113,8 +2125,7 @@ function MissionControl({
 	const resort = useCallback(() => {
 		const r = rankRef.current;
 		const next = [...sessionsRef.current];
-		// Stable sort; V8's stable sort keeps a task's own sessions (and any
-		// equal-rank ties) in encounter order.
+		// Stable sort; V8's stable sort keeps equal-rank ties in encounter order.
 		next.sort(
 			(a, b) =>
 				(r.get(a.task.id) ?? Number.MAX_SAFE_INTEGER) -
@@ -2126,24 +2137,24 @@ function MissionControl({
 			// already see gains nothing and yanks the one they're reading. The
 			// page re-orders only when its membership changes (a tile from
 			// another page earns a visible slot, or one of its own dies).
-			// Off-page tiles always take the new order — that move is invisible.
+			// Off-page tiles always take the new order, that move is invisible.
 			const start = pageRef.current * pageSizeRef.current;
 			const prevWin = prev.slice(start, start + pageSizeRef.current);
 			const nextWin = next.slice(start, start + pageSizeRef.current);
 			const sameSet =
 				prevWin.length === nextWin.length &&
-				prevWin.every((p) => nextWin.some((n) => n.terminalId === p.terminalId));
+				prevWin.every((p) => nextWin.some((n) => n.task.id === p.task.id));
 			if (sameSet && prevWin.length > 0) {
 				// Keep the on-screen arrangement but take next's tile objects,
-				// which carry the freshly fetched task DTOs.
-				const fresh = new Map(nextWin.map((t) => [t.terminalId, t]));
-				const kept = prevWin.map((t) => fresh.get(t.terminalId) ?? t);
+				// which carry the freshly fetched task DTOs and session lists.
+				const fresh = new Map(nextWin.map((t) => [t.task.id, t]));
+				const kept = prevWin.map((t) => fresh.get(t.task.id) ?? t);
 				next.splice(start, kept.length, ...kept);
 			} else {
 				const focused = lockedRef.current ? null : focusedRef.current;
 				if (focused) {
-					const cur = prev.findIndex((t) => t.terminalId === focused);
-					const pinned = next.find((t) => t.terminalId === focused);
+					const cur = prev.findIndex((t) => t.task.id === focused);
+					const pinned = next.find((t) => t.task.id === focused);
 					if (cur >= 0 && pinned) {
 						next.splice(next.indexOf(pinned), 1);
 						next.splice(Math.min(cur, next.length), 0, pinned);
@@ -2185,9 +2196,11 @@ function MissionControl({
 					})),
 				);
 				if (cancelled) return;
-				sessionsRef.current = perTask.flatMap(({ task, sessions }) =>
-					sessions.map((s) => ({ task, terminalId: s.terminalId })),
-				);
+				// listForTask hands sessions back latest-first; reverse so the tabs
+				// read oldest to newest, exactly as they do in the task panel.
+				sessionsRef.current = perTask
+					.filter(({ sessions }) => sessions.length > 0)
+					.map(({ task, sessions }) => ({ task, sessions: [...sessions].reverse() }));
 				resort();
 			} finally {
 				inFlight = false;
@@ -2220,7 +2233,7 @@ function MissionControl({
 		<div className="mc-wrap">
 			{/* Keyed by page: flipping remounts the grid, and TerminalView replays
 			    its ring-buffer snapshot on mount, so a page flip is a clean swap.
-			    The slide follows the flip direction — a "perfect scroll" to the
+			    The slide follows the flip direction, a "perfect scroll" to the
 			    next set of terminals. */}
 			<motion.div
 				key={clampedPage}
@@ -2230,44 +2243,69 @@ function MissionControl({
 				animate={{ y: 0, opacity: 1 }}
 				transition={springy}
 			>
-				{visible.map(({ task, terminalId }) => (
-					// biome-ignore lint/a11y/noStaticElementInteractions: focus/blur only observe where focus is; the tile itself isn't interactive
-					<div
-						key={terminalId}
-						className="tile"
-						// React's onFocus/onBlur bubble (focusin/focusout), so these fire
-						// when the xterm textarea inside the tile gains/loses focus.
-						onFocus={() => {
-							focusedRef.current = terminalId;
-						}}
-						onBlur={(e) => {
-							// Ignore focus moving within the same tile (e.g. from the bar's
-							// button to the terminal). Once focus truly leaves, the pin is
-							// released: if the pin was holding the tile away from an
-							// off-page slot it now moves there (an in-page permutation
-							// alone is skipped by resort anyway).
-							if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-							if (focusedRef.current !== terminalId) return;
-							focusedRef.current = null;
-							resort();
-						}}
-					>
-						<div className="bar">
-							<span>{task.name}</span>
-							<span className="muted">· {task.branch}</span>
-							<span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-								{task.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
-								<IconButton
-									icon={Maximize2}
-									label="Expand to full width"
-									size={13}
-									onClick={() => onExpand(task, terminalId)}
-								/>
-							</span>
+				{visible.map(({ task, sessions }) => {
+					const shown = activeTerminal(sessions, shownByTask[task.id] ?? null);
+					if (!shown) return null; // a task with no live session is not a tile
+					const tabs = sessionTabs(sessions, agents);
+					return (
+						// biome-ignore lint/a11y/noStaticElementInteractions: focus/blur only observe where focus is; the tile itself isn't interactive
+						<div
+							key={task.id}
+							className="tile"
+							// React's onFocus/onBlur bubble (focusin/focusout), so these fire
+							// when the xterm textarea inside the tile gains/loses focus.
+							onFocus={() => {
+								focusedRef.current = task.id;
+							}}
+							onBlur={(e) => {
+								// Ignore focus moving within the same tile (e.g. from the bar's
+								// button to the terminal). Once focus truly leaves, the pin is
+								// released: if the pin was holding the tile away from an
+								// off-page slot it now moves there (an in-page permutation
+								// alone is skipped by resort anyway).
+								if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+								if (focusedRef.current !== task.id) return;
+								focusedRef.current = null;
+								resort();
+							}}
+						>
+							<div className="bar">
+								<span>{task.name}</span>
+								<span className="muted">· {task.branch}</span>
+								<span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+									{task.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
+									<IconButton
+										icon={Maximize2}
+										label="Expand to full width"
+										size={13}
+										onClick={() => onExpand(task, shown)}
+									/>
+								</span>
+							</div>
+							{/* Only worth the row when there is a choice to make. */}
+							{tabs.length > 1 && (
+								<div className="mc-tabs" role="tablist" aria-label={`${task.name} sessions`}>
+									{tabs.map(({ session, label }) => (
+										<button
+											key={session.terminalId}
+											type="button"
+											role="tab"
+											aria-selected={session.terminalId === shown}
+											className={`mc-tab ${session.terminalId === shown ? "active" : ""}`}
+											title={label}
+											onClick={() =>
+												setShownByTask((m) => ({ ...m, [task.id]: session.terminalId }))
+											}
+										>
+											{label}
+										</button>
+									))}
+								</div>
+							)}
+							<TerminalView terminalId={shown} />
 						</div>
-						<TerminalView terminalId={terminalId} />
-					</div>
-				))}
+					);
+				})}
 			</motion.div>
 			{pageCount > 1 && (
 				<div className="mcpager">
