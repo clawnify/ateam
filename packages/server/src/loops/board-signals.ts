@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AteamDb, KanbanColumn, Task } from "@ateam/db";
 import { repo } from "@ateam/db";
+import { signalsFromTask } from "../task-triage";
 import { validateSetStatus } from "./board-organizer";
 import { agentAlive } from "./session-liveness";
 import { type TriageResult, triageWorktree, type WorktreeSignals } from "./worktree-triage";
@@ -57,22 +58,17 @@ async function prMergeInfo(
 	}
 }
 
-/** Gather the signals for one task. Cheap fields come from the DB snapshot;
- *  the gh call is made only when a PR could plausibly exist. */
+/** Gather the signals for one task. The row answers most of them (shared with
+ *  the DTO path via signalsFromTask); this path additionally pays for a live pid
+ *  check and a gh call, made only when a PR could plausibly exist. */
 async function gatherSignals(db: AteamDb, task: Task): Promise<WorktreeSignals> {
-	const gs = task.gitStatus;
 	const mightHavePr = task.prNumber != null || task.column === "review" || task.column === "merged";
 	const pr = mightHavePr ? await prMergeInfo(task.worktreePath) : { state: null, mergedAtMs: null };
 
 	return {
+		...signalsFromTask(task),
+		// Ground truth beats the persisted status when we can afford it.
 		agentAlive: agentAlive(db, task.id),
-		createdAtMs: task.createdAt ?? null,
-		// gitStatus.updatedAt tracks the last git refresh; lastEventAt tracks the
-		// last hook activity (our best proxy for conversation activity).
-		indexMtimeMs: gs?.updatedAt ?? null,
-		transcriptMtimeMs: task.lastEventAt ?? null,
-		dirtyRealCount: gs?.dirty ?? 0,
-		commitsAhead: gs?.ahead ?? 0,
 		prState: pr.state,
 		mergedAtMs: pr.mergedAtMs,
 	};

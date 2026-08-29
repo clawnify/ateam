@@ -4,6 +4,7 @@ import type { HookServer } from "./hooks/hook-server";
 import type { LoopRunner } from "./loops/runner";
 import type { MergeQueue } from "./merge-queue";
 import type { PtyClient } from "./pty/pty-client";
+import { triageTask } from "./task-triage";
 
 export interface Services {
 	db: AteamDb;
@@ -48,6 +49,7 @@ export function toTaskDTO(t: Task): TaskDTO {
 		gitStatus: t.gitStatus ?? null,
 		lastEventAt: t.lastEventAt ?? t.updatedAt ?? null,
 		isUnread: Boolean(t.isUnread),
+		triage: triageTask(t),
 	};
 }
 

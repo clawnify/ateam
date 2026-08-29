@@ -10,42 +10,29 @@ import {
 	ArrowDownToLine,
 	ArrowUp,
 	ArrowUpDown,
-	BookOpen,
 	Brush,
-	Bug,
 	Check,
 	ChevronDown,
 	ChevronRight,
 	Columns2,
-	Database,
 	ExternalLink,
-	FilePen,
-	FlaskConical,
 	FolderPlus,
-	Gauge,
-	GitBranch,
 	GitCommitVertical,
 	GitMerge,
 	History,
 	LayoutGrid,
-	Lock,
-	type LucideIcon,
 	Maximize2,
 	Minimize2,
 	Monitor,
-	Palette,
 	PanelLeft,
 	Play,
 	Plus,
-	Rocket,
 	RotateCw,
 	Rows2,
 	Search,
 	Server,
-	Sparkles,
 	SquareTerminal,
 	Trash2,
-	Wrench,
 	X,
 	Zap,
 } from "lucide-react";
@@ -68,6 +55,8 @@ import { Menu } from "./components/Menu";
 import { NewTaskComposer } from "./components/NewTaskComposer";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
+import { matchesTagQuery, taskIcon, taskTags } from "./task-tags";
+import { byWhatsNext, relativeAge } from "./triage-order";
 import { type Alias, aliasLabel, type UnifiedProject, unifyProjects } from "./unify";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
@@ -78,30 +67,8 @@ const COLUMNS: { key: KanbanColumn; label: string }[] = [
 	{ key: "merged", label: "Done" },
 ];
 
-// Pick an icon from what the task name suggests — like VSCode's file icons,
-// but inferred from intent. First keyword match wins; GitBranch is the default.
-const ICON_RULES: { icon: LucideIcon; re: RegExp }[] = [
-	{ icon: Bug, re: /\b(bug|fix|hotfix|patch|broken|crash|error)\b/i },
-	{ icon: BookOpen, re: /\b(readme|docs?|wiki|guide|changelog)\b/i },
-	{ icon: Lock, re: /\b(auth|login|signin|security|permission|token|oauth)\b/i },
-	{ icon: Palette, re: /\b(ui|ux|style|css|design|theme|button|layout|icon)\b/i },
-	{ icon: FlaskConical, re: /\b(test|spec|e2e|coverage)\b/i },
-	{ icon: Database, re: /\b(db|database|schema|migration|sql|drizzle|query)\b/i },
-	{ icon: Server, re: /\b(api|endpoint|server|backend|route|webhook)\b/i },
-	{ icon: Gauge, re: /\b(perf|performance|optimi|speed|cache|latency)\b/i },
-	{ icon: Wrench, re: /\b(refactor|cleanup|chore|tidy|rename|config|setup)\b/i },
-	{ icon: Rocket, re: /\b(release|deploy|launch|ship|publish)\b/i },
-	{ icon: Sparkles, re: /\b(feat|feature|add|new|implement|create)\b/i },
-	{ icon: FilePen, re: /\b(update|edit|change|tweak|copy|content)\b/i },
-];
-
-function taskIcon(name: string): LucideIcon {
-	for (const rule of ICON_RULES) if (rule.re.test(name)) return rule.icon;
-	return GitBranch;
-}
-
 // ---- sidebar task ordering ----
-type TaskSortMode = "status" | "updated" | "custom";
+type TaskSortMode = "next" | "status" | "updated" | "custom";
 
 // ---- mission control layout ----
 // How agent tiles are arranged: "grid" is a 2x2 overview (tiles half the
@@ -195,7 +162,7 @@ export function App() {
 		document.body.style.userSelect = "none";
 	};
 	const [taskSort, setTaskSortState] = useState<TaskSortMode>(
-		() => (localStorage.getItem("ateam.taskSort") as TaskSortMode) || "status",
+		() => (localStorage.getItem("ateam.taskSort") as TaskSortMode) || "next",
 	);
 	const [customOrder, setCustomOrder] = useState<string[]>([]);
 	const [cleanupOpen, setCleanupOpen] = useState(false);
@@ -460,7 +427,9 @@ export function App() {
 	};
 	const orderedSidebarTasks = useMemo(() => {
 		const list = [...sidebarTasks];
-		if (taskSort === "status") {
+		if (taskSort === "next") {
+			list.sort(byWhatsNext);
+		} else if (taskSort === "status") {
 			list.sort((a, b) => STATUS_RANK[a.column] - STATUS_RANK[b.column]);
 		} else if (taskSort === "updated") {
 			list.sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0));
@@ -475,14 +444,20 @@ export function App() {
 	}, [sidebarTasks, taskSort, customOrder]);
 
 	// Case-insensitive substring match across the task's name, branch, and
-	// description. Empty query matches all.
+	// description. Empty query matches all. A leading `#` switches to a tag
+	// filter instead — "#bug" narrows the board to bug-tagged work, which is the
+	// whole point of having a cross-cutting axis.
 	const query = taskQuery.trim().toLowerCase();
 	const matchesQuery = useCallback(
-		(t: TaskDTO) =>
-			query === "" ||
-			t.name.toLowerCase().includes(query) ||
-			t.branch.toLowerCase().includes(query) ||
-			(t.description?.toLowerCase().includes(query) ?? false),
+		(t: TaskDTO) => {
+			if (query === "") return true;
+			if (query.startsWith("#")) return matchesTagQuery(query, t.name, t.description);
+			return (
+				t.name.toLowerCase().includes(query) ||
+				t.branch.toLowerCase().includes(query) ||
+				(t.description?.toLowerCase().includes(query) ?? false)
+			);
+		},
 		[query],
 	);
 	// Sidebar and board both honor the search; Mission Control and the selected
@@ -523,15 +498,29 @@ export function App() {
 		setPanelMode(mem?.mode ?? "side");
 		setView(mem?.view ?? "board");
 	};
+	// Opening a task IS reading it — the hooks set `isUnread` on Stop /
+	// PermissionRequest and nothing ever cleared it. Only explicit user
+	// selection clears it: restoring a remembered selection on a project
+	// switch must not silently mark things read the user never looked at.
+	const markRead = (id: string) => {
+		// Skip the round trip (and its broadcast) for a task already read.
+		const t = Object.values(tasksByProject)
+			.flat()
+			.find((x) => x.id === id);
+		if (!t?.isUnread) return;
+		void window.ateam.tasks.markRead(id).catch(() => {});
+	};
 	// From the sidebar → open full width. From the board → open on the side.
 	const openTask = (t: TaskDTO) => {
 		setActiveProjectId(t.projectId);
 		setSelectedTaskId(t.id);
+		markRead(t.id);
 		setPanelMode("full");
 		setView("board");
 	};
 	const selectFromBoard = (id: string) => {
 		setSelectedTaskId(id);
+		markRead(id);
 		setPanelMode("side");
 	};
 	// Expanding a Mission Control tile opens that exact terminal full-width.
@@ -541,6 +530,7 @@ export function App() {
 	const openFromMission = (task: TaskDTO, terminalId: string) => {
 		setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		setSelectedTaskId(task.id);
+		markRead(task.id);
 		setPanelMode("full");
 	};
 	// Collapsing the full panel inside Mission Control means "back to the
@@ -877,6 +867,11 @@ export function App() {
 									label="Order tasks"
 									items={[
 										{
+											label: "What's next",
+											icon: taskSort === "next" ? Check : undefined,
+											onClick: () => setTaskSort("next"),
+										},
+										{
 											label: "By status",
 											icon: taskSort === "status" ? Check : undefined,
 											onClick: () => setTaskSort("status"),
@@ -1172,7 +1167,7 @@ function TaskRow({
 				) : (
 					<Icon className="ticon" size={14} strokeWidth={1.75} />
 				)}
-				<span className="tname">{t.name}</span>
+				<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
 			</button>
 			<span className="task-trail">
 				{t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />}
@@ -1212,40 +1207,75 @@ function Board({
 						<h3>
 							{col.label} <span className="count">{items.length}</span>
 						</h3>
-						{items.map((t) => (
-							<motion.div
-								key={t.id}
-								layout
-								transition={springy}
-								className={`card ${t.id === selectedId ? "selected" : ""}`}
-								onClick={(e) => {
-									e.stopPropagation();
-									onSelect(t.id);
-								}}
-							>
-								{t.agentStatus && <span className={`ring ${t.agentStatus}`} />}
-								<div className="name">{t.name}</div>
-								{originLabel(t) && (
-									<span className="card-env muted" style={{ fontSize: 10 }}>
-										{originLabel(t)}
-									</span>
-								)}
-								<div className="branch">{t.branch}</div>
-								<div className="meta">
-									{t.gitStatus && (
-										<span>
-											↑{t.gitStatus.ahead} ↓{t.gitStatus.behind} · {t.gitStatus.dirty} changed
+						{items.map((t) => {
+							const tags = taskTags(t.name, t.description);
+							return (
+								<motion.div
+									key={t.id}
+									layout
+									transition={springy}
+									className={`card ${t.id === selectedId ? "selected" : ""}`}
+									onClick={(e) => {
+										e.stopPropagation();
+										onSelect(t.id);
+									}}
+								>
+									{/* A stalled agent must not wear the live "running" ring — the card
+								    would contradict its own caption. */}
+									{t.agentStatus && (
+										<span
+											className={`ring ${t.triage.bucket === "stalled" ? "stalled" : t.agentStatus}`}
+										/>
+									)}
+									<div className="name">
+										{t.isUnread && <span className="unread" title="New since you last looked" />}
+										{t.name}
+									</div>
+									{originLabel(t) && (
+										<span className="card-env muted" style={{ fontSize: 10 }}>
+											{originLabel(t)}
 										</span>
 									)}
-									{t.prNumber && <span>PR #{t.prNumber}</span>}
-								</div>
-								{t.agentId && (
-									<span className="card-agent">
-										<AgentIcon agentId={t.agentId} size={15} />
-									</span>
-								)}
-							</motion.div>
-						))}
+									{/* Tags live in the branch's slot and appear only on hover (the
+								    branch is the most redundant line on the card, being a slug of the
+								    name). Sharing one fixed-height row means hovering never reflows
+								    the board. */}
+									<div className={`branch-slot ${tags.length ? "has-tags" : ""}`}>
+										<div className="branch">{t.branch}</div>
+										{tags.length > 0 && (
+											<div className="tags">
+												{tags.map((tag) => (
+													<span className="tag" key={tag}>
+														{tag}
+													</span>
+												))}
+											</div>
+										)}
+									</div>
+									{/* Why this card is where it is — the triage verdict that until now
+								    was computed on every refresh and shown only to the MCP tool. */}
+									<div className="triage" title={t.triage.reason}>
+										{t.triage.reason}
+									</div>
+									<div className="meta">
+										{t.gitStatus && (
+											<span>
+												↑{t.gitStatus.ahead} ↓{t.gitStatus.behind} · {t.gitStatus.dirty} changed
+											</span>
+										)}
+										{t.prNumber && <span>PR #{t.prNumber}</span>}
+										{relativeAge(t.lastEventAt, Date.now()) && (
+											<span className="age">{relativeAge(t.lastEventAt, Date.now())}</span>
+										)}
+									</div>
+									{t.agentId && (
+										<span className="card-agent">
+											<AgentIcon agentId={t.agentId} size={15} />
+										</span>
+									)}
+								</motion.div>
+							);
+						})}
 					</div>
 				);
 			})}
@@ -1290,7 +1320,7 @@ function TaskPanel({
 	useEffect(() => {
 		setChangesOpen(false);
 		setViewFile(null);
-	}, [task.id]);
+	}, []);
 
 	const refreshDiff = useCallback(() => {
 		void window.ateam.git.diff(task.id).then(setDiff);

@@ -242,6 +242,14 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			// Drop the card from every window (not just the caller's).
 			engine.sendTaskRemoved(task.id);
 		},
+		// The user has actually looked at the task, so it is no longer news. Only
+		// the hooks set `isUnread` (on Stop / PermissionRequest); nothing cleared
+		// it before, which is why the flag was never worth rendering.
+		[CH.tasksMarkRead]: async (id: string) => {
+			const row = repo.updateTask(db, id, { isUnread: false });
+			engine.sendTaskUpdated(id);
+			return toTaskDTO(row!);
+		},
 		[CH.tasksSetColumn]: async (id: string, column: KanbanColumn) => {
 			const row = repo.updateTask(db, id, { column });
 			// Broadcast so every view (board, sidebar) reflects the move — e.g. the

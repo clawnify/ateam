@@ -82,6 +82,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			create: (input) => call<TaskDTO>(CH.tasksCreate, [input]),
 			remove: (input) => call<void>(CH.tasksRemove, [input]),
 			setColumn: (id, column: KanbanColumn) => call<TaskDTO>(CH.tasksSetColumn, [id, column]),
+			markRead: (id) => call<TaskDTO>(CH.tasksMarkRead, [id]),
 			cleanupPreview: (projectId) => call<CleanupReport>(CH.tasksCleanupPreview, [projectId]),
 			cleanupCandidates: (projectId) =>
 				call<CleanupCandidate[]>(CH.tasksCleanupCandidates, [projectId]),

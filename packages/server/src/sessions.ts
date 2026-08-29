@@ -69,6 +69,16 @@ export async function spawnAgentInTask(
 		cwd: task.worktreePath,
 	});
 
+	// Keep the prompt that started this task. It is the only full-sentence record
+	// of intent anywhere: `name` is a slug of its first six words, and the column
+	// it goes in was previously written by nothing, so every task in the db has a
+	// null description and the search-by-description path could never match. Only
+	// the FIRST launch writes it — later prompts are follow-ups in a conversation,
+	// not what the task is about — and a resume carries no prompt at all.
+	if (input.prompt?.trim() && !task.description) {
+		repo.updateTask(services.db, task.id, { description: input.prompt.trim() });
+	}
+
 	if (agent.id === "claude") {
 		await ensureClaudeHooks(task.worktreePath, services.notifyScriptPath);
 	} else if (agent.id === "codex") {
