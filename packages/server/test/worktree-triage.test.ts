@@ -32,10 +32,50 @@ describe("triageWorktree — the false-done cases the reconciler gets wrong", ()
 		expect(r.suggestedColumn).toBeNull();
 	});
 
-	it("live agent is active regardless of git state", () => {
-		const r = triage(quiet({ agentAlive: true, prState: "MERGED", mergedAtMs: NOW - 5 * HOUR }));
+	it("live, advancing agent is active regardless of git state", () => {
+		const r = triage(
+			quiet({
+				agentAlive: true,
+				transcriptMtimeMs: NOW - 60_000,
+				prState: "MERGED",
+				mergedAtMs: NOW - 5 * HOUR,
+			}),
+		);
 		expect(r.bucket).toBe("active");
 		expect(r.done).toBe(false);
+	});
+
+	// The PTY execs a shell when the agent exits (sessions.ts), so liveness alone
+	// calls a crashed agent healthy forever. Progress, not liveness, decides.
+	it("live agent that stopped advancing is stalled, not active", () => {
+		const r = triage(quiet({ agentAlive: true, transcriptMtimeMs: NOW - 10 * HOUR }));
+		expect(r.bucket).toBe("stalled");
+		expect(r.done).toBe(false);
+		expect(r.suggestedColumn).toBe("needs_attention");
+	});
+
+	it("an agent parked on a question is never stalled, however long it waits", () => {
+		const r = triage(
+			quiet({
+				agentAlive: true,
+				agentAwaitingInput: true,
+				transcriptMtimeMs: NOW - 13 * HOUR,
+			}),
+		);
+		expect(r.bucket).toBe("active");
+	});
+
+	// lastActivityMs folds in indexMtimeMs, which the UI refreshes on opening a
+	// panel — using it here would let inspecting a wedged card hide the problem.
+	it("a fresh git-status refresh does not rescue a stalled agent", () => {
+		const r = triage(
+			quiet({
+				agentAlive: true,
+				transcriptMtimeMs: NOW - 10 * HOUR,
+				indexMtimeMs: NOW - 1000,
+			}),
+		);
+		expect(r.bucket).toBe("stalled");
 	});
 
 	it("merged but the conversation continued past merge is NOT done", () => {
