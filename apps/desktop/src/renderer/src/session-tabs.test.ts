@@ -40,12 +40,32 @@ test("a live pick is kept even when it is not the newest", () => {
 	expect(activeTerminal(live, "a")).toBe("a");
 });
 
-test("a pick whose session ended falls to the newest survivor", () => {
-	expect(activeTerminal([session("a", "claude"), session("b", "shell")], "gone")).toBe("b");
+test("a pick whose session ended falls to the newest surviving agent", () => {
+	expect(activeTerminal([session("a", "shell"), session("b", "claude")], "gone")).toBe("b");
 });
 
-test("opening a task with sessions but no pick lands on the newest", () => {
-	expect(activeTerminal([session("a", "claude"), session("b", "shell")], null)).toBe("b");
+test("opening a task with no pick lands on the newest agent, not a newer shell", () => {
+	const live = [session("a", "claude"), session("b", "shell")];
+	expect(activeTerminal(live, null)).toBe("a");
+});
+
+test("the newest agent wins even with shells opened on either side of it", () => {
+	const live = [
+		session("a", "shell"),
+		session("b", "claude"),
+		session("c", "codex"),
+		session("d", "shell"),
+	];
+	expect(activeTerminal(live, null)).toBe("c");
+});
+
+test("a task with only shells still shows its newest one", () => {
+	expect(activeTerminal([session("a", "shell"), session("b", "shell")], null)).toBe("b");
+});
+
+test("an explicit pick of a shell is kept even though an agent is running", () => {
+	const live = [session("a", "claude"), session("b", "shell")];
+	expect(activeTerminal(live, "b")).toBe("b");
 });
 
 test("the last session ending leaves no terminal to show", () => {

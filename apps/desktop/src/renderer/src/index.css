@@ -1240,6 +1240,47 @@ input {
 	height: 20px;
 }
 
+/* A tile's sessions as read-only tabs: switching only. Creating and closing
+   sessions belongs to the task panel, where the + and the x live, so a tile
+   carries no affordance that could change what exists. Shown only when the task
+   has more than one session, since a lone tab is just a second title bar. */
+.mc-tabs {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	flex: none;
+	min-width: 0;
+	padding: 3px 6px;
+	border-bottom: 1px solid var(--border);
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+.mc-tabs::-webkit-scrollbar {
+	display: none;
+}
+.mc-tab {
+	flex: none;
+	max-width: 120px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding: 2px 8px;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--text-dim);
+	font-size: 11px;
+	cursor: pointer;
+}
+.mc-tab:hover {
+	background: var(--bg-elev);
+	color: var(--text);
+}
+.mc-tab.active {
+	background: var(--bg-elev-2);
+	color: var(--text);
+}
+
 .empty {
 	margin: auto;
 	color: var(--text-dim);
