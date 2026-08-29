@@ -1054,13 +1054,20 @@ input {
 }
 
 /* ---- mission control ---- */
+/* Hosts the sliding page grid and the bottom-right pager overlay. */
+.mc-wrap {
+	flex: 1;
+	display: flex;
+	position: relative;
+	min-height: 0;
+}
 .mc {
 	flex: 1;
 	display: grid;
 	gap: 8px;
 	padding: 12px;
-	/* Always scroll vertically once the tiles don't fit — never shrink a
-	   terminal away; extra agents overflow downward into the scroll area. */
+	/* Tiles are paged, not scrolled: each layout renders at most a pageful, so
+	   this only guards pathologically small windows. */
 	overflow-y: auto;
 	overflow-x: hidden;
 	/* Default ("grid"): 2x2 — each tile is half the window wide and half the
@@ -1080,6 +1087,33 @@ input {
 .mc[data-layout="stack"] {
 	grid-template-columns: minmax(0, 1fr);
 	grid-auto-rows: minmax(280px, 1fr);
+}
+
+/* Pager overlay: sits translucent over the bottom-right corner, full opacity
+   on hover. Clicking the chevrons (or Cmd/Ctrl+Alt+Up/Down) flips to the
+   next/previous pageful of terminals. */
+.mcpager {
+	position: absolute;
+	right: 18px;
+	bottom: 18px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	padding: 3px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	opacity: 0.4;
+	transition: opacity 120ms ease;
+}
+.mcpager:hover {
+	opacity: 1;
+}
+.mcpager .count {
+	font-size: 10px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+	padding: 2px 0;
 }
 
 /* layout picker (segmented control in the topbar) */

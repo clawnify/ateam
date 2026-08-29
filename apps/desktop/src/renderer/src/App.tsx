@@ -19,6 +19,7 @@ import {
 	Check,
 	ChevronDown,
 	ChevronRight,
+	ChevronUp,
 	Columns2,
 	Database,
 	ExternalLink,
@@ -111,8 +112,12 @@ type TaskSortMode = "status" | "updated" | "custom";
 // ---- mission control layout ----
 // How agent tiles are arranged: "grid" is a 2x2 overview (tiles half the
 // window wide and tall), "split" lays them side-by-side at full window
-// height, "stack" stacks them full-width. Extra tiles scroll downward.
+// height, "stack" stacks them full-width. Extra tiles go to further pages,
+// flipped via the bottom-right pager or Cmd/Ctrl+Alt+Up/Down.
 type McLayout = "grid" | "split" | "stack";
+
+// Tiles per page: how many terminals each layout actually shows at once.
+const MC_PAGE_SIZE: Record<McLayout, number> = { grid: 4, split: 2, stack: 1 };
 
 // Status order: what needs the user's eyes first.
 const STATUS_RANK: Record<KanbanColumn, number> = {
@@ -1733,7 +1738,11 @@ function TaskPanel({
 
 				<IconButton
 					icon={ExternalLink}
-					label={alias === null ? "Open worktree in your editor" : `Open worktree in your editor (Remote-SSH: ${alias})`}
+					label={
+						alias === null
+							? "Open worktree in your editor"
+							: `Open worktree in your editor (Remote-SSH: ${alias})`
+					}
 					onClick={() =>
 						run(async () => {
 							// Optional on the API surface (the phone omits it) — the desktop
@@ -1922,6 +1931,46 @@ function MissionControl({
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
 
+	// Pages instead of a scroll area: each layout shows a fixed number of tiles
+	// at once, and the rest live on further pages. "In view" is then a crisp
+	// set — exactly what the reorder-skip below needs.
+	const [page, setPage] = useState(0);
+	const pageSize = MC_PAGE_SIZE[layout];
+	const pageCount = Math.max(1, Math.ceil(tiles.length / pageSize));
+	// Clamp in-render (sessions can die, the layout can change page size) so a
+	// stale page never shows an empty grid, then sync the state.
+	const clampedPage = Math.min(page, pageCount - 1);
+	useEffect(() => {
+		if (page !== clampedPage) setPage(clampedPage);
+	}, [page, clampedPage]);
+	const pageRef = useRef(clampedPage);
+	pageRef.current = clampedPage;
+	const pageSizeRef = useRef(pageSize);
+	pageSizeRef.current = pageSize;
+	const pageCountRef = useRef(pageCount);
+	pageCountRef.current = pageCount;
+	// Last flip direction, read by the page transition so it slides the way a
+	// scroll would have gone.
+	const dirRef = useRef(0);
+	const flip = useCallback((d: number) => {
+		dirRef.current = d;
+		setPage((p) => Math.max(0, Math.min(pageCountRef.current - 1, p + d)));
+	}, []);
+	// Cmd/Ctrl+Alt+Up/Down flips pages. Capture phase so it wins over the
+	// focused xterm textarea; the combo is one no shell binding uses.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (!e.altKey || !(e.metaKey || e.ctrlKey)) return;
+			if (e.key === "ArrowDown") flip(1);
+			else if (e.key === "ArrowUp") flip(-1);
+			else return;
+			e.preventDefault();
+			e.stopPropagation();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, [flip]);
+
 	// Locked: snapshot the sidebar's ordering the moment we land here (or flip
 	// the lock on) and freeze it, so terminals never shuffle under you while
 	// you watch (e.g. "sort by updated" would otherwise reorder live as agents
@@ -1948,9 +1997,10 @@ function MissionControl({
 	const lockedRef = useRef(locked);
 	lockedRef.current = locked;
 
-	// Sort the collected sessions by the active rank. When unlocked and a tile
-	// is focused, that tile keeps the slot it currently occupies on screen and
-	// everything else re-sorts around it.
+	// Sort the collected sessions by the active rank, with two visibility
+	// courtesies: a new order that only permutes the visible page is skipped
+	// there (see below), and while a tile is being typed in it keeps the slot
+	// it currently occupies on screen.
 	const resort = useCallback(() => {
 		const r = rankRef.current;
 		const next = [...sessionsRef.current];
@@ -1962,13 +2012,33 @@ function MissionControl({
 				(r.get(b.task.id) ?? Number.MAX_SAFE_INTEGER),
 		);
 		setTiles((prev) => {
-			const focused = lockedRef.current ? null : focusedRef.current;
-			if (focused) {
-				const cur = prev.findIndex((t) => t.terminalId === focused);
-				const pinned = next.find((t) => t.terminalId === focused);
-				if (cur >= 0 && pinned) {
-					next.splice(next.indexOf(pinned), 1);
-					next.splice(Math.min(cur, next.length), 0, pinned);
+			// If the new order only permutes tiles already on the visible page,
+			// keep that page's arrangement: swapping terminals the user can
+			// already see gains nothing and yanks the one they're reading. The
+			// page re-orders only when its membership changes (a tile from
+			// another page earns a visible slot, or one of its own dies).
+			// Off-page tiles always take the new order — that move is invisible.
+			const start = pageRef.current * pageSizeRef.current;
+			const prevWin = prev.slice(start, start + pageSizeRef.current);
+			const nextWin = next.slice(start, start + pageSizeRef.current);
+			const sameSet =
+				prevWin.length === nextWin.length &&
+				prevWin.every((p) => nextWin.some((n) => n.terminalId === p.terminalId));
+			if (sameSet && prevWin.length > 0) {
+				// Keep the on-screen arrangement but take next's tile objects,
+				// which carry the freshly fetched task DTOs.
+				const fresh = new Map(nextWin.map((t) => [t.terminalId, t]));
+				const kept = prevWin.map((t) => fresh.get(t.terminalId) ?? t);
+				next.splice(start, kept.length, ...kept);
+			} else {
+				const focused = lockedRef.current ? null : focusedRef.current;
+				if (focused) {
+					const cur = prev.findIndex((t) => t.terminalId === focused);
+					const pinned = next.find((t) => t.terminalId === focused);
+					if (cur >= 0 && pinned) {
+						next.splice(next.indexOf(pinned), 1);
+						next.splice(Math.min(cur, next.length), 0, pinned);
+					}
 				}
 			}
 			// Keep the previous array when nothing moved so downstream renders
@@ -2036,44 +2106,83 @@ function MissionControl({
 		);
 	}
 
+	const visible = tiles.slice(clampedPage * pageSize, clampedPage * pageSize + pageSize);
 	return (
-		<div className="mc" data-layout={layout}>
-			{tiles.map(({ task, terminalId }) => (
-				// biome-ignore lint/a11y/noStaticElementInteractions: focus/blur only observe where focus is; the tile itself isn't interactive
-				<div
-					key={terminalId}
-					className="tile"
-					// React's onFocus/onBlur bubble (focusin/focusout), so these fire
-					// when the xterm textarea inside the tile gains/loses focus.
-					onFocus={() => {
-						focusedRef.current = terminalId;
-					}}
-					onBlur={(e) => {
-						// Ignore focus moving within the same tile (e.g. from the bar's
-						// button to the terminal). Once focus truly leaves, the pin is
-						// released and the tile snaps back to its tasks-list slot.
-						if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-						if (focusedRef.current !== terminalId) return;
-						focusedRef.current = null;
-						resort();
-					}}
-				>
-					<div className="bar">
-						<span>{task.name}</span>
-						<span className="muted">· {task.branch}</span>
-						<span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-							{task.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
-							<IconButton
-								icon={Maximize2}
-								label="Expand to full width"
-								size={13}
-								onClick={() => onExpand(task, terminalId)}
-							/>
-						</span>
+		<div className="mc-wrap">
+			{/* Keyed by page: flipping remounts the grid, and TerminalView replays
+			    its ring-buffer snapshot on mount, so a page flip is a clean swap.
+			    The slide follows the flip direction — a "perfect scroll" to the
+			    next set of terminals. */}
+			<motion.div
+				key={clampedPage}
+				className="mc"
+				data-layout={layout}
+				initial={dirRef.current === 0 ? false : { y: dirRef.current * 32, opacity: 0.3 }}
+				animate={{ y: 0, opacity: 1 }}
+				transition={springy}
+			>
+				{visible.map(({ task, terminalId }) => (
+					// biome-ignore lint/a11y/noStaticElementInteractions: focus/blur only observe where focus is; the tile itself isn't interactive
+					<div
+						key={terminalId}
+						className="tile"
+						// React's onFocus/onBlur bubble (focusin/focusout), so these fire
+						// when the xterm textarea inside the tile gains/loses focus.
+						onFocus={() => {
+							focusedRef.current = terminalId;
+						}}
+						onBlur={(e) => {
+							// Ignore focus moving within the same tile (e.g. from the bar's
+							// button to the terminal). Once focus truly leaves, the pin is
+							// released: if the pin was holding the tile away from an
+							// off-page slot it now moves there (an in-page permutation
+							// alone is skipped by resort anyway).
+							if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+							if (focusedRef.current !== terminalId) return;
+							focusedRef.current = null;
+							resort();
+						}}
+					>
+						<div className="bar">
+							<span>{task.name}</span>
+							<span className="muted">· {task.branch}</span>
+							<span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+								{task.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
+								<IconButton
+									icon={Maximize2}
+									label="Expand to full width"
+									size={13}
+									onClick={() => onExpand(task, terminalId)}
+								/>
+							</span>
+						</div>
+						<TerminalView terminalId={terminalId} />
 					</div>
-					<TerminalView terminalId={terminalId} />
+				))}
+			</motion.div>
+			{pageCount > 1 && (
+				<div className="mcpager">
+					<IconButton
+						icon={ChevronUp}
+						label="Previous terminals"
+						shortcut="⌘⌥↑"
+						size={14}
+						disabled={clampedPage === 0}
+						onClick={() => flip(-1)}
+					/>
+					<span className="count">
+						{clampedPage + 1}/{pageCount}
+					</span>
+					<IconButton
+						icon={ChevronDown}
+						label="Next terminals"
+						shortcut="⌘⌥↓"
+						size={14}
+						disabled={clampedPage === pageCount - 1}
+						onClick={() => flip(1)}
+					/>
 				</div>
-			))}
+			)}
 		</div>
 	);
 }
