@@ -1600,7 +1600,7 @@ function TaskPanel({
 				files: input.files.length ? input.files : undefined,
 			});
 			await refreshSessions();
-			setTerminal(tid);
+			showTerminal(tid);
 		});
 
 	const shell = () =>
@@ -1609,7 +1609,7 @@ function TaskPanel({
 				taskId: task.id,
 			});
 			await refreshSessions();
-			setTerminal(tid);
+			showTerminal(tid);
 		});
 
 	const commit = () =>
@@ -1622,6 +1622,17 @@ function TaskPanel({
 
 	const additions = diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0;
 	const deletions = diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0;
+	/**
+	 * Selecting a tab means "show me that terminal" — so it leaves whatever view
+	 * is covering the terminal. Clicking a tab and seeing nothing change (because
+	 * the editor still covered it) left no obvious way back out.
+	 */
+	const showTerminal = (tid: string | null) => {
+		setTerminal(tid);
+		setEditorOpen(false);
+		setChangesOpen(false);
+	};
+
 	const toggleChanges = () => {
 		if (changesOpen) {
 			setChangesOpen(false);
@@ -1702,7 +1713,7 @@ function TaskPanel({
 								aria-selected={session.terminalId === terminalId}
 								className="sess-tab-name"
 								title={label}
-								onClick={() => setTerminal(session.terminalId)}
+								onClick={() => showTerminal(session.terminalId)}
 							>
 								{label}
 							</button>
@@ -1730,7 +1741,12 @@ function TaskPanel({
 							{
 								label: "Resume last conversation",
 								icon: History,
-								onClick: () => launch(false, true),
+								// launch() is also driven by the tab-fallback effect, which must
+								// NOT yank you out of the editor — so only this user gesture does.
+								onClick: () => {
+									setEditorOpen(false);
+									launch(false, true);
+								},
 							},
 						]}
 					/>
@@ -1740,6 +1756,7 @@ function TaskPanel({
 
 				<IconButton
 					icon={FileCode}
+					active={editorOpen}
 					label={editorOpen ? "Back to terminal" : "Edit files (VS Code on the task's machine)"}
 					onClick={() => {
 						if (editorOpen) {
