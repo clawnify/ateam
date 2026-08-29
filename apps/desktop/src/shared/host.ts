@@ -10,6 +10,8 @@ export const HOST_CH = {
 	list: "host:list",
 	connect: "host:connect",
 	disconnect: "host:disconnect",
+	/** Remove a box from the connections list (disconnecting it first if held). */
+	forget: "host:forget",
 	/** All currently-held engines (local is always present). */
 	connected: "host:connected",
 	/** projectId/taskId → owning engine alias (null = local), for per-origin badges/routing. */
@@ -115,6 +117,10 @@ export interface AteamHost {
 	connect(alias: string | null): Promise<HostStatus>;
 	/** Drop a connected box (never local). */
 	disconnect(alias: string): Promise<void>;
+	/** Remove a box from the connections list (disconnecting it first if held).
+	 *  Setting it up or connecting to it again brings it back; ~/.ssh/config is
+	 *  never edited. */
+	forget(alias: string): Promise<void>;
 	/** Every engine currently held (local first). */
 	connected(): Promise<HostStatus[]>;
 	/** id → owning-engine alias (null = local) for each entity the engines have surfaced. */

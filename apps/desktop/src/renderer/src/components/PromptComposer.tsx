@@ -47,6 +47,7 @@ export function PromptComposer({
 	envAgents,
 	onAdd,
 	onInstall,
+	onForget,
 	onInstallAgent,
 	onClose,
 	onCreate,
@@ -69,6 +70,8 @@ export function PromptComposer({
 	onAdd?: (endpoint: string) => Promise<void>;
 	/** Set up a fresh box over SSH (install engine + connect) from the picker. */
 	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<HostStatus>;
+	/** Remove a box from the picker's list (disconnecting it first if connected). */
+	onForget?: (alias: string) => Promise<void>;
 	/** Install a coding agent's CLI on the selected box, streamed; returns the login step. */
 	onInstallAgent?: (
 		alias: string,
@@ -239,6 +242,7 @@ export function PromptComposer({
 							onChange={setAlias}
 							onAdd={onAdd}
 							onInstall={onInstall}
+							onForget={onForget}
 						/>
 					)}
 					<button

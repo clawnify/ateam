@@ -3,8 +3,10 @@ import type {
 	ConnectionDTO,
 	DiffResultDTO,
 	KanbanColumn,
+	LoopDTO,
 	ProjectDTO,
 	SessionDTO,
+	SessionHitDTO,
 	TaskDTO,
 } from "@ateam/protocol";
 import {
@@ -30,6 +32,7 @@ import {
 	History,
 	LayoutGrid,
 	Lock,
+	LockOpen,
 	type LucideIcon,
 	Maximize2,
 	Minimize2,
@@ -38,10 +41,10 @@ import {
 	PanelLeft,
 	Play,
 	Plus,
+	Repeat,
 	Rocket,
 	RotateCw,
 	Rows2,
-	Search,
 	Server,
 	Sparkles,
 	SquareTerminal,
@@ -66,6 +69,7 @@ import { IconButton } from "./components/IconButton";
 import { LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
 import { PromptComposer } from "./components/PromptComposer";
+import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
 import { activeTerminal, sessionTabs } from "./session-tabs";
@@ -155,9 +159,22 @@ export function App() {
 		localStorage.setItem("ateam.mcLayout", l);
 		setMcLayoutState(l);
 	};
+	// Mission Control lock: locked freezes tile order for the whole visit (it
+	// re-snapshots the tasks-list order each time you land on Mission Control);
+	// unlocked follows the tasks-list order live, pinning only the tile being
+	// typed in.
+	const [mcLocked, setMcLockedState] = useState(() => localStorage.getItem("ateam.mcLock") === "1");
+	const setMcLocked = (v: boolean) => {
+		localStorage.setItem("ateam.mcLock", v ? "1" : "0");
+		setMcLockedState(v);
+	};
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
+	const [loopsCollapsed, setLoopsCollapsed] = useState(true);
+	// Every engine's loops (merged), for the sidebar LOOPS section. Each loop
+	// owns one persistent task (loop.taskId); those tasks show under LOOPS.
+	const [loops, setLoops] = useState<LoopDTO[]>([]);
 	const [rail, setRail] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
 	const toggleRail = () => {
 		setRail((r) => {
@@ -251,6 +268,12 @@ export function App() {
 	useEffect(() => {
 		void loadProjects();
 		void window.ateam.agents.list().then(setAgents);
+		// Loops for the sidebar section. Always re-list on the push event — the
+		// event payload carries ONE engine's loops, the sidebar wants the union.
+		void window.ateam.loops.list().then(setLoops);
+		const offLoops = window.ateam.loops.onUpdated(
+			() => void window.ateam.loops.list().then(setLoops),
+		);
 		// Upsert: replace a known task, or add one created in another window (so a
 		// project open in two windows stays consistent). Only for projects this
 		// window tracks — a detached window ignores other projects' tasks.
@@ -277,6 +300,7 @@ export function App() {
 			setSelectedTaskId((cur) => (cur === taskId ? null : cur));
 		});
 		return () => {
+			offLoops();
 			offUpdated();
 			offRemoved();
 		};
@@ -296,6 +320,7 @@ export function App() {
 		return window.ateamHost.onConnectionsChanged(() => {
 			void loadProjects();
 			void window.ateam.agents.list().then(setAgents);
+			void window.ateam.loops.list().then(setLoops);
 		});
 	}, [loadProjects]);
 
@@ -352,6 +377,17 @@ export function App() {
 		[unifiedProjects, activeProjectId],
 	);
 	const activeMembers = activeCard?.members ?? [];
+	// Session search runs on each engine that holds this repo: the transcripts
+	// live on the machine that ran the agent, so a box searches its own disk.
+	const searchProjectIds = useMemo(
+		() =>
+			activeMembers.length > 0
+				? activeMembers.map((m) => m.projectId)
+				: activeProjectId
+					? [activeProjectId]
+					: [],
+		[activeMembers, activeProjectId],
+	);
 	// Which engine a task runs on = the engine that owns its project (tasks never
 	// migrate between engines, so origin is intrinsic to the projectId).
 	const originOf = useCallback((projectId: string): Alias => origins[projectId] ?? null, [origins]);
@@ -382,6 +418,13 @@ export function App() {
 	// unreachable box leaves nothing behind to clean up.
 	const addTailscaleBox = useCallback(async (endpoint: string) => {
 		await window.ateamHost.connect(endpoint);
+	}, []);
+	// Remove a box from the "Run on" list. The main process disconnects it if held
+	// and forgets the saved record (an ssh_config alias is flagged hidden — the
+	// config file itself is never touched); the connections-changed broadcast then
+	// refreshes the list here. Setting the box up again brings it back.
+	const forgetBox = useCallback(async (alias: string) => {
+		await window.ateamHost.forget(alias);
 	}, []);
 	// Set up a fresh box over SSH: install() runs the (idempotent) installer on the
 	// box, streaming its output via onInstallLog, and connects on success. The
@@ -438,8 +481,23 @@ export function App() {
 			? (tasksByProject[activeProjectId] ?? [])
 			: [];
 	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
-	// Sidebar list shows all tasks, including merged/done ones.
-	const sidebarTasks = activeTasks;
+	// Loops of the active repo card (whichever engine holds them), and the task
+	// each one owns. Loop-owned tasks show under LOOPS, not again under TASKS
+	// (they stay on the board — it's the status surface).
+	const activeLoops = useMemo(() => {
+		const memberIds = new Set(activeMembers.map((m) => m.projectId));
+		return loops.filter((l) => l.projectId != null && memberIds.has(l.projectId));
+	}, [loops, activeMembers]);
+	const loopTaskIds = useMemo(() => {
+		const ids = new Set<string>();
+		for (const l of loops) if (l.taskId) ids.add(l.taskId);
+		return ids;
+	}, [loops]);
+	// Sidebar list shows all non-loop tasks, including merged/done ones.
+	const sidebarTasks = useMemo(
+		() => activeTasks.filter((t) => !loopTaskIds.has(t.id)),
+		[activeTasks, loopTaskIds],
+	);
 
 	// Sidebar ordering: by status (Review → Needs You → In Progress → Backlog),
 	// most-recently-updated first, or a hand-dragged custom order.
@@ -477,6 +535,12 @@ export function App() {
 		}
 		return list;
 	}, [sidebarTasks, taskSort, customOrder]);
+	// Stable identity for Mission Control: a fresh array every render would make
+	// its follow-the-tasks-order effect re-run on every App render.
+	const sidebarOrderIds = useMemo(
+		() => orderedSidebarTasks.map((t) => t.id),
+		[orderedSidebarTasks],
+	);
 
 	// Case-insensitive substring match across the task's name, branch, and
 	// description. Empty query matches all.
@@ -546,6 +610,15 @@ export function App() {
 		setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		setSelectedTaskId(task.id);
 		setPanelMode("full");
+	};
+	// A session-search hit opens the task it ran in, and the exact terminal it
+	// ran in when that tab is still alive — the point of the search is to land
+	// back where the work happened, not merely near it.
+	const openSessionHit = (hit: SessionHitDTO) => {
+		const task = activeTasks.find((t) => t.id === hit.taskId);
+		if (!task) return;
+		if (hit.terminalId) setTermByTask((m) => ({ ...m, [task.id]: hit.terminalId }));
+		openTask(task);
 	};
 	// Collapsing the full panel inside Mission Control means "back to the
 	// grid", not "shrink to a side panel" — there is no board to sit beside.
@@ -945,6 +1018,51 @@ export function App() {
 									</motion.div>
 								))
 							))}
+
+						{/* LOOPS accordion — the active repo's scheduled agent sessions.
+						    Each loop owns one persistent task; clicking a row opens that
+						    task's terminal (or the Loops tab before its first run).
+						    loops-side-head floats it to the sidebar's bottom while there
+						    is spare room; a long task list pushes it down naturally. */}
+						<div className="section-head tasks-head loops-side-head">
+							<button
+								type="button"
+								className="section-toggle"
+								onClick={() => setLoopsCollapsed((c) => !c)}
+							>
+								{loopsCollapsed ? (
+									<ChevronRight size={14} strokeWidth={2} />
+								) : (
+									<ChevronDown size={14} strokeWidth={2} />
+								)}
+								<span>Loops</span>
+							</button>
+							<IconButton
+								icon={Plus}
+								label="New loop"
+								onClick={() => setView("loops")}
+								disabled={!activeProjectId}
+							/>
+						</div>
+						{!loopsCollapsed &&
+							(activeLoops.length === 0 ? (
+								<div className="tree-empty">No loops</div>
+							) : (
+								activeLoops.map((l) => {
+									const task = l.taskId
+										? (activeTasks.find((t) => t.id === l.taskId) ?? null)
+										: null;
+									return (
+										<LoopRow
+											key={l.id}
+											loop={l}
+											task={task}
+											selected={task != null && task.id === selectedTaskId}
+											onClick={() => (task ? openTask(task) : setView("loops"))}
+										/>
+									);
+								})
+							))}
 					</>
 				)}
 			</aside>
@@ -995,26 +1113,12 @@ export function App() {
 					</div>
 					{/* Centered task search — absolutely centered in the topbar so the
 					    tabs on the left and action buttons on the right don't shift it. */}
-					<div className="task-search">
-						<Search size={14} strokeWidth={1.75} />
-						<input
-							type="text"
-							placeholder="Search tasks…"
-							value={taskQuery}
-							onChange={(e) => setTaskQuery(e.target.value)}
-							aria-label="Search tasks"
-						/>
-						{taskQuery && (
-							<button
-								type="button"
-								className="ts-clear"
-								aria-label="Clear search"
-								onClick={() => setTaskQuery("")}
-							>
-								<X size={13} strokeWidth={2} />
-							</button>
-						)}
-					</div>
+					<TaskSearch
+						query={taskQuery}
+						onQuery={setTaskQuery}
+						projectIds={searchProjectIds}
+						onOpen={openSessionHit}
+					/>
 					<div className="spacer" />
 					{view === "mission" && !(selectedTask && panelMode === "full") && (
 						<div className="mclayout" role="group" aria-label="Layout">
@@ -1037,6 +1141,24 @@ export function App() {
 									<Icon size={14} strokeWidth={1.75} />
 								</button>
 							))}
+							<button
+								type="button"
+								className={`navbtn icon ${mcLocked ? "active" : ""}`}
+								title={
+									mcLocked
+										? "Layout locked: tile order is frozen while you watch"
+										: "Lock layout (unlocked: tiles follow the tasks list order; the tile you type in stays put)"
+								}
+								aria-label="Lock layout"
+								aria-pressed={mcLocked}
+								onClick={() => setMcLocked(!mcLocked)}
+							>
+								{mcLocked ? (
+									<Lock size={14} strokeWidth={1.75} />
+								) : (
+									<LockOpen size={14} strokeWidth={1.75} />
+								)}
+							</button>
 						</div>
 					)}
 					<button type="button" className="navbtn" onClick={cleanup} disabled={!activeProjectId}>
@@ -1111,8 +1233,9 @@ export function App() {
 						) : (
 							<MissionControl
 								tasks={activeTasks}
-								order={orderedSidebarTasks.map((t) => t.id)}
+								order={sidebarOrderIds}
 								layout={mcLayout}
+								locked={mcLocked}
 								onExpand={openFromMission}
 							/>
 						)
@@ -1137,6 +1260,7 @@ export function App() {
 					envAgents={envAgents}
 					onAdd={addTailscaleBox}
 					onInstall={installBox}
+					onForget={forgetBox}
 					onInstallAgent={installAgentOnBox}
 					onClose={() => setComposerOpen(false)}
 					onCreate={composeTask}
@@ -1193,6 +1317,38 @@ function TaskRow({
 					size={14}
 					onClick={onDelete}
 				/>
+			</span>
+		</div>
+	);
+}
+
+/** Sidebar row for a loop — mirrors TaskRow, with the loop's task supplying
+ *  the status dot. A paused loop renders dimmed. */
+function LoopRow({
+	loop,
+	task,
+	selected,
+	onClick,
+}: {
+	loop: LoopDTO;
+	task: TaskDTO | null;
+	selected: boolean;
+	onClick: () => void;
+}) {
+	return (
+		<div className="tasknode-row">
+			<button
+				type="button"
+				className={`tasknode ${selected ? "selected" : ""} ${loop.enabled ? "" : "loop-paused"}`}
+				onClick={onClick}
+			>
+				<span className="ticon">
+					<Repeat size={14} strokeWidth={1.75} />
+				</span>
+				<span className="tname">{loop.title}</span>
+			</button>
+			<span className="task-trail">
+				{task?.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
 			</span>
 		</div>
 	);
@@ -1575,6 +1731,18 @@ function TaskPanel({
 
 				<span className="spacer" />
 
+				<IconButton
+					icon={ExternalLink}
+					label={alias === null ? "Open worktree in your editor" : `Open worktree in your editor (Remote-SSH: ${alias})`}
+					onClick={() =>
+						run(async () => {
+							// Optional on the API surface (the phone omits it) — the desktop
+							// preload always provides it.
+							const res = await window.ateam.utils.openInEditor?.(task.worktreePath, alias);
+							if (res && !res.ok) throw new Error(res.reason);
+						})
+					}
+				/>
 				<IconButton icon={GitCommitVertical} label="Commit all changes" onClick={commit} />
 				<IconButton
 					icon={ArrowUp}
@@ -1741,23 +1909,82 @@ function MissionControl({
 	tasks,
 	order,
 	layout,
+	locked,
 	onExpand,
 }: {
 	tasks: TaskDTO[];
 	order: string[];
 	layout: McLayout;
+	locked: boolean;
 	onExpand: (task: TaskDTO, terminalId: string) => void;
 }) {
 	const [tiles, setTiles] = useState<{ task: TaskDTO; terminalId: string }[]>([]);
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
 
-	// Snapshot the sidebar's ordering the moment we land here, so tiles come up
-	// in the same order the tasks list is showing — but freeze it: while you're
-	// watching, terminals must not shuffle under you (e.g. "sort by updated"
-	// would otherwise reorder live as agents emit events). Tasks that gain a
-	// session after we landed (not in the snapshot) sort to the end.
-	const [rank] = useState(() => new Map(order.map((id, i) => [id, i])));
+	// Locked: snapshot the sidebar's ordering the moment we land here (or flip
+	// the lock on) and freeze it, so terminals never shuffle under you while
+	// you watch (e.g. "sort by updated" would otherwise reorder live as agents
+	// emit events). Unlocked: follow the sidebar's live order, except the tile
+	// being typed in keeps its slot (see focusedRef). Tasks not in the active
+	// rank sort to the end.
+	const orderRef = useRef(order);
+	orderRef.current = order;
+	const [frozenRank, setFrozenRank] = useState(() => new Map(order.map((id, i) => [id, i])));
+	useEffect(() => {
+		if (locked) setFrozenRank(new Map(orderRef.current.map((id, i) => [id, i])));
+	}, [locked]);
+	const liveRank = useMemo(() => new Map(order.map((id, i) => [id, i])), [order]);
+	const rank = locked ? frozenRank : liveRank;
+
+	// The tile whose terminal currently has keyboard focus, i.e. the one the
+	// user is typing in. A ref, not state: focus alone must not reorder
+	// anything; it only matters at the moment a re-sort happens.
+	const focusedRef = useRef<string | null>(null);
+	// Latest unsorted session list, kept so a re-sort (order change, lock flip,
+	// blur) doesn't need a fresh round of listForTask calls.
+	const sessionsRef = useRef<{ task: TaskDTO; terminalId: string }[]>([]);
+	const rankRef = useRef(rank);
+	const lockedRef = useRef(locked);
+	lockedRef.current = locked;
+
+	// Sort the collected sessions by the active rank. When unlocked and a tile
+	// is focused, that tile keeps the slot it currently occupies on screen and
+	// everything else re-sorts around it.
+	const resort = useCallback(() => {
+		const r = rankRef.current;
+		const next = [...sessionsRef.current];
+		// Stable sort; V8's stable sort keeps a task's own sessions (and any
+		// equal-rank ties) in encounter order.
+		next.sort(
+			(a, b) =>
+				(r.get(a.task.id) ?? Number.MAX_SAFE_INTEGER) -
+				(r.get(b.task.id) ?? Number.MAX_SAFE_INTEGER),
+		);
+		setTiles((prev) => {
+			const focused = lockedRef.current ? null : focusedRef.current;
+			if (focused) {
+				const cur = prev.findIndex((t) => t.terminalId === focused);
+				const pinned = next.find((t) => t.terminalId === focused);
+				if (cur >= 0 && pinned) {
+					next.splice(next.indexOf(pinned), 1);
+					next.splice(Math.min(cur, next.length), 0, pinned);
+				}
+			}
+			// Keep the previous array when nothing moved so downstream renders
+			// (and their terminals) see a stable identity.
+			if (prev.length === next.length && prev.every((t, i) => t === next[i])) return prev;
+			return next;
+		});
+	}, []);
+
+	// Re-sort when the sidebar order changes (only matters unlocked) or the
+	// lock flips off and the live order takes over again. rankRef is synced
+	// here (not at render time) so the effect legitimately depends on rank.
+	useEffect(() => {
+		rankRef.current = rank;
+		resort();
+	}, [rank, resort]);
 
 	// Sessions announce themselves, so this listens instead of polling. Both spawn
 	// paths broadcast taskUpdated and a dying PTY broadcasts ptyExit — including from
@@ -1779,17 +2006,10 @@ function MissionControl({
 					})),
 				);
 				if (cancelled) return;
-				const collected = perTask.flatMap(({ task, sessions }) =>
+				sessionsRef.current = perTask.flatMap(({ task, sessions }) =>
 					sessions.map((s) => ({ task, terminalId: s.terminalId })),
 				);
-				// Stable sort by the frozen sidebar order; V8's stable sort keeps a
-				// task's own sessions (and any equal-rank ties) in encounter order.
-				collected.sort(
-					(a, b) =>
-						(rank.get(a.task.id) ?? Number.MAX_SAFE_INTEGER) -
-						(rank.get(b.task.id) ?? Number.MAX_SAFE_INTEGER),
-				);
-				setTiles(collected);
+				resort();
 			} finally {
 				inFlight = false;
 			}
@@ -1802,7 +2022,7 @@ function MissionControl({
 			offUpdated();
 			offExit();
 		};
-	}, [rank]);
+	}, [resort]);
 
 	if (tiles.length === 0) {
 		return (
@@ -1819,7 +2039,25 @@ function MissionControl({
 	return (
 		<div className="mc" data-layout={layout}>
 			{tiles.map(({ task, terminalId }) => (
-				<div key={terminalId} className="tile">
+				// biome-ignore lint/a11y/noStaticElementInteractions: focus/blur only observe where focus is; the tile itself isn't interactive
+				<div
+					key={terminalId}
+					className="tile"
+					// React's onFocus/onBlur bubble (focusin/focusout), so these fire
+					// when the xterm textarea inside the tile gains/loses focus.
+					onFocus={() => {
+						focusedRef.current = terminalId;
+					}}
+					onBlur={(e) => {
+						// Ignore focus moving within the same tile (e.g. from the bar's
+						// button to the terminal). Once focus truly leaves, the pin is
+						// released and the tile snaps back to its tasks-list slot.
+						if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+						if (focusedRef.current !== terminalId) return;
+						focusedRef.current = null;
+						resort();
+					}}
+				>
 					<div className="bar">
 						<span>{task.name}</span>
 						<span className="muted">· {task.branch}</span>
