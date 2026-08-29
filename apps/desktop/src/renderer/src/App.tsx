@@ -32,6 +32,7 @@ import {
 	History,
 	LayoutGrid,
 	Lock,
+	LockOpen,
 	type LucideIcon,
 	Maximize2,
 	Minimize2,
@@ -157,6 +158,15 @@ export function App() {
 	const setMcLayout = (l: McLayout) => {
 		localStorage.setItem("ateam.mcLayout", l);
 		setMcLayoutState(l);
+	};
+	// Mission Control lock: locked freezes tile order for the whole visit (it
+	// re-snapshots the tasks-list order each time you land on Mission Control);
+	// unlocked follows the tasks-list order live, pinning only the tile being
+	// typed in.
+	const [mcLocked, setMcLockedState] = useState(() => localStorage.getItem("ateam.mcLock") === "1");
+	const setMcLocked = (v: boolean) => {
+		localStorage.setItem("ateam.mcLock", v ? "1" : "0");
+		setMcLockedState(v);
 	};
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
@@ -525,6 +535,12 @@ export function App() {
 		}
 		return list;
 	}, [sidebarTasks, taskSort, customOrder]);
+	// Stable identity for Mission Control: a fresh array every render would make
+	// its follow-the-tasks-order effect re-run on every App render.
+	const sidebarOrderIds = useMemo(
+		() => orderedSidebarTasks.map((t) => t.id),
+		[orderedSidebarTasks],
+	);
 
 	// Case-insensitive substring match across the task's name, branch, and
 	// description. Empty query matches all.
@@ -1125,6 +1141,24 @@ export function App() {
 									<Icon size={14} strokeWidth={1.75} />
 								</button>
 							))}
+							<button
+								type="button"
+								className={`navbtn icon ${mcLocked ? "active" : ""}`}
+								title={
+									mcLocked
+										? "Layout locked: tile order is frozen while you watch"
+										: "Lock layout (unlocked: tiles follow the tasks list order; the tile you type in stays put)"
+								}
+								aria-label="Lock layout"
+								aria-pressed={mcLocked}
+								onClick={() => setMcLocked(!mcLocked)}
+							>
+								{mcLocked ? (
+									<Lock size={14} strokeWidth={1.75} />
+								) : (
+									<LockOpen size={14} strokeWidth={1.75} />
+								)}
+							</button>
 						</div>
 					)}
 					<button type="button" className="navbtn" onClick={cleanup} disabled={!activeProjectId}>
@@ -1199,8 +1233,9 @@ export function App() {
 						) : (
 							<MissionControl
 								tasks={activeTasks}
-								order={orderedSidebarTasks.map((t) => t.id)}
+								order={sidebarOrderIds}
 								layout={mcLayout}
+								locked={mcLocked}
 								onExpand={openFromMission}
 							/>
 						)
@@ -1455,7 +1490,9 @@ function TaskPanel({
 		// The engine hands these back latest-first; reverse so the strip reads
 		// oldest → newest — a new session then appends on the right instead of
 		// shuffling the tabs already open.
-		setLoaded({ taskId, sessions: live.reverse() });
+		const ordered = live.reverse();
+		setLoaded({ taskId, sessions: ordered });
+		return ordered;
 	}, [task.id]);
 
 	useEffect(() => {
@@ -1501,22 +1538,42 @@ function TaskPanel({
 	// and the newest survivor takes focus. With nothing left, resume the agent's
 	// last conversation if the task is still active work (running or awaiting
 	// input). Terminal columns (review/merged) are left alone — there a relaunch
-	// is a deliberate act via the Resume button, not a side effect of opening the
-	// task (and spawning would bounce the card back to "running").
+	// is a deliberate act via the + menu, not a side effect of opening the task
+	// (and spawning would bounce the card back to "running").
+	//
+	// The one thing `sessions` alone must never settle is "this task has none".
+	// A spawn announces itself as a task update — the very event that flips the
+	// column to "running" — and that render arrives BEFORE the listForTask it
+	// also triggers comes back. Concluding "running, nothing alive" from that
+	// stale-empty list is how creating a task opened a second, redundant
+	// "--continue" tab beside the one the composer had just launched. So an empty
+	// list is re-read before anything is torn down or relaunched, and only when
+	// the answer can still change something — otherwise every task that
+	// legitimately has no sessions would re-read itself in a loop.
 	const autoResumedRef = useRef<string | null>(null);
 	useEffect(() => {
 		if (!sessions) return; // list not read yet — don't judge the task by it
 		const next = activeTerminal(sessions, terminalId);
-		if (next !== terminalId) setTerminal(next);
-		if (next) return;
-		if (
+		if (next) {
+			if (next !== terminalId) setTerminal(next);
+			return;
+		}
+		const resumable =
 			(task.column === "running" || task.column === "needs_attention") &&
-			autoResumedRef.current !== task.id
-		) {
+			autoResumedRef.current !== task.id;
+		if (terminalId === null && !resumable) return;
+		let cancelled = false;
+		void refreshSessions().then((live) => {
+			if (cancelled || live.length) return; // it wasn't empty after all
+			if (terminalId !== null) setTerminal(null);
+			if (!resumable) return;
 			autoResumedRef.current = task.id;
 			void launch(false, true);
-		}
-	}, [task.id, task.column, sessions, terminalId, setTerminal, launch]);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [task.id, task.column, sessions, terminalId, setTerminal, launch, refreshSessions]);
 
 	// "+ → New agent session…": the task-creation composer minus name/branch/machine.
 	// Launches into THIS task's worktree, so the prompt, attachments, agent and YOLO
@@ -1674,6 +1731,18 @@ function TaskPanel({
 
 				<span className="spacer" />
 
+				<IconButton
+					icon={ExternalLink}
+					label={alias === null ? "Open worktree in your editor" : `Open worktree in your editor (Remote-SSH: ${alias})`}
+					onClick={() =>
+						run(async () => {
+							// Optional on the API surface (the phone omits it) — the desktop
+							// preload always provides it.
+							const res = await window.ateam.utils.openInEditor?.(task.worktreePath, alias);
+							if (res && !res.ok) throw new Error(res.reason);
+						})
+					}
+				/>
 				<IconButton icon={GitCommitVertical} label="Commit all changes" onClick={commit} />
 				<IconButton
 					icon={ArrowUp}
@@ -1840,23 +1909,82 @@ function MissionControl({
 	tasks,
 	order,
 	layout,
+	locked,
 	onExpand,
 }: {
 	tasks: TaskDTO[];
 	order: string[];
 	layout: McLayout;
+	locked: boolean;
 	onExpand: (task: TaskDTO, terminalId: string) => void;
 }) {
 	const [tiles, setTiles] = useState<{ task: TaskDTO; terminalId: string }[]>([]);
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
 
-	// Snapshot the sidebar's ordering the moment we land here, so tiles come up
-	// in the same order the tasks list is showing — but freeze it: while you're
-	// watching, terminals must not shuffle under you (e.g. "sort by updated"
-	// would otherwise reorder live as agents emit events). Tasks that gain a
-	// session after we landed (not in the snapshot) sort to the end.
-	const [rank] = useState(() => new Map(order.map((id, i) => [id, i])));
+	// Locked: snapshot the sidebar's ordering the moment we land here (or flip
+	// the lock on) and freeze it, so terminals never shuffle under you while
+	// you watch (e.g. "sort by updated" would otherwise reorder live as agents
+	// emit events). Unlocked: follow the sidebar's live order, except the tile
+	// being typed in keeps its slot (see focusedRef). Tasks not in the active
+	// rank sort to the end.
+	const orderRef = useRef(order);
+	orderRef.current = order;
+	const [frozenRank, setFrozenRank] = useState(() => new Map(order.map((id, i) => [id, i])));
+	useEffect(() => {
+		if (locked) setFrozenRank(new Map(orderRef.current.map((id, i) => [id, i])));
+	}, [locked]);
+	const liveRank = useMemo(() => new Map(order.map((id, i) => [id, i])), [order]);
+	const rank = locked ? frozenRank : liveRank;
+
+	// The tile whose terminal currently has keyboard focus, i.e. the one the
+	// user is typing in. A ref, not state: focus alone must not reorder
+	// anything; it only matters at the moment a re-sort happens.
+	const focusedRef = useRef<string | null>(null);
+	// Latest unsorted session list, kept so a re-sort (order change, lock flip,
+	// blur) doesn't need a fresh round of listForTask calls.
+	const sessionsRef = useRef<{ task: TaskDTO; terminalId: string }[]>([]);
+	const rankRef = useRef(rank);
+	const lockedRef = useRef(locked);
+	lockedRef.current = locked;
+
+	// Sort the collected sessions by the active rank. When unlocked and a tile
+	// is focused, that tile keeps the slot it currently occupies on screen and
+	// everything else re-sorts around it.
+	const resort = useCallback(() => {
+		const r = rankRef.current;
+		const next = [...sessionsRef.current];
+		// Stable sort; V8's stable sort keeps a task's own sessions (and any
+		// equal-rank ties) in encounter order.
+		next.sort(
+			(a, b) =>
+				(r.get(a.task.id) ?? Number.MAX_SAFE_INTEGER) -
+				(r.get(b.task.id) ?? Number.MAX_SAFE_INTEGER),
+		);
+		setTiles((prev) => {
+			const focused = lockedRef.current ? null : focusedRef.current;
+			if (focused) {
+				const cur = prev.findIndex((t) => t.terminalId === focused);
+				const pinned = next.find((t) => t.terminalId === focused);
+				if (cur >= 0 && pinned) {
+					next.splice(next.indexOf(pinned), 1);
+					next.splice(Math.min(cur, next.length), 0, pinned);
+				}
+			}
+			// Keep the previous array when nothing moved so downstream renders
+			// (and their terminals) see a stable identity.
+			if (prev.length === next.length && prev.every((t, i) => t === next[i])) return prev;
+			return next;
+		});
+	}, []);
+
+	// Re-sort when the sidebar order changes (only matters unlocked) or the
+	// lock flips off and the live order takes over again. rankRef is synced
+	// here (not at render time) so the effect legitimately depends on rank.
+	useEffect(() => {
+		rankRef.current = rank;
+		resort();
+	}, [rank, resort]);
 
 	// Sessions announce themselves, so this listens instead of polling. Both spawn
 	// paths broadcast taskUpdated and a dying PTY broadcasts ptyExit — including from
@@ -1878,17 +2006,10 @@ function MissionControl({
 					})),
 				);
 				if (cancelled) return;
-				const collected = perTask.flatMap(({ task, sessions }) =>
+				sessionsRef.current = perTask.flatMap(({ task, sessions }) =>
 					sessions.map((s) => ({ task, terminalId: s.terminalId })),
 				);
-				// Stable sort by the frozen sidebar order; V8's stable sort keeps a
-				// task's own sessions (and any equal-rank ties) in encounter order.
-				collected.sort(
-					(a, b) =>
-						(rank.get(a.task.id) ?? Number.MAX_SAFE_INTEGER) -
-						(rank.get(b.task.id) ?? Number.MAX_SAFE_INTEGER),
-				);
-				setTiles(collected);
+				resort();
 			} finally {
 				inFlight = false;
 			}
@@ -1901,7 +2022,7 @@ function MissionControl({
 			offUpdated();
 			offExit();
 		};
-	}, [rank]);
+	}, [resort]);
 
 	if (tiles.length === 0) {
 		return (
@@ -1918,7 +2039,25 @@ function MissionControl({
 	return (
 		<div className="mc" data-layout={layout}>
 			{tiles.map(({ task, terminalId }) => (
-				<div key={terminalId} className="tile">
+				// biome-ignore lint/a11y/noStaticElementInteractions: focus/blur only observe where focus is; the tile itself isn't interactive
+				<div
+					key={terminalId}
+					className="tile"
+					// React's onFocus/onBlur bubble (focusin/focusout), so these fire
+					// when the xterm textarea inside the tile gains/loses focus.
+					onFocus={() => {
+						focusedRef.current = terminalId;
+					}}
+					onBlur={(e) => {
+						// Ignore focus moving within the same tile (e.g. from the bar's
+						// button to the terminal). Once focus truly leaves, the pin is
+						// released and the tile snaps back to its tasks-list slot.
+						if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+						if (focusedRef.current !== terminalId) return;
+						focusedRef.current = null;
+						resort();
+					}}
+				>
 					<div className="bar">
 						<span>{task.name}</span>
 						<span className="muted">· {task.branch}</span>

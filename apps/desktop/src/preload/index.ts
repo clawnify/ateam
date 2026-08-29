@@ -92,6 +92,8 @@ const api: AteamApi = {
 		attachClipboardImage: (terminalId) =>
 			ipcRenderer.invoke(CH.utilAttachClipboardImage, terminalId),
 		writeImageBytes: (base64, ext) => ipcRenderer.invoke(CH.utilWriteImageBytes, base64, ext),
+		openInEditor: (worktreePath, alias) =>
+			ipcRenderer.invoke(CH.utilOpenInEditor, worktreePath, alias),
 	},
 	events: {
 		onTaskUpdated: (cb: (task: TaskDTO) => void) => {

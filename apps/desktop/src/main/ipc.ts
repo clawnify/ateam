@@ -1,6 +1,8 @@
-import { readFileSync } from "node:fs";
-import { extname } from "node:path";
-import { type AttachDelivery, CH } from "@ateam/protocol";
+import { spawn } from "node:child_process";
+import { accessSync, constants, readFileSync } from "node:fs";
+import { extname, join } from "node:path";
+import { type AttachDelivery, CH, type OpenInEditorResult } from "@ateam/protocol";
+import { endpointUrl } from "@ateam/server";
 import { clipboard, dialog, ipcMain, nativeImage } from "electron";
 import type { Router } from "./backend";
 
@@ -16,6 +18,42 @@ function stageImageOnClipboard(path: string | null): boolean {
 	if (img.isEmpty()) return false;
 	clipboard.writeImage(img);
 	return true;
+}
+
+/**
+ * The editors we can hand a folder to, in preference order. First one found wins,
+ * searched by editor rather than by PATH order so the choice is deterministic when
+ * a machine has several.
+ *
+ * shortcut: a fixed list, no preference setting. Add one if users ask for a
+ * different default than "whichever comes first here".
+ */
+const EDITORS = ["code", "cursor", "windsurf", "codium"] as const;
+
+/**
+ * Launched from Finder (rather than a shell) an Electron app inherits a bare PATH
+ * — no /usr/local/bin, no /opt/homebrew/bin — so a PATH-only lookup finds nothing
+ * in the packaged app even when the editor is plainly installed. Search the usual
+ * install dirs too.
+ */
+const EDITOR_DIRS = ["/opt/homebrew/bin", "/usr/local/bin"];
+
+/** Absolute path of the first installed editor, or null if none is on this Mac. */
+function findEditor(): string | null {
+	const dirs = [...(process.env.PATH?.split(":") ?? []), ...EDITOR_DIRS];
+	for (const cmd of EDITORS) {
+		for (const dir of dirs) {
+			if (!dir) continue;
+			const full = join(dir, cmd);
+			try {
+				accessSync(full, constants.X_OK);
+				return full;
+			} catch {
+				/* not here — keep looking */
+			}
+		}
+	}
+	return null;
 }
 
 // Channels the renderer calls with `ipcRenderer.send` (fire-and-forget) rather
@@ -141,4 +179,31 @@ export function registerIpc(router: Router, native: NativeHandlers): void {
 		const path = await router.handleFor(terminalId, CH.utilWriteImageBytes, [base64, "png"]);
 		return { mode: "paths", paths: [path as string] } satisfies AttachDelivery;
 	});
+
+	// Hand a task's worktree to the user's own editor. Client-native on purpose: the
+	// editor is a desktop app on THIS Mac, so this never routes to the engine. For a
+	// task on a box, VS Code's Remote-SSH opens the box-side path over the same
+	// ssh_config alias Ateam already connects with — the box needs no editor
+	// installed, the client pushes a server there on first connect.
+	ipcMain.handle(
+		CH.utilOpenInEditor,
+		async (_e, worktreePath: string, alias: string | null): Promise<OpenInEditorResult> => {
+			const editor = findEditor();
+			if (!editor)
+				return { ok: false, reason: `No editor found (looked for ${EDITORS.join(", ")}).` };
+			// A ws connection is a `host:port` endpoint, not an ssh_config alias, so
+			// Remote-SSH has nothing to resolve. Failing loudly beats the alternative:
+			// opening the path locally would silently show THIS Mac's copy of it.
+			if (alias !== null && endpointUrl(alias))
+				return {
+					ok: false,
+					reason: `"${alias}" is a direct endpoint, not an ssh_config alias. Remote-SSH needs an alias — add one to ~/.ssh/config and connect through it.`,
+				};
+			const args =
+				alias === null ? [worktreePath] : ["--remote", `ssh-remote+${alias}`, worktreePath];
+			// Detached: the editor outlives Ateam, and must not die with it.
+			spawn(editor, args, { detached: true, stdio: "ignore" }).unref();
+			return { ok: true };
+		},
+	);
 }
