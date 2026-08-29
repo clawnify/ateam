@@ -29,18 +29,21 @@ function str(v: unknown): string | undefined {
 }
 
 /**
- * Agent session — the one loop kind. On each tick it creates a fresh task in
- * the loop's project (own branch + worktree, named "<loop> #<run>") and
- * launches the chosen coding agent with the same prompt, exactly like typing
- * it in the composer. A tick is skipped while the previous run's agent is
- * still working, so slow runs never pile up worktrees. Because the loop row
- * lives in one engine's database, WHERE it runs is simply where it was
- * created — this Mac or a box.
+ * Agent session — the one loop kind, with cron semantics: the loop owns ONE
+ * persistent task (branch + worktree, created lazily on the first run), and
+ * every tick starts a FRESH agent session in it with the same prompt — a fixed
+ * working directory, a new process each time. Runs never mint new tasks, so a
+ * loop is one card on the board however long it lives. A tick is skipped while
+ * the previous run's agent is still working; otherwise the previous idle pane
+ * is closed so terminals don't pile up as tabs. Because the loop row lives in
+ * one engine's database, WHERE it runs is simply where it was created — this
+ * Mac or a box.
  */
 const agentSession: LoopTemplate = {
 	id: "agent-session",
 	title: "Agent session",
-	description: "Starts a coding-agent session with the same prompt in a fresh task, on a schedule.",
+	description:
+		"Starts a coding-agent session with the same prompt in the loop's own task, on a schedule.",
 	defaultCadence: { mode: "fixed", everyMs: 3_600_000 },
 	params: [
 		{ key: "prompt", label: "Prompt", type: "string", default: "" },
@@ -56,28 +59,53 @@ const agentSession: LoopTemplate = {
 		const loopId = str(config.loopId);
 		const row = loopId ? repo.getLoop(ctx.db, loopId) : undefined;
 
+		// The loop's persistent task. Loops from the fresh-task-per-run era
+		// stored the newest run's task as `lastTaskId` — that task simply
+		// becomes the persistent one (free migration).
+		const linkedId = str(row?.config?.taskId) ?? str(row?.config?.lastTaskId);
+		let task = linkedId ? repo.getTask(ctx.db, linkedId) : undefined;
+
 		// Never overlap runs: while the previous run's agent is still working
-		// (or waiting on the user), skip this tick instead of stacking tasks.
-		// Require a LIVE PTY, not just the persisted status — agentStatus can
-		// strand at "running" when the exit happened while the app was closed,
-		// and a status-only check would wedge the loop forever.
-		const lastTaskId = str(row?.config?.lastTaskId);
-		if (lastTaskId) {
-			const prev = repo.getTask(ctx.db, lastTaskId);
-			const activeStatus =
-				prev?.agentStatus === "running" || prev?.agentStatus === "awaiting_input";
-			if (prev && activeStatus && ctx.isTaskAgentLive(prev.id)) {
-				return { summary: `previous run still active (${prev.name}) — skipped` };
+		// (or waiting on the user), skip this tick. Require a LIVE PTY, not
+		// just the persisted status — agentStatus can strand at "running" when
+		// the exit happened while the app was closed, and a status-only check
+		// would wedge the loop forever.
+		if (task) {
+			const activeStatus = task.agentStatus === "running" || task.agentStatus === "awaiting_input";
+			if (activeStatus && ctx.isTaskAgentLive(task.id)) {
+				return { summary: `previous run still active (${task.name}) — skipped` };
 			}
 		}
 
 		const runNumber = (row?.runs ?? 0) + 1;
-		const name = `${row?.name ?? "Loop"} #${runNumber}`;
-		const { taskId } = await ctx.startAgentRun({ projectId, name, agentId, prompt });
-		if (loopId && row) {
-			repo.updateLoop(ctx.db, loopId, { config: { ...row.config, lastTaskId: taskId } });
+		if (!task) {
+			// First run (or the task was cleaned up): create the loop's task.
+			const name = row?.name ?? "Loop";
+			let created: { taskId: string };
+			try {
+				created = await ctx.createTask({ projectId, name });
+			} catch {
+				// A branch/worktree from a removed incarnation is still around
+				// (`git worktree add -b` refuses an existing branch) — take a
+				// deterministic fresh name instead of failing the run.
+				created = await ctx.createTask({ projectId, name: `${name} ${runNumber}` });
+			}
+			task = repo.getTask(ctx.db, created.taskId);
+			if (!task) throw new Error("Task creation failed");
+		} else {
+			// Close the previous run's idle pane so panes don't accumulate as
+			// terminal tabs; the agent's own conversation history stays in the
+			// worktree (resumable from the agent CLI).
+			ctx.stopTaskSessions(task.id);
 		}
-		return { summary: `started ${name}` };
+
+		await ctx.spawnAgent({ taskId: task.id, agentId, prompt });
+		if (loopId && row) {
+			// Persist the link under `taskId`; drop the legacy key it migrated from.
+			const { lastTaskId: _legacy, ...rest } = row.config ?? {};
+			repo.updateLoop(ctx.db, loopId, { config: { ...rest, taskId: task.id } });
+		}
+		return { summary: `run ${runNumber} started (${task.name})` };
 	},
 };
 
