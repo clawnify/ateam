@@ -21,11 +21,41 @@
 // v4: added CH.searchSessions. Same reasoning again — a new desktop searching an
 // older box would otherwise get `Unknown method: search:sessions` from the search
 // box instead of "update the older side".
-export const PROTOCOL_VERSION = 4;
+// v5: TaskDTO gained a required `triage` verdict (with the `stalled` bucket) and a
+// `tags` field, and CH.tasksMarkRead was added. Same skew again — an old engine
+// sends cards with no `triage`, which the board reads on EVERY card, and answers
+// markRead with "Unknown method".
+export const PROTOCOL_VERSION = 5;
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
 export type AgentStatus = "idle" | "running" | "awaiting_input" | "stopped";
+
+/**
+ * Why a task is where it is, in urgency order — the done-vs-ongoing judgment
+ * from worktree-triage. Lives here (not in @ateam/server) because it rides on
+ * every TaskDTO: the classifier is server-side, but desktop, mobile, and any
+ * client on the far end of the RPC all render it.
+ */
+export type TriageBucket =
+	| "active"
+	| "stalled"
+	| "uncommitted"
+	| "open_pr"
+	| "unmerged_no_pr"
+	| "merged_unfinished"
+	| "merged_done"
+	| "orphan"
+	| "not_started";
+
+/** One task's triage verdict, computed from its row on every DTO mapping. */
+export interface TaskTriage {
+	bucket: TriageBucket;
+	/** Is this task actually finished? */
+	done: boolean;
+	/** Human-readable justification, shown on the card. */
+	reason: string;
+}
 
 /** Position of a task in the merge queue; null when not queued. */
 export type MergeStatus = "queued" | "updating" | "merging" | "conflict";
@@ -67,6 +97,11 @@ export interface TaskDTO {
 	/** Last agent/lifecycle activity (falls back to row update time). */
 	lastEventAt: number | null;
 	isUnread: boolean;
+	/** Model-assigned topic tags; null when none were generated (the client
+	 *  falls back to deriving them from the task's text). */
+	tags: string[] | null;
+	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
+	triage: TaskTriage;
 }
 
 export interface AgentDTO {
@@ -314,6 +349,7 @@ export const CH = {
 	tasksCreate: "tasks:create",
 	tasksRemove: "tasks:remove",
 	tasksSetColumn: "tasks:setColumn",
+	tasksMarkRead: "tasks:markRead",
 	tasksCleanup: "tasks:cleanup",
 	tasksCleanupPreview: "tasks:cleanupPreview",
 	tasksCleanupCandidates: "tasks:cleanupCandidates",
@@ -441,6 +477,8 @@ export interface AteamApi {
 		create(input: { projectId: string; name: string; baseBranch?: string }): Promise<TaskDTO>;
 		remove(input: { id: string; deleteBranch?: boolean; force?: boolean }): Promise<void>;
 		setColumn(id: string, column: KanbanColumn): Promise<TaskDTO>;
+		/** Clear the unread flag once the user has actually looked at the task. */
+		markRead(id: string): Promise<TaskDTO>;
 		/** Preview which tasks a cleanup would remove vs keep (and why). */
 		cleanupPreview(projectId: string): Promise<CleanupReport>;
 		/** Worktrees advised for cleanup (idle/finished), with their terminals. */

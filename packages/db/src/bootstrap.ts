@@ -41,6 +41,7 @@ export function bootstrap(db: SqliteExecutor): void {
 			git_status TEXT,
 			last_event_at INTEGER,
 			is_unread INTEGER DEFAULT 0,
+			tags TEXT,
 			created_by TEXT NOT NULL DEFAULT 'ateam',
 			created_at INTEGER,
 			updated_at INTEGER
@@ -146,6 +147,7 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE tasks ADD COLUMN agent_id TEXT",
 		"ALTER TABLE tasks ADD COLUMN description TEXT",
 		"ALTER TABLE tasks ADD COLUMN merge_status TEXT",
+		"ALTER TABLE tasks ADD COLUMN tags TEXT",
 		"ALTER TABLE loops ADD COLUMN kind TEXT NOT NULL DEFAULT 'builtin'",
 		"ALTER TABLE loops ADD COLUMN template_id TEXT",
 		"ALTER TABLE loops ADD COLUMN name TEXT",

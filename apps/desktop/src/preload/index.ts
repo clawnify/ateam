@@ -30,6 +30,7 @@ const api: AteamApi = {
 		create: (input) => ipcRenderer.invoke(CH.tasksCreate, input),
 		remove: (input) => ipcRenderer.invoke(CH.tasksRemove, input),
 		setColumn: (id, column: KanbanColumn) => ipcRenderer.invoke(CH.tasksSetColumn, id, column),
+		markRead: (id) => ipcRenderer.invoke(CH.tasksMarkRead, id),
 		cleanupPreview: (projectId) => ipcRenderer.invoke(CH.tasksCleanupPreview, projectId),
 		cleanup: (projectId) => ipcRenderer.invoke(CH.tasksCleanup, projectId),
 		cleanupCandidates: (projectId) => ipcRenderer.invoke(CH.tasksCleanupCandidates, projectId),

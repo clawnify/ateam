@@ -677,12 +677,74 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* Tags share the branch's row and only surface on hover, so the board never
+   reflows and a resting card stays quiet. Same shared-slot swap the sidebar
+   already uses for its status dot / delete button (.task-trail). */
+.card .branch-slot {
+	position: relative;
+}
+.card .tags {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 120ms ease;
+}
+.card:hover .branch-slot.has-tags .branch {
+	opacity: 0;
+}
+.card:hover .branch-slot.has-tags .tags {
+	opacity: 1;
+}
+.card .tag {
+	font-size: 9.5px;
+	line-height: 1;
+	letter-spacing: 0.02em;
+	padding: 3px 6px;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	background: var(--bg-elev-2);
+	color: var(--text-dim);
+	white-space: nowrap;
+}
 .card .meta {
 	display: flex;
 	gap: 8px;
 	margin-top: 8px;
 	font-size: 11px;
 	color: var(--text-dim);
+}
+/* Why this card sits where it does (the triage reason). Sits between the
+   branch and the git counts, dimmer than both so it reads as a caption. */
+.card .triage {
+	margin-top: 6px;
+	font-size: 10.5px;
+	color: var(--text-dim);
+	opacity: 0.85;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.card .meta .age {
+	margin-left: auto;
+}
+/* "Something happened here while you were away." White, not the purple accent,
+   to match the selected-card border. */
+.unread {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--text);
+	margin-right: 6px;
+	vertical-align: middle;
+}
+.tname.unread-row {
+	color: var(--text);
+	font-weight: 600;
 }
 .ring {
 	position: absolute;
@@ -703,6 +765,12 @@ input {
 }
 .ring.idle {
 	background: var(--green);
+}
+/* Claims to be running but stopped advancing: hollow, not pulsing, so it reads
+   as "no longer live" rather than "working". */
+.ring.stalled {
+	background: transparent;
+	border: 1.5px solid var(--text-dim);
 }
 .card-agent {
 	position: absolute;
