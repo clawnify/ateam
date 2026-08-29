@@ -1490,7 +1490,9 @@ function TaskPanel({
 		// The engine hands these back latest-first; reverse so the strip reads
 		// oldest → newest — a new session then appends on the right instead of
 		// shuffling the tabs already open.
-		setLoaded({ taskId, sessions: live.reverse() });
+		const ordered = live.reverse();
+		setLoaded({ taskId, sessions: ordered });
+		return ordered;
 	}, [task.id]);
 
 	useEffect(() => {
@@ -1536,22 +1538,42 @@ function TaskPanel({
 	// and the newest survivor takes focus. With nothing left, resume the agent's
 	// last conversation if the task is still active work (running or awaiting
 	// input). Terminal columns (review/merged) are left alone — there a relaunch
-	// is a deliberate act via the Resume button, not a side effect of opening the
-	// task (and spawning would bounce the card back to "running").
+	// is a deliberate act via the + menu, not a side effect of opening the task
+	// (and spawning would bounce the card back to "running").
+	//
+	// The one thing `sessions` alone must never settle is "this task has none".
+	// A spawn announces itself as a task update — the very event that flips the
+	// column to "running" — and that render arrives BEFORE the listForTask it
+	// also triggers comes back. Concluding "running, nothing alive" from that
+	// stale-empty list is how creating a task opened a second, redundant
+	// "--continue" tab beside the one the composer had just launched. So an empty
+	// list is re-read before anything is torn down or relaunched, and only when
+	// the answer can still change something — otherwise every task that
+	// legitimately has no sessions would re-read itself in a loop.
 	const autoResumedRef = useRef<string | null>(null);
 	useEffect(() => {
 		if (!sessions) return; // list not read yet — don't judge the task by it
 		const next = activeTerminal(sessions, terminalId);
-		if (next !== terminalId) setTerminal(next);
-		if (next) return;
-		if (
+		if (next) {
+			if (next !== terminalId) setTerminal(next);
+			return;
+		}
+		const resumable =
 			(task.column === "running" || task.column === "needs_attention") &&
-			autoResumedRef.current !== task.id
-		) {
+			autoResumedRef.current !== task.id;
+		if (terminalId === null && !resumable) return;
+		let cancelled = false;
+		void refreshSessions().then((live) => {
+			if (cancelled || live.length) return; // it wasn't empty after all
+			if (terminalId !== null) setTerminal(null);
+			if (!resumable) return;
 			autoResumedRef.current = task.id;
 			void launch(false, true);
-		}
-	}, [task.id, task.column, sessions, terminalId, setTerminal, launch]);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [task.id, task.column, sessions, terminalId, setTerminal, launch, refreshSessions]);
 
 	// "+ → New agent session…": the task-creation composer minus name/branch/machine.
 	// Launches into THIS task's worktree, so the prompt, attachments, agent and YOLO
