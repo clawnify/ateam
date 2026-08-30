@@ -24,12 +24,59 @@ export interface TaskInfo {
 	worktreePath: string;
 }
 
+/**
+ * Wall-clock budget for the pre-flight fetch. Freshness here is best-effort, so
+ * the cap is what an interactive "create task" click can absorb, not how long a
+ * fetch might legitimately take.
+ */
+const FETCH_TIMEOUT_MS = 5_000;
+
+/**
+ * Refresh `refs/remotes/origin/<base>` before we branch off it.
+ *
+ * That ref is a LOCAL CACHE, and nothing on this path used to update it: the
+ * only fetches in git-core are in `updateFromBase` and the merge flow, so the
+ * cache went stale until someone happened to merge or hit "update from base".
+ * Merges that land elsewhere (the GitHub UI, another clone, a teammate) are
+ * invisible here by construction, so no amount of reacting to our own merges
+ * can keep it warm. Fetching at the moment of use is the only formulation that
+ * doesn't depend on having witnessed the write.
+ *
+ * Best-effort, never required: offline, no remote, or a headless box with no
+ * credentials all fall through to the chain below (cached ref, then the local
+ * branch, then HEAD). Creating a task must never need the network.
+ *
+ * The bare `fetch origin <base>` refspec writes only `refs/remotes/origin/*` --
+ * never a local branch, never any worktree's checkout. (Contrast the
+ * `<base>:<base>` form in merge.ts, which does write a local branch and leans
+ * on git's own "checked out" refusal to stay safe.) Killing it mid-flight is
+ * safe too: refs are written at the end, so the worst case is a temp packfile
+ * that gc reclaims.
+ *
+ * One measured caveat: aborting kills `git`, but its `git-remote-https` child
+ * survives, orphaned, until the OS gives up on the TCP connect (~75s on macOS).
+ * The caller is already unblocked at FETCH_TIMEOUT_MS, and the strays are idle
+ * and self-reaping -- git exposes no connect timeout (only http.lowSpeed*,
+ * which covers transfer rate, not connect), so bounding it any tighter would
+ * mean bypassing simple-git entirely for this one call.
+ */
+async function fetchBase(repoPath: string, baseBranch: string): Promise<void> {
+	try {
+		await gitFor(repoPath, {
+			abort: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+		}).raw(["fetch", "origin", baseBranch]);
+	} catch {
+		/* best-effort -- branch off whatever ref we already have */
+	}
+}
+
 /** Resolve the start point for a new task branch: prefer the pushed base. */
 async function resolveStartPoint(
 	repoPath: string,
 	baseBranch: string,
 ): Promise<string> {
 	const git = gitFor(repoPath);
+	await fetchBase(repoPath, baseBranch);
 	if (await refExists(git, `refs/remotes/origin/${baseBranch}`)) {
 		return `origin/${baseBranch}`;
 	}

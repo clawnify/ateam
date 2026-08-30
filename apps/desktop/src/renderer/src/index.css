@@ -13,6 +13,9 @@
 	--amber: #fbbf24;
 	--red: #f87171;
 	--blue: #60a5fa;
+	/* Side-panel width, and so the board's right-hand no-go zone: the panel is
+	   sticky over it, so the selected card reserves it as scroll-margin. */
+	--panel-w: 480px;
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -678,6 +681,12 @@ input {
 }
 .card.selected {
 	border-color: #ffffff;
+	/* A selected card means the side panel is open (going full-width hides the
+	   board), and the panel is sticky over the board's right edge. Reserving its
+	   width here is what lets scrollIntoView({inline:"nearest"}) land the card
+	   beside the panel instead of behind it — and stay a no-op when it already is.
+	   +14px matches the board's padding, so the card doesn't kiss the panel. */
+	scroll-margin-right: calc(var(--panel-w) + 14px);
 }
 .card .name {
 	font-size: 13px;
@@ -833,7 +842,7 @@ input {
 
 /* ---- task panel ---- */
 .panel {
-	flex: 0 0 480px; /* fixed width; board scrolls beside it, not squeezed */
+	flex: 0 0 var(--panel-w); /* fixed width; board scrolls beside it, not squeezed */
 	/* Flex min-width:auto would let the terminal's canvas (sized while the
 	   panel was full-width) clamp the panel and stop it collapsing back to
 	   480px — the basis must always win over content min-width. Same on the
@@ -1165,39 +1174,43 @@ input {
 }
 
 /* ---- mission control ---- */
-/* Hosts the sliding page grid and the bottom-right pager overlay. */
+/* Hosts the sliding page grid and the bottom-right pager overlay. Clips the
+   slide: a page flip animates the grid in from 32px away, and .content scrolls
+   (its overflow-x: auto makes the y axis scrollable too), so without this the
+   incoming page would poke past the bottom and flash a scrollbar mid-flip. */
 .mc-wrap {
 	flex: 1;
 	display: flex;
 	position: relative;
 	min-height: 0;
+	overflow: hidden;
 }
 .mc {
 	flex: 1;
 	display: grid;
 	gap: 8px;
 	padding: 12px;
-	/* Tiles are paged, not scrolled: each layout renders at most a pageful, so
-	   this only guards pathologically small windows. */
-	overflow-y: auto;
-	overflow-x: hidden;
+	/* Tiles are paged, never scrolled: every layout sizes its rows so exactly
+	   one pageful fills the box, so there is nothing to scroll to. */
+	overflow: hidden;
 	/* Default ("grid"): 2x2 — each tile is half the window wide and half the
 	   window tall (percentage rows resolve against the visible content box;
 	   calc subtracts half the gap so two rows + gap fit exactly). */
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	grid-auto-rows: calc(50% - 4px);
 }
-/* Split: two side-by-side columns, each row the full window height; extra
-   rows overflow downward into the scroll area. minmax(0,1fr) columns stop
-   wide terminal output from blowing out the track width. */
+/* Split: two side-by-side columns on one full-height row (a page holds two).
+   minmax(0,1fr) columns stop wide terminal output from blowing out the track
+   width. */
 .mc[data-layout="split"] {
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	grid-auto-rows: 100%;
 }
-/* Stack: one full-width column, tiles stacked top-to-bottom and scrolling. */
+/* Stack: a single full-window terminal per page. 100% (not a min-height) so a
+   short window shrinks the tile instead of overflowing into a scrollbar. */
 .mc[data-layout="stack"] {
 	grid-template-columns: minmax(0, 1fr);
-	grid-auto-rows: minmax(280px, 1fr);
+	grid-auto-rows: 100%;
 }
 
 /* Pager overlay: sits translucent over the bottom-right corner, full opacity
@@ -1873,7 +1886,31 @@ input {
 	flex: 1;
 	min-height: 0;
 	display: grid;
-	grid-template-columns: 240px 1fr;
+	/* Wider than the old 240px: each row now carries its deciding factors
+	   (age, PR, git counts) under the branch, not just a one-word reason. */
+	grid-template-columns: 300px 1fr;
+}
+/* All / Recommended — narrows the list to the sweep's own picks. */
+.cleanup-filter {
+	display: flex;
+	gap: 2px;
+	margin-right: 8px;
+	background: var(--bg-elev-2);
+	border-radius: 6px;
+	padding: 2px;
+}
+.cleanup-filter button {
+	background: transparent;
+	border: none;
+	border-radius: 4px;
+	color: var(--text-dim);
+	font-size: 11px;
+	padding: 3px 8px;
+	cursor: pointer;
+}
+.cleanup-filter button.on {
+	background: var(--bg-elev);
+	color: var(--text);
 }
 .cleanup-list {
 	border-right: 1px solid var(--border);
@@ -1905,6 +1942,52 @@ input {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+.cleanup-item .tname {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+/* The sweep would take this one — advice, not a filter. */
+.cleanup-item .rec-dot {
+	flex: none;
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: var(--green);
+}
+.cleanup-factors {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-top: 3px;
+	font-size: 10px;
+	color: var(--text-dim);
+}
+.cleanup-factors .pr {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+}
+.cleanup-factors .pr.open {
+	color: var(--green);
+}
+.cleanup-factors .pr.merged {
+	color: var(--text-dim);
+}
+.cleanup-factors .pr.closed {
+	color: var(--red);
+}
+.cleanup-detail-head .rec-tag {
+	margin-left: 8px;
+	font-size: 10px;
+	font-weight: 400;
+	color: var(--green);
+	border: 1px solid var(--green);
+	border-radius: 4px;
+	padding: 1px 5px;
+	vertical-align: middle;
 }
 .cleanup-item .sub {
 	font-size: 11px;
@@ -2012,9 +2095,18 @@ input {
 	border-radius: 5px;
 	padding: 1px 5px;
 }
+/* A loop's prompt is free text and is often pages long (a pasted brief), which
+   would otherwise render in full and bury the card's controls. The card is a
+   summary row — clamp to two lines; Edit shows the whole prompt. */
 .loop-desc {
 	font-size: 12px;
+	line-height: 1.35;
 	margin: 3px 0 6px;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
 }
 .loop-meta {
 	display: flex;

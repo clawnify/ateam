@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { listAgents } from "@ateam/agents";
-import { repo } from "@ateam/db";
+import { repo, type Task } from "@ateam/db";
 import {
 	cloneRepo,
 	commit,
@@ -27,6 +27,7 @@ import {
 } from "@ateam/git-core";
 import {
 	CH,
+	type CleanupCandidate,
 	type CreateLoopInput,
 	type DirEntryDTO,
 	type GitStatusSnapshot,
@@ -103,36 +104,46 @@ export function createDispatcher(engine: Engine): Dispatcher {
 	// Lazy: no code-server process exists until the first editor:open.
 	const editorHost = createEditorHost();
 
-	// ---- cleanup: remove only merged + idle + clean worktrees ----
-	// A task is removable ONLY when it merged, has no live agent session, and its
-	// working tree is clean. Everything else is kept — never deleting unmerged
-	// work or a task an agent is still using.
+	// ---- cleanup: merged + idle + clean is a RECOMMENDATION, not a filter ----
+	// The rule below (merged, no live agent session, clean working tree) is the
+	// only thing the unattended sweep will delete. The interactive dialog no
+	// longer hides everything that fails it: it lists every task and shows this
+	// verdict as advice, because whether a worktree is worth keeping turns on
+	// factors only the user weighs — how stale it is, whether its PR landed,
+	// whether the leftover dirt matters.
+	async function cleanupVerdict(
+		task: Task,
+	): Promise<{ recommended: boolean; reason: string; live: boolean }> {
+		const live = repo.listSessionsByTask(db, task.id).some((s) => services.pty.has(s.terminalId));
+		const isMerged = task.column === "merged" || task.prState === "merged";
+		if (!isMerged) return { recommended: false, reason: "not merged", live };
+		if (live) return { recommended: false, reason: "agent still active", live };
+		// Only merged + idle tasks reach the subprocess, so listing everything
+		// costs no more git calls than the old pre-filtered list did. The whole
+		// probe is guarded, not just the command: `gitFor` itself throws when the
+		// worktree directory is gone (deleted by hand, or pruned elsewhere), and
+		// an unguarded throw here would fail the entire candidate listing. A
+		// vanished tree has nothing left to lose, so it stays sweepable.
+		let dirty = false;
+		try {
+			dirty = (await gitFor(task.worktreePath).raw(["status", "--porcelain"])).trim() !== "";
+		} catch {
+			dirty = false;
+		}
+		if (dirty) return { recommended: false, reason: "uncommitted/untracked changes", live };
+		return { recommended: true, reason: "merged, clean, no live session", live };
+	}
+
+	// A task is removable by the unattended sweep ONLY when `cleanupVerdict`
+	// recommends it — never deleting unmerged work or a task an agent still uses.
 	async function classifyForCleanup(projectId: string) {
 		const allTasks = repo.listTasks(db, projectId);
 		const removable: typeof allTasks = [];
 		const kept: { task: (typeof allTasks)[number]; reason: string }[] = [];
 		for (const task of allTasks) {
-			const isMerged = task.column === "merged" || task.prState === "merged";
-			if (!isMerged) {
-				kept.push({ task, reason: "not merged" });
-				continue;
-			}
-			const live = repo.listSessionsByTask(db, task.id).some((s) => services.pty.has(s.terminalId));
-			if (live) {
-				kept.push({ task, reason: "agent still active" });
-				continue;
-			}
-			const dirty =
-				(
-					await gitFor(task.worktreePath)
-						.raw(["status", "--porcelain"])
-						.catch(() => "")
-				).trim() !== "";
-			if (dirty) {
-				kept.push({ task, reason: "uncommitted/untracked changes" });
-				continue;
-			}
-			removable.push(task);
+			const v = await cleanupVerdict(task);
+			if (v.recommended) removable.push(task);
+			else kept.push({ task, reason: v.reason });
 		}
 		return { removable, kept };
 	}
@@ -263,41 +274,24 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			return toTaskDTO(row!);
 		},
 
-		// Candidates for the interactive cleanup dialog: every task that isn't
-		// actively running. Each carries a live terminalId when its PTY is still
-		// around, so the dialog can show the conversation and let the user continue.
-		[CH.tasksCleanupCandidates]: async (projectId: string) => {
-			const out: {
-				id: string;
-				name: string;
-				branch: string;
-				worktreePath: string;
-				reason: string;
-				terminalId: string | null;
-				agentStatus: string | null;
-			}[] = [];
+		// Candidates for the interactive cleanup dialog: EVERY task in the project,
+		// each with the sweep's verdict as advice (`recommended`) and the whole
+		// task DTO, so the dialog can lay out the factors the user decides on —
+		// last activity, PR state, ahead/dirty counts, triage. A live terminalId
+		// rides along when the PTY is still around, so the conversation is there
+		// to read before deciding, and "Keep & continue" lands back in it.
+		[CH.tasksCleanupCandidates]: async (projectId: string): Promise<CleanupCandidate[]> => {
+			const out: CleanupCandidate[] = [];
 			for (const task of repo.listTasks(db, projectId)) {
-				const busy = task.agentStatus === "running" || task.agentStatus === "awaiting_input";
-				// Done tasks are always proposed — merged work is cleanup material
-				// even when its agent session is technically still alive.
-				if (busy && task.column !== "merged") continue;
+				const v = await cleanupVerdict(task);
 				const live = repo
 					.listSessionsByTask(db, task.id)
 					.find((s) => services.pty.has(s.terminalId));
-				const reason =
-					task.column === "merged"
-						? "merged"
-						: task.agentStatus === "idle" || task.agentStatus === "stopped"
-							? "agent idle"
-							: "no recent activity";
 				out.push({
-					id: task.id,
-					name: task.name,
-					branch: task.branch,
-					worktreePath: task.worktreePath,
-					reason,
+					task: toTaskDTO(task),
 					terminalId: live?.terminalId ?? null,
-					agentStatus: task.agentStatus ?? null,
+					recommended: v.recommended,
+					reason: v.reason,
 				});
 			}
 			return out;

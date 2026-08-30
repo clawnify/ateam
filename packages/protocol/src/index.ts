@@ -25,11 +25,18 @@
 // `tags` field, and CH.tasksMarkRead was added. Same skew again — an old engine
 // sends cards with no `triage`, which the board reads on EVERY card, and answers
 // markRead with "Unknown method".
-export const PROTOCOL_VERSION = 5;
+// v6: TaskDTO gained `prState`, and CleanupCandidate now carries a whole TaskDTO
+// plus a `recommended` flag (it used to be a flat, pre-filtered row). Both are
+// shape changes the cleanup dialog reads directly, so an older engine would feed
+// it rows with no `task` at all — the handshake must catch that skew first.
+export const PROTOCOL_VERSION = 6;
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
 export type AgentStatus = "idle" | "running" | "awaiting_input" | "stopped";
+
+/** State of the branch's pull request, when one exists. */
+export type PrState = "open" | "merged" | "closed";
 
 /**
  * Why a task is where it is, in urgency order — the done-vs-ongoing judgment
@@ -93,6 +100,8 @@ export interface TaskDTO {
 	mergeStatus: MergeStatus | null;
 	prNumber: number | null;
 	prUrl: string | null;
+	/** open / merged / closed, or null when the branch has no PR. */
+	prState: PrState | null;
 	gitStatus: GitStatusSnapshot | null;
 	/** Last agent/lifecycle activity (falls back to row update time). */
 	lastEventAt: number | null;
@@ -302,16 +311,22 @@ export interface ConnectionDTO {
 	known: boolean;
 }
 
-// A worktree advised for cleanup, shown in the cleanup dialog with its terminal.
+/**
+ * One worktree in the cleanup dialog. EVERY task in the project is listed —
+ * the old rule (merged + no live session + clean tree) no longer filters the
+ * list, it only advises through `recommended`, so the call stays with the user
+ * and is made on the factors the whole task carries: last activity, PR state,
+ * ahead/dirty counts, triage verdict.
+ */
 export interface CleanupCandidate {
-	id: string;
-	name: string;
-	branch: string;
-	worktreePath: string;
-	reason: string;
+	/** The task itself, so the dialog can show every deciding factor. */
+	task: TaskDTO;
 	/** A live PTY session to show/continue, or null if the session ended. */
 	terminalId: string | null;
-	agentStatus: AgentStatus | null;
+	/** The conservative rule's verdict: safe to sweep. */
+	recommended: boolean;
+	/** Why it is — or is not — recommended. */
+	reason: string;
 }
 
 /**
