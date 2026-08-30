@@ -42,10 +42,15 @@ Identity and all GitHub operations come from the `gh` CLI.
 - **git** ≥ 2.31, **gh** (authenticated: `gh auth status`)
 - At least one agent CLI on PATH: `claude`, `opencode`, or `codex`
 
-> Note: if your `node` is x86_64 (Rosetta) while Bun + Electron are arm64, the
-> desktop dev/build scripts run under Bun's runtime (`bunx --bun`) so the right
-> native binaries are used. After `bun install`, native modules are rebuilt for
-> Electron via `bun run --filter @ateam/desktop rebuild`.
+> Note: `bun install` rebuilds better-sqlite3 and node-pty for Electron on its
+> own, via a `postinstall` hook in `apps/desktop`. You do not need a second
+> command, and a fresh task worktree is runnable straight after installing.
+>
+> The hook is not optional bookkeeping. Everything Bun's script runner spawns on
+> macOS runs translated, picking the x86_64 slice of a universal `node`, so
+> `prebuild-install` resolves `process.arch` as x64 and fetches a `darwin-x64`
+> better-sqlite3 that Electron cannot load. The rebuild replaces it with the
+> arm64 Electron-ABI build.
 
 ## Layout
 
@@ -170,10 +175,13 @@ whole setup with you:
 ## Develop
 
 ```bash
-bun install
-bun run --filter @ateam/desktop rebuild   # native modules for Electron (arm64)
+bun install                                # also rebuilds natives for Electron
 bun run --filter @ateam/desktop dev        # launch the app (Electron + Vite HMR)
 ```
+
+The renderer's dev port is derived from the worktree path (and bound to
+`127.0.0.1`), so several worktrees can run `dev` side by side without serving
+each other's code. The URL is printed on startup.
 
 ## Test & typecheck
 
@@ -203,9 +211,12 @@ composer (pick the agent and type the first instruction in one step) reused for
 extra sessions inside an existing task, many terminals per task as tabs (agent
 sessions or plain shells, side by side), agent spawning in PTYs (Claude Code,
 OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection,
-Mission Control grid, collapsible sidebar rail, image drag-drop & paste into
-agent terminals, session search (describe past work in the topbar and jump back
-to the session that did it, reading Claude Code / Codex / OpenCode transcripts),
+Mission Control grid (one tile per task, its sessions as read-only tabs),
+collapsible sidebar rail, image drag-drop & paste into
+agent terminals, session search (the topbar box answers in a popover listing
+matching tasks and the past sessions that discussed them, with an AI row that
+finds a session from a description of the work, reading Claude Code / Codex /
+OpenCode transcripts),
 safe cleanup of merged worktrees, and signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
 Electron main process is boot-verified with native modules.

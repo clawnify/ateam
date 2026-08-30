@@ -21,11 +21,41 @@
 // v4: added CH.searchSessions. Same reasoning again — a new desktop searching an
 // older box would otherwise get `Unknown method: search:sessions` from the search
 // box instead of "update the older side".
-export const PROTOCOL_VERSION = 4;
+// v5: TaskDTO gained a required `triage` verdict (with the `stalled` bucket) and a
+// `tags` field, and CH.tasksMarkRead was added. Same skew again — an old engine
+// sends cards with no `triage`, which the board reads on EVERY card, and answers
+// markRead with "Unknown method".
+export const PROTOCOL_VERSION = 5;
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
 export type AgentStatus = "idle" | "running" | "awaiting_input" | "stopped";
+
+/**
+ * Why a task is where it is, in urgency order — the done-vs-ongoing judgment
+ * from worktree-triage. Lives here (not in @ateam/server) because it rides on
+ * every TaskDTO: the classifier is server-side, but desktop, mobile, and any
+ * client on the far end of the RPC all render it.
+ */
+export type TriageBucket =
+	| "active"
+	| "stalled"
+	| "uncommitted"
+	| "open_pr"
+	| "unmerged_no_pr"
+	| "merged_unfinished"
+	| "merged_done"
+	| "orphan"
+	| "not_started";
+
+/** One task's triage verdict, computed from its row on every DTO mapping. */
+export interface TaskTriage {
+	bucket: TriageBucket;
+	/** Is this task actually finished? */
+	done: boolean;
+	/** Human-readable justification, shown on the card. */
+	reason: string;
+}
 
 /** Position of a task in the merge queue; null when not queued. */
 export type MergeStatus = "queued" | "updating" | "merging" | "conflict";
@@ -67,6 +97,11 @@ export interface TaskDTO {
 	/** Last agent/lifecycle activity (falls back to row update time). */
 	lastEventAt: number | null;
 	isUnread: boolean;
+	/** Model-assigned topic tags; null when none were generated (the client
+	 *  falls back to deriving them from the task's text). */
+	tags: string[] | null;
+	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
+	triage: TaskTriage;
 }
 
 export interface AgentDTO {
@@ -314,6 +349,7 @@ export const CH = {
 	tasksCreate: "tasks:create",
 	tasksRemove: "tasks:remove",
 	tasksSetColumn: "tasks:setColumn",
+	tasksMarkRead: "tasks:markRead",
 	tasksCleanup: "tasks:cleanup",
 	tasksCleanupPreview: "tasks:cleanupPreview",
 	tasksCleanupCandidates: "tasks:cleanupCandidates",
@@ -340,6 +376,9 @@ export const CH = {
 	utilAttachClipboardImage: "util:attachClipboardImage",
 	utilWriteImageBytes: "util:writeImageBytes",
 	utilOpenInEditor: "util:openInEditor",
+	editorOpen: "editor:open",
+	editorOpenUrl: "editor:openUrl",
+	editorInstall: "editor:install",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyWrite: "pty:write",
@@ -397,6 +436,27 @@ export type AttachDelivery =
  */
 export type OpenInEditorResult = { ok: true } | { ok: false; reason: string };
 
+/**
+ * The in-app editor's default port on the engine's machine (code-server). Shared
+ * between the engine (which binds it) and the desktop's SSH forward (which is
+ * opened at connect time, before the engine is asked) — so both sides must agree.
+ * shortcut: a box overriding ATEAM_EDITOR_PORT breaks the ssh path; carry the
+ * port in system:hello if that override ever matters.
+ */
+export const DEFAULT_EDITOR_PORT = 8390;
+
+/** Where the engine's embedded editor (code-server) answers, on ITS machine. */
+export interface EditorEndpointDTO {
+	port: number;
+}
+
+/**
+ * editor:open's answer: the endpoint, or "code-server isn't installed here" —
+ * a state, not an error, so clients can front the install with a consent dialog
+ * instead of parsing an exception.
+ */
+export type EditorOpenResult = EditorEndpointDTO | { needsInstall: true };
+
 // ---- the API surface exposed on window.ateam ----
 export interface AteamApi {
 	projects: {
@@ -417,6 +477,8 @@ export interface AteamApi {
 		create(input: { projectId: string; name: string; baseBranch?: string }): Promise<TaskDTO>;
 		remove(input: { id: string; deleteBranch?: boolean; force?: boolean }): Promise<void>;
 		setColumn(id: string, column: KanbanColumn): Promise<TaskDTO>;
+		/** Clear the unread flag once the user has actually looked at the task. */
+		markRead(id: string): Promise<TaskDTO>;
 		/** Preview which tasks a cleanup would remove vs keep (and why). */
 		cleanupPreview(projectId: string): Promise<CleanupReport>;
 		/** Worktrees advised for cleanup (idle/finished), with their terminals. */
@@ -448,6 +510,21 @@ export interface AteamApi {
 		 * the shortlist and says why each one matched.
 		 */
 		sessions(input: { projectId: string; query: string; ai?: boolean }): Promise<SessionHitDTO[]>;
+	};
+	editor: {
+		/**
+		 * Start (or reuse) the in-app editor for this task's engine and resolve the
+		 * URL THIS client should load — tunneled for an SSH box, direct for a
+		 * Tailscale endpoint, localhost for the local engine. The page is VS Code
+		 * (code-server) on the task's machine; callers append ?folder=<worktree>.
+		 */
+		open(taskId: string): Promise<{ url: string } | { needsInstall: true }>;
+		/**
+		 * Install code-server on the task's engine (one-time, user-space, pinned
+		 * version). Call only after the user consented to a needsInstall answer.
+		 * Resolves when installed; a following open() starts it.
+		 */
+		install(taskId: string): Promise<void>;
 	};
 	fs: {
 		/**

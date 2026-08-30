@@ -432,6 +432,12 @@ input {
 }
 .topbar {
 	position: relative;
+	/* Above .panel (z-index 5) and the sidebar resizer (20), below overlays and
+	   dialogs. The bar itself never overlapped anything, but the session-search
+	   results hang out of it: .task-search is transformed, which makes it a
+	   stacking context, so the dropdown's own z-index orders it only INSIDE the
+	   search box. What decides whether it is visible is this layer. */
+	z-index: 25;
 	height: 44px;
 	display: flex;
 	align-items: center;
@@ -496,31 +502,6 @@ input {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
-.task-search .ts-ai:disabled {
-	opacity: 0.35;
-	cursor: default;
-}
-/* Working: a slow pulse, not a spinner — the search takes seconds, and a
-   spinner at this size reads as a stuck one. */
-.task-search .ts-ai.busy {
-	color: var(--text);
-	animation: ts-pulse 1.4s ease-in-out infinite;
-}
-@keyframes ts-pulse {
-	0%,
-	100% {
-		opacity: 0.45;
-	}
-	50% {
-		opacity: 1;
-	}
-}
-@media (prefers-reduced-motion: reduce) {
-	.task-search .ts-ai.busy {
-		animation: none;
-		color: var(--text);
-	}
-}
 /* Results hang below the box, which is itself absolutely centered in the
    topbar — so this is positioned against the box, not the bar. */
 .ts-results {
@@ -528,7 +509,6 @@ input {
 	top: calc(100% + 6px);
 	left: 0;
 	right: 0;
-	z-index: 30;
 	max-height: 60vh;
 	overflow-y: auto;
 	padding: 4px;
@@ -574,6 +554,44 @@ input {
 	line-clamp: 2;
 	-webkit-box-orient: vertical;
 	overflow: hidden;
+}
+/* The AI row: last, always, and set apart by a rule rather than a colour so it
+   reads as a different KIND of action, not a highlighted result. */
+.ts-ai {
+	/* Later than .ts-hit in this file, same specificity, so it simply wins. */
+	border-top: 1px solid var(--border);
+	border-radius: 0 0 7px 7px;
+	margin-top: 2px;
+}
+.ts-ai .ts-hit-name {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	color: var(--text-dim);
+}
+.ts-ai.on .ts-hit-name,
+.ts-ai.busy .ts-hit-name {
+	color: var(--text);
+}
+/* Working: a slow pulse, not a spinner — the search takes seconds, and a
+   spinner at this size reads as a stuck one. */
+.ts-ai.busy {
+	animation: ts-pulse 1.4s ease-in-out infinite;
+	cursor: default;
+}
+@keyframes ts-pulse {
+	0%,
+	100% {
+		opacity: 0.55;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.ts-ai.busy {
+		animation: none;
+	}
 }
 .ts-hit-meta {
 	font-size: 11px;
@@ -677,12 +695,93 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* Tags share the branch's row and only surface on hover, so the board never
+   reflows and a resting card stays quiet. Same shared-slot swap the sidebar
+   already uses for its status dot / delete button (.task-trail). */
+.card .branch-slot {
+	position: relative;
+}
+.card .tags {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 120ms ease;
+}
+.card:hover .branch-slot.has-tags .branch {
+	opacity: 0;
+}
+.card:hover .branch-slot.has-tags .tags {
+	opacity: 1;
+}
+.tag {
+	font-size: 9.5px;
+	line-height: 1;
+	letter-spacing: 0.02em;
+	padding: 3px 6px;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	background: var(--bg-elev-2);
+	color: var(--text-dim);
+	white-space: nowrap;
+}
 .card .meta {
 	display: flex;
+	align-items: center;
 	gap: 8px;
 	margin-top: 8px;
 	font-size: 11px;
 	color: var(--text-dim);
+}
+/* Why this card sits where it does (the triage reason). Sits between the
+   branch and the git counts, dimmer than both so it reads as a caption. */
+.card .triage {
+	margin-top: 6px;
+	font-size: 10.5px;
+	color: var(--text-dim);
+	opacity: 0.85;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* Age + agent icon, right-aligned as one group so the icon never lands on top
+   of the age label. */
+.card .meta .meta-end {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	opacity: 0.9;
+}
+/* "Something happened here while you were away." White, not the purple accent,
+   to match the selected-card border. */
+.unread {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--text);
+	margin-right: 6px;
+	vertical-align: middle;
+}
+.tname.unread-row {
+	color: var(--text);
+	font-weight: 600;
+}
+/* Sidebar chips: hover-only, same as the card's. Kept clear of the absolutely
+   positioned trailing slot (status dot / delete) by a right margin, and hidden
+   outright at rest so a resting row is exactly as it was. */
+.tasknode .row-tags {
+	display: none;
+	flex: none;
+	gap: 3px;
+	margin-right: 20px;
+}
+.tasknode-row:hover .tasknode .row-tags {
+	display: flex;
 }
 .ring {
 	position: absolute;
@@ -704,11 +803,11 @@ input {
 .ring.idle {
 	background: var(--green);
 }
-.card-agent {
-	position: absolute;
-	right: 10px;
-	bottom: 8px;
-	opacity: 0.9;
+/* Claims to be running but stopped advancing: hollow, not pulsing, so it reads
+   as "no longer live" rather than "working". */
+.ring.stalled {
+	background: transparent;
+	border: 1.5px solid var(--text-dim);
 }
 @keyframes pulse {
 	0%,
@@ -931,6 +1030,18 @@ input {
 }
 
 /* changes view: GitHub-Desktop layout — file list left, diff right */
+/* In-app editor (VS Code web in an iframe), filling the panel like the terminal. */
+.editor-wrap {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+}
+.editor-frame {
+	flex: 1;
+	border: 0;
+	background: #1e1e1e;
+}
+
 .changes-view {
 	flex: 1;
 	min-width: 0;
@@ -1054,13 +1165,20 @@ input {
 }
 
 /* ---- mission control ---- */
+/* Hosts the sliding page grid and the bottom-right pager overlay. */
+.mc-wrap {
+	flex: 1;
+	display: flex;
+	position: relative;
+	min-height: 0;
+}
 .mc {
 	flex: 1;
 	display: grid;
 	gap: 8px;
 	padding: 12px;
-	/* Always scroll vertically once the tiles don't fit — never shrink a
-	   terminal away; extra agents overflow downward into the scroll area. */
+	/* Tiles are paged, not scrolled: each layout renders at most a pageful, so
+	   this only guards pathologically small windows. */
 	overflow-y: auto;
 	overflow-x: hidden;
 	/* Default ("grid"): 2x2 — each tile is half the window wide and half the
@@ -1080,6 +1198,33 @@ input {
 .mc[data-layout="stack"] {
 	grid-template-columns: minmax(0, 1fr);
 	grid-auto-rows: minmax(280px, 1fr);
+}
+
+/* Pager overlay: sits translucent over the bottom-right corner, full opacity
+   on hover. Clicking the chevrons (or Cmd/Ctrl+Alt+Up/Down) flips to the
+   next/previous pageful of terminals. */
+.mcpager {
+	position: absolute;
+	right: 18px;
+	bottom: 18px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	padding: 3px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	opacity: 0.4;
+	transition: opacity 120ms ease;
+}
+.mcpager:hover {
+	opacity: 1;
+}
+.mcpager .count {
+	font-size: 10px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+	padding: 2px 0;
 }
 
 /* layout picker (segmented control in the topbar) */
@@ -1124,6 +1269,47 @@ input {
 .mc .tile .bar .iconbtn {
 	width: 20px;
 	height: 20px;
+}
+
+/* A tile's sessions as read-only tabs: switching only. Creating and closing
+   sessions belongs to the task panel, where the + and the x live, so a tile
+   carries no affordance that could change what exists. Shown only when the task
+   has more than one session, since a lone tab is just a second title bar. */
+.mc-tabs {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	flex: none;
+	min-width: 0;
+	padding: 3px 6px;
+	border-bottom: 1px solid var(--border);
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+.mc-tabs::-webkit-scrollbar {
+	display: none;
+}
+.mc-tab {
+	flex: none;
+	max-width: 120px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding: 2px 8px;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--text-dim);
+	font-size: 11px;
+	cursor: pointer;
+}
+.mc-tab:hover {
+	background: var(--bg-elev);
+	color: var(--text);
+}
+.mc-tab.active {
+	background: var(--bg-elev-2);
+	color: var(--text);
 }
 
 .empty {
@@ -1322,6 +1508,12 @@ input {
 		color 0.1s;
 }
 .iconbtn:hover {
+	background: var(--bg-elev-2);
+	color: var(--text);
+}
+/* A toggle that's currently ON (e.g. the Editor view) — same treatment as the
+   diffstat toggle, so the way back out is visible rather than guessed. */
+.iconbtn.active {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }

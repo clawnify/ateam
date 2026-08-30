@@ -121,6 +121,37 @@ describe("agent sessions & events", () => {
 			older.id,
 		]);
 	});
+
+	it("lists open sessions across projects, excluding exited ones", () => {
+		const a = repo.upsertProject(db, { repoPath: "/r/a", name: "A" });
+		const b = repo.upsertProject(db, { repoPath: "/r/b", name: "B" });
+		const mkTask = (projectId: string, slug: string) =>
+			repo.createTask(db, {
+				projectId,
+				name: slug,
+				slug,
+				branch: slug,
+				baseBranch: "main",
+				worktreePath: `/wt/${slug}`,
+			});
+		const ta = mkTask(a!.id, "ta");
+		const tb = mkTask(b!.id, "tb");
+		const open = repo.createSession(db, {
+			taskId: ta.id,
+			agentId: "claude",
+			terminalId: "term-open",
+			cwd: "/wt/ta",
+		});
+		const exited = repo.createSession(db, {
+			taskId: tb.id,
+			agentId: "claude",
+			terminalId: "term-exited",
+			cwd: "/wt/tb",
+		});
+		repo.updateSession(db, exited.id, { exitedAt: Date.now() });
+
+		expect(repo.listOpenSessions(db).map((s) => s.id)).toEqual([open.id]);
+	});
 });
 
 describe("settings", () => {
