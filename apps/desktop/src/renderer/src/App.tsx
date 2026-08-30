@@ -730,11 +730,17 @@ export function App() {
 			// The created task's project is a member of the active card, so its tasks
 			// are already unioned into the board once loaded.
 			await loadTasks(projectId);
+			// Land the new task in whatever the user is actually looking at: a
+			// task open full-width hands its panel to the new one, the board
+			// opens it beside itself, and Mission Control just grows a tile.
+			// `panelMode` survives deselection, so "full" only counts while a
+			// task is really on screen — otherwise the board would jump to a
+			// full-width panel the user never opened.
+			if (!(selectedTaskId && panelMode === "full")) setPanelMode("side");
 			setSelectedTaskId(task.id);
-			// Keep whatever panel mode the user is already in: if they're
-			// browsing the board (side), open the new task beside it; if they're
-			// already full-width, stay full-width.
-			setView("board");
+			// Loops shows only loop-owned tasks, so a new task would land
+			// somewhere it can't be seen; every other view keeps its place.
+			if (view === "loops") setView("board");
 			const { terminalId } = await window.ateam.pty.spawnAgent({
 				taskId: task.id,
 				agentId: input.agentId,
