@@ -22,6 +22,6 @@ keep the copyright to your contribution.
 
 ## Development
 
-See the [README](./README.md) for setup (`bun install`, native module rebuild,
-and `bun run --filter @ateam/desktop dev`). Please run `bun test` and
+See the [README](./README.md) for setup (`bun install`, then
+`bun run --filter @ateam/desktop dev`). Please run `bun test` and
 `bun run typecheck` before opening a PR.
