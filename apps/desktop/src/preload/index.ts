@@ -135,6 +135,7 @@ const host: AteamHost = {
 	forget: (alias) => ipcRenderer.invoke(HOST_CH.forget, alias),
 	connected: () => ipcRenderer.invoke(HOST_CH.connected),
 	origins: () => ipcRenderer.invoke(HOST_CH.origins),
+	failures: () => ipcRenderer.invoke(HOST_CH.failures),
 	provision: (alias, input) => ipcRenderer.invoke(HOST_CH.provision, alias, input),
 	install: (dest, opts) => ipcRenderer.invoke(HOST_CH.install, dest, opts),
 	createBox: (spec) => ipcRenderer.invoke(HOST_CH.createBox, spec),

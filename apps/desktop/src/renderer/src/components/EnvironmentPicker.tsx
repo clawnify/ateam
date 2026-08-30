@@ -24,6 +24,10 @@ export type EnvOption = {
 	transport?: "ssh" | "ws";
 	/** In ~/.ssh/config but never connected — so almost certainly has no engine yet. */
 	needsSetup?: boolean;
+	/** Why the app's own last connect attempt failed. Outranks the other sub-labels:
+	 *  a box that couldn't be reached or couldn't be upgraded is the reason it looks
+	 *  idle, and it's the only one of these the user can act on. */
+	error?: string;
 };
 
 export function EnvironmentPicker({
@@ -214,7 +218,11 @@ export function EnvironmentPicker({
 									</span>
 									<span className="conn-txt">
 										<span className="conn-title">{env.label}</span>
-										{env.disabled && env.alias !== null ? (
+										{env.error ? (
+											<span className="conn-sub conn-sub-err" title={env.error}>
+												{env.error}
+											</span>
+										) : env.disabled && env.alias !== null ? (
 											<span className="conn-sub">repo needs a git remote to run here</span>
 										) : env.needsSetup ? (
 											<span className="conn-sub">not set up — click to install the engine</span>

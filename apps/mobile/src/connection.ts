@@ -73,8 +73,14 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 	}
 	if (info.protocolVersion !== PROTOCOL_VERSION) {
 		client.close();
+		// "Update the older side" points at no side a phone can reach: there is no SSH
+		// here, and an older box has no upgrade call to make (this handshake is refused
+		// before any call would land). So name the machine that CAN fix it. The desktop
+		// upgrades a box it connects to, which is what makes that sentence actionable.
 		throw new Error(
-			`Protocol mismatch: box speaks v${info.protocolVersion}, app speaks v${PROTOCOL_VERSION}. Update the older side.`,
+			info.protocolVersion < PROTOCOL_VERSION
+				? `This box runs an older Ateam (protocol v${info.protocolVersion}; this app speaks v${PROTOCOL_VERSION}). Open Ateam on your Mac and connect to the box: that updates it over SSH.`
+				: `This box runs a newer Ateam (protocol v${info.protocolVersion}; this app speaks v${PROTOCOL_VERSION}). Update the app on this phone.`,
 		);
 	}
 

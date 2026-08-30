@@ -114,6 +114,8 @@ export function App() {
 	// The ~/.ssh/config boxes a task can be sent to run on (the composer's "Run on"
 	// list). Connecting + cloning the repo onto one happens at task-create time.
 	const [connections, setConnections] = useState<ConnectionDTO[]>([]);
+	// alias → why the box didn't come up when the app connected to it by itself.
+	const [connFailures, setConnFailures] = useState<Record<string, string>>({});
 	// Which agents each connected engine actually has installed (its system:hello
 	// agents), keyed by alias ("local" for this Mac). Drives per-environment agent
 	// availability in the composer — you can only pick an agent the box really has.
@@ -303,6 +305,7 @@ export function App() {
 	useEffect(() => {
 		const load = () => {
 			void window.ateamHost.list().then(setConnections);
+			void window.ateamHost.failures().then(setConnFailures);
 			void window.ateamHost.connected().then((list) => {
 				const map: Record<string, string[]> = {};
 				for (const s of list) map[s.alias ?? "local"] = s.info.agents;
@@ -444,9 +447,13 @@ export function App() {
 				// `known` is only set by a successful connect, so a config alias we've
 				// never reached is one the engine has probably never been installed on.
 				needsSetup: !c.known,
+				// Set only for a connect the app made on its own, where there was no
+				// caller to show the error to — an upgrade that failed reads as an
+				// ordinary offline box without it.
+				error: connFailures[c.alias],
 			})),
 		];
-	}, [connections, canRemote, hasLocalMember, activeMembers]);
+	}, [connections, canRemote, hasLocalMember, activeMembers, connFailures]);
 
 	// The active card's board unions tasks from every engine that has the repo.
 	const activeTasks = activeCard
