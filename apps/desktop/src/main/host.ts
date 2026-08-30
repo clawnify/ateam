@@ -113,6 +113,20 @@ const CONNECT_TIMEOUT_MS = 20_000;
 const WS_PING_INTERVAL_MS = 15_000;
 const WS_PING_TIMEOUT_MS = 10_000;
 
+/**
+ * Why a box was refused, and the one move that fixes it from where the user is.
+ * "Update the older side" was true and useless: on the phone there is no side to
+ * update, and on a box behind an SSH alias the desktop has already tried.
+ */
+function mismatchMessage(alias: string, boxVersion: number, wire: HostTransport | null): string {
+	const head = `"${alias}" speaks protocol v${boxVersion}, this app speaks v${PROTOCOL_VERSION}.`;
+	if (boxVersion > PROTOCOL_VERSION) return `${head} Update Ateam: the box is ahead of it.`;
+	if (wire === "ws") {
+		return `${head} It's reachable only over its Tailscale endpoint, so this app can't update it. Re-run the installer on the box over SSH.`;
+	}
+	return `${head} Updating it over SSH didn't take. Check the install log for what failed.`;
+}
+
 /** The push-events forwarded from every held backend to every window. */
 const FORWARDED: { event: BackendEvent; channel: string }[] = [
 	{ event: "taskUpdated", channel: CH.evtTaskUpdated },
@@ -270,7 +284,19 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return sshClientTransport(alias, [REMOTE_ATTACH], { sshFlags: editorForwardFlags(alias) });
 	}
 
-	async function connect(alias: string | null): Promise<HostStatus> {
+	/**
+	 * Connect a box, bringing it up to THIS app's protocol first if it is behind.
+	 *
+	 * `healed` marks the retry that `install()` makes after upgrading a box, so a box
+	 * that comes back still mismatched reports that instead of installing forever.
+	 *
+	 * Self-healing rather than an "update" button because the button scales the wrong
+	 * way: one press per box per protocol bump, and the phone has no press to give.
+	 * This is what VS Code Remote-SSH and Zed already do with their remote servers,
+	 * the client's version deciding the server's, installed on connect. It fires only
+	 * on a box that is BEHIND and reachable over SSH, never on the routine path.
+	 */
+	async function connect(alias: string | null, healed = false): Promise<HostStatus> {
 		// local is permanent; connecting to it (or to an already-held box) is a no-op.
 		if (alias === null) return statusOf(local, null);
 		const existing = backends.get(alias);
@@ -289,9 +315,15 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		}
 		if (info.protocolVersion !== PROTOCOL_VERSION) {
 			client.close();
-			throw new Error(
-				`Protocol mismatch: "${alias}" speaks v${info.protocolVersion}, this app speaks v${PROTOCOL_VERSION}. Update the older side.`,
-			);
+			// Upward only. A box AHEAD of this app must not be downgraded: the desktop
+			// auto-updates, so the honest fix there is to let it. Upward-only is also what
+			// keeps two desktops on different versions from reinstalling a shared box back
+			// and forth, which is a real risk here because a box has ONE $HOME/ateam-app
+			// rather than the per-version directory VS Code keys its server by.
+			if (!healed && wire !== "ws" && info.protocolVersion < PROTOCOL_VERSION) {
+				return install(alias); // streams the installer's log, and ends by connecting
+			}
+			throw new Error(mismatchMessage(alias, info.protocolVersion, wire));
 		}
 
 		recordConnection(db, {
@@ -391,12 +423,20 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// derive the box's OWN tailnet IP on the box, so the phone's WebSocket listener
 		// is set up automatically when the box is on Tailscale. An empty ATEAM_WS_ADDR
 		// means "daemon service only, no listener" — install.sh treats it as unset.
+		// Pin the box to THIS app's release, the way VS Code keys its remote server to
+		// the client's commit. Unpinned, the box takes `releases/latest` and drifts away
+		// from the desktop the moment a newer release lands, which is the skew this whole
+		// path exists to close. Packaged builds only: a dev build's version has no tag
+		// behind it, and install.sh dies on a tag with no release, so dev keeps taking
+		// the latest, deliberately loud rather than a silent fallback that would leave a
+		// mismatched box and no clue why.
+		const pin = app.isPackaged ? `ATEAM_VERSION=v${app.getVersion()} ` : "";
 		const pipeline = wsAddr
-			? `curl -fsSL ${INSTALL_URL} | ATEAM_WS_ADDR=${wsAddr} bash -s -- --service`
+			? `curl -fsSL ${INSTALL_URL} | ${pin}ATEAM_WS_ADDR=${wsAddr} bash -s -- --service`
 			: // Single-quoted JS so the shell's ${ip:+…} parameter expansion stays literal.
 				"ip=$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | head -1 || true); " +
-				`curl -fsSL ${INSTALL_URL} ` +
-				'| ATEAM_WS_ADDR="${ip:+$ip:' +
+				`curl -fsSL ${INSTALL_URL} | ${pin}` +
+				'ATEAM_WS_ADDR="${ip:+$ip:' +
 				WS_DEFAULT_PORT +
 				'}" bash -s -- --service';
 
@@ -411,7 +451,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// We just reached the box over SSH, so its transport is ssh — seed that row so
 		// connect() resolves it even when `dest` is a user@host with no ssh_config entry.
 		recordConnection(db, { hostAlias: dest, transport: "ssh" });
-		return connect(dest);
+		return connect(dest, true);
 	}
 
 	// The encrypted provider-credentials store, created lazily (needs app to be ready).
@@ -587,9 +627,11 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	for (const c of listConnections(db)) {
 		if (!c.known) continue;
 		void connect(c.alias).catch(() => {
-			// Unreachable, asleep, or version-mismatched. connect() already closed its
-			// own transport, and the connections list still renders the box from the
-			// offline cache, so leaving it disconnected is the honest outcome.
+			// Unreachable or asleep. connect() already closed its own transport, and the
+			// connections list still renders the box from the offline cache, so leaving it
+			// disconnected is the honest outcome. A box that is merely BEHIND is not an
+			// error any more: connect() upgrades it over SSH and comes back held, which is
+			// the only path that reaches an SSH box without waiting for a user gesture.
 		});
 	}
 

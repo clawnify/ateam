@@ -116,7 +116,12 @@ installs **Node 22** via nvm into your home directory and uses that — the laun
 pins the exact interpreter the modules were built for, so a later `nvm use` can't
 break it.
 
-Re-run the same command to upgrade. Three knobs, all optional:
+Re-run the same command to upgrade. It stops the daemon still running the old dist,
+then checks that the process answering afterwards is a different one, so an upgrade
+can no longer report success while the previous version keeps serving. Live agents
+are untouched: they belong to a separate PTY daemon the installer never signals.
+
+Three knobs, all optional:
 
 | Knob | Effect |
 | --- | --- |
@@ -347,7 +352,7 @@ The connection menu surfaces the real error inline. Common ones:
 | --- | --- |
 | **"No servers in ~/.ssh/config"** in the menu | Add a `Host` entry (step 3). |
 | Connect hangs or fails | Check `ssh <box>` works, Tailscale is up on **both** ends (`tailscale status`), and `ateam` is on the box's login PATH: `ssh <box> "bash -lc 'command -v ateam'"`. |
-| **"Protocol mismatch"** | The Mac app and box server are different versions — re-run the installer on the box (step 1), or update the desktop app, so both speak the same protocol. |
+| **"Protocol mismatch"** | A box running behind the Mac app is now upgraded on connect: the app reinstalls it over SSH at its own version, streaming the install log. You only see this error if the box is *ahead* of the app (update the Mac app), or if that upgrade failed, in which case the log says why. On the phone there is no SSH, so the fix is to open Ateam on your Mac and connect to the box once. |
 | Board is empty after connecting | The box has no registered projects yet — add one from the box's filesystem via **Add project** (or register a repo path on the box). |
 | Agents run but commits fail | The box has no git identity — `git config --global user.name/user.email` (step 0). |
 | The agent picker is empty | The agent CLI isn't on the box's **login** PATH: `ssh <box> "bash -lc 'command -v claude'"`. |
