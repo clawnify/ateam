@@ -1174,39 +1174,43 @@ input {
 }
 
 /* ---- mission control ---- */
-/* Hosts the sliding page grid and the bottom-right pager overlay. */
+/* Hosts the sliding page grid and the bottom-right pager overlay. Clips the
+   slide: a page flip animates the grid in from 32px away, and .content scrolls
+   (its overflow-x: auto makes the y axis scrollable too), so without this the
+   incoming page would poke past the bottom and flash a scrollbar mid-flip. */
 .mc-wrap {
 	flex: 1;
 	display: flex;
 	position: relative;
 	min-height: 0;
+	overflow: hidden;
 }
 .mc {
 	flex: 1;
 	display: grid;
 	gap: 8px;
 	padding: 12px;
-	/* Tiles are paged, not scrolled: each layout renders at most a pageful, so
-	   this only guards pathologically small windows. */
-	overflow-y: auto;
-	overflow-x: hidden;
+	/* Tiles are paged, never scrolled: every layout sizes its rows so exactly
+	   one pageful fills the box, so there is nothing to scroll to. */
+	overflow: hidden;
 	/* Default ("grid"): 2x2 — each tile is half the window wide and half the
 	   window tall (percentage rows resolve against the visible content box;
 	   calc subtracts half the gap so two rows + gap fit exactly). */
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	grid-auto-rows: calc(50% - 4px);
 }
-/* Split: two side-by-side columns, each row the full window height; extra
-   rows overflow downward into the scroll area. minmax(0,1fr) columns stop
-   wide terminal output from blowing out the track width. */
+/* Split: two side-by-side columns on one full-height row (a page holds two).
+   minmax(0,1fr) columns stop wide terminal output from blowing out the track
+   width. */
 .mc[data-layout="split"] {
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	grid-auto-rows: 100%;
 }
-/* Stack: one full-width column, tiles stacked top-to-bottom and scrolling. */
+/* Stack: a single full-window terminal per page. 100% (not a min-height) so a
+   short window shrinks the tile instead of overflowing into a scrollbar. */
 .mc[data-layout="stack"] {
 	grid-template-columns: minmax(0, 1fr);
-	grid-auto-rows: minmax(280px, 1fr);
+	grid-auto-rows: 100%;
 }
 
 /* Pager overlay: sits translucent over the bottom-right corner, full opacity
