@@ -217,7 +217,9 @@ agent terminals, session search (the topbar box answers in a popover listing
 matching tasks and the past sessions that discussed them, with an AI row that
 finds a session from a description of the work, reading Claude Code / Codex /
 OpenCode transcripts),
-safe cleanup of merged worktrees, and signed/notarized builds
+worktree cleanup (every worktree listed with the facts you decide on — age, PR
+state, ahead/dirty counts — and the merged-clean-idle ones flagged as
+recommended), and signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
 Electron main process is boot-verified with native modules.
 
