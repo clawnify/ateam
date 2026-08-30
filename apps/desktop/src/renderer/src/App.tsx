@@ -730,11 +730,17 @@ export function App() {
 			// The created task's project is a member of the active card, so its tasks
 			// are already unioned into the board once loaded.
 			await loadTasks(projectId);
+			// Land the new task in whatever the user is actually looking at: a
+			// task open full-width hands its panel to the new one, the board
+			// opens it beside itself, and Mission Control just grows a tile.
+			// `panelMode` survives deselection, so "full" only counts while a
+			// task is really on screen — otherwise the board would jump to a
+			// full-width panel the user never opened.
+			if (!(selectedTaskId && panelMode === "full")) setPanelMode("side");
 			setSelectedTaskId(task.id);
-			// Keep whatever panel mode the user is already in: if they're
-			// browsing the board (side), open the new task beside it; if they're
-			// already full-width, stay full-width.
-			setView("board");
+			// Loops shows only loop-owned tasks, so a new task would land
+			// somewhere it can't be seen; every other view keeps its place.
+			if (view === "loops") setView("board");
 			const { terminalId } = await window.ateam.pty.spawnAgent({
 				taskId: task.id,
 				agentId: input.agentId,
@@ -1388,6 +1394,29 @@ function Board({
 	/** Engine badge for a task (e.g. a box alias), or null to show none (Local). */
 	originLabel: (t: TaskDTO) => string | null;
 }) {
+	// The side panel is sticky over the right edge of the board (the board keeps
+	// its full width rather than reflowing), so a selected card in a right-hand
+	// column sits underneath it. Scroll it clear: `.card.selected` reserves the
+	// panel's width as scroll-margin-right, and "nearest" then no-ops whenever
+	// the card is already in the clear, so we never yank a board the user placed.
+	const selectedRef = useRef<HTMLDivElement | null>(null);
+	const revealSelected = useCallback(() => {
+		const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		selectedRef.current?.scrollIntoView({
+			behavior: reduced ? "auto" : "smooth",
+			block: "nearest",
+			inline: "nearest",
+		});
+	}, []);
+	// Selecting doesn't move the card, so reveal it in the same commit that opens
+	// the panel. A task that later changes status animates to its new column, and
+	// mid-flight the card's box is a transform of the old spot — scrolling then
+	// would chase a moving target, so that case waits for the layout animation
+	// to land (below) instead of keying this effect on the column.
+	useEffect(() => {
+		if (selectedId) revealSelected();
+	}, [selectedId, revealSelected]);
+
 	return (
 		// Clicking empty board space deselects; card clicks stopPropagation.
 		<div className="board" onClick={onDeselect}>
@@ -1400,12 +1429,18 @@ function Board({
 						</h3>
 						{items.map((t) => {
 							const tags = tagsFor(t);
+							const isSelected = t.id === selectedId;
 							return (
 								<motion.div
 									key={t.id}
 									layout
 									transition={springy}
-									className={`card ${t.id === selectedId ? "selected" : ""}`}
+									ref={isSelected ? selectedRef : undefined}
+									// Fires after any layout animation settles — a status change
+									// carrying the card to another column, or cards above it coming
+									// and going. Re-check from the card's final resting box.
+									onLayoutAnimationComplete={isSelected ? revealSelected : undefined}
+									className={`card ${isSelected ? "selected" : ""}`}
 									onClick={(e) => {
 										e.stopPropagation();
 										onSelect(t.id);

@@ -13,6 +13,9 @@
 	--amber: #fbbf24;
 	--red: #f87171;
 	--blue: #60a5fa;
+	/* Side-panel width, and so the board's right-hand no-go zone: the panel is
+	   sticky over it, so the selected card reserves it as scroll-margin. */
+	--panel-w: 480px;
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -678,6 +681,12 @@ input {
 }
 .card.selected {
 	border-color: #ffffff;
+	/* A selected card means the side panel is open (going full-width hides the
+	   board), and the panel is sticky over the board's right edge. Reserving its
+	   width here is what lets scrollIntoView({inline:"nearest"}) land the card
+	   beside the panel instead of behind it — and stay a no-op when it already is.
+	   +14px matches the board's padding, so the card doesn't kiss the panel. */
+	scroll-margin-right: calc(var(--panel-w) + 14px);
 }
 .card .name {
 	font-size: 13px;
@@ -833,7 +842,7 @@ input {
 
 /* ---- task panel ---- */
 .panel {
-	flex: 0 0 480px; /* fixed width; board scrolls beside it, not squeezed */
+	flex: 0 0 var(--panel-w); /* fixed width; board scrolls beside it, not squeezed */
 	/* Flex min-width:auto would let the terminal's canvas (sized while the
 	   panel was full-width) clamp the panel and stop it collapsing back to
 	   480px — the basis must always win over content min-width. Same on the
