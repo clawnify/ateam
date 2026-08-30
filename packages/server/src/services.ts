@@ -46,6 +46,7 @@ export function toTaskDTO(t: Task): TaskDTO {
 		mergeStatus: t.mergeStatus ?? null,
 		prNumber: t.prNumber ?? null,
 		prUrl: t.prUrl ?? null,
+		prState: t.prState ?? null,
 		gitStatus: t.gitStatus ?? null,
 		lastEventAt: t.lastEventAt ?? t.updatedAt ?? null,
 		isUnread: Boolean(t.isUnread),

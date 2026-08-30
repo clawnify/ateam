@@ -112,6 +112,64 @@ describe("createDispatcher", () => {
 		expect(await d.handle(CH.projectsList, [])).toEqual([]);
 	});
 
+	// Cleanup used to hide everything its rule rejected, so an unmerged or busy
+	// worktree was simply not offered. The list is now the whole project and the
+	// rule only advises — that is the difference this asserts.
+	it("offers every task for cleanup, flagging only the sweep-safe ones", async () => {
+		const db = createTestDb();
+		const { engine } = makeEngine(db);
+		// One live terminal, so "merged but the agent is still in it" is real.
+		(engine.services.pty as unknown as { has: (id: string) => boolean }).has = (id) =>
+			id === "live-term";
+		const d = createDispatcher(engine);
+
+		const project = repo.upsertProject(db, { repoPath: "/r/c", name: "C", defaultBranch: "main" });
+		const mk = (name: string) =>
+			repo.createTask(db, {
+				projectId: project!.id,
+				name,
+				slug: name,
+				branch: name,
+				baseBranch: "main",
+				// Nonexistent path: the git probe is guarded and reads a vanished
+				// worktree as clean, which is the behaviour we want asserted here.
+				worktreePath: `/r/c/.ateam/worktrees/${name}`,
+			});
+
+		const ongoing = mk("ongoing"); // todo, no PR → not merged
+		const swept = mk("swept");
+		repo.updateTask(db, swept.id, { column: "merged", prNumber: 7, prState: "merged" });
+		const busy = mk("busy");
+		repo.updateTask(db, busy.id, { column: "merged", prState: "merged" });
+		repo.createSession(db, {
+			taskId: busy.id,
+			agentId: "claude",
+			terminalId: "live-term",
+			cwd: "/r/c",
+		});
+
+		const list = (await d.handle(CH.tasksCleanupCandidates, [project!.id])) as Array<{
+			task: { id: string; prState: string | null; prNumber: number | null };
+			recommended: boolean;
+			reason: string;
+			terminalId: string | null;
+		}>;
+
+		// Every task is listed — nothing is filtered out of the decision any more.
+		expect(list.map((c) => c.task.id).sort()).toEqual([ongoing.id, swept.id, busy.id].sort());
+
+		const by = (id: string) => list.find((c) => c.task.id === id)!;
+		expect(by(swept.id).recommended).toBe(true);
+		expect(by(ongoing.id)).toMatchObject({ recommended: false, reason: "not merged" });
+		expect(by(busy.id)).toMatchObject({ recommended: false, reason: "agent still active" });
+		// The live PTY rides along so the dialog can show the conversation.
+		expect(by(busy.id).terminalId).toBe("live-term");
+		expect(by(ongoing.id).terminalId).toBeNull();
+		// The factors the user decides on come from the task itself.
+		expect(by(swept.id).task.prNumber).toBe(7);
+		expect(by(swept.id).task.prState).toBe("merged");
+	});
+
 	// A brand-new project from a client with no native folder dialog (the phone): the
 	// folder doesn't exist yet, so register+init must create it before git-initing.
 	it("creates the folder and inits a repo when registering a brand-new project", async () => {
