@@ -207,14 +207,12 @@ composer (pick the agent and type the first instruction in one step) reused for
 extra sessions inside an existing task, many terminals per task as tabs (agent
 sessions or plain shells, side by side), agent spawning in PTYs (Claude Code,
 OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection,
-<<<<<<< HEAD
-Mission Control grid, collapsible sidebar rail, image drag-drop & paste into
-=======
 Mission Control grid (one tile per task, its sessions as read-only tabs),
 collapsible sidebar rail, image drag-drop & paste into
->>>>>>> origin/main
-agent terminals, session search (describe past work in the topbar and jump back
-to the session that did it, reading Claude Code / Codex / OpenCode transcripts),
+agent terminals, session search (the topbar box answers in a popover listing
+matching tasks and the past sessions that discussed them, with an AI row that
+finds a session from a description of the work, reading Claude Code / Codex /
+OpenCode transcripts),
 safe cleanup of merged worktrees, and signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
 Electron main process is boot-verified with native modules.

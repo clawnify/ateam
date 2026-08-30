@@ -502,31 +502,6 @@ input {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
-.task-search .ts-ai:disabled {
-	opacity: 0.35;
-	cursor: default;
-}
-/* Working: a slow pulse, not a spinner — the search takes seconds, and a
-   spinner at this size reads as a stuck one. */
-.task-search .ts-ai.busy {
-	color: var(--text);
-	animation: ts-pulse 1.4s ease-in-out infinite;
-}
-@keyframes ts-pulse {
-	0%,
-	100% {
-		opacity: 0.45;
-	}
-	50% {
-		opacity: 1;
-	}
-}
-@media (prefers-reduced-motion: reduce) {
-	.task-search .ts-ai.busy {
-		animation: none;
-		color: var(--text);
-	}
-}
 /* Results hang below the box, which is itself absolutely centered in the
    topbar — so this is positioned against the box, not the bar. */
 .ts-results {
@@ -579,6 +554,44 @@ input {
 	line-clamp: 2;
 	-webkit-box-orient: vertical;
 	overflow: hidden;
+}
+/* The AI row: last, always, and set apart by a rule rather than a colour so it
+   reads as a different KIND of action, not a highlighted result. */
+.ts-ai {
+	/* Later than .ts-hit in this file, same specificity, so it simply wins. */
+	border-top: 1px solid var(--border);
+	border-radius: 0 0 7px 7px;
+	margin-top: 2px;
+}
+.ts-ai .ts-hit-name {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	color: var(--text-dim);
+}
+.ts-ai.on .ts-hit-name,
+.ts-ai.busy .ts-hit-name {
+	color: var(--text);
+}
+/* Working: a slow pulse, not a spinner — the search takes seconds, and a
+   spinner at this size reads as a stuck one. */
+.ts-ai.busy {
+	animation: ts-pulse 1.4s ease-in-out infinite;
+	cursor: default;
+}
+@keyframes ts-pulse {
+	0%,
+	100% {
+		opacity: 0.55;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.ts-ai.busy {
+		animation: none;
+	}
 }
 .ts-hit-meta {
 	font-size: 11px;

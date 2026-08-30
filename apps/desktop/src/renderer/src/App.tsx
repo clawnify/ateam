@@ -518,25 +518,25 @@ export function App() {
 		[orderedSidebarTasks],
 	);
 
-	// Case-insensitive substring match across the task's name, branch, and
-	// description. Empty query matches all. A leading `#` switches to a tag
-	// filter instead — "#bug" narrows the board to bug-tagged work, which is the
-	// whole point of having a cross-cutting axis.
+	// One box, two jobs, told apart by a leading `#`.
+	//
+	//   `#bug`   a FILTER — narrows the board and sidebar to bug-tagged work,
+	//            which is the whole point of having a cross-cutting axis.
+	//   `caret`  a SEARCH — answered in the popover (see TaskSearch), which
+	//            lists matching tasks AND the sessions that discussed them.
+	//
+	// Words used to hide cards too. They no longer do: hiding answers "where is
+	// it?" by removing everything else, which is a filter's answer to a search's
+	// question, and it cannot show a session at all.
 	const query = taskQuery.trim().toLowerCase();
+	const tagFilter = query.startsWith("#") ? query : null;
 	const matchesQuery = useCallback(
-		(t: TaskDTO) => {
-			if (query === "") return true;
-			if (query.startsWith("#")) return matchesTagQuery(query, t);
-			return (
-				t.name.toLowerCase().includes(query) ||
-				t.branch.toLowerCase().includes(query) ||
-				(t.description?.toLowerCase().includes(query) ?? false)
-			);
-		},
-		[query],
+		(t: TaskDTO) => (tagFilter === null ? true : matchesTagQuery(tagFilter, t)),
+		[tagFilter],
 	);
-	// Sidebar and board both honor the search; Mission Control and the selected
-	// task deliberately don't (a live agent tile / open panel shouldn't vanish).
+	// Sidebar and board both honor the tag filter; Mission Control and the
+	// selected task deliberately don't (a live agent tile / open panel shouldn't
+	// vanish).
 	const visibleSidebarTasks = useMemo(
 		() => orderedSidebarTasks.filter(matchesQuery),
 		[orderedSidebarTasks, matchesQuery],
@@ -984,11 +984,13 @@ export function App() {
 							(!activeProjectId ? (
 								<div className="tree-empty">Select a project</div>
 							) : visibleSidebarTasks.length === 0 ? (
-								<div className="tree-empty">{query ? "No matching tasks" : "No active tasks"}</div>
-							) : taskSort === "custom" && !query ? (
+								<div className="tree-empty">
+									{tagFilter ? "No matching tasks" : "No active tasks"}
+								</div>
+							) : taskSort === "custom" && !tagFilter ? (
 								// Custom order: drag rows up/down; Motion animates the shuffle.
-								// Disabled while searching — reordering a filtered subset would
-								// drop the hidden tasks from the saved order.
+								// Disabled while a tag filter is on — reordering a filtered subset
+								// would drop the hidden tasks from the saved order.
 								<Reorder.Group
 									as="div"
 									axis="y"
@@ -1119,7 +1121,9 @@ export function App() {
 						query={taskQuery}
 						onQuery={setTaskQuery}
 						projectIds={searchProjectIds}
-						onOpen={openSessionHit}
+						tasks={activeTasks}
+						onOpenTask={openTask}
+						onOpenSession={openSessionHit}
 					/>
 					<div className="spacer" />
 					{view === "mission" && !(selectedTask && panelMode === "full") && (
