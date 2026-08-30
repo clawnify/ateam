@@ -42,10 +42,15 @@ Identity and all GitHub operations come from the `gh` CLI.
 - **git** ≥ 2.31, **gh** (authenticated: `gh auth status`)
 - At least one agent CLI on PATH: `claude`, `opencode`, or `codex`
 
-> Note: if your `node` is x86_64 (Rosetta) while Bun + Electron are arm64, the
-> desktop dev/build scripts run under Bun's runtime (`bunx --bun`) so the right
-> native binaries are used. After `bun install`, native modules are rebuilt for
-> Electron via `bun run --filter @ateam/desktop rebuild`.
+> Note: `bun install` rebuilds better-sqlite3 and node-pty for Electron on its
+> own, via a `postinstall` hook in `apps/desktop`. You do not need a second
+> command, and a fresh task worktree is runnable straight after installing.
+>
+> The hook is not optional bookkeeping. Everything Bun's script runner spawns on
+> macOS runs translated, picking the x86_64 slice of a universal `node`, so
+> `prebuild-install` resolves `process.arch` as x64 and fetches a `darwin-x64`
+> better-sqlite3 that Electron cannot load. The rebuild replaces it with the
+> arm64 Electron-ABI build.
 
 ## Layout
 
@@ -170,8 +175,7 @@ whole setup with you:
 ## Develop
 
 ```bash
-bun install
-bun run --filter @ateam/desktop rebuild   # native modules for Electron (arm64)
+bun install                                # also rebuilds natives for Electron
 bun run --filter @ateam/desktop dev        # launch the app (Electron + Vite HMR)
 ```
 

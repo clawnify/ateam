@@ -194,6 +194,17 @@ ssh my-ateam-box "bash -lc 'ateam'"
    on the board without picking anything first. A box that's asleep or unreachable
    just shows as disconnected — the rest of the board never waits for it.
 
+> **Editing files by hand on the box.** A task's toolbar has an **Edit files**
+> button that opens VS Code *running on the box*, scoped to that task's worktree,
+> inside the Ateam window — so you can fix a `.env` or anything else the agent
+> didn't touch. The first click asks before installing anything: it's a one-time,
+> user-space `code-server` install on the box (~200 MB in `~/.local`, no root),
+> and declining just closes the dialog. It binds loopback and is reached through
+> the SSH connection Ateam already holds, so no extra port is exposed. Budget
+> ~0.5–1 GB of RAM while it's open — on a 4 GB box that's about one agent
+> session's worth, so size the box accordingly. The button beside it (**Open
+> worktree in your editor**) instead opens *your own* VS Code over Remote-SSH.
+
 ## 5. Same box, from the iOS app
 
 The phone can't run `ssh`, so it speaks to the **same daemon** over a WebSocket

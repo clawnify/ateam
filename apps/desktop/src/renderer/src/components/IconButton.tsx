@@ -10,6 +10,8 @@ interface IconButtonProps {
 	shortcut?: string;
 	onClick?: () => void;
 	variant?: IconButtonVariant;
+	/** Toggle buttons: reflect the on-state, so "click again to leave" is visible. */
+	active?: boolean;
 	disabled?: boolean;
 	size?: number;
 }
@@ -24,6 +26,7 @@ export function IconButton({
 	shortcut,
 	onClick,
 	variant = "default",
+	active,
 	disabled,
 	size = 16,
 }: IconButtonProps) {
@@ -32,10 +35,11 @@ export function IconButton({
 		// scrollbars the way absolutely-positioned CSS tooltips can.
 		<button
 			type="button"
-			className={`iconbtn ${variant}`}
+			className={`iconbtn ${variant}${active ? " active" : ""}`}
 			onClick={onClick}
 			disabled={disabled}
 			aria-label={label}
+			aria-pressed={active}
 			title={shortcut ? `${label} (${shortcut})` : label}
 		>
 			<Icon size={size} strokeWidth={1.75} />

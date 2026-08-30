@@ -717,7 +717,7 @@ input {
 .card:hover .branch-slot.has-tags .tags {
 	opacity: 1;
 }
-.card .tag {
+.tag {
 	font-size: 9.5px;
 	line-height: 1;
 	letter-spacing: 0.02em;
@@ -730,6 +730,7 @@ input {
 }
 .card .meta {
 	display: flex;
+	align-items: center;
 	gap: 8px;
 	margin-top: 8px;
 	font-size: 11px;
@@ -746,8 +747,14 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.card .meta .age {
+/* Age + agent icon, right-aligned as one group so the icon never lands on top
+   of the age label. */
+.card .meta .meta-end {
 	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	opacity: 0.9;
 }
 /* "Something happened here while you were away." White, not the purple accent,
    to match the selected-card border. */
@@ -763,6 +770,18 @@ input {
 .tname.unread-row {
 	color: var(--text);
 	font-weight: 600;
+}
+/* Sidebar chips: hover-only, same as the card's. Kept clear of the absolutely
+   positioned trailing slot (status dot / delete) by a right margin, and hidden
+   outright at rest so a resting row is exactly as it was. */
+.tasknode .row-tags {
+	display: none;
+	flex: none;
+	gap: 3px;
+	margin-right: 20px;
+}
+.tasknode-row:hover .tasknode .row-tags {
+	display: flex;
 }
 .ring {
 	position: absolute;
@@ -789,12 +808,6 @@ input {
 .ring.stalled {
 	background: transparent;
 	border: 1.5px solid var(--text-dim);
-}
-.card-agent {
-	position: absolute;
-	right: 10px;
-	bottom: 8px;
-	opacity: 0.9;
 }
 @keyframes pulse {
 	0%,
@@ -1495,6 +1508,12 @@ input {
 		color 0.1s;
 }
 .iconbtn:hover {
+	background: var(--bg-elev-2);
+	color: var(--text);
+}
+/* A toggle that's currently ON (e.g. the Editor view) — same treatment as the
+   diffstat toggle, so the way back out is visible rather than guessed. */
+.iconbtn.active {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
