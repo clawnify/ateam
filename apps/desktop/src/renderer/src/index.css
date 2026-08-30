@@ -1485,6 +1485,18 @@ input {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
+/* A full-colour brand mark among ghost monochrome icons reads as louder than
+   its neighbours, so it follows the same dim-at-rest → bright-on-interaction
+   rhythm the other toolbar icons get from currentColor. */
+.iconbtn svg[aria-label="Visual Studio Code"] {
+	opacity: 0.7;
+	transition: opacity 0.1s;
+}
+.iconbtn:hover svg[aria-label="Visual Studio Code"],
+.iconbtn.active svg[aria-label="Visual Studio Code"] {
+	opacity: 1;
+}
+
 /* A toggle that's currently ON (e.g. the Editor view) — same treatment as the
    diffstat toggle, so the way back out is visible rather than guessed. */
 .iconbtn.active {
