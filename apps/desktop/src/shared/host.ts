@@ -16,6 +16,8 @@ export const HOST_CH = {
 	connected: "host:connected",
 	/** projectId/taskId → owning engine alias (null = local), for per-origin badges/routing. */
 	origins: "host:origins",
+	/** alias → why the last automatic connect attempt failed (see AteamHost.failures). */
+	failures: "host:failures",
 	/** Clone+register a repo onto a specific box (connect it first). */
 	provision: "host:provision",
 	/** Install the ateam engine on a reachable SSH box, then connect to it. */
@@ -125,6 +127,13 @@ export interface AteamHost {
 	connected(): Promise<HostStatus[]>;
 	/** id → owning-engine alias (null = local) for each entity the engines have surfaced. */
 	origins(): Promise<Record<string, string | null>>;
+	/**
+	 * alias → the message from the last connect this app made on its OWN initiative
+	 * (the startup sweep). Those failures have no caller to reject to, so without
+	 * this a box that failed to come up is indistinguishable from one that is merely
+	 * asleep. A successful connect clears the entry.
+	 */
+	failures(): Promise<Record<string, string>>;
 	/** Connect the box if needed, then clone+register a repo ON it from its remote URL
 	 *  (so a task can run there). Returns the box's project row for that repo. */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;

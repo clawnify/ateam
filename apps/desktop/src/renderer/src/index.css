@@ -1773,6 +1773,10 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* Truncated to the row like every other sub-label; the full text is the title. */
+.conn-sub-err {
+	color: var(--red);
+}
 .conn-spin {
 	animation: spin 0.7s linear infinite;
 	color: var(--text-dim);

@@ -148,6 +148,8 @@ export interface Host {
 	connected(): Promise<HostStatus[]>;
 	/** id → owning-engine alias (null = local), from the aggregate's learned registry. */
 	origins(): Record<string, string | null>;
+	/** alias → why the last self-initiated connect failed (empty once it succeeds). */
+	failures(): Record<string, string>;
 	/** Start the in-app editor on the task's engine and resolve the URL THIS
 	 *  client loads for it (localhost, ssh forward, or tailnet endpoint) — or
 	 *  report that the engine still needs code-server installed. */
@@ -185,6 +187,11 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// alias → backend; `null` is the always-held local engine (insertion order: local
 	// first). Boxes are added on connect and removed on disconnect.
 	const backends = new Map<string | null, Backend>([[null, local]]);
+	// Why a box the app connected to BY ITSELF didn't come up. A connect the user
+	// asked for rejects to its caller, which surfaces the message; the startup sweep
+	// has no caller, so its failures used to vanish into a catch and read to the user
+	// as an ordinary offline box. Keyed by alias, cleared the moment one succeeds.
+	const connectFailures = new Map<string, string>();
 	// Per-alias event unsubscribers, so disconnecting one box stops only its stream.
 	const unbinders = new Map<string | null, () => void>();
 	// Per-alias health probes (ws only) — cleared on disconnect so a dropped box
@@ -326,6 +333,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			throw new Error(mismatchMessage(alias, info.protocolVersion, wire));
 		}
 
+		connectFailures.delete(alias);
 		recordConnection(db, {
 			hostAlias: alias,
 			transport: wire ?? "ssh",
@@ -394,9 +402,14 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	function forget(alias: string): void {
 		disconnect(alias); // no-op if not held; drops the live engine if it is
 		forgetConnection(db, alias);
+		connectFailures.delete(alias);
 		// disconnect only broadcasts when the box was held — a never-connected row
 		// changes the list too, so always tell the renderer to re-read it.
 		broadcastConnections();
+	}
+
+	function failures(): Record<string, string> {
+		return Object.fromEntries(connectFailures);
 	}
 
 	function origins(): Record<string, string | null> {
@@ -626,12 +639,18 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// the renderer reconciles additively — so tasks fill in as engines answer.
 	for (const c of listConnections(db)) {
 		if (!c.known) continue;
-		void connect(c.alias).catch(() => {
-			// Unreachable or asleep. connect() already closed its own transport, and the
-			// connections list still renders the box from the offline cache, so leaving it
-			// disconnected is the honest outcome. A box that is merely BEHIND is not an
-			// error any more: connect() upgrades it over SSH and comes back held, which is
-			// the only path that reaches an SSH box without waiting for a user gesture.
+		void connect(c.alias).catch((err: unknown) => {
+			// Unreachable, asleep, or an upgrade that didn't take. connect() already closed
+			// its own transport, and the connections list still renders the box from the
+			// offline cache, so leaving it disconnected is the honest outcome. The REASON,
+			// though, is only known here: this is the one connect nobody awaits, so record
+			// it instead of dropping it. Without that, a failed upgrade looks exactly like
+			// a sleeping box, and the message explaining it dies in this catch.
+			// A box that is merely BEHIND is not an error any more: connect() upgrades it
+			// over SSH and comes back held, which is the only path that reaches an SSH box
+			// without waiting for a user gesture.
+			connectFailures.set(c.alias, err instanceof Error ? err.message : String(err));
+			broadcastConnections();
 		});
 	}
 
@@ -666,6 +685,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		forget,
 		connected,
 		origins,
+		failures,
 		editorUrl,
 		provision,
 		install,
@@ -686,6 +706,7 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.forget, (_e, alias: string) => host.forget(alias));
 	ipcMain.handle(HOST_CH.connected, () => host.connected());
 	ipcMain.handle(HOST_CH.origins, () => host.origins());
+	ipcMain.handle(HOST_CH.failures, () => host.failures());
 	ipcMain.handle(HOST_CH.provision, (_e, alias: string, input: { cloneUrl: string }) =>
 		host.provision(alias, input),
 	);
