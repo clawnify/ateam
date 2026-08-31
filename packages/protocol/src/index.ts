@@ -42,6 +42,40 @@
 // out, it tells them what to paper over.
 export const PROTOCOL_VERSION = 7;
 
+/**
+ * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
+ *
+ * A skewed box is held rather than refused, so something has to decide what a
+ * client may still ask of it. Two kinds of change need two answers, and only one
+ * of them belongs here:
+ *
+ *   a NEW METHOD needs nothing. An older engine answers "Unknown method", which
+ *   rejects that one call and fails that one feature. v2, v3 and v4 were all of
+ *   this kind, which is why they need no entry.
+ *
+ *   a CHANGED SHAPE on a method that still exists is the dangerous one. The call
+ *   succeeds and returns something the client misreads, and no default can paper
+ *   over it: a client cannot invent a field the engine never computed. Those get
+ *   an entry, and the feature is switched OFF below that version.
+ *
+ * Adding a shape change means adding a line here. That is the point: the version
+ * history below already describes what each bump broke, in prose no code reads,
+ * so nothing forced a bump to answer "what stops working under this?". Now it does.
+ */
+export const FEATURE_MIN_VERSION = {
+	/** v6 turned CleanupCandidate from a flat row into `{ task: TaskDTO, recommended }`.
+	 *  The dialog dereferences `.task` on every row, so a v5 engine's reply is not a
+	 *  degraded dialog, it is a thrown TypeError. */
+	cleanup: 6,
+} as const;
+
+export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
+
+/** Whether an engine on `engineVersion` can serve `feature` in a shape this client reads. */
+export function boxSupports(feature: GatedFeature, engineVersion: number): boolean {
+	return engineVersion >= FEATURE_MIN_VERSION[feature];
+}
+
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
 export type AgentStatus = "idle" | "running" | "awaiting_input" | "stopped";

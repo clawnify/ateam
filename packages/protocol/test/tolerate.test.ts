@@ -54,6 +54,24 @@ describe("tolerantRpc", () => {
 		expect(tolerantRpc(stub, PROTOCOL_VERSION + 1)).toBe(stub);
 	});
 
+	// The bug this keys off: the pre-v6 CleanupCandidate was a flat row that also
+	// carried `worktreePath`, so duck-typing on that alone stamped a fabricated
+	// verdict onto rows that are not tasks.
+	test("does not mistake a pre-v6 cleanup row for a task", async () => {
+		const v5Row = {
+			id: "t1",
+			name: "fix",
+			branch: "b",
+			worktreePath: "/w/t1",
+			reason: "merged",
+			terminalId: null,
+			agentStatus: null,
+		};
+		const rpc = tolerantRpc(stubRpc([v5Row]), PROTOCOL_VERSION - 1);
+		const [row] = (await rpc.call("tasks:cleanupCandidates")) as Record<string, unknown>[];
+		expect(row).not.toHaveProperty("triage");
+	});
+
 	test("passes non-task payloads through untouched", async () => {
 		const rpc = tolerantRpc(stubRpc({ id: "p1", name: "repo" }), PROTOCOL_VERSION - 1);
 		expect(await rpc.call("projects:list")).toEqual({ id: "p1", name: "repo" });

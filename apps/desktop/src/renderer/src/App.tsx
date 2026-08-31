@@ -9,7 +9,7 @@ import type {
 	SessionHitDTO,
 	TaskDTO,
 } from "@ateam/protocol";
-import { PROTOCOL_VERSION } from "@ateam/protocol";
+import { boxSupports, FEATURE_MIN_VERSION, PROTOCOL_VERSION } from "@ateam/protocol";
 import {
 	ArrowDownToLine,
 	ArrowUp,
@@ -774,8 +774,21 @@ export function App() {
 			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		});
 
+	// Cleanup reads a shape that changed in v6, so an older box would not degrade
+	// here, it would throw inside the dialog's sort. Gate on the OWNING engine, not
+	// on whatever box happens to be selected: the dialog runs against one project,
+	// and that project lives on exactly one engine. Local is never skewed with
+	// itself, so a project on this Mac is always allowed.
+	const cleanupBlockedBy = useMemo(() => {
+		if (!activeProjectId) return null;
+		const owner = activeMembers.find((m) => m.projectId === activeProjectId);
+		if (!owner?.alias) return null;
+		const version = envProtocol[owner.alias];
+		return version !== undefined && !boxSupports("cleanup", version) ? version : null;
+	}, [activeProjectId, activeMembers, envProtocol]);
+
 	const cleanup = () => {
-		if (activeProjectId) setCleanupOpen(true);
+		if (activeProjectId && cleanupBlockedBy === null) setCleanupOpen(true);
 	};
 
 	return (
@@ -1196,7 +1209,17 @@ export function App() {
 							</button>
 						</div>
 					)}
-					<button type="button" className="navbtn" onClick={cleanup} disabled={!activeProjectId}>
+					<button
+						type="button"
+						className="navbtn"
+						onClick={cleanup}
+						disabled={!activeProjectId || cleanupBlockedBy !== null}
+						title={
+							cleanupBlockedBy !== null
+								? `This project lives on a box running an older Ateam (protocol v${cleanupBlockedBy}). Cleanup needs v${FEATURE_MIN_VERSION.cleanup} or newer: update the box to use it here.`
+								: undefined
+						}
+					>
 						<Brush size={14} strokeWidth={1.75} />
 						Clean up
 					</button>

@@ -7,17 +7,30 @@
 // always described ("refuses/warns on mismatch") and which moves the burden here:
 // whatever an older engine omits, the client has to survive reading.
 //
-// Only ONE field actually breaks. `triage` is the sole addition that is REQUIRED
-// rather than `| null`, and the board reads `triage.bucket` on every card and in
-// every sort comparator, so a pre-v5 engine takes the whole board down with
-// "Cannot read properties of undefined". Everything a newer client wants beyond
-// that is nullable and every read already spells `?? …`, so it degrades on its
-// own. Unknown METHODS need nothing here either: they reject per call, which
-// fails the one feature the box lacks instead of the session.
+// This covers exactly one thing, and the boundary matters. `triage` is the sole
+// addition that is REQUIRED rather than `| null`, and the board reads
+// `triage.bucket` on every card and in every sort comparator, so a pre-v5 engine
+// takes the whole board down with "Cannot read properties of undefined". A default
+// verdict is honest there: the field is one small object with a sensible empty
+// value, and the card says so.
 //
-// Duck-typed on `worktreePath` (unique to TaskDTO across the wire contract)
-// rather than keyed by method name, because TaskDTOs arrive from calls AND from
-// taskUpdated events, and a method table would rot the next time one is added.
+// What this must NOT be extended to is a changed SHAPE. A client cannot invent a
+// field the engine never computed, and pretending otherwise fabricates data rather
+// than tolerating its absence: the pre-v6 CleanupCandidate carried no `task` at
+// all, and no default reconstructs one. Those cases are switched off by version
+// instead, via FEATURE_MIN_VERSION. Filling is for missing scalars; gating is for
+// missing capability.
+//
+// Everything else a newer client wants is nullable and every read already spells
+// `?? …`, so it degrades on its own. Unknown METHODS need nothing here either:
+// they reject per call, which fails the one feature the box lacks, not the session.
+//
+// Duck-typed rather than keyed by method name, because TaskDTOs arrive from calls
+// AND from taskUpdated events, and a method table would rot the next time one is
+// added. `projectId` + `column` together, NOT `worktreePath`: the pre-v6
+// CleanupCandidate was a flat row carrying `worktreePath` too, so keying on that
+// alone stamped a fabricated verdict onto rows that are not tasks at all. Neither
+// of these two has ever appeared on anything but a TaskDTO.
 import { PROTOCOL_VERSION, type RpcClient, type TaskTriage } from "./index";
 
 /**
@@ -40,7 +53,7 @@ function fill(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(fill);
 	if (!value || typeof value !== "object") return value;
 	const o = value as Record<string, unknown>;
-	if (typeof o.worktreePath === "string" && o.triage === undefined) {
+	if (typeof o.projectId === "string" && typeof o.column === "string" && o.triage === undefined) {
 		return { ...o, triage: NO_TRIAGE };
 	}
 	return value;

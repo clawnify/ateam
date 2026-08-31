@@ -456,7 +456,9 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		//   --service because a box reachable by phone is one under systemd; that is
 		//             what restarts it after an OOM kill.
 		[CH.systemUpdate]: async (): Promise<BoxUpdateStarted> => {
-			const dataDir = dirname(process.env.ATEAM_SOCK ?? join(homedir(), ".ateam", "ateam.sock"));
+			// Same expression cli.ts resolves the socket with, so the log lands beside the
+			// daemon's own even when ATEAM_RPC_SOCK moves it off the default path.
+			const dataDir = dirname(process.env.ATEAM_RPC_SOCK ?? join(homedir(), ".ateam", "rpc.sock"));
 			const logPath = join(dataDir, "update.log");
 			// One at a time. The flag dies with this process a few seconds from now, so
 			// it guards the window that matters: a double tap, or two clients at once.
