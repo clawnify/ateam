@@ -120,6 +120,10 @@ export function App() {
 	// alias → the wire contract the held engine actually speaks. A box on a different
 	// one is held anyway now, so this is what tells the user which box is skewed.
 	const [envProtocol, setEnvProtocol] = useState<Record<string, number>>({});
+	// Whether this build can upgrade a box at all. False in dev, where an update
+	// would install the latest RELEASE and leave a box running main's protocol
+	// still behind — a minute of work that changes nothing.
+	const [canUpdateBoxes, setCanUpdateBoxes] = useState(false);
 	// Which agents each connected engine actually has installed (its system:hello
 	// agents), keyed by alias ("local" for this Mac). Drives per-environment agent
 	// availability in the composer — you can only pick an agent the box really has.
@@ -310,6 +314,7 @@ export function App() {
 		const load = () => {
 			void window.ateamHost.list().then(setConnections);
 			void window.ateamHost.failures().then(setConnFailures);
+			void window.ateamHost.canUpdateBoxes().then(setCanUpdateBoxes);
 			void window.ateamHost.connected().then((list) => {
 				const map: Record<string, string[]> = {};
 				const wire: Record<string, number> = {};
@@ -467,9 +472,20 @@ export function App() {
 					envProtocol[c.alias] !== undefined && envProtocol[c.alias] !== PROTOCOL_VERSION
 						? envProtocol[c.alias]
 						: undefined,
+				// Can THIS app update THIS box: a dev build can't update any box, and no
+				// build can update one reachable only over its Tailscale endpoint.
+				updatable: canUpdateBoxes && c.transport !== "ws",
 			})),
 		];
-	}, [connections, canRemote, hasLocalMember, activeMembers, connFailures, envProtocol]);
+	}, [
+		connections,
+		canRemote,
+		hasLocalMember,
+		activeMembers,
+		connFailures,
+		envProtocol,
+		canUpdateBoxes,
+	]);
 
 	// The active card's board unions tasks from every engine that has the repo.
 	const activeTasks = activeCard
