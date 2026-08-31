@@ -236,9 +236,12 @@ export function EnvironmentPicker({
 														: `This box speaks protocol v${env.skew}, this app speaks v${PROTOCOL_VERSION}. The box is ahead of this app; update Ateam.`
 												}
 											>
+												{/* Short enough to survive the 260px row: the colour carries the
+												    warning and the title carries the consequence. The long form
+												    truncated mid-word, which read as a rendering bug. */}
 												{env.skew < PROTOCOL_VERSION
-													? `older Ateam (v${env.skew}): some features will misbehave`
-													: `newer Ateam (v${env.skew}): update this app`}
+													? `older Ateam (v${env.skew})`
+													: `newer Ateam (v${env.skew})`}
 											</span>
 										) : env.disabled && env.alias !== null ? (
 											<span className="conn-sub">repo needs a git remote to run here</span>
