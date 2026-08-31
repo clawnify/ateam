@@ -189,6 +189,19 @@ export interface SessionDTO {
 	agentSessionId: string | null;
 	status: AgentStatus;
 	cwd: string;
+	/**
+	 * When this session last reported a hook event, i.e. when it last did
+	 * something. Lets a view with several of a task's sessions in hand open on
+	 * the one that just moved rather than merely the newest one.
+	 *
+	 * Optional, and deliberately NOT a protocol bump: a box that predates the
+	 * field simply omits it, and a client that sees none falls back to the
+	 * newest session — exactly what every client did before. There is no
+	 * feature to gate off, only a nicety that quietly doesn't apply, and
+	 * marking every older box skewed over a tab default would cost more than
+	 * it tells anyone.
+	 */
+	lastEventAt?: number | null;
 }
 
 export interface DiffFileDTO {

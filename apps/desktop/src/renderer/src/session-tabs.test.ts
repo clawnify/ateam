@@ -7,7 +7,7 @@ const AGENTS: AgentDTO[] = [
 	{ id: "codex", label: "Codex", description: "", available: true },
 ];
 
-function session(terminalId: string, agentId: string): SessionDTO {
+function session(terminalId: string, agentId: string, lastEventAt?: number): SessionDTO {
 	return {
 		id: `s-${terminalId}`,
 		taskId: "t1",
@@ -16,6 +16,7 @@ function session(terminalId: string, agentId: string): SessionDTO {
 		agentSessionId: agentId === "shell" ? null : terminalId,
 		status: "idle",
 		cwd: "/w",
+		lastEventAt: lastEventAt ?? null,
 	};
 }
 
@@ -67,6 +68,26 @@ test("a task with only shells still shows its newest one", () => {
 test("an explicit pick of a shell is kept even though an agent is running", () => {
 	const live = [session("a", "claude"), session("b", "shell")];
 	expect(activeTerminal(live, "b")).toBe("b");
+});
+
+test("with no pick, the agent that most recently did something wins over the newest", () => {
+	const live = [session("a", "claude", 200), session("b", "codex", 100)];
+	expect(activeTerminal(live, null)).toBe("a");
+});
+
+test("a busy shell never steals the tab from the agent that reported longest ago", () => {
+	const live = [session("a", "claude", 100), session("b", "shell", 999)];
+	expect(activeTerminal(live, null)).toBe("a");
+});
+
+test("an engine too old to report activity still lands on the newest agent", () => {
+	const live = [session("a", "claude"), session("b", "codex")];
+	expect(activeTerminal(live, null)).toBe("b");
+});
+
+test("a session that has never reported loses to one that has", () => {
+	const live = [session("a", "claude", 50), session("b", "codex")];
+	expect(activeTerminal(live, null)).toBe("a");
 });
 
 test("the last session ending leaves no terminal to show", () => {

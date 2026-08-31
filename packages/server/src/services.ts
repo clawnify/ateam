@@ -67,5 +67,6 @@ export function toSessionDTO(s: AgentSession): SessionDTO {
 		agentSessionId: s.agentSessionId ?? null,
 		status: s.status,
 		cwd: s.cwd,
+		lastEventAt: s.lastEventAt ?? null,
 	};
 }
