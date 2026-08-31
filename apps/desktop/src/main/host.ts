@@ -118,11 +118,19 @@ const WS_PING_TIMEOUT_MS = 10_000;
  * "Update the older side" was true and useless: on the phone there is no side to
  * update, and on a box behind an SSH alias the desktop has already tried.
  */
-function mismatchMessage(alias: string, boxVersion: number, wire: HostTransport | null): string {
+function mismatchMessage(
+	alias: string,
+	boxVersion: number,
+	wire: HostTransport | null,
+	canUpgrade: boolean,
+): string {
 	const head = `"${alias}" speaks protocol v${boxVersion}, this app speaks v${PROTOCOL_VERSION}.`;
 	if (boxVersion > PROTOCOL_VERSION) return `${head} Update Ateam: the box is ahead of it.`;
 	if (wire === "ws") {
 		return `${head} It's reachable only over its Tailscale endpoint, so this app can't update it. Re-run the installer on the box over SSH.`;
+	}
+	if (!canUpgrade) {
+		return `${head} A dev build can't upgrade a box: the installer only serves released versions, and this protocol isn't in one yet. Install this build with packages/server/scripts/install-remote.sh ${alias}.`;
 	}
 	return `${head} Updating it over SSH didn't take. Check the install log for what failed.`;
 }
@@ -327,10 +335,19 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			// keeps two desktops on different versions from reinstalling a shared box back
 			// and forth, which is a real risk here because a box has ONE $HOME/ateam-app
 			// rather than the per-version directory VS Code keys its server by.
-			if (!healed && wire !== "ws" && info.protocolVersion < PROTOCOL_VERSION) {
+			//
+			// Packaged builds only, and that is not a nicety: install.sh serves RELEASES,
+			// so the newest protocol a box can reach is the one in the latest release. A
+			// dev build runs main, whose protocol is ahead of that release the moment it
+			// is bumped, the normal state between releases. Healing from dev would then
+			// npm-install on the box for a minute, come back on the same old protocol and
+			// fail, once per box per launch, forever. The invariant that makes the heal
+			// safe is that we can pin the exact release whose protocol we speak, which is
+			// the same condition the ATEAM_VERSION pin needs, so the two share a gate.
+			if (!healed && app.isPackaged && wire !== "ws" && info.protocolVersion < PROTOCOL_VERSION) {
 				return install(alias); // streams the installer's log, and ends by connecting
 			}
-			throw new Error(mismatchMessage(alias, info.protocolVersion, wire));
+			throw new Error(mismatchMessage(alias, info.protocolVersion, wire, app.isPackaged));
 		}
 
 		connectFailures.delete(alias);
@@ -440,9 +457,10 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// the client's commit. Unpinned, the box takes `releases/latest` and drifts away
 		// from the desktop the moment a newer release lands, which is the skew this whole
 		// path exists to close. Packaged builds only: a dev build's version has no tag
-		// behind it, and install.sh dies on a tag with no release, so dev keeps taking
-		// the latest, deliberately loud rather than a silent fallback that would leave a
-		// mismatched box and no clue why.
+		// behind it, and install.sh dies on a tag with no release. So a deliberate install
+		// from dev takes the latest release, which is the right thing when SETTING UP a
+		// box; what dev must not do is heal on connect, because that release can be behind
+		// main's protocol and the upgrade is then guaranteed futile (see connect()).
 		const pin = app.isPackaged ? `ATEAM_VERSION=v${app.getVersion()} ` : "";
 		const pipeline = wsAddr
 			? `curl -fsSL ${INSTALL_URL} | ${pin}ATEAM_WS_ADDR=${wsAddr} bash -s -- --service`
