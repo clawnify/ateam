@@ -33,6 +33,11 @@ export type EnvOption = {
 	 *  usable, but some features will misbehave, so the row says so rather than
 	 *  letting the weirdness turn up later with no explanation. */
 	skew?: number;
+	/** Whether this app can actually bring this box up to its version. False for a
+	 *  dev build (it can only install releases, which may still be behind) and for a
+	 *  ws box (no SSH to run the installer over). Gates the update button, so we
+	 *  never offer an action that would run for a minute and change nothing. */
+	updatable?: boolean;
 };
 
 export function EnvironmentPicker({
@@ -231,9 +236,15 @@ export function EnvironmentPicker({
 											<span
 												className="conn-sub conn-sub-warn"
 												title={
-													env.skew < PROTOCOL_VERSION
-														? `This box runs an older Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). It still works, but anything added since v${env.skew} will misbehave here. Use the update button on this row to bring it up to this app's version.`
-														: `This box runs a newer Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). Update Ateam on this Mac to catch up with it.`
+													env.skew > PROTOCOL_VERSION
+														? `This box runs a newer Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). Update Ateam on this Mac to catch up with it.`
+														: `This box runs an older Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). It still works, but anything added since v${env.skew} will misbehave here. ${
+																env.updatable
+																	? "Use the update button on this row to bring it up to this app's version."
+																	: env.transport === "ws"
+																		? "It's reachable only over its Tailscale endpoint, so this app can't run the installer on it. Update it over SSH."
+																		: "This dev build can't update it: the installer serves releases, and this protocol isn't in one yet. Use packages/server/scripts/install-remote.sh."
+															}`
 												}
 											>
 												{/* Framed as an UPDATE, the same thing the desktop does to itself,
@@ -263,7 +274,7 @@ export function EnvironmentPicker({
 								{env.skew !== undefined &&
 									env.skew < PROTOCOL_VERSION &&
 									env.alias &&
-									env.transport !== "ws" &&
+									env.updatable &&
 									onInstall && (
 										<button
 											type="button"
