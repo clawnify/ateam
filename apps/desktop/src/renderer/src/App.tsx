@@ -850,7 +850,7 @@ export function App() {
 								</span>
 							</div>
 						) : (
-							<>
+							<div className="side-section">
 								{/* PROJECTS accordion */}
 								<div className="section-head">
 									<button
@@ -867,219 +867,232 @@ export function App() {
 									</button>
 									<IconButton icon={FolderPlus} label="Add project" onClick={addProject} />
 								</div>
-								{!projectsCollapsed &&
-									unifiedProjects.map((card) => {
-										const alert = cardAlert(card);
-										// Selecting/detaching acts on the local copy if present, else the first.
-										const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
-										if (!primary) return null;
-										const active = card.members.some((m) => m.projectId === activeProjectId);
-										// Show the environments this repo spans (Local · box) when it's on more
-										// than just this Mac — that's the multi-engine cue.
-										const multiEnv =
-											card.members.length > 1 || card.members.some((m) => m.alias !== null);
-										return (
-											// Double-click (or the hover button) detaches the project into its
-											// own window. Row and open-button are siblings so the button's
-											// click can't nest inside the row button.
-											<div
-												key={card.key}
-												className="proj-row"
-												onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
-											>
-												<button
-													type="button"
-													className={`proj ${active ? "active" : ""}`}
-													onClick={() => selectProject(primary.projectId)}
+								{!projectsCollapsed && (
+									<div className="side-list">
+										{unifiedProjects.map((card) => {
+											const alert = cardAlert(card);
+											// Selecting/detaching acts on the local copy if present, else the first.
+											const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+											if (!primary) return null;
+											const active = card.members.some((m) => m.projectId === activeProjectId);
+											// Show the environments this repo spans (Local · box) when it's on more
+											// than just this Mac — that's the multi-engine cue.
+											const multiEnv =
+												card.members.length > 1 || card.members.some((m) => m.alias !== null);
+											return (
+												// Double-click (or the hover button) detaches the project into its
+												// own window. Row and open-button are siblings so the button's
+												// click can't nest inside the row button.
+												<div
+													key={card.key}
+													className="proj-row"
+													onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
 												>
-													<span
-														className={`dot ${alert ? `alert ${alert}` : ""}`}
-														style={!alert && card.color ? { background: card.color } : undefined}
-													/>
-													<span className="proj-name" title={primary.project.repoPath}>
-														{card.name}
-													</span>
-													{multiEnv && (
-														// One icon per environment — a monitor for this Mac, a server per
-														// box — instead of the names, which crowded the row as soon as a
-														// repo spanned more than one box. The name is the hover title
-														// (and the accessible name, so the row still reads its
-														// environments aloud). Monitor, not Laptop: lucide draws Laptop
-														// only 15 units tall inside the 24-unit box against Server's 20,
-														// so the pair looked mismatched at the same `size`. Monitor is
-														// 18 and exactly as wide, which reads as even.
-														<span className="proj-envs">
-															{card.members.map((m) => {
-																const name = aliasLabel(m.alias);
-																return (
-																	<span
-																		key={m.alias ?? "local"}
-																		className="proj-env"
-																		title={name}
-																		role="img"
-																		aria-label={name}
-																	>
-																		{m.alias === null ? (
-																			<Monitor size={12} strokeWidth={1.75} aria-hidden="true" />
-																		) : (
-																			<Server size={12} strokeWidth={1.75} aria-hidden="true" />
-																		)}
-																	</span>
-																);
-															})}
+													<button
+														type="button"
+														className={`proj ${active ? "active" : ""}`}
+														onClick={() => selectProject(primary.projectId)}
+													>
+														<span
+															className={`dot ${alert ? `alert ${alert}` : ""}`}
+															style={!alert && card.color ? { background: card.color } : undefined}
+														/>
+														<span className="proj-name" title={primary.project.repoPath}>
+															{card.name}
 														</span>
-													)}
-												</button>
-												<span className="proj-open">
-													<IconButton
-														icon={ExternalLink}
-														label="Open in new window"
-														size={14}
-														onClick={() => window.ateam.window.openProject(primary.projectId)}
-													/>
-												</span>
-											</div>
-										);
-									})}
-							</>
+														{multiEnv && (
+															// One icon per environment — a monitor for this Mac, a server per
+															// box — instead of the names, which crowded the row as soon as a
+															// repo spanned more than one box. The name is the hover title
+															// (and the accessible name, so the row still reads its
+															// environments aloud). Monitor, not Laptop: lucide draws Laptop
+															// only 15 units tall inside the 24-unit box against Server's 20,
+															// so the pair looked mismatched at the same `size`. Monitor is
+															// 18 and exactly as wide, which reads as even.
+															<span className="proj-envs">
+																{card.members.map((m) => {
+																	const name = aliasLabel(m.alias);
+																	return (
+																		<span
+																			key={m.alias ?? "local"}
+																			className="proj-env"
+																			title={name}
+																			role="img"
+																			aria-label={name}
+																		>
+																			{m.alias === null ? (
+																				<Monitor size={12} strokeWidth={1.75} aria-hidden="true" />
+																			) : (
+																				<Server size={12} strokeWidth={1.75} aria-hidden="true" />
+																			)}
+																		</span>
+																	);
+																})}
+															</span>
+														)}
+													</button>
+													<span className="proj-open">
+														<IconButton
+															icon={ExternalLink}
+															label="Open in new window"
+															size={14}
+															onClick={() => window.ateam.window.openProject(primary.projectId)}
+														/>
+													</span>
+												</div>
+											);
+										})}
+									</div>
+								)}
+							</div>
 						)}
 
 						{/* TASKS accordion — active tasks of the selected project */}
-						<div className="section-head tasks-head">
-							<button
-								type="button"
-								className="section-toggle"
-								onClick={() => setTasksCollapsed((c) => !c)}
-							>
-								{tasksCollapsed ? (
-									<ChevronRight size={14} strokeWidth={2} />
-								) : (
-									<ChevronDown size={14} strokeWidth={2} />
-								)}
-								<span>Tasks</span>
-							</button>
-							<span style={{ display: "flex", gap: 2 }}>
-								<Menu
-									icon={ArrowUpDown}
-									label="Order tasks"
-									items={[
-										{
-											label: "What's next",
-											icon: taskSort === "next" ? Check : undefined,
-											onClick: () => setTaskSort("next"),
-										},
-										{
-											label: "By status",
-											icon: taskSort === "status" ? Check : undefined,
-											onClick: () => setTaskSort("status"),
-										},
-										{
-											label: "Last updated first",
-											icon: taskSort === "updated" ? Check : undefined,
-											onClick: () => setTaskSort("updated"),
-										},
-										{
-											label: "Custom (drag to reorder)",
-											icon: taskSort === "custom" ? Check : undefined,
-											onClick: () => setTaskSort("custom"),
-										},
-									]}
-								/>
-								<IconButton
-									icon={Plus}
-									label="New task"
-									onClick={newTask}
-									disabled={!activeProjectId}
-								/>
-							</span>
-						</div>
-						{!tasksCollapsed &&
-							(!activeProjectId ? (
-								<div className="tree-empty">Select a project</div>
-							) : visibleSidebarTasks.length === 0 ? (
-								<div className="tree-empty">
-									{tagFilter ? "No matching tasks" : "No active tasks"}
-								</div>
-							) : taskSort === "custom" && !tagFilter ? (
-								// Custom order: drag rows up/down; Motion animates the shuffle.
-								// Disabled while a tag filter is on — reordering a filtered subset
-								// would drop the hidden tasks from the saved order.
-								<Reorder.Group
-									as="div"
-									axis="y"
-									values={orderedSidebarTasks.map((t) => t.id)}
-									onReorder={reorderTasks}
+						<div className="side-section">
+							<div className="section-head tasks-head">
+								<button
+									type="button"
+									className="section-toggle"
+									onClick={() => setTasksCollapsed((c) => !c)}
 								>
-									{orderedSidebarTasks.map((t) => (
-										<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
-											<TaskRow
-												task={t}
-												selected={t.id === selectedTaskId}
-												onClick={() => openTask(t)}
-												onDelete={() => deleteTask(t)}
-											/>
-										</Reorder.Item>
-									))}
-								</Reorder.Group>
-							) : (
-								// Sorted modes: layout animation glides rows to their new spot
-								// when a status change or update reorders them.
-								visibleSidebarTasks.map((t) => (
-									<motion.div key={t.id} layout transition={springy}>
-										<TaskRow
-											task={t}
-											selected={t.id === selectedTaskId}
-											onClick={() => openTask(t)}
-											onDelete={() => deleteTask(t)}
-										/>
-									</motion.div>
-								))
-							))}
+									{tasksCollapsed ? (
+										<ChevronRight size={14} strokeWidth={2} />
+									) : (
+										<ChevronDown size={14} strokeWidth={2} />
+									)}
+									<span>Tasks</span>
+								</button>
+								<span style={{ display: "flex", gap: 2 }}>
+									<Menu
+										icon={ArrowUpDown}
+										label="Order tasks"
+										items={[
+											{
+												label: "What's next",
+												icon: taskSort === "next" ? Check : undefined,
+												onClick: () => setTaskSort("next"),
+											},
+											{
+												label: "By status",
+												icon: taskSort === "status" ? Check : undefined,
+												onClick: () => setTaskSort("status"),
+											},
+											{
+												label: "Last updated first",
+												icon: taskSort === "updated" ? Check : undefined,
+												onClick: () => setTaskSort("updated"),
+											},
+											{
+												label: "Custom (drag to reorder)",
+												icon: taskSort === "custom" ? Check : undefined,
+												onClick: () => setTaskSort("custom"),
+											},
+										]}
+									/>
+									<IconButton
+										icon={Plus}
+										label="New task"
+										onClick={newTask}
+										disabled={!activeProjectId}
+									/>
+								</span>
+							</div>
+							{!tasksCollapsed && (
+								<div className="side-list">
+									{!activeProjectId ? (
+										<div className="tree-empty">Select a project</div>
+									) : visibleSidebarTasks.length === 0 ? (
+										<div className="tree-empty">
+											{tagFilter ? "No matching tasks" : "No active tasks"}
+										</div>
+									) : taskSort === "custom" && !tagFilter ? (
+										// Custom order: drag rows up/down; Motion animates the shuffle.
+										// Disabled while a tag filter is on — reordering a filtered subset
+										// would drop the hidden tasks from the saved order.
+										<Reorder.Group
+											as="div"
+											axis="y"
+											values={orderedSidebarTasks.map((t) => t.id)}
+											onReorder={reorderTasks}
+										>
+											{orderedSidebarTasks.map((t) => (
+												<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
+													<TaskRow
+														task={t}
+														selected={t.id === selectedTaskId}
+														onClick={() => openTask(t)}
+														onDelete={() => deleteTask(t)}
+													/>
+												</Reorder.Item>
+											))}
+										</Reorder.Group>
+									) : (
+										// Sorted modes: layout animation glides rows to their new spot
+										// when a status change or update reorders them.
+										visibleSidebarTasks.map((t) => (
+											<motion.div key={t.id} layout transition={springy}>
+												<TaskRow
+													task={t}
+													selected={t.id === selectedTaskId}
+													onClick={() => openTask(t)}
+													onDelete={() => deleteTask(t)}
+												/>
+											</motion.div>
+										))
+									)}
+								</div>
+							)}
+						</div>
 
 						{/* LOOPS accordion — the active repo's scheduled agent sessions.
 						    Each loop owns one persistent task; clicking a row opens that
 						    task's terminal (or the Loops tab before its first run).
-						    loops-side-head floats it to the sidebar's bottom while there
-						    is spare room; a long task list pushes it down naturally. */}
-						<div className="section-head tasks-head loops-side-head">
-							<button
-								type="button"
-								className="section-toggle"
-								onClick={() => setLoopsCollapsed((c) => !c)}
-							>
-								{loopsCollapsed ? (
-									<ChevronRight size={14} strokeWidth={2} />
-								) : (
-									<ChevronDown size={14} strokeWidth={2} />
-								)}
-								<span>Loops</span>
-							</button>
-							<IconButton
-								icon={Plus}
-								label="New loop"
-								onClick={() => setView("loops")}
-								disabled={!activeProjectId}
-							/>
+						    loops-side-section floats it to the sidebar's bottom while
+						    there is spare room; a long task list pushes it down. */}
+						<div className="side-section loops-side-section">
+							<div className="section-head tasks-head">
+								<button
+									type="button"
+									className="section-toggle"
+									onClick={() => setLoopsCollapsed((c) => !c)}
+								>
+									{loopsCollapsed ? (
+										<ChevronRight size={14} strokeWidth={2} />
+									) : (
+										<ChevronDown size={14} strokeWidth={2} />
+									)}
+									<span>Loops</span>
+								</button>
+								<IconButton
+									icon={Plus}
+									label="New loop"
+									onClick={() => setView("loops")}
+									disabled={!activeProjectId}
+								/>
+							</div>
+							{!loopsCollapsed && (
+								<div className="side-list">
+									{activeLoops.length === 0 ? (
+										<div className="tree-empty">No loops</div>
+									) : (
+										activeLoops.map((l) => {
+											const task = l.taskId
+												? (activeTasks.find((t) => t.id === l.taskId) ?? null)
+												: null;
+											return (
+												<LoopRow
+													key={l.id}
+													loop={l}
+													task={task}
+													selected={task != null && task.id === selectedTaskId}
+													onClick={() => (task ? openTask(task) : setView("loops"))}
+												/>
+											);
+										})
+									)}
+								</div>
+							)}
 						</div>
-						{!loopsCollapsed &&
-							(activeLoops.length === 0 ? (
-								<div className="tree-empty">No loops</div>
-							) : (
-								activeLoops.map((l) => {
-									const task = l.taskId
-										? (activeTasks.find((t) => t.id === l.taskId) ?? null)
-										: null;
-									return (
-										<LoopRow
-											key={l.id}
-											loop={l}
-											task={task}
-											selected={task != null && task.id === selectedTaskId}
-											onClick={() => (task ? openTask(task) : setView("loops"))}
-										/>
-									);
-								})
-							))}
 					</>
 				)}
 			</aside>
@@ -1993,10 +2006,7 @@ function TaskPanel({
 			<div className="panel-body">
 				{/* Keep the terminal mounted (xterm state survives) while the
 				    changes view is open — just hide it. */}
-				<div
-					className="term-wrap"
-					style={{ display: changesOpen || editorOpen ? "none" : "flex" }}
-				>
+				<div className="term-wrap" style={{ display: changesOpen || editorOpen ? "none" : "flex" }}>
 					{terminalId ? (
 						<TerminalView
 							terminalId={terminalId}
