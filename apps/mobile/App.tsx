@@ -448,6 +448,7 @@ function BoardScreen({
 	onOpenPreview,
 	skew,
 	updating,
+	updateError,
 	onUpdateBox,
 }: {
 	connColor: string;
@@ -466,6 +467,8 @@ function BoardScreen({
 	/** The box's protocol when it differs from this app's; null when they match. */
 	skew: number | null;
 	updating: boolean;
+	/** Why the last update attempt failed. Cleared at the start of the next one. */
+	updateError: string | null;
 	onUpdateBox: () => void;
 }) {
 	const shown = tasks.filter((t) => t.projectId === selectedProjectId);
@@ -514,6 +517,11 @@ function BoardScreen({
 							<Text style={styles.skewBtnText}>{updating ? "Updating…" : "Update box"}</Text>
 						</Pressable>
 					)}
+				</View>
+			)}
+			{skew !== null && updateError && (
+				<View style={styles.skewErrorBar}>
+					<Text style={styles.skewErrorText}>{updateError}</Text>
 				</View>
 			)}
 
@@ -571,6 +579,12 @@ export default function App() {
 	// connect, so a reconnect after an update is what clears the banner.
 	const [skew, setSkew] = useState<number | null>(null);
 	const [updatingBox, setUpdatingBox] = useState(false);
+	// Why the last update attempt failed. Separate from `error` (the connect
+	// screen's own state) because this renders on the BOARD, where the button
+	// lives — reusing `error` left a failed update with nowhere to show up: the
+	// button just flashed and reverted, which is exactly what an
+	// Unknown-method rejection looked like the one time this actually happened.
+	const [updateError, setUpdateError] = useState<string | null>(null);
 	const [tasks, setTasks] = useState<TaskDTO[]>([]);
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
 	const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -712,14 +726,14 @@ export default function App() {
 		const c = conn.current;
 		if (!c) return;
 		setUpdatingBox(true);
-		setError(null);
+		setUpdateError(null);
 		try {
 			await c.update();
 		} catch (err) {
 			// The likely one: a box older than v7 has no system:update at all, and has
 			// to be updated once from a Mac before it can ever do this itself.
 			setUpdatingBox(false);
-			setError(err instanceof Error ? err.message : String(err));
+			setUpdateError(err instanceof Error ? err.message : String(err));
 		}
 	}, []);
 
@@ -1009,6 +1023,7 @@ export default function App() {
 				onOpenPreview={() => setPreviewOpen(true)}
 				skew={skew}
 				updating={updatingBox}
+				updateError={updateError}
 				onUpdateBox={updateBox}
 			/>
 			<PreviewModal
@@ -1268,6 +1283,17 @@ const styles = StyleSheet.create({
 	},
 	skewBtnBusy: { opacity: 0.55 },
 	skewBtnText: { color: "#ffe9ad", fontSize: 12, fontWeight: "600" },
+	// A failed update, directly under the row whose button caused it. Red rather
+	// than the banner's amber: this is the one case that's a genuine failure, not
+	// a known, working-as-intended state.
+	skewErrorBar: {
+		paddingHorizontal: 14,
+		paddingVertical: 8,
+		backgroundColor: "#3a1414",
+		borderBottomWidth: 1,
+		borderBottomColor: "#5a2020",
+	},
+	skewErrorText: { color: "#f8a8a8", fontSize: 12, lineHeight: 16 },
 	board: { flex: 1 },
 	boardContent: { padding: 16, paddingBottom: 24 },
 	// Centered, width-capped content column (see CONTENT_MAX) — keeps the phone layout
