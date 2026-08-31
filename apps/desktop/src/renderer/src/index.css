@@ -951,6 +951,19 @@ input {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
+/* A tab a restart took away: it holds no terminal until you click it, so it
+   reads as an outline rather than a surface. Dashed, not merely faded — faded
+   alone would say "disabled", and this one is the clickable kind. */
+.sess-tab.restorable {
+	border: 1px dashed var(--border);
+	opacity: 0.6;
+}
+.sess-tab.restorable:hover {
+	opacity: 1;
+}
+.sess-tab.restorable .sess-tab-name {
+	padding-right: 8px;
+}
 .sess-tab-name {
 	max-width: 140px;
 	overflow: hidden;

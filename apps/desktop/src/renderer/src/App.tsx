@@ -1618,6 +1618,12 @@ function TaskPanel({
 	// "this task has no sessions".
 	const [loaded, setLoaded] = useState<{ taskId: string; sessions: SessionDTO[] } | null>(null);
 	const sessions = loaded?.taskId === task.id ? loaded.sessions : null;
+	// Tabs that were open when the app last went down. Same tagging rule as
+	// `loaded`: the render right after a task switch still holds the previous
+	// task's list. An empty array is the honest default here — unlike `sessions`,
+	// nothing decides anything from "this task has none".
+	const [dead, setDead] = useState<{ taskId: string; sessions: SessionDTO[] } | null>(null);
+	const restorable = dead?.taskId === task.id ? dead.sessions : [];
 
 	// Selecting another task closes the changes view.
 	useEffect(() => {
@@ -1627,13 +1633,18 @@ function TaskPanel({
 
 	const refreshSessions = useCallback(async () => {
 		const taskId = task.id;
-		const live = await window.ateam.pty.listForTask(taskId);
+		const [live, stranded] = await Promise.all([
+			window.ateam.pty.listForTask(taskId),
+			window.ateam.pty.listRestorable(taskId),
+		]);
 		// The engine hands these back latest-first; reverse so the strip reads
 		// oldest → newest — a new session then appends on the right instead of
 		// shuffling the tabs already open.
 		const ordered = live.reverse();
+		const orderedDead = stranded.reverse();
 		setLoaded({ taskId, sessions: ordered });
-		return ordered;
+		setDead({ taskId, sessions: orderedDead });
+		return { live: ordered, restorable: orderedDead };
 	}, [task.id]);
 
 	useEffect(() => {
@@ -1674,6 +1685,25 @@ function TaskPanel({
 		[task.id, fallbackAgentId, run, setTerminal, refreshSessions],
 	);
 
+	/**
+	 * Bring a stranded tab back: a new terminal running the SAME conversation.
+	 * Mirrors `launch` in using `setTerminal` rather than `showTerminal` — this
+	 * also runs from the fallback effect below, which must not yank you out of
+	 * the editor.
+	 */
+	const restoreTab = useCallback(
+		(session: SessionDTO) =>
+			run(async () => {
+				const { terminalId: tid } = await window.ateam.pty.restoreSession({
+					taskId: task.id,
+					terminalId: session.terminalId,
+				});
+				await refreshSessions();
+				setTerminal(tid);
+			}),
+		[task.id, run, setTerminal, refreshSessions],
+	);
+
 	// Keep the active tab pointed at something real. Covers (re)opening a task
 	// with surviving daemon sessions, and a session ending — its tab disappears
 	// and the newest survivor takes focus. With nothing left, resume the agent's
@@ -1704,17 +1734,32 @@ function TaskPanel({
 			autoResumedRef.current !== task.id;
 		if (terminalId === null && !resumable) return;
 		let cancelled = false;
-		void refreshSessions().then((live) => {
+		void refreshSessions().then(({ live, restorable: stranded }) => {
 			if (cancelled || live.length) return; // it wasn't empty after all
 			if (terminalId !== null) setTerminal(null);
 			if (!resumable) return;
 			autoResumedRef.current = task.id;
-			void launch(false, true);
+			// Prefer the newest tab that was actually open when we went down: it
+			// resumes THAT conversation by id. `launch(resume)` is the fallback for
+			// a task with nothing stranded (or nothing but shells) — it can only
+			// reach the newest conversation in the worktree, whichever tab that was.
+			const newest = [...stranded].reverse().find((s) => s.agentId !== "shell");
+			if (newest) void restoreTab(newest);
+			else void launch(false, true);
 		});
 		return () => {
 			cancelled = true;
 		};
-	}, [task.id, task.column, sessions, terminalId, setTerminal, launch, refreshSessions]);
+	}, [
+		task.id,
+		task.column,
+		sessions,
+		terminalId,
+		setTerminal,
+		launch,
+		restoreTab,
+		refreshSessions,
+	]);
 
 	// "+ → New agent session…": the task-creation composer minus name/branch/machine.
 	// Launches into THIS task's worktree, so the prompt, attachments, agent and YOLO
@@ -1779,7 +1824,7 @@ function TaskPanel({
 		if (!viewFile && diff?.files[0]) setViewFile(diff.files[0].path);
 	};
 
-	const tabs = sessionTabs(sessions ?? [], agents);
+	const tabs = sessionTabs(sessions ?? [], agents, restorable);
 
 	// Closing a tab kills its PTY — tabs are exactly the live sessions, so there
 	// is no "closed but still running" state to explain. Confirm first when the
@@ -1837,30 +1882,44 @@ function TaskPanel({
 				    of agent session you get is the composer's question, not a row of
 				    buttons — so the row stays legible however many tabs are open. */}
 				<div className="sess-tabs" role="tablist" aria-label="Sessions">
-					{tabs.map(({ session, label }) => (
+					{tabs.map(({ session, label, live }) => (
 						<div
 							key={session.terminalId}
-							className={`sess-tab ${session.terminalId === terminalId ? "active" : ""}`}
+							className={`sess-tab ${session.terminalId === terminalId ? "active" : ""} ${
+								live ? "" : "restorable"
+							}`}
 						>
 							<button
 								type="button"
 								role="tab"
-								aria-selected={session.terminalId === terminalId}
+								aria-selected={live && session.terminalId === terminalId}
 								className="sess-tab-name"
-								title={label}
-								onClick={() => showTerminal(session.terminalId)}
+								title={live ? label : `${label} — closed by a restart. Click to resume it.`}
+								onClick={() => {
+									if (live) {
+										showTerminal(session.terminalId);
+										return;
+									}
+									setEditorOpen(false);
+									setChangesOpen(false);
+									void restoreTab(session);
+								}}
 							>
 								{label}
 							</button>
-							<button
-								type="button"
-								className="sess-tab-close"
-								aria-label={`Close ${label}`}
-								title={`Close ${label}`}
-								onClick={() => closeSession(session, label)}
-							>
-								<X size={11} />
-							</button>
+							{/* A stranded tab has no process to kill, and it retires itself
+							    after one run of the app — so it carries no close button. */}
+							{live && (
+								<button
+									type="button"
+									className="sess-tab-close"
+									aria-label={`Close ${label}`}
+									title={`Close ${label}`}
+									onClick={() => closeSession(session, label)}
+								>
+									<X size={11} />
+								</button>
+							)}
 						</div>
 					))}
 					<Menu

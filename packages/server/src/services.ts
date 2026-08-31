@@ -64,6 +64,7 @@ export function toSessionDTO(s: AgentSession): SessionDTO {
 		taskId: s.taskId,
 		agentId: s.agentId,
 		terminalId: s.terminalId,
+		agentSessionId: s.agentSessionId ?? null,
 		status: s.status,
 		cwd: s.cwd,
 	};

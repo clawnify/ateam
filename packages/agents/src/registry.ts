@@ -27,6 +27,20 @@ export interface AgentDefinition {
 	 */
 	resumeCommand?: string;
 	/**
+	 * Flag that pins a NEW conversation to an id we choose (`--session-id <uuid>`).
+	 * This is what makes a tab restorable: every tab in a task shares one
+	 * worktree, so `resumeCommand` ("the most recent conversation in the cwd")
+	 * can only ever bring back one of them. Minting the id at launch gives each
+	 * tab its own handle, which `resumeIdCommand` takes back. Omitted for a CLI
+	 * that insists on minting its own.
+	 */
+	sessionIdFlag?: string;
+	/**
+	 * Command that resumes ONE named conversation — the id goes straight after
+	 * it. Every harness can do this; only some let us choose the id up front.
+	 */
+	resumeIdCommand?: string;
+	/**
 	 * "Agent mode" command — the tool's autonomous multi-agent surface (e.g.
 	 * Claude Code's `claude agents` board), launched in the task's worktree.
 	 * Omitted for agents without one.
@@ -76,6 +90,11 @@ export const AGENTS = [
 		command: "claude",
 		yoloFlag: "--permission-mode auto",
 		resumeCommand: "claude --continue",
+		// Verified against the CLI itself: `--session-id <uuid>` names the
+		// transcript (~/.claude/projects/<slug>/<uuid>.jsonl) and `--resume <uuid>`
+		// returns to it without forking.
+		sessionIdFlag: "--session-id",
+		resumeIdCommand: "claude --resume",
 		agentsCommand: "claude agents",
 		install: "curl -fsSL https://claude.ai/install.sh | bash",
 		loginCommand: "claude login",
@@ -97,6 +116,10 @@ export const AGENTS = [
 		command: "codex",
 		yoloFlag: "--dangerously-bypass-approvals-and-sandbox",
 		resumeCommand: "codex resume --last",
+		// `codex resume [SESSION_ID]` takes a UUID, but Codex mints it itself —
+		// there is no flag to hand it one, so its tabs stay unrestorable until
+		// the id is read back out of its transcript store.
+		resumeIdCommand: "codex resume",
 		install: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
 		loginCommand: "codex login",
 		// `codex exec` streams its progress to stdout, so the answer is taken
@@ -115,6 +138,9 @@ export const AGENTS = [
 		bin: "opencode",
 		command: "opencode",
 		resumeCommand: "opencode --continue",
+		// Same shape as Codex: `-s/--session <id>` continues a named session,
+		// but nothing pins the id of a new one.
+		resumeIdCommand: "opencode --session",
 		install: "curl -fsSL https://opencode.ai/install | bash",
 		loginCommand: "opencode auth login",
 		// `opencode run` takes the message as positional arguments.
@@ -132,6 +158,10 @@ export function agentCommand(
 		/** Working dir to scope agent mode to (the task's worktree). */
 		cwd?: string;
 		prompt?: string;
+		/** Id to pin a FRESH conversation to, so this tab can be resumed by name. */
+		sessionId?: string;
+		/** Resume THIS conversation — beats the cwd-scoped `resume`. */
+		resumeSessionId?: string;
 	} = {},
 ): string {
 	// Agent mode launches the tool's own multi-agent board (interactive — it takes
@@ -143,12 +173,23 @@ export function agentCommand(
 		const base = `${agent.agentsCommand}${cwd}`;
 		return opts.yolo && agent.yoloFlag ? `${base} ${agent.yoloFlag}` : base;
 	}
-	const base = opts.resume && agent.resumeCommand ? agent.resumeCommand : agent.command;
-	const cmd = opts.yolo && agent.yoloFlag ? `${base} ${agent.yoloFlag}` : base;
+	const sq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+	const resumeOne =
+		opts.resumeSessionId && agent.resumeIdCommand
+			? `${agent.resumeIdCommand} ${sq(opts.resumeSessionId)}`
+			: null;
+	const base =
+		resumeOne ?? (opts.resume && agent.resumeCommand ? agent.resumeCommand : agent.command);
+	let cmd = opts.yolo && agent.yoloFlag ? `${base} ${agent.yoloFlag}` : base;
+	// Only a fresh launch takes an id: a resumed conversation already has one,
+	// and handing it a second would either be refused or fork it in two.
+	if (opts.sessionId && agent.sessionIdFlag && !resumeOne && !opts.resume) {
+		cmd = `${cmd} ${agent.sessionIdFlag} ${sq(opts.sessionId)}`;
+	}
 	if (!opts.prompt) return cmd;
 	// Single-quoted for the login shell; claude/codex take the prompt as a
 	// positional argument, opencode via --prompt.
-	const q = `'${opts.prompt.replace(/'/g, `'\\''`)}'`;
+	const q = sq(opts.prompt);
 	return agent.id === "opencode" ? `${cmd} --prompt ${q}` : `${cmd} ${q}`;
 }
 

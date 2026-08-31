@@ -16,10 +16,20 @@ import type { Engine } from "../src/engine";
 // assert the extraction still emits it.
 function makeEngine(db: AteamDb) {
 	const taskUpdated: string[] = [];
+	const spawned: { terminalId: string; args?: string[] }[] = [];
 	const engine = {
 		services: {
 			db,
-			pty: { has: () => false, kill() {}, write() {}, resize() {}, spawn() {} },
+			pty: {
+				has: () => false,
+				kill() {},
+				write() {},
+				resize() {},
+				spawn(o: { terminalId: string; args?: string[] }) {
+					spawned.push(o);
+				},
+			},
+			followUps: { arm() {}, discard() {} },
 			hooks: {},
 			mergeQueue: {},
 			loopRunner: { describe: () => [] },
@@ -31,7 +41,7 @@ function makeEngine(db: AteamDb) {
 		sendTaskUpdated: (id: string) => taskUpdated.push(id),
 		sendLoopsUpdated: () => {},
 	} as unknown as Engine;
-	return { engine, taskUpdated };
+	return { engine, taskUpdated, spawned };
 }
 
 describe("createDispatcher", () => {
@@ -72,6 +82,148 @@ describe("createDispatcher", () => {
 		};
 		expect(spawned.terminalId).toBeTruthy();
 		expect(taskUpdated).toContain(task.id);
+	});
+
+	// --- tabs a restart took away ---------------------------------------------
+
+	// The bug this exists for: a laptop restart kills the PTY daemon, and every
+	// tab but one was simply gone. Restoring has to bring back the SAME
+	// conversation, not the newest one in the worktree — which is all
+	// `claude --continue` can reach, and all the app could do before.
+	it("restores a stranded tab into a new terminal on the same conversation", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "ateam-restore-"));
+		try {
+			const db = createTestDb();
+			const { engine, spawned } = makeEngine(db);
+			const d = createDispatcher(engine);
+			const project = repo.upsertProject(db, { repoPath: dir, name: "R", defaultBranch: "main" });
+			const task = repo.createTask(db, {
+				projectId: project!.id,
+				name: "restore me",
+				slug: "restore-me",
+				branch: "restore-me",
+				baseBranch: "main",
+				worktreePath: dir,
+			});
+			const dead = repo.createSession(db, {
+				taskId: task.id,
+				agentId: "claude",
+				terminalId: "term-dead",
+				agentSessionId: "conv-1",
+				cwd: dir,
+			});
+			repo.updateSession(db, dead.id, { exitedAt: 1, exitReason: "stranded" });
+
+			const listed = (await d.handle(CH.ptyListRestorable, [task.id])) as Array<{
+				terminalId: string;
+			}>;
+			expect(listed.map((x) => x.terminalId)).toEqual(["term-dead"]);
+
+			const back = (await d.handle(CH.ptyRestoreSession, [
+				{ taskId: task.id, terminalId: "term-dead" },
+			])) as { terminalId: string };
+
+			// A new terminal, still pointed at the conversation the old tab held.
+			expect(back.terminalId).not.toBe("term-dead");
+			expect(repo.getSessionByTerminal(db, back.terminalId)?.agentSessionId).toBe("conv-1");
+			expect(spawned.at(-1)?.args?.join(" ")).toContain("claude --resume 'conv-1'");
+			// …and it is no longer offered, so it cannot be restored twice.
+			expect(await d.handle(CH.ptyListRestorable, [task.id])).toEqual([]);
+			expect(repo.getSessionByTerminal(db, "term-dead")?.exitReason).toBe("restored");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	// Two windows on the same task both auto-restore, or you double-click: the
+	// conversation is already back, so hand over the tab it is in.
+	it("hands back the existing tab when the conversation is already restored", async () => {
+		const db = createTestDb();
+		const { engine } = makeEngine(db);
+		// This engine reports the second session as live.
+		(engine.services as unknown as { pty: { has: (t: string) => boolean } }).pty.has = (t) =>
+			t === "term-back";
+		const d = createDispatcher(engine);
+		const project = repo.upsertProject(db, { repoPath: "/r/e", name: "E" });
+		const task = repo.createTask(db, {
+			projectId: project!.id,
+			name: "t",
+			slug: "t",
+			branch: "t",
+			baseBranch: "main",
+			worktreePath: "/r/e/wt",
+		});
+		const dead = repo.createSession(db, {
+			taskId: task.id,
+			agentId: "claude",
+			terminalId: "term-dead",
+			agentSessionId: "conv-1",
+			cwd: "/r/e/wt",
+		});
+		repo.updateSession(db, dead.id, { exitedAt: 1, exitReason: "restored" });
+		repo.createSession(db, {
+			taskId: task.id,
+			agentId: "claude",
+			terminalId: "term-back",
+			agentSessionId: "conv-1",
+			cwd: "/r/e/wt",
+		});
+
+		expect(
+			await d.handle(CH.ptyRestoreSession, [{ taskId: task.id, terminalId: "term-dead" }]),
+		).toEqual({ terminalId: "term-back" });
+	});
+
+	it("refuses to restore a tab that was closed on purpose", async () => {
+		const db = createTestDb();
+		const { engine } = makeEngine(db);
+		const d = createDispatcher(engine);
+		const project = repo.upsertProject(db, { repoPath: "/r/c", name: "C" });
+		const task = repo.createTask(db, {
+			projectId: project!.id,
+			name: "t",
+			slug: "t",
+			branch: "t",
+			baseBranch: "main",
+			worktreePath: "/r/c/wt",
+		});
+		const s = repo.createSession(db, {
+			taskId: task.id,
+			agentId: "claude",
+			terminalId: "term-closed",
+			cwd: "/r/c/wt",
+		});
+		repo.updateSession(db, s.id, { exitedAt: 1, exitReason: "closed" });
+
+		expect(
+			d.handle(CH.ptyRestoreSession, [{ taskId: task.id, terminalId: "term-closed" }]),
+		).rejects.toThrow(/not restorable/);
+	});
+
+	// Closing a tab is the one ending that means "I am done with this". The
+	// engine reads this stamp back instead of guessing why a PTY went away.
+	it("marks a killed session closed, so a restart cannot offer it back", async () => {
+		const db = createTestDb();
+		const { engine } = makeEngine(db);
+		const d = createDispatcher(engine);
+		const project = repo.upsertProject(db, { repoPath: "/r/d", name: "D" });
+		const task = repo.createTask(db, {
+			projectId: project!.id,
+			name: "t",
+			slug: "t",
+			branch: "t",
+			baseBranch: "main",
+			worktreePath: "/r/d/wt",
+		});
+		repo.createSession(db, {
+			taskId: task.id,
+			agentId: "claude",
+			terminalId: "term-1",
+			cwd: "/r/d/wt",
+		});
+
+		await d.handle(CH.ptyKill, ["term-1"]);
+		expect(repo.getSessionByTerminal(db, "term-1")?.exitReason).toBe("closed");
 	});
 
 	it("throws on an unknown method", () => {
