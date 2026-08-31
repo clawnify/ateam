@@ -3,11 +3,19 @@
 // (agent_sessions is keyed by task, pty:listForTask returns every live one). So
 // the tabs are not state of their own: they ARE the session list, and the only
 // thing the panel decides is which one to look at. Pure + unit-tested.
+//
+// Restarting the machine kills the PTY daemon, and with it every terminal. The
+// sessions that were open at that moment are marked `stranded` by the engine's
+// reconcile and come back here as RESTORABLE tabs: they hold no process, they
+// sit at the end of the strip, and clicking one spawns a terminal that resumes
+// the same conversation. Everything else about a tab is unchanged.
 import type { AgentDTO, SessionDTO } from "@ateam/protocol";
 
 export interface SessionTab {
 	session: SessionDTO;
 	label: string;
+	/** False for a tab with no process behind it — click to bring it back. */
+	live: boolean;
 }
 
 /**
@@ -15,18 +23,29 @@ export interface SessionTab {
  * ("Claude", "Claude 2") so the common single-session case reads as a plain name.
  * `sessions` must be oldest-first, which keeps a tab's number stable for as long
  * as it lives — numbering the newest would renumber the whole strip on each spawn.
+ *
+ * Restorable tabs are numbered in the same sequence and follow the live ones, so
+ * bringing one back never renumbers a tab you are looking at.
  */
-export function sessionTabs(sessions: SessionDTO[], agents: AgentDTO[]): SessionTab[] {
+export function sessionTabs(
+	sessions: SessionDTO[],
+	agents: AgentDTO[],
+	restorable: SessionDTO[] = [],
+): SessionTab[] {
 	const seen = new Map<string, number>();
-	return sessions.map((session) => {
+	const label = (session: SessionDTO): string => {
 		const base =
 			session.agentId === "shell"
 				? "Shell"
 				: (agents.find((a) => a.id === session.agentId)?.label ?? session.agentId);
 		const n = (seen.get(base) ?? 0) + 1;
 		seen.set(base, n);
-		return { session, label: n > 1 ? `${base} ${n}` : base };
-	});
+		return n > 1 ? `${base} ${n}` : base;
+	};
+	return [
+		...sessions.map((session) => ({ session, label: label(session), live: true })),
+		...restorable.map((session) => ({ session, label: label(session), live: false })),
+	];
 }
 
 /**

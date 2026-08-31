@@ -8,7 +8,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDb, repo } from "@ateam/db";
+import { createDb, repo, type SessionExitReason } from "@ateam/db";
 import type {
 	AgentStatus,
 	KanbanColumn,
@@ -25,7 +25,7 @@ import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
 import { PtyClient } from "./pty/pty-client";
-import { strandedSessions } from "./pty/stranded";
+import { makeStrandReconciler } from "./pty/reconcile";
 import { type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
 
@@ -205,8 +205,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		taskId: string,
 		exitedAt: number,
 		markUnread: boolean,
+		exitReason: SessionExitReason,
 	): void => {
-		repo.updateSession(db, sessionId, { status: "stopped", exitedAt });
+		repo.updateSession(db, sessionId, { status: "stopped", exitedAt, exitReason });
 		const task = repo.getTask(db, taskId);
 		if (task && task.column === "running") {
 			repo.updateTask(db, task.id, {
@@ -231,7 +232,12 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		followUps.discard(e.terminalId);
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
-		if (session.exitedAt == null) applyAgentExit(session.id, session.taskId, Date.now(), true);
+		// `closed` is stamped by the kill handler before the PTY goes; anything
+		// else reaching here ended on its own. Either way the tab is not coming
+		// back on its own, so neither is offered as restorable.
+		if (session.exitedAt == null) {
+			applyAgentExit(session.id, session.taskId, Date.now(), true, session.exitReason ?? "exited");
+		}
 	});
 
 	// The backstop for exits nobody watched. The daemon outlives the app, so an
@@ -240,14 +246,17 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	// good. Every connect hands us the daemon's live set, which is exactly the
 	// evidence needed to close those out. See pty/stranded.ts for why this is
 	// scoped to sessions predating this engine.
+	// Marking them `stranded` is also what lets the panel offer them back as
+	// tabs — see pty/reconcile.ts for the once-per-run rule that keeps that set
+	// to "what was open at shutdown".
+	const reconcileStranded = makeStrandReconciler(db, engineStartedAt, (s) => {
+		// Best guess at when it died: we only know it was gone by now.
+		applyAgentExit(s.id, s.taskId, Date.now(), false, "stranded");
+	});
 	pty.on("attached", (terminals: { terminalId: string }[]) => {
 		const live = new Set(terminals.map((t) => t.terminalId));
 		const open = repo.listOpenSessions(db);
-		const stranded = strandedSessions(open, live, engineStartedAt);
-		for (const s of stranded) {
-			// Best guess at when it died: we only know it was gone by now.
-			applyAgentExit(s.id, s.taskId, Date.now(), false);
-		}
+		const stranded = reconcileStranded(live);
 		// Always log: this is a bulk mutation of the board, so "it did nothing"
 		// has to be as visible as "it closed 700 cards". The desktop passes no
 		// `log`, so fall back to console like LoopRunner does.

@@ -164,3 +164,96 @@ describe("settings", () => {
 		expect(updated.defaultAgentId).toBe("opencode");
 	});
 });
+
+describe("restorable sessions", () => {
+	function task() {
+		const p = repo.upsertProject(db, { repoPath: "/r/a", name: "A" });
+		return repo.createTask(db, {
+			projectId: p!.id,
+			name: "t",
+			slug: "t",
+			branch: "t",
+			baseBranch: "main",
+			worktreePath: "/wt/t",
+		});
+	}
+
+	// The distinction the whole restore rests on: a tab you closed stays closed,
+	// a tab a restart took away comes back.
+	it("offers only the sessions that were open when the app went down", () => {
+		const t = task();
+		const mk = (terminalId: string, exitReason: "closed" | "exited" | "stranded" | null) => {
+			const s = repo.createSession(db, {
+				taskId: t.id,
+				agentId: "claude",
+				terminalId,
+				agentSessionId: terminalId,
+				cwd: "/wt/t",
+			});
+			if (exitReason) repo.updateSession(db, s.id, { exitedAt: 1, exitReason });
+			return s;
+		};
+		mk("term-live", null);
+		mk("term-closed", "closed");
+		mk("term-exited", "exited");
+		const stranded = mk("term-stranded", "stranded");
+
+		expect(repo.listRestorableSessions(db, t.id).map((s) => s.id)).toEqual([stranded.id]);
+	});
+
+	// Sessions predating the column carry no claim about how they ended, so a db
+	// full of history does not turn into a strip full of ghosts on first launch.
+	it("does not offer sessions that predate the exit_reason column", () => {
+		const t = task();
+		const s = repo.createSession(db, {
+			taskId: t.id,
+			agentId: "claude",
+			terminalId: "term-old",
+			cwd: "/wt/t",
+		});
+		repo.updateSession(db, s.id, { exitedAt: 1 });
+		expect(repo.listRestorableSessions(db, t.id)).toEqual([]);
+	});
+
+	// Without this, every run of the app would leave its own layer of tabs behind.
+	it("retires the previous run's stranded tabs to plain history", () => {
+		const t = task();
+		const s = repo.createSession(db, {
+			taskId: t.id,
+			agentId: "claude",
+			terminalId: "term-1",
+			cwd: "/wt/t",
+		});
+		repo.updateSession(db, s.id, { exitedAt: 1, exitReason: "stranded" });
+
+		repo.demoteStrandedSessions(db);
+
+		expect(repo.listRestorableSessions(db, t.id)).toEqual([]);
+		expect(repo.getSessionByTerminal(db, "term-1")?.exitReason).toBe("exited");
+	});
+
+	// A conversation carried into a new tab must resolve to the tab it lives in
+	// NOW — this is the lookup session search uses to open a result.
+	it("finds the newest terminal a conversation is running on", () => {
+		const t = task();
+		const first = repo.createSession(db, {
+			taskId: t.id,
+			agentId: "claude",
+			terminalId: "term-1",
+			agentSessionId: "conv-1",
+			cwd: "/wt/t",
+		});
+		const second = repo.createSession(db, {
+			taskId: t.id,
+			agentId: "claude",
+			terminalId: "term-2",
+			agentSessionId: "conv-1",
+			cwd: "/wt/t",
+		});
+		repo.updateSession(db, first.id, { startedAt: 1000 });
+		repo.updateSession(db, second.id, { startedAt: 2000 });
+
+		expect(repo.findTerminalByAgentSessionId(db, "conv-1")).toBe("term-2");
+		expect(repo.findTerminalByAgentSessionId(db, "nope")).toBeUndefined();
+	});
+});

@@ -181,6 +181,12 @@ export interface SessionDTO {
 	taskId: string;
 	agentId: string;
 	terminalId: string;
+	/**
+	 * The agent harness's own conversation id, when it is known — the handle
+	 * `pty.restoreSession` resumes by. Null for a shell, and for a conversation
+	 * whose id the harness never told us.
+	 */
+	agentSessionId: string | null;
 	status: AgentStatus;
 	cwd: string;
 }
@@ -471,6 +477,8 @@ export const CH = {
 	ptyKill: "pty:kill",
 	ptySnapshot: "pty:snapshot",
 	ptyListForTask: "pty:listForTask",
+	ptyListRestorable: "pty:listRestorable",
+	ptyRestoreSession: "pty:restoreSession",
 	// main → renderer push events
 	evtPtyData: "evt:pty:data",
 	evtPtyExit: "evt:pty:exit",
@@ -642,6 +650,8 @@ export interface AteamApi {
 			prompt?: string;
 			/** Absolute paths to attach — appended to the prompt for the agent to read. */
 			files?: string[];
+			/** Resume this exact conversation instead of starting a new one. */
+			resumeSessionId?: string;
 		}): Promise<{ terminalId: string }>;
 		spawnShell(input: { taskId: string }): Promise<{ terminalId: string }>;
 		write(terminalId: string, data: string): void;
@@ -649,6 +659,10 @@ export interface AteamApi {
 		kill(terminalId: string): void;
 		snapshot(terminalId: string): Promise<PtySnapshot>;
 		listForTask(taskId: string): Promise<SessionDTO[]>;
+		/** Tabs this task had open when the app last went down, newest first. */
+		listRestorable(taskId: string): Promise<SessionDTO[]>;
+		/** Bring one of those back — same conversation, new terminal. */
+		restoreSession(input: { taskId: string; terminalId: string }): Promise<{ terminalId: string }>;
 		onData(cb: (e: PtyDataEvent) => void): () => void;
 		onExit(cb: (e: PtyExitEvent) => void): () => void;
 	};

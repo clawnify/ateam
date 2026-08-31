@@ -79,6 +79,8 @@ const api: AteamApi = {
 		kill: (terminalId) => ipcRenderer.invoke(CH.ptyKill, terminalId),
 		snapshot: (terminalId) => ipcRenderer.invoke(CH.ptySnapshot, terminalId),
 		listForTask: (taskId) => ipcRenderer.invoke(CH.ptyListForTask, taskId),
+		listRestorable: (taskId) => ipcRenderer.invoke(CH.ptyListRestorable, taskId),
+		restoreSession: (input) => ipcRenderer.invoke(CH.ptyRestoreSession, input),
 		onData: (cb: (e: PtyDataEvent) => void) => {
 			const handler = (_: unknown, e: PtyDataEvent) => cb(e);
 			ipcRenderer.on(CH.evtPtyData, handler);

@@ -1,4 +1,4 @@
-import { desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import {
 	agentEvents,
 	agentSessions,
@@ -82,7 +82,15 @@ export const repo = {
 	// ---- agent sessions & events ----
 	createSession(
 		db: AteamDb,
-		s: { taskId: string; agentId: string; terminalId: string; cwd: string; pid?: number },
+		s: {
+			taskId: string;
+			agentId: string;
+			terminalId: string;
+			cwd: string;
+			pid?: number;
+			/** The harness's own conversation id, when we know it. */
+			agentSessionId?: string | null;
+		},
 	) {
 		return db.insert(agentSessions).values(s).returning().get();
 	},
@@ -114,17 +122,57 @@ export const repo = {
 	},
 
 	/**
-	 * The terminal a harness's OWN session id was seen on. Hook events carry the
-	 * agent's session id (`raw_agent_session_id`), which is the only link between
-	 * a transcript on disk and the PTY tab that produced it — session search uses
-	 * it to open the exact terminal a result came from.
+	 * The tabs this task had open when the app last went down — what the panel
+	 * offers to bring back. Newest first, like `listSessionsByTask`.
+	 *
+	 * Deliberately NOT "every session that never got closed". A task in this db
+	 * has held as many as 28 sessions over its life, and a strip of 28 dead tabs
+	 * is not a restore, it is a history browser nobody asked for. `stranded` is
+	 * kept to one app run by `demoteStrandedSessions`, so this list can never be
+	 * longer than the number of tabs actually open at shutdown.
 	 */
-	findTerminalByAgentSessionId(db: AteamDb, rawAgentSessionId: string) {
+	listRestorableSessions(db: AteamDb, taskId: string) {
 		return db
-			.select({ terminalId: agentEvents.terminalId })
-			.from(agentEvents)
-			.where(eq(agentEvents.rawAgentSessionId, rawAgentSessionId))
-			.orderBy(desc(agentEvents.createdAt))
+			.select()
+			.from(agentSessions)
+			.where(and(eq(agentSessions.taskId, taskId), eq(agentSessions.exitReason, "stranded")))
+			.orderBy(desc(agentSessions.startedAt))
+			.all();
+	},
+
+	/**
+	 * Retire the previous run's stranded sessions to plain history. Called once
+	 * per app run, just before the new sweep marks its own: a tab you did not
+	 * bring back during a whole run of the app is not still "open", and without
+	 * this the strip would accumulate one run's worth of ghosts after another.
+	 */
+	demoteStrandedSessions(db: AteamDb) {
+		db.update(agentSessions)
+			.set({ exitReason: "exited" })
+			.where(eq(agentSessions.exitReason, "stranded"))
+			.run();
+	},
+
+	/**
+	 * The terminal a harness's OWN session id is running on — the link between a
+	 * transcript on disk and the PTY tab that produced it, which session search
+	 * uses to open the exact terminal a result came from.
+	 *
+	 * Reads `agent_sessions.agent_session_id`, the id Ateam hands the agent at
+	 * launch. It used to read `agent_events.raw_agent_session_id`, which was fed
+	 * from a `$CLAUDE_SESSION_ID` the hook environment never defines: every one
+	 * of the 20k rows in a real db holds an empty string, so this lookup could
+	 * only ever return nothing and no search hit was ever clickable.
+	 *
+	 * Newest first, because a conversation resumed into a fresh tab keeps its id
+	 * while the terminal changes — the latest row is the tab it lives in now.
+	 */
+	findTerminalByAgentSessionId(db: AteamDb, agentSessionId: string) {
+		return db
+			.select({ terminalId: agentSessions.terminalId })
+			.from(agentSessions)
+			.where(eq(agentSessions.agentSessionId, agentSessionId))
+			.orderBy(desc(agentSessions.startedAt))
 			.get()?.terminalId;
 	},
 

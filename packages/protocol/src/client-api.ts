@@ -159,6 +159,8 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			kill: (terminalId) => void call<void>(CH.ptyKill, [terminalId]),
 			snapshot: (terminalId) => call<PtySnapshot>(CH.ptySnapshot, [terminalId]),
 			listForTask: (taskId) => call<SessionDTO[]>(CH.ptyListForTask, [taskId]),
+			listRestorable: (taskId) => call<SessionDTO[]>(CH.ptyListRestorable, [taskId]),
+			restoreSession: (input) => call<{ terminalId: string }>(CH.ptyRestoreSession, [input]),
 			onData: (cb) => rpc.on("ptyData", (p) => cb(p as PtyDataEvent)),
 			onExit: (cb) => rpc.on("ptyExit", (p) => cb(p as PtyExitEvent)),
 		},

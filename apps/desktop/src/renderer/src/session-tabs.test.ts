@@ -13,6 +13,7 @@ function session(terminalId: string, agentId: string): SessionDTO {
 		taskId: "t1",
 		agentId,
 		terminalId,
+		agentSessionId: agentId === "shell" ? null : terminalId,
 		status: "idle",
 		cwd: "/w",
 	};
@@ -70,5 +71,37 @@ test("an explicit pick of a shell is kept even though an agent is running", () =
 
 test("the last session ending leaves no terminal to show", () => {
 	expect(activeTerminal([], "a")).toBeNull();
+	expect(activeTerminal([], null)).toBeNull();
+});
+
+// --- tabs a restart took away -------------------------------------------------
+
+test("a task with nothing stranded has the strip it always had", () => {
+	const tabs = sessionTabs([session("a", "claude")], AGENTS, []);
+	expect(tabs.map((t) => [t.label, t.live])).toEqual([["Claude Code", true]]);
+});
+
+test("stranded tabs follow the live ones and are marked not live", () => {
+	const tabs = sessionTabs([session("a", "claude")], AGENTS, [session("b", "claude")]);
+	expect(tabs.map((t) => [t.label, t.live])).toEqual([
+		["Claude Code", true],
+		["Claude Code 2", false],
+	]);
+});
+
+// The whole reason the feature exists: a task can strand several tabs at once,
+// and each has to come back as its own.
+test("several stranded sessions each get their own numbered tab", () => {
+	const tabs = sessionTabs([], AGENTS, [
+		session("a", "claude"),
+		session("b", "claude"),
+		session("c", "shell"),
+	]);
+	expect(tabs.map((t) => t.label)).toEqual(["Claude Code", "Claude Code 2", "Shell"]);
+	expect(tabs.every((t) => !t.live)).toBe(true);
+});
+
+// A stranded tab holds no terminal, so it must never be what the panel shows.
+test("a stranded session is not something the view can land on", () => {
 	expect(activeTerminal([], null)).toBeNull();
 });
