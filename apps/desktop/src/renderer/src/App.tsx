@@ -2148,9 +2148,14 @@ function MissionControl({
 	// between them. Creating and closing sessions stays in the task panel, where
 	// the + and the ✕ live; a tile is a viewport onto work that already exists.
 	const [tiles, setTiles] = useState<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
-	// Which session each tile is showing, when the viewer has picked one. Absent
-	// (or pointing at a session that has since died) falls back to activeTerminal.
-	const [shownByTask, setShownByTask] = useState<Record<string, string>>({});
+	// Which session each tile is showing. `pinned` marks a tab the viewer clicked,
+	// which is then kept for as long as that session lives. An unpinned entry is
+	// resolved the moment the tile arrives on the visible page (see below), and
+	// absent — or pointing at a session that has since died — falls back to
+	// activeTerminal.
+	const [shownByTask, setShownByTask] = useState<
+		Record<string, { terminalId: string; pinned: boolean }>
+	>({});
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
 
@@ -2318,6 +2323,45 @@ function MissionControl({
 		};
 	}, [resort]);
 
+	// The tiles this page actually shows. Computed before the empty-state return
+	// so the arrival effect below runs on every render, as hooks must.
+	const visible = tiles.slice(clampedPage * pageSize, clampedPage * pageSize + pageSize);
+	const visibleRef = useRef(visible);
+	visibleRef.current = visible;
+	// Task ids on screen, in order: the effect's dependency, so it fires exactly
+	// when the visible set changes and not on every session refresh.
+	const onScreen = visible.map((t) => t.task.id).join(" ");
+	const onScreenRef = useRef<Set<string>>(new Set());
+
+	// A tile ARRIVING on the visible page — promoted by a reorder, or paged to —
+	// lands on the session that most recently did something (activeTerminal with
+	// no pick). That resolution is then held while the tile stays on screen: the
+	// tab must not swap under someone reading it, or worse, mid-sentence into it,
+	// because the task's other agent stirred. So this is deliberately not live:
+	// it re-reads the room only at the moment the room changes.
+	useEffect(() => {
+		const ids = onScreen ? onScreen.split(" ") : [];
+		const arriving = ids.filter((id) => !onScreenRef.current.has(id));
+		onScreenRef.current = new Set(ids);
+		if (arriving.length === 0) return;
+		const sessionsById = new Map(visibleRef.current.map((t) => [t.task.id, t.sessions]));
+		setShownByTask((m) => {
+			let next = m;
+			for (const id of arriving) {
+				const sessions = sessionsById.get(id);
+				if (!sessions) continue;
+				const cur = m[id];
+				// A tab the viewer chose outranks the news, until its session dies.
+				if (cur?.pinned && sessions.some((s) => s.terminalId === cur.terminalId)) continue;
+				const pick = activeTerminal(sessions, null);
+				if (!pick || cur?.terminalId === pick) continue;
+				if (next === m) next = { ...m };
+				next[id] = { terminalId: pick, pinned: false };
+			}
+			return next;
+		});
+	}, [onScreen]);
+
 	if (tiles.length === 0) {
 		return (
 			<div className="mc" data-layout={layout}>
@@ -2330,7 +2374,6 @@ function MissionControl({
 		);
 	}
 
-	const visible = tiles.slice(clampedPage * pageSize, clampedPage * pageSize + pageSize);
 	return (
 		<div className="mc-wrap">
 			{/* Keyed by page: flipping remounts the grid, and TerminalView replays
@@ -2346,14 +2389,24 @@ function MissionControl({
 				transition={springy}
 			>
 				{visible.map(({ task, sessions }) => {
-					const shown = activeTerminal(sessions, shownByTask[task.id] ?? null);
+					const shown = activeTerminal(sessions, shownByTask[task.id]?.terminalId ?? null);
 					if (!shown) return null; // a task with no live session is not a tile
 					const tabs = sessionTabs(sessions, agents);
 					return (
-						// biome-ignore lint/a11y/noStaticElementInteractions: focus/blur only observe where focus is; the tile itself isn't interactive
-						<div
+						<motion.div
 							key={task.id}
 							className="tile"
+							// A reorder swaps terminals in and out of a page in silence — the
+							// same four boxes, different work inside them — so the change had
+							// to be announced. Tiles that keep their place glide to it (the
+							// sidebar's treatment), and a tile arriving in a slot fades up
+							// from nothing, which is the part you actually notice. Position
+							// only: `layout` alone would scale a terminal mid-flight when the
+							// page holds a different number of tiles than it did before.
+							layout="position"
+							initial={{ opacity: 0 }}
+							animate={{ opacity: 1 }}
+							transition={{ layout: springy, opacity: { duration: 0.22 } }}
 							// React's onFocus/onBlur bubble (focusin/focusout), so these fire
 							// when the xterm textarea inside the tile gains/loses focus.
 							onFocus={() => {
@@ -2396,7 +2449,10 @@ function MissionControl({
 											className={`mc-tab ${session.terminalId === shown ? "active" : ""}`}
 											title={label}
 											onClick={() =>
-												setShownByTask((m) => ({ ...m, [task.id]: session.terminalId }))
+												setShownByTask((m) => ({
+													...m,
+													[task.id]: { terminalId: session.terminalId, pinned: true },
+												}))
 											}
 										>
 											{label}
@@ -2405,7 +2461,7 @@ function MissionControl({
 								</div>
 							)}
 							<TerminalView terminalId={shown} />
-						</div>
+						</motion.div>
 					);
 				})}
 			</motion.div>

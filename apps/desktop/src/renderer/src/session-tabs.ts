@@ -33,14 +33,24 @@ export function sessionTabs(sessions: SessionDTO[], agents: AgentDTO[]): Session
  * Which session a view should be showing, given the live (oldest-first) list and
  * the tab currently picked. Keeps your pick while it's alive. When it dies, or
  * when a task is opened with sessions this view has never chosen between, it
- * falls to the newest AGENT session, and only to a plain shell when the task has
- * no agent at all: a terminal you opened to run one command is not what the task
- * is about, so it should not become what you see just by being newest. `null`
- * means the task has no terminal left.
+ * falls to the AGENT session that most recently did something, and only to a
+ * plain shell when the task has no agent at all: a terminal you opened to run
+ * one command is not what the task is about, so it should not become what you
+ * see just by being newest. `null` means the task has no terminal left.
+ *
+ * Last activity, not last spawned, because a task's sessions are read at the
+ * moment it earns your attention: it is the agent that just stopped, or just
+ * asked something, that put the task there. Landing on whichever agent happened
+ * to be launched last showed the quiet one and hid the news. Sessions that have
+ * never reported (a box too old to send `lastEventAt`, or one nothing has run
+ * in yet) tie at 0, and the tie goes to the newest — the old behaviour, intact.
  */
 export function activeTerminal(sessions: SessionDTO[], current: string | null): string | null {
 	if (current && sessions.some((s) => s.terminalId === current)) return current;
 	const agents = sessions.filter((s) => s.agentId !== "shell");
 	const pool = agents.length ? agents : sessions;
-	return pool[pool.length - 1]?.terminalId ?? null;
+	// `>=` over an oldest-first list means the newest of equal candidates wins.
+	let best: SessionDTO | null = null;
+	for (const s of pool) if (!best || (s.lastEventAt ?? 0) >= (best.lastEventAt ?? 0)) best = s;
+	return best?.terminalId ?? null;
 }
