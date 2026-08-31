@@ -128,8 +128,31 @@ input {
 	border-right: 1px solid var(--border);
 	display: flex;
 	flex-direction: column;
-	/* Bounded by the .app grid row above; scroll the project/task lists rather
-	   than overflow off-screen (the collapsed .sidebar.rail already does this). */
+	/* Bounded by the .app grid row above and never scrolled as a whole: each
+	   accordion scrolls its own list instead, so every section header stays on
+	   screen. (The collapsed .sidebar.rail is a flat tile strip and still
+	   scrolls itself.) */
+	min-height: 0;
+	overflow: hidden;
+}
+
+/* One accordion: a header that never scrolls away plus a list that scrolls
+   inside whatever height the section gets. Basis 0 + grow splits the sidebar
+   between the expanded sections; max-content caps a section to its own rows so
+   flexbox freezes it there and hands the leftover to the sections that still
+   need it (a two-row Projects doesn't scroll just because Tasks is long). */
+.side-section {
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 0;
+	/* min-height: 0, not the default auto: auto resolves to the list's own
+	   content height, which would push a long list straight out of the sidebar
+	   and take the sections below it off screen. */
+	min-height: 0;
+	max-height: max-content;
+}
+.side-list {
+	flex: 1 1 auto;
 	min-height: 0;
 	overflow-y: auto;
 	overflow-x: hidden;
@@ -2271,10 +2294,11 @@ input {
 .tasknode.loop-paused {
 	opacity: 0.5;
 }
-/* Float the LOOPS section to the sidebar's bottom while there's spare room;
-   once the task list overflows, the auto margin collapses and it simply
-   follows the content. */
-.loops-side-head {
+/* Float the LOOPS section to the sidebar's bottom while there's spare room —
+   free space only exists once every section is capped at its content height,
+   so as soon as the lists fill the sidebar the auto margin collapses and the
+   section simply follows Tasks. */
+.loops-side-section {
 	margin-top: auto;
 }
 
