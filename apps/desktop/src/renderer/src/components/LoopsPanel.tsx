@@ -1,4 +1,10 @@
-import type { AgentDTO, LoopDTO, ProjectDTO } from "@ateam/protocol";
+import {
+	type AgentDTO,
+	boxSupports,
+	FEATURE_MIN_VERSION,
+	type LoopDTO,
+	type ProjectDTO,
+} from "@ateam/protocol";
 import {
 	AlertTriangle,
 	Check,
@@ -52,6 +58,7 @@ function envLabel(origins: Origins, id: string): string {
 interface LoopDraft {
 	name: string;
 	prompt: string;
+	followUp: string;
 	projectId: string;
 	agentId: string;
 	everyMin: string;
@@ -69,6 +76,7 @@ function LoopForm({
 	projects,
 	agents,
 	origins,
+	envProtocol,
 	onSaved,
 	onCancel,
 }: {
@@ -76,6 +84,7 @@ function LoopForm({
 	projects: ProjectDTO[];
 	agents: AgentDTO[];
 	origins: Origins;
+	envProtocol: Record<string, number>;
 	onSaved: (loops: LoopDTO[]) => void;
 	onCancel: () => void;
 }) {
@@ -86,6 +95,7 @@ function LoopForm({
 	const draft = drafts.get(draftKey);
 	const [name, setName] = useState(draft?.name ?? editing?.title ?? "");
 	const [prompt, setPrompt] = useState(draft?.prompt ?? editing?.prompt ?? "");
+	const [followUp, setFollowUp] = useState(draft?.followUp ?? editing?.followUp ?? "");
 	const [projectId, setProjectId] = useState(
 		draft?.projectId ?? editing?.projectId ?? projects[0]?.id ?? "",
 	);
@@ -100,13 +110,23 @@ function LoopForm({
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
-		drafts.set(draftKey, { name, prompt, projectId, agentId, everyMin });
-	}, [draftKey, name, prompt, projectId, agentId, everyMin]);
+		drafts.set(draftKey, { name, prompt, followUp, projectId, agentId, everyMin });
+	}, [draftKey, name, prompt, followUp, projectId, agentId, everyMin]);
 
 	const close = (done: () => void) => {
 		drafts.delete(draftKey);
 		done();
 	};
+
+	// A follow-up is delivered by the OWNING engine's turn-end hook, so a box on
+	// an older Ateam accepts the config key and then never acts on it. Gate on
+	// that engine, like cleanup does: local is never skewed with itself.
+	const followUpBlockedBy = (() => {
+		const alias = origins[projectId];
+		if (!alias) return null;
+		const version = envProtocol[alias];
+		return version !== undefined && !boxSupports("followUps", version) ? version : null;
+	})();
 
 	const ready = prompt.trim() && projectId && Number(everyMin) >= 1;
 
@@ -120,7 +140,11 @@ function LoopForm({
 					id: editing.id,
 					name: name.trim() || "Loop",
 					intervalMs: Number(everyMin) * 60_000,
-					config: { prompt: prompt.trim(), agentId },
+					config: {
+						prompt: prompt.trim(),
+						agentId,
+						followUp: followUpBlockedBy === null ? followUp.trim() : "",
+					},
 				});
 			} else {
 				// The chosen project decides the environment: its engine (this Mac or
@@ -130,7 +154,11 @@ function LoopForm({
 					name: name.trim() || "Loop",
 					projectId,
 					intervalMs: Number(everyMin) * 60_000,
-					config: { prompt: prompt.trim(), agentId },
+					config: {
+						prompt: prompt.trim(),
+						agentId,
+						followUp: followUpBlockedBy === null ? followUp.trim() : "",
+					},
 				});
 			}
 			// Re-list rather than trust the call's return: the call ran on ONE
@@ -203,6 +231,19 @@ function LoopForm({
 						/>
 					</label>
 				</div>
+				<div className="loop-form-row">
+					<label>
+						{followUpBlockedBy === null
+							? "Follow-up (optional) — sent once, after the agent's first reply"
+							: `Follow-up — needs Ateam v${FEATURE_MIN_VERSION.followUps} on this box (it runs v${followUpBlockedBy})`}
+						<textarea
+							value={followUp}
+							disabled={followUpBlockedBy !== null}
+							placeholder="/check"
+							onChange={(e) => setFollowUp(e.target.value)}
+						/>
+					</label>
+				</div>
 				{error && (
 					<div className="loop-stat err">
 						<AlertTriangle size={13} /> {error}
@@ -228,7 +269,7 @@ function LoopForm({
  * prompt, on the environment (this Mac or a box) where its project lives.
  * Stays live via the loops:updated push event and a 1s tick.
  */
-export function LoopsPanel() {
+export function LoopsPanel({ envProtocol }: { envProtocol: Record<string, number> }) {
 	const [loops, setLoops] = useState<LoopDTO[]>([]);
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
@@ -311,6 +352,7 @@ export function LoopsPanel() {
 					projects={projects}
 					agents={agents}
 					origins={origins}
+					envProtocol={envProtocol}
 					onSaved={(ls) => {
 						setLoops(ls);
 						setCreating(false);
@@ -329,6 +371,7 @@ export function LoopsPanel() {
 						projects={projects}
 						agents={agents}
 						origins={origins}
+						envProtocol={envProtocol}
 						onSaved={(ls) => {
 							setLoops(ls);
 							setEditingId(null);

@@ -48,11 +48,21 @@ const agentSession: LoopTemplate = {
 	params: [
 		{ key: "prompt", label: "Prompt", type: "string", default: "" },
 		{ key: "agentId", label: "Agent", type: "string", default: "claude" },
+		{
+			key: "followUp",
+			label: "Follow-up",
+			type: "string",
+			default: "",
+			help: "Sent once, after the agent's first reply. A slash command or a sentence.",
+		},
 	],
 	build: (config) => async (ctx) => {
 		const prompt = str(config.prompt)?.trim();
 		const projectId = str(config.projectId);
 		const agentId = str(config.agentId) ?? "claude";
+		// Optional: the agent takes one more turn on this the moment its first
+		// response lands. Empty means the run is a single turn, as before.
+		const followUp = str(config.followUp)?.trim();
 		if (!prompt) throw new Error("Loop has no prompt");
 		if (!projectId) throw new Error("Loop has no project");
 		// The runner injects the row id so a run can read/update its own record.
@@ -99,7 +109,7 @@ const agentSession: LoopTemplate = {
 			ctx.stopTaskSessions(task.id);
 		}
 
-		await ctx.spawnAgent({ taskId: task.id, agentId, prompt });
+		await ctx.spawnAgent({ taskId: task.id, agentId, prompt, followUp });
 		if (loopId && row) {
 			// Persist the link under `taskId`; drop the legacy key it migrated from.
 			const { lastTaskId: _legacy, ...rest } = row.config ?? {};

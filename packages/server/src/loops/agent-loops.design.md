@@ -56,13 +56,32 @@ exactly what justifies a thin per-agent adapter (the greybeard-`install.js` /
 
 | Agent | Native seam | Ateam already has | Binding |
 |---|---|---|---|
-| **Claude Code** | native `/loop` skill (self-paced; carries into backgrounded sessions) — [docs](https://code.claude.com/docs/en/scheduled-tasks.md) | launch args / PTY | Launch the session with `/loop <prompt>`. Cadence + self-pacing live in the agent; Ateam holds the record + a hard cap. The Stop-hook "continue" is **undocumented** for Claude, so we use the native command, not a hook. |
+| **Claude Code** | native `/loop` skill (self-paced; carries into backgrounded sessions) — [docs](https://code.claude.com/docs/en/scheduled-tasks.md), **and** the same `Stop`-hook block-and-continue as Codex | launch args / PTY / hook server | Open-ended self-paced loops: launch with `/loop <prompt>`; cadence lives in the agent, Ateam holds the record + a hard cap. Bounded continuations: the Stop hook (see below). |
 | **Codex** | `Stop` hook returns `{"decision":"block","reason":"…"}` to keep going — [docs](https://developers.openai.com/codex/hooks) (its in-session `/loop`/cron is only [proposed #25466](https://github.com/openai/codex/issues/25466), **not shipped**) | writes `.codex/hooks.json` + runs the hook server | On `Stop`, a hook script GETs `/loop/decide` → server runs `decideContinuation` → returns `block`+prompt to continue, or allows the stop. **Zero PTY injection.** Lowest-effort native win. |
 | **OpenCode** | `session.idle` plugin event + plugin API to inject a prompt (no native loop/cron at all) — [docs](https://opencode.ai/docs/plugins/); community proof: [opencode-loop](https://github.com/ByBrawe/opencode-loop) | plugin registration | A small plugin: on `session.idle`, call `/loop/decide`; if continue, inject the prompt. Same shared decision. |
 
 The "brain" (continue? next prompt?) is one shared function; only the *binding*
 differs — and for Codex/OpenCode the binding is a hook/plugin file Ateam already
 knows how to write, so the cross-agent layer is cheap.
+
+### Correction (2026-08-31): Claude's Stop hook DOES block-and-continue
+
+The matrix above originally said the Stop-hook "continue" was undocumented for
+Claude. That was true when this was written (2026-07-03) and is no longer. In
+Claude Code 2.1.251 the bundled hooks reference documents `"decision": "block"`
+for Stop, with `reason` as the instruction the agent then acts on, plus a
+`stop_hook_active` flag in the hook's stdin payload and a
+`CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` backstop. Verified by running it, not just by
+reading it: a Stop hook returning `{"decision":"block","reason":"/somecommand"}`
+made the agent execute that slash command instead of stopping, and a plain
+sentence in `reason` is followed the same way.
+
+`follow-ups.ts` is the first user of that seam: a Loop's optional follow-up is
+one extra turn taken right after the first response. It changes nothing about
+the "zero PTY injection" rule above, which still holds and is why keystroke
+delivery was rejected for it. Note the split: the native `/loop` is still the
+right engine for an open-ended self-paced loop, while the Stop hook is the right
+one for a bounded, externally-supplied continuation.
 
 ## Termination is mandatory (why the cap is not optional)
 
