@@ -1315,7 +1315,7 @@ export function App() {
 							/>
 						)
 					) : (
-						<LoopsPanel />
+						<LoopsPanel envProtocol={envProtocol} />
 					)}
 				</div>
 			</main>
@@ -2048,10 +2048,7 @@ function TaskPanel({
 			<div className="panel-body">
 				{/* Keep the terminal mounted (xterm state survives) while the
 				    changes view is open — just hide it. */}
-				<div
-					className="term-wrap"
-					style={{ display: changesOpen || editorOpen ? "none" : "flex" }}
-				>
+				<div className="term-wrap" style={{ display: changesOpen || editorOpen ? "none" : "flex" }}>
 					{terminalId ? (
 						<TerminalView
 							terminalId={terminalId}

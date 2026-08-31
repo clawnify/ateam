@@ -40,7 +40,14 @@
 // box, read it through tolerantRpc, and say so in the UI. The bump rule below is
 // unchanged, but the reason to obey it shifts: a bump no longer locks old clients
 // out, it tells them what to paper over.
-export const PROTOCOL_VERSION = 7;
+// v8: LoopDTO gained `followUp`, an optional extra turn a loop's run takes after
+// the agent's first reply. Shape-wise a missing field reads as "no follow-up",
+// which is harmless; the damage is on the WRITE side, where a new desktop saves a
+// follow-up onto an older box that stores the config key, ignores it at launch,
+// and never continues the turn. Since v7 a mismatch no longer refuses, so the
+// bump alone does not protect anyone: the `followUps` entry below is what turns
+// that silent no-op into a feature the client knows to switch off.
+export const PROTOCOL_VERSION = 8;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -67,6 +74,10 @@ export const FEATURE_MIN_VERSION = {
 	 *  The dialog dereferences `.task` on every row, so a v5 engine's reply is not a
 	 *  degraded dialog, it is a thrown TypeError. */
 	cleanup: 6,
+	/** v8 added LoopDTO.followUp AND the turn-end delivery behind it. A v7 engine
+	 *  accepts the config key and silently never acts on it, so the honest move is
+	 *  to hide the field rather than let it look saved. */
+	followUps: 8,
 } as const;
 
 export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
@@ -231,6 +242,8 @@ export interface LoopDTO {
 	prompt: string | null;
 	/** Which coding agent each run launches (agent-session loops). */
 	agentId: string | null;
+	/** Optional second turn, sent once after the agent's first reply. */
+	followUp: string | null;
 	/** The loop's one persistent task — every run is a fresh session in it. */
 	taskId: string | null;
 	intervalMs: number | null;
@@ -710,9 +723,8 @@ export type { NativeClientApi } from "./client-api";
 export { buildAteamApi, requestBoxUpdate, serverHandshake } from "./client-api";
 // Transport-agnostic RPC framing + client (shared by every transport).
 export * from "./rpc";
+// Reading an engine older than this client (the version gate is advisory now).
+export { NO_TRIAGE, tolerantRpc } from "./tolerate";
 export type { WsClient } from "./ws";
 // WebSocket ClientTransport over the platform-global WebSocket (browser / RN / Bun).
 export { wsClientTransport } from "./ws";
-
-// Reading an engine older than this client (the version gate is advisory now).
-export { NO_TRIAGE, tolerantRpc } from "./tolerate";
