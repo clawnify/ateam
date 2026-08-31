@@ -1,5 +1,5 @@
 import { PROTOCOL_VERSION } from "@ateam/protocol";
-import { Check, Cloud, Laptop, Network, Plus, Server, X } from "lucide-react";
+import { ArrowUpCircle, Check, Cloud, Laptop, Network, Plus, Server, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { HostStatus } from "../../../shared/host";
@@ -232,16 +232,17 @@ export function EnvironmentPicker({
 												className="conn-sub conn-sub-warn"
 												title={
 													env.skew < PROTOCOL_VERSION
-														? `This box speaks protocol v${env.skew}, this app speaks v${PROTOCOL_VERSION}. It still works, but anything added since v${env.skew} will misbehave here. Re-run the installer on the box to update it.`
-														: `This box speaks protocol v${env.skew}, this app speaks v${PROTOCOL_VERSION}. The box is ahead of this app; update Ateam.`
+														? `This box runs an older Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). It still works, but anything added since v${env.skew} will misbehave here. Use the update button on this row to bring it up to this app's version.`
+														: `This box runs a newer Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). Update Ateam on this Mac to catch up with it.`
 												}
 											>
-												{/* Short enough to survive the 260px row: the colour carries the
-												    warning and the title carries the consequence. The long form
-												    truncated mid-word, which read as a rendering bug. */}
+												{/* Framed as an UPDATE, the same thing the desktop does to itself,
+												    rather than as an installer to re-run: that is the user's mental
+												    model and it is the one the button next to it acts on. Short
+												    enough to survive the 260px row, with the detail in the title. */}
 												{env.skew < PROTOCOL_VERSION
-													? `older Ateam (v${env.skew})`
-													: `newer Ateam (v${env.skew})`}
+													? `update available (v${env.skew})`
+													: `update this app (box is v${env.skew})`}
 											</span>
 										) : env.disabled && env.alias !== null ? (
 											<span className="conn-sub">repo needs a git remote to run here</span>
@@ -253,6 +254,31 @@ export function EnvironmentPicker({
 									</span>
 									{env.alias === value ? <Check size={15} strokeWidth={2.25} /> : null}
 								</button>
+								{/* A row that only STATES the box is behind leaves the user nowhere to
+								    go: the fix lives in a terminal, which is exactly the gesture this
+								    whole path exists to remove. The install form below already knows how
+								    to run the installer over SSH and stream its log, so an update is that
+								    same flow with the destination filled in. Kept off the row itself so a
+								    skewed box stays selectable, which is the point of holding it. */}
+								{env.skew !== undefined &&
+									env.skew < PROTOCOL_VERSION &&
+									env.alias &&
+									env.transport !== "ws" &&
+									onInstall && (
+										<button
+											type="button"
+											className="conn-update"
+											title={`Update ${env.label} to this app's version over SSH`}
+											aria-label={`Update ${env.label}`}
+											onClick={() => {
+												setDest(env.alias as string);
+												setAddMode("ssh");
+												setInstallError(null);
+											}}
+										>
+											<ArrowUpCircle size={13} strokeWidth={2} />
+										</button>
+									)}
 								{env.alias !== null && onForget && (
 									<button
 										type="button"
