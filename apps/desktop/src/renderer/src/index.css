@@ -1790,6 +1790,10 @@ input {
 .conn-sub-err {
 	color: var(--red);
 }
+/* A skewed box still works, so it warns rather than alarms. */
+.conn-sub-warn {
+	color: var(--amber, #fbbf24);
+}
 .conn-spin {
 	animation: spin 0.7s linear infinite;
 	color: var(--text-dim);

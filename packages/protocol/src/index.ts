@@ -29,7 +29,18 @@
 // plus a `recommended` flag (it used to be a flat, pre-filtered row). Both are
 // shape changes the cleanup dialog reads directly, so an older engine would feed
 // it rows with no `task` at all — the handshake must catch that skew first.
-export const PROTOCOL_VERSION = 6;
+// v7: added CH.systemUpdate, so a box can be told to update ITSELF. The phone has
+// no SSH and pty:spawnShell needs a taskId, so before this there was no way to fix
+// a skewed box from the phone at all. Note what this version can and cannot do: a
+// box older than v7 has no such method, so it still takes one update over SSH (or
+// by hand) before the phone can ever drive the next one. That bootstrap is not
+// avoidable from the client side.
+//
+// From v7 the mismatch is ADVISORY rather than a refusal: clients hold a skewed
+// box, read it through tolerantRpc, and say so in the UI. The bump rule below is
+// unchanged, but the reason to obey it shifts: a bump no longer locks old clients
+// out, it tells them what to paper over.
+export const PROTOCOL_VERSION = 7;
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
@@ -259,6 +270,17 @@ export interface SystemInfo {
 	agents: string[];
 }
 
+/** What `system:update` reports back before the engine goes down to be replaced. */
+export interface BoxUpdateStarted {
+	/** False when an update was already running: the caller double-tapped, or another
+	 *  client got there first. Nothing new was launched. */
+	started: boolean;
+	/** Where the installer's output is going on the box, so a human can read why it
+	 *  failed after the fact. The engine that could have streamed it is the thing
+	 *  being replaced, so a file is the only place that survives the restart. */
+	logPath: string;
+}
+
 // A subdirectory in a remote-fs listing (the repo picker over RPC).
 export interface DirEntryDTO {
 	name: string;
@@ -385,6 +407,7 @@ export const CH = {
 	agentsList: "agents:list",
 	searchSessions: "search:sessions",
 	systemHello: "system:hello",
+	systemUpdate: "system:update",
 	fsListDir: "fs:listDir",
 	utilPickFiles: "util:pickFiles",
 	utilAttachImages: "util:attachImages",
@@ -650,9 +673,12 @@ export interface AteamApi {
 
 export type { NativeClientApi } from "./client-api";
 // Client-side binding of the AteamApi surface over an RpcClient.
-export { buildAteamApi, serverHandshake } from "./client-api";
+export { buildAteamApi, requestBoxUpdate, serverHandshake } from "./client-api";
 // Transport-agnostic RPC framing + client (shared by every transport).
 export * from "./rpc";
 export type { WsClient } from "./ws";
 // WebSocket ClientTransport over the platform-global WebSocket (browser / RN / Bun).
 export { wsClientTransport } from "./ws";
+
+// Reading an engine older than this client (the version gate is advisory now).
+export { NO_TRIAGE, tolerantRpc } from "./tolerate";

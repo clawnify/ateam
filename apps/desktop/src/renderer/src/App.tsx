@@ -9,6 +9,7 @@ import type {
 	SessionHitDTO,
 	TaskDTO,
 } from "@ateam/protocol";
+import { PROTOCOL_VERSION } from "@ateam/protocol";
 import {
 	ArrowDownToLine,
 	ArrowUp,
@@ -116,6 +117,9 @@ export function App() {
 	const [connections, setConnections] = useState<ConnectionDTO[]>([]);
 	// alias → why the box didn't come up when the app connected to it by itself.
 	const [connFailures, setConnFailures] = useState<Record<string, string>>({});
+	// alias → the wire contract the held engine actually speaks. A box on a different
+	// one is held anyway now, so this is what tells the user which box is skewed.
+	const [envProtocol, setEnvProtocol] = useState<Record<string, number>>({});
 	// Which agents each connected engine actually has installed (its system:hello
 	// agents), keyed by alias ("local" for this Mac). Drives per-environment agent
 	// availability in the composer — you can only pick an agent the box really has.
@@ -308,8 +312,13 @@ export function App() {
 			void window.ateamHost.failures().then(setConnFailures);
 			void window.ateamHost.connected().then((list) => {
 				const map: Record<string, string[]> = {};
-				for (const s of list) map[s.alias ?? "local"] = s.info.agents;
+				const wire: Record<string, number> = {};
+				for (const s of list) {
+					map[s.alias ?? "local"] = s.info.agents;
+					wire[s.alias ?? "local"] = s.info.protocolVersion;
+				}
 				setEnvAgents(map);
+				setEnvProtocol(wire);
 			});
 		};
 		load();
@@ -451,9 +460,16 @@ export function App() {
 				// caller to show the error to — an upgrade that failed reads as an
 				// ordinary offline box without it.
 				error: connFailures[c.alias],
+				// Held, but not on this app's wire contract. Only for a box we actually
+				// hold: an unreachable one has no version to report, and saying nothing
+				// is better than guessing from the last one we saw.
+				skew:
+					envProtocol[c.alias] !== undefined && envProtocol[c.alias] !== PROTOCOL_VERSION
+						? envProtocol[c.alias]
+						: undefined,
 			})),
 		];
-	}, [connections, canRemote, hasLocalMember, activeMembers, connFailures]);
+	}, [connections, canRemote, hasLocalMember, activeMembers, connFailures, envProtocol]);
 
 	// The active card's board unions tasks from every engine that has the repo.
 	const activeTasks = activeCard

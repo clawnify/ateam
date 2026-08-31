@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from "@ateam/protocol";
 import { Check, Cloud, Laptop, Network, Plus, Server, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -28,6 +29,10 @@ export type EnvOption = {
 	 *  a box that couldn't be reached or couldn't be upgraded is the reason it looks
 	 *  idle, and it's the only one of these the user can act on. */
 	error?: string;
+	/** The protocol this box speaks, when it isn't the one this app speaks. Held and
+	 *  usable, but some features will misbehave, so the row says so rather than
+	 *  letting the weirdness turn up later with no explanation. */
+	skew?: number;
 };
 
 export function EnvironmentPicker({
@@ -221,6 +226,19 @@ export function EnvironmentPicker({
 										{env.error ? (
 											<span className="conn-sub conn-sub-err" title={env.error}>
 												{env.error}
+											</span>
+										) : env.skew !== undefined ? (
+											<span
+												className="conn-sub conn-sub-warn"
+												title={
+													env.skew < PROTOCOL_VERSION
+														? `This box speaks protocol v${env.skew}, this app speaks v${PROTOCOL_VERSION}. It still works, but anything added since v${env.skew} will misbehave here. Re-run the installer on the box to update it.`
+														: `This box speaks protocol v${env.skew}, this app speaks v${PROTOCOL_VERSION}. The box is ahead of this app; update Ateam.`
+												}
+											>
+												{env.skew < PROTOCOL_VERSION
+													? `older Ateam (v${env.skew}): some features will misbehave`
+													: `newer Ateam (v${env.skew}): update this app`}
 											</span>
 										) : env.disabled && env.alias !== null ? (
 											<span className="conn-sub">repo needs a git remote to run here</span>

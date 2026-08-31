@@ -3,8 +3,17 @@
 // that need Electron's dialog/clipboard). Lifted verbatim from the desktop's
 // ipcMain handlers; the desktop now adapts ipcMain → handle(), and the SSH
 // server will adapt a JSON-RPC channel → handle(). One body, many transports.
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { listAgents } from "@ateam/agents";
@@ -27,6 +36,7 @@ import {
 } from "@ateam/git-core";
 import {
 	CH,
+	type BoxUpdateStarted,
 	type CleanupCandidate,
 	type CreateLoopInput,
 	type DirEntryDTO,
@@ -90,6 +100,15 @@ async function computeGitStatus(
 		updatedAt: Date.now(),
 	};
 }
+
+/** Where install.sh is fetched from, matching the documented one-liner and the
+ *  desktop's own SSH install: raw `main`, so a box always runs the current script
+ *  even when its own dist is months old. */
+const INSTALL_URL =
+	"https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh";
+
+/** An update is in flight in THIS process (see CH.systemUpdate). */
+let updating = false;
 
 export interface Dispatcher {
 	/** Method names this dispatcher handles (the non-native CH.* channels). */
@@ -416,6 +435,42 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				protocolVersion: PROTOCOL_VERSION,
 				agents: agents.filter((a) => a.available).map((a) => a.id),
 			};
+		},
+
+		// ---- system: replace this engine with the current release ----
+		// The phone's only route to a stale box. There is no SSH there, and
+		// pty:spawnShell needs a taskId, so nothing without a shell could reach the
+		// installer. Every detail below is load-bearing:
+		//
+		//   detached  the installer STOPS this daemon partway through (that is what
+		//             makes an upgrade take effect). As a plain child it would be in
+		//             this process's group and die with it, leaving the box on a half
+		//             installed dist. setsid is what lets it outlive its own trigger.
+		//   log file  for the same reason there is nobody left to stream output to, so
+		//             it goes somewhere a human can read afterwards.
+		//   WS addr   inherited from THIS process. Re-running the installer without it
+		//             writes a unit with no listener, which would cut the phone off from
+		//             the box permanently, with the phone's own tap as the cause. If a
+		//             client is talking to us over WS at all, cli.ts set this from env,
+		//             so passing it through is what keeps the door open behind us.
+		//   --service because a box reachable by phone is one under systemd; that is
+		//             what restarts it after an OOM kill.
+		[CH.systemUpdate]: async (): Promise<BoxUpdateStarted> => {
+			const dataDir = dirname(process.env.ATEAM_SOCK ?? join(homedir(), ".ateam", "ateam.sock"));
+			const logPath = join(dataDir, "update.log");
+			// One at a time. The flag dies with this process a few seconds from now, so
+			// it guards the window that matters: a double tap, or two clients at once.
+			if (updating) return { started: false, logPath };
+			updating = true;
+			if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+			const log = openSync(logPath, "a");
+			const wsAddr = process.env.ATEAM_WS_ADDR;
+			const env = wsAddr ? `ATEAM_WS_ADDR=${JSON.stringify(wsAddr)} ` : "";
+			spawn("bash", ["-lc", `curl -fsSL ${INSTALL_URL} | ${env}bash -s -- --service`], {
+				detached: true,
+				stdio: ["ignore", log, log],
+			}).unref();
+			return { started: true, logPath };
 		},
 
 		// ---- editor: the engine-side half of the in-app editor (code-server on
