@@ -20,6 +20,12 @@ export interface SpawnAgentInput {
 	agentMode?: boolean;
 	prompt?: string;
 	files?: string[];
+	/**
+	 * One extra turn to take right after the first response, delivered through
+	 * the agent's own turn-end hook (see `follow-ups.ts`). A slash command and a
+	 * plain sentence are both just text here.
+	 */
+	followUp?: string;
 }
 
 /** Create a task (branch + worktree + row) in a project and announce it. */
@@ -124,6 +130,10 @@ export async function spawnAgentInTask(
 		cwd: task.worktreePath,
 		env,
 	});
+
+	// Arm before the first turn can possibly end. The entry is consumed by the
+	// turn-end hook, or dropped if the pane dies first.
+	services.followUps.arm(terminalId, input.followUp);
 
 	repo.updateTask(services.db, task.id, {
 		column: "running",

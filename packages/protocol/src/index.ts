@@ -29,7 +29,12 @@
 // plus a `recommended` flag (it used to be a flat, pre-filtered row). Both are
 // shape changes the cleanup dialog reads directly, so an older engine would feed
 // it rows with no `task` at all — the handshake must catch that skew first.
-export const PROTOCOL_VERSION = 6;
+// v7: LoopDTO gained `followUp`, and the follow-up turn is delivered by the
+// engine's own turn-end hook. The skew is silent otherwise: a new desktop would
+// happily save a follow-up onto an older box, which stores the config key,
+// ignores it at launch, and never continues the turn — a field that looks saved
+// and does nothing. Better to say "update the older side" at the handshake.
+export const PROTOCOL_VERSION = 7;
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
@@ -186,6 +191,8 @@ export interface LoopDTO {
 	prompt: string | null;
 	/** Which coding agent each run launches (agent-session loops). */
 	agentId: string | null;
+	/** Optional second turn, sent once after the agent's first reply. */
+	followUp: string | null;
 	/** The loop's one persistent task — every run is a fresh session in it. */
 	taskId: string | null;
 	intervalMs: number | null;

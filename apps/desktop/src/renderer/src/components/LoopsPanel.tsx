@@ -52,6 +52,7 @@ function envLabel(origins: Origins, id: string): string {
 interface LoopDraft {
 	name: string;
 	prompt: string;
+	followUp: string;
 	projectId: string;
 	agentId: string;
 	everyMin: string;
@@ -86,6 +87,7 @@ function LoopForm({
 	const draft = drafts.get(draftKey);
 	const [name, setName] = useState(draft?.name ?? editing?.title ?? "");
 	const [prompt, setPrompt] = useState(draft?.prompt ?? editing?.prompt ?? "");
+	const [followUp, setFollowUp] = useState(draft?.followUp ?? editing?.followUp ?? "");
 	const [projectId, setProjectId] = useState(
 		draft?.projectId ?? editing?.projectId ?? projects[0]?.id ?? "",
 	);
@@ -100,8 +102,8 @@ function LoopForm({
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
-		drafts.set(draftKey, { name, prompt, projectId, agentId, everyMin });
-	}, [draftKey, name, prompt, projectId, agentId, everyMin]);
+		drafts.set(draftKey, { name, prompt, followUp, projectId, agentId, everyMin });
+	}, [draftKey, name, prompt, followUp, projectId, agentId, everyMin]);
 
 	const close = (done: () => void) => {
 		drafts.delete(draftKey);
@@ -120,7 +122,7 @@ function LoopForm({
 					id: editing.id,
 					name: name.trim() || "Loop",
 					intervalMs: Number(everyMin) * 60_000,
-					config: { prompt: prompt.trim(), agentId },
+					config: { prompt: prompt.trim(), agentId, followUp: followUp.trim() },
 				});
 			} else {
 				// The chosen project decides the environment: its engine (this Mac or
@@ -130,7 +132,7 @@ function LoopForm({
 					name: name.trim() || "Loop",
 					projectId,
 					intervalMs: Number(everyMin) * 60_000,
-					config: { prompt: prompt.trim(), agentId },
+					config: { prompt: prompt.trim(), agentId, followUp: followUp.trim() },
 				});
 			}
 			// Re-list rather than trust the call's return: the call ran on ONE
@@ -200,6 +202,16 @@ function LoopForm({
 							value={prompt}
 							placeholder="Update dependencies and open a PR."
 							onChange={(e) => setPrompt(e.target.value)}
+						/>
+					</label>
+				</div>
+				<div className="loop-form-row">
+					<label>
+						Follow-up (optional) — sent once, after the agent's first reply
+						<textarea
+							value={followUp}
+							placeholder="/check"
+							onChange={(e) => setFollowUp(e.target.value)}
 						/>
 					</label>
 				</div>

@@ -19,6 +19,7 @@ import type {
 	TaskDTO,
 } from "@ateam/protocol";
 import { ensureGhShim, ensureNotifyScript } from "./agent-setup";
+import { FollowUps } from "./follow-ups";
 import { type HookEvent, HookServer, type MergeRequestEvent } from "./hooks/hook-server";
 import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
@@ -142,6 +143,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	repo.updateSettings(db, { hookPort });
 
 	const mergeQueue = new MergeQueue({ db, onTaskUpdated: sendTaskUpdated });
+	const followUps = new FollowUps();
 	// Loops are user-created only; nothing is registered here. A loop tick
 	// starts an agent session through the same task-create + spawn path the
 	// composer uses. (`services` is declared just below and also holds this
@@ -172,6 +174,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		setStatus: async (req) => applySetStatus(db, req, sendTaskUpdated),
 	});
 
+	// A finished turn with a follow-up armed continues instead of stopping. The
+	// lookup consumes, so it can only ever fire once per launch.
+	hooks.setFollowUpResolver((terminalId, eventType) => followUps.take(terminalId, eventType));
+
 	const services: Services = {
 		db,
 		pty,
@@ -182,6 +188,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		hookPort,
 		mergeQueue,
 		loopRunner,
+		followUps,
 	};
 
 	// Record an agent's exit: close the session and file its card. Shared by the
@@ -220,6 +227,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		// after its process is gone — the gap that previously stranded cards in
 		// the running column. Code that needs liveness must ask the PTY daemon
 		// (pty.has), not this status.
+		// The pane is gone, so a follow-up armed for it can never be delivered.
+		followUps.discard(e.terminalId);
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
 		if (session.exitedAt == null) applyAgentExit(session.id, session.taskId, Date.now(), true);
