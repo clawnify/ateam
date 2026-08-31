@@ -974,6 +974,19 @@ input {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
+/* A tab a restart took away: it holds no terminal until you click it, so it
+   reads as an outline rather than a surface. Dashed, not merely faded — faded
+   alone would say "disabled", and this one is the clickable kind. */
+.sess-tab.restorable {
+	border: 1px dashed var(--border);
+	opacity: 0.6;
+}
+.sess-tab.restorable:hover {
+	opacity: 1;
+}
+.sess-tab.restorable .sess-tab-name {
+	padding-right: 8px;
+}
 .sess-tab-name {
 	max-width: 140px;
 	overflow: hidden;
@@ -1761,6 +1774,30 @@ input {
 	color: var(--text);
 	background: rgba(255, 255, 255, 0.08);
 }
+/* Deliberately NOT hover-only like .conn-forget: this is the answer to "how do I
+   update it", so hiding it until hover would leave the warning with no visible way
+   to act on it. Amber ties it to the label it resolves. */
+.conn-update {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border: none;
+	border-radius: 5px;
+	background: transparent;
+	color: var(--amber, #fbbf24);
+	cursor: pointer;
+}
+.conn-update:hover {
+	background: rgba(251, 191, 36, 0.14);
+}
+/* The icon is a flex item and shrank to width:0 without this — laid out, coloured,
+   and painting nothing. Same reason .conn-spin carries it. */
+.conn-update svg {
+	flex: none;
+}
 .conn-add {
 	display: flex;
 	flex-direction: column;
@@ -1812,6 +1849,10 @@ input {
 /* Truncated to the row like every other sub-label; the full text is the title. */
 .conn-sub-err {
 	color: var(--red);
+}
+/* A skewed box still works, so it warns rather than alarms. */
+.conn-sub-warn {
+	color: var(--amber, #fbbf24);
 }
 .conn-spin {
 	animation: spin 0.7s linear infinite;

@@ -1,4 +1,5 @@
-import { Check, Cloud, Laptop, Network, Plus, Server, X } from "lucide-react";
+import { PROTOCOL_VERSION } from "@ateam/protocol";
+import { ArrowUpCircle, Check, Cloud, Laptop, Network, Plus, Server, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { HostStatus } from "../../../shared/host";
@@ -28,6 +29,15 @@ export type EnvOption = {
 	 *  a box that couldn't be reached or couldn't be upgraded is the reason it looks
 	 *  idle, and it's the only one of these the user can act on. */
 	error?: string;
+	/** The protocol this box speaks, when it isn't the one this app speaks. Held and
+	 *  usable, but some features will misbehave, so the row says so rather than
+	 *  letting the weirdness turn up later with no explanation. */
+	skew?: number;
+	/** Whether this app can actually bring this box up to its version. False for a
+	 *  dev build (it can only install releases, which may still be behind) and for a
+	 *  ws box (no SSH to run the installer over). Gates the update button, so we
+	 *  never offer an action that would run for a minute and change nothing. */
+	updatable?: boolean;
 };
 
 export function EnvironmentPicker({
@@ -222,6 +232,29 @@ export function EnvironmentPicker({
 											<span className="conn-sub conn-sub-err" title={env.error}>
 												{env.error}
 											</span>
+										) : env.skew !== undefined ? (
+											<span
+												className="conn-sub conn-sub-warn"
+												title={
+													env.skew > PROTOCOL_VERSION
+														? `This box runs a newer Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). Update Ateam on this Mac to catch up with it.`
+														: `This box runs an older Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). It still works, but anything added since v${env.skew} will misbehave here. ${
+																env.updatable
+																	? "Use the update button on this row to bring it up to this app's version."
+																	: env.transport === "ws"
+																		? "It's reachable only over its Tailscale endpoint, so this app can't run the installer on it. Update it over SSH."
+																		: "This dev build can't update it: the installer serves releases, and this protocol isn't in one yet. Use packages/server/scripts/install-remote.sh."
+															}`
+												}
+											>
+												{/* Framed as an UPDATE, the same thing the desktop does to itself,
+												    rather than as an installer to re-run: that is the user's mental
+												    model and it is the one the button next to it acts on. Short
+												    enough to survive the 260px row, with the detail in the title. */}
+												{env.skew < PROTOCOL_VERSION
+													? `update available (v${env.skew})`
+													: `update this app (box is v${env.skew})`}
+											</span>
 										) : env.disabled && env.alias !== null ? (
 											<span className="conn-sub">repo needs a git remote to run here</span>
 										) : env.needsSetup ? (
@@ -232,6 +265,31 @@ export function EnvironmentPicker({
 									</span>
 									{env.alias === value ? <Check size={15} strokeWidth={2.25} /> : null}
 								</button>
+								{/* A row that only STATES the box is behind leaves the user nowhere to
+								    go: the fix lives in a terminal, which is exactly the gesture this
+								    whole path exists to remove. The install form below already knows how
+								    to run the installer over SSH and stream its log, so an update is that
+								    same flow with the destination filled in. Kept off the row itself so a
+								    skewed box stays selectable, which is the point of holding it. */}
+								{env.skew !== undefined &&
+									env.skew < PROTOCOL_VERSION &&
+									env.alias &&
+									env.updatable &&
+									onInstall && (
+										<button
+											type="button"
+											className="conn-update"
+											title={`Update ${env.label} to this app's version over SSH`}
+											aria-label={`Update ${env.label}`}
+											onClick={() => {
+												setDest(env.alias as string);
+												setAddMode("ssh");
+												setInstallError(null);
+											}}
+										>
+											<ArrowUpCircle size={13} strokeWidth={2} />
+										</button>
+									)}
 								{env.alias !== null && onForget && (
 									<button
 										type="button"

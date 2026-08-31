@@ -16,6 +16,13 @@ export interface MergeRequestEvent {
 	strategy?: string;
 }
 
+/**
+ * Asks whether a finished turn should be continued with a follow-up prompt.
+ * Returning text turns the agent's own `Stop` into another turn; returning
+ * undefined lets it stop. Consuming is the resolver's job (see `FollowUps`).
+ */
+export type FollowUpResolver = (terminalId: string, eventType: string) => string | undefined;
+
 /** Only localhost origins may reach the MCP endpoint (DNS-rebinding guard). */
 const LOCAL_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
 
@@ -28,11 +35,17 @@ const LOCAL_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
 export class HookServer extends EventEmitter {
 	private server?: http.Server;
 	private board?: BoardHandlers;
+	private followUp?: FollowUpResolver;
 	port = 0;
 
 	/** Wire the Board Organizer's request/response tool handlers. */
 	setBoardHandlers(handlers: BoardHandlers): void {
 		this.board = handlers;
+	}
+
+	/** Wire the one-shot follow-up lookup consulted at every turn end. */
+	setFollowUpResolver(resolve: FollowUpResolver): void {
+		this.followUp = resolve;
 	}
 
 	async start(preferred?: number): Promise<number> {
@@ -132,6 +145,15 @@ export class HookServer extends EventEmitter {
 							eventType,
 							sessionId,
 						} satisfies HookEvent);
+					}
+					// A turn that ends with a follow-up armed continues instead of
+					// stopping: this body IS the agent's Stop-hook output, echoed
+					// straight back by notify.sh. Every other request keeps the
+					// empty 204 it has always returned, so a session without a
+					// follow-up behaves exactly as before.
+					const followUp = terminalId ? this.followUp?.(terminalId, eventType) : undefined;
+					if (followUp) {
+						return json(200, { decision: "block", reason: followUp });
 					}
 					res.writeHead(204);
 					res.end();

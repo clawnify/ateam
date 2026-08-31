@@ -18,7 +18,11 @@ TID="\${ATEAM_TERMINAL_ID:-\${GROVE_TERMINAL_ID:-}}"
 [ -z "$PORT" ] && exit 0
 [ -z "$TID" ] && exit 0
 EVENT="\${1:-Stop}"
-curl -s -m 2 "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}&sessionId=\${CLAUDE_SESSION_ID:-}" >/dev/null 2>&1 || true
+# The reply is empty (204) unless this terminal has a follow-up armed, in which
+# case it is the agent's own continuation JSON and stdout is where it belongs.
+# A timeout or an unreachable app also yields empty, i.e. the old behaviour.
+BODY=$(curl -s -m 2 "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}&sessionId=\${CLAUDE_SESSION_ID:-}" 2>/dev/null || true)
+[ -n "$BODY" ] && printf '%s' "$BODY"
 exit 0
 `;
 
@@ -38,7 +42,11 @@ case "$1" in
 	*approval*) EVENT="PermissionRequest" ;;
 	*) exit 0 ;;
 esac
-curl -s -m 2 "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}" >/dev/null 2>&1 || true
+# Same follow-up echo as notify.sh. The notify program is fire-and-forget, so a
+# follow-up only reaches the agent through .codex/hooks.json, where Stop shares
+# Claude's hook schema.
+BODY=$(curl -s -m 2 "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}" 2>/dev/null || true)
+[ -n "$BODY" ] && printf '%s' "$BODY"
 exit 0
 `;
 

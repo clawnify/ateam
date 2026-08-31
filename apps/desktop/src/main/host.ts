@@ -15,6 +15,7 @@ import {
 	type EditorEndpointDTO,
 	type EditorOpenResult,
 	PROTOCOL_VERSION,
+	tolerantRpc,
 	type ProjectDTO,
 	type RpcClient,
 	type SystemInfo,
@@ -113,20 +114,6 @@ const CONNECT_TIMEOUT_MS = 20_000;
 const WS_PING_INTERVAL_MS = 15_000;
 const WS_PING_TIMEOUT_MS = 10_000;
 
-/**
- * Why a box was refused, and the one move that fixes it from where the user is.
- * "Update the older side" was true and useless: on the phone there is no side to
- * update, and on a box behind an SSH alias the desktop has already tried.
- */
-function mismatchMessage(alias: string, boxVersion: number, wire: HostTransport | null): string {
-	const head = `"${alias}" speaks protocol v${boxVersion}, this app speaks v${PROTOCOL_VERSION}.`;
-	if (boxVersion > PROTOCOL_VERSION) return `${head} Update Ateam: the box is ahead of it.`;
-	if (wire === "ws") {
-		return `${head} It's reachable only over its Tailscale endpoint, so this app can't update it. Re-run the installer on the box over SSH.`;
-	}
-	return `${head} Updating it over SSH didn't take. Check the install log for what failed.`;
-}
-
 /** The push-events forwarded from every held backend to every window. */
 const FORWARDED: { event: BackendEvent; channel: string }[] = [
 	{ event: "taskUpdated", channel: CH.evtTaskUpdated },
@@ -150,6 +137,8 @@ export interface Host {
 	origins(): Record<string, string | null>;
 	/** alias → why the last self-initiated connect failed (empty once it succeeds). */
 	failures(): Record<string, string>;
+	/** Whether this build can upgrade a box to its own version (packaged only). */
+	canUpdateBoxes(): boolean;
 	/** Start the in-app editor on the task's engine and resolve the URL THIS
 	 *  client loads for it (localhost, ssh forward, or tailnet endpoint) — or
 	 *  report that the engine still needs code-server installed. */
@@ -321,16 +310,33 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			throw err;
 		}
 		if (info.protocolVersion !== PROTOCOL_VERSION) {
-			client.close();
+			// Upgrade it if we can, but a mismatch is no longer a refusal. Refusing was
+			// safe and total: a box one release old became unusable rather than partly
+			// useful, and the phone had no way to act on the advice. The version is
+			// advisory (as this contract's doc always said), the client tolerates an
+			// older engine's replies, and the UI says the box is skewed. What the user
+			// gets is a box that mostly works and an explanation, instead of a wall.
+			//
 			// Upward only. A box AHEAD of this app must not be downgraded: the desktop
 			// auto-updates, so the honest fix there is to let it. Upward-only is also what
 			// keeps two desktops on different versions from reinstalling a shared box back
 			// and forth, which is a real risk here because a box has ONE $HOME/ateam-app
 			// rather than the per-version directory VS Code keys its server by.
-			if (!healed && wire !== "ws" && info.protocolVersion < PROTOCOL_VERSION) {
-				return install(alias); // streams the installer's log, and ends by connecting
+			//
+			// Packaged builds only, and that is not a nicety: install.sh serves RELEASES,
+			// so the newest protocol a box can reach is the one in the latest release. A
+			// dev build runs main, whose protocol is ahead of that release the moment it
+			// is bumped, the normal state between releases. Healing from dev would then
+			// npm-install on the box for a minute, come back on the same old protocol and
+			// fail, once per box per launch, forever. The invariant that makes the heal
+			// safe is that we can pin the exact release whose protocol we speak, which is
+			// the same condition the ATEAM_VERSION pin needs, so the two share a gate.
+			if (!healed && app.isPackaged && wire !== "ws" && info.protocolVersion < PROTOCOL_VERSION) {
+				client.close();
+				// A failed upgrade must not cost the connection either: come back and hold
+				// the box as it is. `healed` stops this from installing twice.
+				return install(alias).catch(() => connect(alias, true));
 			}
-			throw new Error(mismatchMessage(alias, info.protocolVersion, wire));
 		}
 
 		connectFailures.delete(alias);
@@ -340,8 +346,15 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			serverVersion: String(info.protocolVersion),
 			agentsAvailable: info.agents,
 		});
-		// The remote's method set matches the local dispatcher's (same contract).
-		const backend = remoteBackend(rpc, local.methods, client.close);
+		// The remote's method set matches the local dispatcher's (same contract). An
+		// engine BEHIND this app is read through tolerantRpc, which fills in what its
+		// version never sent. Without it a pre-v5 box's cards crash the board on
+		// `triage.bucket`, which is read on every card and in every sort.
+		const backend = remoteBackend(
+			tolerantRpc(rpc, info.protocolVersion),
+			local.methods,
+			client.close,
+		);
 		infos.set(alias, info); // cached before the backend is reachable — statusOf's invariant
 		backends.set(alias, backend);
 		backendList.push(backend); // the live aggregate now fans out to it too
@@ -412,6 +425,13 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return Object.fromEntries(connectFailures);
 	}
 
+	// The same gate the auto-heal uses: only a packaged build can pin the release
+	// whose protocol it speaks, so only a packaged build can promise an upgrade
+	// that actually closes the gap. See the comment in connect().
+	function canUpdateBoxes(): boolean {
+		return app.isPackaged;
+	}
+
 	function origins(): Record<string, string | null> {
 		// Invert the aggregate's learned id→Backend registry into id→alias for the renderer.
 		const byBackend = new Map<Backend, string | null>();
@@ -440,9 +460,10 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// the client's commit. Unpinned, the box takes `releases/latest` and drifts away
 		// from the desktop the moment a newer release lands, which is the skew this whole
 		// path exists to close. Packaged builds only: a dev build's version has no tag
-		// behind it, and install.sh dies on a tag with no release, so dev keeps taking
-		// the latest, deliberately loud rather than a silent fallback that would leave a
-		// mismatched box and no clue why.
+		// behind it, and install.sh dies on a tag with no release. So a deliberate install
+		// from dev takes the latest release, which is the right thing when SETTING UP a
+		// box; what dev must not do is heal on connect, because that release can be behind
+		// main's protocol and the upgrade is then guaranteed futile (see connect()).
 		const pin = app.isPackaged ? `ATEAM_VERSION=v${app.getVersion()} ` : "";
 		const pipeline = wsAddr
 			? `curl -fsSL ${INSTALL_URL} | ${pin}ATEAM_WS_ADDR=${wsAddr} bash -s -- --service`
@@ -686,6 +707,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		connected,
 		origins,
 		failures,
+		canUpdateBoxes,
 		editorUrl,
 		provision,
 		install,
@@ -707,6 +729,7 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.connected, () => host.connected());
 	ipcMain.handle(HOST_CH.origins, () => host.origins());
 	ipcMain.handle(HOST_CH.failures, () => host.failures());
+	ipcMain.handle(HOST_CH.canUpdateBoxes, () => host.canUpdateBoxes());
 	ipcMain.handle(HOST_CH.provision, (_e, alias: string, input: { cloneUrl: string }) =>
 		host.provision(alias, input),
 	);

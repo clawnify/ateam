@@ -18,6 +18,8 @@ export const HOST_CH = {
 	origins: "host:origins",
 	/** alias → why the last automatic connect attempt failed (see AteamHost.failures). */
 	failures: "host:failures",
+	/** Whether this build can upgrade a box at all (see AteamHost.canUpdateBoxes). */
+	canUpdateBoxes: "host:canUpdateBoxes",
 	/** Clone+register a repo onto a specific box (connect it first). */
 	provision: "host:provision",
 	/** Install the ateam engine on a reachable SSH box, then connect to it. */
@@ -134,6 +136,17 @@ export interface AteamHost {
 	 * asleep. A successful connect clears the entry.
 	 */
 	failures(): Promise<Record<string, string>>;
+	/**
+	 * Whether this build can bring a box up to its own version.
+	 *
+	 * Only a packaged build can. install.sh serves RELEASES, so an upgrade lands on
+	 * whatever the newest release holds; a packaged build pins ATEAM_VERSION to its
+	 * own tag and therefore gets exactly the protocol it speaks, while a dev build
+	 * runs main, whose protocol is ahead of any release the moment it is bumped. An
+	 * update offered from dev would run for a minute and change nothing, so the UI
+	 * asks this before offering one. Same invariant as the auto-heal in connect().
+	 */
+	canUpdateBoxes(): Promise<boolean>;
 	/** Connect the box if needed, then clone+register a repo ON it from its remote URL
 	 *  (so a task can run there). Returns the box's project row for that repo. */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;
