@@ -29,12 +29,63 @@
 // plus a `recommended` flag (it used to be a flat, pre-filtered row). Both are
 // shape changes the cleanup dialog reads directly, so an older engine would feed
 // it rows with no `task` at all — the handshake must catch that skew first.
-// v7: LoopDTO gained `followUp`, and the follow-up turn is delivered by the
-// engine's own turn-end hook. The skew is silent otherwise: a new desktop would
-// happily save a follow-up onto an older box, which stores the config key,
-// ignores it at launch, and never continues the turn — a field that looks saved
-// and does nothing. Better to say "update the older side" at the handshake.
-export const PROTOCOL_VERSION = 7;
+// v7: added CH.systemUpdate, so a box can be told to update ITSELF. The phone has
+// no SSH and pty:spawnShell needs a taskId, so before this there was no way to fix
+// a skewed box from the phone at all. Note what this version can and cannot do: a
+// box older than v7 has no such method, so it still takes one update over SSH (or
+// by hand) before the phone can ever drive the next one. That bootstrap is not
+// avoidable from the client side.
+//
+// From v7 the mismatch is ADVISORY rather than a refusal: clients hold a skewed
+// box, read it through tolerantRpc, and say so in the UI. The bump rule below is
+// unchanged, but the reason to obey it shifts: a bump no longer locks old clients
+// out, it tells them what to paper over.
+// v8: LoopDTO gained `followUp`, an optional extra turn a loop's run takes after
+// the agent's first reply. Shape-wise a missing field reads as "no follow-up",
+// which is harmless; the damage is on the WRITE side, where a new desktop saves a
+// follow-up onto an older box that stores the config key, ignores it at launch,
+// and never continues the turn. Since v7 a mismatch no longer refuses, so the
+// bump alone does not protect anyone: the `followUps` entry below is what turns
+// that silent no-op into a feature the client knows to switch off.
+export const PROTOCOL_VERSION = 8;
+
+/**
+ * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
+ *
+ * A skewed box is held rather than refused, so something has to decide what a
+ * client may still ask of it. Two kinds of change need two answers, and only one
+ * of them belongs here:
+ *
+ *   a NEW METHOD needs nothing. An older engine answers "Unknown method", which
+ *   rejects that one call and fails that one feature. v2, v3 and v4 were all of
+ *   this kind, which is why they need no entry.
+ *
+ *   a CHANGED SHAPE on a method that still exists is the dangerous one. The call
+ *   succeeds and returns something the client misreads, and no default can paper
+ *   over it: a client cannot invent a field the engine never computed. Those get
+ *   an entry, and the feature is switched OFF below that version.
+ *
+ * Adding a shape change means adding a line here. That is the point: the version
+ * history below already describes what each bump broke, in prose no code reads,
+ * so nothing forced a bump to answer "what stops working under this?". Now it does.
+ */
+export const FEATURE_MIN_VERSION = {
+	/** v6 turned CleanupCandidate from a flat row into `{ task: TaskDTO, recommended }`.
+	 *  The dialog dereferences `.task` on every row, so a v5 engine's reply is not a
+	 *  degraded dialog, it is a thrown TypeError. */
+	cleanup: 6,
+	/** v8 added LoopDTO.followUp AND the turn-end delivery behind it. A v7 engine
+	 *  accepts the config key and silently never acts on it, so the honest move is
+	 *  to hide the field rather than let it look saved. */
+	followUps: 8,
+} as const;
+
+export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
+
+/** Whether an engine on `engineVersion` can serve `feature` in a shape this client reads. */
+export function boxSupports(feature: GatedFeature, engineVersion: number): boolean {
+	return engineVersion >= FEATURE_MIN_VERSION[feature];
+}
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
@@ -266,6 +317,17 @@ export interface SystemInfo {
 	agents: string[];
 }
 
+/** What `system:update` reports back before the engine goes down to be replaced. */
+export interface BoxUpdateStarted {
+	/** False when an update was already running: the caller double-tapped, or another
+	 *  client got there first. Nothing new was launched. */
+	started: boolean;
+	/** Where the installer's output is going on the box, so a human can read why it
+	 *  failed after the fact. The engine that could have streamed it is the thing
+	 *  being replaced, so a file is the only place that survives the restart. */
+	logPath: string;
+}
+
 // A subdirectory in a remote-fs listing (the repo picker over RPC).
 export interface DirEntryDTO {
 	name: string;
@@ -392,6 +454,7 @@ export const CH = {
 	agentsList: "agents:list",
 	searchSessions: "search:sessions",
 	systemHello: "system:hello",
+	systemUpdate: "system:update",
 	fsListDir: "fs:listDir",
 	utilPickFiles: "util:pickFiles",
 	utilAttachImages: "util:attachImages",
@@ -657,9 +720,11 @@ export interface AteamApi {
 
 export type { NativeClientApi } from "./client-api";
 // Client-side binding of the AteamApi surface over an RpcClient.
-export { buildAteamApi, serverHandshake } from "./client-api";
+export { buildAteamApi, requestBoxUpdate, serverHandshake } from "./client-api";
 // Transport-agnostic RPC framing + client (shared by every transport).
 export * from "./rpc";
+// Reading an engine older than this client (the version gate is advisory now).
+export { NO_TRIAGE, tolerantRpc } from "./tolerate";
 export type { WsClient } from "./ws";
 // WebSocket ClientTransport over the platform-global WebSocket (browser / RN / Bun).
 export { wsClientTransport } from "./ws";
