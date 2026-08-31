@@ -448,11 +448,16 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		//             installed dist. setsid is what lets it outlive its own trigger.
 		//   log file  for the same reason there is nobody left to stream output to, so
 		//             it goes somewhere a human can read afterwards.
-		//   WS addr   inherited from THIS process. Re-running the installer without it
-		//             writes a unit with no listener, which would cut the phone off from
-		//             the box permanently, with the phone's own tap as the cause. If a
-		//             client is talking to us over WS at all, cli.ts set this from env,
-		//             so passing it through is what keeps the door open behind us.
+		//   clean env the installer must NOT inherit this process's ambient ATEAM_*.
+		//             A daemon that install-remote.sh started carries ATEAM_TARBALL
+		//             pointing at a dev build in /tmp, and an inherited spawn then
+		//             reinstalls that stale tarball and reports success, which is an
+		//             update that updates nothing. Observed on a real box, not theory.
+		//             A stale ATEAM_VERSION pin would stick the same way.
+		//   WS addr   left in place when this process has it. install.sh already carries
+		//             an existing unit's address forward when the variable is unset, so
+		//             that inheritance (not this) is what usually keeps the phone's
+		//             listener alive; this only covers a box with no unit written yet.
 		//   --service because a box reachable by phone is one under systemd; that is
 		//             what restarts it after an OOM kill.
 		[CH.systemUpdate]: async (): Promise<BoxUpdateStarted> => {
@@ -466,11 +471,13 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			updating = true;
 			if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
 			const log = openSync(logPath, "a");
-			const wsAddr = process.env.ATEAM_WS_ADDR;
-			const env = wsAddr ? `ATEAM_WS_ADDR=${JSON.stringify(wsAddr)} ` : "";
-			spawn("bash", ["-lc", `curl -fsSL ${INSTALL_URL} | ${env}bash -s -- --service`], {
+			const env = { ...process.env };
+			delete env.ATEAM_TARBALL;
+			delete env.ATEAM_VERSION;
+			spawn("bash", ["-lc", `curl -fsSL ${INSTALL_URL} | bash -s -- --service`], {
 				detached: true,
 				stdio: ["ignore", log, log],
+				env,
 			}).unref();
 			return { started: true, logPath };
 		},
