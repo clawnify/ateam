@@ -3,8 +3,17 @@
 // that need Electron's dialog/clipboard). Lifted verbatim from the desktop's
 // ipcMain handlers; the desktop now adapts ipcMain → handle(), and the SSH
 // server will adapt a JSON-RPC channel → handle(). One body, many transports.
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { listAgents } from "@ateam/agents";
@@ -27,6 +36,7 @@ import {
 } from "@ateam/git-core";
 import {
 	CH,
+	type BoxUpdateStarted,
 	type CleanupCandidate,
 	type CreateLoopInput,
 	type DirEntryDTO,
@@ -90,6 +100,15 @@ async function computeGitStatus(
 		updatedAt: Date.now(),
 	};
 }
+
+/** Where install.sh is fetched from, matching the documented one-liner and the
+ *  desktop's own SSH install: raw `main`, so a box always runs the current script
+ *  even when its own dist is months old. */
+const INSTALL_URL =
+	"https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh";
+
+/** An update is in flight in THIS process (see CH.systemUpdate). */
+let updating = false;
 
 export interface Dispatcher {
 	/** Method names this dispatcher handles (the non-native CH.* channels). */
@@ -416,6 +435,51 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				protocolVersion: PROTOCOL_VERSION,
 				agents: agents.filter((a) => a.available).map((a) => a.id),
 			};
+		},
+
+		// ---- system: replace this engine with the current release ----
+		// The phone's only route to a stale box. There is no SSH there, and
+		// pty:spawnShell needs a taskId, so nothing without a shell could reach the
+		// installer. Every detail below is load-bearing:
+		//
+		//   detached  the installer STOPS this daemon partway through (that is what
+		//             makes an upgrade take effect). As a plain child it would be in
+		//             this process's group and die with it, leaving the box on a half
+		//             installed dist. setsid is what lets it outlive its own trigger.
+		//   log file  for the same reason there is nobody left to stream output to, so
+		//             it goes somewhere a human can read afterwards.
+		//   clean env the installer must NOT inherit this process's ambient ATEAM_*.
+		//             A daemon that install-remote.sh started carries ATEAM_TARBALL
+		//             pointing at a dev build in /tmp, and an inherited spawn then
+		//             reinstalls that stale tarball and reports success, which is an
+		//             update that updates nothing. Observed on a real box, not theory.
+		//             A stale ATEAM_VERSION pin would stick the same way.
+		//   WS addr   left in place when this process has it. install.sh already carries
+		//             an existing unit's address forward when the variable is unset, so
+		//             that inheritance (not this) is what usually keeps the phone's
+		//             listener alive; this only covers a box with no unit written yet.
+		//   --service because a box reachable by phone is one under systemd; that is
+		//             what restarts it after an OOM kill.
+		[CH.systemUpdate]: async (): Promise<BoxUpdateStarted> => {
+			// Same expression cli.ts resolves the socket with, so the log lands beside the
+			// daemon's own even when ATEAM_RPC_SOCK moves it off the default path.
+			const dataDir = dirname(process.env.ATEAM_RPC_SOCK ?? join(homedir(), ".ateam", "rpc.sock"));
+			const logPath = join(dataDir, "update.log");
+			// One at a time. The flag dies with this process a few seconds from now, so
+			// it guards the window that matters: a double tap, or two clients at once.
+			if (updating) return { started: false, logPath };
+			updating = true;
+			if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+			const log = openSync(logPath, "a");
+			const env = { ...process.env };
+			delete env.ATEAM_TARBALL;
+			delete env.ATEAM_VERSION;
+			spawn("bash", ["-lc", `curl -fsSL ${INSTALL_URL} | bash -s -- --service`], {
+				detached: true,
+				stdio: ["ignore", log, log],
+				env,
+			}).unref();
+			return { started: true, logPath };
 		},
 
 		// ---- editor: the engine-side half of the in-app editor (code-server on

@@ -9,6 +9,7 @@ import type {
 	SessionHitDTO,
 	TaskDTO,
 } from "@ateam/protocol";
+import { boxSupports, FEATURE_MIN_VERSION, PROTOCOL_VERSION } from "@ateam/protocol";
 import {
 	ArrowDownToLine,
 	ArrowUp,
@@ -116,6 +117,9 @@ export function App() {
 	const [connections, setConnections] = useState<ConnectionDTO[]>([]);
 	// alias → why the box didn't come up when the app connected to it by itself.
 	const [connFailures, setConnFailures] = useState<Record<string, string>>({});
+	// alias → the wire contract the held engine actually speaks. A box on a different
+	// one is held anyway now, so this is what tells the user which box is skewed.
+	const [envProtocol, setEnvProtocol] = useState<Record<string, number>>({});
 	// Which agents each connected engine actually has installed (its system:hello
 	// agents), keyed by alias ("local" for this Mac). Drives per-environment agent
 	// availability in the composer — you can only pick an agent the box really has.
@@ -308,8 +312,13 @@ export function App() {
 			void window.ateamHost.failures().then(setConnFailures);
 			void window.ateamHost.connected().then((list) => {
 				const map: Record<string, string[]> = {};
-				for (const s of list) map[s.alias ?? "local"] = s.info.agents;
+				const wire: Record<string, number> = {};
+				for (const s of list) {
+					map[s.alias ?? "local"] = s.info.agents;
+					wire[s.alias ?? "local"] = s.info.protocolVersion;
+				}
 				setEnvAgents(map);
+				setEnvProtocol(wire);
 			});
 		};
 		load();
@@ -451,9 +460,16 @@ export function App() {
 				// caller to show the error to — an upgrade that failed reads as an
 				// ordinary offline box without it.
 				error: connFailures[c.alias],
+				// Held, but not on this app's wire contract. Only for a box we actually
+				// hold: an unreachable one has no version to report, and saying nothing
+				// is better than guessing from the last one we saw.
+				skew:
+					envProtocol[c.alias] !== undefined && envProtocol[c.alias] !== PROTOCOL_VERSION
+						? envProtocol[c.alias]
+						: undefined,
 			})),
 		];
-	}, [connections, canRemote, hasLocalMember, activeMembers, connFailures]);
+	}, [connections, canRemote, hasLocalMember, activeMembers, connFailures, envProtocol]);
 
 	// The active card's board unions tasks from every engine that has the repo.
 	const activeTasks = activeCard
@@ -758,8 +774,21 @@ export function App() {
 			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		});
 
+	// Cleanup reads a shape that changed in v6, so an older box would not degrade
+	// here, it would throw inside the dialog's sort. Gate on the OWNING engine, not
+	// on whatever box happens to be selected: the dialog runs against one project,
+	// and that project lives on exactly one engine. Local is never skewed with
+	// itself, so a project on this Mac is always allowed.
+	const cleanupBlockedBy = useMemo(() => {
+		if (!activeProjectId) return null;
+		const owner = activeMembers.find((m) => m.projectId === activeProjectId);
+		if (!owner?.alias) return null;
+		const version = envProtocol[owner.alias];
+		return version !== undefined && !boxSupports("cleanup", version) ? version : null;
+	}, [activeProjectId, activeMembers, envProtocol]);
+
 	const cleanup = () => {
-		if (activeProjectId) setCleanupOpen(true);
+		if (activeProjectId && cleanupBlockedBy === null) setCleanupOpen(true);
 	};
 
 	return (
@@ -1180,7 +1209,17 @@ export function App() {
 							</button>
 						</div>
 					)}
-					<button type="button" className="navbtn" onClick={cleanup} disabled={!activeProjectId}>
+					<button
+						type="button"
+						className="navbtn"
+						onClick={cleanup}
+						disabled={!activeProjectId || cleanupBlockedBy !== null}
+						title={
+							cleanupBlockedBy !== null
+								? `This project lives on a box running an older Ateam (protocol v${cleanupBlockedBy}). Cleanup needs v${FEATURE_MIN_VERSION.cleanup} or newer: update the box to use it here.`
+								: undefined
+						}
+					>
 						<Brush size={14} strokeWidth={1.75} />
 						Clean up
 					</button>

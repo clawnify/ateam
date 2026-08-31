@@ -116,6 +116,11 @@ installs **Node 22** via nvm into your home directory and uses that — the laun
 pins the exact interpreter the modules were built for, so a later `nvm use` can't
 break it.
 
+A box can also update itself: the phone's **Update box** button (and any client on
+protocol v7+) tells the daemon to run this same installer over itself. A box older
+than v7 has no such command, so it needs one update over SSH first, after which the
+phone can drive every later one.
+
 Re-run the same command to upgrade. It stops the daemon still running the old dist,
 then checks that the process answering afterwards is a different one, so an upgrade
 can no longer report success while the previous version keeps serving. Live agents
@@ -352,7 +357,7 @@ The connection menu surfaces the real error inline. Common ones:
 | --- | --- |
 | **"No servers in ~/.ssh/config"** in the menu | Add a `Host` entry (step 3). |
 | Connect hangs or fails | Check `ssh <box>` works, Tailscale is up on **both** ends (`tailscale status`), and `ateam` is on the box's login PATH: `ssh <box> "bash -lc 'command -v ateam'"`. |
-| **"Protocol mismatch"** | A box running behind the Mac app is now upgraded on connect: the app reinstalls it over SSH at its own version, streaming the install log. You only see this error if the box is *ahead* of the app (update the Mac app), or if that upgrade failed, in which case the box's row in the **Run on** list carries the reason. On the phone there is no SSH, so the fix is to open Ateam on your Mac and connect to the box once. |
+| A box shows **"older Ateam (vN)"** | Version skew no longer blocks anything: the box connects and works. A feature whose data shape changed on a newer engine is switched off with a reason rather than misreading the old shape (Cleanup needs a v6 box); a method the box simply does not have fails on its own, only where you use it. The Mac app upgrades a box it connects to over SSH, so this clears itself on the next connect; on the phone, tap **Update box** in the banner. A box *ahead* of the client says so instead, and the fix there is to update the client, not the box. |
 | Board is empty after connecting | The box has no registered projects yet — add one from the box's filesystem via **Add project** (or register a repo path on the box). |
 | Agents run but commits fail | The box has no git identity — `git config --global user.name/user.email` (step 0). |
 | The agent picker is empty | The agent CLI isn't on the box's **login** PATH: `ssh <box> "bash -lc 'command -v claude'"`. |

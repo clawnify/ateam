@@ -12,6 +12,7 @@ import type {
 	AgentDTO,
 	AteamApi,
 	AttachDelivery,
+	BoxUpdateStarted,
 	CleanupCandidate,
 	CleanupReport,
 	CreateLoopInput,
@@ -45,6 +46,24 @@ import type { RpcClient } from "./rpc";
  */
 export function serverHandshake(rpc: RpcClient): Promise<SystemInfo> {
 	return rpc.call(CH.systemHello) as Promise<SystemInfo>;
+}
+
+/**
+ * Ask the box to update ITSELF, the only route a phone has: there is no SSH here,
+ * and pty:spawnShell needs a taskId, so no client without a shell could reach the
+ * installer before this. Resolves as soon as the installer is launched, NOT when it
+ * finishes: the install stops the engine partway through (that is the whole point of
+ * the restart fix), so the socket this reply came over is about to drop. Treat the
+ * drop as success-in-progress and reconnect; the daemon comes back on the new dist.
+ *
+ * Live agents are unaffected: they belong to the PTY daemon, which the installer
+ * never signals.
+ *
+ * Also deliberately not on AteamApi, for the same reason as the handshake: it is a
+ * connection-level operation, not part of the board surface.
+ */
+export function requestBoxUpdate(rpc: RpcClient): Promise<BoxUpdateStarted> {
+	return rpc.call(CH.systemUpdate) as Promise<BoxUpdateStarted>;
 }
 
 /**
