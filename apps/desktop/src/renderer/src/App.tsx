@@ -156,9 +156,13 @@ export function App() {
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
 	const [loopsCollapsed, setLoopsCollapsed] = useState(true);
-	// Every engine's loops (merged), for the sidebar LOOPS section. Each loop
-	// owns one persistent task (loop.taskId); those tasks show under LOOPS.
+	// Every engine's loops (merged), for the sidebar LOOPS section and the Loops
+	// tab (both scoped to the selected project). Each loop owns one persistent
+	// task (loop.taskId); those tasks show under LOOPS.
 	const [loops, setLoops] = useState<LoopDTO[]>([]);
+	// A mutation's return and the push event both carry ONE engine's loops, so
+	// every refresh re-lists the union.
+	const refreshLoops = useCallback(() => void window.ateam.loops.list().then(setLoops), []);
 	const [rail, setRail] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
 	const toggleRail = () => {
 		setRail((r) => {
@@ -252,12 +256,11 @@ export function App() {
 	useEffect(() => {
 		void loadProjects();
 		void window.ateam.agents.list().then(setAgents);
-		// Loops for the sidebar section. Always re-list on the push event — the
-		// event payload carries ONE engine's loops, the sidebar wants the union.
-		void window.ateam.loops.list().then(setLoops);
-		const offLoops = window.ateam.loops.onUpdated(
-			() => void window.ateam.loops.list().then(setLoops),
-		);
+		// Loops for the sidebar section and the Loops tab. Always re-list on the
+		// push event — the event payload carries ONE engine's loops, the UI wants
+		// the union.
+		refreshLoops();
+		const offLoops = window.ateam.loops.onUpdated(refreshLoops);
 		// Upsert: replace a known task, or add one created in another window (so a
 		// project open in two windows stays consistent). Only for projects this
 		// window tracks — a detached window ignores other projects' tasks.
@@ -288,7 +291,7 @@ export function App() {
 			offUpdated();
 			offRemoved();
 		};
-	}, [loadProjects]);
+	}, [loadProjects, refreshLoops]);
 
 	// Load the selected project's tasks whenever it changes.
 	useEffect(() => {
@@ -304,9 +307,9 @@ export function App() {
 		return window.ateamHost.onConnectionsChanged(() => {
 			void loadProjects();
 			void window.ateam.agents.list().then(setAgents);
-			void window.ateam.loops.list().then(setLoops);
+			refreshLoops();
 		});
-	}, [loadProjects]);
+	}, [loadProjects, refreshLoops]);
 
 	// The ~/.ssh/config box list for the composer's "Run on" picker + each connected
 	// engine's installed agents, kept fresh as boxes connect/disconnect.
@@ -1328,7 +1331,14 @@ export function App() {
 							/>
 						)
 					) : (
-						<LoopsPanel envProtocol={envProtocol} />
+						<LoopsPanel
+							loops={activeLoops}
+							members={activeMembers}
+							cardKey={activeCard?.key ?? null}
+							agents={agents}
+							envProtocol={envProtocol}
+							onChanged={refreshLoops}
+						/>
 					)}
 				</div>
 			</main>
