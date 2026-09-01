@@ -200,6 +200,29 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		}
 	};
 
+	/** Open a login shell in a task's worktree and record the session. */
+	const spawnShellInTask = (task: { id: string; worktreePath: string }) => {
+		const terminalId = randomUUID();
+		repo.createSession(db, {
+			taskId: task.id,
+			agentId: "shell",
+			terminalId,
+			cwd: task.worktreePath,
+		});
+		services.pty.spawn({
+			terminalId,
+			shell,
+			args: ["-l"],
+			cwd: task.worktreePath,
+			env: { ...process.env },
+		});
+		// A new session IS a change to the task — say so, exactly as the agent
+		// spawn does. Without this, a shell opened in one window is invisible to
+		// every other client until something else touches the task.
+		engine.sendTaskUpdated(task.id);
+		return { terminalId };
+	};
+
 	const handlers = {
 		// ---- projects ----
 		[CH.projectsRegister]: async (repoPath: string, opts?: { init?: boolean }) => {
@@ -591,28 +614,8 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		// ---- pty ----
 		[CH.ptySpawnAgent]: async (input: SpawnAgentInput) =>
 			spawnAgentInTask(services, engine.sendTaskUpdated, input),
-		[CH.ptySpawnShell]: async (input: { taskId: string }) => {
-			const task = requireTask(services, input.taskId);
-			const terminalId = randomUUID();
-			repo.createSession(db, {
-				taskId: task.id,
-				agentId: "shell",
-				terminalId,
-				cwd: task.worktreePath,
-			});
-			services.pty.spawn({
-				terminalId,
-				shell,
-				args: ["-l"],
-				cwd: task.worktreePath,
-				env: { ...process.env },
-			});
-			// A new session IS a change to the task — say so, exactly as the agent
-			// spawn above does. Without this, a shell opened in one window is
-			// invisible to every other client until something else touches the task.
-			engine.sendTaskUpdated(task.id);
-			return { terminalId };
-		},
+		[CH.ptySpawnShell]: async (input: { taskId: string }) =>
+			spawnShellInTask(requireTask(services, input.taskId)),
 		[CH.ptyWrite]: (terminalId: string, data: string) => {
 			services.pty.write(terminalId, data);
 		},
@@ -620,6 +623,14 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			services.pty.resize(terminalId, cols, rows);
 		},
 		[CH.ptyKill]: async (terminalId: string) => {
+			// Stamp WHY before the exit lands: closing a tab is the one ending that
+			// means "I am done with this", so it must not come back as a restorable
+			// tab the way an app or machine going down does. The exit handler reads
+			// this back rather than assuming (engine.ts).
+			const session = repo.getSessionByTerminal(db, terminalId);
+			if (session && session.exitedAt == null) {
+				repo.updateSession(db, session.id, { exitReason: "closed" });
+			}
 			services.pty.kill(terminalId);
 		},
 		[CH.ptySnapshot]: async (terminalId: string) => services.pty.snapshot(terminalId),
@@ -629,6 +640,47 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				.listSessionsByTask(db, taskId)
 				.filter((s) => services.pty.has(s.terminalId))
 				.map(toSessionDTO),
+		// Deliberately a separate call from listForTask rather than a widening of
+		// it: every existing caller (the panel's tab fallback, Mission Control,
+		// the CLI) asks "what is alive here?" and would have to re-filter a mixed
+		// list. Restorable tabs are a second, smaller question, asked only by the
+		// panel that draws them.
+		[CH.ptyListRestorable]: async (taskId: string) =>
+			repo.listRestorableSessions(db, taskId).map(toSessionDTO),
+		[CH.ptyRestoreSession]: async (input: { taskId: string; terminalId: string }) => {
+			const task = requireTask(services, input.taskId);
+			const dead = repo.getSessionByTerminal(db, input.terminalId);
+			if (!dead || dead.taskId !== task.id) {
+				throw new Error(`Session not found: ${input.terminalId}`);
+			}
+			// Someone got here first — a second window auto-restoring the same task,
+			// or a double click. "Bring this conversation back" is already true, so
+			// hand back the tab it is living in rather than erroring or opening a
+			// second terminal onto the same conversation.
+			if (dead.agentSessionId) {
+				const open = repo
+					.listSessionsByTask(db, task.id)
+					.find((s) => s.agentSessionId === dead.agentSessionId && services.pty.has(s.terminalId));
+				if (open) return { terminalId: open.terminalId };
+			}
+			if (dead.exitReason !== "stranded") throw new Error("That session is not restorable");
+			// A shell holds no conversation — restoring one means opening a fresh
+			// shell where it stood, which is all it ever was.
+			if (dead.agentId === "shell") {
+				repo.updateSession(db, dead.id, { exitReason: "restored" });
+				return spawnShellInTask(task);
+			}
+			// With a known conversation, resume THAT one. Without (a harness that
+			// mints its own ids, or a tab that started life as a `--continue`),
+			// fall back to the newest conversation in the worktree — the same best
+			// effort the app made before, now at least aimed at the right task.
+			repo.updateSession(db, dead.id, { exitReason: "restored" });
+			return spawnAgentInTask(services, engine.sendTaskUpdated, {
+				taskId: task.id,
+				agentId: dead.agentId,
+				...(dead.agentSessionId ? { resumeSessionId: dead.agentSessionId } : { resume: true }),
+			});
+		},
 	} satisfies Record<string, (...args: never[]) => unknown>;
 
 	return {

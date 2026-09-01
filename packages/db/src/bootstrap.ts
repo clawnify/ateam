@@ -55,12 +55,14 @@ export function bootstrap(db: SqliteExecutor): void {
 			task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
 			agent_id TEXT NOT NULL,
 			terminal_id TEXT NOT NULL UNIQUE,
+			agent_session_id TEXT,
 			status TEXT NOT NULL DEFAULT 'idle',
 			pid INTEGER,
 			cwd TEXT NOT NULL,
 			started_at INTEGER,
 			last_event_at INTEGER,
-			exited_at INTEGER
+			exited_at INTEGER,
+			exit_reason TEXT
 		);
 		CREATE INDEX IF NOT EXISTS agent_sessions_task_idx ON agent_sessions (task_id);
 
@@ -159,6 +161,11 @@ export function bootstrap(db: SqliteExecutor): void {
 		// kind of connection that existed — so the default backfills correctly.
 		"ALTER TABLE hosts ADD COLUMN transport TEXT NOT NULL DEFAULT 'ssh'",
 		"ALTER TABLE hosts ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
+		// Both null for every session that predates them, which reads correctly:
+		// no known conversation to resume, and no claim about how it ended — so
+		// history is never mistaken for tabs that were open at shutdown.
+		"ALTER TABLE agent_sessions ADD COLUMN agent_session_id TEXT",
+		"ALTER TABLE agent_sessions ADD COLUMN exit_reason TEXT",
 	]) {
 		try {
 			db.exec(sql);

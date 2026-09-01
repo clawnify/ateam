@@ -8,7 +8,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDb, repo } from "@ateam/db";
+import { createDb, repo, type SessionExitReason } from "@ateam/db";
 import type {
 	AgentStatus,
 	KanbanColumn,
@@ -19,12 +19,13 @@ import type {
 	TaskDTO,
 } from "@ateam/protocol";
 import { ensureGhShim, ensureNotifyScript } from "./agent-setup";
+import { FollowUps } from "./follow-ups";
 import { type HookEvent, HookServer, type MergeRequestEvent } from "./hooks/hook-server";
 import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
 import { PtyClient } from "./pty/pty-client";
-import { strandedSessions } from "./pty/stranded";
+import { makeStrandReconciler } from "./pty/reconcile";
 import { type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
 
@@ -85,6 +86,23 @@ function mapEventToColumn(eventType: string): KanbanColumn {
 	return "running";
 }
 
+/**
+ * Does this event count as news for the user? `isUnread` is a claim about
+ * novelty, and the renderer's triage order ranks ANY unread task above every
+ * triage bucket, so a card that re-arms the flag on a schedule permanently
+ * outranks real work.
+ *
+ * A loop's tick ends with a Stop on every run (hourly by default), and a
+ * scheduled job finishing on schedule is not news — that is the cron contract
+ * loops already declare: silent on success, loud on exception. So a loop's own
+ * card skips the Stop-driven flag and keeps the PermissionRequest one, which
+ * means the agent is blocked on the user and genuinely needs them.
+ */
+export function mapEventToUnread(eventType: string, ownedByLoop: boolean): boolean {
+	if (eventType === "PermissionRequest") return true;
+	return eventType === "Stop" && !ownedByLoop;
+}
+
 export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	const { dataDir, daemonPath, execPath } = opts;
 	const emitter = new EventEmitter();
@@ -142,6 +160,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	repo.updateSettings(db, { hookPort });
 
 	const mergeQueue = new MergeQueue({ db, onTaskUpdated: sendTaskUpdated });
+	const followUps = new FollowUps();
 	// Loops are user-created only; nothing is registered here. A loop tick
 	// starts an agent session through the same task-create + spawn path the
 	// composer uses. (`services` is declared just below and also holds this
@@ -172,6 +191,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		setStatus: async (req) => applySetStatus(db, req, sendTaskUpdated),
 	});
 
+	// A finished turn with a follow-up armed continues instead of stopping. The
+	// lookup consumes, so it can only ever fire once per launch.
+	hooks.setFollowUpResolver((terminalId, eventType) => followUps.take(terminalId, eventType));
+
 	const services: Services = {
 		db,
 		pty,
@@ -182,6 +205,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		hookPort,
 		mergeQueue,
 		loopRunner,
+		followUps,
 	};
 
 	// Record an agent's exit: close the session and file its card. Shared by the
@@ -198,8 +222,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		taskId: string,
 		exitedAt: number,
 		markUnread: boolean,
+		exitReason: SessionExitReason,
 	): void => {
-		repo.updateSession(db, sessionId, { status: "stopped", exitedAt });
+		repo.updateSession(db, sessionId, { status: "stopped", exitedAt, exitReason });
 		const task = repo.getTask(db, taskId);
 		if (task && task.column === "running") {
 			repo.updateTask(db, task.id, {
@@ -220,9 +245,16 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		// after its process is gone — the gap that previously stranded cards in
 		// the running column. Code that needs liveness must ask the PTY daemon
 		// (pty.has), not this status.
+		// The pane is gone, so a follow-up armed for it can never be delivered.
+		followUps.discard(e.terminalId);
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
-		if (session.exitedAt == null) applyAgentExit(session.id, session.taskId, Date.now(), true);
+		// `closed` is stamped by the kill handler before the PTY goes; anything
+		// else reaching here ended on its own. Either way the tab is not coming
+		// back on its own, so neither is offered as restorable.
+		if (session.exitedAt == null) {
+			applyAgentExit(session.id, session.taskId, Date.now(), true, session.exitReason ?? "exited");
+		}
 	});
 
 	// The backstop for exits nobody watched. The daemon outlives the app, so an
@@ -231,14 +263,17 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	// good. Every connect hands us the daemon's live set, which is exactly the
 	// evidence needed to close those out. See pty/stranded.ts for why this is
 	// scoped to sessions predating this engine.
+	// Marking them `stranded` is also what lets the panel offer them back as
+	// tabs — see pty/reconcile.ts for the once-per-run rule that keeps that set
+	// to "what was open at shutdown".
+	const reconcileStranded = makeStrandReconciler(db, engineStartedAt, (s) => {
+		// Best guess at when it died: we only know it was gone by now.
+		applyAgentExit(s.id, s.taskId, Date.now(), false, "stranded");
+	});
 	pty.on("attached", (terminals: { terminalId: string }[]) => {
 		const live = new Set(terminals.map((t) => t.terminalId));
 		const open = repo.listOpenSessions(db);
-		const stranded = strandedSessions(open, live, engineStartedAt);
-		for (const s of stranded) {
-			// Best guess at when it died: we only know it was gone by now.
-			applyAgentExit(s.id, s.taskId, Date.now(), false);
-		}
+		const stranded = reconcileStranded(live);
 		// Always log: this is a bulk mutation of the board, so "it did nothing"
 		// has to be as visible as "it closed 700 cards". The desktop passes no
 		// `log`, so fall back to console like LoopRunner does.
@@ -280,13 +315,17 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			if (e.eventType === "Working" && task.column === column && task.agentStatus === status) {
 				return;
 			}
+			// Only a Stop is ever suppressed, so only a Stop pays for the lookup:
+			// `Working` fires on every tool use and must not hit the loops table.
+			const ownedByLoop = e.eventType === "Stop" && repo.loopForTask(db, task.id) !== undefined;
 			repo.updateTask(db, task.id, {
 				agentStatus: status,
 				column,
 				lastEventAt: Date.now(),
 				// Working/Start mean the user just interacted or launched — the
-				// task isn't "unread"; Stop/PermissionRequest are news for them.
-				isUnread: e.eventType === "Stop" || e.eventType === "PermissionRequest",
+				// task isn't "unread"; Stop/PermissionRequest are news for them,
+				// unless the Stop is just a loop's tick ending on schedule.
+				isUnread: mapEventToUnread(e.eventType, ownedByLoop),
 			});
 			sendTaskUpdated(task.id);
 		}

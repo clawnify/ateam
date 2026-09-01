@@ -1,5 +1,6 @@
 import type { AgentSession, AteamDb, Project, Task } from "@ateam/db";
 import type { ProjectDTO, SessionDTO, TaskDTO } from "@ateam/protocol";
+import type { FollowUps } from "./follow-ups";
 import type { HookServer } from "./hooks/hook-server";
 import type { LoopRunner } from "./loops/runner";
 import type { MergeQueue } from "./merge-queue";
@@ -16,6 +17,8 @@ export interface Services {
 	hookPort: number;
 	mergeQueue: MergeQueue;
 	loopRunner: LoopRunner;
+	/** One-shot follow-up turns, armed at launch and consumed at turn end. */
+	followUps: FollowUps;
 }
 
 export function toProjectDTO(p: Project): ProjectDTO {
@@ -61,7 +64,9 @@ export function toSessionDTO(s: AgentSession): SessionDTO {
 		taskId: s.taskId,
 		agentId: s.agentId,
 		terminalId: s.terminalId,
+		agentSessionId: s.agentSessionId ?? null,
 		status: s.status,
 		cwd: s.cwd,
+		lastEventAt: s.lastEventAt ?? null,
 	};
 }

@@ -62,6 +62,12 @@ const ENTITY = new Set<string>([
 	CH.loopsDelete, // loop id
 	CH.searchSessions, // {projectId} — a box searches the history on its own disk
 	CH.ptyListForTask, // taskId
+	CH.ptyListRestorable, // taskId
+	// {taskId, terminalId}: routed by TASK, not terminal. The terminal being
+	// restored is dead — it belongs to a previous run of the app, so it was
+	// never learned by `learn()` and would fall back to the local engine,
+	// looking for a box's session in the wrong db.
+	CH.ptyRestoreSession,
 	CH.ptyWrite, // terminalId
 	CH.ptyResize,
 	CH.ptyKill,

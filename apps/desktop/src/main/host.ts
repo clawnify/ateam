@@ -137,6 +137,8 @@ export interface Host {
 	origins(): Record<string, string | null>;
 	/** alias → why the last self-initiated connect failed (empty once it succeeds). */
 	failures(): Record<string, string>;
+	/** Whether this build can upgrade a box to its own version (packaged only). */
+	canUpdateBoxes(): boolean;
 	/** Start the in-app editor on the task's engine and resolve the URL THIS
 	 *  client loads for it (localhost, ssh forward, or tailnet endpoint) — or
 	 *  report that the engine still needs code-server installed. */
@@ -423,6 +425,13 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return Object.fromEntries(connectFailures);
 	}
 
+	// The same gate the auto-heal uses: only a packaged build can pin the release
+	// whose protocol it speaks, so only a packaged build can promise an upgrade
+	// that actually closes the gap. See the comment in connect().
+	function canUpdateBoxes(): boolean {
+		return app.isPackaged;
+	}
+
 	function origins(): Record<string, string | null> {
 		// Invert the aggregate's learned id→Backend registry into id→alias for the renderer.
 		const byBackend = new Map<Backend, string | null>();
@@ -698,6 +707,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		connected,
 		origins,
 		failures,
+		canUpdateBoxes,
 		editorUrl,
 		provision,
 		install,
@@ -719,6 +729,7 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.connected, () => host.connected());
 	ipcMain.handle(HOST_CH.origins, () => host.origins());
 	ipcMain.handle(HOST_CH.failures, () => host.failures());
+	ipcMain.handle(HOST_CH.canUpdateBoxes, () => host.canUpdateBoxes());
 	ipcMain.handle(HOST_CH.provision, (_e, alias: string, input: { cloneUrl: string }) =>
 		host.provision(alias, input),
 	);
