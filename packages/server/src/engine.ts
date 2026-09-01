@@ -85,6 +85,23 @@ function mapEventToColumn(eventType: string): KanbanColumn {
 	return "running";
 }
 
+/**
+ * Does this event count as news for the user? `isUnread` is a claim about
+ * novelty, and the renderer's triage order ranks ANY unread task above every
+ * triage bucket, so a card that re-arms the flag on a schedule permanently
+ * outranks real work.
+ *
+ * A loop's tick ends with a Stop on every run (hourly by default), and a
+ * scheduled job finishing on schedule is not news — that is the cron contract
+ * loops already declare: silent on success, loud on exception. So a loop's own
+ * card skips the Stop-driven flag and keeps the PermissionRequest one, which
+ * means the agent is blocked on the user and genuinely needs them.
+ */
+export function mapEventToUnread(eventType: string, ownedByLoop: boolean): boolean {
+	if (eventType === "PermissionRequest") return true;
+	return eventType === "Stop" && !ownedByLoop;
+}
+
 export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	const { dataDir, daemonPath, execPath } = opts;
 	const emitter = new EventEmitter();
@@ -280,13 +297,17 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			if (e.eventType === "Working" && task.column === column && task.agentStatus === status) {
 				return;
 			}
+			// Only a Stop is ever suppressed, so only a Stop pays for the lookup:
+			// `Working` fires on every tool use and must not hit the loops table.
+			const ownedByLoop = e.eventType === "Stop" && repo.loopForTask(db, task.id) !== undefined;
 			repo.updateTask(db, task.id, {
 				agentStatus: status,
 				column,
 				lastEventAt: Date.now(),
 				// Working/Start mean the user just interacted or launched — the
-				// task isn't "unread"; Stop/PermissionRequest are news for them.
-				isUnread: e.eventType === "Stop" || e.eventType === "PermissionRequest",
+				// task isn't "unread"; Stop/PermissionRequest are news for them,
+				// unless the Stop is just a loop's tick ending on schedule.
+				isUnread: mapEventToUnread(e.eventType, ownedByLoop),
 			});
 			sendTaskUpdated(task.id);
 		}

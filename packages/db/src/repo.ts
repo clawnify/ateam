@@ -162,6 +162,18 @@ export const repo = {
 	},
 
 	/**
+	 * The loop that owns this task, if any. A loop keeps its persistent task's
+	 * id in its config (`lastTaskId` on rows written before the persistent-task
+	 * pivot), so the reverse link is a scan of the handful of loop rows rather
+	 * than an index — gate calls on a once-per-session event, not a hot path.
+	 */
+	loopForTask(db: AteamDb, taskId: string): Loop | undefined {
+		return repo
+			.listLoops(db)
+			.find((l) => l.config?.taskId === taskId || l.config?.lastTaskId === taskId);
+	},
+
+	/**
 	 * Ensure a row exists for a loop instance, returning it. Existing rows keep
 	 * their persisted `enabled`/telemetry; only first creation seeds defaults.
 	 */
