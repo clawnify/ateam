@@ -21,7 +21,6 @@ import {
 	ChevronUp,
 	Columns2,
 	ExternalLink,
-	FileCode,
 	FolderPlus,
 	GitCommitVertical,
 	GitMerge,
@@ -61,6 +60,7 @@ import { LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
 import { PromptComposer } from "./components/PromptComposer";
 import { TaskSearch } from "./components/TaskSearch";
+import { VscodeLogo } from "./components/VscodeLogo";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
 import { activeTerminal, sessionTabs } from "./session-tabs";
@@ -1978,7 +1978,7 @@ function TaskPanel({
 				<span className="spacer" />
 
 				<IconButton
-					icon={FileCode}
+					icon={VscodeLogo}
 					active={editorOpen}
 					label={editorOpen ? "Back to terminal" : "Edit files (VS Code on the task's machine)"}
 					onClick={() => {
@@ -2120,7 +2120,10 @@ function TaskPanel({
 			<div className="panel-body">
 				{/* Keep the terminal mounted (xterm state survives) while the
 				    changes view is open — just hide it. */}
-				<div className="term-wrap" style={{ display: changesOpen || editorOpen ? "none" : "flex" }}>
+				<div
+					className="term-wrap"
+					style={{ display: changesOpen || editorOpen ? "none" : "flex" }}
+				>
 					{terminalId ? (
 						<TerminalView
 							terminalId={terminalId}
