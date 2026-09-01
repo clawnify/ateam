@@ -1,10 +1,4 @@
-import {
-	type AgentDTO,
-	boxSupports,
-	FEATURE_MIN_VERSION,
-	type LoopDTO,
-	type ProjectDTO,
-} from "@ateam/protocol";
+import { type AgentDTO, boxSupports, FEATURE_MIN_VERSION, type LoopDTO } from "@ateam/protocol";
 import {
 	AlertTriangle,
 	Check,
@@ -17,6 +11,7 @@ import {
 	X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { type Alias, aliasLabel, type EngineMember } from "../unify";
 
 /** "in 45s" / "in 2m" / "now", or "—" when no next run is scheduled. */
 function untilLabel(nextRunAt: number | null, now: number): string {
@@ -44,17 +39,17 @@ function everyLabel(intervalMs: number | null): string {
 	return min < 60 ? `every ${min}m` : `every ${Math.round(min / 60)}h`;
 }
 
-// id → owning-engine alias (null/absent = this Mac), from the host's learned registry.
-type Origins = Record<string, string | null>;
-
-function envLabel(origins: Origins, id: string): string {
-	return origins[id] ?? "Local";
+/** The engine holding the copy of the repo this loop was created on. */
+function memberFor(members: EngineMember[], projectId: string | null): EngineMember | null {
+	if (!projectId) return null;
+	return members.find((m) => m.projectId === projectId) ?? null;
 }
 
 // A half-written loop must survive a tab switch (the panel unmounts with the
-// tab). Drafts live at module scope, keyed by the loop being edited ("new" for
-// the create form), together with which form was open — restored on mount,
-// cleared only on save or an explicit Cancel.
+// tab). Drafts live at module scope, keyed by the loop being edited (or
+// "new:<card>" for the create form — a draft belongs to the repo it was started
+// on), together with which form was open — restored on mount, cleared only on
+// save or an explicit Cancel.
 interface LoopDraft {
 	name: string;
 	prompt: string;
@@ -68,39 +63,47 @@ const openForm = { creating: false, editingId: null as string | null };
 
 /**
  * Inline form for a loop — a scheduled agent session on an environment. With
- * `editing`, it patches that loop in place; the project (and so the
- * environment) is fixed at creation — moving a loop means delete + recreate.
+ * `editing`, it patches that loop in place. The repo is the selected project, so
+ * the only placement choice is WHICH environment runs it (this Mac or a box that
+ * also has the repo); that's fixed at creation — moving a loop means delete +
+ * recreate.
  */
 function LoopForm({
 	editing,
-	projects,
+	draftKey,
+	members,
 	agents,
-	origins,
 	envProtocol,
 	onSaved,
 	onCancel,
 }: {
 	editing?: LoopDTO;
-	projects: ProjectDTO[];
+	draftKey: string;
+	members: EngineMember[];
 	agents: AgentDTO[];
-	origins: Origins;
 	envProtocol: Record<string, number>;
-	onSaved: (loops: LoopDTO[]) => void;
+	onSaved: () => void;
 	onCancel: () => void;
 }) {
 	// Resume the surviving draft for this form, falling back to the loop being
 	// edited (or blank for a new one). Every change is mirrored back into the
 	// draft so a tab switch loses nothing.
-	const draftKey = editing?.id ?? "new";
 	const draft = drafts.get(draftKey);
 	const [name, setName] = useState(draft?.name ?? editing?.title ?? "");
 	const [prompt, setPrompt] = useState(draft?.prompt ?? editing?.prompt ?? "");
 	const [followUp, setFollowUp] = useState(draft?.followUp ?? editing?.followUp ?? "");
+	// Default environment: this Mac when it has the repo, else the first box.
 	const [projectId, setProjectId] = useState(
-		draft?.projectId ?? editing?.projectId ?? projects[0]?.id ?? "",
+		draft?.projectId ??
+			editing?.projectId ??
+			members.find((m) => m.alias === null)?.projectId ??
+			members[0]?.projectId ??
+			"",
 	);
+	// Only agents actually installed on this machine can run a session.
+	const usable = agents.filter((a) => a.available);
 	const [agentId, setAgentId] = useState(
-		draft?.agentId ?? editing?.agentId ?? agents.find((a) => a.available)?.id ?? "claude",
+		draft?.agentId ?? editing?.agentId ?? usable[0]?.id ?? "claude",
 	);
 	const [everyMin, setEveryMin] = useState(
 		draft?.everyMin ??
@@ -122,7 +125,7 @@ function LoopForm({
 	// an older Ateam accepts the config key and then never acts on it. Gate on
 	// that engine, like cleanup does: local is never skewed with itself.
 	const followUpBlockedBy = (() => {
-		const alias = origins[projectId];
+		const alias: Alias = memberFor(members, projectId)?.alias ?? null;
 		if (!alias) return null;
 		const version = envProtocol[alias];
 		return version !== undefined && !boxSupports("followUps", version) ? version : null;
@@ -147,8 +150,8 @@ function LoopForm({
 					},
 				});
 			} else {
-				// The chosen project decides the environment: its engine (this Mac or
-				// a box) owns the loop and runs every session there.
+				// The chosen environment is one engine's copy of this repo: that
+				// engine owns the loop and runs every session there.
 				await window.ateam.loops.create({
 					templateId: "agent-session",
 					name: name.trim() || "Loop",
@@ -161,10 +164,7 @@ function LoopForm({
 					},
 				});
 			}
-			// Re-list rather than trust the call's return: the call ran on ONE
-			// engine and returns only its loops — the panel shows the merged view.
-			const loops = await window.ateam.loops.list();
-			close(() => onSaved(loops));
+			close(onSaved);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -187,7 +187,7 @@ function LoopForm({
 					<label>
 						Agent
 						<select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-							{agents.map((a) => (
+							{usable.map((a) => (
 								<option key={a.id} value={a.id}>
 									{a.label}
 								</option>
@@ -197,16 +197,20 @@ function LoopForm({
 				</div>
 				<div className="loop-form-row">
 					<label>
-						Project · environment
+						Environment
 						<select
 							value={projectId}
 							disabled={!!editing}
-							title={editing ? "Fixed at creation — delete and recreate to move a loop" : undefined}
+							title={
+								editing
+									? "Fixed at creation — delete and recreate to move a loop"
+									: "Which machine runs this loop's sessions"
+							}
 							onChange={(e) => setProjectId(e.target.value)}
 						>
-							{projects.map((p) => (
-								<option key={p.id} value={p.id}>
-									{p.name} — {envLabel(origins, p.id)}
+							{members.map((m) => (
+								<option key={m.projectId} value={m.projectId}>
+									{aliasLabel(m.alias)}
 								</option>
 							))}
 						</select>
@@ -264,16 +268,28 @@ function LoopForm({
 }
 
 /**
- * The Loops panel. A loop is deliberately user-created and nothing else: on its
- * interval it starts the chosen coding agent in a fresh task with the same
- * prompt, on the environment (this Mac or a box) where its project lives.
- * Stays live via the loops:updated push event and a 1s tick.
+ * The Loops panel, scoped to the selected project. A loop is deliberately
+ * user-created and nothing else: on its interval it starts the chosen coding
+ * agent in a fresh task with the same prompt, on the environment (this Mac or a
+ * box) it was created on. `loops` and `members` are the selected repo card's —
+ * one card spans every engine holding that repo, so both engines' loops show
+ * here and the only placement choice is which of them runs a new one.
  */
-export function LoopsPanel({ envProtocol }: { envProtocol: Record<string, number> }) {
-	const [loops, setLoops] = useState<LoopDTO[]>([]);
-	const [projects, setProjects] = useState<ProjectDTO[]>([]);
-	const [agents, setAgents] = useState<AgentDTO[]>([]);
-	const [origins, setOrigins] = useState<Origins>({});
+export function LoopsPanel({
+	loops,
+	members,
+	cardKey,
+	agents,
+	envProtocol,
+	onChanged,
+}: {
+	loops: LoopDTO[];
+	members: EngineMember[];
+	cardKey: string | null;
+	agents: AgentDTO[];
+	envProtocol: Record<string, number>;
+	onChanged: () => void;
+}) {
 	const [busy, setBusy] = useState<string | null>(null);
 	// Which form is open survives a tab switch, like the draft itself.
 	const [creating, setCreatingState] = useState(openForm.creating);
@@ -289,91 +305,97 @@ export function LoopsPanel({ envProtocol }: { envProtocol: Record<string, number
 	const [now, setNow] = useState(() => Date.now());
 
 	useEffect(() => {
-		// Load the merged lists first — the host learns which engine owns each id
-		// during those reads — then ask it for the origins map to label rows with.
-		void Promise.all([
-			window.ateam.loops.list().then(setLoops),
-			window.ateam.projects.list().then(setProjects),
-			window.ateam.agents.list().then((a) => setAgents(a.filter((x) => x.available))),
-		]).then(async () => setOrigins(await window.ateamHost.origins()));
-		// A mutation's return and the push event both carry ONE engine's loops;
-		// the panel shows the union across engines, so always re-list.
-		const refresh = () => void window.ateam.loops.list().then(setLoops);
-		const off = window.ateam.loops.onUpdated(refresh);
 		const tick = setInterval(() => setNow(Date.now()), 1000);
-		return () => {
-			off();
-			clearInterval(tick);
-		};
+		return () => clearInterval(tick);
 	}, []);
 
-	const refresh = async () => setLoops(await window.ateam.loops.list());
+	// A loop being edited that left this project's scope (project switched, or the
+	// loop was deleted elsewhere) would leave its form behind; close it so the
+	// panel always reflects the selected project.
+	useEffect(() => {
+		if (openForm.editingId && !loops.some((l) => l.id === openForm.editingId)) {
+			openForm.editingId = null;
+			setEditingIdState(null);
+		}
+	}, [loops]);
+
 	const toggle = async (l: LoopDTO) => {
 		await window.ateam.loops.setEnabled(l.id, !l.enabled);
-		await refresh();
+		onChanged();
 	};
 	const runNow = async (l: LoopDTO) => {
 		setBusy(l.id);
 		try {
 			await window.ateam.loops.runNow(l.id);
-			await refresh();
+			onChanged();
 		} finally {
 			setBusy(null);
 		}
 	};
 	const remove = async (l: LoopDTO) => {
 		await window.ateam.loops.remove(l.id);
-		await refresh();
+		onChanged();
 	};
+
+	if (members.length === 0) {
+		return (
+			<div className="loops">
+				<div className="loops-head">
+					<div className="loops-head-row">
+						<h2>Loops</h2>
+					</div>
+				</div>
+				<div className="empty">Select a project to see its loops.</div>
+			</div>
+		);
+	}
 
 	return (
 		<div className="loops">
 			<div className="loops-head">
 				<div className="loops-head-row">
 					<h2>Loops</h2>
-					<button
-						type="button"
-						className="navbtn"
-						onClick={() => setCreating(!creating)}
-						disabled={projects.length === 0}
-					>
+					<button type="button" className="navbtn" onClick={() => setCreating(!creating)}>
 						<Plus size={14} /> New loop
 					</button>
 				</div>
 				<p className="muted">
 					A loop starts a coding-agent session with the same prompt on a schedule. Each loop owns
-					one task (branch + worktree); every run is a fresh session in it, on this Mac or a box
-					(wherever the loop's project lives). Loops only exist when you create them.
+					one task (branch + worktree); every run is a fresh session in it, on the environment you
+					pick (this Mac or a box that has this repo). Loops only exist when you create them, and
+					you only see the selected project's.
 				</p>
 			</div>
 
 			{creating && (
 				<LoopForm
-					projects={projects}
+					draftKey={`new:${cardKey ?? ""}`}
+					members={members}
 					agents={agents}
-					origins={origins}
 					envProtocol={envProtocol}
-					onSaved={(ls) => {
-						setLoops(ls);
+					onSaved={() => {
+						onChanged();
 						setCreating(false);
 					}}
 					onCancel={() => setCreating(false)}
 				/>
 			)}
 
-			{loops.length === 0 && !creating && <div className="empty">No loops. Create one.</div>}
+			{loops.length === 0 && !creating && (
+				<div className="empty">No loops on this project. Create one.</div>
+			)}
 
 			{loops.map((l) =>
 				editingId === l.id ? (
 					<LoopForm
 						key={l.id}
 						editing={l}
-						projects={projects}
+						draftKey={l.id}
+						members={members}
 						agents={agents}
-						origins={origins}
 						envProtocol={envProtocol}
-						onSaved={(ls) => {
-							setLoops(ls);
+						onSaved={() => {
+							onChanged();
 							setEditingId(null);
 						}}
 						onCancel={() => setEditingId(null)}
@@ -383,7 +405,9 @@ export function LoopsPanel({ envProtocol }: { envProtocol: Record<string, number
 						<div className="loop-main">
 							<div className="loop-title">
 								<span>{l.title}</span>
-								<span className="loop-tag">{envLabel(origins, l.id)}</span>
+								<span className="loop-tag">
+									{aliasLabel(memberFor(members, l.projectId)?.alias ?? null)}
+								</span>
 								<span className="loop-cadence muted">
 									{l.agentId ?? "claude"} · {everyLabel(l.intervalMs)}
 								</span>
