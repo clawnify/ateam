@@ -811,6 +811,13 @@ input {
 	flex: none;
 	gap: 3px;
 	margin-right: 20px;
+	/* Zero cross-size, so chips take horizontal room (squeezing the name, which
+	   already ellipsizes) but contribute nothing to the row's height: the chip
+	   is 17.5px against a 15px name line box, so in normal flow revealing it on
+	   hover grew the row by 2px under the cursor. Centred overflow keeps the
+	   chip on the row's midline, and the row stays put whatever size it is. */
+	height: 0;
+	align-items: center;
 }
 .tasknode-row:hover .tasknode .row-tags {
 	display: flex;
