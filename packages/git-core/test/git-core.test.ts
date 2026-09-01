@@ -73,6 +73,39 @@ describe("project", () => {
 	});
 });
 
+describe("createTask freshness", () => {
+	it("branches off the latest origin/<base>, not a stale cached ref", async () => {
+		// The clone's refs/remotes/origin/main is now behind the real remote --
+		// exactly the state a repo sits in between merges.
+		const advanced = await advanceOrigin(repo);
+		expect(await branchSha(repo.work, "refs/remotes/origin/main")).not.toBe(
+			advanced,
+		);
+
+		const task = await createTask({ repoPath: repo.work, name: "fresh" });
+
+		expect(await headSha(task.worktreePath)).toBe(advanced);
+	});
+
+	it("still creates the task when the remote is unreachable", async () => {
+		const advanced = await advanceOrigin(repo);
+		const cached = await branchSha(repo.work, "refs/remotes/origin/main");
+		await simpleGit(repo.work).raw([
+			"remote",
+			"set-url",
+			"origin",
+			join(repo.dir, "does-not-exist.git"),
+		]);
+
+		const task = await createTask({ repoPath: repo.work, name: "offline" });
+
+		// Falls back to the cached ref instead of failing: creating a task must
+		// never require the network.
+		expect(await headSha(task.worktreePath)).toBe(cached);
+		expect(cached).not.toBe(advanced);
+	});
+});
+
 describe("createTask isolation", () => {
 	it("creates a co-located worktree without disturbing the main worktree", async () => {
 		const headBefore = await simpleGit(repo.work).raw([

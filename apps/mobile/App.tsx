@@ -9,6 +9,7 @@
 // status. Connection = ALWAYS a WebSocket to a Tailscale address (RN can't spawn
 // ssh; WireGuard is the auth boundary).
 import type { AgentDTO, ProjectDTO, TaskDTO } from "@ateam/protocol";
+import { PROTOCOL_VERSION } from "@ateam/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
@@ -445,6 +446,10 @@ function BoardScreen({
 	onCreate,
 	onAddProject,
 	onOpenPreview,
+	skew,
+	updating,
+	updateError,
+	onUpdateBox,
 }: {
 	connColor: string;
 	projects: ProjectDTO[];
@@ -459,6 +464,12 @@ function BoardScreen({
 	onCreate: (input: ComposerSubmit) => void;
 	onAddProject: () => void;
 	onOpenPreview: () => void;
+	/** The box's protocol when it differs from this app's; null when they match. */
+	skew: number | null;
+	updating: boolean;
+	/** Why the last update attempt failed. Cleared at the start of the next one. */
+	updateError: string | null;
+	onUpdateBox: () => void;
 }) {
 	const shown = tasks.filter((t) => t.projectId === selectedProjectId);
 	return (
@@ -485,6 +496,34 @@ function BoardScreen({
 					</View>
 				</Pressable>
 			</View>
+
+			{/* The board still works on a skewed box, so this states the risk and offers
+			    the one fix, rather than blocking the way the handshake used to. A box
+			    AHEAD of the app can't be fixed from here: updating it would only take it
+			    further away, so that case just explains itself. */}
+			{skew !== null && (
+				<View style={styles.skewBar}>
+					<Text style={styles.skewText}>
+						{skew < PROTOCOL_VERSION
+							? `This box runs an older Ateam (v${skew}). It works, but newer features will misbehave.`
+							: `This box runs a newer Ateam (v${skew}). Update this app from TestFlight.`}
+					</Text>
+					{skew < PROTOCOL_VERSION && (
+						<Pressable
+							style={[styles.skewBtn, updating && styles.skewBtnBusy]}
+							onPress={onUpdateBox}
+							disabled={updating}
+						>
+							<Text style={styles.skewBtnText}>{updating ? "Updating…" : "Update box"}</Text>
+						</Pressable>
+					)}
+				</View>
+			)}
+			{skew !== null && updateError && (
+				<View style={styles.skewErrorBar}>
+					<Text style={styles.skewErrorText}>{updateError}</Text>
+				</View>
+			)}
 
 			<ScrollView
 				style={styles.board}
@@ -536,6 +575,16 @@ export default function App() {
 	const [connecting, setConnecting] = useState(false);
 	const [connected, setConnected] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// The box's protocol when it differs from ours (null when level). Set on every
+	// connect, so a reconnect after an update is what clears the banner.
+	const [skew, setSkew] = useState<number | null>(null);
+	const [updatingBox, setUpdatingBox] = useState(false);
+	// Why the last update attempt failed. Separate from `error` (the connect
+	// screen's own state) because this renders on the BOARD, where the button
+	// lives — reusing `error` left a failed update with nowhere to show up: the
+	// button just flashed and reverted, which is exactly what an
+	// Unknown-method rejection looked like the one time this actually happened.
+	const [updateError, setUpdateError] = useState<string | null>(null);
 	const [tasks, setTasks] = useState<TaskDTO[]>([]);
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
 	const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -649,6 +698,10 @@ export default function App() {
 				backoff.current = 0;
 				await saveConnection({ host: h, port });
 				setConnected(true);
+				setSkew(c.skewed ? c.info.protocolVersion : null);
+				// Whatever we came back as, we are no longer mid-update. A reconnect is
+				// exactly how an update ends, so this is where the spinner stops.
+				setUpdatingBox(false);
 				setConnGen((g) => g + 1);
 				void c.api.agents.list().then(setAgents);
 				setView("board");
@@ -665,6 +718,24 @@ export default function App() {
 		},
 		[refresh],
 	);
+
+	// Ask the box to replace itself with the current release. The reply lands before
+	// the engine goes down, then the socket drops and the reconnect loop picks it up
+	// on the new dist, so success here looks like a disconnect, not a result.
+	const updateBox = useCallback(async () => {
+		const c = conn.current;
+		if (!c) return;
+		setUpdatingBox(true);
+		setUpdateError(null);
+		try {
+			await c.update();
+		} catch (err) {
+			// The likely one: a box older than v7 has no system:update at all, and has
+			// to be updated once from a Mac before it can ever do this itself.
+			setUpdatingBox(false);
+			setUpdateError(err instanceof Error ? err.message : String(err));
+		}
+	}, []);
 
 	// Reattach to the intended box: try once, and on failure schedule a capped
 	// exponential backoff retry (1s → 15s) so a still-down box keeps getting picked up.
@@ -950,6 +1021,10 @@ export default function App() {
 				onCreate={onCreate}
 				onAddProject={() => setBrowserOpen(true)}
 				onOpenPreview={() => setPreviewOpen(true)}
+				skew={skew}
+				updating={updatingBox}
+				updateError={updateError}
+				onUpdateBox={updateBox}
 			/>
 			<PreviewModal
 				visible={previewOpen}
@@ -1188,6 +1263,37 @@ const styles = StyleSheet.create({
 	mono: { color: C.muted, fontVariant: ["tabular-nums"] },
 
 	// board
+	// Warns without alarming: the board underneath still works.
+	skewBar: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 10,
+		paddingHorizontal: 14,
+		paddingVertical: 9,
+		backgroundColor: "#3a2f12",
+		borderBottomWidth: 1,
+		borderBottomColor: "#5a4a1c",
+	},
+	skewText: { flex: 1, color: "#f0d68c", fontSize: 12, lineHeight: 16 },
+	skewBtn: {
+		paddingHorizontal: 11,
+		paddingVertical: 6,
+		borderRadius: 6,
+		backgroundColor: "#5a4a1c",
+	},
+	skewBtnBusy: { opacity: 0.55 },
+	skewBtnText: { color: "#ffe9ad", fontSize: 12, fontWeight: "600" },
+	// A failed update, directly under the row whose button caused it. Red rather
+	// than the banner's amber: this is the one case that's a genuine failure, not
+	// a known, working-as-intended state.
+	skewErrorBar: {
+		paddingHorizontal: 14,
+		paddingVertical: 8,
+		backgroundColor: "#3a1414",
+		borderBottomWidth: 1,
+		borderBottomColor: "#5a2020",
+	},
+	skewErrorText: { color: "#f8a8a8", fontSize: 12, lineHeight: 16 },
 	board: { flex: 1 },
 	boardContent: { padding: 16, paddingBottom: 24 },
 	// Centered, width-capped content column (see CONTENT_MAX) — keeps the phone layout

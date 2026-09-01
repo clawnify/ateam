@@ -9,6 +9,7 @@ import type {
 	SessionHitDTO,
 	TaskDTO,
 } from "@ateam/protocol";
+import { boxSupports, FEATURE_MIN_VERSION, PROTOCOL_VERSION } from "@ateam/protocol";
 import {
 	ArrowDownToLine,
 	ArrowUp,
@@ -114,6 +115,15 @@ export function App() {
 	// The ~/.ssh/config boxes a task can be sent to run on (the composer's "Run on"
 	// list). Connecting + cloning the repo onto one happens at task-create time.
 	const [connections, setConnections] = useState<ConnectionDTO[]>([]);
+	// alias → why the box didn't come up when the app connected to it by itself.
+	const [connFailures, setConnFailures] = useState<Record<string, string>>({});
+	// alias → the wire contract the held engine actually speaks. A box on a different
+	// one is held anyway now, so this is what tells the user which box is skewed.
+	const [envProtocol, setEnvProtocol] = useState<Record<string, number>>({});
+	// Whether this build can upgrade a box at all. False in dev, where an update
+	// would install the latest RELEASE and leave a box running main's protocol
+	// still behind — a minute of work that changes nothing.
+	const [canUpdateBoxes, setCanUpdateBoxes] = useState(false);
 	// Which agents each connected engine actually has installed (its system:hello
 	// agents), keyed by alias ("local" for this Mac). Drives per-environment agent
 	// availability in the composer — you can only pick an agent the box really has.
@@ -303,10 +313,17 @@ export function App() {
 	useEffect(() => {
 		const load = () => {
 			void window.ateamHost.list().then(setConnections);
+			void window.ateamHost.failures().then(setConnFailures);
+			void window.ateamHost.canUpdateBoxes().then(setCanUpdateBoxes);
 			void window.ateamHost.connected().then((list) => {
 				const map: Record<string, string[]> = {};
-				for (const s of list) map[s.alias ?? "local"] = s.info.agents;
+				const wire: Record<string, number> = {};
+				for (const s of list) {
+					map[s.alias ?? "local"] = s.info.agents;
+					wire[s.alias ?? "local"] = s.info.protocolVersion;
+				}
 				setEnvAgents(map);
+				setEnvProtocol(wire);
 			});
 		};
 		load();
@@ -444,9 +461,31 @@ export function App() {
 				// `known` is only set by a successful connect, so a config alias we've
 				// never reached is one the engine has probably never been installed on.
 				needsSetup: !c.known,
+				// Set only for a connect the app made on its own, where there was no
+				// caller to show the error to — an upgrade that failed reads as an
+				// ordinary offline box without it.
+				error: connFailures[c.alias],
+				// Held, but not on this app's wire contract. Only for a box we actually
+				// hold: an unreachable one has no version to report, and saying nothing
+				// is better than guessing from the last one we saw.
+				skew:
+					envProtocol[c.alias] !== undefined && envProtocol[c.alias] !== PROTOCOL_VERSION
+						? envProtocol[c.alias]
+						: undefined,
+				// Can THIS app update THIS box: a dev build can't update any box, and no
+				// build can update one reachable only over its Tailscale endpoint.
+				updatable: canUpdateBoxes && c.transport !== "ws",
 			})),
 		];
-	}, [connections, canRemote, hasLocalMember, activeMembers]);
+	}, [
+		connections,
+		canRemote,
+		hasLocalMember,
+		activeMembers,
+		connFailures,
+		envProtocol,
+		canUpdateBoxes,
+	]);
 
 	// The active card's board unions tasks from every engine that has the repo.
 	const activeTasks = activeCard
@@ -518,25 +557,25 @@ export function App() {
 		[orderedSidebarTasks],
 	);
 
-	// Case-insensitive substring match across the task's name, branch, and
-	// description. Empty query matches all. A leading `#` switches to a tag
-	// filter instead — "#bug" narrows the board to bug-tagged work, which is the
-	// whole point of having a cross-cutting axis.
+	// One box, two jobs, told apart by a leading `#`.
+	//
+	//   `#bug`   a FILTER — narrows the board and sidebar to bug-tagged work,
+	//            which is the whole point of having a cross-cutting axis.
+	//   `caret`  a SEARCH — answered in the popover (see TaskSearch), which
+	//            lists matching tasks AND the sessions that discussed them.
+	//
+	// Words used to hide cards too. They no longer do: hiding answers "where is
+	// it?" by removing everything else, which is a filter's answer to a search's
+	// question, and it cannot show a session at all.
 	const query = taskQuery.trim().toLowerCase();
+	const tagFilter = query.startsWith("#") ? query : null;
 	const matchesQuery = useCallback(
-		(t: TaskDTO) => {
-			if (query === "") return true;
-			if (query.startsWith("#")) return matchesTagQuery(query, t);
-			return (
-				t.name.toLowerCase().includes(query) ||
-				t.branch.toLowerCase().includes(query) ||
-				(t.description?.toLowerCase().includes(query) ?? false)
-			);
-		},
-		[query],
+		(t: TaskDTO) => (tagFilter === null ? true : matchesTagQuery(tagFilter, t)),
+		[tagFilter],
 	);
-	// Sidebar and board both honor the search; Mission Control and the selected
-	// task deliberately don't (a live agent tile / open panel shouldn't vanish).
+	// Sidebar and board both honor the tag filter; Mission Control and the
+	// selected task deliberately don't (a live agent tile / open panel shouldn't
+	// vanish).
 	const visibleSidebarTasks = useMemo(
 		() => orderedSidebarTasks.filter(matchesQuery),
 		[orderedSidebarTasks, matchesQuery],
@@ -730,11 +769,17 @@ export function App() {
 			// The created task's project is a member of the active card, so its tasks
 			// are already unioned into the board once loaded.
 			await loadTasks(projectId);
+			// Land the new task in whatever the user is actually looking at: a
+			// task open full-width hands its panel to the new one, the board
+			// opens it beside itself, and Mission Control just grows a tile.
+			// `panelMode` survives deselection, so "full" only counts while a
+			// task is really on screen — otherwise the board would jump to a
+			// full-width panel the user never opened.
+			if (!(selectedTaskId && panelMode === "full")) setPanelMode("side");
 			setSelectedTaskId(task.id);
-			// Keep whatever panel mode the user is already in: if they're
-			// browsing the board (side), open the new task beside it; if they're
-			// already full-width, stay full-width.
-			setView("board");
+			// Loops shows only loop-owned tasks, so a new task would land
+			// somewhere it can't be seen; every other view keeps its place.
+			if (view === "loops") setView("board");
 			const { terminalId } = await window.ateam.pty.spawnAgent({
 				taskId: task.id,
 				agentId: input.agentId,
@@ -745,8 +790,21 @@ export function App() {
 			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		});
 
+	// Cleanup reads a shape that changed in v6, so an older box would not degrade
+	// here, it would throw inside the dialog's sort. Gate on the OWNING engine, not
+	// on whatever box happens to be selected: the dialog runs against one project,
+	// and that project lives on exactly one engine. Local is never skewed with
+	// itself, so a project on this Mac is always allowed.
+	const cleanupBlockedBy = useMemo(() => {
+		if (!activeProjectId) return null;
+		const owner = activeMembers.find((m) => m.projectId === activeProjectId);
+		if (!owner?.alias) return null;
+		const version = envProtocol[owner.alias];
+		return version !== undefined && !boxSupports("cleanup", version) ? version : null;
+	}, [activeProjectId, activeMembers, envProtocol]);
+
 	const cleanup = () => {
-		if (activeProjectId) setCleanupOpen(true);
+		if (activeProjectId && cleanupBlockedBy === null) setCleanupOpen(true);
 	};
 
 	return (
@@ -837,7 +895,7 @@ export function App() {
 								</span>
 							</div>
 						) : (
-							<>
+							<div className="side-section">
 								{/* PROJECTS accordion */}
 								<div className="section-head">
 									<button
@@ -854,217 +912,232 @@ export function App() {
 									</button>
 									<IconButton icon={FolderPlus} label="Add project" onClick={addProject} />
 								</div>
-								{!projectsCollapsed &&
-									unifiedProjects.map((card) => {
-										const alert = cardAlert(card);
-										// Selecting/detaching acts on the local copy if present, else the first.
-										const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
-										if (!primary) return null;
-										const active = card.members.some((m) => m.projectId === activeProjectId);
-										// Show the environments this repo spans (Local · box) when it's on more
-										// than just this Mac — that's the multi-engine cue.
-										const multiEnv =
-											card.members.length > 1 || card.members.some((m) => m.alias !== null);
-										return (
-											// Double-click (or the hover button) detaches the project into its
-											// own window. Row and open-button are siblings so the button's
-											// click can't nest inside the row button.
-											<div
-												key={card.key}
-												className="proj-row"
-												onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
-											>
-												<button
-													type="button"
-													className={`proj ${active ? "active" : ""}`}
-													onClick={() => selectProject(primary.projectId)}
+								{!projectsCollapsed && (
+									<div className="side-list">
+										{unifiedProjects.map((card) => {
+											const alert = cardAlert(card);
+											// Selecting/detaching acts on the local copy if present, else the first.
+											const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+											if (!primary) return null;
+											const active = card.members.some((m) => m.projectId === activeProjectId);
+											// Show the environments this repo spans (Local · box) when it's on more
+											// than just this Mac — that's the multi-engine cue.
+											const multiEnv =
+												card.members.length > 1 || card.members.some((m) => m.alias !== null);
+											return (
+												// Double-click (or the hover button) detaches the project into its
+												// own window. Row and open-button are siblings so the button's
+												// click can't nest inside the row button.
+												<div
+													key={card.key}
+													className="proj-row"
+													onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
 												>
-													<span
-														className={`dot ${alert ? `alert ${alert}` : ""}`}
-														style={!alert && card.color ? { background: card.color } : undefined}
-													/>
-													<span className="proj-name" title={primary.project.repoPath}>
-														{card.name}
-													</span>
-													{multiEnv && (
-														// One icon per environment — a monitor for this Mac, a server per
-														// box — instead of the names, which crowded the row as soon as a
-														// repo spanned more than one box. The name is the hover title
-														// (and the accessible name, so the row still reads its
-														// environments aloud). Monitor, not Laptop: lucide draws Laptop
-														// only 15 units tall inside the 24-unit box against Server's 20,
-														// so the pair looked mismatched at the same `size`. Monitor is
-														// 18 and exactly as wide, which reads as even.
-														<span className="proj-envs">
-															{card.members.map((m) => {
-																const name = aliasLabel(m.alias);
-																return (
-																	<span
-																		key={m.alias ?? "local"}
-																		className="proj-env"
-																		title={name}
-																		role="img"
-																		aria-label={name}
-																	>
-																		{m.alias === null ? (
-																			<Monitor size={12} strokeWidth={1.75} aria-hidden="true" />
-																		) : (
-																			<Server size={12} strokeWidth={1.75} aria-hidden="true" />
-																		)}
-																	</span>
-																);
-															})}
+													<button
+														type="button"
+														className={`proj ${active ? "active" : ""}`}
+														onClick={() => selectProject(primary.projectId)}
+													>
+														<span
+															className={`dot ${alert ? `alert ${alert}` : ""}`}
+															style={!alert && card.color ? { background: card.color } : undefined}
+														/>
+														<span className="proj-name" title={primary.project.repoPath}>
+															{card.name}
 														</span>
-													)}
-												</button>
-												<span className="proj-open">
-													<IconButton
-														icon={ExternalLink}
-														label="Open in new window"
-														size={14}
-														onClick={() => window.ateam.window.openProject(primary.projectId)}
-													/>
-												</span>
-											</div>
-										);
-									})}
-							</>
+														{multiEnv && (
+															// One icon per environment — a monitor for this Mac, a server per
+															// box — instead of the names, which crowded the row as soon as a
+															// repo spanned more than one box. The name is the hover title
+															// (and the accessible name, so the row still reads its
+															// environments aloud). Monitor, not Laptop: lucide draws Laptop
+															// only 15 units tall inside the 24-unit box against Server's 20,
+															// so the pair looked mismatched at the same `size`. Monitor is
+															// 18 and exactly as wide, which reads as even.
+															<span className="proj-envs">
+																{card.members.map((m) => {
+																	const name = aliasLabel(m.alias);
+																	return (
+																		<span
+																			key={m.alias ?? "local"}
+																			className="proj-env"
+																			title={name}
+																			role="img"
+																			aria-label={name}
+																		>
+																			{m.alias === null ? (
+																				<Monitor size={12} strokeWidth={1.75} aria-hidden="true" />
+																			) : (
+																				<Server size={12} strokeWidth={1.75} aria-hidden="true" />
+																			)}
+																		</span>
+																	);
+																})}
+															</span>
+														)}
+													</button>
+													<span className="proj-open">
+														<IconButton
+															icon={ExternalLink}
+															label="Open in new window"
+															size={14}
+															onClick={() => window.ateam.window.openProject(primary.projectId)}
+														/>
+													</span>
+												</div>
+											);
+										})}
+									</div>
+								)}
+							</div>
 						)}
 
 						{/* TASKS accordion — active tasks of the selected project */}
-						<div className="section-head tasks-head">
-							<button
-								type="button"
-								className="section-toggle"
-								onClick={() => setTasksCollapsed((c) => !c)}
-							>
-								{tasksCollapsed ? (
-									<ChevronRight size={14} strokeWidth={2} />
-								) : (
-									<ChevronDown size={14} strokeWidth={2} />
-								)}
-								<span>Tasks</span>
-							</button>
-							<span style={{ display: "flex", gap: 2 }}>
-								<Menu
-									icon={ArrowUpDown}
-									label="Order tasks"
-									items={[
-										{
-											label: "What's next",
-											icon: taskSort === "next" ? Check : undefined,
-											onClick: () => setTaskSort("next"),
-										},
-										{
-											label: "By status",
-											icon: taskSort === "status" ? Check : undefined,
-											onClick: () => setTaskSort("status"),
-										},
-										{
-											label: "Last updated first",
-											icon: taskSort === "updated" ? Check : undefined,
-											onClick: () => setTaskSort("updated"),
-										},
-										{
-											label: "Custom (drag to reorder)",
-											icon: taskSort === "custom" ? Check : undefined,
-											onClick: () => setTaskSort("custom"),
-										},
-									]}
-								/>
-								<IconButton
-									icon={Plus}
-									label="New task"
-									onClick={newTask}
-									disabled={!activeProjectId}
-								/>
-							</span>
-						</div>
-						{!tasksCollapsed &&
-							(!activeProjectId ? (
-								<div className="tree-empty">Select a project</div>
-							) : visibleSidebarTasks.length === 0 ? (
-								<div className="tree-empty">{query ? "No matching tasks" : "No active tasks"}</div>
-							) : taskSort === "custom" && !query ? (
-								// Custom order: drag rows up/down; Motion animates the shuffle.
-								// Disabled while searching — reordering a filtered subset would
-								// drop the hidden tasks from the saved order.
-								<Reorder.Group
-									as="div"
-									axis="y"
-									values={orderedSidebarTasks.map((t) => t.id)}
-									onReorder={reorderTasks}
+						<div className="side-section">
+							<div className="section-head tasks-head">
+								<button
+									type="button"
+									className="section-toggle"
+									onClick={() => setTasksCollapsed((c) => !c)}
 								>
-									{orderedSidebarTasks.map((t) => (
-										<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
-											<TaskRow
-												task={t}
-												selected={t.id === selectedTaskId}
-												onClick={() => openTask(t)}
-												onDelete={() => deleteTask(t)}
-											/>
-										</Reorder.Item>
-									))}
-								</Reorder.Group>
-							) : (
-								// Sorted modes: layout animation glides rows to their new spot
-								// when a status change or update reorders them.
-								visibleSidebarTasks.map((t) => (
-									<motion.div key={t.id} layout transition={springy}>
-										<TaskRow
-											task={t}
-											selected={t.id === selectedTaskId}
-											onClick={() => openTask(t)}
-											onDelete={() => deleteTask(t)}
-										/>
-									</motion.div>
-								))
-							))}
+									{tasksCollapsed ? (
+										<ChevronRight size={14} strokeWidth={2} />
+									) : (
+										<ChevronDown size={14} strokeWidth={2} />
+									)}
+									<span>Tasks</span>
+								</button>
+								<span style={{ display: "flex", gap: 2 }}>
+									<Menu
+										icon={ArrowUpDown}
+										label="Order tasks"
+										items={[
+											{
+												label: "What's next",
+												icon: taskSort === "next" ? Check : undefined,
+												onClick: () => setTaskSort("next"),
+											},
+											{
+												label: "By status",
+												icon: taskSort === "status" ? Check : undefined,
+												onClick: () => setTaskSort("status"),
+											},
+											{
+												label: "Last updated first",
+												icon: taskSort === "updated" ? Check : undefined,
+												onClick: () => setTaskSort("updated"),
+											},
+											{
+												label: "Custom (drag to reorder)",
+												icon: taskSort === "custom" ? Check : undefined,
+												onClick: () => setTaskSort("custom"),
+											},
+										]}
+									/>
+									<IconButton
+										icon={Plus}
+										label="New task"
+										onClick={newTask}
+										disabled={!activeProjectId}
+									/>
+								</span>
+							</div>
+							{!tasksCollapsed && (
+								<div className="side-list">
+									{!activeProjectId ? (
+										<div className="tree-empty">Select a project</div>
+									) : visibleSidebarTasks.length === 0 ? (
+										<div className="tree-empty">
+											{tagFilter ? "No matching tasks" : "No active tasks"}
+										</div>
+									) : taskSort === "custom" && !tagFilter ? (
+										// Custom order: drag rows up/down; Motion animates the shuffle.
+										// Disabled while a tag filter is on — reordering a filtered subset
+										// would drop the hidden tasks from the saved order.
+										<Reorder.Group
+											as="div"
+											axis="y"
+											values={orderedSidebarTasks.map((t) => t.id)}
+											onReorder={reorderTasks}
+										>
+											{orderedSidebarTasks.map((t) => (
+												<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
+													<TaskRow
+														task={t}
+														selected={t.id === selectedTaskId}
+														onClick={() => openTask(t)}
+														onDelete={() => deleteTask(t)}
+													/>
+												</Reorder.Item>
+											))}
+										</Reorder.Group>
+									) : (
+										// Sorted modes: layout animation glides rows to their new spot
+										// when a status change or update reorders them.
+										visibleSidebarTasks.map((t) => (
+											<motion.div key={t.id} layout transition={springy}>
+												<TaskRow
+													task={t}
+													selected={t.id === selectedTaskId}
+													onClick={() => openTask(t)}
+													onDelete={() => deleteTask(t)}
+												/>
+											</motion.div>
+										))
+									)}
+								</div>
+							)}
+						</div>
 
 						{/* LOOPS accordion — the active repo's scheduled agent sessions.
 						    Each loop owns one persistent task; clicking a row opens that
 						    task's terminal (or the Loops tab before its first run).
-						    loops-side-head floats it to the sidebar's bottom while there
-						    is spare room; a long task list pushes it down naturally. */}
-						<div className="section-head tasks-head loops-side-head">
-							<button
-								type="button"
-								className="section-toggle"
-								onClick={() => setLoopsCollapsed((c) => !c)}
-							>
-								{loopsCollapsed ? (
-									<ChevronRight size={14} strokeWidth={2} />
-								) : (
-									<ChevronDown size={14} strokeWidth={2} />
-								)}
-								<span>Loops</span>
-							</button>
-							<IconButton
-								icon={Plus}
-								label="New loop"
-								onClick={() => setView("loops")}
-								disabled={!activeProjectId}
-							/>
+						    loops-side-section floats it to the sidebar's bottom while
+						    there is spare room; a long task list pushes it down. */}
+						<div className="side-section loops-side-section">
+							<div className="section-head tasks-head">
+								<button
+									type="button"
+									className="section-toggle"
+									onClick={() => setLoopsCollapsed((c) => !c)}
+								>
+									{loopsCollapsed ? (
+										<ChevronRight size={14} strokeWidth={2} />
+									) : (
+										<ChevronDown size={14} strokeWidth={2} />
+									)}
+									<span>Loops</span>
+								</button>
+								<IconButton
+									icon={Plus}
+									label="New loop"
+									onClick={() => setView("loops")}
+									disabled={!activeProjectId}
+								/>
+							</div>
+							{!loopsCollapsed && (
+								<div className="side-list">
+									{activeLoops.length === 0 ? (
+										<div className="tree-empty">No loops</div>
+									) : (
+										activeLoops.map((l) => {
+											const task = l.taskId
+												? (activeTasks.find((t) => t.id === l.taskId) ?? null)
+												: null;
+											return (
+												<LoopRow
+													key={l.id}
+													loop={l}
+													task={task}
+													selected={task != null && task.id === selectedTaskId}
+													onClick={() => (task ? openTask(task) : setView("loops"))}
+												/>
+											);
+										})
+									)}
+								</div>
+							)}
 						</div>
-						{!loopsCollapsed &&
-							(activeLoops.length === 0 ? (
-								<div className="tree-empty">No loops</div>
-							) : (
-								activeLoops.map((l) => {
-									const task = l.taskId
-										? (activeTasks.find((t) => t.id === l.taskId) ?? null)
-										: null;
-									return (
-										<LoopRow
-											key={l.id}
-											loop={l}
-											task={task}
-											selected={task != null && task.id === selectedTaskId}
-											onClick={() => (task ? openTask(task) : setView("loops"))}
-										/>
-									);
-								})
-							))}
 					</>
 				)}
 			</aside>
@@ -1119,7 +1192,9 @@ export function App() {
 						query={taskQuery}
 						onQuery={setTaskQuery}
 						projectIds={searchProjectIds}
-						onOpen={openSessionHit}
+						tasks={activeTasks}
+						onOpenTask={openTask}
+						onOpenSession={openSessionHit}
 					/>
 					<div className="spacer" />
 					{view === "mission" && !(selectedTask && panelMode === "full") && (
@@ -1163,7 +1238,17 @@ export function App() {
 							</button>
 						</div>
 					)}
-					<button type="button" className="navbtn" onClick={cleanup} disabled={!activeProjectId}>
+					<button
+						type="button"
+						className="navbtn"
+						onClick={cleanup}
+						disabled={!activeProjectId || cleanupBlockedBy !== null}
+						title={
+							cleanupBlockedBy !== null
+								? `This project lives on a box running an older Ateam (protocol v${cleanupBlockedBy}). Cleanup needs v${FEATURE_MIN_VERSION.cleanup} or newer: update the box to use it here.`
+								: undefined
+						}
+					>
 						<Brush size={14} strokeWidth={1.75} />
 						Clean up
 					</button>
@@ -1243,7 +1328,7 @@ export function App() {
 							/>
 						)
 					) : (
-						<LoopsPanel />
+						<LoopsPanel envProtocol={envProtocol} />
 					)}
 				</div>
 			</main>
@@ -1296,6 +1381,7 @@ function TaskRow({
 	onDelete: () => void;
 }) {
 	const Icon = taskIcon(t.name);
+	const tags = tagsFor(t);
 	// Row and trailing slot are siblings so the trash click can't nest inside the
 	// row button (same pattern as proj-row / proj-open above). The status dot and
 	// delete button share the trailing slot and swap in place on hover.
@@ -1310,6 +1396,18 @@ function TaskRow({
 					<Icon className="ticon" size={14} strokeWidth={1.75} />
 				)}
 				<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
+				{/* Hover-only, like the card's. The name already ellipsizes, so it
+				    simply truncates further to make room and the row never changes
+				    height. */}
+				{tags.length > 0 && (
+					<span className="row-tags">
+						{tags.map((tag) => (
+							<span className="tag" key={tag}>
+								{tag}
+							</span>
+						))}
+					</span>
+				)}
 			</button>
 			<span className="task-trail">
 				{t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />}
@@ -1371,6 +1469,29 @@ function Board({
 	/** Engine badge for a task (e.g. a box alias), or null to show none (Local). */
 	originLabel: (t: TaskDTO) => string | null;
 }) {
+	// The side panel is sticky over the right edge of the board (the board keeps
+	// its full width rather than reflowing), so a selected card in a right-hand
+	// column sits underneath it. Scroll it clear: `.card.selected` reserves the
+	// panel's width as scroll-margin-right, and "nearest" then no-ops whenever
+	// the card is already in the clear, so we never yank a board the user placed.
+	const selectedRef = useRef<HTMLDivElement | null>(null);
+	const revealSelected = useCallback(() => {
+		const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		selectedRef.current?.scrollIntoView({
+			behavior: reduced ? "auto" : "smooth",
+			block: "nearest",
+			inline: "nearest",
+		});
+	}, []);
+	// Selecting doesn't move the card, so reveal it in the same commit that opens
+	// the panel. A task that later changes status animates to its new column, and
+	// mid-flight the card's box is a transform of the old spot — scrolling then
+	// would chase a moving target, so that case waits for the layout animation
+	// to land (below) instead of keying this effect on the column.
+	useEffect(() => {
+		if (selectedId) revealSelected();
+	}, [selectedId, revealSelected]);
+
 	return (
 		// Clicking empty board space deselects; card clicks stopPropagation.
 		<div className="board" onClick={onDeselect}>
@@ -1383,12 +1504,18 @@ function Board({
 						</h3>
 						{items.map((t) => {
 							const tags = tagsFor(t);
+							const isSelected = t.id === selectedId;
 							return (
 								<motion.div
 									key={t.id}
 									layout
 									transition={springy}
-									className={`card ${t.id === selectedId ? "selected" : ""}`}
+									ref={isSelected ? selectedRef : undefined}
+									// Fires after any layout animation settles — a status change
+									// carrying the card to another column, or cards above it coming
+									// and going. Re-check from the card's final resting box.
+									onLayoutAnimationComplete={isSelected ? revealSelected : undefined}
+									className={`card ${isSelected ? "selected" : ""}`}
 									onClick={(e) => {
 										e.stopPropagation();
 										onSelect(t.id);
@@ -1438,15 +1565,15 @@ function Board({
 											</span>
 										)}
 										{t.prNumber && <span>PR #{t.prNumber}</span>}
-										{relativeAge(t.lastEventAt, Date.now()) && (
-											<span className="age">{relativeAge(t.lastEventAt, Date.now())}</span>
-										)}
-									</div>
-									{t.agentId && (
-										<span className="card-agent">
-											<AgentIcon agentId={t.agentId} size={15} />
+										{/* Age and agent icon share one right-aligned group: the icon used to
+									    be absolutely positioned and sat on top of the age label. */}
+										<span className="meta-end">
+											{relativeAge(t.lastEventAt, Date.now()) && (
+												<span className="age">{relativeAge(t.lastEventAt, Date.now())}</span>
+											)}
+											{t.agentId && <AgentIcon agentId={t.agentId} size={15} />}
 										</span>
-									)}
+									</div>
 								</motion.div>
 							);
 						})}
@@ -1520,6 +1647,12 @@ function TaskPanel({
 	// "this task has no sessions".
 	const [loaded, setLoaded] = useState<{ taskId: string; sessions: SessionDTO[] } | null>(null);
 	const sessions = loaded?.taskId === task.id ? loaded.sessions : null;
+	// Tabs that were open when the app last went down. Same tagging rule as
+	// `loaded`: the render right after a task switch still holds the previous
+	// task's list. An empty array is the honest default here — unlike `sessions`,
+	// nothing decides anything from "this task has none".
+	const [dead, setDead] = useState<{ taskId: string; sessions: SessionDTO[] } | null>(null);
+	const restorable = dead?.taskId === task.id ? dead.sessions : [];
 
 	// Selecting another task closes the changes view.
 	useEffect(() => {
@@ -1529,13 +1662,18 @@ function TaskPanel({
 
 	const refreshSessions = useCallback(async () => {
 		const taskId = task.id;
-		const live = await window.ateam.pty.listForTask(taskId);
+		const [live, stranded] = await Promise.all([
+			window.ateam.pty.listForTask(taskId),
+			window.ateam.pty.listRestorable(taskId),
+		]);
 		// The engine hands these back latest-first; reverse so the strip reads
 		// oldest → newest — a new session then appends on the right instead of
 		// shuffling the tabs already open.
 		const ordered = live.reverse();
+		const orderedDead = stranded.reverse();
 		setLoaded({ taskId, sessions: ordered });
-		return ordered;
+		setDead({ taskId, sessions: orderedDead });
+		return { live: ordered, restorable: orderedDead };
 	}, [task.id]);
 
 	useEffect(() => {
@@ -1576,6 +1714,25 @@ function TaskPanel({
 		[task.id, fallbackAgentId, run, setTerminal, refreshSessions],
 	);
 
+	/**
+	 * Bring a stranded tab back: a new terminal running the SAME conversation.
+	 * Mirrors `launch` in using `setTerminal` rather than `showTerminal` — this
+	 * also runs from the fallback effect below, which must not yank you out of
+	 * the editor.
+	 */
+	const restoreTab = useCallback(
+		(session: SessionDTO) =>
+			run(async () => {
+				const { terminalId: tid } = await window.ateam.pty.restoreSession({
+					taskId: task.id,
+					terminalId: session.terminalId,
+				});
+				await refreshSessions();
+				setTerminal(tid);
+			}),
+		[task.id, run, setTerminal, refreshSessions],
+	);
+
 	// Keep the active tab pointed at something real. Covers (re)opening a task
 	// with surviving daemon sessions, and a session ending — its tab disappears
 	// and the newest survivor takes focus. With nothing left, resume the agent's
@@ -1606,17 +1763,32 @@ function TaskPanel({
 			autoResumedRef.current !== task.id;
 		if (terminalId === null && !resumable) return;
 		let cancelled = false;
-		void refreshSessions().then((live) => {
+		void refreshSessions().then(({ live, restorable: stranded }) => {
 			if (cancelled || live.length) return; // it wasn't empty after all
 			if (terminalId !== null) setTerminal(null);
 			if (!resumable) return;
 			autoResumedRef.current = task.id;
-			void launch(false, true);
+			// Prefer the newest tab that was actually open when we went down: it
+			// resumes THAT conversation by id. `launch(resume)` is the fallback for
+			// a task with nothing stranded (or nothing but shells) — it can only
+			// reach the newest conversation in the worktree, whichever tab that was.
+			const newest = [...stranded].reverse().find((s) => s.agentId !== "shell");
+			if (newest) void restoreTab(newest);
+			else void launch(false, true);
 		});
 		return () => {
 			cancelled = true;
 		};
-	}, [task.id, task.column, sessions, terminalId, setTerminal, launch, refreshSessions]);
+	}, [
+		task.id,
+		task.column,
+		sessions,
+		terminalId,
+		setTerminal,
+		launch,
+		restoreTab,
+		refreshSessions,
+	]);
 
 	// "+ → New agent session…": the task-creation composer minus name/branch/machine.
 	// Launches into THIS task's worktree, so the prompt, attachments, agent and YOLO
@@ -1681,7 +1853,7 @@ function TaskPanel({
 		if (!viewFile && diff?.files[0]) setViewFile(diff.files[0].path);
 	};
 
-	const tabs = sessionTabs(sessions ?? [], agents);
+	const tabs = sessionTabs(sessions ?? [], agents, restorable);
 
 	// Closing a tab kills its PTY — tabs are exactly the live sessions, so there
 	// is no "closed but still running" state to explain. Confirm first when the
@@ -1739,30 +1911,44 @@ function TaskPanel({
 				    of agent session you get is the composer's question, not a row of
 				    buttons — so the row stays legible however many tabs are open. */}
 				<div className="sess-tabs" role="tablist" aria-label="Sessions">
-					{tabs.map(({ session, label }) => (
+					{tabs.map(({ session, label, live }) => (
 						<div
 							key={session.terminalId}
-							className={`sess-tab ${session.terminalId === terminalId ? "active" : ""}`}
+							className={`sess-tab ${session.terminalId === terminalId ? "active" : ""} ${
+								live ? "" : "restorable"
+							}`}
 						>
 							<button
 								type="button"
 								role="tab"
-								aria-selected={session.terminalId === terminalId}
+								aria-selected={live && session.terminalId === terminalId}
 								className="sess-tab-name"
-								title={label}
-								onClick={() => showTerminal(session.terminalId)}
+								title={live ? label : `${label} — closed by a restart. Click to resume it.`}
+								onClick={() => {
+									if (live) {
+										showTerminal(session.terminalId);
+										return;
+									}
+									setEditorOpen(false);
+									setChangesOpen(false);
+									void restoreTab(session);
+								}}
 							>
 								{label}
 							</button>
-							<button
-								type="button"
-								className="sess-tab-close"
-								aria-label={`Close ${label}`}
-								title={`Close ${label}`}
-								onClick={() => closeSession(session, label)}
-							>
-								<X size={11} />
-							</button>
+							{/* A stranded tab has no process to kill, and it retires itself
+							    after one run of the app — so it carries no close button. */}
+							{live && (
+								<button
+									type="button"
+									className="sess-tab-close"
+									aria-label={`Close ${label}`}
+									title={`Close ${label}`}
+									onClick={() => closeSession(session, label)}
+								>
+									<X size={11} />
+								</button>
+							)}
 						</div>
 					))}
 					<Menu
@@ -2053,9 +2239,14 @@ function MissionControl({
 	// between them. Creating and closing sessions stays in the task panel, where
 	// the + and the ✕ live; a tile is a viewport onto work that already exists.
 	const [tiles, setTiles] = useState<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
-	// Which session each tile is showing, when the viewer has picked one. Absent
-	// (or pointing at a session that has since died) falls back to activeTerminal.
-	const [shownByTask, setShownByTask] = useState<Record<string, string>>({});
+	// Which session each tile is showing. `pinned` marks a tab the viewer clicked,
+	// which is then kept for as long as that session lives. An unpinned entry is
+	// resolved the moment the tile arrives on the visible page (see below), and
+	// absent — or pointing at a session that has since died — falls back to
+	// activeTerminal.
+	const [shownByTask, setShownByTask] = useState<
+		Record<string, { terminalId: string; pinned: boolean }>
+	>({});
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
 
@@ -2223,6 +2414,45 @@ function MissionControl({
 		};
 	}, [resort]);
 
+	// The tiles this page actually shows. Computed before the empty-state return
+	// so the arrival effect below runs on every render, as hooks must.
+	const visible = tiles.slice(clampedPage * pageSize, clampedPage * pageSize + pageSize);
+	const visibleRef = useRef(visible);
+	visibleRef.current = visible;
+	// Task ids on screen, in order: the effect's dependency, so it fires exactly
+	// when the visible set changes and not on every session refresh.
+	const onScreen = visible.map((t) => t.task.id).join(" ");
+	const onScreenRef = useRef<Set<string>>(new Set());
+
+	// A tile ARRIVING on the visible page — promoted by a reorder, or paged to —
+	// lands on the session that most recently did something (activeTerminal with
+	// no pick). That resolution is then held while the tile stays on screen: the
+	// tab must not swap under someone reading it, or worse, mid-sentence into it,
+	// because the task's other agent stirred. So this is deliberately not live:
+	// it re-reads the room only at the moment the room changes.
+	useEffect(() => {
+		const ids = onScreen ? onScreen.split(" ") : [];
+		const arriving = ids.filter((id) => !onScreenRef.current.has(id));
+		onScreenRef.current = new Set(ids);
+		if (arriving.length === 0) return;
+		const sessionsById = new Map(visibleRef.current.map((t) => [t.task.id, t.sessions]));
+		setShownByTask((m) => {
+			let next = m;
+			for (const id of arriving) {
+				const sessions = sessionsById.get(id);
+				if (!sessions) continue;
+				const cur = m[id];
+				// A tab the viewer chose outranks the news, until its session dies.
+				if (cur?.pinned && sessions.some((s) => s.terminalId === cur.terminalId)) continue;
+				const pick = activeTerminal(sessions, null);
+				if (!pick || cur?.terminalId === pick) continue;
+				if (next === m) next = { ...m };
+				next[id] = { terminalId: pick, pinned: false };
+			}
+			return next;
+		});
+	}, [onScreen]);
+
 	if (tiles.length === 0) {
 		return (
 			<div className="mc" data-layout={layout}>
@@ -2235,7 +2465,6 @@ function MissionControl({
 		);
 	}
 
-	const visible = tiles.slice(clampedPage * pageSize, clampedPage * pageSize + pageSize);
 	return (
 		<div className="mc-wrap">
 			{/* Keyed by page: flipping remounts the grid, and TerminalView replays
@@ -2251,14 +2480,24 @@ function MissionControl({
 				transition={springy}
 			>
 				{visible.map(({ task, sessions }) => {
-					const shown = activeTerminal(sessions, shownByTask[task.id] ?? null);
+					const shown = activeTerminal(sessions, shownByTask[task.id]?.terminalId ?? null);
 					if (!shown) return null; // a task with no live session is not a tile
 					const tabs = sessionTabs(sessions, agents);
 					return (
-						// biome-ignore lint/a11y/noStaticElementInteractions: focus/blur only observe where focus is; the tile itself isn't interactive
-						<div
+						<motion.div
 							key={task.id}
 							className="tile"
+							// A reorder swaps terminals in and out of a page in silence — the
+							// same four boxes, different work inside them — so the change had
+							// to be announced. Tiles that keep their place glide to it (the
+							// sidebar's treatment), and a tile arriving in a slot fades up
+							// from nothing, which is the part you actually notice. Position
+							// only: `layout` alone would scale a terminal mid-flight when the
+							// page holds a different number of tiles than it did before.
+							layout="position"
+							initial={{ opacity: 0 }}
+							animate={{ opacity: 1 }}
+							transition={{ layout: springy, opacity: { duration: 0.22 } }}
 							// React's onFocus/onBlur bubble (focusin/focusout), so these fire
 							// when the xterm textarea inside the tile gains/loses focus.
 							onFocus={() => {
@@ -2301,7 +2540,10 @@ function MissionControl({
 											className={`mc-tab ${session.terminalId === shown ? "active" : ""}`}
 											title={label}
 											onClick={() =>
-												setShownByTask((m) => ({ ...m, [task.id]: session.terminalId }))
+												setShownByTask((m) => ({
+													...m,
+													[task.id]: { terminalId: session.terminalId, pinned: true },
+												}))
 											}
 										>
 											{label}
@@ -2310,7 +2552,7 @@ function MissionControl({
 								</div>
 							)}
 							<TerminalView terminalId={shown} />
-						</div>
+						</motion.div>
 					);
 				})}
 			</motion.div>

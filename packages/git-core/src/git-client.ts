@@ -24,9 +24,22 @@ const BASE_OPTIONS = {
  *
  * `GIT_TERMINAL_PROMPT=0` makes credential-less HTTPS remotes fail fast instead
  * of blocking on a prompt no one can answer (the app has no terminal attached).
+ *
+ * `abort` swaps that inactivity budget for a WALL-CLOCK cap, for the callers
+ * where finishing is optional rather than required (a best-effort refresh on an
+ * interactive path). simple-git's abort plugin kills the spawned process when
+ * the signal fires, so a stalled network costs the caller's budget, not five
+ * minutes. Callers that MUST complete (the merge queue) pass nothing and keep
+ * the inactivity semantics.
  */
-export function gitFor(worktreePath: string): SimpleGit {
-	return simpleGit(worktreePath, BASE_OPTIONS).env({
+export function gitFor(
+	worktreePath: string,
+	options?: { abort?: AbortSignal },
+): SimpleGit {
+	return simpleGit(worktreePath, {
+		...BASE_OPTIONS,
+		...(options?.abort && { abort: options.abort }),
+	}).env({
 		...process.env,
 		GIT_OPTIONAL_LOCKS: "0",
 		GIT_TERMINAL_PROMPT: "0",

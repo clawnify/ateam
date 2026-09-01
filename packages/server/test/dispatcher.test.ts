@@ -16,10 +16,20 @@ import type { Engine } from "../src/engine";
 // assert the extraction still emits it.
 function makeEngine(db: AteamDb) {
 	const taskUpdated: string[] = [];
+	const spawned: { terminalId: string; args?: string[] }[] = [];
 	const engine = {
 		services: {
 			db,
-			pty: { has: () => false, kill() {}, write() {}, resize() {}, spawn() {} },
+			pty: {
+				has: () => false,
+				kill() {},
+				write() {},
+				resize() {},
+				spawn(o: { terminalId: string; args?: string[] }) {
+					spawned.push(o);
+				},
+			},
+			followUps: { arm() {}, discard() {} },
 			hooks: {},
 			mergeQueue: {},
 			loopRunner: { describe: () => [] },
@@ -31,7 +41,7 @@ function makeEngine(db: AteamDb) {
 		sendTaskUpdated: (id: string) => taskUpdated.push(id),
 		sendLoopsUpdated: () => {},
 	} as unknown as Engine;
-	return { engine, taskUpdated };
+	return { engine, taskUpdated, spawned };
 }
 
 describe("createDispatcher", () => {
@@ -74,6 +84,148 @@ describe("createDispatcher", () => {
 		expect(taskUpdated).toContain(task.id);
 	});
 
+	// --- tabs a restart took away ---------------------------------------------
+
+	// The bug this exists for: a laptop restart kills the PTY daemon, and every
+	// tab but one was simply gone. Restoring has to bring back the SAME
+	// conversation, not the newest one in the worktree — which is all
+	// `claude --continue` can reach, and all the app could do before.
+	it("restores a stranded tab into a new terminal on the same conversation", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "ateam-restore-"));
+		try {
+			const db = createTestDb();
+			const { engine, spawned } = makeEngine(db);
+			const d = createDispatcher(engine);
+			const project = repo.upsertProject(db, { repoPath: dir, name: "R", defaultBranch: "main" });
+			const task = repo.createTask(db, {
+				projectId: project!.id,
+				name: "restore me",
+				slug: "restore-me",
+				branch: "restore-me",
+				baseBranch: "main",
+				worktreePath: dir,
+			});
+			const dead = repo.createSession(db, {
+				taskId: task.id,
+				agentId: "claude",
+				terminalId: "term-dead",
+				agentSessionId: "conv-1",
+				cwd: dir,
+			});
+			repo.updateSession(db, dead.id, { exitedAt: 1, exitReason: "stranded" });
+
+			const listed = (await d.handle(CH.ptyListRestorable, [task.id])) as Array<{
+				terminalId: string;
+			}>;
+			expect(listed.map((x) => x.terminalId)).toEqual(["term-dead"]);
+
+			const back = (await d.handle(CH.ptyRestoreSession, [
+				{ taskId: task.id, terminalId: "term-dead" },
+			])) as { terminalId: string };
+
+			// A new terminal, still pointed at the conversation the old tab held.
+			expect(back.terminalId).not.toBe("term-dead");
+			expect(repo.getSessionByTerminal(db, back.terminalId)?.agentSessionId).toBe("conv-1");
+			expect(spawned.at(-1)?.args?.join(" ")).toContain("claude --resume 'conv-1'");
+			// …and it is no longer offered, so it cannot be restored twice.
+			expect(await d.handle(CH.ptyListRestorable, [task.id])).toEqual([]);
+			expect(repo.getSessionByTerminal(db, "term-dead")?.exitReason).toBe("restored");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	// Two windows on the same task both auto-restore, or you double-click: the
+	// conversation is already back, so hand over the tab it is in.
+	it("hands back the existing tab when the conversation is already restored", async () => {
+		const db = createTestDb();
+		const { engine } = makeEngine(db);
+		// This engine reports the second session as live.
+		(engine.services as unknown as { pty: { has: (t: string) => boolean } }).pty.has = (t) =>
+			t === "term-back";
+		const d = createDispatcher(engine);
+		const project = repo.upsertProject(db, { repoPath: "/r/e", name: "E" });
+		const task = repo.createTask(db, {
+			projectId: project!.id,
+			name: "t",
+			slug: "t",
+			branch: "t",
+			baseBranch: "main",
+			worktreePath: "/r/e/wt",
+		});
+		const dead = repo.createSession(db, {
+			taskId: task.id,
+			agentId: "claude",
+			terminalId: "term-dead",
+			agentSessionId: "conv-1",
+			cwd: "/r/e/wt",
+		});
+		repo.updateSession(db, dead.id, { exitedAt: 1, exitReason: "restored" });
+		repo.createSession(db, {
+			taskId: task.id,
+			agentId: "claude",
+			terminalId: "term-back",
+			agentSessionId: "conv-1",
+			cwd: "/r/e/wt",
+		});
+
+		expect(
+			await d.handle(CH.ptyRestoreSession, [{ taskId: task.id, terminalId: "term-dead" }]),
+		).toEqual({ terminalId: "term-back" });
+	});
+
+	it("refuses to restore a tab that was closed on purpose", async () => {
+		const db = createTestDb();
+		const { engine } = makeEngine(db);
+		const d = createDispatcher(engine);
+		const project = repo.upsertProject(db, { repoPath: "/r/c", name: "C" });
+		const task = repo.createTask(db, {
+			projectId: project!.id,
+			name: "t",
+			slug: "t",
+			branch: "t",
+			baseBranch: "main",
+			worktreePath: "/r/c/wt",
+		});
+		const s = repo.createSession(db, {
+			taskId: task.id,
+			agentId: "claude",
+			terminalId: "term-closed",
+			cwd: "/r/c/wt",
+		});
+		repo.updateSession(db, s.id, { exitedAt: 1, exitReason: "closed" });
+
+		expect(
+			d.handle(CH.ptyRestoreSession, [{ taskId: task.id, terminalId: "term-closed" }]),
+		).rejects.toThrow(/not restorable/);
+	});
+
+	// Closing a tab is the one ending that means "I am done with this". The
+	// engine reads this stamp back instead of guessing why a PTY went away.
+	it("marks a killed session closed, so a restart cannot offer it back", async () => {
+		const db = createTestDb();
+		const { engine } = makeEngine(db);
+		const d = createDispatcher(engine);
+		const project = repo.upsertProject(db, { repoPath: "/r/d", name: "D" });
+		const task = repo.createTask(db, {
+			projectId: project!.id,
+			name: "t",
+			slug: "t",
+			branch: "t",
+			baseBranch: "main",
+			worktreePath: "/r/d/wt",
+		});
+		repo.createSession(db, {
+			taskId: task.id,
+			agentId: "claude",
+			terminalId: "term-1",
+			cwd: "/r/d/wt",
+		});
+
+		await d.handle(CH.ptyKill, ["term-1"]);
+		expect(repo.getSessionByTerminal(db, "term-1")?.exitReason).toBe("closed");
+	});
+
 	it("throws on an unknown method", () => {
 		const { engine } = makeEngine(createTestDb());
 		const d = createDispatcher(engine);
@@ -110,6 +262,64 @@ describe("createDispatcher", () => {
 		const { engine } = makeEngine(createTestDb());
 		const d = createDispatcher(engine);
 		expect(await d.handle(CH.projectsList, [])).toEqual([]);
+	});
+
+	// Cleanup used to hide everything its rule rejected, so an unmerged or busy
+	// worktree was simply not offered. The list is now the whole project and the
+	// rule only advises — that is the difference this asserts.
+	it("offers every task for cleanup, flagging only the sweep-safe ones", async () => {
+		const db = createTestDb();
+		const { engine } = makeEngine(db);
+		// One live terminal, so "merged but the agent is still in it" is real.
+		(engine.services.pty as unknown as { has: (id: string) => boolean }).has = (id) =>
+			id === "live-term";
+		const d = createDispatcher(engine);
+
+		const project = repo.upsertProject(db, { repoPath: "/r/c", name: "C", defaultBranch: "main" });
+		const mk = (name: string) =>
+			repo.createTask(db, {
+				projectId: project!.id,
+				name,
+				slug: name,
+				branch: name,
+				baseBranch: "main",
+				// Nonexistent path: the git probe is guarded and reads a vanished
+				// worktree as clean, which is the behaviour we want asserted here.
+				worktreePath: `/r/c/.ateam/worktrees/${name}`,
+			});
+
+		const ongoing = mk("ongoing"); // todo, no PR → not merged
+		const swept = mk("swept");
+		repo.updateTask(db, swept.id, { column: "merged", prNumber: 7, prState: "merged" });
+		const busy = mk("busy");
+		repo.updateTask(db, busy.id, { column: "merged", prState: "merged" });
+		repo.createSession(db, {
+			taskId: busy.id,
+			agentId: "claude",
+			terminalId: "live-term",
+			cwd: "/r/c",
+		});
+
+		const list = (await d.handle(CH.tasksCleanupCandidates, [project!.id])) as Array<{
+			task: { id: string; prState: string | null; prNumber: number | null };
+			recommended: boolean;
+			reason: string;
+			terminalId: string | null;
+		}>;
+
+		// Every task is listed — nothing is filtered out of the decision any more.
+		expect(list.map((c) => c.task.id).sort()).toEqual([ongoing.id, swept.id, busy.id].sort());
+
+		const by = (id: string) => list.find((c) => c.task.id === id)!;
+		expect(by(swept.id).recommended).toBe(true);
+		expect(by(ongoing.id)).toMatchObject({ recommended: false, reason: "not merged" });
+		expect(by(busy.id)).toMatchObject({ recommended: false, reason: "agent still active" });
+		// The live PTY rides along so the dialog can show the conversation.
+		expect(by(busy.id).terminalId).toBe("live-term");
+		expect(by(ongoing.id).terminalId).toBeNull();
+		// The factors the user decides on come from the task itself.
+		expect(by(swept.id).task.prNumber).toBe(7);
+		expect(by(swept.id).task.prState).toBe("merged");
 	});
 
 	// A brand-new project from a client with no native folder dialog (the phone): the

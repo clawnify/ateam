@@ -15,6 +15,7 @@ import {
 	type EditorEndpointDTO,
 	type EditorOpenResult,
 	PROTOCOL_VERSION,
+	tolerantRpc,
 	type ProjectDTO,
 	type RpcClient,
 	type SystemInfo,
@@ -134,6 +135,10 @@ export interface Host {
 	connected(): Promise<HostStatus[]>;
 	/** id → owning-engine alias (null = local), from the aggregate's learned registry. */
 	origins(): Record<string, string | null>;
+	/** alias → why the last self-initiated connect failed (empty once it succeeds). */
+	failures(): Record<string, string>;
+	/** Whether this build can upgrade a box to its own version (packaged only). */
+	canUpdateBoxes(): boolean;
 	/** Start the in-app editor on the task's engine and resolve the URL THIS
 	 *  client loads for it (localhost, ssh forward, or tailnet endpoint) — or
 	 *  report that the engine still needs code-server installed. */
@@ -171,6 +176,11 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// alias → backend; `null` is the always-held local engine (insertion order: local
 	// first). Boxes are added on connect and removed on disconnect.
 	const backends = new Map<string | null, Backend>([[null, local]]);
+	// Why a box the app connected to BY ITSELF didn't come up. A connect the user
+	// asked for rejects to its caller, which surfaces the message; the startup sweep
+	// has no caller, so its failures used to vanish into a catch and read to the user
+	// as an ordinary offline box. Keyed by alias, cleared the moment one succeeds.
+	const connectFailures = new Map<string, string>();
 	// Per-alias event unsubscribers, so disconnecting one box stops only its stream.
 	const unbinders = new Map<string | null, () => void>();
 	// Per-alias health probes (ws only) — cleared on disconnect so a dropped box
@@ -270,7 +280,19 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return sshClientTransport(alias, [REMOTE_ATTACH], { sshFlags: editorForwardFlags(alias) });
 	}
 
-	async function connect(alias: string | null): Promise<HostStatus> {
+	/**
+	 * Connect a box, bringing it up to THIS app's protocol first if it is behind.
+	 *
+	 * `healed` marks the retry that `install()` makes after upgrading a box, so a box
+	 * that comes back still mismatched reports that instead of installing forever.
+	 *
+	 * Self-healing rather than an "update" button because the button scales the wrong
+	 * way: one press per box per protocol bump, and the phone has no press to give.
+	 * This is what VS Code Remote-SSH and Zed already do with their remote servers,
+	 * the client's version deciding the server's, installed on connect. It fires only
+	 * on a box that is BEHIND and reachable over SSH, never on the routine path.
+	 */
+	async function connect(alias: string | null, healed = false): Promise<HostStatus> {
 		// local is permanent; connecting to it (or to an already-held box) is a no-op.
 		if (alias === null) return statusOf(local, null);
 		const existing = backends.get(alias);
@@ -288,20 +310,51 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			throw err;
 		}
 		if (info.protocolVersion !== PROTOCOL_VERSION) {
-			client.close();
-			throw new Error(
-				`Protocol mismatch: "${alias}" speaks v${info.protocolVersion}, this app speaks v${PROTOCOL_VERSION}. Update the older side.`,
-			);
+			// Upgrade it if we can, but a mismatch is no longer a refusal. Refusing was
+			// safe and total: a box one release old became unusable rather than partly
+			// useful, and the phone had no way to act on the advice. The version is
+			// advisory (as this contract's doc always said), the client tolerates an
+			// older engine's replies, and the UI says the box is skewed. What the user
+			// gets is a box that mostly works and an explanation, instead of a wall.
+			//
+			// Upward only. A box AHEAD of this app must not be downgraded: the desktop
+			// auto-updates, so the honest fix there is to let it. Upward-only is also what
+			// keeps two desktops on different versions from reinstalling a shared box back
+			// and forth, which is a real risk here because a box has ONE $HOME/ateam-app
+			// rather than the per-version directory VS Code keys its server by.
+			//
+			// Packaged builds only, and that is not a nicety: install.sh serves RELEASES,
+			// so the newest protocol a box can reach is the one in the latest release. A
+			// dev build runs main, whose protocol is ahead of that release the moment it
+			// is bumped, the normal state between releases. Healing from dev would then
+			// npm-install on the box for a minute, come back on the same old protocol and
+			// fail, once per box per launch, forever. The invariant that makes the heal
+			// safe is that we can pin the exact release whose protocol we speak, which is
+			// the same condition the ATEAM_VERSION pin needs, so the two share a gate.
+			if (!healed && app.isPackaged && wire !== "ws" && info.protocolVersion < PROTOCOL_VERSION) {
+				client.close();
+				// A failed upgrade must not cost the connection either: come back and hold
+				// the box as it is. `healed` stops this from installing twice.
+				return install(alias).catch(() => connect(alias, true));
+			}
 		}
 
+		connectFailures.delete(alias);
 		recordConnection(db, {
 			hostAlias: alias,
 			transport: wire ?? "ssh",
 			serverVersion: String(info.protocolVersion),
 			agentsAvailable: info.agents,
 		});
-		// The remote's method set matches the local dispatcher's (same contract).
-		const backend = remoteBackend(rpc, local.methods, client.close);
+		// The remote's method set matches the local dispatcher's (same contract). An
+		// engine BEHIND this app is read through tolerantRpc, which fills in what its
+		// version never sent. Without it a pre-v5 box's cards crash the board on
+		// `triage.bucket`, which is read on every card and in every sort.
+		const backend = remoteBackend(
+			tolerantRpc(rpc, info.protocolVersion),
+			local.methods,
+			client.close,
+		);
 		infos.set(alias, info); // cached before the backend is reachable — statusOf's invariant
 		backends.set(alias, backend);
 		backendList.push(backend); // the live aggregate now fans out to it too
@@ -362,9 +415,21 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	function forget(alias: string): void {
 		disconnect(alias); // no-op if not held; drops the live engine if it is
 		forgetConnection(db, alias);
+		connectFailures.delete(alias);
 		// disconnect only broadcasts when the box was held — a never-connected row
 		// changes the list too, so always tell the renderer to re-read it.
 		broadcastConnections();
+	}
+
+	function failures(): Record<string, string> {
+		return Object.fromEntries(connectFailures);
+	}
+
+	// The same gate the auto-heal uses: only a packaged build can pin the release
+	// whose protocol it speaks, so only a packaged build can promise an upgrade
+	// that actually closes the gap. See the comment in connect().
+	function canUpdateBoxes(): boolean {
+		return app.isPackaged;
 	}
 
 	function origins(): Record<string, string | null> {
@@ -391,12 +456,21 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// derive the box's OWN tailnet IP on the box, so the phone's WebSocket listener
 		// is set up automatically when the box is on Tailscale. An empty ATEAM_WS_ADDR
 		// means "daemon service only, no listener" — install.sh treats it as unset.
+		// Pin the box to THIS app's release, the way VS Code keys its remote server to
+		// the client's commit. Unpinned, the box takes `releases/latest` and drifts away
+		// from the desktop the moment a newer release lands, which is the skew this whole
+		// path exists to close. Packaged builds only: a dev build's version has no tag
+		// behind it, and install.sh dies on a tag with no release. So a deliberate install
+		// from dev takes the latest release, which is the right thing when SETTING UP a
+		// box; what dev must not do is heal on connect, because that release can be behind
+		// main's protocol and the upgrade is then guaranteed futile (see connect()).
+		const pin = app.isPackaged ? `ATEAM_VERSION=v${app.getVersion()} ` : "";
 		const pipeline = wsAddr
-			? `curl -fsSL ${INSTALL_URL} | ATEAM_WS_ADDR=${wsAddr} bash -s -- --service`
+			? `curl -fsSL ${INSTALL_URL} | ${pin}ATEAM_WS_ADDR=${wsAddr} bash -s -- --service`
 			: // Single-quoted JS so the shell's ${ip:+…} parameter expansion stays literal.
 				"ip=$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | head -1 || true); " +
-				`curl -fsSL ${INSTALL_URL} ` +
-				'| ATEAM_WS_ADDR="${ip:+$ip:' +
+				`curl -fsSL ${INSTALL_URL} | ${pin}` +
+				'ATEAM_WS_ADDR="${ip:+$ip:' +
 				WS_DEFAULT_PORT +
 				'}" bash -s -- --service';
 
@@ -411,7 +485,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// We just reached the box over SSH, so its transport is ssh — seed that row so
 		// connect() resolves it even when `dest` is a user@host with no ssh_config entry.
 		recordConnection(db, { hostAlias: dest, transport: "ssh" });
-		return connect(dest);
+		return connect(dest, true);
 	}
 
 	// The encrypted provider-credentials store, created lazily (needs app to be ready).
@@ -586,10 +660,18 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// the renderer reconciles additively — so tasks fill in as engines answer.
 	for (const c of listConnections(db)) {
 		if (!c.known) continue;
-		void connect(c.alias).catch(() => {
-			// Unreachable, asleep, or version-mismatched. connect() already closed its
-			// own transport, and the connections list still renders the box from the
-			// offline cache, so leaving it disconnected is the honest outcome.
+		void connect(c.alias).catch((err: unknown) => {
+			// Unreachable, asleep, or an upgrade that didn't take. connect() already closed
+			// its own transport, and the connections list still renders the box from the
+			// offline cache, so leaving it disconnected is the honest outcome. The REASON,
+			// though, is only known here: this is the one connect nobody awaits, so record
+			// it instead of dropping it. Without that, a failed upgrade looks exactly like
+			// a sleeping box, and the message explaining it dies in this catch.
+			// A box that is merely BEHIND is not an error any more: connect() upgrades it
+			// over SSH and comes back held, which is the only path that reaches an SSH box
+			// without waiting for a user gesture.
+			connectFailures.set(c.alias, err instanceof Error ? err.message : String(err));
+			broadcastConnections();
 		});
 	}
 
@@ -624,6 +706,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		forget,
 		connected,
 		origins,
+		failures,
+		canUpdateBoxes,
 		editorUrl,
 		provision,
 		install,
@@ -644,6 +728,8 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.forget, (_e, alias: string) => host.forget(alias));
 	ipcMain.handle(HOST_CH.connected, () => host.connected());
 	ipcMain.handle(HOST_CH.origins, () => host.origins());
+	ipcMain.handle(HOST_CH.failures, () => host.failures());
+	ipcMain.handle(HOST_CH.canUpdateBoxes, () => host.canUpdateBoxes());
 	ipcMain.handle(HOST_CH.provision, (_e, alias: string, input: { cloneUrl: string }) =>
 		host.provision(alias, input),
 	);

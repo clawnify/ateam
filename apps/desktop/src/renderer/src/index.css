@@ -13,6 +13,9 @@
 	--amber: #fbbf24;
 	--red: #f87171;
 	--blue: #60a5fa;
+	/* Side-panel width, and so the board's right-hand no-go zone: the panel is
+	   sticky over it, so the selected card reserves it as scroll-margin. */
+	--panel-w: 480px;
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -125,8 +128,31 @@ input {
 	border-right: 1px solid var(--border);
 	display: flex;
 	flex-direction: column;
-	/* Bounded by the .app grid row above; scroll the project/task lists rather
-	   than overflow off-screen (the collapsed .sidebar.rail already does this). */
+	/* Bounded by the .app grid row above and never scrolled as a whole: each
+	   accordion scrolls its own list instead, so every section header stays on
+	   screen. (The collapsed .sidebar.rail is a flat tile strip and still
+	   scrolls itself.) */
+	min-height: 0;
+	overflow: hidden;
+}
+
+/* One accordion: a header that never scrolls away plus a list that scrolls
+   inside whatever height the section gets. Basis 0 + grow splits the sidebar
+   between the expanded sections; max-content caps a section to its own rows so
+   flexbox freezes it there and hands the leftover to the sections that still
+   need it (a two-row Projects doesn't scroll just because Tasks is long). */
+.side-section {
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 0;
+	/* min-height: 0, not the default auto: auto resolves to the list's own
+	   content height, which would push a long list straight out of the sidebar
+	   and take the sections below it off screen. */
+	min-height: 0;
+	max-height: max-content;
+}
+.side-list {
+	flex: 1 1 auto;
 	min-height: 0;
 	overflow-y: auto;
 	overflow-x: hidden;
@@ -502,31 +528,6 @@ input {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
-.task-search .ts-ai:disabled {
-	opacity: 0.35;
-	cursor: default;
-}
-/* Working: a slow pulse, not a spinner — the search takes seconds, and a
-   spinner at this size reads as a stuck one. */
-.task-search .ts-ai.busy {
-	color: var(--text);
-	animation: ts-pulse 1.4s ease-in-out infinite;
-}
-@keyframes ts-pulse {
-	0%,
-	100% {
-		opacity: 0.45;
-	}
-	50% {
-		opacity: 1;
-	}
-}
-@media (prefers-reduced-motion: reduce) {
-	.task-search .ts-ai.busy {
-		animation: none;
-		color: var(--text);
-	}
-}
 /* Results hang below the box, which is itself absolutely centered in the
    topbar — so this is positioned against the box, not the bar. */
 .ts-results {
@@ -579,6 +580,44 @@ input {
 	line-clamp: 2;
 	-webkit-box-orient: vertical;
 	overflow: hidden;
+}
+/* The AI row: last, always, and set apart by a rule rather than a colour so it
+   reads as a different KIND of action, not a highlighted result. */
+.ts-ai {
+	/* Later than .ts-hit in this file, same specificity, so it simply wins. */
+	border-top: 1px solid var(--border);
+	border-radius: 0 0 7px 7px;
+	margin-top: 2px;
+}
+.ts-ai .ts-hit-name {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	color: var(--text-dim);
+}
+.ts-ai.on .ts-hit-name,
+.ts-ai.busy .ts-hit-name {
+	color: var(--text);
+}
+/* Working: a slow pulse, not a spinner — the search takes seconds, and a
+   spinner at this size reads as a stuck one. */
+.ts-ai.busy {
+	animation: ts-pulse 1.4s ease-in-out infinite;
+	cursor: default;
+}
+@keyframes ts-pulse {
+	0%,
+	100% {
+		opacity: 0.55;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.ts-ai.busy {
+		animation: none;
+	}
 }
 .ts-hit-meta {
 	font-size: 11px;
@@ -665,6 +704,12 @@ input {
 }
 .card.selected {
 	border-color: #ffffff;
+	/* A selected card means the side panel is open (going full-width hides the
+	   board), and the panel is sticky over the board's right edge. Reserving its
+	   width here is what lets scrollIntoView({inline:"nearest"}) land the card
+	   beside the panel instead of behind it — and stay a no-op when it already is.
+	   +14px matches the board's padding, so the card doesn't kiss the panel. */
+	scroll-margin-right: calc(var(--panel-w) + 14px);
 }
 .card .name {
 	font-size: 13px;
@@ -704,7 +749,7 @@ input {
 .card:hover .branch-slot.has-tags .tags {
 	opacity: 1;
 }
-.card .tag {
+.tag {
 	font-size: 9.5px;
 	line-height: 1;
 	letter-spacing: 0.02em;
@@ -717,6 +762,7 @@ input {
 }
 .card .meta {
 	display: flex;
+	align-items: center;
 	gap: 8px;
 	margin-top: 8px;
 	font-size: 11px;
@@ -733,8 +779,14 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.card .meta .age {
+/* Age + agent icon, right-aligned as one group so the icon never lands on top
+   of the age label. */
+.card .meta .meta-end {
 	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	opacity: 0.9;
 }
 /* "Something happened here while you were away." White, not the purple accent,
    to match the selected-card border. */
@@ -750,6 +802,18 @@ input {
 .tname.unread-row {
 	color: var(--text);
 	font-weight: 600;
+}
+/* Sidebar chips: hover-only, same as the card's. Kept clear of the absolutely
+   positioned trailing slot (status dot / delete) by a right margin, and hidden
+   outright at rest so a resting row is exactly as it was. */
+.tasknode .row-tags {
+	display: none;
+	flex: none;
+	gap: 3px;
+	margin-right: 20px;
+}
+.tasknode-row:hover .tasknode .row-tags {
+	display: flex;
 }
 .ring {
 	position: absolute;
@@ -777,12 +841,6 @@ input {
 	background: transparent;
 	border: 1.5px solid var(--text-dim);
 }
-.card-agent {
-	position: absolute;
-	right: 10px;
-	bottom: 8px;
-	opacity: 0.9;
-}
 @keyframes pulse {
 	0%,
 	100% {
@@ -807,7 +865,7 @@ input {
 
 /* ---- task panel ---- */
 .panel {
-	flex: 0 0 480px; /* fixed width; board scrolls beside it, not squeezed */
+	flex: 0 0 var(--panel-w); /* fixed width; board scrolls beside it, not squeezed */
 	/* Flex min-width:auto would let the terminal's canvas (sized while the
 	   panel was full-width) clamp the panel and stop it collapsing back to
 	   480px — the basis must always win over content min-width. Same on the
@@ -915,6 +973,19 @@ input {
 .sess-tab.active {
 	background: var(--bg-elev-2);
 	color: var(--text);
+}
+/* A tab a restart took away: it holds no terminal until you click it, so it
+   reads as an outline rather than a surface. Dashed, not merely faded — faded
+   alone would say "disabled", and this one is the clickable kind. */
+.sess-tab.restorable {
+	border: 1px dashed var(--border);
+	opacity: 0.6;
+}
+.sess-tab.restorable:hover {
+	opacity: 1;
+}
+.sess-tab.restorable .sess-tab-name {
+	padding-right: 8px;
 }
 .sess-tab-name {
 	max-width: 140px;
@@ -1139,39 +1210,43 @@ input {
 }
 
 /* ---- mission control ---- */
-/* Hosts the sliding page grid and the bottom-right pager overlay. */
+/* Hosts the sliding page grid and the bottom-right pager overlay. Clips the
+   slide: a page flip animates the grid in from 32px away, and .content scrolls
+   (its overflow-x: auto makes the y axis scrollable too), so without this the
+   incoming page would poke past the bottom and flash a scrollbar mid-flip. */
 .mc-wrap {
 	flex: 1;
 	display: flex;
 	position: relative;
 	min-height: 0;
+	overflow: hidden;
 }
 .mc {
 	flex: 1;
 	display: grid;
 	gap: 8px;
 	padding: 12px;
-	/* Tiles are paged, not scrolled: each layout renders at most a pageful, so
-	   this only guards pathologically small windows. */
-	overflow-y: auto;
-	overflow-x: hidden;
+	/* Tiles are paged, never scrolled: every layout sizes its rows so exactly
+	   one pageful fills the box, so there is nothing to scroll to. */
+	overflow: hidden;
 	/* Default ("grid"): 2x2 — each tile is half the window wide and half the
 	   window tall (percentage rows resolve against the visible content box;
 	   calc subtracts half the gap so two rows + gap fit exactly). */
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	grid-auto-rows: calc(50% - 4px);
 }
-/* Split: two side-by-side columns, each row the full window height; extra
-   rows overflow downward into the scroll area. minmax(0,1fr) columns stop
-   wide terminal output from blowing out the track width. */
+/* Split: two side-by-side columns on one full-height row (a page holds two).
+   minmax(0,1fr) columns stop wide terminal output from blowing out the track
+   width. */
 .mc[data-layout="split"] {
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	grid-auto-rows: 100%;
 }
-/* Stack: one full-width column, tiles stacked top-to-bottom and scrolling. */
+/* Stack: a single full-window terminal per page. 100% (not a min-height) so a
+   short window shrinks the tile instead of overflowing into a scrollbar. */
 .mc[data-layout="stack"] {
 	grid-template-columns: minmax(0, 1fr);
-	grid-auto-rows: minmax(280px, 1fr);
+	grid-auto-rows: 100%;
 }
 
 /* Pager overlay: sits translucent over the bottom-right corner, full opacity
@@ -1711,6 +1786,30 @@ input {
 	color: var(--text);
 	background: rgba(255, 255, 255, 0.08);
 }
+/* Deliberately NOT hover-only like .conn-forget: this is the answer to "how do I
+   update it", so hiding it until hover would leave the warning with no visible way
+   to act on it. Amber ties it to the label it resolves. */
+.conn-update {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border: none;
+	border-radius: 5px;
+	background: transparent;
+	color: var(--amber, #fbbf24);
+	cursor: pointer;
+}
+.conn-update:hover {
+	background: rgba(251, 191, 36, 0.14);
+}
+/* The icon is a flex item and shrank to width:0 without this — laid out, coloured,
+   and painting nothing. Same reason .conn-spin carries it. */
+.conn-update svg {
+	flex: none;
+}
 .conn-add {
 	display: flex;
 	flex-direction: column;
@@ -1758,6 +1857,14 @@ input {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+/* Truncated to the row like every other sub-label; the full text is the title. */
+.conn-sub-err {
+	color: var(--red);
+}
+/* A skewed box still works, so it warns rather than alarms. */
+.conn-sub-warn {
+	color: var(--amber, #fbbf24);
 }
 .conn-spin {
 	animation: spin 0.7s linear infinite;
@@ -1855,7 +1962,31 @@ input {
 	flex: 1;
 	min-height: 0;
 	display: grid;
-	grid-template-columns: 240px 1fr;
+	/* Wider than the old 240px: each row now carries its deciding factors
+	   (age, PR, git counts) under the branch, not just a one-word reason. */
+	grid-template-columns: 300px 1fr;
+}
+/* All / Recommended — narrows the list to the sweep's own picks. */
+.cleanup-filter {
+	display: flex;
+	gap: 2px;
+	margin-right: 8px;
+	background: var(--bg-elev-2);
+	border-radius: 6px;
+	padding: 2px;
+}
+.cleanup-filter button {
+	background: transparent;
+	border: none;
+	border-radius: 4px;
+	color: var(--text-dim);
+	font-size: 11px;
+	padding: 3px 8px;
+	cursor: pointer;
+}
+.cleanup-filter button.on {
+	background: var(--bg-elev);
+	color: var(--text);
 }
 .cleanup-list {
 	border-right: 1px solid var(--border);
@@ -1887,6 +2018,52 @@ input {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+.cleanup-item .tname {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+/* The sweep would take this one — advice, not a filter. */
+.cleanup-item .rec-dot {
+	flex: none;
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: var(--green);
+}
+.cleanup-factors {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-top: 3px;
+	font-size: 10px;
+	color: var(--text-dim);
+}
+.cleanup-factors .pr {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+}
+.cleanup-factors .pr.open {
+	color: var(--green);
+}
+.cleanup-factors .pr.merged {
+	color: var(--text-dim);
+}
+.cleanup-factors .pr.closed {
+	color: var(--red);
+}
+.cleanup-detail-head .rec-tag {
+	margin-left: 8px;
+	font-size: 10px;
+	font-weight: 400;
+	color: var(--green);
+	border: 1px solid var(--green);
+	border-radius: 4px;
+	padding: 1px 5px;
+	vertical-align: middle;
 }
 .cleanup-item .sub {
 	font-size: 11px;
@@ -1994,9 +2171,18 @@ input {
 	border-radius: 5px;
 	padding: 1px 5px;
 }
+/* A loop's prompt is free text and is often pages long (a pasted brief), which
+   would otherwise render in full and bury the card's controls. The card is a
+   summary row — clamp to two lines; Edit shows the whole prompt. */
 .loop-desc {
 	font-size: 12px;
+	line-height: 1.35;
 	margin: 3px 0 6px;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
 }
 .loop-meta {
 	display: flex;
@@ -2120,10 +2306,11 @@ input {
 .tasknode.loop-paused {
 	opacity: 0.5;
 }
-/* Float the LOOPS section to the sidebar's bottom while there's spare room;
-   once the task list overflows, the auto margin collapses and it simply
-   follows the content. */
-.loops-side-head {
+/* Float the LOOPS section to the sidebar's bottom while there's spare room —
+   free space only exists once every section is capped at its content height,
+   so as soon as the lists fill the sidebar the auto margin collapses and the
+   section simply follows Tasks. */
+.loops-side-section {
 	margin-top: auto;
 }
 

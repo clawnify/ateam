@@ -44,6 +44,22 @@ die() {
 	exit 1
 }
 
+# The running engine daemon, identified by the one command line it always has:
+# APP_DIR is fixed, and the systemd unit execs that same launcher.
+DAEMON_PAT='ateam-app/cli\.js daemon'
+# `|| true` earns its place: pgrep exits 1 when nothing matches, and under
+# `pipefail` that becomes the substitution's status, which would trip `set -e` on
+# the ordinary "no daemon running" case.
+daemon_pid() { pgrep -f "$DAEMON_PAT" 2>/dev/null | head -1 || true; }
+
+# One `system:hello` through the same relay a real client uses, so what this
+# reports is what a client would see. `attach` is a persistent relay: it never
+# self-exits after replying, so cap it and keep the first line.
+handshake() {
+	printf '{"t":"req","id":1,"method":"system:hello","args":[]}\n' |
+		timeout 25 bash -lc 'ateam attach --stdio' 2>/dev/null | head -1 || true
+}
+
 if [ "$(id -u)" = 0 ]; then die "run this as the user that will own the agents, not as root"; fi
 command -v curl >/dev/null || die "curl is required"
 command -v tar >/dev/null || die "tar is required"
@@ -83,7 +99,7 @@ install_node22() {
 	set -eu
 }
 
-step "[1/6] locate a Node ≥ 22"
+step "[1/7] locate a Node ≥ 22"
 NODE="$(find_node)"
 if [ -z "$NODE" ]; then
 	install_node22
@@ -94,7 +110,7 @@ info "node: $NODE ($("$NODE" --version))"
 
 # ------------------------------------------------------------- download ------
 
-step "[2/6] fetch the server dist"
+step "[2/7] fetch the server dist"
 TARBALL="$TMP/ateam-server.tar.gz"
 if [ -n "${ATEAM_TARBALL:-}" ] && [ -f "$ATEAM_TARBALL" ]; then
 	info "source: $ATEAM_TARBALL (local)"
@@ -118,7 +134,7 @@ for f in cli.js daemon.js package.json; do
 	[ -f "$TMP/$f" ] || die "malformed tarball: missing $f"
 done
 
-step "[3/6] install to $APP_DIR"
+step "[3/7] install to $APP_DIR"
 mkdir -p "$APP_DIR" "$BIN_DIR"
 cp "$TMP/cli.js" "$TMP/daemon.js" "$TMP/package.json" "$APP_DIR/"
 
@@ -132,7 +148,7 @@ NPM="$(dirname "$NODE")/npm"
 
 natives_load() { (cd "$APP_DIR" && "$NODE" -e 'require("better-sqlite3");require("node-pty")' >/dev/null 2>&1); }
 
-step "[4/6] install native modules (prebuilt — no compiler needed)"
+step "[4/7] install native modules (prebuilt — no compiler needed)"
 (cd "$APP_DIR" && PATH="$(dirname "$NODE"):$PATH" "$NPM" install --omit=dev --no-audit --no-fund >/dev/null 2>&1) ||
 	die "npm install failed in $APP_DIR"
 
@@ -150,7 +166,7 @@ info "better-sqlite3 + node-pty load OK"
 
 # -------------------------------------------------------------- launcher ----
 
-step "[5/6] install the 'ateam' launcher on the login PATH"
+step "[5/7] install the 'ateam' launcher on the login PATH"
 # Node is pinned by absolute path: the launcher must use the SAME runtime the
 # natives were installed for, whatever a login shell's PATH happens to resolve.
 printf '#!/bin/sh\nexec %s "%s/cli.js" "$@"\n' "$NODE" "$APP_DIR" >"$BIN_DIR/ateam"
@@ -176,17 +192,55 @@ if ! bash -lc 'command -v ateam' >/dev/null 2>&1; then
 fi
 info "login shell resolves: $(bash -lc 'command -v ateam')"
 
+# ------------------------------------------------------------- restart ------
+
+step "[6/7] stop the daemon still running the old dist"
+# An upgrade that does not restart is not an upgrade. A running daemon holds its
+# code in MEMORY, so overwriting cli.js above changes nothing about what it
+# serves: the box keeps answering `system:hello` with the PREVIOUS protocol
+# version, and every client goes on refusing it ("update the older side") however
+# many times this installer is re-run, with the new dist sitting on disk beside it.
+#
+# Live agents are untouched. They belong to the PTY daemon (pty/daemon.ts), a
+# separate detached process this never signals; the engine reattaches to it on
+# start, and it only idle-exits once it has neither sessions nor clients. Clients
+# see a blip and no more: the desktop reconnects over SSH, the phone reattaches.
+#
+# Stopped rather than restarted, because nothing needs to own the socket yet: the
+# verify below spawns one from the NEW dist (which is what `ateam attach` does
+# when none is live), and --service hands that to systemd right after.
+OLD_PID="$(daemon_pid)"
+if [ -n "$OLD_PID" ]; then
+	pkill -f "$DAEMON_PAT" 2>/dev/null || true
+	sleep 1
+	info "stopped the old daemon (pid $OLD_PID); its agents keep running"
+	# A systemd-managed daemon comes straight back on its own here (a signal counts
+	# as failure, so `Restart=on-failure` fires), and that is fine: whatever starts
+	# from now on runs the dist installed above. So this deliberately does NOT wait
+	# for the pid to stay gone, which would race that restart and fail a healthy
+	# box. The invariant that actually matters is asserted by the verify below.
+else
+	info "no daemon was running"
+fi
+
 # -------------------------------------------------------------- verify ------
 
-step "[6/6] verify the handshake"
-# `attach` is a persistent relay — it never self-exits after replying, so cap it
-# and keep the first line. A real client holds the connection open instead.
-HELLO="$(printf '{"t":"req","id":1,"method":"system:hello","args":[]}\n' |
-	timeout 25 bash -lc 'ateam attach --stdio' 2>/dev/null | head -1 || true)"
+step "[7/7] verify the handshake"
+# Spawns a daemon from the dist just installed, so this proves the NEW code runs
+# on this box's Node (where an ABI break surfaces) and prints the version every
+# client will now see.
+HELLO="$(handshake)"
 case "$HELLO" in
 *protocolVersion*) info "OK  $HELLO" ;;
 *) die "handshake failed: ${HELLO:-<no reply>}" ;;
 esac
+# The one assertion that catches a silent no-op upgrade: the process answering
+# must not be the one that predates this install. A handshake alone cannot tell
+# the difference, which is why every stale box still reported a healthy install.
+NEW_PID="$(daemon_pid)"
+if [ -n "$OLD_PID" ] && [ "$NEW_PID" = "$OLD_PID" ]; then
+	die "pid $OLD_PID survived, so this box is still serving the OLD dist: stop it and re-run"
+fi
 
 # ------------------------------------------------------------------ gh ------
 
@@ -351,21 +405,42 @@ if [ "$WANT_SERVICE" = 1 ]; then
 	$SYSTEMCTL daemon-reload
 	$SYSTEMCTL enable ateam.service >/dev/null 2>&1 || true
 
-	# Never kill a daemon out from under running agents. If one is already up
-	# outside systemd, hand over deliberately rather than silently. Test for a live
-	# PROCESS, not for the socket file: a crashed daemon leaves the file behind, and
-	# that stale socket would otherwise make this skip starting the service.
-	if pgrep -f 'ateam-app/cli\.js daemon' >/dev/null 2>&1 && ! $SYSTEMCTL is-active --quiet ateam.service; then
-		info "a daemon is already running outside systemd — enabled for next boot."
-		info "to hand it over now (agents keep running; the PTY daemon is untouched):"
-		info "     pkill -f 'ateam-app/cli.js daemon' && $SYSTEMCTL start ateam"
-	else
-		$SYSTEMCTL start ateam.service
-		sleep 2
-		$SYSTEMCTL is-active --quiet ateam.service &&
-			info "service active; starts on boot" ||
-			die "service failed to start — $SYSTEMCTL status ateam"
+	# Take the socket back, then RESTART. Two reasons this is not `start`:
+	#   1. `start` on an already-active unit does nothing, so an upgrade left the
+	#      OLD process serving. That is the bug this installer shipped with, and it
+	#      is why boxes stayed on an old protocol through repeated installs.
+	#   2. `ateam daemon` deliberately bows out when a live daemon already owns the
+	#      socket, so a service started around one (the verify step's, or one that
+	#      an `ateam attach` spawned) exits 0 and the old code keeps answering.
+	# Running agents survive both, for the reason spelled out at [6/7].
+	if [ -n "$(daemon_pid)" ] && ! $SYSTEMCTL is-active --quiet ateam.service; then
+		info "handing the out-of-systemd daemon over to the service"
+		pkill -f "$DAEMON_PAT" 2>/dev/null || true
+		sleep 1
 	fi
+	$SYSTEMCTL restart ateam.service
+
+	# Prove the SERVICE is what answers now, and that it answers with the dist just
+	# installed. `is-active` alone passed happily while a stale daemon held the
+	# socket, which is precisely how the old protocol survived an "upgrade".
+	SVC_PID=""
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		sleep 1
+		if $SYSTEMCTL is-active --quiet ateam.service; then
+			SVC_PID="$(daemon_pid)"
+			if [ -n "$SVC_PID" ]; then break; fi
+		fi
+	done
+	if [ -z "$SVC_PID" ]; then die "service failed to start: $SYSTEMCTL status ateam"; fi
+	if [ -n "$OLD_PID" ] && [ "$SVC_PID" = "$OLD_PID" ]; then
+		die "pid $OLD_PID survived the restart, so the service is still the OLD dist"
+	fi
+	HELLO="$(handshake)"
+	case "$HELLO" in
+	*protocolVersion*) info "service active (pid $SVC_PID); starts on boot" ;;
+	*) die "service is up but the handshake failed: ${HELLO:-<no reply>} ($SYSTEMCTL status ateam)" ;;
+	esac
+	info "serving: $HELLO"
 
 	if [ "$SERVICE_SCOPE" = user ]; then
 		info ""

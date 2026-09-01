@@ -20,6 +20,19 @@ export type AgentStatus = "idle" | "running" | "awaiting_input" | "stopped";
 export type PrState = "open" | "merged" | "closed";
 
 /**
+ * How a terminal session ended. The distinction exists for exactly one reason:
+ * only `stranded` sessions are offered back as restorable tabs.
+ *
+ * - `closed`   — you closed the tab (its PTY was killed on purpose).
+ * - `exited`   — the shell behind it ended on its own while the app watched.
+ * - `stranded` — it was still open when the app or the machine went down, and
+ *                the PTY daemon had forgotten it by the time we reconnected.
+ * - `restored` — a stranded session whose conversation has since been picked
+ *                back up in a new tab, so it is no longer offered.
+ */
+export type SessionExitReason = "closed" | "exited" | "stranded" | "restored";
+
+/**
  * Where a task sits in the merge queue. `null` = not queued. The queue is
  * serialized per `${repoPath}::${baseBranch}`, so several tasks targeting the
  * same base sit in `queued` behind whichever is `updating`/`merging`.
@@ -113,12 +126,22 @@ export const agentSessions = sqliteTable(
 			.references(() => tasks.id, { onDelete: "cascade" }),
 		agentId: text("agent_id").notNull(),
 		terminalId: text("terminal_id").notNull().unique(),
+		/**
+		 * The HARNESS's own conversation id — the handle its resume command takes.
+		 * Equal to `terminalId` when we minted it (see `sessionIdFlag`), and
+		 * carried forward unchanged onto the row of a tab restored from it: the
+		 * PTY is new, the conversation is not. Null for a harness that mints its
+		 * own id, and for every session that predates this column.
+		 */
+		agentSessionId: text("agent_session_id"),
 		status: text("status").$type<AgentStatus>().notNull().default("idle"),
 		pid: integer("pid"),
 		cwd: text("cwd").notNull(),
 		startedAt: epochMs("started_at"),
 		lastEventAt: integer("last_event_at"),
 		exitedAt: integer("exited_at"),
+		/** How this session ended — see `SessionExitReason`. Null while it runs. */
+		exitReason: text("exit_reason").$type<SessionExitReason>(),
 	},
 	(t) => [index("agent_sessions_task_idx").on(t.taskId)],
 );

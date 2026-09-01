@@ -9,8 +9,10 @@ import {
 	createRpcClient,
 	type NativeClientApi,
 	PROTOCOL_VERSION,
+	requestBoxUpdate,
 	type SystemInfo,
 	serverHandshake,
+	tolerantRpc,
 	wsClientTransport,
 } from "@ateam/protocol";
 
@@ -30,8 +32,21 @@ export const mobileNative: NativeClientApi = {
 export interface Connection {
 	api: AteamApi;
 	info: SystemInfo;
+	/** True when the box speaks a different wire contract than this app. The
+	 *  connection is live either way; this is what the UI warns about. */
+	skewed: boolean;
 	/** Fast liveness probe — a timed handshake. False if the socket is dead/half-open. */
 	ping(): Promise<boolean>;
+	/**
+	 * Tell the box to install the current release over itself. Resolves when the
+	 * installer has been LAUNCHED, after which this socket drops on purpose and
+	 * `onClose` fires: the engine is being replaced. Reconnect to see the new one.
+	 *
+	 * Rejects on a box older than v7, which has no such method. That box has to be
+	 * updated once from a Mac over SSH before the phone can ever drive it, and no
+	 * client-side trick avoids that: the capability has to exist on the box first.
+	 */
+	update(): Promise<{ started: boolean; logPath: string }>;
 	/** Close the socket; the daemon and its live sessions live on. */
 	close(): void;
 }
@@ -71,12 +86,13 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 		client.close();
 		throw err;
 	}
-	if (info.protocolVersion !== PROTOCOL_VERSION) {
-		client.close();
-		throw new Error(
-			`Protocol mismatch: box speaks v${info.protocolVersion}, app speaks v${PROTOCOL_VERSION}. Update the older side.`,
-		);
-	}
+	// A skew is no longer a refusal. Refusing was total: it made a box on last
+	// month's release unusable from the phone, and the only advice it could give
+	// ("open your Mac") is useless to someone who is out with a phone. The version
+	// is advisory now, replies are read through tolerantRpc so an older engine's
+	// cards can't crash this app, and the UI says the box is skewed. update() is
+	// the way out from here, which is what makes the warning actionable at all.
+	const skewed = info.protocolVersion !== PROTOCOL_VERSION;
 
 	// Keepalive: a WS over Tailscale on a phone goes half-open on NAT/WireGuard idle
 	// timeout with no close event — a later RPC then hangs forever. A periodic cheap
@@ -87,8 +103,10 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 	}, 15_000);
 
 	return {
-		api: buildAteamApi(rpc, mobileNative),
+		api: buildAteamApi(tolerantRpc(rpc, info.protocolVersion), mobileNative),
 		info,
+		skewed,
+		update: () => requestBoxUpdate(rpc),
 		ping: () =>
 			withTimeout(serverHandshake(rpc), PING_TIMEOUT_MS).then(
 				() => true,

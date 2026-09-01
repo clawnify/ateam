@@ -3,12 +3,21 @@
 // that need Electron's dialog/clipboard). Lifted verbatim from the desktop's
 // ipcMain handlers; the desktop now adapts ipcMain → handle(), and the SSH
 // server will adapt a JSON-RPC channel → handle(). One body, many transports.
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { listAgents } from "@ateam/agents";
-import { repo } from "@ateam/db";
+import { repo, type Task } from "@ateam/db";
 import {
 	cloneRepo,
 	commit,
@@ -27,6 +36,8 @@ import {
 } from "@ateam/git-core";
 import {
 	CH,
+	type BoxUpdateStarted,
+	type CleanupCandidate,
 	type CreateLoopInput,
 	type DirEntryDTO,
 	type GitStatusSnapshot,
@@ -90,6 +101,15 @@ async function computeGitStatus(
 	};
 }
 
+/** Where install.sh is fetched from, matching the documented one-liner and the
+ *  desktop's own SSH install: raw `main`, so a box always runs the current script
+ *  even when its own dist is months old. */
+const INSTALL_URL =
+	"https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh";
+
+/** An update is in flight in THIS process (see CH.systemUpdate). */
+let updating = false;
+
 export interface Dispatcher {
 	/** Method names this dispatcher handles (the non-native CH.* channels). */
 	readonly methods: string[];
@@ -103,36 +123,46 @@ export function createDispatcher(engine: Engine): Dispatcher {
 	// Lazy: no code-server process exists until the first editor:open.
 	const editorHost = createEditorHost();
 
-	// ---- cleanup: remove only merged + idle + clean worktrees ----
-	// A task is removable ONLY when it merged, has no live agent session, and its
-	// working tree is clean. Everything else is kept — never deleting unmerged
-	// work or a task an agent is still using.
+	// ---- cleanup: merged + idle + clean is a RECOMMENDATION, not a filter ----
+	// The rule below (merged, no live agent session, clean working tree) is the
+	// only thing the unattended sweep will delete. The interactive dialog no
+	// longer hides everything that fails it: it lists every task and shows this
+	// verdict as advice, because whether a worktree is worth keeping turns on
+	// factors only the user weighs — how stale it is, whether its PR landed,
+	// whether the leftover dirt matters.
+	async function cleanupVerdict(
+		task: Task,
+	): Promise<{ recommended: boolean; reason: string; live: boolean }> {
+		const live = repo.listSessionsByTask(db, task.id).some((s) => services.pty.has(s.terminalId));
+		const isMerged = task.column === "merged" || task.prState === "merged";
+		if (!isMerged) return { recommended: false, reason: "not merged", live };
+		if (live) return { recommended: false, reason: "agent still active", live };
+		// Only merged + idle tasks reach the subprocess, so listing everything
+		// costs no more git calls than the old pre-filtered list did. The whole
+		// probe is guarded, not just the command: `gitFor` itself throws when the
+		// worktree directory is gone (deleted by hand, or pruned elsewhere), and
+		// an unguarded throw here would fail the entire candidate listing. A
+		// vanished tree has nothing left to lose, so it stays sweepable.
+		let dirty = false;
+		try {
+			dirty = (await gitFor(task.worktreePath).raw(["status", "--porcelain"])).trim() !== "";
+		} catch {
+			dirty = false;
+		}
+		if (dirty) return { recommended: false, reason: "uncommitted/untracked changes", live };
+		return { recommended: true, reason: "merged, clean, no live session", live };
+	}
+
+	// A task is removable by the unattended sweep ONLY when `cleanupVerdict`
+	// recommends it — never deleting unmerged work or a task an agent still uses.
 	async function classifyForCleanup(projectId: string) {
 		const allTasks = repo.listTasks(db, projectId);
 		const removable: typeof allTasks = [];
 		const kept: { task: (typeof allTasks)[number]; reason: string }[] = [];
 		for (const task of allTasks) {
-			const isMerged = task.column === "merged" || task.prState === "merged";
-			if (!isMerged) {
-				kept.push({ task, reason: "not merged" });
-				continue;
-			}
-			const live = repo.listSessionsByTask(db, task.id).some((s) => services.pty.has(s.terminalId));
-			if (live) {
-				kept.push({ task, reason: "agent still active" });
-				continue;
-			}
-			const dirty =
-				(
-					await gitFor(task.worktreePath)
-						.raw(["status", "--porcelain"])
-						.catch(() => "")
-				).trim() !== "";
-			if (dirty) {
-				kept.push({ task, reason: "uncommitted/untracked changes" });
-				continue;
-			}
-			removable.push(task);
+			const v = await cleanupVerdict(task);
+			if (v.recommended) removable.push(task);
+			else kept.push({ task, reason: v.reason });
 		}
 		return { removable, kept };
 	}
@@ -168,6 +198,29 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		} catch {
 			/* offline or gh unavailable — retried on a later refresh */
 		}
+	};
+
+	/** Open a login shell in a task's worktree and record the session. */
+	const spawnShellInTask = (task: { id: string; worktreePath: string }) => {
+		const terminalId = randomUUID();
+		repo.createSession(db, {
+			taskId: task.id,
+			agentId: "shell",
+			terminalId,
+			cwd: task.worktreePath,
+		});
+		services.pty.spawn({
+			terminalId,
+			shell,
+			args: ["-l"],
+			cwd: task.worktreePath,
+			env: { ...process.env },
+		});
+		// A new session IS a change to the task — say so, exactly as the agent
+		// spawn does. Without this, a shell opened in one window is invisible to
+		// every other client until something else touches the task.
+		engine.sendTaskUpdated(task.id);
+		return { terminalId };
 	};
 
 	const handlers = {
@@ -263,41 +316,24 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			return toTaskDTO(row!);
 		},
 
-		// Candidates for the interactive cleanup dialog: every task that isn't
-		// actively running. Each carries a live terminalId when its PTY is still
-		// around, so the dialog can show the conversation and let the user continue.
-		[CH.tasksCleanupCandidates]: async (projectId: string) => {
-			const out: {
-				id: string;
-				name: string;
-				branch: string;
-				worktreePath: string;
-				reason: string;
-				terminalId: string | null;
-				agentStatus: string | null;
-			}[] = [];
+		// Candidates for the interactive cleanup dialog: EVERY task in the project,
+		// each with the sweep's verdict as advice (`recommended`) and the whole
+		// task DTO, so the dialog can lay out the factors the user decides on —
+		// last activity, PR state, ahead/dirty counts, triage. A live terminalId
+		// rides along when the PTY is still around, so the conversation is there
+		// to read before deciding, and "Keep & continue" lands back in it.
+		[CH.tasksCleanupCandidates]: async (projectId: string): Promise<CleanupCandidate[]> => {
+			const out: CleanupCandidate[] = [];
 			for (const task of repo.listTasks(db, projectId)) {
-				const busy = task.agentStatus === "running" || task.agentStatus === "awaiting_input";
-				// Done tasks are always proposed — merged work is cleanup material
-				// even when its agent session is technically still alive.
-				if (busy && task.column !== "merged") continue;
+				const v = await cleanupVerdict(task);
 				const live = repo
 					.listSessionsByTask(db, task.id)
 					.find((s) => services.pty.has(s.terminalId));
-				const reason =
-					task.column === "merged"
-						? "merged"
-						: task.agentStatus === "idle" || task.agentStatus === "stopped"
-							? "agent idle"
-							: "no recent activity";
 				out.push({
-					id: task.id,
-					name: task.name,
-					branch: task.branch,
-					worktreePath: task.worktreePath,
-					reason,
+					task: toTaskDTO(task),
 					terminalId: live?.terminalId ?? null,
-					agentStatus: task.agentStatus ?? null,
+					recommended: v.recommended,
+					reason: v.reason,
 				});
 			}
 			return out;
@@ -424,6 +460,51 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			};
 		},
 
+		// ---- system: replace this engine with the current release ----
+		// The phone's only route to a stale box. There is no SSH there, and
+		// pty:spawnShell needs a taskId, so nothing without a shell could reach the
+		// installer. Every detail below is load-bearing:
+		//
+		//   detached  the installer STOPS this daemon partway through (that is what
+		//             makes an upgrade take effect). As a plain child it would be in
+		//             this process's group and die with it, leaving the box on a half
+		//             installed dist. setsid is what lets it outlive its own trigger.
+		//   log file  for the same reason there is nobody left to stream output to, so
+		//             it goes somewhere a human can read afterwards.
+		//   clean env the installer must NOT inherit this process's ambient ATEAM_*.
+		//             A daemon that install-remote.sh started carries ATEAM_TARBALL
+		//             pointing at a dev build in /tmp, and an inherited spawn then
+		//             reinstalls that stale tarball and reports success, which is an
+		//             update that updates nothing. Observed on a real box, not theory.
+		//             A stale ATEAM_VERSION pin would stick the same way.
+		//   WS addr   left in place when this process has it. install.sh already carries
+		//             an existing unit's address forward when the variable is unset, so
+		//             that inheritance (not this) is what usually keeps the phone's
+		//             listener alive; this only covers a box with no unit written yet.
+		//   --service because a box reachable by phone is one under systemd; that is
+		//             what restarts it after an OOM kill.
+		[CH.systemUpdate]: async (): Promise<BoxUpdateStarted> => {
+			// Same expression cli.ts resolves the socket with, so the log lands beside the
+			// daemon's own even when ATEAM_RPC_SOCK moves it off the default path.
+			const dataDir = dirname(process.env.ATEAM_RPC_SOCK ?? join(homedir(), ".ateam", "rpc.sock"));
+			const logPath = join(dataDir, "update.log");
+			// One at a time. The flag dies with this process a few seconds from now, so
+			// it guards the window that matters: a double tap, or two clients at once.
+			if (updating) return { started: false, logPath };
+			updating = true;
+			if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+			const log = openSync(logPath, "a");
+			const env = { ...process.env };
+			delete env.ATEAM_TARBALL;
+			delete env.ATEAM_VERSION;
+			spawn("bash", ["-lc", `curl -fsSL ${INSTALL_URL} | bash -s -- --service`], {
+				detached: true,
+				stdio: ["ignore", log, log],
+				env,
+			}).unref();
+			return { started: true, logPath };
+		},
+
 		// ---- editor: the engine-side half of the in-app editor (code-server on
 		// THIS machine). taskId scopes it to an engine (and routes it there); the
 		// worktree itself is picked client-side via the URL's ?folder= param. ----
@@ -533,28 +614,8 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		// ---- pty ----
 		[CH.ptySpawnAgent]: async (input: SpawnAgentInput) =>
 			spawnAgentInTask(services, engine.sendTaskUpdated, input),
-		[CH.ptySpawnShell]: async (input: { taskId: string }) => {
-			const task = requireTask(services, input.taskId);
-			const terminalId = randomUUID();
-			repo.createSession(db, {
-				taskId: task.id,
-				agentId: "shell",
-				terminalId,
-				cwd: task.worktreePath,
-			});
-			services.pty.spawn({
-				terminalId,
-				shell,
-				args: ["-l"],
-				cwd: task.worktreePath,
-				env: { ...process.env },
-			});
-			// A new session IS a change to the task — say so, exactly as the agent
-			// spawn above does. Without this, a shell opened in one window is
-			// invisible to every other client until something else touches the task.
-			engine.sendTaskUpdated(task.id);
-			return { terminalId };
-		},
+		[CH.ptySpawnShell]: async (input: { taskId: string }) =>
+			spawnShellInTask(requireTask(services, input.taskId)),
 		[CH.ptyWrite]: (terminalId: string, data: string) => {
 			services.pty.write(terminalId, data);
 		},
@@ -562,6 +623,14 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			services.pty.resize(terminalId, cols, rows);
 		},
 		[CH.ptyKill]: async (terminalId: string) => {
+			// Stamp WHY before the exit lands: closing a tab is the one ending that
+			// means "I am done with this", so it must not come back as a restorable
+			// tab the way an app or machine going down does. The exit handler reads
+			// this back rather than assuming (engine.ts).
+			const session = repo.getSessionByTerminal(db, terminalId);
+			if (session && session.exitedAt == null) {
+				repo.updateSession(db, session.id, { exitReason: "closed" });
+			}
 			services.pty.kill(terminalId);
 		},
 		[CH.ptySnapshot]: async (terminalId: string) => services.pty.snapshot(terminalId),
@@ -571,6 +640,47 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				.listSessionsByTask(db, taskId)
 				.filter((s) => services.pty.has(s.terminalId))
 				.map(toSessionDTO),
+		// Deliberately a separate call from listForTask rather than a widening of
+		// it: every existing caller (the panel's tab fallback, Mission Control,
+		// the CLI) asks "what is alive here?" and would have to re-filter a mixed
+		// list. Restorable tabs are a second, smaller question, asked only by the
+		// panel that draws them.
+		[CH.ptyListRestorable]: async (taskId: string) =>
+			repo.listRestorableSessions(db, taskId).map(toSessionDTO),
+		[CH.ptyRestoreSession]: async (input: { taskId: string; terminalId: string }) => {
+			const task = requireTask(services, input.taskId);
+			const dead = repo.getSessionByTerminal(db, input.terminalId);
+			if (!dead || dead.taskId !== task.id) {
+				throw new Error(`Session not found: ${input.terminalId}`);
+			}
+			// Someone got here first — a second window auto-restoring the same task,
+			// or a double click. "Bring this conversation back" is already true, so
+			// hand back the tab it is living in rather than erroring or opening a
+			// second terminal onto the same conversation.
+			if (dead.agentSessionId) {
+				const open = repo
+					.listSessionsByTask(db, task.id)
+					.find((s) => s.agentSessionId === dead.agentSessionId && services.pty.has(s.terminalId));
+				if (open) return { terminalId: open.terminalId };
+			}
+			if (dead.exitReason !== "stranded") throw new Error("That session is not restorable");
+			// A shell holds no conversation — restoring one means opening a fresh
+			// shell where it stood, which is all it ever was.
+			if (dead.agentId === "shell") {
+				repo.updateSession(db, dead.id, { exitReason: "restored" });
+				return spawnShellInTask(task);
+			}
+			// With a known conversation, resume THAT one. Without (a harness that
+			// mints its own ids, or a tab that started life as a `--continue`),
+			// fall back to the newest conversation in the worktree — the same best
+			// effort the app made before, now at least aimed at the right task.
+			repo.updateSession(db, dead.id, { exitReason: "restored" });
+			return spawnAgentInTask(services, engine.sendTaskUpdated, {
+				taskId: task.id,
+				agentId: dead.agentId,
+				...(dead.agentSessionId ? { resumeSessionId: dead.agentSessionId } : { resume: true }),
+			});
+		},
 	} satisfies Record<string, (...args: never[]) => unknown>;
 
 	return {

@@ -20,6 +20,18 @@ export interface SpawnAgentInput {
 	agentMode?: boolean;
 	prompt?: string;
 	files?: string[];
+	/**
+	 * Pick THIS conversation back up rather than starting a new one — the handle
+	 * a restored tab carries (`agent_sessions.agent_session_id`). Beats `resume`,
+	 * which can only ever reach the newest conversation in the worktree.
+	 */
+	resumeSessionId?: string;
+	/**
+	 * One extra turn to take right after the first response, delivered through
+	 * the agent's own turn-end hook (see `follow-ups.ts`). A slash command and a
+	 * plain sentence are both just text here.
+	 */
+	followUp?: string;
 }
 
 /** Create a task (branch + worktree + row) in a project and announce it. */
@@ -62,12 +74,32 @@ export async function spawnAgentInTask(
 	if (!agent) throw new Error(`Unknown agent: ${input.agentId}`);
 
 	const terminalId = randomUUID();
+	// The conversation this tab holds. On a fresh launch we mint it — the
+	// terminal id doubles as the agent's session id, so the tab can be resumed
+	// by name later. A restore carries the id it was handed: the PTY is new, the
+	// conversation is the same one.
+	//
+	// Null when we genuinely cannot know it: a harness that mints its own id, a
+	// `--continue` (which lands on whatever conversation the worktree saw last),
+	// or agent mode (a board, not a conversation). Recording the terminal id
+	// there would be a lie the restore then acts on.
+	const mintsId = Boolean(agent.sessionIdFlag) && !input.resume && !input.agentMode;
+	const agentSessionId = input.resumeSessionId ?? (mintsId ? terminalId : null);
 	repo.createSession(services.db, {
 		taskId: task.id,
 		agentId: agent.id,
 		terminalId,
+		agentSessionId,
 		cwd: task.worktreePath,
 	});
+	// The tab this one is picking up is no longer waiting to be restored.
+	if (input.resumeSessionId) {
+		for (const prior of repo.listRestorableSessions(services.db, task.id)) {
+			if (prior.agentSessionId === input.resumeSessionId) {
+				repo.updateSession(services.db, prior.id, { exitReason: "restored" });
+			}
+		}
+	}
 
 	// Keep the prompt that started this task. It is the only full-sentence record
 	// of intent anywhere: `name` is a slug of its first six words, and the column
@@ -108,6 +140,8 @@ export async function spawnAgentInTask(
 		agentMode: input.agentMode,
 		cwd: task.worktreePath,
 		prompt,
+		sessionId: agentSessionId ?? undefined,
+		resumeSessionId: input.resumeSessionId,
 	});
 	if (agent.id === "codex") {
 		// Codex has no hooks, but `notify` invokes a program with a JSON
@@ -124,6 +158,10 @@ export async function spawnAgentInTask(
 		cwd: task.worktreePath,
 		env,
 	});
+
+	// Arm before the first turn can possibly end. The entry is consumed by the
+	// turn-end hook, or dropped if the pane dies first.
+	services.followUps.arm(terminalId, input.followUp);
 
 	repo.updateTask(services.db, task.id, {
 		column: "running",

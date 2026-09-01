@@ -25,11 +25,74 @@
 // `tags` field, and CH.tasksMarkRead was added. Same skew again — an old engine
 // sends cards with no `triage`, which the board reads on EVERY card, and answers
 // markRead with "Unknown method".
-export const PROTOCOL_VERSION = 5;
+// v6: TaskDTO gained `prState`, and CleanupCandidate now carries a whole TaskDTO
+// plus a `recommended` flag (it used to be a flat, pre-filtered row). Both are
+// shape changes the cleanup dialog reads directly, so an older engine would feed
+// it rows with no `task` at all — the handshake must catch that skew first.
+// v7: added CH.systemUpdate, so a box can be told to update ITSELF. The phone has
+// no SSH and pty:spawnShell needs a taskId, so before this there was no way to fix
+// a skewed box from the phone at all. Note what this version can and cannot do: a
+// box older than v7 has no such method, so it still takes one update over SSH (or
+// by hand) before the phone can ever drive the next one. That bootstrap is not
+// avoidable from the client side.
+//
+// From v7 the mismatch is ADVISORY rather than a refusal: clients hold a skewed
+// box, read it through tolerantRpc, and say so in the UI. The bump rule below is
+// unchanged, but the reason to obey it shifts: a bump no longer locks old clients
+// out, it tells them what to paper over.
+// v8: LoopDTO gained `followUp`, an optional extra turn a loop's run takes after
+// the agent's first reply. Shape-wise a missing field reads as "no follow-up",
+// which is harmless; the damage is on the WRITE side, where a new desktop saves a
+// follow-up onto an older box that stores the config key, ignores it at launch,
+// and never continues the turn. Since v7 a mismatch no longer refuses, so the
+// bump alone does not protect anyone: the `followUps` entry below is what turns
+// that silent no-op into a feature the client knows to switch off.
+export const PROTOCOL_VERSION = 8;
+
+/**
+ * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
+ *
+ * A skewed box is held rather than refused, so something has to decide what a
+ * client may still ask of it. Two kinds of change need two answers, and only one
+ * of them belongs here:
+ *
+ *   a NEW METHOD needs nothing. An older engine answers "Unknown method", which
+ *   rejects that one call and fails that one feature. v2, v3 and v4 were all of
+ *   this kind, which is why they need no entry.
+ *
+ *   a CHANGED SHAPE on a method that still exists is the dangerous one. The call
+ *   succeeds and returns something the client misreads, and no default can paper
+ *   over it: a client cannot invent a field the engine never computed. Those get
+ *   an entry, and the feature is switched OFF below that version.
+ *
+ * Adding a shape change means adding a line here. That is the point: the version
+ * history below already describes what each bump broke, in prose no code reads,
+ * so nothing forced a bump to answer "what stops working under this?". Now it does.
+ */
+export const FEATURE_MIN_VERSION = {
+	/** v6 turned CleanupCandidate from a flat row into `{ task: TaskDTO, recommended }`.
+	 *  The dialog dereferences `.task` on every row, so a v5 engine's reply is not a
+	 *  degraded dialog, it is a thrown TypeError. */
+	cleanup: 6,
+	/** v8 added LoopDTO.followUp AND the turn-end delivery behind it. A v7 engine
+	 *  accepts the config key and silently never acts on it, so the honest move is
+	 *  to hide the field rather than let it look saved. */
+	followUps: 8,
+} as const;
+
+export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
+
+/** Whether an engine on `engineVersion` can serve `feature` in a shape this client reads. */
+export function boxSupports(feature: GatedFeature, engineVersion: number): boolean {
+	return engineVersion >= FEATURE_MIN_VERSION[feature];
+}
 
 export type KanbanColumn = "todo" | "running" | "needs_attention" | "review" | "merged";
 
 export type AgentStatus = "idle" | "running" | "awaiting_input" | "stopped";
+
+/** State of the branch's pull request, when one exists. */
+export type PrState = "open" | "merged" | "closed";
 
 /**
  * Why a task is where it is, in urgency order — the done-vs-ongoing judgment
@@ -93,6 +156,8 @@ export interface TaskDTO {
 	mergeStatus: MergeStatus | null;
 	prNumber: number | null;
 	prUrl: string | null;
+	/** open / merged / closed, or null when the branch has no PR. */
+	prState: PrState | null;
 	gitStatus: GitStatusSnapshot | null;
 	/** Last agent/lifecycle activity (falls back to row update time). */
 	lastEventAt: number | null;
@@ -116,8 +181,27 @@ export interface SessionDTO {
 	taskId: string;
 	agentId: string;
 	terminalId: string;
+	/**
+	 * The agent harness's own conversation id, when it is known — the handle
+	 * `pty.restoreSession` resumes by. Null for a shell, and for a conversation
+	 * whose id the harness never told us.
+	 */
+	agentSessionId: string | null;
 	status: AgentStatus;
 	cwd: string;
+	/**
+	 * When this session last reported a hook event, i.e. when it last did
+	 * something. Lets a view with several of a task's sessions in hand open on
+	 * the one that just moved rather than merely the newest one.
+	 *
+	 * Optional, and deliberately NOT a protocol bump: a box that predates the
+	 * field simply omits it, and a client that sees none falls back to the
+	 * newest session — exactly what every client did before. There is no
+	 * feature to gate off, only a nicety that quietly doesn't apply, and
+	 * marking every older box skewed over a tab default would cost more than
+	 * it tells anyone.
+	 */
+	lastEventAt?: number | null;
 }
 
 export interface DiffFileDTO {
@@ -177,6 +261,8 @@ export interface LoopDTO {
 	prompt: string | null;
 	/** Which coding agent each run launches (agent-session loops). */
 	agentId: string | null;
+	/** Optional second turn, sent once after the agent's first reply. */
+	followUp: string | null;
 	/** The loop's one persistent task — every run is a fresh session in it. */
 	taskId: string | null;
 	intervalMs: number | null;
@@ -250,6 +336,17 @@ export interface SystemInfo {
 	agents: string[];
 }
 
+/** What `system:update` reports back before the engine goes down to be replaced. */
+export interface BoxUpdateStarted {
+	/** False when an update was already running: the caller double-tapped, or another
+	 *  client got there first. Nothing new was launched. */
+	started: boolean;
+	/** Where the installer's output is going on the box, so a human can read why it
+	 *  failed after the fact. The engine that could have streamed it is the thing
+	 *  being replaced, so a file is the only place that survives the restart. */
+	logPath: string;
+}
+
 // A subdirectory in a remote-fs listing (the repo picker over RPC).
 export interface DirEntryDTO {
 	name: string;
@@ -302,16 +399,22 @@ export interface ConnectionDTO {
 	known: boolean;
 }
 
-// A worktree advised for cleanup, shown in the cleanup dialog with its terminal.
+/**
+ * One worktree in the cleanup dialog. EVERY task in the project is listed —
+ * the old rule (merged + no live session + clean tree) no longer filters the
+ * list, it only advises through `recommended`, so the call stays with the user
+ * and is made on the factors the whole task carries: last activity, PR state,
+ * ahead/dirty counts, triage verdict.
+ */
 export interface CleanupCandidate {
-	id: string;
-	name: string;
-	branch: string;
-	worktreePath: string;
-	reason: string;
+	/** The task itself, so the dialog can show every deciding factor. */
+	task: TaskDTO;
 	/** A live PTY session to show/continue, or null if the session ended. */
 	terminalId: string | null;
-	agentStatus: AgentStatus | null;
+	/** The conservative rule's verdict: safe to sweep. */
+	recommended: boolean;
+	/** Why it is — or is not — recommended. */
+	reason: string;
 }
 
 /**
@@ -370,6 +473,7 @@ export const CH = {
 	agentsList: "agents:list",
 	searchSessions: "search:sessions",
 	systemHello: "system:hello",
+	systemUpdate: "system:update",
 	fsListDir: "fs:listDir",
 	utilPickFiles: "util:pickFiles",
 	utilAttachImages: "util:attachImages",
@@ -386,6 +490,8 @@ export const CH = {
 	ptyKill: "pty:kill",
 	ptySnapshot: "pty:snapshot",
 	ptyListForTask: "pty:listForTask",
+	ptyListRestorable: "pty:listRestorable",
+	ptyRestoreSession: "pty:restoreSession",
 	// main → renderer push events
 	evtPtyData: "evt:pty:data",
 	evtPtyExit: "evt:pty:exit",
@@ -557,6 +663,8 @@ export interface AteamApi {
 			prompt?: string;
 			/** Absolute paths to attach — appended to the prompt for the agent to read. */
 			files?: string[];
+			/** Resume this exact conversation instead of starting a new one. */
+			resumeSessionId?: string;
 		}): Promise<{ terminalId: string }>;
 		spawnShell(input: { taskId: string }): Promise<{ terminalId: string }>;
 		write(terminalId: string, data: string): void;
@@ -564,6 +672,10 @@ export interface AteamApi {
 		kill(terminalId: string): void;
 		snapshot(terminalId: string): Promise<PtySnapshot>;
 		listForTask(taskId: string): Promise<SessionDTO[]>;
+		/** Tabs this task had open when the app last went down, newest first. */
+		listRestorable(taskId: string): Promise<SessionDTO[]>;
+		/** Bring one of those back — same conversation, new terminal. */
+		restoreSession(input: { taskId: string; terminalId: string }): Promise<{ terminalId: string }>;
 		onData(cb: (e: PtyDataEvent) => void): () => void;
 		onExit(cb: (e: PtyExitEvent) => void): () => void;
 	};
@@ -635,9 +747,11 @@ export interface AteamApi {
 
 export type { NativeClientApi } from "./client-api";
 // Client-side binding of the AteamApi surface over an RpcClient.
-export { buildAteamApi, serverHandshake } from "./client-api";
+export { buildAteamApi, requestBoxUpdate, serverHandshake } from "./client-api";
 // Transport-agnostic RPC framing + client (shared by every transport).
 export * from "./rpc";
+// Reading an engine older than this client (the version gate is advisory now).
+export { NO_TRIAGE, tolerantRpc } from "./tolerate";
 export type { WsClient } from "./ws";
 // WebSocket ClientTransport over the platform-global WebSocket (browser / RN / Bun).
 export { wsClientTransport } from "./ws";

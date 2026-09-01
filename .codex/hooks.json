@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"/Users/riccardomariapallaoro/Library/Application Support/ateam/hooks/notify.sh\" Start"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"/Users/riccardomariapallaoro/Library/Application Support/ateam/hooks/notify.sh\" Stop"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"/Users/riccardomariapallaoro/Library/Application Support/ateam/hooks/notify.sh\" PermissionRequest"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"/Users/riccardomariapallaoro/Library/Application Support/ateam/hooks/notify.sh\" Working"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"/Users/riccardomariapallaoro/Library/Application Support/ateam/hooks/notify.sh\" UserReply"
+          }
+        ]
+      }
+    ]
+  }
+}
