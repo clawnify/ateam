@@ -104,6 +104,14 @@ const springy = { type: "spring", stiffness: 550, damping: 42 } as const;
 // below this; the upper bound is 50% of the window (see startSidebarResize).
 const MIN_SIDEBAR_W = 240;
 
+// Where collapsing a focused task takes you — it's whatever view the task was
+// opened over, so the tooltip has to name that view, not the board.
+const FOCUS_COLLAPSE_LABEL: Record<"board" | "mission" | "loops", string> = {
+	board: "Show beside the board",
+	mission: "Back to Mission Control",
+	loops: "Back to Loops",
+};
+
 export function App() {
 	// Non-null in a detached window: this window is pinned to one project and
 	// hides the project switcher; null in the main multi-project dashboard.
@@ -627,13 +635,14 @@ export function App() {
 		if (!t?.isUnread) return;
 		void window.ateam.tasks.markRead(id).catch(() => {});
 	};
-	// From the sidebar → open full width. From the board → open on the side.
+	// From the sidebar → open full width over whichever view you're already in
+	// (the focused task covers Board / Mission Control / Loops alike, and closing
+	// it lands you back there). From the board → open on the side.
 	const openTask = (t: TaskDTO) => {
 		setActiveProjectId(t.projectId);
 		setSelectedTaskId(t.id);
 		markRead(t.id);
 		setPanelMode("full");
-		setView("board");
 	};
 	const selectFromBoard = (id: string) => {
 		setSelectedTaskId(id);
@@ -650,6 +659,17 @@ export function App() {
 		markRead(task.id);
 		setPanelMode("full");
 	};
+	// Clicking the task you're already focused on closes it, revealing the view
+	// underneath — the lit tab already tells you which one you'll land on. Only
+	// the sidebar toggles: a search hit or a board card means "take me there",
+	// never "take me away".
+	const toggleTask = (t: TaskDTO) => {
+		if (t.id === selectedTaskId && panelMode === "full") {
+			setSelectedTaskId(null);
+			return;
+		}
+		openTask(t);
+	};
 	// A session-search hit opens the task it ran in, and the exact terminal it
 	// ran in when that tab is still alive — the point of the search is to land
 	// back where the work happened, not merely near it.
@@ -659,11 +679,22 @@ export function App() {
 		if (hit.terminalId) setTermByTask((m) => ({ ...m, [task.id]: hit.terminalId }));
 		openTask(task);
 	};
-	// Collapsing the full panel inside Mission Control means "back to the
-	// grid", not "shrink to a side panel" — there is no board to sit beside.
-	const collapseToMission = () => {
+	// Collapsing the focused task. Only the Board has somewhere to shrink *to*
+	// (its side panel); Mission Control and Loops are single-column, so there
+	// collapsing means "back to the view", same as closing.
+	const collapseFocus = () => {
+		if (view === "board") {
+			setPanelMode("side");
+			return;
+		}
 		setSelectedTaskId(null);
 		setPanelMode("side");
+	};
+	// Tabs mean "show me this view". The focused task covers the view it belongs
+	// to, so switching tabs — including clicking the lit one — closes it.
+	const goToView = (v: "board" | "mission" | "loops") => {
+		if (panelMode === "full") setSelectedTaskId(null);
+		setView(v);
 	};
 
 	const addProject = () =>
@@ -871,7 +902,7 @@ export function App() {
 									key={t.id}
 									className={`rail-tile ${t.id === selectedTaskId ? "active" : ""}`}
 									title={t.name}
-									onClick={() => openTask(t)}
+									onClick={() => toggleTask(t)}
 								>
 									{t.agentId ? (
 										<AgentIcon agentId={t.agentId} size={16} />
@@ -1068,7 +1099,7 @@ export function App() {
 													<TaskRow
 														task={t}
 														selected={t.id === selectedTaskId}
-														onClick={() => openTask(t)}
+														onClick={() => toggleTask(t)}
 														onDelete={() => deleteTask(t)}
 													/>
 												</Reorder.Item>
@@ -1082,7 +1113,7 @@ export function App() {
 												<TaskRow
 													task={t}
 													selected={t.id === selectedTaskId}
-													onClick={() => openTask(t)}
+													onClick={() => toggleTask(t)}
 													onDelete={() => deleteTask(t)}
 												/>
 											</motion.div>
@@ -1133,7 +1164,7 @@ export function App() {
 													loop={l}
 													task={task}
 													selected={task != null && task.id === selectedTaskId}
-													onClick={() => (task ? openTask(task) : setView("loops"))}
+													onClick={() => (task ? toggleTask(task) : setView("loops"))}
 												/>
 											);
 										})
@@ -1160,31 +1191,24 @@ export function App() {
 			<main className="main">
 				<div className="topbar">
 					<div className="tabs">
+						{/* The tab stays lit while a task is focused over it: the focused
+						    task belongs to a view, and the lit tab is where closing it
+						    lands you. */}
 						<div
-							className={`tab ${view === "board" && !(selectedTask && panelMode === "full") ? "active" : ""}`}
-							onClick={() => {
-								// A full-width task hides the board — clicking "Board" while
-								// one is open means "show me the board", so deselect it.
-								if (panelMode === "full") setSelectedTaskId(null);
-								setView("board");
-							}}
+							className={`tab ${view === "board" ? "active" : ""}`}
+							onClick={() => goToView("board")}
 						>
 							Board
 						</div>
 						<div
 							className={`tab ${view === "mission" ? "active" : ""}`}
-							onClick={() => {
-								// Same as Board: a full-width task covers this view, so
-								// clicking the tab means "show me Mission Control".
-								if (panelMode === "full") setSelectedTaskId(null);
-								setView("mission");
-							}}
+							onClick={() => goToView("mission")}
 						>
 							Mission Control
 						</div>
 						<div
 							className={`tab ${view === "loops" ? "active" : ""}`}
-							onClick={() => setView("loops")}
+							onClick={() => goToView("loops")}
 						>
 							Loops
 						</div>
@@ -1262,22 +1286,44 @@ export function App() {
 				</div>
 
 				<div className="content">
-					{view === "board" ? (
+					{/* Focus: a task open full-width covers whichever view it was opened
+					    from, rather than being a fourth view of its own. The view keeps
+					    its tab lit, and collapsing or closing lands back on it — so
+					    there is one panel here, not one per view. */}
+					{selectedTask && panelMode === "full" ? (
+						<TaskPanel
+							task={selectedTask}
+							agents={agents}
+							envAgents={envAgents}
+							alias={originOf(selectedTask.projectId)}
+							onInstallAgent={installAgentOnBox}
+							mode={panelMode}
+							onSetMode={(m) => (m === "side" ? collapseFocus() : setPanelMode(m))}
+							collapseLabel={FOCUS_COLLAPSE_LABEL[view]}
+							terminalId={termByTask[selectedTask.id] ?? null}
+							setTerminal={(tid) => setTermByTask((m) => ({ ...m, [selectedTask.id]: tid }))}
+							run={run}
+							ask={ask}
+							confirm={confirm}
+							reload={() => activeProjectId && loadTasks(activeProjectId)}
+							onClose={(taskId) =>
+								setSelectedTaskId((cur) => (taskId == null || cur === taskId ? null : cur))
+							}
+						/>
+					) : view === "board" ? (
 						<>
-							{!(selectedTask && panelMode === "full") && (
-								<Board
-									tasks={filteredBoardTasks}
-									selectedId={selectedTaskId}
-									onSelect={selectFromBoard}
-									onDeselect={() => setSelectedTaskId(null)}
-									// Badge a card only when it runs on a box — Local is the default, so
-									// tagging it would be noise. `null` = no badge.
-									originLabel={(t) => {
-										const a = originOf(t.projectId);
-										return a ? aliasLabel(a) : null;
-									}}
-								/>
-							)}
+							<Board
+								tasks={filteredBoardTasks}
+								selectedId={selectedTaskId}
+								onSelect={selectFromBoard}
+								onDeselect={() => setSelectedTaskId(null)}
+								// Badge a card only when it runs on a box — Local is the default, so
+								// tagging it would be noise. `null` = no badge.
+								originLabel={(t) => {
+									const a = originOf(t.projectId);
+									return a ? aliasLabel(a) : null;
+								}}
+							/>
 							{selectedTask && (
 								<TaskPanel
 									task={selectedTask}
@@ -1300,36 +1346,14 @@ export function App() {
 							)}
 						</>
 					) : view === "mission" ? (
-						selectedTask && panelMode === "full" ? (
-							<TaskPanel
-								task={selectedTask}
-								agents={agents}
-								envAgents={envAgents}
-								alias={originOf(selectedTask.projectId)}
-								onInstallAgent={installAgentOnBox}
-								mode={panelMode}
-								onSetMode={(m) => (m === "side" ? collapseToMission() : setPanelMode(m))}
-								collapseLabel="Back to Mission Control"
-								terminalId={termByTask[selectedTask.id] ?? null}
-								setTerminal={(tid) => setTermByTask((m) => ({ ...m, [selectedTask.id]: tid }))}
-								run={run}
-								ask={ask}
-								confirm={confirm}
-								reload={() => activeProjectId && loadTasks(activeProjectId)}
-								onClose={(taskId) =>
-									setSelectedTaskId((cur) => (taskId == null || cur === taskId ? null : cur))
-								}
-							/>
-						) : (
-							<MissionControl
-								tasks={activeTasks}
-								agents={agents}
-								order={sidebarOrderIds}
-								layout={mcLayout}
-								locked={mcLocked}
-								onExpand={openFromMission}
-							/>
-						)
+						<MissionControl
+							tasks={activeTasks}
+							agents={agents}
+							order={sidebarOrderIds}
+							layout={mcLayout}
+							locked={mcLocked}
+							onExpand={openFromMission}
+						/>
 					) : (
 						<LoopsPanel
 							loops={activeLoops}
