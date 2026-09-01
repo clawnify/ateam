@@ -21,6 +21,8 @@ export interface LoopSessionOps {
 		taskId: string;
 		agentId: string;
 		prompt: string;
+		/** Optional second turn, taken right after the first response. */
+		followUp?: string;
 	}) => Promise<{ terminalId: string }>;
 	/** Kill a task's live PTYs (the previous run's idle pane). */
 	stopTaskSessions: (taskId: string) => void;

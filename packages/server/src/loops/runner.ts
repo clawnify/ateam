@@ -265,6 +265,7 @@ export class LoopRunner {
 				cadence: cadence?.mode ?? "self_paced",
 				prompt: typeof row.config?.prompt === "string" ? row.config.prompt : null,
 				agentId: typeof row.config?.agentId === "string" ? row.config.agentId : null,
+				followUp: typeof row.config?.followUp === "string" ? row.config.followUp : null,
 				// The loop's persistent task (lastTaskId = pre-persistent-era key).
 				taskId:
 					typeof row.config?.taskId === "string"

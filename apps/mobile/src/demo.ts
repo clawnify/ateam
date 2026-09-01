@@ -186,6 +186,11 @@ export function demoConnection(): Connection {
 	return {
 		api: buildAteamApi(rpc, mobileNative),
 		info: INFO,
+		// The canned engine answers as this exact build, so it is never skewed and has
+		// nothing to update itself to. Both members exist to satisfy Connection: demo
+		// mode never renders the banner that would call them.
+		skewed: false,
+		update: async () => ({ started: false, logPath: "" }),
 		ping: async () => true,
 		close: () => {
 			onFrame = null;
