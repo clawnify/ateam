@@ -1,9 +1,18 @@
-import type { LucideIcon } from "lucide-react";
+import type { ComponentType } from "react";
+
+/**
+ * Any icon the button can render: a lucide icon, or one of our own inlined brand
+ * marks (VscodeLogo) — both take `size`, and a brand mark ignores strokeWidth.
+ */
+export type ButtonIcon = ComponentType<{
+	size?: string | number;
+	strokeWidth?: string | number;
+}>;
 
 export type IconButtonVariant = "default" | "primary" | "yolo" | "danger";
 
 interface IconButtonProps {
-	icon: LucideIcon;
+	icon: ButtonIcon;
 	/** Tooltip label shown on hover (icons carry no visible text). */
 	label: string;
 	/** Optional shortcut hint shown in the tooltip, e.g. "⌘⏎". */

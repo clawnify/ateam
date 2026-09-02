@@ -11,6 +11,13 @@ import type {
 	LoopSessionOps,
 } from "./types";
 
+/**
+ * How long after start an already-overdue loop waits before its catch-up run.
+ * Long enough for the app to finish booting (window, PTY daemon, box
+ * connections), short enough that a missed tick still feels prompt.
+ */
+const SETTLE_MS = 60_000;
+
 interface Instance {
 	def: LoopDefinition;
 	loopId: string;
@@ -166,7 +173,10 @@ export class LoopRunner {
 		if (def) {
 			this.defs.set(def.id, def);
 			// Swap the running instance for one built on the new definition; keep
-			// the row. ensureInstance reschedules it (if enabled) from now.
+			// the row, so ensureInstance reschedules it (if enabled) against the
+			// persisted schedule under the NEW interval — shortening the interval
+			// on a loop that is already overdue by it runs it shortly, rather
+			// than waiting out a fresh full interval.
 			this.removeInstance(input.id);
 			this.ensureInstance(def);
 		}
@@ -203,7 +213,7 @@ export class LoopRunner {
 		});
 		const inst: Instance = { def, loopId, scopeKey, timer: null, running: false };
 		this.instances.set(loopId, inst);
-		if (row.enabled) this.schedule(inst, this.initialDelay(def));
+		if (row.enabled) this.schedule(inst, this.initialDelay(def, row));
 		return inst;
 	}
 
@@ -285,11 +295,37 @@ export class LoopRunner {
 	}
 
 	// ---- internals ----
-	private initialDelay(def: LoopDefinition): number {
-		// Honor a fixed interval as-is; for self-paced loops do a first pass soon
-		// after boot so a stale board is corrected promptly.
-		if (def.cadence.mode === "fixed") return def.cadence.everyMs;
-		return Math.min(2000, def.cadence.minMs);
+	/**
+	 * Delay before an instance's FIRST run of this process.
+	 *
+	 * Timers live in the process, but the schedule lives in the row. Locally the
+	 * runner is started by the desktop app (apps/desktop/src/main/index.ts), so
+	 * it dies on every quit; a boot that always waited a whole interval pushed
+	 * the loop further out each launch and silently dropped every tick in
+	 * between, so a 1h loop on a Mac closed more often than hourly never ran at
+	 * all. On a box the daemon stays up, which is why this only ever bit locally.
+	 *
+	 * So resume from what was persisted: due = lastRunAt + interval, falling back
+	 * to the nextRunAt this loop was last scheduled for (a loop that has never
+	 * run has no lastRunAt, and would otherwise drift forever). Both columns are
+	 * already written by schedule()/fire() — nothing new is stored.
+	 *
+	 * An overdue loop runs ONCE, after a short settle, never a backlog: catching
+	 * up 8 hours of closed laptop with 8 sessions in one worktree is worse than
+	 * the miss. Same shape as a Kubernetes CronJob's startingDeadlineSeconds.
+	 *
+	 * `row` is absent only for a caller that means "start the clock now" —
+	 * setEnabled, where the user just flipped the loop on by hand.
+	 */
+	private initialDelay(def: LoopDefinition, row?: Loop): number {
+		// Self-paced loops do a first pass soon after boot regardless.
+		if (def.cadence.mode !== "fixed") return Math.min(2000, def.cadence.minMs);
+		const everyMs = def.cadence.everyMs;
+		if (!row) return everyMs;
+		const due = row.lastRunAt != null ? row.lastRunAt + everyMs : (row.nextRunAt ?? null);
+		if (due == null) return everyMs;
+		// Don't fire into a half-booted app (the PTY daemon connects around now).
+		return Math.max(SETTLE_MS, Math.min(everyMs, due - Date.now()));
 	}
 
 	private schedule(inst: Instance, delayMs: number): void {
@@ -323,12 +359,15 @@ export class LoopRunner {
 		} finally {
 			inst.running = false;
 		}
+		// A skipped tick started nothing, so it is not a run: leave `runs` and
+		// `lastRunAt` alone. `lastRunAt` is what the next start computes the due
+		// time from (initialDelay), so counting a skip would silently push the
+		// schedule forward. The summary still updates, so the panel says why.
 		repo.updateLoop(this.deps.db, inst.loopId, {
-			lastRunAt: Date.now(),
 			lastStatus: status,
 			lastSummary: outcome.summary ?? null,
 			lastError: error,
-			runs: (row.runs ?? 0) + 1,
+			...(outcome.skipped ? {} : { lastRunAt: Date.now(), runs: (row.runs ?? 0) + 1 }),
 		});
 		if (status === "done") {
 			this.removeInstance(inst.loopId, { deleteRow: true });

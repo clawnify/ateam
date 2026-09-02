@@ -53,6 +53,14 @@ export interface LoopOutcome {
 	nextDelayMs?: number;
 	/** The loop is finished and should stop and remove itself (watcher loops). */
 	done?: boolean;
+	/**
+	 * Nothing was started: the tick found the previous run still working. The
+	 * runner records the reason but leaves `runs` and `lastRunAt` alone — a
+	 * skipped tick is not a run, and `lastRunAt` is what the next start
+	 * computes the due time from, so counting one would push the schedule
+	 * forward without anything having happened.
+	 */
+	skipped?: boolean;
 }
 
 /**
