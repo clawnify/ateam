@@ -9,12 +9,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
  *   `#tag …`  filters the board and sidebar (see matchesTagQuery in App).
  *   anything  searches, and answers in this popover — never by hiding cards.
  *
- * The popover answers in two passes. Task names match instantly and locally;
- * the sessions that TALKED about it arrive a moment later from the engine's
- * transcript index. The last row is always the AI search, which is how you find
- * a session whose words you no longer remember. It stays visible even when
- * there are results, because "none of these is the one" is exactly when you
- * want it, and it is the only way to discover the feature exists.
+ * Typing matches the tasks ALREADY IN THIS WINDOW — name, branch, description —
+ * and nothing else. It costs a pass over an array, so there is nothing to
+ * debounce and nothing to cancel. Transcripts are deliberately not in that
+ * path: reading a board's session history is hundreds of MB off disk, and
+ * paying it per keystroke made the box the most expensive control in the app.
+ *
+ * The last row is always the AI search, and it is what reads the transcripts —
+ * one deliberate click, for the session whose words you no longer remember. It
+ * stays visible even when there are results, because "none of these is the one"
+ * is exactly when you want it, and it is the only way to discover it exists.
  */
 
 /**
@@ -26,8 +30,7 @@ type Row =
 	| { kind: "result"; key: string; name: string; subtitle: string; meta: string; open: () => void }
 	| { kind: "ai" };
 
-const DEBOUNCE_MS = 200;
-/** Task-name matches shown before session matches get their turn. */
+/** Task matches shown above the AI row. */
 const MAX_TASK_ROWS = 6;
 
 export function TaskSearch({
@@ -48,78 +51,60 @@ export function TaskSearch({
 	onOpenTask: (task: TaskDTO) => void;
 	onOpenSession: (hit: SessionHitDTO) => void;
 }) {
-	const [sessionHits, setSessionHits] = useState<SessionHitDTO[]>([]);
-	const [aiHits, setAiHits] = useState<SessionHitDTO[] | null>(null);
-	const [busy, setBusy] = useState(false);
-	const [dismissed, setDismissed] = useState(false);
-	const [cursor, setCursor] = useState(0);
+	// The answer, the request in flight, the dismissal and the highlighted row are
+	// each stamped with the question they belong to, and read back only when that
+	// stamp still matches. Nothing has to be reset when the question changes: a
+	// stale stamp simply stops matching. The old version reset them from an
+	// effect keyed on `projectIds`, which the parent rebuilds every render — a
+	// fresh array re-ran the effect, the effect set state, the state re-rendered
+	// the parent. Derived state cannot spin that way.
+	const [answer, setAnswer] = useState<{ key: string; hits: SessionHitDTO[] } | null>(null);
+	const [pending, setPending] = useState<string | null>(null);
+	const [dismissed, setDismissed] = useState<string | null>(null);
+	const [caret, setCaret] = useState<{ scope: string; index: number }>({ scope: "", index: 0 });
 	const boxRef = useRef<HTMLDivElement>(null);
-	// Only the newest search may write results: a slower earlier answer arriving
-	// late would otherwise replace the one being read.
-	const runId = useRef(0);
+	// Only the newest ask may write results: a slower earlier answer arriving late
+	// would otherwise replace the one being read.
+	const latest = useRef(0);
 
 	const trimmed = query.trim();
+	// What the popover is currently answering. Compared by value, so the parent
+	// handing us a new-but-equal `projectIds` array is not a new question.
+	const key = `${projectIds.join("\u0000")}\u0000${trimmed}`;
 	// A tag query is a filter, and the board is already showing its answer.
 	const isFilter = trimmed.startsWith("#");
-	const open = trimmed !== "" && !isFilter && !dismissed;
-
-	const reset = useCallback(() => {
-		runId.current++;
-		setSessionHits([]);
-		setAiHits(null);
-		setBusy(false);
-		setCursor(0);
-	}, []);
-
-	// Lexical pass: instant, free, and re-run as the query settles.
-	useEffect(() => {
-		setDismissed(false);
-		reset();
-		if (trimmed === "" || isFilter || projectIds.length === 0) return;
-		const run = ++runId.current;
-		const timer = setTimeout(async () => {
-			const lists = await Promise.all(
-				projectIds.map((projectId) =>
-					window.ateam.search.sessions({ projectId, query: trimmed }).catch(() => []),
-				),
-			);
-			if (run === runId.current) setSessionHits(interleave(lists));
-		}, DEBOUNCE_MS);
-		return () => clearTimeout(timer);
-	}, [trimmed, isFilter, projectIds, reset]);
+	const open = trimmed !== "" && !isFilter && dismissed !== key;
+	const aiHits = answer?.key === key ? answer.hits : null;
+	const busy = pending === key;
 
 	const askAi = useCallback(async () => {
-		if (!trimmed || projectIds.length === 0 || busy) return;
-		const run = ++runId.current;
-		setBusy(true);
+		if (!trimmed || projectIds.length === 0 || pending === key) return;
+		const run = ++latest.current;
+		setPending(key);
 		try {
 			const lists = await Promise.all(
 				projectIds.map((projectId) =>
 					window.ateam.search.sessions({ projectId, query: trimmed, ai: true }).catch(() => []),
 				),
 			);
-			if (run !== runId.current) return;
-			setAiHits(interleave(lists));
-			setCursor(0);
+			if (run === latest.current) setAnswer({ key, hits: interleave(lists) });
 		} finally {
-			if (run === runId.current) setBusy(false);
+			if (run === latest.current) setPending(null);
 		}
-	}, [trimmed, projectIds, busy]);
+	}, [key, trimmed, projectIds, pending]);
 
 	const rows = useMemo<Row[]>(() => {
 		if (!open) return [];
 		if (aiHits) return aiHits.map((hit) => sessionRow(hit, onOpenSession));
 		const needle = trimmed.toLowerCase();
-		const named = new Set<string>();
 		const out: Row[] = [];
 		for (const task of tasks) {
-			if (named.size >= MAX_TASK_ROWS) break;
+			if (out.length >= MAX_TASK_ROWS) break;
 			const matched =
 				task.name.toLowerCase().includes(needle) ||
 				task.branch.toLowerCase().includes(needle) ||
 				(task.description?.toLowerCase().includes(needle) ?? false);
 			if (!matched) continue;
-			named.add(task.id);
 			out.push({
 				kind: "result",
 				key: task.id,
@@ -129,38 +114,36 @@ export function TaskSearch({
 				open: () => onOpenTask(task),
 			});
 		}
-		// A session match for a task already listed by name adds nothing but a
-		// duplicate row; the name match is the stronger signal, so it stands.
-		for (const hit of sessionHits) {
-			if (!named.has(hit.taskId)) out.push(sessionRow(hit, onOpenSession));
-		}
 		out.push({ kind: "ai" });
 		return out;
-	}, [open, aiHits, trimmed, tasks, sessionHits, onOpenTask, onOpenSession]);
+	}, [open, aiHits, trimmed, tasks, onOpenTask, onOpenSession]);
 
-	useEffect(() => {
-		if (cursor >= rows.length) setCursor(0);
-	}, [rows.length, cursor]);
+	// Highlight, scoped to the list it was chosen from: a new question, or the
+	// AI's answer replacing the task matches, starts back at the top. Clamped
+	// here rather than corrected by an effect, so it can never point off the end.
+	const scope = aiHits ? `ai\u0000${key}` : key;
+	const cursor = Math.min(caret.scope === scope ? caret.index : 0, Math.max(0, rows.length - 1));
+	const moveCursor = (index: number) => setCaret({ scope, index });
 
 	useEffect(() => {
 		if (!open) return;
 		const onClick = (e: MouseEvent) => {
-			if (!boxRef.current?.contains(e.target as Node)) setDismissed(true);
+			if (!boxRef.current?.contains(e.target as Node)) setDismissed(key);
 		};
 		document.addEventListener("mousedown", onClick);
 		return () => document.removeEventListener("mousedown", onClick);
-	}, [open]);
+	}, [open, key]);
 
 	const activate = (row: Row) => {
 		if (row.kind === "ai") return void askAi();
 		row.open();
-		setDismissed(true);
+		setDismissed(key);
 	};
 
 	const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
 		if (e.key === "Escape" && open) {
 			e.preventDefault();
-			setDismissed(true);
+			setDismissed(key);
 		} else if (e.key === "Enter") {
 			e.preventDefault();
 			const row = rows[cursor];
@@ -168,7 +151,7 @@ export function TaskSearch({
 		} else if (open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
 			e.preventDefault();
 			const step = e.key === "ArrowDown" ? 1 : -1;
-			setCursor((c) => Math.max(0, Math.min(rows.length - 1, c + step)));
+			moveCursor(Math.max(0, Math.min(rows.length - 1, cursor + step)));
 		}
 	};
 
@@ -181,7 +164,7 @@ export function TaskSearch({
 				value={query}
 				onChange={(e) => onQuery(e.target.value)}
 				onKeyDown={onKeyDown}
-				onFocus={() => setDismissed(false)}
+				onFocus={() => setDismissed(null)}
 				aria-label="Search tasks"
 			/>
 			{query && (
@@ -206,7 +189,7 @@ export function TaskSearch({
 								role="option"
 								aria-selected={i === cursor}
 								disabled={busy}
-								onMouseEnter={() => setCursor(i)}
+								onMouseEnter={() => moveCursor(i)}
 								onClick={() => void askAi()}
 							>
 								<span className="ts-hit-name">
@@ -224,7 +207,7 @@ export function TaskSearch({
 								className={`ts-hit ${i === cursor ? "on" : ""}`}
 								role="option"
 								aria-selected={i === cursor}
-								onMouseEnter={() => setCursor(i)}
+								onMouseEnter={() => moveCursor(i)}
 								onClick={() => activate(row)}
 							>
 								<span className="ts-hit-name">{row.name}</span>

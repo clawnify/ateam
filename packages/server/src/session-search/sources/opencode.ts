@@ -37,7 +37,7 @@ interface SessionRow {
 export function opencodeSource(): TranscriptSource {
 	return {
 		agentId: "opencode",
-		digestsFor(cwds) {
+		async digestsFor(cwds) {
 			const path = DB_PATH();
 			if (!existsSync(path) || cwds.length === 0) return [];
 			// Required lazily: the driver is a native module that loads under

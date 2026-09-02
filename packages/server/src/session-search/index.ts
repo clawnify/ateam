@@ -29,11 +29,11 @@ const SHORTLIST = 20;
 const RESULTS = 8;
 
 /**
- * shortcut: the digest index is rebuilt from disk on a cache miss and held for
- * TTL_MS, rather than persisted. A full rebuild is ~1s for this repo's history
- * because only a project's own worktrees are read; if that stops being true
- * (thousands of tasks), persist digests keyed by path+mtime and rebuild the
- * delta instead.
+ * How long a built index is reused before the stores are checked again. The
+ * rebuild behind it is nearly free: each source memoizes its parsed digests by
+ * path+mtime, so a rebuild stats the files and re-reads only the session you
+ * are still in. The memo lives for the life of the process rather than on disk
+ * — persist it only if a cold first search ever becomes the complaint.
  */
 const TTL_MS = 60_000;
 
@@ -45,22 +45,27 @@ interface CacheEntry {
 }
 const cache = new Map<string, CacheEntry>();
 
-function buildIndex(worktrees: string[]): SessionDigest[] {
-	const out: SessionDigest[] = [];
-	for (const source of SOURCES) {
-		try {
-			out.push(...source.digestsFor(worktrees));
-		} catch {
-			// One harness's store being unreadable must not hide the others.
-		}
-	}
-	return out;
+async function buildIndex(worktrees: string[]): Promise<SessionDigest[]> {
+	const lists = await Promise.all(
+		SOURCES.map(async (source) => {
+			try {
+				return await source.digestsFor(worktrees);
+			} catch {
+				// One harness's store being unreadable must not hide the others.
+				return [];
+			}
+		}),
+	);
+	return lists.flat();
 }
 
 export interface SessionSearchInput {
 	projectId: string;
 	query: string;
-	/** Run the model re-rank. Off = the instant, free, lexical answer. */
+	/** Run the model re-rank. Off = the lexical answer alone.
+	 *  The desktop only ever asks with `ai: true`: typing is answered from the
+	 *  tasks already in the window (name, branch, description), and reading the
+	 *  transcripts is what the "find the session that did this" row buys. */
 	ai?: boolean;
 	/** Which agent answers the re-rank; defaults to the configured agent. */
 	agentId?: string;
@@ -80,7 +85,9 @@ export async function searchSessions(
 
 	const cached = cache.get(input.projectId);
 	const digests =
-		cached && Date.now() - cached.at < TTL_MS ? cached.digests : buildIndex([...byWorktree.keys()]);
+		cached && Date.now() - cached.at < TTL_MS
+			? cached.digests
+			: await buildIndex([...byWorktree.keys()]);
 	cache.set(input.projectId, { at: Date.now(), digests });
 
 	// Resolve against the CURRENT tasks, not the cached ones: a task removed

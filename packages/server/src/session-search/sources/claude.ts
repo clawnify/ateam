@@ -4,28 +4,41 @@
 // We deliberately do NOT reproduce Claude's cwd→directory slug rule. It is
 // undocumented, and a rule that drifts would silently return "no sessions"
 // rather than fail loudly. Instead each directory is asked what cwd it holds by
-// reading the `cwd` field off its first transcript — 0.15s for 200 directories,
-// and correct whatever the slug rule does next.
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+// reading the `cwd` field off the FIRST BYTES of its first transcript, and the
+// answer is remembered: a directory's cwd is what its name was derived from, so
+// it cannot change under us.
+import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pushPrompt } from "../digest";
 import type { SessionDigest, TranscriptSource } from "../types";
+import { fileMemo, mtimeOf, readHead } from "./files";
 
 const ROOT = () => join(homedir(), ".claude", "projects");
 
+/** How much of a transcript is read to find its `cwd`. The field is on the
+ *  session's first events; reading the whole file to reach them cost a
+ *  gigabyte of I/O across 229 directories (1.3s) instead of 14MB (0.1s). */
+const HEAD_BYTES = 64_000;
+
+/** dir → cwd, for the life of the process. Misses are NOT remembered: a
+ *  directory that is empty now holds the session you start next. */
+const dirCwds = new Map<string, string>();
+
 /** Read the `cwd` a project directory belongs to, from its first transcript. */
-function dirCwd(dir: string): string | null {
+async function dirCwd(dir: string): Promise<string | null> {
+	const known = dirCwds.get(dir);
+	if (known) return known;
 	let files: string[];
 	try {
-		files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+		files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
 	} catch {
 		return null;
 	}
 	for (const f of files.slice(0, 2)) {
 		let head: string;
 		try {
-			head = readFileSync(join(dir, f), "utf8").slice(0, 64_000);
+			head = await readHead(join(dir, f), HEAD_BYTES);
 		} catch {
 			continue;
 		}
@@ -33,7 +46,10 @@ function dirCwd(dir: string): string | null {
 			if (!line.includes('"cwd"')) continue;
 			try {
 				const cwd = (JSON.parse(line) as { cwd?: unknown }).cwd;
-				if (typeof cwd === "string" && cwd) return cwd;
+				if (typeof cwd === "string" && cwd) {
+					dirCwds.set(dir, cwd);
+					return cwd;
+				}
 			} catch {
 				/* a truncated last line — keep looking */
 			}
@@ -43,12 +59,13 @@ function dirCwd(dir: string): string | null {
 }
 
 /** Parse one transcript into a digest, or null if it holds no real prompts. */
-export function readClaudeTranscript(path: string): SessionDigest | null {
+export async function readClaudeTranscript(
+	path: string,
+	mtimeMs: number,
+): Promise<SessionDigest | null> {
 	let raw: string;
-	let mtimeMs: number;
 	try {
-		raw = readFileSync(path, "utf8");
-		mtimeMs = statSync(path).mtimeMs;
+		raw = await readFile(path, "utf8");
 	} catch {
 		return null;
 	}
@@ -95,26 +112,38 @@ export function readClaudeTranscript(path: string): SessionDigest | null {
 }
 
 export function claudeSource(): TranscriptSource {
+	const digests = fileMemo<SessionDigest | null>();
 	return {
 		agentId: "claude",
-		digestsFor(cwds) {
+		async digestsFor(cwds) {
 			const root = ROOT();
-			if (!existsSync(root)) return [];
 			const wanted = new Set(cwds);
 			const out: SessionDigest[] = [];
 			let dirs: string[];
 			try {
-				dirs = readdirSync(root);
+				dirs = await readdir(root);
 			} catch {
 				return [];
 			}
 			for (const name of dirs) {
 				const dir = join(root, name);
-				const cwd = dirCwd(dir);
+				const cwd = await dirCwd(dir);
 				if (!cwd || !wanted.has(cwd)) continue;
-				for (const f of readdirSync(dir)) {
+				let files: string[];
+				try {
+					files = await readdir(dir);
+				} catch {
+					continue;
+				}
+				// One file at a time on purpose: a transcript can be tens of MB, and
+				// reading a directory's worth in parallel would spike memory for no
+				// gain — the awaits already keep the process responsive.
+				for (const f of files) {
 					if (!f.endsWith(".jsonl")) continue;
-					const digest = readClaudeTranscript(join(dir, f));
+					const path = join(dir, f);
+					const mtimeMs = await mtimeOf(path);
+					if (mtimeMs === null) continue;
+					const digest = await digests(path, mtimeMs, () => readClaudeTranscript(path, mtimeMs));
 					// The directory maps to one cwd, but trust the transcript's own.
 					if (digest && wanted.has(digest.cwd || cwd)) {
 						out.push({ ...digest, cwd: digest.cwd || cwd });

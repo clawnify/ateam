@@ -38,8 +38,10 @@ export interface SessionDigest {
 export interface TranscriptSource {
 	agentId: string;
 	/** Digests for sessions whose cwd is one of `cwds`. Never throws: a missing
-	 *  or unreadable store is simply an agent with no history to search. */
-	digestsFor(cwds: string[]): SessionDigest[];
+	 *  or unreadable store is simply an agent with no history to search.
+	 *  Async because the engine shares a process with the window — a store this
+	 *  size read synchronously freezes the app for the length of the read. */
+	digestsFor(cwds: string[]): Promise<SessionDigest[]>;
 }
 
 /** A ranked match, before it is joined back to a task for the UI. */
