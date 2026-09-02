@@ -194,6 +194,49 @@ describe("createTask isolation", () => {
 		expect(existsSync(task.worktreePath)).toBe(true);
 		expect(existsSync(join(task.worktreePath, ".env"))).toBe(false);
 	});
+	it("allows several tasks with the same name", async () => {
+		const a = await createTask({ repoPath: repo.work, name: "same name" });
+		const b = await createTask({ repoPath: repo.work, name: "same name" });
+		const c = await createTask({ repoPath: repo.work, name: "Same Name!" });
+
+		expect([a.branch, b.branch, c.branch]).toEqual([
+			"same-name",
+			"same-name-2",
+			"same-name-3",
+		]);
+		expect([a.slug, b.slug, c.slug]).toEqual([
+			"same-name",
+			"same-name-2",
+			"same-name-3",
+		]);
+		for (const t of [a, b, c]) expect(existsSync(t.worktreePath)).toBe(true);
+	});
+
+	it("skips a name whose branch survived an earlier task", async () => {
+		// Task removed, branch kept (deleteBranch not requested) — the classic
+		// "a branch named X already exists" failure.
+		const first = await createTask({ repoPath: repo.work, name: "leftover" });
+		await removeTask({
+			repoPath: repo.work,
+			worktreePath: first.worktreePath,
+			branch: first.branch,
+		});
+
+		const second = await createTask({ repoPath: repo.work, name: "leftover" });
+		expect(second.branch).toBe("leftover-2");
+		expect(existsSync(second.worktreePath)).toBe(true);
+	});
+
+	it("skips a name already taken by a remote branch", async () => {
+		await simpleGit(repo.work).raw([
+			"update-ref",
+			"refs/remotes/origin/taken",
+			"HEAD",
+		]);
+
+		const task = await createTask({ repoPath: repo.work, name: "taken" });
+		expect(task.branch).toBe("taken-2");
+	});
 });
 
 describe("updateFromBase", () => {
