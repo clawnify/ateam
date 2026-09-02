@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import {
 	agentEvents,
 	agentSessions,
@@ -127,15 +127,21 @@ export const repo = {
 	 *
 	 * Deliberately NOT "every session that never got closed". A task in this db
 	 * has held as many as 28 sessions over its life, and a strip of 28 dead tabs
-	 * is not a restore, it is a history browser nobody asked for. `stranded` is
-	 * kept to one app run by `demoteStrandedSessions`, so this list can never be
-	 * longer than the number of tabs actually open at shutdown.
+	 * is not a restore, it is a history browser nobody asked for. Both sources
+	 * are bounded to keep it that way: `stranded` is kept to one app run by
+	 * `demoteStrandedSessions`, and `reaped` to one per task by
+	 * `demoteReapedSessions`.
 	 */
 	listRestorableSessions(db: AteamDb, taskId: string) {
 		return db
 			.select()
 			.from(agentSessions)
-			.where(and(eq(agentSessions.taskId, taskId), eq(agentSessions.exitReason, "stranded")))
+			.where(
+				and(
+					eq(agentSessions.taskId, taskId),
+					inArray(agentSessions.exitReason, ["stranded", "reaped"]),
+				),
+			)
 			.orderBy(desc(agentSessions.startedAt))
 			.all();
 	},
@@ -150,6 +156,19 @@ export const repo = {
 		db.update(agentSessions)
 			.set({ exitReason: "exited" })
 			.where(eq(agentSessions.exitReason, "stranded"))
+			.run();
+	},
+
+	/**
+	 * Retire a task's previously reaped tabs to plain history. A task holds one
+	 * live session at a time, so a fresh reap supersedes any earlier one. Without
+	 * this, a task the user never brings back would collect a dead tab per reap —
+	 * the same history-browser strip `listRestorableSessions` exists to avoid.
+	 */
+	demoteReapedSessions(db: AteamDb, taskId: string) {
+		db.update(agentSessions)
+			.set({ exitReason: "exited" })
+			.where(and(eq(agentSessions.taskId, taskId), eq(agentSessions.exitReason, "reaped")))
 			.run();
 	},
 

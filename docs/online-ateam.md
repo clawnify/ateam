@@ -55,8 +55,9 @@ Skip this if you already have a box you work on. Starting from a provider's
 **Size it for agents, not for the app.** A recent Ubuntu LTS with **4 GB RAM, 2 vCPU,
 40 GB disk** is a comfortable starting point — a Hetzner **CX23** (x86) or **CAX11**
 (Arm64), or the equivalent elsewhere. Each concurrent agent session wants roughly a
-gigabyte, plus whatever your project's own dev server and test runs need. x86_64 and
-arm64 both work.
+gigabyte, plus whatever your project's own dev server and test runs need. Size for
+agents *active* rather than agents *started* — a finished one is reclaimed after two
+hours and costs nothing until you open it again. x86_64 and arm64 both work.
 
 **Create a non-root user.** Agents run as this user, in its login shell, with its
 git and `gh` credentials — don't give them root.
@@ -372,7 +373,11 @@ The connection menu surfaces the real error inline. Common ones:
 - **The same box also backs the iOS app** — see step 5. Same daemon, agents, and
   worktrees; a WebSocket instead of SSH, both riding Tailscale.
 - **Sessions persist.** The daemon keeps agents and PTYs alive across disconnects;
-  reconnecting re-attaches to the exact running sessions.
+  reconnecting re-attaches to the exact running sessions. The one exception is an
+  agent that finished its turn and has been untouched for two hours: the app
+  reclaims its process and leaves the tab on the strip, and bringing it back
+  resumes the same conversation. Agents mid-turn or holding a question are never
+  reclaimed.
 - **A box that drops mid-session shows as disconnected too.** Sleep the Mac, flip
   networks, or let the box go away and Ateam drops that box rather than leaving a dead
   link on the board — the rest of the board keeps working, and reconnecting from the
