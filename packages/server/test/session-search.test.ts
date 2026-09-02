@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { cleanPrompt, contentText, pushPrompt } from "../src/session-search/digest";
 import { rank, terms } from "../src/session-search/rank";
 import { extractJson, parseVerdicts } from "../src/session-search/rerank";
+import { codexSource } from "../src/session-search/sources/codex";
+import { readFirstLine } from "../src/session-search/sources/files";
 import type { SessionDigest } from "../src/session-search/types";
 
 function digest(id: string, prompts: string[], endedAt = 0): SessionDigest {
@@ -163,5 +168,76 @@ describe("verdicts", () => {
 		expect(parseVerdicts(reply, new Set(["a"]))).toEqual([
 			{ sessionId: "a", why: "w", confidence: "low" },
 		]);
+	});
+});
+
+describe("readFirstLine", () => {
+	async function withFile<T>(body: string, fn: (path: string) => Promise<T>): Promise<T> {
+		const path = join(await mkdtemp(join(tmpdir(), "ateam-search-")), "f.jsonl");
+		await writeFile(path, body);
+		try {
+			return await fn(path);
+		} finally {
+			await rm(dirname(path), { recursive: true, force: true });
+		}
+	}
+
+	test("returns a header line far longer than one read chunk", async () => {
+		// The bug this guards: Codex writes its whole system prompt into the
+		// session_meta line (~19KB and growing), so any fixed head budget
+		// truncates it — and a truncated JSON line does not raise, it silently
+		// parses to nothing and every Codex session disappears from search.
+		const header = `{"pad":"${"x".repeat(300_000)}","cwd":"/w"}`;
+		const line = await withFile(`${header}\n{"body":1}\n`, readFirstLine);
+		expect(line).toBe(header);
+		expect(JSON.parse(line).cwd).toBe("/w");
+	});
+
+	test("stops at the newline instead of reading the body", async () => {
+		const line = await withFile(`{"a":1}\n${"y".repeat(500_000)}\n`, readFirstLine);
+		expect(line).toBe('{"a":1}');
+	});
+
+	test("decodes a multi-byte character that straddles a chunk boundary", async () => {
+		// 64_000 is the chunk size, and "€" is 3 bytes: pad so one lands across
+		// the seam. Decoding per chunk instead of once at the end mangles it.
+		const line = `${"a".repeat(63_999)}€tail`;
+		expect(await withFile(`${line}\n`, readFirstLine)).toBe(line);
+	});
+
+	test("a file with no newline at all still returns its content", async () => {
+		expect(await withFile('{"a":1}', readFirstLine)).toBe('{"a":1}');
+	});
+});
+
+describe("codexSource", () => {
+	test("indexes a rollout whose header line exceeds any fixed budget", async () => {
+		const root = await mkdtemp(join(tmpdir(), "ateam-codex-"));
+		const store = join(root, ".codex", "sessions");
+		const day = join(store, "2026", "09", "01");
+		await mkdir(day, { recursive: true });
+		const cwd = join(root, "worktrees", "a-task");
+		// Same shape as a real rollout: an oversized session_meta, then the turns.
+		const meta = JSON.stringify({
+			timestamp: "2026-09-01T10:00:00.000Z",
+			type: "session_meta",
+			payload: { id: "sess-1", cwd, base_instructions: { text: "z".repeat(200_000) } },
+		});
+		const turn = JSON.stringify({
+			timestamp: "2026-09-01T10:01:00.000Z",
+			payload: { role: "user", content: [{ type: "input_text", text: "make the search cheap" }] },
+		});
+		await writeFile(join(day, "rollout-2026-09-01T10-00-00-sess-1.jsonl"), `${meta}\n${turn}\n`);
+
+		try {
+			const digests = await codexSource(store).digestsFor([cwd]);
+			expect(digests.map((d) => d.sessionId)).toEqual(["sess-1"]);
+			expect(digests[0]?.cwd).toBe(cwd);
+			expect(digests[0]?.prompts).toEqual(["make the search cheap"]);
+			// A rollout from some other repo is skipped without reading its body.
+			expect(await codexSource(store).digestsFor(["/somewhere/else"])).toEqual([]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 });
