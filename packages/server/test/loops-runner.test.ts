@@ -64,7 +64,16 @@ function makeRunner(log: SessionLog = makeLog()): LoopRunner {
 			},
 			spawnAgent: async (input) => {
 				log.spawned.push(input);
-				return { terminalId: `term-${log.spawned.length}` };
+				const terminalId = `term-${log.spawned.length}`;
+				// Mirror spawnAgentInTask: a launch records a session row, which is
+				// what the template's liveness check reads.
+				repo.createSession(db, {
+					taskId: input.taskId,
+					agentId: input.agentId,
+					terminalId,
+					cwd: `/tmp/${input.taskId}`,
+				});
+				return { terminalId };
 			},
 			stopTaskSessions: (taskId) => {
 				log.stopped.push(taskId);
@@ -400,7 +409,8 @@ describe("LoopRunner", () => {
 			const taskId = repo.getLoop(db, id)?.config?.taskId as string;
 			repo.updateTask(db, taskId, { agentStatus: "running" });
 			log.liveTasks.add(taskId);
-			await runner.runNow(id);
+			// A SCHEDULED tick, not a manual one: the guard only binds the schedule.
+			await runner.runNow(id, { manual: false });
 			expect(log.spawned).toHaveLength(1);
 			expect(log.stopped).toHaveLength(0); // a live pane is never killed
 			expect(repo.getLoop(db, id)?.lastSummary).toContain("skipped");
@@ -426,6 +436,75 @@ describe("LoopRunner", () => {
 			runner.stop();
 		});
 
+		it("protects a FRESH prompt: a recent awaiting_input still blocks a tick", async () => {
+			// A question you are seconds from answering deserves the same protection as
+			// a running turn — the tick would otherwise kill the pane under you.
+			const projectId = seedProject();
+			const log = makeLog();
+			const runner = makeRunner(log);
+			runner.start();
+			const id = seedLoop(runner, projectId);
+
+			await runner.runNow(id);
+			const taskId = repo.getLoop(db, id)?.config?.taskId as string;
+			repo.updateTask(db, taskId, { agentStatus: "awaiting_input" });
+			log.liveTasks.add(taskId);
+
+			await runner.runNow(id, { manual: false });
+			expect(log.spawned).toHaveLength(1);
+			runner.stop();
+		});
+
+		it("breaks the latch: a long-silent session never blocks a tick", async () => {
+			// The wedge that stopped every long-lived loop. Both statuses latched the
+			// same way — the skip spawned nothing, so no hook fired, so the status that
+			// caused the skip could never change. Recency is what bounds it.
+			const stale = Date.now() - 3 * 60 * 60 * 1000;
+			for (const status of ["running", "awaiting_input"] as const) {
+				db = createTestDb();
+				const projectId = seedProject();
+				const log = makeLog();
+				const runner = makeRunner(log);
+				runner.start();
+				const id = seedLoop(runner, projectId);
+
+				await runner.runNow(id);
+				const taskId = repo.getLoop(db, id)?.config?.taskId as string;
+				repo.updateTask(db, taskId, { agentStatus: status });
+				log.liveTasks.add(taskId);
+				for (const sess of repo.listSessionsByTask(db, taskId)) {
+					repo.updateSession(db, sess.id, { lastEventAt: stale });
+				}
+
+				await runner.runNow(id, { manual: false });
+				expect(log.spawned).toHaveLength(2);
+				runner.stop();
+			}
+		});
+
+		it("Run now overrides the guard even while the agent is working", async () => {
+			// The scheduled tick protects real work; a human pressing the button is
+			// asking for a run and can see what it replaces.
+			const projectId = seedProject();
+			const log = makeLog();
+			const runner = makeRunner(log);
+			runner.start();
+			const id = seedLoop(runner, projectId);
+
+			await runner.runNow(id);
+			const taskId = repo.getLoop(db, id)?.config?.taskId as string;
+			repo.updateTask(db, taskId, { agentStatus: "running" });
+			log.liveTasks.add(taskId);
+
+			await runner.runNow(id, { manual: false });
+			expect(log.spawned).toHaveLength(1); // schedule defers to live work
+
+			await runner.runNow(id); // manual by default
+			expect(log.spawned).toHaveLength(2);
+			expect(log.stopped).toContain(taskId); // the old pane is replaced
+			runner.stop();
+		});
+
 		it("does not count a skipped tick as a run", async () => {
 			// `lastRunAt` is what a restart computes the next due time from, so a
 			// skip that stamped it would silently push the schedule forward.
@@ -442,7 +521,7 @@ describe("LoopRunner", () => {
 			const taskId = afterRun?.config?.taskId as string;
 			repo.updateTask(db, taskId, { agentStatus: "running" });
 			log.liveTasks.add(taskId);
-			await runner.runNow(id);
+			await runner.runNow(id, { manual: false });
 
 			const afterSkip = repo.getLoop(db, id);
 			expect(log.spawned).toHaveLength(1);
