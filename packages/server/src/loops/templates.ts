@@ -83,7 +83,7 @@ const agentSession: LoopTemplate = {
 		if (task) {
 			const activeStatus = task.agentStatus === "running" || task.agentStatus === "awaiting_input";
 			if (activeStatus && ctx.isTaskAgentLive(task.id)) {
-				return { summary: `previous run still active (${task.name}) — skipped` };
+				return { skipped: true, summary: `previous run still active (${task.name}) — skipped` };
 			}
 		}
 

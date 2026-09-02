@@ -426,6 +426,32 @@ describe("LoopRunner", () => {
 			runner.stop();
 		});
 
+		it("does not count a skipped tick as a run", async () => {
+			// `lastRunAt` is what a restart computes the next due time from, so a
+			// skip that stamped it would silently push the schedule forward.
+			const projectId = seedProject();
+			const log = makeLog();
+			const runner = makeRunner(log);
+			runner.start();
+			const id = seedLoop(runner, projectId);
+
+			await runner.runNow(id);
+			const afterRun = repo.getLoop(db, id);
+			expect(afterRun?.runs).toBe(1);
+
+			const taskId = afterRun?.config?.taskId as string;
+			repo.updateTask(db, taskId, { agentStatus: "running" });
+			log.liveTasks.add(taskId);
+			await runner.runNow(id);
+
+			const afterSkip = repo.getLoop(db, id);
+			expect(log.spawned).toHaveLength(1);
+			expect(afterSkip?.runs).toBe(1); // the skip did not count
+			expect(afterSkip?.lastRunAt).toBe(afterRun?.lastRunAt as number);
+			expect(afterSkip?.lastSummary).toContain("skipped"); // but it is reported
+			runner.stop();
+		});
+
 		it("records an error when the loop has no prompt", async () => {
 			const projectId = seedProject();
 			const runner = makeRunner();
@@ -443,6 +469,93 @@ describe("LoopRunner", () => {
 			expect(repo.getLoop(db, id)?.lastStatus).toBe("error");
 			expect(repo.getLoop(db, id)?.lastError).toContain("prompt");
 			runner.stop();
+		});
+	});
+
+	// Timers die with the process (locally the runner is started by the desktop
+	// app), but the schedule lives in the row. A restart that always waited a
+	// fresh interval pushed the loop further out every launch, so a loop with an
+	// interval longer than the app's uptime never ran at all.
+	describe("schedule across restarts", () => {
+		const HOUR = 3_600_000;
+
+		/** Create a fixed-cadence user loop, then drop the runner that made it. */
+		function seedThenStop(projectId: string): string {
+			const runner = makeRunner();
+			runner.start();
+			const id = runner
+				.createUserLoop({
+					templateId: "agent-session",
+					name: "Nightly deps",
+					projectId,
+					config: { prompt: "update deps", agentId: "claude" },
+					cadenceMode: "fixed",
+					intervalMs: HOUR,
+				})
+				.find((l) => l.kind === "user")?.id as string;
+			runner.stop();
+			return id;
+		}
+
+		/** Milliseconds from now until the loop's scheduled next run. */
+		function dueInMs(runner: LoopRunner, id: string): number {
+			const next = runner.describe().find((l) => l.id === id)?.nextRunAt;
+			if (next == null) throw new Error("loop is not scheduled");
+			return next - Date.now();
+		}
+
+		it("resumes the remaining interval instead of restarting the clock", () => {
+			const projectId = seedProject();
+			const id = seedThenStop(projectId);
+			// It last ran 30 minutes ago, so 30 minutes of the hour are left.
+			repo.updateLoop(db, id, { lastRunAt: Date.now() - HOUR / 2 });
+
+			const restarted = makeRunner();
+			restarted.start();
+			expect(dueInMs(restarted, id)).toBeLessThan(HOUR / 2 + 2_000);
+			expect(dueInMs(restarted, id)).toBeGreaterThan(HOUR / 2 - 2_000);
+			restarted.stop();
+		});
+
+		it("catches an overdue loop up once, shortly after start", () => {
+			const projectId = seedProject();
+			const id = seedThenStop(projectId);
+			// The app was closed for five hours: five ticks were missed.
+			repo.updateLoop(db, id, { lastRunAt: Date.now() - 5 * HOUR });
+
+			const restarted = makeRunner();
+			restarted.start();
+			const due = dueInMs(restarted, id);
+			// One catch-up run, after a settle delay — never a five-run backlog,
+			// and never immediately, into a half-booted app.
+			expect(due).toBeGreaterThan(0);
+			expect(due).toBeLessThan(90_000);
+			expect(repo.getLoop(db, id)?.runs).toBe(0);
+			restarted.stop();
+		});
+
+		it("keeps the scheduled time of a loop that has never run", () => {
+			const projectId = seedProject();
+			const id = seedThenStop(projectId);
+			// Created 45 minutes ago and never run, so it is due in 15 — with no
+			// lastRunAt to work from, the persisted nextRunAt is what carries it.
+			repo.updateLoop(db, id, { lastRunAt: null, nextRunAt: Date.now() + HOUR / 4 });
+
+			const restarted = makeRunner();
+			restarted.start();
+			expect(dueInMs(restarted, id)).toBeLessThan(HOUR / 4 + 2_000);
+			expect(dueInMs(restarted, id)).toBeGreaterThan(HOUR / 4 - 2_000);
+			restarted.stop();
+		});
+
+		it("starts a brand-new loop a full interval out", () => {
+			const projectId = seedProject();
+			const id = seedThenStop(projectId);
+
+			const restarted = makeRunner();
+			restarted.start();
+			expect(dueInMs(restarted, id)).toBeGreaterThan(HOUR - 2_000);
+			restarted.stop();
 		});
 	});
 });

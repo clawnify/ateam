@@ -18,6 +18,24 @@ TID="\${ATEAM_TERMINAL_ID:-\${GROVE_TERMINAL_ID:-}}"
 [ -z "$PORT" ] && exit 0
 [ -z "$TID" ] && exit 0
 EVENT="\${1:-Stop}"
+# Claude's Notification hook is a general bus, not a "needs you" signal: it also
+# fires on idle input (notification_type=idle_prompt, ~60s after a turn ends),
+# on completion, auth and quota. Reporting all of it as PermissionRequest parked
+# every finished task in needs_attention a minute after it succeeded, and wedged
+# every loop (its next tick reads that status as "previous run still active").
+# So a Notification payload — the only one carrying notification_type — passes
+# only when a human genuinely has to act. Tool approvals are unaffected: they
+# have their own dedicated PermissionRequest hook.
+PAYLOAD=""
+[ -t 0 ] || PAYLOAD=$(cat)
+case "$PAYLOAD" in
+	*notification_type*)
+		case "$PAYLOAD" in
+			*permission_prompt*|*agent_needs_input*|*elicitation_dialog*|*elicitation_url_dialog*) ;;
+			*) exit 0 ;;
+		esac
+		;;
+esac
 # The reply is empty (204) unless this terminal has a follow-up armed, in which
 # case it is the agent's own continuation JSON and stdout is where it belongs.
 # A timeout or an unreachable app also yields empty, i.e. the old behaviour.
