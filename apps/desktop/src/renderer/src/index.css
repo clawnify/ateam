@@ -1516,11 +1516,25 @@ input {
 	font-size: 13px;
 	margin-bottom: 10px;
 }
+/* Task names can be one long unbreakable word (a pasted URL), so let the
+   body break anywhere rather than run past the dialog's edge. */
+.dbody {
+	font-size: 12px;
+	line-height: 1.45;
+	margin-bottom: 8px;
+	overflow-wrap: anywhere;
+}
 .drow {
 	display: flex;
 	justify-content: flex-end;
 	gap: 8px;
 	margin-top: 12px;
+}
+/* Nothing sets a body font size, so buttons and inputs here would inherit
+   the browser's 16px default and dwarf the 12-13px dialog text. */
+.dialog .drow button,
+.dialog > input {
+	font-size: 13px;
 }
 
 /* ---- error toast ---- */
