@@ -302,6 +302,12 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				rawAgentSessionId: e.sessionId ?? null,
 			});
 		}
+		// A Start is the process coming up, not the conversation doing anything:
+		// it fires on `--resume` (and on compaction) exactly as on a fresh launch.
+		// A fresh launch already filed the card as running when it spawned, and
+		// its first Working follows within seconds; a resume sits idle at the
+		// prompt and must not move the card or refresh its "last activity".
+		if (e.eventType === "Start") return;
 		const task = repo.getTask(db, session.taskId);
 		if (task) {
 			const column = mapEventToColumn(e.eventType);
