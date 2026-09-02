@@ -46,9 +46,7 @@ export function usePrompt(): {
 			<div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
 				<div className="dtitle">{state.title}</div>
 				{state.body && (
-					<div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-						{state.body}
-					</div>
+					<div className="dbody muted">{state.body}</div>
 				)}
 				{state.kind === "input" && (
 					// biome-ignore lint/a11y/noAutofocus: modal input should focus
