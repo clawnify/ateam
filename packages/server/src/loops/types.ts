@@ -38,6 +38,12 @@ export interface LoopSessionOps {
 /** Services and helpers handed to a loop on each run. */
 export interface LoopContext extends LoopSessionOps {
 	db: AteamDb;
+	/**
+	 * A human pressed Run now, rather than the schedule firing. A run may then
+	 * override guards that exist to protect an unattended tick from itself —
+	 * the user asked for this one, and can see what it interrupts.
+	 */
+	manual: boolean;
 	/** Emit a diagnostic line (prefixed with the loop id by the runner). */
 	log: (message: string) => void;
 }

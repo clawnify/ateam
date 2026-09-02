@@ -241,15 +241,19 @@ export class LoopRunner {
 		}
 	}
 
-	/** Run an instance now, even if disabled (manual trigger from the UI). */
-	async runNow(loopId: string): Promise<void> {
+	/**
+	 * Run an instance now, even if disabled (manual trigger from the UI). The run
+	 * is marked `manual` so it can override the guards a scheduled tick honours;
+	 * tests pass `{ manual: false }` to exercise the scheduled path synchronously.
+	 */
+	async runNow(loopId: string, opts: { manual?: boolean } = {}): Promise<void> {
 		const inst = this.instances.get(loopId);
 		if (!inst) return;
 		if (inst.timer) {
 			clearTimeout(inst.timer);
 			inst.timer = null;
 		}
-		await this.fire(inst, true);
+		await this.fire(inst, true, opts.manual ?? true);
 	}
 
 	list(): Loop[] {
@@ -336,7 +340,7 @@ export class LoopRunner {
 		}, delayMs);
 	}
 
-	private async fire(inst: Instance, force: boolean): Promise<void> {
+	private async fire(inst: Instance, force: boolean, manual = false): Promise<void> {
 		if (inst.running) return; // never overlap a loop with itself
 		const row = repo.getLoop(this.deps.db, inst.loopId);
 		if (!row) return;
@@ -344,6 +348,7 @@ export class LoopRunner {
 		inst.running = true;
 		const ctx: LoopContext = {
 			db: this.deps.db,
+			manual,
 			log: (m) => this.deps.log?.(`[loop ${inst.loopId}] ${m}`),
 			...this.deps.sessions,
 		};

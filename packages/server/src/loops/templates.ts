@@ -29,6 +29,23 @@ function str(v: unknown): string | undefined {
 }
 
 /**
+ * How long a session may go silent before a tick stops treating its agent as
+ * working.
+ *
+ * Deliberately generous, because the two failure costs are lopsided: too short
+ * kills real work (a single long tool call — a build, a test suite — emits no
+ * hook event while it runs), while too long only delays a latched loop's
+ * self-healing, which Run now already cuts through instantly.
+ *
+ * The honest caveat: this cannot be measured from what we store. `Working` is
+ * the event a busy agent emits, and it is deliberately excluded from the
+ * `agent_events` log (see the hook handler), while `agent_sessions.lastEventAt`
+ * is overwritten in place — so no history of the working cadence exists. Two
+ * hours is chosen to sit beyond any plausible single tool call, not from data.
+ */
+const AGENT_SILENT_MS = 2 * 60 * 60 * 1000;
+
+/**
  * Agent session — the one loop kind, with cron semantics: the loop owns ONE
  * persistent task (branch + worktree, created lazily on the first run), and
  * every tick starts a FRESH agent session in it with the same prompt — a fixed
@@ -75,14 +92,37 @@ const agentSession: LoopTemplate = {
 		const linkedId = str(row?.config?.taskId) ?? str(row?.config?.lastTaskId);
 		let task = linkedId ? repo.getTask(ctx.db, linkedId) : undefined;
 
-		// Never overlap runs: while the previous run's agent is still working
-		// (or waiting on the user), skip this tick. Require a LIVE PTY, not
-		// just the persisted status — agentStatus can strand at "running" when
-		// the exit happened while the app was closed, and a status-only check
-		// would wedge the loop forever.
-		if (task) {
-			const activeStatus = task.agentStatus === "running" || task.agentStatus === "awaiting_input";
-			if (activeStatus && ctx.isTaskAgentLive(task.id)) {
+		// Don't cut off an agent that is genuinely mid-flight. The branch below
+		// kills the previous pane before spawning, so this is not about overlap:
+		// it is only about not interrupting real work.
+		//
+		// Status and a live PTY are both necessary and neither is sufficient, which
+		// is why the old two-condition version latched every long-lived loop:
+		//   * a live PTY is not a live agent — a pane runs `<agent>; exec $SHELL -l`
+		//     (see spawnAgentInTask), so it outlives the agent by design;
+		//   * and a status can strand when the exit went unobserved.
+		// With only those two, the guard is self-perpetuating: a skipped tick
+		// spawns nothing, so no hook fires, so the status that caused the skip can
+		// never change. Every loop here sat wedged for ~20 hours that way.
+		//
+		// Recency is what bounds it. `updateSession` stamps the SESSION row on
+		// every hook event, including the per-tool-use `Working` that the task row
+		// skips for no-op updates, so a working agent keeps this fresh while a
+		// stranded one goes quiet. `awaiting_input` stays in scope on purpose: a
+		// prompt you are about to answer deserves the same protection as a running
+		// turn, and a day-old one gets none because it is no longer recent.
+		//
+		// A manual Run now overrides all of it — the user asked, and can see what
+		// it replaced.
+		if (task && !ctx.manual) {
+			const active = task.agentStatus === "running" || task.agentStatus === "awaiting_input";
+			const working = active && ctx.isTaskAgentLive(task.id);
+			const lastHeard = Math.max(
+				0,
+				// A session that just spawned has no hook event yet; its start counts.
+				...repo.listSessionsByTask(ctx.db, task.id).map((s) => s.lastEventAt ?? s.startedAt ?? 0),
+			);
+			if (working && Date.now() - lastHeard < AGENT_SILENT_MS) {
 				return { skipped: true, summary: `previous run still active (${task.name}) — skipped` };
 			}
 		}
