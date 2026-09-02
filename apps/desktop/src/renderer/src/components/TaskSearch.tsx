@@ -134,10 +134,18 @@ export function TaskSearch({
 		return () => document.removeEventListener("mousedown", onClick);
 	}, [open, key]);
 
+	// Opening a result ends the search: the box is a way to GET somewhere, and
+	// once you are there the words you got there with are stale. Leaving them
+	// behind left a query sitting in the box that reopened its own popover the
+	// next time the box took focus, which is the window coming back from the
+	// background as often as it is you.
+	//
+	// A `#tag` query is the exception and needs no code: it filters the board
+	// rather than listing results, so it has no row to activate.
 	const activate = (row: Row) => {
 		if (row.kind === "ai") return void askAi();
 		row.open();
-		setDismissed(key);
+		onQuery("");
 	};
 
 	const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -162,9 +170,20 @@ export function TaskSearch({
 				type="text"
 				placeholder="Search tasks…"
 				value={query}
-				onChange={(e) => onQuery(e.target.value)}
+				onChange={(e) => {
+					// Typing is always a request to see results, and it also stops a
+					// dismissal outliving its question: `dismissed` holds a query, so
+					// Escape on "foo" would otherwise still be suppressing the popover
+					// when "foo" is typed again an hour later.
+					setDismissed(null);
+					onQuery(e.target.value);
+				}}
 				onKeyDown={onKeyDown}
-				onFocus={() => setDismissed(null)}
+				// Clicking back into a box you dismissed brings its results back —
+				// but on the POINTER, not on focus. Focus arrives unbidden when the
+				// OS hands the window back and the browser restores it to whatever
+				// held it last, and reopening then is the app talking over you.
+				onPointerDown={() => setDismissed(null)}
 				aria-label="Search tasks"
 			/>
 			{query && (
