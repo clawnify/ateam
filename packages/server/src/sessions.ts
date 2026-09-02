@@ -163,9 +163,15 @@ export async function spawnAgentInTask(
 	// turn-end hook, or dropped if the pane dies first.
 	services.followUps.arm(terminalId, input.followUp);
 
+	// A resume is not activity. It brings a conversation back to an idle
+	// prompt: nothing runs until the user types (UserPromptSubmit → UserReply
+	// moves the card then). Opening a stopped task auto-resumes it, so writing
+	// "running" here would file every task you merely looked at as in-flight,
+	// and the stall rule would later demote it as silent work. Leave the card
+	// where it was; only a launch that carries a prompt is work starting.
+	const isResume = Boolean(input.resume || input.resumeSessionId);
 	repo.updateTask(services.db, task.id, {
-		column: "running",
-		agentStatus: "running",
+		...(isResume ? {} : { column: "running", agentStatus: "running" }),
 		agentId: agent.id,
 	});
 	notifyTaskUpdated(task.id);
