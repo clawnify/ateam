@@ -135,6 +135,51 @@ describe("createDispatcher", () => {
 		}
 	});
 
+	// The other ending that owes the tab back: the app reclaimed an idle agent's
+	// process to free memory. The user must not be able to tell the difference —
+	// the same strip, the same conversation, resumed by id.
+	it("restores a reaped tab into a new terminal on the same conversation", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "ateam-reaped-"));
+		try {
+			const db = createTestDb();
+			const { engine, spawned } = makeEngine(db);
+			const d = createDispatcher(engine);
+			const project = repo.upsertProject(db, { repoPath: dir, name: "R", defaultBranch: "main" });
+			const task = repo.createTask(db, {
+				projectId: project!.id,
+				name: "reap me",
+				slug: "reap-me",
+				branch: "reap-me",
+				baseBranch: "main",
+				worktreePath: dir,
+			});
+			const reaped = repo.createSession(db, {
+				taskId: task.id,
+				agentId: "claude",
+				terminalId: "term-reaped",
+				agentSessionId: "conv-9",
+				cwd: dir,
+			});
+			repo.updateSession(db, reaped.id, { exitedAt: 1, exitReason: "reaped" });
+
+			const listed = (await d.handle(CH.ptyListRestorable, [task.id])) as Array<{
+				terminalId: string;
+			}>;
+			expect(listed.map((x) => x.terminalId)).toEqual(["term-reaped"]);
+
+			const back = (await d.handle(CH.ptyRestoreSession, [
+				{ taskId: task.id, terminalId: "term-reaped" },
+			])) as { terminalId: string };
+
+			expect(back.terminalId).not.toBe("term-reaped");
+			expect(spawned.at(-1)?.args?.join(" ")).toContain("claude --resume 'conv-9'");
+			expect(await d.handle(CH.ptyListRestorable, [task.id])).toEqual([]);
+			expect(repo.getSessionByTerminal(db, "term-reaped")?.exitReason).toBe("restored");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	// Two windows on the same task both auto-restore, or you double-click: the
 	// conversation is already back, so hand over the tab it is in.
 	it("hands back the existing tab when the conversation is already restored", async () => {

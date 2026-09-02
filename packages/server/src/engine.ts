@@ -25,6 +25,7 @@ import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
 import { PtyClient } from "./pty/pty-client";
+import { reapableSessions } from "./pty/reap";
 import { makeStrandReconciler } from "./pty/reconcile";
 import { type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
@@ -73,6 +74,11 @@ export interface Engine {
 	/** Stop just the hook server (used by the headless smoke check). */
 	stopHooks(): void;
 }
+
+/** How long an agent sits finished before the app reclaims its process. */
+const REAP_IDLE_MS = 2 * 60 * 60 * 1000;
+/** How often to look for reapable sessions. One indexed read over open rows. */
+const REAP_SWEEP_MS = 5 * 60 * 1000;
 
 function mapEventToStatus(eventType: string): AgentStatus {
 	if (eventType === "PermissionRequest") return "awaiting_input";
@@ -253,7 +259,16 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		// else reaching here ended on its own. Either way the tab is not coming
 		// back on its own, so neither is offered as restorable.
 		if (session.exitedAt == null) {
-			applyAgentExit(session.id, session.taskId, Date.now(), true, session.exitReason ?? "exited");
+			// A reap is the app reclaiming an idle process, not news: the card must
+			// not claim the user has something new to look at because a timer fired.
+			const reaped = session.exitReason === "reaped";
+			applyAgentExit(
+				session.id,
+				session.taskId,
+				Date.now(),
+				!reaped,
+				session.exitReason ?? "exited",
+			);
 		}
 	});
 
@@ -337,6 +352,28 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		}
 	});
 
+	// Reclaim agents that finished their turn and went quiet (see pty/reap.ts).
+	// Stamp the ending BEFORE the kill, exactly as the close-tab handler does:
+	// the exit handler above reads it back, and `reaped` is what puts the tab on
+	// the restorable strip instead of retiring it to history.
+	let reapTimer: ReturnType<typeof setInterval> | null = null;
+	const reapIdleSessions = (): void => {
+		const due = reapableSessions(repo.listOpenSessions(db), Date.now(), REAP_IDLE_MS);
+		let count = 0;
+		for (const s of due) {
+			// Already gone: its exit is the live path's to record, not ours.
+			if (!pty.has(s.terminalId)) continue;
+			repo.demoteReapedSessions(db, s.taskId);
+			repo.updateSession(db, s.id, { exitReason: "reaped" });
+			pty.kill(s.terminalId);
+			count += 1;
+		}
+		if (count > 0) {
+			const log = opts.log ?? ((line: string) => console.log(line));
+			log(`[ateam] reaped ${count} idle session(s) — restorable from their tabs`);
+		}
+	};
+
 	// Agent ran `gh pr merge` in its terminal → the gh shim routed it here.
 	// Resolve the task from the terminal and enqueue, so terminal merges and the
 	// in-app Merge button share one serialized queue per base branch.
@@ -381,11 +418,16 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		},
 		startLoops() {
 			loopRunner.start();
+			reapTimer ??= setInterval(reapIdleSessions, REAP_SWEEP_MS);
 		},
 		stop() {
 			pty.disconnect();
 			hooks.stop();
 			loopRunner.stop();
+			if (reapTimer) {
+				clearInterval(reapTimer);
+				reapTimer = null;
+			}
 		},
 		stopHooks() {
 			hooks.stop();

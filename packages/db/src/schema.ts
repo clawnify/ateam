@@ -21,16 +21,20 @@ export type PrState = "open" | "merged" | "closed";
 
 /**
  * How a terminal session ended. The distinction exists for exactly one reason:
- * only `stranded` sessions are offered back as restorable tabs.
+ * only `stranded` and `reaped` sessions are offered back as restorable tabs.
  *
  * - `closed`   — you closed the tab (its PTY was killed on purpose).
  * - `exited`   — the shell behind it ended on its own while the app watched.
  * - `stranded` — it was still open when the app or the machine went down, and
  *                the PTY daemon had forgotten it by the time we reconnected.
- * - `restored` — a stranded session whose conversation has since been picked
- *                back up in a new tab, so it is no longer offered.
+ * - `reaped`   — it finished its turn and sat idle long enough that the app
+ *                reclaimed the process (see pty/reap.ts). Unlike `stranded`,
+ *                this survives a restart: the ending was deliberate, so the tab
+ *                stays on offer until the user brings it back or supersedes it.
+ * - `restored` — a stranded or reaped session whose conversation has since been
+ *                picked back up in a new tab, so it is no longer offered.
  */
-export type SessionExitReason = "closed" | "exited" | "stranded" | "restored";
+export type SessionExitReason = "closed" | "exited" | "stranded" | "reaped" | "restored";
 
 /**
  * Where a task sits in the merge queue. `null` = not queued. The queue is

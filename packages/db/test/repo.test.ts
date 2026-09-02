@@ -215,6 +215,51 @@ describe("restorable sessions", () => {
 		expect(repo.listRestorableSessions(db, t.id)).toEqual([]);
 	});
 
+	// A reap is deliberate, so unlike a strand it survives the once-per-run
+	// retirement: the app took the process on purpose and owes the tab back.
+	it("offers a reaped tab, and still offers it after the next app run", () => {
+		const t = task();
+		const s = repo.createSession(db, {
+			taskId: t.id,
+			agentId: "claude",
+			terminalId: "term-reaped",
+			agentSessionId: "conv-1",
+			cwd: "/wt/t",
+		});
+		repo.updateSession(db, s.id, { exitedAt: 1, exitReason: "reaped" });
+
+		expect(repo.listRestorableSessions(db, t.id).map((x) => x.id)).toEqual([s.id]);
+
+		repo.demoteStrandedSessions(db);
+
+		expect(repo.listRestorableSessions(db, t.id).map((x) => x.id)).toEqual([s.id]);
+	});
+
+	// A task holds one live session at a time, so reap after reap on a task the
+	// user never comes back to must not grow a strip of dead tabs.
+	it("supersedes a task's earlier reaped tab with the newest one", () => {
+		const t = task();
+		const mk = (terminalId: string) => {
+			const s = repo.createSession(db, {
+				taskId: t.id,
+				agentId: "claude",
+				terminalId,
+				agentSessionId: terminalId,
+				cwd: "/wt/t",
+			});
+			repo.updateSession(db, s.id, { exitedAt: 1, exitReason: "reaped" });
+			return s;
+		};
+		const first = mk("term-1");
+
+		repo.demoteReapedSessions(db, t.id);
+		const second = mk("term-2");
+
+		expect(repo.listRestorableSessions(db, t.id).map((x) => x.id)).toEqual([second.id]);
+		expect(repo.getSessionByTerminal(db, "term-1")?.exitReason).toBe("exited");
+		expect(first.id).not.toBe(second.id);
+	});
+
 	// Without this, every run of the app would leave its own layer of tabs behind.
 	it("retires the previous run's stranded tabs to plain history", () => {
 		const t = task();
