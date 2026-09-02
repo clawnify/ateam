@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import type { SimpleGit } from "simple-git";
 import { gitFor, refExists } from "./git-client";
 import { GitCoreError } from "./errors";
 import { detectDefaultBranch, ensureWorktreesIgnored } from "./project";
@@ -84,6 +86,45 @@ async function resolveStartPoint(
 		return baseBranch;
 	}
 	return "HEAD";
+}
+
+/** Give up after this many suffixed variants (guards against a pathological repo). */
+const MAX_NAME_ATTEMPTS = 100;
+
+/**
+ * Pick the first free `slug`/`branch`/worktree triple: `slug`, then `slug-2`,
+ * `slug-3`, ... A repeated task name is normal (two prompts that summarize to
+ * the same title, or a branch that outlived a removed task), so it must never
+ * surface `git worktree add -b` refusing an existing branch. "Free" means no
+ * directory at the worktree path, no local branch, and no `origin/` branch.
+ */
+async function allocateNames(
+	git: SimpleGit,
+	repoPath: string,
+	slug: string,
+	branch: string,
+	worktreesRoot: string | null | undefined,
+): Promise<{ slug: string; branch: string; worktreePath: string }> {
+	for (let n = 1; n <= MAX_NAME_ATTEMPTS; n++) {
+		const suffix = n === 1 ? "" : `-${n}`;
+		const candidate = {
+			slug: slug + suffix,
+			branch: branch + suffix,
+			worktreePath: safeResolveWorktreePath(
+				repoPath,
+				slug + suffix,
+				worktreesRoot,
+			),
+		};
+		if (existsSync(candidate.worktreePath)) continue;
+		if (await refExists(git, `refs/heads/${candidate.branch}`)) continue;
+		if (await refExists(git, `refs/remotes/origin/${candidate.branch}`)) continue;
+		return candidate;
+	}
+	throw new GitCoreError(
+		"INVALID_NAME",
+		`Could not find a free branch/worktree name for "${slug}" after ${MAX_NAME_ATTEMPTS} attempts`,
+	);
 }
 
 /**
@@ -178,23 +219,25 @@ async function copyEnvFiles(
  * and we never `checkout` a different branch inside an existing worktree.
  */
 export async function createTask(input: CreateTaskInput): Promise<TaskInfo> {
-	const slug = slugify(input.name);
-	if (!slug) {
+	const baseSlug = slugify(input.name);
+	if (!baseSlug) {
 		throw new GitCoreError(
 			"INVALID_NAME",
 			`Task name produced an empty slug: "${input.name}"`,
 		);
 	}
-	const branch = input.branch ?? slug;
 	const baseBranch =
 		input.baseBranch ?? (await detectDefaultBranch(input.repoPath));
-	const worktreePath = safeResolveWorktreePath(
-		input.repoPath,
-		slug,
-		input.worktreesRoot,
-	);
 
 	const git = gitFor(input.repoPath);
+	// A repeated name is normal, not an error: take the next free variant.
+	const { slug, branch, worktreePath } = await allocateNames(
+		git,
+		input.repoPath,
+		baseSlug,
+		input.branch ?? baseSlug,
+		input.worktreesRoot,
+	);
 	const startPoint = await resolveStartPoint(input.repoPath, baseBranch);
 
 	// Keep co-located worktrees out of the project's own `git status`, even if
