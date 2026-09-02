@@ -32,6 +32,9 @@ import { socketServerTransport } from "./transport/socket";
 import { wsServerTransport } from "./transport/ws";
 
 const SOCK = process.env.ATEAM_RPC_SOCK ?? join(homedir(), ".ateam", "rpc.sock");
+// Where a daemon started from here keeps its state. Shared with the notice
+// `attach` prints before auto-spawning, so the two can never disagree.
+const DATA_DIR = process.env.ATEAM_DATA_DIR ?? join(homedir(), ".ateam");
 
 // Absolute path to THIS running cli.js. Do NOT use import.meta.url: the bundler
 // inlines it to the BUILD-TIME source path (the build host's filesystem), so the
@@ -52,12 +55,15 @@ async function runDaemon(): Promise<void> {
 		return;
 	}
 
-	const dataDir = process.env.ATEAM_DATA_DIR ?? join(homedir(), ".ateam");
 	// The PTY daemon bundle (node-pty + xterm). Shipped beside the ateam bin on
 	// the server; overridable for dev.
 	const ptyDaemon = process.env.ATEAM_PTY_DAEMON ?? join(dirname(SELF), "daemon.js");
 
-	const engine = await createEngine({ dataDir, daemonPath: ptyDaemon, execPath: process.execPath });
+	const engine = await createEngine({
+		dataDir: DATA_DIR,
+		daemonPath: ptyDaemon,
+		execPath: process.execPath,
+	});
 	engine.startLoops();
 	const dispatcher = createDispatcher(engine);
 
@@ -195,9 +201,15 @@ function runAttach(): void {
 					// Route its output to a log file: a detached daemon with no logs is
 					// undebuggable on a remote box (and this is where its startup errors
 					// surface).
-					const dataDir = dirname(SOCK);
-					if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
-					const log = openSync(join(dataDir, "daemon.log"), "a");
+					const sockDir = dirname(SOCK);
+					if (!existsSync(sockDir)) mkdirSync(sockDir, { recursive: true });
+					const log = openSync(join(sockDir, "daemon.log"), "a");
+					// Say so, on STDERR — stdout is the RPC wire (piped above). A daemon
+					// started here owns DATA_DIR, and on a desktop machine that is NOT
+					// where the app keeps its database (Electron uses its own userData
+					// dir), so starting one silently would serve an empty board from a
+					// second engine with no hint that it had happened.
+					console.error(`[ateam] no daemon at ${SOCK}; starting one (data dir ${DATA_DIR})`);
 					spawn(process.execPath, [SELF, "daemon"], {
 						detached: true,
 						stdio: ["ignore", log, log],
