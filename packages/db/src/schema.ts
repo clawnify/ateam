@@ -193,6 +193,13 @@ export const settings = sqliteTable("settings", {
 	terminalFontFamily: text("terminal_font_family"),
 	terminalFontSize: integer("terminal_font_size"),
 	notificationsMuted: integer("notifications_muted", { mode: "boolean" }),
+	/**
+	 * The last PATH successfully resolved from this machine's login shell.
+	 * A GUI launch inherits launchd's PATH, and when the startup probe that
+	 * repairs that misses, this is what the engine falls back to instead of
+	 * leaving every agent CLI and `gh` unreachable (see login-env.ts).
+	 */
+	loginPath: text("login_path"),
 });
 
 /**
