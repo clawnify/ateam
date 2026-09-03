@@ -474,7 +474,13 @@ describe("LoopRunner", () => {
 
 			await runner.runNow(id);
 			const sent = log.spawned[0]?.prompt as string;
-			expect(sent).toContain(".ateam/loop-state.md");
+			// ABSOLUTE path: "relative to the repository root" is ambiguous inside a
+			// worktree, and one loop resolved it to the main checkout, where every
+			// loop on that repo then shared a single file.
+			const worktree = repo.getTask(db, repo.getLoop(db, id)?.config?.taskId as string)
+				?.worktreePath as string;
+			expect(sent).toContain(`${worktree}/.ateam/loop-state.md`);
+			expect(sent).toContain("never one outside this worktree");
 			expect(sent).toContain("update deps"); // the user's prompt still leads the task
 			// Writes are not tied to completion; the text says so in as many words.
 			expect(sent).toContain("not only when you finish");
