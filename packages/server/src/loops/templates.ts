@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { repo } from "@ateam/db";
 import type { LoopCadence, LoopContext, LoopOutcome } from "./types";
 
@@ -53,10 +54,20 @@ const STATE_FILE = ".ateam/loop-state.md";
  * happened — a run that parks on a question has still learned something worth
  * leaving behind.
  */
-const STATE_INSTRUCTIONS = [
-	`This is one run of a recurring loop, not a one-off task. Earlier runs leave notes in \`${STATE_FILE}\` (relative to the repository root); read it before you start. The repository itself is the source of truth — treat that file as a hint about where the last run stopped, not as fact.`,
-	`Whenever you learn something a later run would otherwise have to rediscover, rewrite \`${STATE_FILE}\` in place (rewrite, do not append): what exists now, what this run did, what is next, and what is blocked. Keep it under 40 lines. Write it as you go, including before you stop to ask a question — not only when you finish.`,
-].join("\n\n");
+function stateInstructions(worktreePath: string): string {
+	// ABSOLUTE, not "relative to the repository root". Inside a linked worktree
+	// that phrase has two defensible readings, and `.ateam/` exists at BOTH
+	// levels — the main checkout's holds `worktrees/` — so the wrong reading
+	// lands somewhere plausible instead of failing. One loop resolved it to the
+	// main repo and every other loop on that repo then shared one file; the next
+	// run to notice had to reason its way around a collision at runtime.
+	const file = join(worktreePath, STATE_FILE);
+	return [
+		`This is one run of a recurring loop, not a one-off task. Earlier runs leave notes in \`${file}\`; read it before you start. The repository itself is the source of truth — treat that file as a hint about where the last run stopped, not as fact.`,
+		`That file is this loop's alone. Do not read or write a \`${STATE_FILE}\` anywhere else, and never one outside this worktree — another loop's notes live there.`,
+		`Whenever you learn something a later run would otherwise have to rediscover, rewrite \`${file}\` in place (rewrite, do not append): what exists now, what this run did, what is next, and what is blocked. Keep it under 40 lines. Write it as you go, including before you stop to ask a question — not only when you finish.`,
+	].join("\n\n");
+}
 
 /**
  * How long a session may go silent before a tick stops treating its agent as
@@ -187,7 +198,7 @@ const agentSession: LoopTemplate = {
 		await ctx.spawnAgent({
 			taskId: task.id,
 			agentId,
-			prompt: `${STATE_INSTRUCTIONS}\n\n---\n\n${prompt}`,
+			prompt: `${stateInstructions(task.worktreePath)}\n\n---\n\n${prompt}`,
 			followUp,
 		});
 		if (loopId && row) {
