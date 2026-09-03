@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readlink,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import simpleGit from "simple-git";
 import {
@@ -187,6 +195,57 @@ describe("createTask isolation", () => {
 			).text(),
 		).toBe("API=2\n");
 		expect(existsSync(join(task.worktreePath, ".env.example"))).toBe(false);
+	});
+
+	it("seeds every node_modules into the new worktree, symlinks verbatim", async () => {
+		// A monorepo keeps a tree per package, and package stores link between
+		// them RELATIVELY. A copy that rewrites those links to absolute paths
+		// would point the new worktree back at the source repo.
+		await mkdir(join(repo.work, "node_modules", ".store", "dep"), {
+			recursive: true,
+		});
+		await writeFile(
+			join(repo.work, "node_modules", ".store", "dep", "index.js"),
+			"module.exports = 1;\n",
+		);
+		await symlink(
+			join(".store", "dep"),
+			join(repo.work, "node_modules", "dep"),
+		);
+		await mkdir(join(repo.work, "apps", "web", "node_modules"), {
+			recursive: true,
+		});
+		await symlink(
+			join("..", "..", "..", "node_modules", ".store", "dep"),
+			join(repo.work, "apps", "web", "node_modules", "dep"),
+		);
+
+		const task = await createTask({ repoPath: repo.work, name: "seeded" });
+
+		expect(
+			await Bun.file(
+				join(task.worktreePath, "node_modules", ".store", "dep", "index.js"),
+			).text(),
+		).toBe("module.exports = 1;\n");
+		// The nested tree is cloned too, not just the root one.
+		expect(
+			existsSync(join(task.worktreePath, "apps", "web", "node_modules")),
+		).toBe(true);
+		// And both links still point where they did, relatively.
+		expect(
+			await readlink(join(task.worktreePath, "node_modules", "dep")),
+		).toBe(join(".store", "dep"));
+		expect(
+			await readlink(
+				join(task.worktreePath, "apps", "web", "node_modules", "dep"),
+			),
+		).toBe(join("..", "..", "..", "node_modules", ".store", "dep"));
+	});
+
+	it("creates the worktree fine when nothing is installed", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "no-deps" });
+		expect(existsSync(task.worktreePath)).toBe(true);
+		expect(existsSync(join(task.worktreePath, "node_modules"))).toBe(false);
 	});
 
 	it("creates the worktree fine when there are no env files", async () => {
