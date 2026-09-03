@@ -1767,6 +1767,20 @@ function TaskPanel({
 		[task.id, run, setTerminal, refreshSessions],
 	);
 
+	/**
+	 * "Resume last conversation": the newest tab a restart stranded, brought back
+	 * by id, and failing that the newest conversation in the worktree. Same choice
+	 * the tab-fallback effect makes below — this is the button for when that
+	 * effect has already had its one go, or the task's column rules it out.
+	 * Leaves the editor, like every other user gesture that shows a terminal.
+	 */
+	const resumeLast = useCallback(() => {
+		setEditorOpen(false);
+		const newest = [...restorable].reverse().find((s) => s.agentId !== "shell");
+		if (newest) void restoreTab(newest);
+		else void launch(false, true);
+	}, [restorable, restoreTab, launch]);
+
 	// Keep the active tab pointed at something real. Covers (re)opening a task
 	// with surviving daemon sessions, and a session ending — its tab disappears
 	// and the newest survivor takes focus. With nothing left, resume the agent's
@@ -1995,16 +2009,7 @@ function TaskPanel({
 								onClick: () => setSessionComposerOpen(true),
 							},
 							{ label: "Terminal", icon: SquareTerminal, onClick: shell },
-							{
-								label: "Resume last conversation",
-								icon: History,
-								// launch() is also driven by the tab-fallback effect, which must
-								// NOT yank you out of the editor — so only this user gesture does.
-								onClick: () => {
-									setEditorOpen(false);
-									launch(false, true);
-								},
-							},
+							{ label: "Resume last conversation", icon: History, onClick: resumeLast },
 						]}
 					/>
 				</div>
@@ -2169,8 +2174,12 @@ function TaskPanel({
 							}
 						/>
 					) : (
-						<div className="term" style={{ display: "grid", placeItems: "center" }}>
-							<span className="muted">Open a tab with + to start a terminal</span>
+						<div className="term term-empty">
+							<button type="button" onClick={resumeLast}>
+								<History size={13} />
+								Resume last conversation
+							</button>
+							<span className="muted">or open a tab with + to start a terminal</span>
 						</div>
 					)}
 				</div>

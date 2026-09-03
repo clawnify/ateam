@@ -1,12 +1,16 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, stat } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import { promisify } from "node:util";
 import type { SimpleGit } from "simple-git";
 import { gitFor, refExists } from "./git-client";
 import { GitCoreError } from "./errors";
 import { detectDefaultBranch, ensureWorktreesIgnored } from "./project";
 import { slugify } from "./util";
 import { safeResolveWorktreePath, worktreesRootFor } from "./worktree-paths";
+
+const pexec = promisify(execFile);
 
 export interface CreateTaskInput {
 	repoPath: string;
@@ -212,6 +216,75 @@ async function copyEnvFiles(
 }
 
 /**
+ * Copy-on-write copy: share blocks with the source instead of duplicating them.
+ * macOS `cp -c` is clonefile(2); GNU `cp --reflink=auto` reflinks on btrfs/XFS
+ * and silently falls back to a full copy elsewhere rather than failing.
+ */
+const CLONE_CP = process.platform === "darwin" ? "/bin/cp" : "cp";
+const CLONE_ARGS = process.platform === "darwin" ? ["-c", "-R"] : ["--reflink=auto", "-R"];
+
+/** Every `node_modules` in the repo, without descending into them. */
+async function findNodeModules(repoPath: string, worktreesRoot?: string | null): Promise<string[]> {
+	const root = worktreesRootFor(repoPath, worktreesRoot);
+	const found: string[] = [];
+
+	async function walk(dir: string): Promise<void> {
+		const entries = await readdir(dir, { withFileTypes: true }).catch(() => null);
+		if (!entries) return;
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			const abs = join(dir, entry.name);
+			if (abs === root) continue; // don't descend into other worktrees
+			if (entry.name === "node_modules") {
+				found.push(abs); // a tree to clone, not a tree to walk
+				continue;
+			}
+			if (entry.name === ".git") continue;
+			await walk(abs);
+		}
+	}
+
+	await walk(repoPath);
+	return found;
+}
+
+/**
+ * Dependencies are gitignored, so a fresh worktree cannot typecheck, lint or run
+ * until something installs them — and nothing does. Clone the source repo's
+ * `node_modules` across instead, which on a copy-on-write filesystem shares the
+ * blocks rather than duplicating them.
+ *
+ * Measured on this repo: 23k files that `du` reports as 807 MB clone in ~5s for
+ * ~9 MB of real disk. `fs.cp` is not a substitute — even with COPYFILE_FICLONE
+ * it wrote 819 MB for the same tree — hence shelling out. `verbatim` symlink
+ * behaviour matters too: `cp -R` preserves the relative links a bun/pnpm store
+ * depends on, while `fs.cp` rewrites them to absolute paths into the SOURCE.
+ *
+ * The seed also removes the expensive half of any later install: Electron's
+ * postinstall exits early once `dist/version` matches, so its 244 MB download
+ * and extract never runs in this worktree.
+ *
+ * Monorepos keep a `node_modules` per package, so every tree is cloned, not just
+ * the root one. Best-effort: a repo with no deps installed, a filesystem without
+ * reflinks, or a copy error must never fail task creation.
+ */
+async function seedNodeModules(
+	repoPath: string,
+	worktreePath: string,
+	worktreesRoot?: string | null,
+): Promise<void> {
+	for (const src of await findNodeModules(repoPath, worktreesRoot)) {
+		const dest = join(worktreePath, relative(repoPath, src));
+		try {
+			await mkdir(dirname(dest), { recursive: true });
+			await pexec(CLONE_CP, [...CLONE_ARGS, src, dest]);
+		} catch {
+			/* best-effort — the worktree just needs its own install */
+		}
+	}
+}
+
+/**
  * Create a task = a new branch checked out into its own co-located worktree.
  *
  * Safety: `git worktree add -b` creates the branch and checks it out into the
@@ -264,6 +337,11 @@ export async function createTask(input: CreateTaskInput): Promise<TaskInfo> {
 	// Carry gitignored env files (.env*, .dev.vars*) over, including nested ones,
 	// so the worktree can run the app without re-creating its local secrets.
 	await copyEnvFiles(input.repoPath, worktreePath, input.worktreesRoot);
+
+	// Carry the installed dependencies over as a copy-on-write clone, so the
+	// worktree can typecheck and run immediately instead of paying a full
+	// install (and Electron's 244 MB extract) per task.
+	await seedNodeModules(input.repoPath, worktreePath, input.worktreesRoot);
 
 	return { slug, branch, baseBranch, worktreePath };
 }
