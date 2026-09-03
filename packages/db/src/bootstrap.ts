@@ -166,6 +166,8 @@ export function bootstrap(db: SqliteExecutor): void {
 		// history is never mistaken for tabs that were open at shutdown.
 		"ALTER TABLE agent_sessions ADD COLUMN agent_session_id TEXT",
 		"ALTER TABLE agent_sessions ADD COLUMN exit_reason TEXT",
+		// Null until the first login-shell probe succeeds on this machine.
+		"ALTER TABLE settings ADD COLUMN login_path TEXT",
 	]) {
 		try {
 			db.exec(sql);

@@ -663,7 +663,11 @@ export function createDispatcher(engine: Engine): Dispatcher {
 					.find((s) => s.agentSessionId === dead.agentSessionId && services.pty.has(s.terminalId));
 				if (open) return { terminalId: open.terminalId };
 			}
-			if (dead.exitReason !== "stranded") throw new Error("That session is not restorable");
+			// Both endings mean "this tab is coming back if you ask": the app went
+			// down under it, or the app reclaimed its idle process.
+			if (dead.exitReason !== "stranded" && dead.exitReason !== "reaped") {
+				throw new Error("That session is not restorable");
+			}
 			// A shell holds no conversation — restoring one means opening a fresh
 			// shell where it stood, which is all it ever was.
 			if (dead.agentId === "shell") {
