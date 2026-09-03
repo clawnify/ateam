@@ -174,6 +174,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	const loopRunner = new LoopRunner({
 		db,
 		log: opts.log ?? ((line) => console.log(line)),
+		// A scheduled tick has no RPC call to answer, so it pushes its own update
+		// — otherwise the UI keeps the pre-tick DTOs (no taskId, stale telemetry)
+		// until some unrelated event happens to re-list.
+		onChanged: () => emitter.emit("loopsUpdated", loopRunner.describe()),
 		sessions: {
 			createTask: async (input) => {
 				const task = await createTaskInProject(services, sendTaskUpdated, input);

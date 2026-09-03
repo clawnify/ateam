@@ -31,6 +31,17 @@ export interface LoopRunnerDeps {
 	log?: (line: string) => void;
 	/** Task/session capabilities handed through to each run (engine-wired). */
 	sessions: LoopSessionOps;
+	/**
+	 * Called after a SCHEDULED tick changed a loop's row, so the UI re-lists.
+	 * The UI-driven mutations (create/update/enable/run now) already push from
+	 * their RPC handler; a timer tick has no request to answer, and its row
+	 * changes are exactly the ones the board depends on — a first run mints the
+	 * loop's persistent task, and a UI holding the pre-run DTO has no `taskId`
+	 * to filter that task out of the sidebar's TASKS list with, so the loop's
+	 * card shows up there as if it were a hand-made task until something else
+	 * happens to re-list.
+	 */
+	onChanged?: () => void;
 }
 
 export interface CreateUserLoopInput {
@@ -376,15 +387,24 @@ export class LoopRunner {
 		});
 		if (status === "done") {
 			this.removeInstance(inst.loopId, { deleteRow: true });
+			this.deps.onChanged?.();
 			return;
 		}
 		// Re-check liveness/enabled — the run may have disabled or removed us, or
 		// an edit may have swapped in a REPLACEMENT instance (updateUserLoop);
 		// identity, not just presence, or both instances would keep timers.
-		if (this.instances.get(inst.loopId) !== inst) return;
+		if (this.instances.get(inst.loopId) !== inst) {
+			this.deps.onChanged?.();
+			return;
+		}
 		const after = repo.getLoop(this.deps.db, inst.loopId);
-		if (!after?.enabled) return;
+		if (!after?.enabled) {
+			this.deps.onChanged?.();
+			return;
+		}
 		this.schedule(inst, this.nextDelay(inst.def, outcome));
+		// After the reschedule, so the pushed DTO carries the new nextRunAt too.
+		this.deps.onChanged?.();
 	}
 
 	private nextDelay(def: LoopDefinition, outcome: LoopOutcome): number {
