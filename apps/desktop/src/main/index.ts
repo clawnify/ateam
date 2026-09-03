@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createEngine, type Engine } from "@ateam/server";
@@ -27,36 +26,6 @@ function broadcast(channel: string, ...args: unknown[]): void {
 }
 
 const SMOKE = process.env.ATEAM_SMOKE === "1";
-
-/**
- * GUI apps on macOS launch with a minimal PATH (/usr/bin:/bin:…), so agent
- * binaries in ~/.local/bin or /opt/homebrew/bin look "not installed" and
- * can't be spawned. Resolve the user's real login-shell PATH once at startup
- * and adopt it — the availability probe, PTY env, and the daemon all inherit
- * process.env.
- *
- * Same for the locale: GUI apps also launch with no LANG/LC_*, and `pbcopy`
- * then interprets UTF-8 input as Mac OS Roman — copying from a terminal turns
- * "→ — €" into ",Üí ,Äî ,Ç¨". Adopt the login shell's LANG, falling back to a
- * UTF-8 locale.
- */
-function adoptLoginShellPath(): void {
-	if (process.platform !== "darwin") return;
-	try {
-		const shell = process.env.SHELL || "/bin/zsh";
-		const out = execFileSync(
-			shell,
-			["-ilc", 'printf "__ATEAM_PATH__%s__SEP__%s__END__" "$PATH" "${LANG:-}"'],
-			{ encoding: "utf8", timeout: 8000 },
-		);
-		const m = out.match(/__ATEAM_PATH__([\s\S]*?)__SEP__([\s\S]*?)__END__/);
-		if (m?.[1]) process.env.PATH = m[1];
-		if (!process.env.LANG) process.env.LANG = m?.[2] || "en_US.UTF-8";
-	} catch (err) {
-		console.warn("[ateam] could not resolve login-shell PATH:", err);
-		process.env.LANG ??= "en_US.UTF-8";
-	}
-}
 
 // Triggers a manual update check (with "you're up to date" feedback). Wired by
 // setupAutoUpdate() once auto-update is active; null in dev / unpackaged builds.
@@ -320,7 +289,6 @@ app
 	.whenReady()
 	.then(async () => {
 		app.setName(APP_NAME);
-		adoptLoginShellPath();
 
 		// Show the app icon in the macOS dock during dev (packaged builds use the
 		// .icns in build/). Best-effort: the icon lives at build/icon.png.

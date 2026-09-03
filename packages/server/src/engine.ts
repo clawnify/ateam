@@ -21,6 +21,7 @@ import type {
 import { ensureGhShim, ensureNotifyScript } from "./agent-setup";
 import { FollowUps } from "./follow-ups";
 import { type HookEvent, HookServer, type MergeRequestEvent } from "./hooks/hook-server";
+import { ensureLoginEnv } from "./login-env";
 import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
@@ -129,6 +130,11 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		}
 	}
 	const db = createDb(dbPath);
+
+	// Before anything is spawned: a GUI launch inherits launchd's PATH, so the
+	// agent CLIs, `gh` and every headless turn would look uninstalled. Awaited
+	// because agent detection runs seconds from here.
+	await ensureLoginEnv({ db, log: opts.log ?? ((line) => console.log(line)) });
 
 	// Prune stale image attachments (written by util:writeImageBytes to the OS temp dir
 	// when a client attaches an image) older than a week, so temp files never accumulate
