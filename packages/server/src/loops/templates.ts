@@ -29,6 +29,36 @@ function str(v: unknown): string | undefined {
 }
 
 /**
+ * Where a loop keeps its notes between runs, relative to the worktree root.
+ * Under `.ateam/`, which `ensureWorktreesIgnored` already adds to the repo's
+ * local exclude file, so it never shows in `git status` and never flips the
+ * card's triage to "uncommitted".
+ */
+const STATE_FILE = ".ateam/loop-state.md";
+
+/**
+ * Prepended to every tick's prompt. A loop runs unattended and each tick is a
+ * fresh process with fresh context, so a run that learns something has nowhere
+ * to put it — the only thing that outlives the run is the worktree.
+ *
+ * A named file rather than a harness feature, on purpose. Claude Code's auto
+ * memory already does this well and does it unprompted, but it is Claude-only
+ * (codex and opencode have no equivalent) and is keyed to the repository rather
+ * than the loop, so it is shared with every other task on that repo. A file in
+ * the loop's own worktree is agent-agnostic, scoped to this loop, and sits at a
+ * path the app can read.
+ *
+ * Note what it does NOT say: "write this when you finish". A run may rewrite the
+ * file several times, and a tick ending is not a promise that the last write
+ * happened — a run that parks on a question has still learned something worth
+ * leaving behind.
+ */
+const STATE_INSTRUCTIONS = [
+	`This is one run of a recurring loop, not a one-off task. Earlier runs leave notes in \`${STATE_FILE}\` (relative to the repository root); read it before you start. The repository itself is the source of truth — treat that file as a hint about where the last run stopped, not as fact.`,
+	`Whenever you learn something a later run would otherwise have to rediscover, rewrite \`${STATE_FILE}\` in place (rewrite, do not append): what exists now, what this run did, what is next, and what is blocked. Keep it under 40 lines. Write it as you go, including before you stop to ask a question — not only when you finish.`,
+].join("\n\n");
+
+/**
  * How long a session may go silent before a tick stops treating its agent as
  * working.
  *
@@ -142,6 +172,11 @@ const agentSession: LoopTemplate = {
 			}
 			task = repo.getTask(ctx.db, created.taskId);
 			if (!task) throw new Error("Task creation failed");
+			// Record the loop's own prompt as the task's description before the
+			// launch can: description is the task's record of intent and feeds the
+			// LLM tagger and search (see spawnAgentInTask / tagTaskInBackground),
+			// so the state instructions must never end up in it.
+			repo.updateTask(ctx.db, task.id, { description: prompt });
 		} else {
 			// Close the previous run's idle pane so panes don't accumulate as
 			// terminal tabs; the agent's own conversation history stays in the
@@ -149,7 +184,12 @@ const agentSession: LoopTemplate = {
 			ctx.stopTaskSessions(task.id);
 		}
 
-		await ctx.spawnAgent({ taskId: task.id, agentId, prompt, followUp });
+		await ctx.spawnAgent({
+			taskId: task.id,
+			agentId,
+			prompt: `${STATE_INSTRUCTIONS}\n\n---\n\n${prompt}`,
+			followUp,
+		});
 		if (loopId && row) {
 			// Persist the link under `taskId`; drop the legacy key it migrated from.
 			const { lastTaskId: _legacy, ...rest } = row.config ?? {};

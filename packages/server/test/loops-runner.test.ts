@@ -283,7 +283,7 @@ describe("LoopRunner", () => {
 		// The next run uses the new prompt/agent, in the same task.
 		await runner.runNow(id);
 		expect(log.spawned[1]).toMatchObject({
-			prompt: "update deps weekly",
+			prompt: expect.stringContaining("update deps weekly"),
 			agentId: "codex",
 			taskId,
 		});
@@ -339,7 +339,11 @@ describe("LoopRunner", () => {
 			expect(log.created).toHaveLength(1);
 			expect(log.created[0]).toMatchObject({ projectId, name: "Nightly deps" });
 			const taskId = repo.getLoop(db, id)?.config?.taskId as string;
-			expect(log.spawned[0]).toMatchObject({ taskId, agentId: "codex", prompt: "update deps" });
+			expect(log.spawned[0]).toMatchObject({
+				taskId,
+				agentId: "codex",
+				prompt: expect.stringContaining("update deps"),
+			});
 
 			// Previous run finished → the next tick reuses the SAME task: no new
 			// task, previous pane closed, fresh session spawned in place.
@@ -455,6 +459,28 @@ describe("LoopRunner", () => {
 			});
 			await runner.runNow(id);
 			expect(log.spawned).toHaveLength(2);
+			runner.stop();
+		});
+
+		it("hands every tick the state file, and keeps it out of the task's description", async () => {
+			// The loop's own notes: each tick is a fresh process, so the only thing that
+			// survives is the worktree. The instructions must NOT reach `description`,
+			// which is the task's record of intent and feeds tagging and search.
+			const projectId = seedProject();
+			const log = makeLog();
+			const runner = makeRunner(log);
+			runner.start();
+			const id = seedLoop(runner, projectId);
+
+			await runner.runNow(id);
+			const sent = log.spawned[0]?.prompt as string;
+			expect(sent).toContain(".ateam/loop-state.md");
+			expect(sent).toContain("update deps"); // the user's prompt still leads the task
+			// Writes are not tied to completion; the text says so in as many words.
+			expect(sent).toContain("not only when you finish");
+
+			const taskId = repo.getLoop(db, id)?.config?.taskId as string;
+			expect(repo.getTask(db, taskId)?.description).toBe("update deps");
 			runner.stop();
 		});
 
