@@ -45,9 +45,10 @@ function makeLog(): SessionLog {
 
 /** Fake session ops: record calls and create real task rows, so the
  *  agent-session template's liveness/link checks see real state. */
-function makeRunner(log: SessionLog = makeLog()): LoopRunner {
+function makeRunner(log: SessionLog = makeLog(), onChanged?: () => void): LoopRunner {
 	return new LoopRunner({
 		db,
+		onChanged,
 		sessions: {
 			createTask: async (input) => {
 				if (log.failNames.has(input.name)) throw new Error(`branch exists: ${input.name}`);
@@ -348,6 +349,27 @@ describe("LoopRunner", () => {
 			expect(log.stopped).toEqual([taskId]);
 			expect(log.spawned).toHaveLength(2);
 			expect(log.spawned[1]?.taskId).toBe(taskId);
+			runner.stop();
+		});
+
+		it("notifies after a scheduled tick, with the task link already in the DTO", async () => {
+			const projectId = seedProject();
+			const log = makeLog();
+			// What the engine pushes on each notification — the UI filters the
+			// loop's task out of its TASKS list by this taskId, so a notification
+			// that arrives without it would leave the loop's card sitting there.
+			const pushed: (string | null)[] = [];
+			let runner!: LoopRunner;
+			runner = makeRunner(log, () => {
+				pushed.push(runner.describe().find((l) => l.kind === "user")?.taskId ?? null);
+			});
+			runner.start();
+			const id = seedLoop(runner, projectId);
+
+			await runner.runNow(id, { manual: false });
+			const taskId = repo.getLoop(db, id)?.config?.taskId as string;
+			expect(taskId).toBeTruthy();
+			expect(pushed).toEqual([taskId]);
 			runner.stop();
 		});
 
