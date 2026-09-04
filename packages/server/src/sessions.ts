@@ -38,7 +38,23 @@ export interface SpawnAgentInput {
 export async function createTaskInProject(
 	services: Services,
 	notifyTaskUpdated: (taskId: string) => void,
-	input: { projectId: string; name: string; baseBranch?: string },
+	input: {
+		projectId: string;
+		name: string;
+		baseBranch?: string;
+		/**
+		 * The agent the composer already chose. Recorded with the row rather than
+		 * waiting for the launch to write it: the card renders `agentId ? agent
+		 * icon : icon-guessed-from-the-name`, and spawnAgentInTask only sets it
+		 * after the worktree finishes seeding. That gap used to be invisible
+		 * because the card itself did not exist until then; now the card comes
+		 * first, so leaving this null shows a keyword icon (Sparkles for a name
+		 * containing "add"/"new"/"create", GitBranch otherwise) that visibly
+		 * flips to the agent's icon later. The choice is known here, so there is
+		 * nothing to guess.
+		 */
+		agentId?: string;
+	},
 ): Promise<Task> {
 	const project = repo.getProject(services.db, input.projectId);
 	if (!project) throw new Error(`Project not found: ${input.projectId}`);
@@ -55,6 +71,7 @@ export async function createTaskInProject(
 		branch: created.branch,
 		baseBranch: created.baseBranch,
 		worktreePath: created.worktreePath,
+		agentId: input.agentId ?? null,
 	});
 	// Broadcast so any other window showing this project gains the new card
 	// (renderers upsert). The caller also gets it — an idempotent upsert.
