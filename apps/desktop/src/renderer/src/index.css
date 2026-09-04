@@ -439,6 +439,14 @@ input {
 .tstatus.stopped {
 	background: var(--text-dim);
 }
+/* Dependencies still copying in. Dim rather than a status colour — nothing is
+   wrong and nothing is running yet — with the same pulse the rail uses, so it
+   reads as work in progress instead of a fifth agent state. */
+.tstatus.preparing,
+.rail-tile .corner.preparing {
+	background: var(--text-dim);
+	animation: dotpulse 1.4s ease-in-out infinite;
+}
 .tree-empty {
 	color: var(--text-dim);
 	font-size: 12px;

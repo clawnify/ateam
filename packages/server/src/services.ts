@@ -41,7 +41,7 @@ export function toProjectDTO(p: Project): ProjectDTO {
 	};
 }
 
-export function toTaskDTO(t: Task): TaskDTO {
+export function toTaskDTO(t: Task, preparing = false): TaskDTO {
 	return {
 		id: t.id,
 		projectId: t.projectId,
@@ -61,6 +61,7 @@ export function toTaskDTO(t: Task): TaskDTO {
 		gitStatus: t.gitStatus ?? null,
 		lastEventAt: t.lastEventAt ?? t.updatedAt ?? null,
 		isUnread: Boolean(t.isUnread),
+		preparing,
 		tags: t.tags ?? null,
 		triage: triageTask(t),
 	};
