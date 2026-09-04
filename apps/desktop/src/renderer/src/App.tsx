@@ -1713,11 +1713,19 @@ function TaskPanel({
 	const [dead, setDead] = useState<{ taskId: string; sessions: SessionDTO[] } | null>(null);
 	const restorable = dead?.taskId === task.id ? dead.sessions : [];
 
-	// Selecting another task closes the changes view.
+	// Selecting another task closes the changes view — and leaves the previous
+	// task's editor behind: the panel isn't remounted per task, so the iframe
+	// would keep showing the old worktree (worst after a rename, where that
+	// folder no longer exists). Close both; the next open resolves the new
+	// task's own URL.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: task.id is the trigger, not a value the body reads — the resets must run on every task switch.
 	useEffect(() => {
 		setChangesOpen(false);
 		setViewFile(null);
-	}, []);
+		setEditorOpen(false);
+		setEditorSrc(null);
+		setEditorBusy(null);
+	}, [task.id]);
 
 	const refreshSessions = useCallback(async () => {
 		const taskId = task.id;
@@ -2055,40 +2063,42 @@ function TaskPanel({
 							setEditorOpen(false);
 							return;
 						}
-						if (editorSrc) {
+						void run(async () => {
+							// Resolve on every open — never trust the cached src. The
+							// worktree can move (a rename leaves the old ?folder= pointing
+							// nowhere, and a stale cache would reopen that missing folder
+							// for every task after it). Setting an identical src is a
+							// React no-op, so a plain re-open doesn't reload the iframe.
 							setEditorOpen(true);
 							setChangesOpen(false);
-							return;
-						}
-						void run(async () => {
-							let res = await window.ateam.editor.open(task.id);
-							if ("needsInstall" in res) {
-								// Inline coding is optional — nothing is installed without a yes.
-								const where = alias === null ? "this Mac" : `"${alias}"`;
-								const ok = await confirm(
-									"Install the inline editor?",
-									`Inline coding runs VS Code (code-server) on ${where} — a one-time, user-space install (~200 MB, no root). Install it now? It takes about a minute.`,
-								);
-								if (!ok) return;
-								setEditorOpen(true);
-								setChangesOpen(false);
-								setEditorBusy(`Installing the inline editor on ${where}…`);
-								try {
+							setEditorBusy("Opening the editor…");
+							try {
+								let res = await window.ateam.editor.open(task.id);
+								if ("needsInstall" in res) {
+									// Inline coding is optional — nothing is installed without a yes.
+									const where = alias === null ? "this Mac" : `"${alias}"`;
+									const ok = await confirm(
+										"Install the inline editor?",
+										`Inline coding runs VS Code (code-server) on ${where} — a one-time, user-space install (~200 MB, no root). Install it now? It takes about a minute.`,
+									);
+									if (!ok) {
+										setEditorOpen(false);
+										return;
+									}
+									setEditorBusy(`Installing the inline editor on ${where}…`);
 									await window.ateam.editor.install(task.id);
 									res = await window.ateam.editor.open(task.id);
 									if ("needsInstall" in res)
 										throw new Error("Install finished but the editor is still missing.");
-								} catch (e) {
-									// Back to the terminal — a blank editor pane would hide it.
-									setEditorOpen(false);
-									throw e;
-								} finally {
-									setEditorBusy(null);
 								}
+								setEditorSrc(`${res.url}/?folder=${encodeURIComponent(task.worktreePath)}`);
+							} catch (e) {
+								// Back to the terminal — a blank editor pane would hide it.
+								setEditorOpen(false);
+								throw e;
+							} finally {
+								setEditorBusy(null);
 							}
-							setEditorSrc(`${res.url}/?folder=${encodeURIComponent(task.worktreePath)}`);
-							setEditorOpen(true);
-							setChangesOpen(false);
 						});
 					}}
 				/>
