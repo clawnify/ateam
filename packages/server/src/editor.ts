@@ -89,6 +89,9 @@ export function preseedUserSettings(dataDir = join(homedir(), ".local", "share",
 			{
 				"workbench.colorTheme": "Default Dark Modern",
 				"security.workspace.trust.enabled": false,
+				// Copilot Chat opens itself in the secondary side bar on first run;
+				// this is what its "Show View by Default" toggle writes.
+				"workbench.secondarySideBar.defaultVisibility": "hidden",
 			},
 			null,
 			2,

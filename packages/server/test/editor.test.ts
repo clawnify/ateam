@@ -45,6 +45,7 @@ describe("editor: preseedUserSettings", () => {
 		const seeded = JSON.parse(readFileSync(file, "utf8"));
 		expect(seeded["workbench.colorTheme"]).toBe("Default Dark Modern");
 		expect(seeded["security.workspace.trust.enabled"]).toBe(false);
+		expect(seeded["workbench.secondarySideBar.defaultVisibility"]).toBe("hidden");
 
 		writeFileSync(file, '{"workbench.colorTheme":"Mine"}');
 		preseedUserSettings(dataDir);

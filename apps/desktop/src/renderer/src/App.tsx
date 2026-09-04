@@ -32,6 +32,7 @@ import {
 	Minimize2,
 	Monitor,
 	PanelLeft,
+	PanelRight,
 	Play,
 	Plus,
 	Repeat,
@@ -1686,6 +1687,15 @@ function TaskPanel({
 	const [editorSrc, setEditorSrc] = useState<string | null>(null);
 	const [editorOpen, setEditorOpen] = useState(false);
 	const [editorBusy, setEditorBusy] = useState<string | null>(null);
+	// Dock the agent terminal as a right sidebar while the editor or the changes
+	// view owns the main area — the agent keeps working in view instead of
+	// vanishing behind it. Default on; the left-sidebar variant was left out.
+	const [termSide, setTermSide] = useState(() => localStorage.getItem("ateam.termSide") !== "0");
+	const toggleTermSide = () =>
+		setTermSide((s) => {
+			localStorage.setItem("ateam.termSide", s ? "0" : "1");
+			return !s;
+		});
 	const [viewFile, setViewFile] = useState<string | null>(null);
 	// This task's live PTY sessions — agents and shells alike. They ARE the tabs:
 	// the daemon already owns as many per task as you like, so there is nothing
@@ -1918,6 +1928,11 @@ function TaskPanel({
 
 	const tabs = sessionTabs(sessions ?? [], agents, restorable);
 
+	// Whether a view covers the terminal, and whether the terminal instead docks
+	// beside it (both open at once). Only when the toggle wants it.
+	const mainViewOpen = editorOpen || changesOpen;
+	const termDocked = termSide && mainViewOpen;
+
 	// Closing a tab kills its PTY — tabs are exactly the live sessions, so there
 	// is no "closed but still running" state to explain. Confirm first when the
 	// agent is mid-turn or holding a permission prompt, where a stray click would
@@ -2078,6 +2093,12 @@ function TaskPanel({
 					}}
 				/>
 				<IconButton
+					icon={PanelRight}
+					active={termSide}
+					label={termSide ? "Hide terminal sidebar" : "Show terminal sidebar"}
+					onClick={toggleTermSide}
+				/>
+				<IconButton
 					icon={ExternalLink}
 					label={
 						alias === null
@@ -2171,10 +2192,14 @@ function TaskPanel({
 				</button>
 			</div>
 
-			<div className="panel-body">
+			<div className={`panel-body${termDocked ? " docked-term" : ""}`}>
 				{/* Keep the terminal mounted (xterm state survives) while the
-				    changes view is open — just hide it. */}
-				<div className="term-wrap" style={{ display: changesOpen || editorOpen ? "none" : "flex" }}>
+				    changes view is open — just hide it, or dock it beside the
+				    view when the sidebar toggle is on. */}
+				<div
+					className="term-wrap"
+					style={{ display: termDocked || !mainViewOpen ? "flex" : "none" }}
+				>
 					{terminalId ? (
 						<TerminalView
 							terminalId={terminalId}
