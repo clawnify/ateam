@@ -46,11 +46,16 @@ Identity and all GitHub operations come from the `gh` CLI.
 > own, via a `postinstall` hook in `apps/desktop`. You do not need a second
 > command, and a fresh task worktree is runnable straight after installing.
 >
-> The hook is not optional bookkeeping. Everything Bun's script runner spawns on
-> macOS runs translated, picking the x86_64 slice of a universal `node`, so
-> `prebuild-install` resolves `process.arch` as x64 and fetches a `darwin-x64`
-> better-sqlite3 that Electron cannot load. The rebuild replaces it with the
-> arm64 Electron-ABI build.
+> The hook is not optional bookkeeping. `bun install` fetches better-sqlite3 built
+> for the host's Node ABI, which Electron cannot load; the rebuild replaces it with
+> the arm64 Electron-ABI build.
+>
+> On Apple Silicon the hook also re-execs itself natively first. Bun runs lifecycle
+> scripts with the first `bash` on `PATH`, and an x86_64-only bash (an Intel Homebrew
+> in `/usr/local` is the usual source) makes the script and everything under it run
+> under Rosetta, so `prebuild-install` resolves `process.arch` as x64 and fetches a
+> `darwin-x64` binary. Worth fixing at the source too: macOS blames the app that owns
+> the terminal for translated child processes, and Rosetta ends after macOS 27.
 
 ## Layout
 

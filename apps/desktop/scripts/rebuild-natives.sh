@@ -17,12 +17,22 @@ set -euo pipefail
 # CI installs the workspace on Linux to typecheck and test; no Electron there.
 [ "$(uname -s)" = Darwin ] || exit 0
 
-# Everything bun's script runner spawns runs TRANSLATED: it picks the x86_64
-# slice of universal binaries, so inside this script `uname -m` reports x86_64
-# and `arch` reports i386 even on an M-series Mac. That is also why bun's install
-# leaves a darwin-x64 better-sqlite3 behind: prebuild-install sees process.arch
-# as x64. `sysctl hw.optional.arm64` describes the HARDWARE, not the calling
-# process, so it survives the translation and is the one honest probe here.
+# `bun run` executes lifecycle scripts with the first `bash` on PATH. When that is
+# an x86_64-only bash (an Intel Homebrew under /usr/local is the usual source), this
+# script and every child it spawns run TRANSLATED: `uname -m` reports x86_64 on an
+# M-series Mac and prebuild-install sees process.arch as x64, which is how a
+# darwin-x64 better-sqlite3 lands in the worktree. macOS also attributes translated
+# processes to the app that owns the terminal, which is what raises "Support Ending
+# for Intel-Based Apps" against Ateam. Re-exec natively so node-gyp, python3 and cc
+# below all run arm64; after the re-exec proc_translated is 0, so this runs once.
+if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = 1 ] &&
+	[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ] &&
+	[ -x /usr/bin/arch ] && [ -x /bin/bash ]; then
+	exec /usr/bin/arch -arm64 /bin/bash "$0" "$@"
+fi
+
+# `sysctl hw.optional.arm64` describes the HARDWARE, not the calling process, so it
+# stays honest even on a machine where the re-exec above could not run.
 if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ]; then
 	ARCH=arm64
 else
