@@ -1,14 +1,14 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { cp, mkdir, readdir, stat } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { cp, mkdir, rm, stat } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { SimpleGit } from "simple-git";
-import { gitFor, refExists } from "./git-client";
 import { GitCoreError } from "./errors";
+import { gitFor, refExists, safeRaw } from "./git-client";
 import { detectDefaultBranch, ensureWorktreesIgnored } from "./project";
 import { slugify } from "./util";
-import { safeResolveWorktreePath, worktreesRootFor } from "./worktree-paths";
+import { safeResolveWorktreePath } from "./worktree-paths";
 
 const pexec = promisify(execFile);
 
@@ -77,10 +77,7 @@ async function fetchBase(repoPath: string, baseBranch: string): Promise<void> {
 }
 
 /** Resolve the start point for a new task branch: prefer the pushed base. */
-async function resolveStartPoint(
-	repoPath: string,
-	baseBranch: string,
-): Promise<string> {
+async function resolveStartPoint(repoPath: string, baseBranch: string): Promise<string> {
 	const git = gitFor(repoPath);
 	await fetchBase(repoPath, baseBranch);
 	if (await refExists(git, `refs/remotes/origin/${baseBranch}`)) {
@@ -114,11 +111,7 @@ async function allocateNames(
 		const candidate = {
 			slug: slug + suffix,
 			branch: branch + suffix,
-			worktreePath: safeResolveWorktreePath(
-				repoPath,
-				slug + suffix,
-				worktreesRoot,
-			),
+			worktreePath: safeResolveWorktreePath(repoPath, slug + suffix, worktreesRoot),
 		};
 		if (existsSync(candidate.worktreePath)) continue;
 		if (await refExists(git, `refs/heads/${candidate.branch}`)) continue;
@@ -139,10 +132,7 @@ async function allocateNames(
  * CLI in the new worktree is already linked. Best-effort: a missing source dir,
  * a non-Supabase repo, or a copy error must never fail task creation.
  */
-async function copySupabaseLink(
-	repoPath: string,
-	worktreePath: string,
-): Promise<void> {
+async function copySupabaseLink(repoPath: string, worktreePath: string): Promise<void> {
 	const src = join(repoPath, "supabase", ".temp");
 	try {
 		if (!(await stat(src)).isDirectory()) return;
@@ -158,17 +148,57 @@ async function copySupabaseLink(
 	}
 }
 
-/** Directories never worth descending into when hunting for env files. */
-const SKIP_DIRS = new Set([".git", "node_modules"]);
+/**
+ * What is in this working tree but NOT on the branch: its ignored and untracked
+ * entries. Everything the seed carries across is one of these by definition —
+ * git refuses to put them on the branch, which is precisely why a fresh worktree
+ * cannot run until something copies them.
+ *
+ * `git ls-files` rather than a hand-rolled directory walk, for two properties a
+ * walk cannot reproduce:
+ *
+ *  - It never crosses a repository boundary. A nested checkout — another tool's
+ *    worktrees (`.claude/worktrees`), a vendored clone, a submodule — is
+ *    reported as a single entry whose contents are never listed, whether or not
+ *    it is gitignored. A walk has no idea it has left this repo, so it descends
+ *    and copies that repo's dependencies and secrets into the new worktree:
+ *    measured on one monorepo, 370 `node_modules` trees instead of 11, and 28
+ *    `.env`/`.dev.vars` files belonging to six unrelated checkouts.
+ *  - It owns ignore semantics — `.gitignore` at every level, `.git/info/exclude`
+ *    (where ensureWorktreesIgnored puts our own worktrees root), the user's
+ *    global excludes — so the worktrees root needs no special-casing here.
+ *
+ * Two invocations, answering different questions:
+ *  - ignored, WITH `--directory`: collapses a wholly-ignored tree to one entry,
+ *    so `node_modules/` arrives as a single path instead of 114k files.
+ *  - untracked-but-not-ignored, WITHOUT `--directory`: a repo that does not
+ *    gitignore its `.env` still needs it carried, and there the individual files
+ *    are what we want. Nested repos stay collapsed either way.
+ *
+ * Tracked files appear in neither, which is correct: they ride the branch, and
+ * copying them would clobber the checkout with the source worktree's version.
+ *
+ * `-z` because `ls-files` otherwise C-quotes any path with non-ASCII bytes.
+ */
+async function listUnversionedEntries(repoPath: string): Promise<string[]> {
+	const git = gitFor(repoPath);
+	const [ignored, untracked] = await Promise.all([
+		safeRaw(git, ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--directory"]),
+		safeRaw(git, ["ls-files", "-z", "-o", "--exclude-standard"]),
+	]);
+	const entries = new Set<string>();
+	for (const raw of `${ignored}\0${untracked}`.split("\0")) {
+		const entry = raw.replace(/\/$/, "").trim();
+		if (entry) entries.add(entry);
+	}
+	return [...entries];
+}
 
 /**
- * Local secrets/config live in gitignored env files — `.env` (and variants like
+ * Local secrets/config live in env files — `.env` (and variants like
  * `.env.local`) and Cloudflare's `.dev.vars` — that don't ride along on the
- * branch, so a fresh worktree can't run the app until they're present. Copy them
- * across, including nested ones (e.g. `apps/api/.dev.vars`), preserving their
- * relative location. Template files (`.env.example` & co.) are tracked already,
- * so we skip them. Best-effort: any walk/copy error must never fail task
- * creation.
+ * branch, so a fresh worktree can't run the app until they're present. Template
+ * files (`.env.example` & co.) are tracked already, so we skip them.
  */
 function isEnvFile(name: string): boolean {
 	if (/\.(example|sample|template)$/.test(name)) return false;
@@ -180,73 +210,38 @@ function isEnvFile(name: string): boolean {
 	);
 }
 
+/** Copy this repo's own env files across, preserving their relative location. */
 async function copyEnvFiles(
 	repoPath: string,
 	worktreePath: string,
-	worktreesRoot?: string | null,
+	entries: string[],
 ): Promise<void> {
-	const root = worktreesRootFor(repoPath, worktreesRoot);
-
-	async function walk(dir: string): Promise<void> {
-		let entries;
+	for (const rel of entries) {
+		if (!isEnvFile(basename(rel))) continue;
 		try {
-			entries = await readdir(dir, { withFileTypes: true });
+			if (!(await stat(join(repoPath, rel))).isFile()) continue;
+			const dest = join(worktreePath, rel);
+			await mkdir(dirname(dest), { recursive: true });
+			await cp(join(repoPath, rel), dest);
 		} catch {
-			return;
-		}
-		for (const entry of entries) {
-			const abs = join(dir, entry.name);
-			if (abs === root) continue; // don't descend into other worktrees
-			if (entry.isDirectory()) {
-				if (SKIP_DIRS.has(entry.name)) continue;
-				await walk(abs);
-			} else if (entry.isFile() && isEnvFile(entry.name)) {
-				const dest = join(worktreePath, relative(repoPath, abs));
-				try {
-					await mkdir(dirname(dest), { recursive: true });
-					await cp(abs, dest);
-				} catch {
-					/* best-effort — skip this file */
-				}
-			}
+			/* best-effort — skip this file */
 		}
 	}
-
-	await walk(repoPath);
 }
 
 /**
  * Copy-on-write copy: share blocks with the source instead of duplicating them.
  * macOS `cp -c` is clonefile(2); GNU `cp --reflink=auto` reflinks on btrfs/XFS
  * and silently falls back to a full copy elsewhere rather than failing.
+ *
+ * Measured ceiling: this is per-file, so a 1.3 GB / 114k-file `node_modules`
+ * costs ~35s. Darwin's clonefile(2) applied to the DIRECTORY does the same work
+ * in ~3.7s, but it has no Node binding and no Linux equivalent, and the engine
+ * also runs on Linux boxes. Revisit only if seeding ever blocks task creation
+ * again — today it does not, seedWorktree runs after the task row exists.
  */
 const CLONE_CP = process.platform === "darwin" ? "/bin/cp" : "cp";
 const CLONE_ARGS = process.platform === "darwin" ? ["-c", "-R"] : ["--reflink=auto", "-R"];
-
-/** Every `node_modules` in the repo, without descending into them. */
-async function findNodeModules(repoPath: string, worktreesRoot?: string | null): Promise<string[]> {
-	const root = worktreesRootFor(repoPath, worktreesRoot);
-	const found: string[] = [];
-
-	async function walk(dir: string): Promise<void> {
-		const entries = await readdir(dir, { withFileTypes: true }).catch(() => null);
-		if (!entries) return;
-		for (const entry of entries) {
-			if (!entry.isDirectory()) continue;
-			const abs = join(dir, entry.name);
-			if (abs === root) continue; // don't descend into other worktrees
-			if (entry.name === "node_modules") {
-				found.push(abs); // a tree to clone, not a tree to walk
-				continue;
-			}
-			if (entry.name === ".git") continue;
-			await walk(abs);
-		}
-	}
-
-	await walk(repoPath);
-	return found;
-}
 
 /**
  * Dependencies are gitignored, so a fresh worktree cannot typecheck, lint or run
@@ -254,30 +249,30 @@ async function findNodeModules(repoPath: string, worktreesRoot?: string | null):
  * `node_modules` across instead, which on a copy-on-write filesystem shares the
  * blocks rather than duplicating them.
  *
- * Measured on this repo: 23k files that `du` reports as 807 MB clone in ~5s for
- * ~9 MB of real disk. `fs.cp` is not a substitute — even with COPYFILE_FICLONE
- * it wrote 819 MB for the same tree — hence shelling out. `verbatim` symlink
- * behaviour matters too: `cp -R` preserves the relative links a bun/pnpm store
- * depends on, while `fs.cp` rewrites them to absolute paths into the SOURCE.
+ * `fs.cp` is not a substitute — even with COPYFILE_FICLONE it wrote 819 MB for a
+ * tree that clones for ~9 MB of real disk — hence shelling out. `verbatim`
+ * symlink behaviour matters too: `cp -R` preserves the relative links a bun/pnpm
+ * store depends on, while `fs.cp` rewrites them to absolute paths into the
+ * SOURCE.
  *
  * The seed also removes the expensive half of any later install: Electron's
  * postinstall exits early once `dist/version` matches, so its 244 MB download
  * and extract never runs in this worktree.
  *
- * Monorepos keep a `node_modules` per package, so every tree is cloned, not just
- * the root one. Best-effort: a repo with no deps installed, a filesystem without
- * reflinks, or a copy error must never fail task creation.
+ * Monorepos keep a `node_modules` per package, so every tree THIS repo owns is
+ * cloned, not just the root one.
  */
 async function seedNodeModules(
 	repoPath: string,
 	worktreePath: string,
-	worktreesRoot?: string | null,
+	entries: string[],
 ): Promise<void> {
-	for (const src of await findNodeModules(repoPath, worktreesRoot)) {
-		const dest = join(worktreePath, relative(repoPath, src));
+	for (const rel of entries) {
+		if (basename(rel) !== "node_modules") continue;
+		const dest = join(worktreePath, rel);
 		try {
 			await mkdir(dirname(dest), { recursive: true });
-			await pexec(CLONE_CP, [...CLONE_ARGS, src, dest]);
+			await pexec(CLONE_CP, [...CLONE_ARGS, join(repoPath, rel), dest]);
 		} catch {
 			/* best-effort — the worktree just needs its own install */
 		}
@@ -294,13 +289,9 @@ async function seedNodeModules(
 export async function createTask(input: CreateTaskInput): Promise<TaskInfo> {
 	const baseSlug = slugify(input.name);
 	if (!baseSlug) {
-		throw new GitCoreError(
-			"INVALID_NAME",
-			`Task name produced an empty slug: "${input.name}"`,
-		);
+		throw new GitCoreError("INVALID_NAME", `Task name produced an empty slug: "${input.name}"`);
 	}
-	const baseBranch =
-		input.baseBranch ?? (await detectDefaultBranch(input.repoPath));
+	const baseBranch = input.baseBranch ?? (await detectDefaultBranch(input.repoPath));
 
 	const git = gitFor(input.repoPath);
 	// A repeated name is normal, not an error: take the next free variant.
@@ -318,32 +309,46 @@ export async function createTask(input: CreateTaskInput): Promise<TaskInfo> {
 	await ensureWorktreesIgnored(input.repoPath, input.worktreesRoot);
 
 	await mkdir(dirname(worktreePath), { recursive: true });
-	await git.raw([
-		"worktree",
-		"add",
-		"--no-track",
-		"-b",
-		branch,
-		worktreePath,
-		startPoint,
-	]);
+	await git.raw(["worktree", "add", "--no-track", "-b", branch, worktreePath, startPoint]);
 
 	// Record the base branch so update/merge know what to diff/merge against.
 	await gitFor(worktreePath).raw(["config", `branch.${branch}.base`, baseBranch]);
 
+	return { slug, branch, baseBranch, worktreePath };
+}
+
+export interface SeedWorktreeInput {
+	repoPath: string;
+	worktreePath: string;
+}
+
+/**
+ * Carry over the gitignored working-tree state a fresh worktree needs in order
+ * to RUN: the Supabase link, env files, and installed dependencies.
+ *
+ * Deliberately NOT part of createTask, and deliberately not awaited by it. This
+ * is the overwhelming majority of the cost — measured on one monorepo, `git
+ * worktree add` is ~2s and this is ~52s for 161k files — so gating the task's
+ * existence on it means the board shows nothing for a minute, and the user
+ * reasonably concludes the click did not register and clicks New task again.
+ * The caller creates the row first, announces it, and runs this after; anything
+ * that needs the dependencies (launching an agent) awaits it by task id.
+ *
+ * Every step is best-effort by design: a repo with nothing installed, a
+ * filesystem without reflinks, or a copy error leaves a worktree that needs its
+ * own install — never a task that failed to be created.
+ */
+export async function seedWorktree(input: SeedWorktreeInput): Promise<void> {
+	const entries = await listUnversionedEntries(input.repoPath);
 	// Carry the Supabase link over so the worktree's CLI is already linked.
-	await copySupabaseLink(input.repoPath, worktreePath);
-
-	// Carry gitignored env files (.env*, .dev.vars*) over, including nested ones,
-	// so the worktree can run the app without re-creating its local secrets.
-	await copyEnvFiles(input.repoPath, worktreePath, input.worktreesRoot);
-
+	await copySupabaseLink(input.repoPath, input.worktreePath);
+	// Carry env files (.env*, .dev.vars*) over, including nested ones, so the
+	// worktree can run the app without re-creating its local secrets.
+	await copyEnvFiles(input.repoPath, input.worktreePath, entries);
 	// Carry the installed dependencies over as a copy-on-write clone, so the
 	// worktree can typecheck and run immediately instead of paying a full
 	// install (and Electron's 244 MB extract) per task.
-	await seedNodeModules(input.repoPath, worktreePath, input.worktreesRoot);
-
-	return { slug, branch, baseBranch, worktreePath };
+	await seedNodeModules(input.repoPath, input.worktreePath, entries);
 }
 
 export interface RemoveTaskInput {
@@ -361,9 +366,42 @@ export interface RemoveTaskResult {
 	warnings: string[];
 }
 
-export async function removeTask(
-	input: RemoveTaskInput,
-): Promise<RemoveTaskResult> {
+/**
+ * Delete a worktree's directory ourselves, returning whether it is now gone.
+ *
+ * `rm -rf` driven by a path out of the database needs a stronger guarantee than
+ * "it looks like a worktree path", so the only paths eligible are the ones git
+ * itself reports as worktrees of THIS repo, minus the main worktree. That is one
+ * command, and it is git's own record rather than our inference from a string.
+ */
+async function removeWorktreeDirectory(
+	git: SimpleGit,
+	repoPath: string,
+	worktreePath: string,
+): Promise<boolean> {
+	const target = resolve(worktreePath);
+	if (target === resolve(repoPath)) return false;
+	const listed = await safeRaw(git, ["worktree", "list", "--porcelain"]);
+	const known = listed
+		.split("\n")
+		.filter((line) => line.startsWith("worktree "))
+		.some((line) => resolve(line.slice("worktree ".length).trim()) === target);
+	if (!known) return false;
+	try {
+		await rm(target, { recursive: true, force: true });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * simple-git's inactivity killer, verbatim from its timeout plugin. Matching the
+ * message is what separates "git was killed mid-removal" from "git refused".
+ */
+const TIMEOUT_KILL = /block timeout reached/i;
+
+export async function removeTask(input: RemoveTaskInput): Promise<RemoveTaskResult> {
 	const git = gitFor(input.repoPath);
 	const warnings: string[] = [];
 
@@ -378,12 +416,33 @@ export async function removeTask(
 		// the tree is already gone. Prune the stale admin entry below and carry
 		// on to branch deletion instead of surfacing the error to the user.
 		const message = err instanceof Error ? err.message : String(err);
-		if (!/is not a working tree|No such file or directory/i.test(message)) {
+		if (/is not a working tree|No such file or directory/i.test(message)) {
+			warnings.push(`Worktree "${input.worktreePath}" was already gone; pruned its stale entry.`);
+		} else if (
+			TIMEOUT_KILL.test(message) &&
+			(await removeWorktreeDirectory(git, input.repoPath, input.worktreePath))
+		) {
+			// git was KILLED here, it did not refuse: simple-git's `timeout.block`
+			// is an INACTIVITY timer, and `worktree remove` prints nothing at all
+			// while it unlinks, so a worktree with seeded dependencies (~161k files)
+			// trips it at five minutes with the tree half-deleted. Rethrowing then
+			// strands the task — the caller never deletes its row, the card stays on
+			// the board pointing at a broken worktree, and every retry dies exactly
+			// the same way. Finishing the removal ourselves is what makes a delete
+			// the user asked for actually complete.
+			//
+			// Narrow to that one signature ON PURPOSE. `worktree remove` validates
+			// BEFORE it unlinks, so a timeout means the checks already passed and
+			// the deletion was underway — safe to finish. Every other failure is git
+			// REFUSING (a dirty worktree without --force, a main working tree), and
+			// deleting the directory there would silently turn a guarded removal
+			// into a forced one and destroy uncommitted work. Those still throw.
+			warnings.push(
+				`Worktree "${input.worktreePath}" did not remove cleanly (${message}); removed its directory directly.`,
+			);
+		} else {
 			throw err;
 		}
-		warnings.push(
-			`Worktree "${input.worktreePath}" was already gone; pruned its stale entry.`,
-		);
 	}
 
 	// Prune before deleting the branch: if the worktree dir vanished, git still

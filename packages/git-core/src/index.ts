@@ -35,9 +35,10 @@ export type {
 	CreateTaskInput,
 	RemoveTaskInput,
 	RemoveTaskResult,
+	SeedWorktreeInput,
 	TaskInfo,
 } from "./task";
-export { createTask, removeTask } from "./task";
+export { createTask, removeTask, seedWorktree } from "./task";
 export type { GitClient } from "./types";
 export { slugify } from "./util";
 export type { WorktreeRecord } from "./worktree-list";

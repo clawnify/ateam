@@ -1,16 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
-import {
-	chmod,
-	mkdir,
-	mkdtemp,
-	readlink,
-	rm,
-	symlink,
-	writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import simpleGit from "simple-git";
+import { GitCoreError } from "../src/errors";
 import {
 	cloneRepo,
 	commit,
@@ -19,22 +12,17 @@ import {
 	detectMerged,
 	diff,
 	initRepository,
-	push,
 	parseWorktreeList,
+	push,
 	registerProject,
 	removeTask,
 	safeResolveWorktreePath,
+	seedWorktree,
 	slugify,
 	updateFromBase,
 	updateLocalMain,
 } from "../src/index";
-import { GitCoreError } from "../src/errors";
-import {
-	advanceOrigin,
-	commitFile,
-	makeTempRepoPair,
-	type TempRepo,
-} from "./helpers/temp-repo";
+import { advanceOrigin, commitFile, makeTempRepoPair, type TempRepo } from "./helpers/temp-repo";
 
 let repo: TempRepo;
 
@@ -68,9 +56,7 @@ describe("project", () => {
 
 	it("adds /.ateam/ to .git/info/exclude", async () => {
 		await registerProject(repo.work);
-		const exclude = await Bun.file(
-			join(repo.work, ".git", "info", "exclude"),
-		).text();
+		const exclude = await Bun.file(join(repo.work, ".git", "info", "exclude")).text();
 		expect(exclude).toContain("/.ateam/");
 	});
 
@@ -86,9 +72,7 @@ describe("createTask freshness", () => {
 		// The clone's refs/remotes/origin/main is now behind the real remote --
 		// exactly the state a repo sits in between merges.
 		const advanced = await advanceOrigin(repo);
-		expect(await branchSha(repo.work, "refs/remotes/origin/main")).not.toBe(
-			advanced,
-		);
+		expect(await branchSha(repo.work, "refs/remotes/origin/main")).not.toBe(advanced);
 
 		const task = await createTask({ repoPath: repo.work, name: "fresh" });
 
@@ -115,11 +99,22 @@ describe("createTask freshness", () => {
 });
 
 describe("createTask isolation", () => {
+	/**
+	 * A real "create a task" is both calls: createTask makes the worktree, and
+	 * seedWorktree carries the gitignored state it needs to RUN. They are split
+	 * so the task's row (and its card) can exist before the slow half finishes.
+	 */
+	async function createAndSeed(name: string) {
+		const task = await createTask({ repoPath: repo.work, name });
+		await seedWorktree({
+			repoPath: repo.work,
+			worktreePath: task.worktreePath,
+		});
+		return task;
+	}
+
 	it("creates a co-located worktree without disturbing the main worktree", async () => {
-		const headBefore = await simpleGit(repo.work).raw([
-			"symbolic-ref",
-			"HEAD",
-		]);
+		const headBefore = await simpleGit(repo.work).raw(["symbolic-ref", "HEAD"]);
 		const statusBefore = await porcelainStatus(repo.work);
 
 		const task = await createTask({ repoPath: repo.work, name: "Add auth" });
@@ -127,15 +122,11 @@ describe("createTask isolation", () => {
 		expect(task.slug).toBe("add-auth");
 		expect(task.branch).toBe("add-auth");
 		expect(task.baseBranch).toBe("main");
-		expect(task.worktreePath).toBe(
-			join(repo.work, ".ateam", "worktrees", "add-auth"),
-		);
+		expect(task.worktreePath).toBe(join(repo.work, ".ateam", "worktrees", "add-auth"));
 		expect(existsSync(task.worktreePath)).toBe(true);
 
 		// Main worktree HEAD + working tree byte-for-byte unchanged.
-		expect(await simpleGit(repo.work).raw(["symbolic-ref", "HEAD"])).toBe(
-			headBefore,
-		);
+		expect(await simpleGit(repo.work).raw(["symbolic-ref", "HEAD"])).toBe(headBefore);
 		expect(await porcelainStatus(repo.work)).toBe(statusBefore);
 	});
 
@@ -153,12 +144,9 @@ describe("createTask isolation", () => {
 	it("copies the Supabase link state into the new worktree", async () => {
 		// Simulate `supabase link`: the gitignored link cache in the main repo.
 		await mkdir(join(repo.work, "supabase", ".temp"), { recursive: true });
-		await writeFile(
-			join(repo.work, "supabase", ".temp", "project-ref"),
-			"abcdefghijklmnopqrst",
-		);
+		await writeFile(join(repo.work, "supabase", ".temp", "project-ref"), "abcdefghijklmnopqrst");
 
-		const task = await createTask({ repoPath: repo.work, name: "linked" });
+		const task = await createAndSeed("linked");
 
 		const copied = join(task.worktreePath, "supabase", ".temp", "project-ref");
 		expect(existsSync(copied)).toBe(true);
@@ -167,7 +155,7 @@ describe("createTask isolation", () => {
 
 	it("creates the worktree fine when there is no Supabase link", async () => {
 		// No supabase/.temp in the repo — task creation must still succeed.
-		const task = await createTask({ repoPath: repo.work, name: "unlinked" });
+		const task = await createAndSeed("unlinked");
 		expect(existsSync(task.worktreePath)).toBe(true);
 		expect(existsSync(join(task.worktreePath, "supabase"))).toBe(false);
 	});
@@ -181,19 +169,13 @@ describe("createTask isolation", () => {
 		// Template files are tracked already — must NOT be copied as a secret.
 		await writeFile(join(repo.work, ".env.example"), "ROOT=\n");
 
-		const task = await createTask({ repoPath: repo.work, name: "envy" });
+		const task = await createAndSeed("envy");
 
-		expect(await Bun.file(join(task.worktreePath, ".env")).text()).toBe(
-			"ROOT=1\n",
+		expect(await Bun.file(join(task.worktreePath, ".env")).text()).toBe("ROOT=1\n");
+		expect(await Bun.file(join(task.worktreePath, ".env.local")).text()).toBe("LOCAL=1\n");
+		expect(await Bun.file(join(task.worktreePath, "apps", "api", ".dev.vars")).text()).toBe(
+			"API=2\n",
 		);
-		expect(await Bun.file(join(task.worktreePath, ".env.local")).text()).toBe(
-			"LOCAL=1\n",
-		);
-		expect(
-			await Bun.file(
-				join(task.worktreePath, "apps", "api", ".dev.vars"),
-			).text(),
-		).toBe("API=2\n");
 		expect(existsSync(join(task.worktreePath, ".env.example"))).toBe(false);
 	});
 
@@ -201,6 +183,7 @@ describe("createTask isolation", () => {
 		// A monorepo keeps a tree per package, and package stores link between
 		// them RELATIVELY. A copy that rewrites those links to absolute paths
 		// would point the new worktree back at the source repo.
+		await writeFile(join(repo.work, ".gitignore"), "node_modules/\n");
 		await mkdir(join(repo.work, "node_modules", ".store", "dep"), {
 			recursive: true,
 		});
@@ -208,10 +191,7 @@ describe("createTask isolation", () => {
 			join(repo.work, "node_modules", ".store", "dep", "index.js"),
 			"module.exports = 1;\n",
 		);
-		await symlink(
-			join(".store", "dep"),
-			join(repo.work, "node_modules", "dep"),
-		);
+		await symlink(join(".store", "dep"), join(repo.work, "node_modules", "dep"));
 		await mkdir(join(repo.work, "apps", "web", "node_modules"), {
 			recursive: true,
 		});
@@ -220,36 +200,58 @@ describe("createTask isolation", () => {
 			join(repo.work, "apps", "web", "node_modules", "dep"),
 		);
 
-		const task = await createTask({ repoPath: repo.work, name: "seeded" });
+		const task = await createAndSeed("seeded");
 
 		expect(
-			await Bun.file(
-				join(task.worktreePath, "node_modules", ".store", "dep", "index.js"),
-			).text(),
+			await Bun.file(join(task.worktreePath, "node_modules", ".store", "dep", "index.js")).text(),
 		).toBe("module.exports = 1;\n");
 		// The nested tree is cloned too, not just the root one.
-		expect(
-			existsSync(join(task.worktreePath, "apps", "web", "node_modules")),
-		).toBe(true);
+		expect(existsSync(join(task.worktreePath, "apps", "web", "node_modules"))).toBe(true);
 		// And both links still point where they did, relatively.
-		expect(
-			await readlink(join(task.worktreePath, "node_modules", "dep")),
-		).toBe(join(".store", "dep"));
-		expect(
-			await readlink(
-				join(task.worktreePath, "apps", "web", "node_modules", "dep"),
-			),
-		).toBe(join("..", "..", "..", "node_modules", ".store", "dep"));
+		expect(await readlink(join(task.worktreePath, "node_modules", "dep"))).toBe(
+			join(".store", "dep"),
+		);
+		expect(await readlink(join(task.worktreePath, "apps", "web", "node_modules", "dep"))).toBe(
+			join("..", "..", "..", "node_modules", ".store", "dep"),
+		);
+	});
+
+	it("never descends into a nested checkout when seeding", async () => {
+		// Another tool's worktrees, or a vendored clone, living inside the repo.
+		// Its dependencies and secrets belong to IT, not to this task, and a
+		// directory walk cannot tell it has left the repo — which is how 370
+		// node_modules trees and 28 unrelated .env files ended up in every new
+		// worktree. `git ls-files` stops at the boundary; that is the fix.
+		await writeFile(join(repo.work, ".gitignore"), "node_modules/\n");
+		await mkdir(join(repo.work, "node_modules", "own"), { recursive: true });
+		await writeFile(join(repo.work, "node_modules", "own", "i.js"), "mine\n");
+		await writeFile(join(repo.work, ".env"), "MINE=1\n");
+
+		const nested = join(repo.work, "vendor", "other");
+		await mkdir(nested, { recursive: true });
+		await simpleGit().raw(["init", "-b", "main", nested]);
+		await mkdir(join(nested, "node_modules", "theirs"), { recursive: true });
+		await writeFile(join(nested, "node_modules", "theirs", "i.js"), "theirs\n");
+		await writeFile(join(nested, ".env"), "THEIRS=1\n");
+
+		const task = await createAndSeed("boundary");
+
+		// This repo's own state came across.
+		expect(existsSync(join(task.worktreePath, "node_modules", "own"))).toBe(true);
+		expect(await Bun.file(join(task.worktreePath, ".env")).text()).toBe("MINE=1\n");
+		// The nested checkout's did not — neither its deps nor its secrets.
+		expect(existsSync(join(task.worktreePath, "vendor", "other", "node_modules"))).toBe(false);
+		expect(existsSync(join(task.worktreePath, "vendor", "other", ".env"))).toBe(false);
 	});
 
 	it("creates the worktree fine when nothing is installed", async () => {
-		const task = await createTask({ repoPath: repo.work, name: "no-deps" });
+		const task = await createAndSeed("no-deps");
 		expect(existsSync(task.worktreePath)).toBe(true);
 		expect(existsSync(join(task.worktreePath, "node_modules"))).toBe(false);
 	});
 
 	it("creates the worktree fine when there are no env files", async () => {
-		const task = await createTask({ repoPath: repo.work, name: "no-env" });
+		const task = await createAndSeed("no-env");
 		expect(existsSync(task.worktreePath)).toBe(true);
 		expect(existsSync(join(task.worktreePath, ".env"))).toBe(false);
 	});
@@ -258,16 +260,8 @@ describe("createTask isolation", () => {
 		const b = await createTask({ repoPath: repo.work, name: "same name" });
 		const c = await createTask({ repoPath: repo.work, name: "Same Name!" });
 
-		expect([a.branch, b.branch, c.branch]).toEqual([
-			"same-name",
-			"same-name-2",
-			"same-name-3",
-		]);
-		expect([a.slug, b.slug, c.slug]).toEqual([
-			"same-name",
-			"same-name-2",
-			"same-name-3",
-		]);
+		expect([a.branch, b.branch, c.branch]).toEqual(["same-name", "same-name-2", "same-name-3"]);
+		expect([a.slug, b.slug, c.slug]).toEqual(["same-name", "same-name-2", "same-name-3"]);
 		for (const t of [a, b, c]) expect(existsSync(t.worktreePath)).toBe(true);
 	});
 
@@ -287,11 +281,7 @@ describe("createTask isolation", () => {
 	});
 
 	it("skips a name already taken by a remote branch", async () => {
-		await simpleGit(repo.work).raw([
-			"update-ref",
-			"refs/remotes/origin/taken",
-			"HEAD",
-		]);
+		await simpleGit(repo.work).raw(["update-ref", "refs/remotes/origin/taken", "HEAD"]);
 
 		const task = await createTask({ repoPath: repo.work, name: "taken" });
 		expect(task.branch).toBe("taken-2");
@@ -344,12 +334,7 @@ describe("updateLocalMain — Stage B safety (no GitHub needed)", () => {
 
 	it("aborts cleanly without clobbering when local main has diverged", async () => {
 		// Local divergent commit on work's main.
-		const localSha = await commitFile(
-			repo.work,
-			"local.txt",
-			"local\n",
-			"divergent local commit",
-		);
+		const localSha = await commitFile(repo.work, "local.txt", "local\n", "divergent local commit");
 		// Remote advances on a different line of history.
 		await advanceOrigin(repo, { file: "remote.txt", content: "remote\n" });
 
@@ -454,6 +439,25 @@ describe("detectMerged — external merge detection (no GitHub needed)", () => {
 });
 
 describe("removeTask", () => {
+	it("refuses a dirty worktree instead of deleting it behind git's back", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "dirty" });
+		await writeFile(join(task.worktreePath, "scratch.txt"), "unsaved\n");
+
+		// removeTask has a rescue path that deletes the directory itself, but it
+		// is armed ONLY for git being KILLED mid-removal (the inactivity timeout
+		// on a huge worktree). git REFUSING is a different thing entirely, and
+		// widening the rescue to cover it would turn every guarded removal into a
+		// forced one and destroy uncommitted work.
+		await expect(
+			removeTask({
+				repoPath: repo.work,
+				worktreePath: task.worktreePath,
+				branch: task.branch,
+			}),
+		).rejects.toThrow();
+		expect(existsSync(join(task.worktreePath, "scratch.txt"))).toBe(true);
+	});
+
 	it("removes only the target worktree, leaving siblings intact", async () => {
 		const a = await createTask({ repoPath: repo.work, name: "task a" });
 		const b = await createTask({ repoPath: repo.work, name: "task b" });
@@ -531,9 +535,7 @@ describe("commit & diff", () => {
 
 describe("path safety", () => {
 	it("safeResolveWorktreePath rejects traversal", () => {
-		expect(() => safeResolveWorktreePath("/repo", "../../evil")).toThrow(
-			GitCoreError,
-		);
+		expect(() => safeResolveWorktreePath("/repo", "../../evil")).toThrow(GitCoreError);
 	});
 
 	it("slugify neutralizes traversal characters", () => {
@@ -581,8 +583,8 @@ describe("cloneRepo — gh fallback (no GitHub needed)", () => {
 
 	it("throws GH_FAILED when git fails too", async () => {
 		process.env.GIT_CONFIG_KEY_0 = `url.${join(repo.dir, "nowhere.git")}.insteadOf`;
-		await expect(
-			cloneRepo(GH_URL, join(repo.dir, "cloned")),
-		).rejects.toMatchObject({ code: "GH_FAILED" });
+		await expect(cloneRepo(GH_URL, join(repo.dir, "cloned"))).rejects.toMatchObject({
+			code: "GH_FAILED",
+		});
 	});
 });
