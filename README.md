@@ -13,10 +13,13 @@
   <a href="https://github.com/clawnify/ateam/releases/latest/download/Ateam-macos.dmg">
     <img src="./assets/macos-badge.svg" alt="Download app for macOS" width="220" />
   </a>
+  <a href="https://apps.apple.com/gb/app/ateam-go/id6790125600">
+    <img src="./assets/iphone-badge.svg" alt="Download app for iPhone" width="220" />
+  </a>
 </p>
 
 <p align="center">
-  <img src="./assets/screenshot-board.png" alt="Ateam — kanban board with tasks across Backlog, In Progress, Needs You, Review, and Done" width="900" />
+  <img src="./assets/screenshot-hero.png" alt="Ateam — kanban board on the desktop with tasks across Backlog, In Progress, Needs You, Review, and Done, and the same board in the iOS app on a phone" width="900" />
 </p>
 
 <p align="center">
