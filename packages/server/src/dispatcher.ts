@@ -277,7 +277,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 
 		// ---- tasks ----
-		[CH.tasksList]: async (projectId: string) => repo.listTasks(db, projectId).map(toTaskDTO),
+		[CH.tasksList]: async (projectId: string) =>
+			repo
+				.listTasks(db, projectId)
+				.map((t) => toTaskDTO(t, services.pendingSeeds.has(t.id))),
 		[CH.tasksCreate]: async (input: {
 			projectId: string;
 			name: string;
@@ -285,7 +288,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			agentId?: string;
 		}) => {
 			const row = await createTaskInProject(services, engine.sendTaskUpdated, input);
-			return toTaskDTO(row);
+			return toTaskDTO(row, services.pendingSeeds.has(row.id));
 		},
 		[CH.tasksRemove]: async (input: { id: string; deleteBranch?: boolean; force?: boolean }) => {
 			const task = requireTask(services, input.id);

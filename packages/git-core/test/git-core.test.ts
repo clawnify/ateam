@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import simpleGit from "simple-git";
 import { GitCoreError } from "../src/errors";
@@ -214,6 +214,30 @@ describe("createTask isolation", () => {
 		expect(await readlink(join(task.worktreePath, "apps", "web", "node_modules", "dep"))).toBe(
 			join("..", "..", "..", "node_modules", ".store", "dep"),
 		);
+	});
+
+	it("stages dependencies outside the worktree and leaves no scrap behind", async () => {
+		// The copy takes ~25s on a real monorepo and the agent no longer waits for
+		// it, so a tree copied in place would be visible half-populated — worse
+		// than absent, because a partial `node_modules` fails in ways that look
+		// like the code's fault. Staging out of tree and renaming in makes the
+		// worktree show absent or complete and nothing else.
+		await writeFile(join(repo.work, ".gitignore"), "node_modules/\n");
+		await mkdir(join(repo.work, "node_modules", "pkg"), { recursive: true });
+		await writeFile(join(repo.work, "node_modules", "pkg", "i.js"), "dep\n");
+
+		const task = await createAndSeed("staged");
+
+		// Landed complete...
+		expect(
+			await Bun.file(join(task.worktreePath, "node_modules", "pkg", "i.js")).text(),
+		).toBe("dep\n");
+		// ...and the staging directory, a sibling of the worktree, is gone.
+		const worktreesRoot = join(repo.work, ".ateam", "worktrees");
+		const leftovers = (await readdir(worktreesRoot)).filter((n) =>
+			n.startsWith(".seeding-"),
+		);
+		expect(leftovers).toEqual([]);
 	});
 
 	it("never descends into a nested checkout when seeding", async () => {

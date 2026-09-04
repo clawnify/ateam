@@ -104,12 +104,13 @@ export async function spawnAgentInTask(
 	const agent = getAgent(input.agentId);
 	if (!agent) throw new Error(`Unknown agent: ${input.agentId}`);
 
-	// A task's card appears as soon as its worktree exists, so its dependencies
-	// may still be copying. An agent launched into a half-seeded worktree would
-	// fail its first `bun test` / typecheck for reasons that have nothing to do
-	// with the code, so the launch waits here rather than the board waiting
-	// earlier. Undefined (nothing pending) awaits to undefined immediately.
-	await services.pendingSeeds.get(task.id);
+	// Deliberately NOT awaiting services.pendingSeeds here. Dependencies land
+	// under the agent while it works: seedNodeModules stages each tree outside
+	// the worktree and renames it in, so the worktree only ever shows an absent
+	// or a complete `node_modules`, never a half-copied one. That was the whole
+	// reason to block, and blocking cost ~25s of dead time before the terminal
+	// even appeared on a large monorepo. The card reports `preparing` while the
+	// copy is in flight, so the wait is visible instead of mysterious.
 
 	const terminalId = randomUUID();
 	// The conversation this tab holds. On a fresh launch we mint it — the

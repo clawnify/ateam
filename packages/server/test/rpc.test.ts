@@ -38,6 +38,7 @@ function makeEngine(db: AteamDb): Engine {
 			pty: { has: () => false },
 			mergeQueue: {},
 			loopRunner: { describe: () => [] },
+			pendingSeeds: new Map(),
 		},
 		on: (event: string, cb: (p: unknown) => void) => {
 			ee.on(event, cb);

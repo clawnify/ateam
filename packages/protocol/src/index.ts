@@ -162,6 +162,12 @@ export interface TaskDTO {
 	/** Last agent/lifecycle activity (falls back to row update time). */
 	lastEventAt: number | null;
 	isUnread: boolean;
+	/**
+	 * The worktree's dependencies are still being copied in. Ephemeral and
+	 * runtime-only — derived from the engine's in-flight seed map, never stored,
+	 * so a crash mid-seed cannot leave a task permanently "preparing".
+	 */
+	preparing: boolean;
 	/** Model-assigned topic tags; null when none were generated (the client
 	 *  falls back to deriving them from the task's text). */
 	tags: string[] | null;

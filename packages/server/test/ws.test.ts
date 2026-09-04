@@ -22,7 +22,13 @@ import { wsServerTransport } from "../src/transport/ws";
 function makeEngine(db: AteamDb): Engine {
 	const ee = new EventEmitter();
 	return {
-		services: { db, pty: { has: () => false }, mergeQueue: {}, loopRunner: { describe: () => [] } },
+		services: {
+			db,
+			pty: { has: () => false },
+			mergeQueue: {},
+			loopRunner: { describe: () => [] },
+			pendingSeeds: new Map(),
+		},
 		on: (event: string, cb: (p: unknown) => void) => {
 			ee.on(event, cb);
 			return () => ee.off(event, cb);

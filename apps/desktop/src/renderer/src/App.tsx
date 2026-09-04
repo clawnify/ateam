@@ -819,24 +819,13 @@ export function App() {
 			// Loops shows only loop-owned tasks, so a new task would land
 			// somewhere it can't be seen; every other view keeps its place.
 			if (view === "loops") setView("board");
-			// The card is on the board already — the engine creates the row as soon
-			// as the worktree exists. What this awaits is the worktree's gitignored
-			// state (dependencies, env files) finishing its copy, which the engine
-			// makes the agent launch wait for. Without a word here, that gap reads
-			// as another dead click, which is the whole bug this path had.
-			setInfo("Preparing worktree…");
-			let terminalId: string;
-			try {
-				({ terminalId } = await window.ateam.pty.spawnAgent({
-					taskId: task.id,
-					agentId: input.agentId,
-					yolo: input.yolo,
-					prompt: input.prompt || undefined,
-					files: input.files.length ? input.files : undefined,
-				}));
-			} finally {
-				setInfo(null);
-			}
+			const { terminalId } = await window.ateam.pty.spawnAgent({
+				taskId: task.id,
+				agentId: input.agentId,
+				yolo: input.yolo,
+				prompt: input.prompt || undefined,
+				files: input.files.length ? input.files : undefined,
+			});
 			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		});
 
@@ -925,7 +914,11 @@ export function App() {
 									) : (
 										<Icon size={16} strokeWidth={1.75} />
 									)}
-									{t.agentStatus && <span className={`corner ${t.agentStatus}`} />}
+									{t.preparing ? (
+										<span className="corner preparing" />
+									) : (
+										t.agentStatus && <span className={`corner ${t.agentStatus}`} />
+									)}
 								</button>
 							);
 						})}
@@ -1460,7 +1453,17 @@ function TaskRow({
 				)}
 			</button>
 			<span className="task-trail">
-				{t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />}
+				{/* A task is `preparing` before it has any agentStatus, so this is
+				    the one dot it gets — otherwise the trail is empty for the whole
+				    copy and the card looks idle while it is anything but. */}
+				{t.preparing ? (
+					<span
+						className="tstatus preparing"
+						title="Copying dependencies into the worktree…"
+					/>
+				) : (
+					t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />
+				)}
 				<IconButton
 					icon={Trash2}
 					label="Delete task"

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { cp, mkdir, rm, stat } from "node:fs/promises";
+import { cp, mkdir, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { SimpleGit } from "simple-git";
@@ -267,15 +267,46 @@ async function seedNodeModules(
 	worktreePath: string,
 	entries: string[],
 ): Promise<void> {
-	for (const rel of entries) {
-		if (basename(rel) !== "node_modules") continue;
-		const dest = join(worktreePath, rel);
-		try {
-			await mkdir(dirname(dest), { recursive: true });
-			await pexec(CLONE_CP, [...CLONE_ARGS, join(repoPath, rel), dest]);
-		} catch {
-			/* best-effort — the worktree just needs its own install */
+	// Stage OUTSIDE the worktree, then move each finished tree in. Two reasons,
+	// both learned the hard way:
+	//
+	//  - A copy takes ~25s for a large monorepo, and the agent now launches
+	//    immediately rather than waiting for it. A tree copied in place is
+	//    therefore VISIBLE while half-populated, and a half-populated
+	//    `node_modules` is worse than none at all: an absent one fails with a
+	//    plain "not installed", a partial one fails with a module resolving to
+	//    nothing halfway through a build. `rename(2)` is atomic, so the worktree
+	//    only ever sees absent or complete.
+	//  - Nothing writes inside the worktree while it is being copied, so a
+	//    delete that lands mid-seed is not racing a copy that keeps recreating
+	//    the directory it is trying to remove.
+	//
+	// The staging directory is a sibling of the worktree (same worktrees root,
+	// therefore the same filesystem), which is what makes the rename a metadata
+	// operation rather than a second copy: measured at 0.1ms for a 114k-file
+	// tree, against ~25s to copy it.
+	const staging = join(
+		dirname(worktreePath),
+		`.seeding-${basename(worktreePath)}-${process.pid}`,
+	);
+	try {
+		for (const rel of entries) {
+			if (basename(rel) !== "node_modules") continue;
+			const staged = join(staging, rel);
+			const dest = join(worktreePath, rel);
+			try {
+				await mkdir(dirname(staged), { recursive: true });
+				await pexec(CLONE_CP, [...CLONE_ARGS, join(repoPath, rel), staged]);
+				await mkdir(dirname(dest), { recursive: true });
+				await rename(staged, dest);
+			} catch {
+				/* best-effort — the worktree just needs its own install */
+			}
 		}
+	} finally {
+		// Whatever did not make it across is scrap; never leave it beside the
+		// worktrees, where the next task's walk would have to reason about it.
+		await rm(staging, { recursive: true, force: true }).catch(() => {});
 	}
 }
 

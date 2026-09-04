@@ -152,9 +152,14 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		}
 	}
 
+	// Declared here rather than inline in `services` below because the broadcast
+	// closure needs it: a card's "preparing" state is exactly "is there a seed in
+	// flight for this task", and that answer must ride along on every update.
+	const pendingSeeds = new Map<string, Promise<void>>();
+
 	const sendTaskUpdated = (taskId: string): void => {
 		const task = repo.getTask(db, taskId);
-		if (task) emitter.emit("taskUpdated", toTaskDTO(task));
+		if (task) emitter.emit("taskUpdated", toTaskDTO(task, pendingSeeds.has(taskId)));
 	};
 
 	// The detached PTY daemon survives restarts; daemonPath is run via execPath as
@@ -222,7 +227,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		mergeQueue,
 		loopRunner,
 		followUps,
-		pendingSeeds: new Map(),
+		pendingSeeds,
 	};
 
 	// Record an agent's exit: close the session and file its card. Shared by the

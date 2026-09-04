@@ -141,6 +141,42 @@ describe("createDispatcher", () => {
 		}
 	});
 
+	// The card must say "still preparing" while dependencies copy in, or the wait
+	// is invisible and the app looks like it ignored the click — which is exactly
+	// how this was reported. The flag is derived from the in-flight seed map and
+	// never stored, so a crash mid-seed cannot strand a task as preparing.
+	it("reports preparing while a seed is in flight, and not after", async () => {
+		const db = createTestDb();
+		const { engine } = makeEngine(db);
+		const d = createDispatcher(engine);
+		const project = repo.upsertProject(db, {
+			repoPath: "/r/p",
+			name: "P",
+			defaultBranch: "main",
+		});
+		const task = repo.createTask(db, {
+			projectId: project!.id,
+			name: "seeding now",
+			slug: "seeding-now",
+			branch: "seeding-now",
+			baseBranch: "main",
+			worktreePath: "/r/p/.ateam/worktrees/seeding-now",
+		});
+
+		const seeds = engine.services.pendingSeeds;
+		let release!: () => void;
+		seeds.set(task.id, new Promise<void>((r) => { release = r; }));
+
+		const during = (await d.handle(CH.tasksList, [project!.id])) as { preparing: boolean }[];
+		expect(during[0]?.preparing).toBe(true);
+
+		release();
+		seeds.delete(task.id);
+
+		const after = (await d.handle(CH.tasksList, [project!.id])) as { preparing: boolean }[];
+		expect(after[0]?.preparing).toBe(false);
+	});
+
 	// --- tabs a restart took away ---------------------------------------------
 
 	// The bug this exists for: a laptop restart kills the PTY daemon, and every
