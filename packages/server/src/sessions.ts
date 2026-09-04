@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { agentCommand, generateTaskTags, getAgent } from "@ateam/agents";
 import { repo, type Task } from "@ateam/db";
-import { createTask as gitCreateTask } from "@ateam/git-core";
+import { createTask as gitCreateTask, seedWorktree } from "@ateam/git-core";
 import { buildAgentEnv, ensureClaudeHooks, ensureCodexHooks } from "./agent-setup";
 import type { Services } from "./services";
 
@@ -59,6 +59,20 @@ export async function createTaskInProject(
 	// Broadcast so any other window showing this project gains the new card
 	// (renderers upsert). The caller also gets it — an idempotent upsert.
 	notifyTaskUpdated(row.id);
+	// Only NOW carry the gitignored state across. It is by far the slowest part
+	// of making a task (~52s against ~2s for the worktree itself on a large
+	// monorepo), and nothing above needs it, so blocking the row on it bought
+	// nothing and cost the user every signal that their click had registered.
+	// The promise is parked for `spawnAgentInTask` to await; failures are
+	// already swallowed inside seedWorktree, and the catch here only keeps a
+	// rejection from escaping as unhandled.
+	const seeding = seedWorktree({
+		repoPath: project.repoPath,
+		worktreePath: created.worktreePath,
+	})
+		.catch(() => {})
+		.finally(() => services.pendingSeeds.delete(row.id));
+	services.pendingSeeds.set(row.id, seeding);
 	return row;
 }
 
@@ -72,6 +86,13 @@ export async function spawnAgentInTask(
 	if (!task) throw new Error(`Task not found: ${input.taskId}`);
 	const agent = getAgent(input.agentId);
 	if (!agent) throw new Error(`Unknown agent: ${input.agentId}`);
+
+	// A task's card appears as soon as its worktree exists, so its dependencies
+	// may still be copying. An agent launched into a half-seeded worktree would
+	// fail its first `bun test` / typecheck for reasons that have nothing to do
+	// with the code, so the launch waits here rather than the board waiting
+	// earlier. Undefined (nothing pending) awaits to undefined immediately.
+	await services.pendingSeeds.get(task.id);
 
 	const terminalId = randomUUID();
 	// The conversation this tab holds. On a fresh launch we mint it — the

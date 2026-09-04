@@ -19,6 +19,14 @@ export interface Services {
 	loopRunner: LoopRunner;
 	/** One-shot follow-up turns, armed at launch and consumed at turn end. */
 	followUps: FollowUps;
+	/**
+	 * In-flight `seedWorktree` calls by task id. A task's row is created (and its
+	 * card announced) as soon as the worktree exists, so its dependencies are
+	 * still landing for up to a minute afterwards; anything that needs them —
+	 * launching an agent — awaits the entry here. Absent means nothing pending,
+	 * so `await map.get(id)` is the whole protocol.
+	 */
+	pendingSeeds: Map<string, Promise<void>>;
 }
 
 export function toProjectDTO(p: Project): ProjectDTO {

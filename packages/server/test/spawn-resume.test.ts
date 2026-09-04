@@ -38,6 +38,7 @@ beforeEach(() => {
 		notifyScriptPath: join(scratch, "notify.sh"),
 		hookPort: 0,
 		followUps: new FollowUps(),
+		pendingSeeds: new Map(),
 	} as unknown as Services;
 	const project = repo.upsertProject(db, {
 		repoPath: "/tmp/repo",

@@ -222,6 +222,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		mergeQueue,
 		loopRunner,
 		followUps,
+		pendingSeeds: new Map(),
 	};
 
 	// Record an agent's exit: close the session and file its card. Shared by the

@@ -60,9 +60,9 @@ import { LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
 import { PromptComposer } from "./components/PromptComposer";
 import { TaskSearch } from "./components/TaskSearch";
-import { VscodeLogo } from "./components/VscodeLogo";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
+import { VscodeLogo } from "./components/VscodeLogo";
 import { activeTerminal, sessionTabs } from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge } from "./triage-order";
@@ -814,13 +814,24 @@ export function App() {
 			// Loops shows only loop-owned tasks, so a new task would land
 			// somewhere it can't be seen; every other view keeps its place.
 			if (view === "loops") setView("board");
-			const { terminalId } = await window.ateam.pty.spawnAgent({
-				taskId: task.id,
-				agentId: input.agentId,
-				yolo: input.yolo,
-				prompt: input.prompt || undefined,
-				files: input.files.length ? input.files : undefined,
-			});
+			// The card is on the board already — the engine creates the row as soon
+			// as the worktree exists. What this awaits is the worktree's gitignored
+			// state (dependencies, env files) finishing its copy, which the engine
+			// makes the agent launch wait for. Without a word here, that gap reads
+			// as another dead click, which is the whole bug this path had.
+			setInfo("Preparing worktree…");
+			let terminalId: string;
+			try {
+				({ terminalId } = await window.ateam.pty.spawnAgent({
+					taskId: task.id,
+					agentId: input.agentId,
+					yolo: input.yolo,
+					prompt: input.prompt || undefined,
+					files: input.files.length ? input.files : undefined,
+				}));
+			} finally {
+				setInfo(null);
+			}
 			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 		});
 
@@ -2159,10 +2170,7 @@ function TaskPanel({
 			<div className="panel-body">
 				{/* Keep the terminal mounted (xterm state survives) while the
 				    changes view is open — just hide it. */}
-				<div
-					className="term-wrap"
-					style={{ display: changesOpen || editorOpen ? "none" : "flex" }}
-				>
+				<div className="term-wrap" style={{ display: changesOpen || editorOpen ? "none" : "flex" }}>
 					{terminalId ? (
 						<TerminalView
 							terminalId={terminalId}
