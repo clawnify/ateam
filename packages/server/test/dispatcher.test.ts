@@ -30,6 +30,7 @@ function makeEngine(db: AteamDb) {
 				},
 			},
 			followUps: { arm() {}, discard() {} },
+			pendingSeeds: new Map(),
 			hooks: {},
 			mergeQueue: {},
 			loopRunner: { describe: () => [] },
