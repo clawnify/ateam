@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="./assets/screenshot-board.png" alt="Ateam — kanban board with tasks across Backlog, In Progress, Needs You, Review, and Done" width="900" />
+  <img src="./assets/screenshot-hero.png" alt="Ateam — kanban board on the desktop with tasks across Backlog, In Progress, Needs You, Review, and Done, and the same board in the iOS app on a phone" width="900" />
 </p>
 
 <p align="center">
