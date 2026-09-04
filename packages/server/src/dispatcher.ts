@@ -278,7 +278,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 
 		// ---- tasks ----
 		[CH.tasksList]: async (projectId: string) => repo.listTasks(db, projectId).map(toTaskDTO),
-		[CH.tasksCreate]: async (input: { projectId: string; name: string; baseBranch?: string }) => {
+		[CH.tasksCreate]: async (input: {
+			projectId: string;
+			name: string;
+			baseBranch?: string;
+			agentId?: string;
+		}) => {
 			const row = await createTaskInProject(services, engine.sendTaskUpdated, input);
 			return toTaskDTO(row);
 		},

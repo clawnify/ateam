@@ -8,6 +8,8 @@ import { CH } from "@ateam/protocol";
 // Reuse the db package's in-memory bun:sqlite test db (better-sqlite3 can't load
 // under Bun). Cross-package test helper — the DRY source of a test AteamDb.
 import { createTestDb } from "../../db/test/helpers/test-db";
+// Same cross-package pattern: a real git repo, because createTask really runs git.
+import { makeTempRepoPair } from "../../git-core/test/helpers/temp-repo";
 import { createDispatcher } from "../src/dispatcher";
 import type { Engine } from "../src/engine";
 
@@ -83,6 +85,60 @@ describe("createDispatcher", () => {
 		};
 		expect(spawned.terminalId).toBeTruthy();
 		expect(taskUpdated).toContain(task.id);
+	});
+
+	// The card is created before its worktree finishes seeding, and it renders
+	// `agentId ? <AgentIcon> : taskIcon(name)`. spawnAgentInTask only writes
+	// agentId once seeding is done, so a null here is a keyword-guessed icon
+	// (Sparkles / GitBranch) on screen that later flips to the real agent — a
+	// flicker the user sees for the whole seed. The composer already knows the
+	// answer, so the row carries it from the start.
+	it("records the composer's agent on the task, so the card never guesses an icon", async () => {
+		const tmp = await makeTempRepoPair();
+		try {
+			const db = createTestDb();
+			const { engine } = makeEngine(db);
+			const d = createDispatcher(engine);
+			const project = repo.upsertProject(db, {
+				repoPath: tmp.work,
+				name: "seeded",
+				defaultBranch: "main",
+			});
+
+			const task = (await d.handle(CH.tasksCreate, [
+				{ projectId: project!.id, name: "look into the flake", agentId: "codex" },
+			])) as { id: string; agentId: string | null };
+
+			expect(task.agentId).toBe("codex");
+			expect(repo.getTask(db, task.id)?.agentId).toBe("codex");
+		} finally {
+			await tmp.cleanup();
+		}
+	});
+
+	// A task created without an explicit agent still stores null rather than a
+	// guess — the icon falls back to the name-derived one, which is correct when
+	// nothing has been chosen (e.g. a loop tick that picks its agent later).
+	it("leaves agentId null when no agent was chosen", async () => {
+		const tmp = await makeTempRepoPair();
+		try {
+			const db = createTestDb();
+			const { engine } = makeEngine(db);
+			const d = createDispatcher(engine);
+			const project = repo.upsertProject(db, {
+				repoPath: tmp.work,
+				name: "unseeded",
+				defaultBranch: "main",
+			});
+
+			const task = (await d.handle(CH.tasksCreate, [
+				{ projectId: project!.id, name: "no agent yet" },
+			])) as { agentId: string | null };
+
+			expect(task.agentId).toBeNull();
+		} finally {
+			await tmp.cleanup();
+		}
 	});
 
 	// --- tabs a restart took away ---------------------------------------------

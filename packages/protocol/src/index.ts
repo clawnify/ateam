@@ -580,7 +580,13 @@ export interface AteamApi {
 	};
 	tasks: {
 		list(projectId: string): Promise<TaskDTO[]>;
-		create(input: { projectId: string; name: string; baseBranch?: string }): Promise<TaskDTO>;
+		create(input: {
+			projectId: string;
+			name: string;
+			baseBranch?: string;
+			/** The agent chosen in the composer, recorded up front so the card shows it. */
+			agentId?: string;
+		}): Promise<TaskDTO>;
 		remove(input: { id: string; deleteBranch?: boolean; force?: boolean }): Promise<void>;
 		setColumn(id: string, column: KanbanColumn): Promise<TaskDTO>;
 		/** Clear the unread flag once the user has actually looked at the task. */

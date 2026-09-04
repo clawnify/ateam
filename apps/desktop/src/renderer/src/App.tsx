@@ -799,7 +799,11 @@ export function App() {
 					projectId = proj.id;
 				}
 			}
-			const task = await window.ateam.tasks.create({ projectId, name: input.name });
+			const task = await window.ateam.tasks.create({
+				projectId,
+				name: input.name,
+				agentId: input.agentId,
+			});
 			// The created task's project is a member of the active card, so its tasks
 			// are already unioned into the board once loaded.
 			await loadTasks(projectId);
