@@ -13,6 +13,9 @@
   <a href="https://github.com/clawnify/ateam/releases/latest/download/Ateam-macos.dmg">
     <img src="./assets/macos-badge.svg" alt="Download app for macOS" width="220" />
   </a>
+  <a href="https://apps.apple.com/gb/app/ateam-go/id6790125600">
+    <img src="./assets/iphone-badge.svg" alt="Download app for iPhone" width="220" />
+  </a>
 </p>
 
 <p align="center">
