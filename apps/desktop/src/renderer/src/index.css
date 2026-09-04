@@ -1110,6 +1110,17 @@ input {
 	background: #1e1e1e;
 }
 
+/* Terminal docked as a right sidebar: while the editor (or changes view) owns
+   the main area, the agent terminal stays visible beside it. Same node as
+   always — `order` moves it right in the flex row, because re-placing it in
+   JSX would remount it and drop the xterm. Fixed 40% dock; a drag-resizable
+   width is the upgrade if this ever feels wrong. */
+.panel-body.docked-term .term-wrap {
+	order: 2;
+	flex: 0 0 40%;
+	border-left: 1px solid var(--border);
+}
+
 .changes-view {
 	flex: 1;
 	min-width: 0;
