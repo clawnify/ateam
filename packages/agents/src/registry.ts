@@ -247,6 +247,41 @@ export async function probeAgentBinary(
 	}
 }
 
+/** Installers download a runtime; the slow ones are minutes, not seconds. */
+const INSTALL_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Run an agent's official installer on THIS machine.
+ *
+ * `&& command -v <bin>` is the acceptance test, not decoration: an installer
+ * that unpacked a binary somewhere the login shell can't see has not installed
+ * anything as far as this app is concerned, and saying otherwise would hand the
+ * user a "done" that the next launch contradicts. Same command the box
+ * installer has always run over SSH (host.ts), now available to whichever
+ * machine the engine is on.
+ *
+ * Consent lives with the caller: engines run this only after a client relayed
+ * the user's yes — the same rule `installCodeServer` states.
+ */
+export function installAgentCli(
+	agent: AgentDefinition,
+	shell: string = defaultShell(),
+): Promise<void> {
+	if (!agent.install) {
+		return Promise.reject(new Error(`Don't know how to install ${agent.label}.`));
+	}
+	const cmd = `${agent.install} && command -v ${agent.bin}`;
+	return new Promise((resolve, reject) => {
+		execFile(shell, ["-lc", cmd], { timeout: INSTALL_TIMEOUT_MS }, (err, _out, stderr) => {
+			if (!err) return resolve();
+			// The installer's own last words are the only useful diagnostic here,
+			// and they are what the user needs to see in the picker.
+			const tail = (stderr ?? "").trim().split("\n").slice(-3).join(" ");
+			reject(new Error(`Installing ${agent.label} failed${tail ? `: ${tail}` : ""}`));
+		});
+	});
+}
+
 /**
  * Is the agent's binary on PATH? Conservative on purpose: this answers "may I
  * OFFER this agent", where an unanswerable probe should hide it rather than

@@ -9,6 +9,7 @@ export {
 	AGENTS,
 	agentCommand,
 	getAgent,
+	installAgentCli,
 	isAgentAvailable,
 	listAgents,
 	probeAgentBinary,

@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { listAgents } from "@ateam/agents";
+import { getAgent, installAgentCli, isAgentAvailable, listAgents } from "@ateam/agents";
 import { repo, type Task } from "@ateam/db";
 import {
 	cloneRepo,
@@ -51,6 +51,7 @@ import {
 	type UpdateLoopInput,
 } from "@ateam/protocol";
 import { createEditorHost, installCodeServer } from "./editor";
+import { refreshLoginPath } from "./login-env";
 import type { Engine } from "./engine";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
@@ -124,6 +125,10 @@ export interface Dispatcher {
 export function createDispatcher(engine: Engine): Dispatcher {
 	const { services } = engine;
 	const { db, mergeQueue, loopRunner } = services;
+	// Injectable for the same reason `probeAgent` is: the real one runs an
+	// interactive login shell, and a test must not depend on this machine's.
+	const refreshPath =
+		services.refreshPath ?? ((opts?: { force?: boolean }) => refreshLoginPath({ db, ...opts }));
 	// Lazy: no code-server process exists until the first editor:open.
 	const editorHost = createEditorHost();
 
@@ -482,6 +487,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 
 		// ---- agents ----
 		[CH.agentsList]: async () => {
+			// Opening the picker is the moment the user expects it to be current, and
+			// this process's PATH is otherwise a snapshot from when the engine
+			// started (login-env.ts). Without this, an agent installed since launch
+			// stays greyed out — and greyed out means unselectable, so no launch can
+			// ever be attempted to discover otherwise. Rate-limited inside.
+			await refreshPath();
 			const agents = await listAgents();
 			return agents.map((a) => ({
 				id: a.id,
@@ -489,6 +500,31 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				description: a.description,
 				available: a.available,
 			}));
+		},
+
+		// Install an agent's CLI on the machine THIS engine runs on. The desktop
+		// used to do this over SSH, which meant it worked for a box and for
+		// nothing else: not this Mac, and not the phone, which has no SSH at all.
+		// Here it is the same RPC wherever the engine is, exactly as editor:install
+		// already installs code-server on the task's own machine.
+		//
+		// `projectId` only picks the engine (the routing loops:create uses); the
+		// install is machine-wide, not scoped to the project.
+		[CH.agentsInstall]: async (input: { projectId: string; agentId: string }) => {
+			requireProjectFor(services, input.projectId);
+			const agent = getAgent(input.agentId);
+			if (!agent) throw new Error(`Unknown agent: ${input.agentId}`);
+			await installAgentCli(agent);
+			// The installer very likely edited a shell profile, so this process's
+			// PATH is now stale in the one way that matters. Force past the rate
+			// limit: something definitely changed, and the answer below is the
+			// client's cue to let the user pick the agent.
+			await refreshPath({ force: true });
+			return {
+				agentId: agent.id,
+				available: await isAgentAvailable(agent.bin),
+				...(agent.loginCommand ? { loginCommand: agent.loginCommand } : {}),
+			};
 		},
 
 		// ---- session search ----
@@ -502,6 +538,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		// The client calls this first over a fresh transport and checks
 		// protocolVersion before trusting the rest of the surface (see serverHandshake).
 		[CH.systemHello]: async () => {
+			await refreshPath();
 			const agents = await listAgents();
 			return {
 				protocolVersion: PROTOCOL_VERSION,

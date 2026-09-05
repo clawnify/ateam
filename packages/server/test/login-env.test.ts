@@ -8,6 +8,9 @@ import {
 	ensureLoginEnv,
 	fallbackBinDirs,
 	type LoginEnv,
+	REFRESH_MIN_INTERVAL_MS,
+	refreshLoginPath,
+	resetLoginPathRefresh,
 	sanitizeLoginPath,
 } from "../src/login-env";
 
@@ -110,6 +113,85 @@ describe("ensureLoginEnv", () => {
 			...opts(db, env, async () => ({ path: REAL, lang: "" })),
 			platform: "linux",
 		});
+		expect(env.PATH).toBe(BARE);
+	});
+});
+
+// A CLI installed while the app is running is invisible to it: ensureLoginEnv
+// resolves the PATH once at startup and returns on the first success, so
+// without a refresh "restart Ateam" becomes the unwritten last step of every
+// install. Seen for real with opencode, whose installer appends to ~/.zshrc.
+describe("refreshLoginPath", () => {
+	const opts = (db: AteamDb, env: NodeJS.ProcessEnv, path: string | null, now: number) => ({
+		db,
+		env,
+		platform: "darwin" as NodeJS.Platform,
+		now: () => now,
+		probe: async (): Promise<LoginEnv | null> => (path ? { path, lang: "en_US.UTF-8" } : null),
+	});
+
+	test("adopts a PATH that moved, and says it moved", async () => {
+		resetLoginPathRefresh();
+		const db = createTestDb();
+		const env: NodeJS.ProcessEnv = { PATH: BARE };
+		expect(await refreshLoginPath(opts(db, env, REAL, 1_000_000))).toBe(true);
+		expect(env.PATH).toBe(REAL);
+		// Remembered, so a later startup whose probe misses still has it.
+		expect(repo.getSettings(db).loginPath).toBe(REAL);
+	});
+
+	test("reports no change when the PATH is the same", async () => {
+		resetLoginPathRefresh();
+		const db = createTestDb();
+		const env: NodeJS.ProcessEnv = { PATH: REAL };
+		expect(await refreshLoginPath(opts(db, env, REAL, 1_000_000))).toBe(false);
+	});
+
+	test("won't pay for a second probe inside the interval", async () => {
+		resetLoginPathRefresh();
+		const db = createTestDb();
+		const env: NodeJS.ProcessEnv = { PATH: BARE };
+		let probes = 0;
+		const counting = (now: number) => ({
+			...opts(db, env, REAL, now),
+			probe: async (): Promise<LoginEnv | null> => {
+				probes++;
+				return { path: REAL, lang: "" };
+			},
+		});
+		await refreshLoginPath(counting(1_000_000));
+		await refreshLoginPath(counting(1_000_000 + REFRESH_MIN_INTERVAL_MS - 1));
+		expect(probes).toBe(1);
+		// An interactive login shell can take PROBE_TIMEOUT_MS to answer; the
+		// agent catalog and a launch about to be refused must not each spend that.
+		await refreshLoginPath(counting(1_000_000 + REFRESH_MIN_INTERVAL_MS));
+		expect(probes).toBe(2);
+	});
+
+	test("forces past the interval right after an install", async () => {
+		resetLoginPathRefresh();
+		const db = createTestDb();
+		const env: NodeJS.ProcessEnv = { PATH: BARE };
+		let probes = 0;
+		const counting = () => ({
+			...opts(db, env, REAL, 1_000_000),
+			probe: async (): Promise<LoginEnv | null> => {
+				probes++;
+				return { path: REAL, lang: "" };
+			},
+		});
+		await refreshLoginPath(counting());
+		await refreshLoginPath({ ...counting(), force: true });
+		expect(probes).toBe(2);
+	});
+
+	test("does nothing off darwin, where the daemon inherits a login shell", async () => {
+		resetLoginPathRefresh();
+		const db = createTestDb();
+		const env: NodeJS.ProcessEnv = { PATH: BARE };
+		expect(await refreshLoginPath({ ...opts(db, env, REAL, 1_000_000), platform: "linux" })).toBe(
+			false,
+		);
 		expect(env.PATH).toBe(BARE);
 	});
 });

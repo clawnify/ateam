@@ -46,6 +46,7 @@ const api: AteamApi = {
 	},
 	agents: {
 		list: () => ipcRenderer.invoke(CH.agentsList),
+		install: (input) => ipcRenderer.invoke(CH.agentsInstall, input),
 	},
 	editor: {
 		open: (taskId) => ipcRenderer.invoke(CH.editorOpenUrl, taskId),

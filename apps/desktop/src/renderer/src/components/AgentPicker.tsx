@@ -4,10 +4,11 @@ import { createPortal } from "react-dom";
 import type { AgentDTO } from "@ateam/protocol";
 
 // The composer's coding-agent control — the pill + popover the environment picker
-// uses, so a *missing* agent on the selected box can be installed right here instead
-// of being a dead "(not installed)" option. Installing runs the agent's official
-// installer on the box over SSH (streamed); the one-time OAuth login is a follow-up
-// the user runs in the box's terminal.
+// uses, so a *missing* agent on the selected environment can be installed right here
+// instead of being a dead "(not installed)" option. Installing asks that environment's
+// own engine to run the agent's official installer on itself, which is why the button
+// works for this Mac and for a box alike; the one-time OAuth login is a follow-up the
+// user runs in a terminal there.
 
 const POP_W = 260;
 
@@ -23,23 +24,17 @@ export function AgentPicker({
 	value: string;
 	onChange: (agentId: string) => void;
 	isAvailable: (agentId: string) => boolean;
-	/** The selected environment — install targets this box; null (local) can't install. */
+	/** The selected environment — the machine an install lands on. null = this Mac. */
 	alias: string | null;
-	/** Install an agent on the box, streaming log lines; resolves with the login step. */
-	onInstallAgent?: (
-		alias: string,
-		agentId: string,
-		onLog: (chunk: string) => void,
-	) => Promise<{ loginCommand?: string }>;
+	/** Install the agent on the selected environment; resolves with the login step. */
+	onInstallAgent?: (alias: string | null, agentId: string) => Promise<{ loginCommand?: string }>;
 }) {
 	const [pos, setPos] = useState<{ bottom: number; left: number } | null>(null);
 	const [installing, setInstalling] = useState<string | null>(null);
-	const [log, setLog] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [loginFor, setLoginFor] = useState<{ agentId: string; command?: string } | null>(null);
 	const btnRef = useRef<HTMLButtonElement>(null);
 	const popRef = useRef<HTMLDivElement>(null);
-	const logRef = useRef<HTMLPreElement>(null);
 
 	const current = agents.find((a) => a.id === value);
 	const label = current?.label ?? value;
@@ -62,19 +57,14 @@ export function AgentPicker({
 		document.addEventListener("mousedown", onDoc);
 		return () => document.removeEventListener("mousedown", onDoc);
 	}, [pos]);
-	useEffect(() => {
-		if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-	}, [log]);
-
 	const install = async (agentId: string) => {
-		if (!alias || !onInstallAgent || installing) return;
+		if (!onInstallAgent || installing) return;
 		setInstalling(agentId);
 		setError(null);
-		setLog("");
 		setLoginFor(null);
 		try {
-			const res = await onInstallAgent(alias, agentId, (chunk) => setLog((l) => l + chunk));
-			// The box's agent list refreshes via onConnectionsChanged; select it now.
+			const res = await onInstallAgent(alias, agentId);
+			// The caller has already recorded the engine's own verdict; select it now.
 			onChange(agentId);
 			setLoginFor({ agentId, command: res.loginCommand });
 		} catch (err) {
@@ -118,7 +108,7 @@ export function AgentPicker({
 						</div>
 						{agents.map((a) => {
 							const avail = isAvailable(a.id);
-							const canInstall = !avail && alias !== null && !!onInstallAgent;
+							const canInstall = !avail && !!onInstallAgent;
 							return (
 								<div key={a.id} className="agent-item">
 									<div className="agent-row">
@@ -156,11 +146,6 @@ export function AgentPicker({
 											</button>
 										) : null}
 									</div>
-									{installing === a.id && log ? (
-										<pre ref={logRef} className="conn-install-log">
-											{log}
-										</pre>
-									) : null}
 									{loginFor?.agentId === a.id ? (
 										<div className="agent-login">Installed ✓ — it signs in on first use.</div>
 									) : null}

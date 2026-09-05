@@ -43,6 +43,7 @@ beforeEach(() => {
 		// CI runner has no agent CLIs at all. Stub it: this file is about what a
 		// resume does to the card, not about what is installed on the machine.
 		probeAgent: async () => "present" as const,
+		refreshPath: async () => false,
 	} as unknown as Services;
 	const project = repo.upsertProject(db, {
 		repoPath: "/tmp/repo",

@@ -72,12 +72,8 @@ export function PromptComposer({
 	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<HostStatus>;
 	/** Remove a box from the picker's list (disconnecting it first if connected). */
 	onForget?: (alias: string) => Promise<void>;
-	/** Install a coding agent's CLI on the selected box, streamed; returns the login step. */
-	onInstallAgent?: (
-		alias: string,
-		agentId: string,
-		onLog: (chunk: string) => void,
-	) => Promise<{ loginCommand?: string }>;
+	/** Install a coding agent's CLI on the selected environment; returns the login step. */
+	onInstallAgent?: (alias: string | null, agentId: string) => Promise<{ loginCommand?: string }>;
 	onClose: () => void;
 	onCreate: (input: {
 		name: string;
