@@ -113,6 +113,13 @@ const agentSession: LoopTemplate = {
 			default: "",
 			help: "Sent once, after the agent's first reply. A slash command or a sentence.",
 		},
+		{
+			key: "yolo",
+			label: "Auto mode",
+			type: "boolean",
+			default: false,
+			help: "Launch each run permission-free, like the composer's Auto mode.",
+		},
 	],
 	build: (config) => async (ctx) => {
 		const prompt = str(config.prompt)?.trim();
@@ -121,6 +128,10 @@ const agentSession: LoopTemplate = {
 		// Optional: the agent takes one more turn on this the moment its first
 		// response lands. Empty means the run is a single turn, as before.
 		const followUp = str(config.followUp)?.trim();
+		// Strict equality, not str(): a boolean param carries no string form, and
+		// anything but an explicit true means "prompt me" — a loop running
+		// unattended must never drift into permission-free by accident.
+		const yolo = config.yolo === true;
 		if (!prompt) throw new Error("Loop has no prompt");
 		if (!projectId) throw new Error("Loop has no project");
 		// The runner injects the row id so a run can read/update its own record.
@@ -212,6 +223,7 @@ const agentSession: LoopTemplate = {
 			agentId,
 			prompt: `${stateInstructions(task.worktreePath)}\n\n---\n\n${prompt}`,
 			followUp,
+			yolo,
 		});
 		return { summary: `run ${runNumber} started (${task.name})` };
 	},
