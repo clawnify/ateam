@@ -29,9 +29,19 @@ let db: AteamDb;
 let taskId: string;
 let spawned: number;
 let scratch: string;
+let refreshes: number;
 
-/** Services whose only real moving part is the probe under test. */
-function servicesWith(presence: BinaryPresence): Services {
+/**
+ * Services whose only real moving part is the probe under test.
+ *
+ * `presence` may be a list, consumed one call at a time, for the case where a
+ * PATH refresh changes the answer between the first probe and the second.
+ */
+function servicesWith(
+	presence: BinaryPresence | BinaryPresence[],
+	opts: { pathMoved?: boolean } = {},
+): Services {
+	const answers = Array.isArray(presence) ? [...presence] : null;
 	return {
 		db,
 		pty: {
@@ -46,13 +56,19 @@ function servicesWith(presence: BinaryPresence): Services {
 		hookPort: 0,
 		followUps: new FollowUps(),
 		pendingSeeds: new Map(),
-		probeAgent: async () => presence,
+		probeAgent: async () =>
+			answers ? (answers.shift() ?? "absent") : (presence as BinaryPresence),
+		refreshPath: async () => {
+			refreshes++;
+			return opts.pathMoved ?? false;
+		},
 	} as unknown as Services;
 }
 
 beforeEach(() => {
 	db = createTestDb();
 	spawned = 0;
+	refreshes = 0;
 	scratch = mkdtempSync(join(tmpdir(), "ateam-missing-"));
 	const project = repo.upsertProject(db, {
 		repoPath: "/tmp/repo",
@@ -99,6 +115,27 @@ describe("launching an agent whose CLI is missing", () => {
 		await spawnAgentInTask(services, () => {}, { taskId, agentId: "opencode" });
 		expect(spawned).toBe(1);
 		expect(repo.listSessionsByTask(db, taskId)).toHaveLength(1);
+	});
+
+	// The engine's PATH is a snapshot from when it started (login-env.ts), so an
+	// agent installed since then is invisible to it. A loop tick is exactly the
+	// caller that never opens the picker that would otherwise re-resolve it.
+	it("re-resolves the login PATH before refusing, and launches if that found it", async () => {
+		const services = servicesWith(["absent", "present"], { pathMoved: true });
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "opencode" });
+		expect(refreshes).toBe(1);
+		expect(spawned).toBe(1);
+	});
+
+	it("doesn't re-probe when the PATH didn't move", async () => {
+		const services = servicesWith(["absent", "present"], { pathMoved: false });
+		await expect(
+			spawnAgentInTask(services, () => {}, { taskId, agentId: "opencode" }),
+		).rejects.toThrow(/not on PATH/);
+		// It asked once, was told nothing changed, and refused on the first answer
+		// rather than spending a second probe on an unchanged machine.
+		expect(refreshes).toBe(1);
+		expect(spawned).toBe(0);
 	});
 
 	it("launches when the CLI is there", async () => {

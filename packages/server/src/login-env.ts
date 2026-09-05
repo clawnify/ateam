@@ -123,6 +123,80 @@ export async function probeLoginEnv(
 	}
 }
 
+/**
+ * Take a resolved login environment as this process's own. `at` is when the
+ * resolution happened, on the caller's clock — one clock per mechanism, so an
+ * injected one in a test isn't quietly overruled by the wall clock in here.
+ */
+function adoptLoginEnv(db: AteamDb, env: NodeJS.ProcessEnv, resolved: LoginEnv, at: number): void {
+	env.PATH = resolved.path;
+	// GUI apps also launch with no LANG, and pbcopy then reads UTF-8 as Mac OS
+	// Roman — copying "→ — €" out of a terminal yields mojibake.
+	if (!env.LANG) env.LANG = resolved.lang || "en_US.UTF-8";
+	repo.updateSettings(db, { loginPath: resolved.path });
+	// Startup counts as a resolution, so the first refresh after launch is a
+	// no-op rather than a second probe of a machine nothing has changed yet.
+	lastRefreshAt = at;
+}
+
+/**
+ * How often a refresh is allowed to pay for a real probe. An interactive login
+ * shell can take up to PROBE_TIMEOUT_MS to answer, so the callers below (the
+ * agent catalog, and a launch about to be refused) must not each spend that.
+ */
+export const REFRESH_MIN_INTERVAL_MS = 60_000;
+let lastRefreshAt = 0;
+
+/** Test seam: forget that a refresh just happened. */
+export function resetLoginPathRefresh(): void {
+	lastRefreshAt = 0;
+}
+
+/**
+ * Re-resolve the login shell's PATH and adopt it, if one hasn't been resolved
+ * recently.
+ *
+ * `ensureLoginEnv` runs ONCE at startup and returns the moment a probe lands,
+ * so without this the PATH this process spawns everything with is a snapshot of
+ * the machine as it was when the app opened. A CLI installed afterwards — by
+ * this app's own installer, by brew, by a terminal — stays invisible until the
+ * app is restarted, and "restart Ateam" becomes the unwritten last step of
+ * every install. Observed with `opencode`: the installer appended to ~/.zshrc,
+ * a fresh login shell found it, and the running app could not.
+ *
+ * Returns whether the PATH changed, so a caller can say something happened.
+ */
+export async function refreshLoginPath(opts: {
+	db: AteamDb;
+	env?: NodeJS.ProcessEnv;
+	probe?: () => Promise<LoginEnv | null>;
+	platform?: NodeJS.Platform;
+	now?: () => number;
+	/** Probe even if one ran recently — for the moment right after an install. */
+	force?: boolean;
+}): Promise<boolean> {
+	const {
+		db,
+		env = process.env,
+		probe = () => probeLoginEnv(),
+		platform = process.platform,
+		now = Date.now,
+		force = false,
+	} = opts;
+	// Same reason ensureLoginEnv skips it: only a GUI launch loses the
+	// environment. A Linux daemon was started FROM the login shell, and its
+	// PTYs re-read the profile on every spawn.
+	if (platform !== "darwin") return false;
+	const at = now();
+	if (!force && at - lastRefreshAt < REFRESH_MIN_INTERVAL_MS) return false;
+	lastRefreshAt = at;
+	const resolved = await probe();
+	if (!resolved) return false;
+	const before = env.PATH;
+	adoptLoginEnv(db, env, resolved, at);
+	return env.PATH !== before;
+}
+
 export interface EnsureLoginEnvOptions {
 	db: AteamDb;
 	log: (line: string) => void;
@@ -154,13 +228,7 @@ export async function ensureLoginEnv(opts: EnsureLoginEnvOptions): Promise<void>
 	// the login shell that started it.
 	if (platform !== "darwin") return;
 
-	const adopt = (resolved: LoginEnv): void => {
-		env.PATH = resolved.path;
-		// GUI apps also launch with no LANG, and pbcopy then reads UTF-8 as Mac OS
-		// Roman — copying "→ — €" out of a terminal yields mojibake.
-		if (!env.LANG) env.LANG = resolved.lang || "en_US.UTF-8";
-		repo.updateSettings(db, { loginPath: resolved.path });
-	};
+	const adopt = (resolved: LoginEnv): void => adoptLoginEnv(db, env, resolved, Date.now());
 
 	const resolved = await probe();
 	if (resolved) {

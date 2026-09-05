@@ -443,19 +443,29 @@ export function App() {
 			off();
 		}
 	}, []);
-	// Install a coding agent's CLI on a connected box (streamed via the same install log).
-	const installAgentOnBox = useCallback(
-		async (alias: string, agentId: string, onLog: (chunk: string) => void) => {
-			const off = window.ateamHost.onInstallLog((e) => {
-				if (e.dest === alias) onLog(e.chunk);
-			});
-			try {
-				return await window.ateamHost.installAgent(alias, agentId);
-			} finally {
-				off();
+	// Install a coding agent's CLI on whichever machine the chosen environment is:
+	// this Mac or a box, one path for both. Routed by that engine's projectId —
+	// the same key that lands a task there (unify.ts) — because the engine doing
+	// the installing IS the machine that has to end up with the binary.
+	const installAgentOn = useCallback(
+		async (alias: Alias, agentId: string) => {
+			const member = activeMembers.find((m) => m.alias === alias);
+			if (!member) throw new Error("Pick an environment that has this repo first.");
+			const res = await window.ateam.agents.install({ projectId: member.projectId, agentId });
+			// Take the engine's own verdict rather than waiting for the next
+			// handshake: it just re-resolved its PATH, so this is the freshest
+			// answer anyone has, and it's what un-greys the row.
+			if (res.available) {
+				const key = alias ?? "local";
+				setEnvAgents((prev) => ({
+					...prev,
+					[key]: [...new Set([...(prev[key] ?? []), agentId])],
+				}));
+				if (alias === null) void window.ateam.agents.list().then(setAgents);
 			}
+			return res;
 		},
-		[],
+		[activeMembers],
 	);
 	const canRemote = activeRepoRemote !== null;
 	const hasLocalMember = activeMembers.some((m) => m.alias === null);
@@ -1305,7 +1315,7 @@ export function App() {
 							agents={agents}
 							envAgents={envAgents}
 							alias={originOf(selectedTask.projectId)}
-							onInstallAgent={installAgentOnBox}
+							onInstallAgent={installAgentOn}
 							mode={panelMode}
 							onSetMode={(m) => (m === "side" ? collapseFocus() : setPanelMode(m))}
 							collapseLabel={FOCUS_COLLAPSE_LABEL[view]}
@@ -1339,7 +1349,7 @@ export function App() {
 									agents={agents}
 									envAgents={envAgents}
 									alias={originOf(selectedTask.projectId)}
-									onInstallAgent={installAgentOnBox}
+									onInstallAgent={installAgentOn}
 									mode={panelMode}
 									onSetMode={setPanelMode}
 									terminalId={termByTask[selectedTask.id] ?? null}
@@ -1392,7 +1402,7 @@ export function App() {
 					onAdd={addTailscaleBox}
 					onInstall={installBox}
 					onForget={forgetBox}
-					onInstallAgent={installAgentOnBox}
+					onInstallAgent={installAgentOn}
 					onClose={() => setComposerOpen(false)}
 					onCreate={composeTask}
 				/>
@@ -1661,12 +1671,8 @@ function TaskPanel({
 	envAgents: Record<string, string[]>;
 	/** The engine this task runs on; null = this Mac. */
 	alias: Alias;
-	/** Install a coding agent's CLI on the box, streamed (the agent picker's flow). */
-	onInstallAgent: (
-		alias: string,
-		agentId: string,
-		onLog: (chunk: string) => void,
-	) => Promise<{ loginCommand?: string }>;
+	/** Install a coding agent's CLI on this task's environment (the picker's flow). */
+	onInstallAgent: (alias: Alias, agentId: string) => Promise<{ loginCommand?: string }>;
 	mode: "side" | "full";
 	onSetMode: (m: "side" | "full") => void;
 	/** Tooltip for the minimize button — where collapsing takes you. */

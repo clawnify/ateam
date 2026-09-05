@@ -47,6 +47,10 @@ function makeEngine(db: AteamDb, agentPresence: BinaryPresence = "present") {
 			// about which agents happen to be installed on the machine running
 			// them — a CI runner has none.
 			probeAgent: async () => agentPresence,
+			// Same rationale, and it also mutates process.env: the real one runs an
+			// interactive login shell and adopts whatever PATH it reports, which
+			// would leak out of this test into every one that shells out after it.
+			refreshPath: async () => false,
 		},
 		sendTaskUpdated: (id: string) => taskUpdated.push(id),
 		sendLoopsUpdated: () => {},
