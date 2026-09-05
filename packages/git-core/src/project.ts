@@ -198,6 +198,87 @@ export async function getOriginUrl(repoPath: string): Promise<string | null> {
 	}
 }
 
+/** One GitHub repo this machine's `gh` can reach. */
+export interface RemoteRepo {
+	fullName: string;
+	cloneUrl: string;
+	private: boolean;
+	pushedAt: string;
+}
+
+/**
+ * The GitHub repos this machine's `gh` can reach, most recently pushed first.
+ *
+ * `gh api user/repos` rather than `gh repo list`: the latter takes ONE owner and
+ * defaults to the authenticated user, so it silently omits every org repo — which
+ * for most people is where the actual work is. The `affiliation` filter is what
+ * spans both. Returns [] when gh is missing or signed out, exactly as
+ * detectGithubRepo used to swallow that case: a picker with no rows is honest,
+ * a thrown error in the middle of "add a project" is not.
+ */
+export async function listRemoteRepos(limit = 100): Promise<RemoteRepo[]> {
+	const query = `user/repos?per_page=${limit}&sort=pushed&affiliation=owner,organization_member`;
+	try {
+		const { stdout } = await pexec("gh", ["api", query]);
+		const rows = JSON.parse(stdout) as {
+			full_name?: string;
+			clone_url?: string;
+			private?: boolean;
+			pushed_at?: string;
+		}[];
+		return rows.flatMap((r) =>
+			r.full_name && r.clone_url
+				? [
+						{
+							fullName: r.full_name,
+							cloneUrl: r.clone_url,
+							private: r.private ?? true,
+							pushedAt: r.pushed_at ?? "",
+						},
+					]
+				: [],
+		);
+	} catch {
+		return []; // gh missing, signed out, or offline
+	}
+}
+
+/**
+ * Create a GitHub repo FOR an existing local one and set it as `origin`.
+ *
+ * This is what keeps a brand-new project from being a second-class citizen: with no
+ * remote it can never be merged with its copy on another engine (that identity is
+ * owner/name, read from `origin`) and can never be provisioned onto a box at all.
+ * `name` may be `owner/name` to put it under an org.
+ *
+ * Throws GH_FAILED so the caller can register the project anyway and report that it
+ * has no remote yet — losing the repo because GitHub said no would be worse.
+ */
+export async function createGithubRepo(
+	repoPath: string,
+	opts: { name: string; private: boolean },
+): Promise<void> {
+	try {
+		await pexec("gh", [
+			"repo",
+			"create",
+			opts.name,
+			"--source",
+			resolve(repoPath),
+			"--remote",
+			"origin",
+			"--push",
+			opts.private ? "--private" : "--public",
+		]);
+	} catch (err) {
+		throw new GitCoreError(
+			"GH_FAILED",
+			`Could not create the GitHub repo "${opts.name}" (is gh installed and authenticated on that machine?)`,
+			err,
+		);
+	}
+}
+
 /**
  * Clone a repo onto THIS machine from its remote URL, so a task can run here. GitHub
  * URLs go through `gh` (reuses its auth uniformly for private repos); anything else

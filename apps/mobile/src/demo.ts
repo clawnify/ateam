@@ -191,6 +191,13 @@ export function demoConnection(): Connection {
 		// mode never renders the banner that would call them.
 		skewed: false,
 		update: async () => ({ started: false, logPath: "" }),
+		// The demo box is offline by definition: it has no `gh` to ask and nowhere to
+		// clone to. An empty list is what the picker renders as "no repos", which is
+		// the truthful answer here rather than fake rows that go nowhere when tapped.
+		box: {
+			repos: async () => [],
+			clone: async () => PROJECT,
+		},
 		ping: async () => true,
 		close: () => {
 			onFrame = null;
