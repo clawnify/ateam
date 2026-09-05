@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BinaryPresence } from "@ateam/agents";
 import { type AteamDb, repo } from "@ateam/db";
+import { gitFor } from "@ateam/git-core";
 import { CH } from "@ateam/protocol";
 // Reuse the db package's in-memory bun:sqlite test db (better-sqlite3 can't load
 // under Bun). Cross-package test helper — the DRY source of a test AteamDb.
@@ -447,6 +448,53 @@ describe("createDispatcher", () => {
 		const { engine } = makeEngine(createTestDb());
 		const d = createDispatcher(engine);
 		expect(await d.handle(CH.projectsList, [])).toEqual([]);
+	});
+
+	// The phone's "New project" git-inits an empty folder and registers it BEFORE
+	// anything is cloned into it, so the row is born with no GitHub identity — and
+	// that identity is the only thing that merges this repo's copies across engines
+	// into one board card. Listing must repair it, or the board shows the repo twice
+	// forever. Repairing must NOT reorder the sidebar, which sorts on lastOpenedAt.
+	it("repairs a project's GitHub identity on list without touching lastOpenedAt", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "ateam-identity-"));
+		try {
+			const db = createTestDb();
+			const { engine } = makeEngine(db);
+			const d = createDispatcher(engine);
+
+			const older = (await d.handle(CH.projectsRegister, [join(dir, "older"), { init: true }])) as {
+				id: string;
+			};
+			const project = (await d.handle(CH.projectsRegister, [
+				join(dir, "repo"),
+				{ init: true },
+			])) as { id: string; githubOwner: string | null };
+			// Born identity-less: `git init` alone has no origin to read one from.
+			expect(project.githubOwner).toBeNull();
+			const openedAt = repo.getProject(db, project.id)?.lastOpenedAt;
+
+			// …and now the repo is cloned in, which is when origin appears.
+			await gitFor(join(dir, "repo")).addRemote(
+				"origin",
+				"https://github.com/Clawnify/TaskWindow.git",
+			);
+
+			const listed = (await d.handle(CH.projectsList, [])) as Array<{
+				id: string;
+				githubOwner: string | null;
+				githubName: string | null;
+			}>;
+			const healed = listed.find((p) => p.id === project.id);
+			expect(healed?.githubOwner).toBe("Clawnify");
+			expect(healed?.githubName).toBe("TaskWindow");
+			// Persisted, so every later list agrees…
+			expect(repo.getProject(db, project.id)?.githubName).toBe("TaskWindow");
+			// …and the repair is invisible to the sidebar's ordering.
+			expect(repo.getProject(db, project.id)?.lastOpenedAt).toBe(openedAt!);
+			expect(listed.map((p) => p.id)).toEqual([project.id, older.id]);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
 	});
 
 	// Cleanup used to hide everything its rule rejected, so an unmerged or busy

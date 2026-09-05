@@ -45,6 +45,14 @@ export const repo = {
 		return db.select().from(projects).where(eq(projects.id, id)).get();
 	},
 
+	/** Patch specific columns. Unlike upsertProject this does NOT touch
+	 *  lastOpenedAt, which orders the sidebar — a background repair must not
+	 *  reshuffle the board. */
+	updateProject(db: AteamDb, id: string, patch: Partial<NewProject>) {
+		db.update(projects).set(patch).where(eq(projects.id, id)).run();
+		return repo.getProject(db, id);
+	},
+
 	deleteProject(db: AteamDb, id: string) {
 		db.delete(projects).where(eq(projects.id, id)).run();
 	},

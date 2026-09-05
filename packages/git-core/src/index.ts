@@ -18,8 +18,10 @@ export type { GithubRepo, ProjectInfo } from "./project";
 export {
 	cloneRepo,
 	detectDefaultBranch,
+	detectGithubRepo,
 	getOriginUrl,
 	initRepository,
+	parseGithubRepo,
 	registerProject,
 } from "./project";
 export { SerialQueue } from "./serial-queue";

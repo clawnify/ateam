@@ -21,6 +21,7 @@ import { repo, type Task } from "@ateam/db";
 import {
 	cloneRepo,
 	commit,
+	detectGithubRepo,
 	detectMerged,
 	diff,
 	errorMessage,
@@ -268,10 +269,36 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			const project = requireProjectFor(services, projectId);
 			return getOriginUrl(project.repoPath);
 		},
-		[CH.projectsList]: async () =>
-			repo
-				.listProjects(db)
-				.map((p) => toProjectDTO({ ...p, name: readmeTitle(p.repoPath) ?? p.name })),
+		[CH.projectsList]: async () => {
+			// Repair each row's GitHub identity from its `origin` before answering.
+			// That identity is what merges this repo's copies across engines into ONE
+			// board card (desktop unify.ts), and capturing it once at register time is
+			// not enough: the phone's "New project" git-inits an empty folder and
+			// registers it BEFORE anything is cloned into it, so the row is born with
+			// no identity and never regains one. The board then shows the same repo
+			// twice and "Run on <box>" re-clones a copy the box already has.
+			//
+			// Safe to do on a list: one `git remote get-url origin` per project, local
+			// and offline (30ms for 11 projects, measured), on a call made at board
+			// mount and on connect, never polled. That stays well inside the desktop
+			// aggregate's 10s merge-read budget, past which an engine drops off the
+			// board entirely — which is precisely why detection must not reach the
+			// network (see detectGithubRepo). Write only on an actual change, and
+			// through updateProject rather than upsertProject, so a repair never bumps
+			// lastOpenedAt and reshuffles the sidebar.
+			const rows = repo.listProjects(db);
+			const identities = await Promise.all(rows.map((p) => detectGithubRepo(p.repoPath)));
+			return rows.map((p, i) => {
+				const gh = identities[i] ?? null;
+				const owner = gh?.owner ?? null;
+				const name = gh?.name ?? null;
+				let row = p;
+				if (owner !== p.githubOwner || name !== p.githubName) {
+					row = repo.updateProject(db, p.id, { githubOwner: owner, githubName: name }) ?? p;
+				}
+				return toProjectDTO({ ...row, name: readmeTitle(row.repoPath) ?? row.name });
+			});
+		},
 		[CH.projectsRemove]: async (id: string) => {
 			repo.deleteProject(db, id);
 		},
