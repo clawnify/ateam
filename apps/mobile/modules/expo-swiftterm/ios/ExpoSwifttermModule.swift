@@ -5,7 +5,7 @@ public class ExpoSwifttermModule: Module {
     Name("ExpoSwiftterm")
 
     View(ExpoSwifttermView.self) {
-      Events("onInput", "onSizeChange")
+      Events("onInput", "onSizeChange", "onOpenLink")
 
       // Stream PTY bytes into the terminal. A view function (imperative) — not a
       // prop — so no chunk is ever dropped by RN prop-diffing.
