@@ -276,15 +276,24 @@ providers under your accounts. Agreeing is remembered; declining opens the offli
 instead, which connects to nothing.
 
 **What still needs a computer.** Everything above — don't try to defer it. The phone
-has nothing to connect to until a daemon is listening, and once connected the app can
-only add a project by browsing the box for a repo that is **already cloned there**
-(`projects.register` rejects a path that isn't a git repo). Its terminal lives inside
-a task's worktree, so there is no free-standing shell to clone that first repo with.
-Do steps 0–4 in one SSH session.
+has nothing to connect to until a daemon is listening, and it cannot install that
+daemon for you. Do steps 0–4 in one SSH session.
 
-After that, the phone is enough: its terminal is a real login shell on the box, so
-re-logging into `claude` when a session expires, `gh auth refresh`, and cloning
-further repos all work from the app.
+After that, the phone is enough. **Add project** asks what you want rather than making
+you find a folder:
+
+| | |
+| --- | --- |
+| **Bring one over from GitHub** | Pick from the repos the box's `gh` can see (your own and your orgs', most recently pushed first) and it's cloned onto the box and registered in one tap. There's a paste-a-URL fallback for anything `gh` won't list. |
+| **Use a repo already on the box** | Browse the box's folders, same as before. |
+| **Start something new** | Names a folder, `git init`s it, and offers to create the GitHub repo for it at the same time. Take the offer: a project with no remote can't be merged with a copy on your Mac or another box, and can't be provisioned onto a second box at all. |
+
+The first row needs a **v9 box**. An older one still works, it just shows the
+paste-a-URL door instead of the picker and skips the create-a-repo offer, because it
+would accept the request and silently not do it.
+
+Its terminal is a real login shell on the box too, so re-logging into `claude` when a
+session expires and `gh auth refresh` also work from the app.
 
 ### Write a Tailscale ACL — this one isn't optional
 

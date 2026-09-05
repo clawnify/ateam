@@ -972,7 +972,7 @@ export default function App() {
 	if (browserOpen && conn.current) {
 		return (
 			<ProjectBrowser
-				api={conn.current.api}
+				conn={conn.current}
 				onClose={() => setBrowserOpen(false)}
 				onRegistered={(project) => {
 					setBrowserOpen(false);

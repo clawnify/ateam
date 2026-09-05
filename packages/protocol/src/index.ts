@@ -47,7 +47,15 @@
 // and never continues the turn. Since v7 a mismatch no longer refuses, so the
 // bump alone does not protect anyone: the `followUps` entry below is what turns
 // that silent no-op into a feature the client knows to switch off.
-export const PROTOCOL_VERSION = 8;
+// v9: added CH.projectsRemoteRepos (the repos a box's `gh` can see) and the
+// `createRemote` option on projects:register, which gives a brand-new project a
+// GitHub origin as it is created. Both are how a client can add a project to a box
+// WITHOUT one already being cloned there, which until now took an SSH session. The
+// write side needs the same treatment as v8's followUps: an older engine accepts
+// `createRemote` and silently ignores it, leaving a repo with no remote — which is
+// the one state that can never merge across engines — so `githubProjects` below is
+// what turns that silent no-op into a feature the client switches off.
+export const PROTOCOL_VERSION = 9;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -78,6 +86,10 @@ export const FEATURE_MIN_VERSION = {
 	 *  accepts the config key and silently never acts on it, so the honest move is
 	 *  to hide the field rather than let it look saved. */
 	followUps: 8,
+	/** v9 added the repo list AND `register({ createRemote })`. A v8 box answers the
+	 *  first with "Unknown method" and swallows the second, so both halves of "add a
+	 *  project from GitHub" are hidden rather than half-working. */
+	githubProjects: 9,
 } as const;
 
 export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
@@ -131,6 +143,30 @@ export interface ProjectDTO {
 	githubOwner: string | null;
 	githubName: string | null;
 	color: string | null;
+}
+
+/**
+ * A GitHub repo the engine's `gh` can reach, for picking one to add as a project.
+ * Deliberately thin: what a picker renders, plus the URL to clone. `fullName` is
+ * `owner/name`, which is also the cross-engine identity a project is merged by.
+ */
+export interface RemoteRepoDTO {
+	fullName: string;
+	cloneUrl: string;
+	private: boolean;
+	/** ISO 8601. The list arrives most-recently-pushed first, which is the order a
+	 *  picker wants: the repo you were last working in is the one you want next. */
+	pushedAt: string;
+}
+
+/** Options for projects:register. */
+export interface RegisterProjectOptions {
+	/** Run `git init` + an initial commit first (after asking). */
+	init?: boolean;
+	/** Create a GitHub repo for it and set it as `origin`, so a project born on one
+	 *  engine can reach another. Only meaningful with `init`; ignored by a pre-v9
+	 *  engine, so gate it on FEATURE_MIN_VERSION.githubProjects. */
+	createRemote?: { name: string; private: boolean };
 }
 
 export interface GitStatusSnapshot {
@@ -460,6 +496,7 @@ export const CH = {
 	projectsRegister: "projects:register",
 	projectsClone: "projects:clone",
 	projectsRemoteUrl: "projects:remoteUrl",
+	projectsRemoteRepos: "projects:remoteRepos",
 	projectsList: "projects:list",
 	projectsRemove: "projects:remove",
 	windowOpenProject: "window:openProject",
@@ -583,8 +620,12 @@ export type EditorOpenResult = EditorEndpointDTO | { needsInstall: true };
 export interface AteamApi {
 	projects: {
 		pick(): Promise<string | null>;
-		/** `init: true` runs `git init` + initial commit first (after asking). */
-		register(repoPath: string, opts?: { init?: boolean }): Promise<ProjectDTO>;
+		/** `init: true` runs `git init` + initial commit first (after asking); add
+		 *  `createRemote` to give that new repo a GitHub origin at the same time. */
+		register(repoPath: string, opts?: RegisterProjectOptions): Promise<ProjectDTO>;
+		// NB: projects:remoteRepos is NOT here either, for the same reason as clone:
+		// "which engine's gh?" has no answer on a client holding several. The phone
+		// holds exactly one box, so it reaches both through its Connection.
 		// NB: projects:clone (CH.projectsClone) is deliberately NOT on this surface —
 		// it must target a specific box, so it's driven by ateamHost.provision →
 		// backend.handle(CH.projectsClone) directly, never the id-routed aggregate.

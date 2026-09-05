@@ -6,9 +6,12 @@
 import {
 	type AteamApi,
 	buildAteamApi,
+	CH,
 	createRpcClient,
 	type NativeClientApi,
 	PROTOCOL_VERSION,
+	type ProjectDTO,
+	type RemoteRepoDTO,
 	requestBoxUpdate,
 	type SystemInfo,
 	serverHandshake,
@@ -47,6 +50,21 @@ export interface Connection {
 	 * client-side trick avoids that: the capability has to exist on the box first.
 	 */
 	update(): Promise<{ started: boolean; logPath: string }>;
+	/**
+	 * Calls that address THIS box rather than an entity on it. They stay off
+	 * AteamApi for the same reason `update` does: a client holding several engines
+	 * has no answer to "which one?", so the aggregate cannot route them and would
+	 * silently fall back to the local machine. The phone holds exactly one box, so
+	 * here the question doesn't arise. Gate `repos` on FEATURE_MIN_VERSION
+	 * .githubProjects — a pre-v9 box rejects it as an unknown method.
+	 */
+	box: {
+		/** Every GitHub repo this box's `gh` can see, most recently pushed first. */
+		repos(): Promise<RemoteRepoDTO[]>;
+		/** Clone one onto the box and register it as a project. Idempotent: a repo
+		 *  already cloned there is just registered. */
+		clone(cloneUrl: string): Promise<ProjectDTO>;
+	};
 	/** Close the socket; the daemon and its live sessions live on. */
 	close(): void;
 }
@@ -107,6 +125,11 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 		info,
 		skewed,
 		update: () => requestBoxUpdate(rpc),
+		box: {
+			repos: () => rpc.call(CH.projectsRemoteRepos, []) as Promise<RemoteRepoDTO[]>,
+			clone: (cloneUrl: string) =>
+				rpc.call(CH.projectsClone, [{ cloneUrl }]) as Promise<ProjectDTO>,
+		},
 		ping: () =>
 			withTimeout(serverHandshake(rpc), PING_TIMEOUT_MS).then(
 				() => true,

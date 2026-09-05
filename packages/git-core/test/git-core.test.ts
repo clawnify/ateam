@@ -12,6 +12,7 @@ import {
 	detectMerged,
 	diff,
 	initRepository,
+	parseGithubRepo,
 	parseWorktreeList,
 	push,
 	registerProject,
@@ -65,6 +66,36 @@ describe("project", () => {
 			code: "NOT_A_REPO",
 		});
 	});
+});
+
+// This parse IS the cross-engine identity: the same repo cloned on a Mac and on a
+// box is reconciled into one board card by the owner/name read out of each clone's
+// origin URL. Two clones of one repo routinely disagree on scheme AND on casing, so
+// every shape below has to land on the same pair.
+describe("parseGithubRepo", () => {
+	const cases: [string, { owner: string; name: string } | null][] = [
+		["https://github.com/clawnify/ateam.git", { owner: "clawnify", name: "ateam" }],
+		["https://github.com/clawnify/ateam", { owner: "clawnify", name: "ateam" }],
+		["https://github.com/clawnify/ateam/", { owner: "clawnify", name: "ateam" }],
+		["git@github.com:clawnify/ateam.git", { owner: "clawnify", name: "ateam" }],
+		["ssh://git@github.com/clawnify/ateam.git", { owner: "clawnify", name: "ateam" }],
+		// Casing is preserved here and folded by the consumer, so BOTH real spellings
+		// of this repo survive the parse rather than one of them being lost.
+		["https://github.com/clawnify/TaskWindow.git", { owner: "clawnify", name: "TaskWindow" }],
+		["https://github.com/clawnify/taskwindow.git", { owner: "clawnify", name: "taskwindow" }],
+		// Dots and dashes are legal in both halves.
+		["https://github.com/my-org/my.repo.git", { owner: "my-org", name: "my.repo" }],
+		// Not GitHub: no identity rather than a wrong one, so these stay their own card.
+		["https://gitlab.com/clawnify/ateam.git", null],
+		["git@bitbucket.org:clawnify/ateam.git", null],
+		["/srv/git/bare.git", null],
+		["", null],
+	];
+	for (const [url, want] of cases) {
+		it(`parses ${url || "(empty)"}`, () => {
+			expect(parseGithubRepo(url)).toEqual(want);
+		});
+	}
 });
 
 describe("createTask freshness", () => {
@@ -229,14 +260,12 @@ describe("createTask isolation", () => {
 		const task = await createAndSeed("staged");
 
 		// Landed complete...
-		expect(
-			await Bun.file(join(task.worktreePath, "node_modules", "pkg", "i.js")).text(),
-		).toBe("dep\n");
+		expect(await Bun.file(join(task.worktreePath, "node_modules", "pkg", "i.js")).text()).toBe(
+			"dep\n",
+		);
 		// ...and the staging directory, a sibling of the worktree, is gone.
 		const worktreesRoot = join(repo.work, ".ateam", "worktrees");
-		const leftovers = (await readdir(worktreesRoot)).filter((n) =>
-			n.startsWith(".seeding-"),
-		);
+		const leftovers = (await readdir(worktreesRoot)).filter((n) => n.startsWith(".seeding-"));
 		expect(leftovers).toEqual([]);
 	});
 

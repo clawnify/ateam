@@ -13,14 +13,16 @@ export type {
 	PrStatus,
 } from "./merge";
 export { detectMerged, mergeViaPR, prStatus, updateLocalMain } from "./merge";
-export type { GithubRepo, ProjectInfo } from "./project";
+export type { GithubRepo, ProjectInfo, RemoteRepo } from "./project";
 
 export {
 	cloneRepo,
+	createGithubRepo,
 	detectDefaultBranch,
 	detectGithubRepo,
 	getOriginUrl,
 	initRepository,
+	listRemoteRepos,
 	parseGithubRepo,
 	registerProject,
 } from "./project";

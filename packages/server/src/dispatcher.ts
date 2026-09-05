@@ -21,6 +21,7 @@ import { repo, type Task } from "@ateam/db";
 import {
 	cloneRepo,
 	commit,
+	createGithubRepo,
 	detectGithubRepo,
 	detectMerged,
 	diff,
@@ -30,6 +31,7 @@ import {
 	gitFor,
 	removeTask as gitRemoveTask,
 	initRepository,
+	listRemoteRepos,
 	push,
 	registerProject,
 	trackingStatus,
@@ -45,6 +47,7 @@ import {
 	type KanbanColumn,
 	type MergeStrategy,
 	PROTOCOL_VERSION,
+	type RegisterProjectOptions,
 	type UpdateLoopInput,
 } from "@ateam/protocol";
 import { createEditorHost, installCodeServer } from "./editor";
@@ -231,7 +234,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 
 	const handlers = {
 		// ---- projects ----
-		[CH.projectsRegister]: async (repoPath: string, opts?: { init?: boolean }) => {
+		[CH.projectsRegister]: async (repoPath: string, opts?: RegisterProjectOptions) => {
 			// "Create a repository here instead" (GitHub-Desktop-style), after the client
 			// asked the user. When the folder doesn't exist yet, create it first — a
 			// brand-new project from a client with no native folder dialog (the phone).
@@ -239,6 +242,18 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			if (opts?.init) {
 				if (!existsSync(repoPath)) mkdirSync(repoPath);
 				await initRepository(repoPath);
+				// Give the new repo a GitHub origin in the same breath. Without one it is
+				// a dead end: no cross-engine identity to merge its copies by, and the
+				// composer refuses to put it on a box at all. Best-effort on purpose —
+				// if GitHub says no we still register the project, and the returned
+				// githubOwner being null is how the client knows it has no remote yet.
+				if (opts.createRemote) {
+					try {
+						await createGithubRepo(repoPath, opts.createRemote);
+					} catch {
+						/* registered without a remote; the DTO says so */
+					}
+				}
 			}
 			const info = await registerProject(repoPath);
 			const row = repo.upsertProject(db, {
@@ -270,6 +285,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			});
 			return toProjectDTO(row!);
 		},
+		[CH.projectsRemoteRepos]: async () => listRemoteRepos(),
 		[CH.projectsRemoteUrl]: async (projectId: string) => {
 			const project = requireProjectFor(services, projectId);
 			return getOriginUrl(project.repoPath);
@@ -310,9 +326,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 
 		// ---- tasks ----
 		[CH.tasksList]: async (projectId: string) =>
-			repo
-				.listTasks(db, projectId)
-				.map((t) => toTaskDTO(t, services.pendingSeeds.has(t.id))),
+			repo.listTasks(db, projectId).map((t) => toTaskDTO(t, services.pendingSeeds.has(t.id))),
 		[CH.tasksCreate]: async (input: {
 			projectId: string;
 			name: string;
