@@ -2,6 +2,7 @@
 // answer its requests through the dispatcher. Transport-agnostic — the desktop
 // hands it an Electron-IPC connection, the SSH server an stdio one — so every
 // client drives the identical engine + dispatcher.
+import { randomUUID } from "node:crypto";
 import { errorMessage } from "@ateam/git-core";
 import type { ClientFrame, ServerFrame } from "@ateam/protocol";
 import type { Dispatcher } from "./dispatcher";
@@ -34,14 +35,18 @@ export function serveRpc(
 		engine.on("ptyData", forward("ptyData")),
 		engine.on("ptyExit", forward("ptyExit")),
 	];
+	// One id per connection: the dispatcher tells viewers of the same terminal
+	// apart by it (whose size the PTY follows), and forgets them when they go.
+	const client = randomUUID();
 	const dispose = () => {
 		for (const u of unsubscribe) u();
+		dispatcher.release(client);
 	};
 
 	transport.onFrame(async (frame) => {
 		if (frame.t !== "req") return;
 		try {
-			const result = await dispatcher.handle(frame.method, frame.args);
+			const result = await dispatcher.handle(frame.method, frame.args, { client });
 			transport.send({ t: "res", id: frame.id, ok: true, result });
 		} catch (err) {
 			transport.send({ t: "res", id: frame.id, ok: false, error: errorMessage(err) });

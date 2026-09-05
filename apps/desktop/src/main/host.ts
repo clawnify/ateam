@@ -646,7 +646,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 
 	const router: Router = {
 		methods: local.methods,
-		handle: (method, args) => agg.handle(method, args),
+		handle: (method, args, ctx) => agg.handle(method, args, ctx),
+		release: (client) => local.release?.(client),
 		handleFor: (ownerId, method, args) => agg.handleFor(ownerId, method, args),
 		ownerKind: (ownerId) => agg.ownerKindOf(ownerId),
 	};
