@@ -98,6 +98,11 @@ gh auth login          # device-code flow — works fine over SSH
 interactive SSH session. The daemon only offers agents that are installed and on its
 **login-shell** PATH.
 
+You can skip the install half of that: the desktop's composer lists every agent it
+knows, greys out the ones this box hasn't got, and offers **Install** beside them,
+which runs that agent's official installer on the box. The one-time OAuth login is
+still yours to do, in a terminal there, on first use.
+
 ## 1. Install the `ateam` server on the box
 
 One command, run **on the box as your non-root user**:
@@ -363,7 +368,7 @@ The connection menu surfaces the real error inline. Common ones:
 | Board is empty after connecting | The box has no registered projects yet — add one from the box's filesystem via **Add project** (or register a repo path on the box). |
 | Agents run but commits fail | The box has no git identity — `git config --global user.name/user.email` (step 0). |
 | The agent picker is empty | The agent CLI isn't on the box's **login** PATH: `ssh <box> "bash -lc 'command -v claude'"`. |
-| **"<Agent> isn't installed here"** when a task or loop starts | Exactly what it says, checked against the login shell the launch uses. It is normal for an agent that *used* to work: an uninstall, or a PATH that moved under a reboot, takes it away from a task or loop that is still pinned to it. Install it again (the message carries the command), or repoint the task/loop at an agent the machine has. A loop keeps its task across the failure, so nothing accumulates while it is broken. |
+| **"<Agent> isn't installed here"** when a task or loop starts | Exactly what it says, checked against the login shell the launch uses. It is normal for an agent that *used* to work: an uninstall, or a PATH that moved under a reboot, takes it away from a task or loop that is still pinned to it. Install it from the composer's agent picker (**Install** next to the greyed-out agent, which runs the official installer on that environment), or repoint the task/loop at an agent the machine has. Installing anywhere else works too — a terminal, `brew` — and the app picks it up without a restart. A loop keeps its task across the failure, so nothing accumulates while it is broken. |
 | The iOS app won't connect (but the desktop does) | The daemon is down — the desktop restarts one over SSH just by connecting, so it hides this. Check `systemctl status ateam` (or `--user`, depending on the unit); if it was OOM-killed, `journalctl -u ateam \| grep oom` shows it. See [Keeping the daemon alive](#keeping-the-daemon-alive). |
 | The iOS app won't connect | In order: is Tailscale's VPN toggle on on the phone (green only proves the path, not that anything is listening); is a daemon running at all (`systemctl status ateam`, or `--user` for a user unit); does it say `also listening on ws://…` (if not it started before `ATEAM_WS_ADDR` was set — restart it); does `sudo ufw status` allow the **tailscale0 interface**, not just port 22. |
 
