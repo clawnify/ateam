@@ -5,11 +5,12 @@
 // composer creates + launches tasks on the box; tapping a task opens its terminal.
 //
 // Theme = Ateam's real tokens (apps/desktop/src/renderer/src/index.css): near-black
-// #0c0c0e canvas, purple accent #7c5cff, ink/white primary action, amber/blue/green
-// status. Connection = ALWAYS a WebSocket to a Tailscale address (RN can't spawn
+// #0c0c0e canvas, ink/white for the primary action and every highlight (no accent
+// hue), amber/blue/green status. Connection = ALWAYS a WebSocket to a Tailscale address (RN can't spawn
 // ssh; WireGuard is the auth boundary).
-import type { AgentDTO, ProjectDTO, TaskDTO } from "@ateam/protocol";
+import type { AgentDTO, AteamApi, LoopDTO, ProjectDTO, TaskDTO } from "@ateam/protocol";
 import { PROTOCOL_VERSION } from "@ateam/protocol";
+import Feather from "@expo/vector-icons/Feather";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
@@ -32,23 +33,31 @@ import { Composer, type ComposerSubmit } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
 import { type Connection, connect } from "./src/connection";
 import { demoConnection } from "./src/demo";
+import { HomeScreen } from "./src/HomeScreen";
+import { LoopForm, LoopsScreen } from "./src/LoopsScreen";
+import { MissionScreen } from "./src/MissionScreen";
 import { NativeTerminalScreen } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
 import {
 	loadConnection,
 	loadConsent,
+	loadDismissedSkew,
 	loadPreviewPort,
 	loadSelectedProject,
 	saveConnection,
 	saveConsent,
+	saveDismissedSkew,
 	savePreviewPort,
 	saveSelectedProject,
 } from "./src/storage";
+import { type Tab, TabStrip } from "./src/TabStrip";
 import { TerminalScreen } from "./src/TerminalScreen";
+import { sortTasks } from "./src/task-order";
 
 // SPIKE flag: evaluate the native SwiftTerm terminal (native scroll/select/copy)
 // vs the xterm-in-webview one. Flip back to false to fall back to the webview.
 const USE_NATIVE_TERMINAL = true;
+const Term = USE_NATIVE_TERMINAL ? NativeTerminalScreen : TerminalScreen;
 
 const C = {
 	bg: "#0c0c0e",
@@ -58,7 +67,6 @@ const C = {
 	ink: "#e6e6ea",
 	muted: "#9a9aa6",
 	faint: "#6a6a75",
-	accent: "#7c5cff",
 	green: "#4ade80",
 	amber: "#fbbf24",
 	red: "#f87171",
@@ -67,7 +75,7 @@ const C = {
 
 const TINT: Record<string, string> = {
 	[C.amber]: "rgba(251,191,36,0.13)",
-	[C.accent]: "rgba(124,92,255,0.16)",
+	[C.ink]: "rgba(230,230,234,0.12)",
 	[C.blue]: "rgba(96,165,250,0.14)",
 	[C.green]: "rgba(74,222,128,0.13)",
 	[C.muted]: "rgba(154,154,166,0.12)",
@@ -76,7 +84,7 @@ const TINT: Record<string, string> = {
 
 const COLUMNS: { key: TaskDTO["column"]; label: string; tint: string }[] = [
 	{ key: "needs_attention", label: "Needs You", tint: C.amber },
-	{ key: "running", label: "In Progress", tint: C.accent },
+	{ key: "running", label: "In Progress", tint: C.ink },
 	{ key: "review", label: "Review", tint: C.blue },
 	{ key: "todo", label: "Backlog", tint: C.muted },
 	{ key: "merged", label: "Done", tint: C.green },
@@ -161,69 +169,6 @@ function TaskCard({ task, tint, onOpen }: { task: TaskDTO; tint: string; onOpen:
 				<Badge tint={tint}>{taskNote(task)}</Badge>
 			</View>
 		</Pressable>
-	);
-}
-
-// ── Project dropdown — centered in the board header ──
-
-function ProjectDropdown({
-	projects,
-	selectedId,
-	onSelect,
-	onAddProject,
-}: {
-	projects: ProjectDTO[];
-	selectedId: string | null;
-	onSelect: (id: string) => void;
-	onAddProject: () => void;
-}) {
-	const [open, setOpen] = useState(false);
-	const selected = projects.find((p) => p.id === selectedId);
-	return (
-		<>
-			<Pressable style={styles.projPill} onPress={() => setOpen(true)} hitSlop={6}>
-				<Text style={styles.projName} numberOfLines={1}>
-					{selected?.name ?? "No project"}
-				</Text>
-				<Text style={styles.projCaret}>▾</Text>
-			</Pressable>
-			<Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-				<Pressable style={styles.modalBackdrop} onPress={() => setOpen(false)}>
-					<View style={styles.modalCard}>
-						{projects.map((p) => (
-							<Pressable
-								key={p.id}
-								style={styles.modalRow}
-								onPress={() => {
-									onSelect(p.id);
-									setOpen(false);
-								}}
-							>
-								<View
-									style={[
-										styles.modalDot,
-										{ backgroundColor: p.id === selectedId ? C.accent : "transparent" },
-									]}
-								/>
-								<Text style={styles.modalRowText} numberOfLines={1}>
-									{p.name}
-								</Text>
-							</Pressable>
-						))}
-						<Pressable
-							style={styles.modalRow}
-							onPress={() => {
-								setOpen(false);
-								onAddProject();
-							}}
-						>
-							<Text style={styles.modalAdd}>＋</Text>
-							<Text style={[styles.modalRowText, { color: C.accent }]}>Add project…</Text>
-						</Pressable>
-					</View>
-				</Pressable>
-			</Modal>
-		</>
 	);
 }
 
@@ -316,7 +261,7 @@ function ConnectionScreen({
 			<ScrollView contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
 				<View style={styles.contentColumn}>
 					<View style={styles.eyebrowRow}>
-						<View style={[styles.tick, { backgroundColor: C.accent }]} />
+						<View style={[styles.tick, { backgroundColor: C.ink }]} />
 						<Text style={styles.eyebrow}>Box</Text>
 					</View>
 					<View style={styles.formCard}>
@@ -430,9 +375,10 @@ function PreviewModal({
 	);
 }
 
-// ── Board screen — status dot (left) · project dropdown (center) · preview (right) ──
+// ── Shell — status dot (left) · tab pill (center) · one of Home / Board / Mission
+// Control / Loops below, or the open task's terminal in their place ──
 
-function BoardScreen({
+function Shell({
 	connColor,
 	projects,
 	selectedProjectId,
@@ -445,11 +391,24 @@ function BoardScreen({
 	onOpenTask,
 	onCreate,
 	onAddProject,
-	onOpenPreview,
 	skew,
 	updating,
 	updateError,
+	boxAtLatest,
 	onUpdateBox,
+	api,
+	tab,
+	onTab,
+	loops,
+	onNewLoop,
+	onEditLoop,
+	onLoopsChanged,
+	openTask,
+	openTaskFocus,
+	onCloseTask,
+	onExpandTask,
+	onDismissSkew,
+	connGen,
 }: {
 	connColor: string;
 	projects: ProjectDTO[];
@@ -463,15 +422,42 @@ function BoardScreen({
 	onOpenTask: (task: TaskDTO) => void;
 	onCreate: (input: ComposerSubmit) => void;
 	onAddProject: () => void;
-	onOpenPreview: () => void;
 	/** The box's protocol when it differs from this app's; null when they match. */
 	skew: number | null;
 	updating: boolean;
 	/** Why the last update attempt failed. Cleared at the start of the next one. */
 	updateError: string | null;
+	/** An update came back on the same version: the box already runs the newest
+	 *  release, and it's this app that is ahead of it. */
+	boxAtLatest: boolean;
 	onUpdateBox: () => void;
+	api: AteamApi;
+	tab: Tab;
+	onTab: (tab: Tab) => void;
+	/** The selected project's loops. */
+	loops: LoopDTO[];
+	onNewLoop: () => void;
+	onEditLoop: (loop: LoopDTO) => void;
+	onLoopsChanged: (loops: LoopDTO[]) => void;
+	/** The task whose terminal fills the view under the navbar, if any. */
+	openTask: TaskDTO | null;
+	/** Whether that terminal should open with the keyboard up (expanded from a tile). */
+	openTaskFocus: boolean;
+	onCloseTask: () => void;
+	/** Expand a Mission Control tile: open its terminal ready to type. */
+	onExpandTask: (task: TaskDTO) => void;
+	/** Hide the version banner for this box version (it returns when the version changes). */
+	onDismissSkew: () => void;
+	/** Keys the terminal so an auto-reattach remounts it onto the fresh api. */
+	connGen: number;
 }) {
 	const shown = tasks.filter((t) => t.projectId === selectedProjectId);
+	// Mission Control tiles: this project's tasks that have (or had) an agent, in
+	// Home's order, merged work excluded.
+	const missionTasks = sortTasks(
+		shown.filter((t) => t.column !== "merged" && t.agentStatus !== null),
+		"status",
+	);
 	return (
 		<KeyboardAvoidingView
 			style={styles.root}
@@ -483,18 +469,17 @@ function BoardScreen({
 					<View style={[styles.statusDot, { backgroundColor: connColor }]} />
 				</Pressable>
 				<View style={styles.headerCenter}>
-					<ProjectDropdown
-						projects={projects}
-						selectedId={selectedProjectId}
-						onSelect={onSelectProject}
-						onAddProject={onAddProject}
+					<TabStrip
+						tab={tab}
+						onChange={(t) => {
+							// A tab tap from the full terminal leaves it, like the desktop.
+							onCloseTask();
+							onTab(t);
+						}}
 					/>
 				</View>
-				<Pressable style={styles.previewHit} onPress={onOpenPreview} hitSlop={10}>
-					<View style={styles.previewBtn}>
-						<Text style={styles.previewGlyph}>↗</Text>
-					</View>
-				</Pressable>
+				{/* Right-hand spacer keeps the tabs centered against the status dot. */}
+				<View style={styles.previewHit} />
 			</View>
 
 			{/* The board still works on a skewed box, so this states the risk and offers
@@ -505,10 +490,12 @@ function BoardScreen({
 				<View style={styles.skewBar}>
 					<Text style={styles.skewText}>
 						{skew < PROTOCOL_VERSION
-							? `This box runs an older Ateam (v${skew}). It works, but newer features will misbehave.`
+							? boxAtLatest
+								? `This box is on the latest Ateam release (v${skew}). This app is ahead of it; the next release clears this.`
+								: `This box runs an older Ateam (v${skew}). It works, but newer features will misbehave.`
 							: `This box runs a newer Ateam (v${skew}). Update this app from TestFlight.`}
 					</Text>
-					{skew < PROTOCOL_VERSION && (
+					{skew < PROTOCOL_VERSION && !boxAtLatest && (
 						<Pressable
 							style={[styles.skewBtn, updating && styles.skewBtnBusy]}
 							onPress={onUpdateBox}
@@ -517,6 +504,9 @@ function BoardScreen({
 							<Text style={styles.skewBtnText}>{updating ? "Updating…" : "Update box"}</Text>
 						</Pressable>
 					)}
+					<Pressable onPress={onDismissSkew} hitSlop={10} accessibilityLabel="Dismiss">
+						<Feather name="x" size={16} color={C.amber} />
+					</Pressable>
 				</View>
 			)}
 			{skew !== null && updateError && (
@@ -525,44 +515,85 @@ function BoardScreen({
 				</View>
 			)}
 
-			<ScrollView
-				style={styles.board}
-				contentContainerStyle={styles.boardContent}
-				showsVerticalScrollIndicator={false}
-				keyboardShouldPersistTaps="handled"
-			>
-				<View style={styles.contentColumn}>
-					{loading && shown.length === 0 ? (
-						<View style={styles.centerPad}>
-							<ActivityIndicator color={C.accent} />
-							<Text style={styles.footnote}>loading board…</Text>
-						</View>
-					) : shown.length === 0 ? (
-						<View style={styles.centerPad}>
-							<Text style={styles.footnote}>no tasks yet — start one below</Text>
-						</View>
-					) : (
-						COLUMNS.map((col) => {
-							const inCol = shown.filter((t) => t.column === col.key);
-							if (inCol.length === 0) return null;
-							return (
-								<View key={col.key} style={styles.zone}>
-									<View style={styles.eyebrowRow}>
-										<View style={[styles.tick, { backgroundColor: col.tint }]} />
-										<Text style={styles.eyebrow}>{col.label}</Text>
-										<Text style={styles.eyebrowCount}>{inCol.length}</Text>
+			{openTask ? (
+				<Term
+					key={connGen}
+					api={api}
+					task={openTask}
+					onClose={onCloseTask}
+					autoFocus={openTaskFocus}
+				/>
+			) : null}
+			{!openTask && tab === "board" && (
+				<ScrollView
+					style={styles.board}
+					contentContainerStyle={styles.boardContent}
+					showsVerticalScrollIndicator={false}
+					keyboardShouldPersistTaps="handled"
+				>
+					<View style={styles.contentColumn}>
+						{loading && shown.length === 0 ? (
+							<View style={styles.centerPad}>
+								<ActivityIndicator color={C.ink} />
+								<Text style={styles.footnote}>loading board…</Text>
+							</View>
+						) : shown.length === 0 ? (
+							<View style={styles.centerPad}>
+								<Text style={styles.footnote}>no tasks yet — start one below</Text>
+							</View>
+						) : (
+							COLUMNS.map((col) => {
+								const inCol = shown.filter((t) => t.column === col.key);
+								if (inCol.length === 0) return null;
+								return (
+									<View key={col.key} style={styles.zone}>
+										<View style={styles.eyebrowRow}>
+											<View style={[styles.tick, { backgroundColor: col.tint }]} />
+											<Text style={styles.eyebrow}>{col.label}</Text>
+											<Text style={styles.eyebrowCount}>{inCol.length}</Text>
+										</View>
+										{inCol.map((t) => (
+											<TaskCard key={t.id} task={t} tint={col.tint} onOpen={() => onOpenTask(t)} />
+										))}
 									</View>
-									{inCol.map((t) => (
-										<TaskCard key={t.id} task={t} tint={col.tint} onOpen={() => onOpenTask(t)} />
-									))}
-								</View>
-							);
-						})
-					)}
-				</View>
-			</ScrollView>
+								);
+							})
+						)}
+					</View>
+				</ScrollView>
+			)}
+			{!openTask && tab === "home" && (
+				<HomeScreen
+					projects={projects}
+					selectedProjectId={selectedProjectId}
+					onSelectProject={onSelectProject}
+					onAddProject={onAddProject}
+					tasks={shown}
+					loops={loops}
+					loading={loading}
+					onOpenTask={onOpenTask}
+					onOpenLoops={() => onTab("loops")}
+					onNewLoop={onNewLoop}
+				/>
+			)}
+			{!openTask && tab === "mission" && (
+				<MissionScreen api={api} tasks={missionTasks} onExpand={onExpandTask} />
+			)}
+			{!openTask && tab === "loops" && (
+				<LoopsScreen
+					api={api}
+					loops={loops}
+					tasks={shown}
+					onOpenTask={onOpenTask}
+					onCreate={onNewLoop}
+					onEdit={onEditLoop}
+					onChanged={onLoopsChanged}
+				/>
+			)}
 
-			<Composer agents={agents} busy={creating} onSubmit={onCreate} />
+			{!openTask && (tab === "board" || tab === "home") && (
+				<Composer agents={agents} busy={creating} onSubmit={onCreate} />
+			)}
 		</KeyboardAvoidingView>
 	);
 }
@@ -570,6 +601,12 @@ function BoardScreen({
 export default function App() {
 	useColorScheme(); // reserved: theme-aware later
 	const [view, setView] = useState<"connect" | "board">("connect");
+	// Which of Home / Board / Mission Control / Loops is showing. Every connect
+	// lands on Home, the sidebar-as-a-list.
+	const [tab, setTab] = useState<Tab>("home");
+	const [loops, setLoops] = useState<LoopDTO[]>([]);
+	// The loop form modal: null closed, `editing` null for a new loop.
+	const [loopForm, setLoopForm] = useState<{ editing: LoopDTO | null } | null>(null);
 	const [host, setHost] = useState("");
 	const [port, setPort] = useState("8787");
 	const [connecting, setConnecting] = useState(false);
@@ -585,6 +622,10 @@ export default function App() {
 	// button just flashed and reverted, which is exactly what an
 	// Unknown-method rejection looked like the one time this actually happened.
 	const [updateError, setUpdateError] = useState<string | null>(null);
+	// The skew an update started from. If the reconnect lands on the same version,
+	// the box already had the newest release: say so instead of offering it again.
+	const updateFrom = useRef<number | null>(null);
+	const [boxAtLatest, setBoxAtLatest] = useState(false);
 	const [tasks, setTasks] = useState<TaskDTO[]>([]);
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
 	const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -592,6 +633,10 @@ export default function App() {
 	const [loading, setLoading] = useState(false);
 	const [creating, setCreating] = useState(false);
 	const [openTask, setOpenTask] = useState<TaskDTO | null>(null);
+	const [openTaskFocus, setOpenTaskFocus] = useState(false);
+	// The box version whose banner was dismissed; the banner comes back when the
+	// box reports a different one. Persisted per box.
+	const [dismissedSkew, setDismissedSkew] = useState<number | null>(null);
 	const [browserOpen, setBrowserOpen] = useState(false);
 	const [previewOpen, setPreviewOpen] = useState(false);
 	const [previewPort, setPreviewPort] = useState("3000");
@@ -628,6 +673,8 @@ export default function App() {
 			const perProject = await Promise.all(projs.map((p) => api.tasks.list(p.id)));
 			const all = perProject.flat().sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0));
 			setTasks(all);
+			// A box that predates loops rejects the call; the sections just stay empty.
+			setLoops(await api.loops.list().catch(() => []));
 		} finally {
 			setLoading(false);
 		}
@@ -649,7 +696,11 @@ export default function App() {
 				return next;
 			});
 		});
-		return off;
+		const offLoops = api.loops.onUpdated((next) => setLoops(next));
+		return () => {
+			off();
+			offLoops();
+		};
 	}, [view, connGen]);
 
 	// The one connect path — used by the Connect button, the launch auto-connect, and
@@ -698,13 +749,21 @@ export default function App() {
 				backoff.current = 0;
 				await saveConnection({ host: h, port });
 				setConnected(true);
-				setSkew(c.skewed ? c.info.protocolVersion : null);
+				const nextSkew = c.skewed ? c.info.protocolVersion : null;
+				setSkew(nextSkew);
+				if (updateFrom.current !== null) {
+					setBoxAtLatest(nextSkew !== null && nextSkew === updateFrom.current);
+					updateFrom.current = null;
+				} else if (nextSkew === null) {
+					setBoxAtLatest(false);
+				}
 				// Whatever we came back as, we are no longer mid-update. A reconnect is
 				// exactly how an update ends, so this is where the spinner stops.
 				setUpdatingBox(false);
 				setConnGen((g) => g + 1);
 				void c.api.agents.list().then(setAgents);
 				setView("board");
+				setTab("home");
 				await refresh();
 				return true;
 			} catch (err) {
@@ -727,15 +786,17 @@ export default function App() {
 		if (!c) return;
 		setUpdatingBox(true);
 		setUpdateError(null);
+		updateFrom.current = skew;
 		try {
 			await c.update();
 		} catch (err) {
 			// The likely one: a box older than v7 has no system:update at all, and has
 			// to be updated once from a Mac before it can ever do this itself.
 			setUpdatingBox(false);
+			updateFrom.current = null;
 			setUpdateError(err instanceof Error ? err.message : String(err));
 		}
-	}, []);
+	}, [skew]);
 
 	// Reattach to the intended box: try once, and on failure schedule a capped
 	// exponential backoff retry (1s → 15s) so a still-down box keeps getting picked up.
@@ -816,6 +877,7 @@ export default function App() {
 		setConnGen((g) => g + 1);
 		void conn.current.api.agents.list().then(setAgents);
 		setView("board");
+		setTab("home");
 		await refresh();
 	}, [refresh]);
 
@@ -869,6 +931,7 @@ export default function App() {
 				loadPreviewPort(),
 				loadConsent(),
 			]);
+			if (saved?.host) setDismissedSkew(await loadDismissedSkew(saved.host));
 			// Read in the same batch as the connection, so the auto-reattach below can't
 			// race ahead of it and show the disclosure to someone who already accepted.
 			consented.current = agreed;
@@ -920,6 +983,7 @@ export default function App() {
 		setTasks([]);
 		setProjects([]);
 		setSelectedProjectId(null);
+		setLoops([]);
 		setView("connect");
 	}, []);
 
@@ -951,21 +1015,6 @@ export default function App() {
 		},
 		[selectedProjectId],
 	);
-
-	// A tapped task opens its live terminal (api comes from the live connection).
-	if (openTask && conn.current) {
-		const Term = USE_NATIVE_TERMINAL ? NativeTerminalScreen : TerminalScreen;
-		// key={connGen}: an auto-reattach swaps in a fresh api — remount so the terminal
-		// cleanly re-resolves (attach-if-live) its still-alive PTY on the new connection.
-		return (
-			<Term
-				key={connGen}
-				api={conn.current.api}
-				task={openTask}
-				onClose={() => setOpenTask(null)}
-			/>
-		);
-	}
 
 	// The project browser is a full-screen view-swap (NOT a nested modal — presenting
 	// a modal while the dropdown modal dismisses deadlocks iOS and freezes the app).
@@ -1007,7 +1056,7 @@ export default function App() {
 
 	return (
 		<>
-			<BoardScreen
+			<Shell
 				connColor={connected ? C.green : C.faint}
 				projects={projects}
 				selectedProjectId={selectedProjectId}
@@ -1020,12 +1069,48 @@ export default function App() {
 				onOpenTask={setOpenTask}
 				onCreate={onCreate}
 				onAddProject={() => setBrowserOpen(true)}
-				onOpenPreview={() => setPreviewOpen(true)}
-				skew={skew}
+				skew={skew !== null && skew === dismissedSkew ? null : skew}
 				updating={updatingBox}
 				updateError={updateError}
+				boxAtLatest={boxAtLatest}
 				onUpdateBox={updateBox}
+				api={conn.current?.api ?? demoConnection().api}
+				tab={tab}
+				onTab={setTab}
+				loops={loops.filter((l) => l.projectId === selectedProjectId)}
+				onNewLoop={() => setLoopForm({ editing: null })}
+				onEditLoop={(l) => setLoopForm({ editing: l })}
+				onLoopsChanged={(next) => setLoops(Array.isArray(next) ? next : loops)}
+				openTask={conn.current ? openTask : null}
+				openTaskFocus={openTaskFocus}
+				onCloseTask={() => {
+					setOpenTask(null);
+					setOpenTaskFocus(false);
+				}}
+				onExpandTask={(t) => {
+					setOpenTaskFocus(true);
+					setOpenTask(t);
+				}}
+				onDismissSkew={() => {
+					if (skew === null) return;
+					setDismissedSkew(skew);
+					void saveDismissedSkew(target.current?.host ?? "", skew);
+				}}
+				connGen={connGen}
 			/>
+			{loopForm && conn.current && (
+				<LoopForm
+					api={conn.current.api}
+					agents={agents}
+					projectId={selectedProjectId}
+					editing={loopForm.editing}
+					onClose={() => setLoopForm(null)}
+					onSaved={(next) => {
+						setLoopForm(null);
+						setLoops(Array.isArray(next) ? next : loops);
+					}}
+				/>
+			)}
 			<PreviewModal
 				visible={previewOpen}
 				host={target.current?.host ?? null}
@@ -1071,17 +1156,6 @@ const styles = StyleSheet.create({
 	statusDot: { width: 12, height: 12, borderRadius: 6 },
 	headerCenter: { flex: 1, alignItems: "center" },
 	previewHit: { width: 44, alignItems: "flex-end", justifyContent: "center" },
-	previewBtn: {
-		width: 30,
-		height: 30,
-		borderRadius: 8,
-		backgroundColor: C.sunken,
-		borderWidth: 1,
-		borderColor: C.line,
-		alignItems: "center",
-		justifyContent: "center",
-	},
-	previewGlyph: { color: C.ink, fontSize: 15, fontWeight: "700", marginTop: -1 },
 	projPill: {
 		flexDirection: "row",
 		alignItems: "center",
@@ -1095,7 +1169,6 @@ const styles = StyleSheet.create({
 		maxWidth: 240,
 	},
 	projName: { color: C.ink, fontSize: 14, fontWeight: "700", letterSpacing: -0.2 },
-	projCaret: { color: C.muted, fontSize: 11 },
 
 	// project dropdown modal
 	modalBackdrop: {
@@ -1104,25 +1177,6 @@ const styles = StyleSheet.create({
 		paddingTop: 100,
 		alignItems: "center",
 	},
-	modalCard: {
-		width: 280,
-		backgroundColor: C.surface,
-		borderWidth: 1,
-		borderColor: C.line,
-		borderRadius: 12,
-		paddingVertical: 6,
-	},
-	modalEmpty: { color: C.muted, fontSize: 13, textAlign: "center", paddingVertical: 16 },
-	modalRow: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: 10,
-		paddingHorizontal: 14,
-		paddingVertical: 12,
-	},
-	modalDot: { width: 7, height: 7, borderRadius: 4 },
-	modalRowText: { color: C.ink, fontSize: 15, flex: 1 },
-	modalAdd: { color: C.accent, fontSize: 15, width: 7, textAlign: "center", fontWeight: "700" },
 
 	// dev-server preview modal
 	previewCard: {
@@ -1176,7 +1230,7 @@ const styles = StyleSheet.create({
 		borderBottomColor: C.line,
 	},
 	navTitle: { color: C.ink, fontSize: 17, fontWeight: "700", letterSpacing: -0.2 },
-	backText: { color: C.accent, fontSize: 15, fontWeight: "600" },
+	backText: { color: C.ink, fontSize: 15, fontWeight: "600" },
 	spacer: { flex: 1 },
 	connectBtn: {
 		backgroundColor: C.ink,

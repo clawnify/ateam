@@ -4,18 +4,15 @@
 // scroll / selection / copy are native (the whole reason for the swap). Kept
 // separate from TerminalScreen so the webview path stays intact while we evaluate.
 
-import type { AteamApi, PtyDataEvent, TaskDTO } from "@ateam/protocol";
+import type { AteamApi, TaskDTO } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Keyboard,
-	KeyboardAvoidingView,
 	Linking,
-	Platform,
 	Pressable,
-	ScrollView,
 	StyleSheet,
 	Text,
 	View,
@@ -24,7 +21,10 @@ import {
 	type SwiftTermHandle,
 	SwiftTermView,
 } from "../modules/expo-swiftterm/src/ExpoSwifttermView";
+import { KeyBar, keyStyles } from "./KeyBar";
+import { TerminalStrip } from "./TerminalStrip";
 import { useKeyboardVisible } from "./useKeyboardVisible";
+import { useTaskPty } from "./useTaskPty";
 
 const C = {
 	bg: "#0c0c0e",
@@ -36,24 +36,6 @@ const C = {
 	red: "#f87171",
 	green: "#4ade80",
 };
-
-// TUI control bytes the soft keyboard can't send (our own bar — SwiftTerm's is off).
-// PgUp/PgDn drive the TUI's OWN scroll (Claude Code scrolls its conversation on
-// PageUp/PageDown in every mode) — the reliable way to scroll a full-screen agent,
-// vs the emulator scrollback (empty on an alt-screen).
-const KEYS: { label: string; bytes: string; scroll?: boolean }[] = [
-	{ label: "esc", bytes: "\x1b" },
-	{ label: "⇧tab", bytes: "\x1b[Z" },
-	{ label: "⏎", bytes: "\r" },
-	{ label: "/", bytes: "/" },
-	{ label: "←", bytes: "\x1b[D" },
-	{ label: "↑", bytes: "\x1b[A" },
-	{ label: "↓", bytes: "\x1b[B" },
-	{ label: "→", bytes: "\x1b[C" },
-	{ label: "^C", bytes: "\x03" },
-	{ label: "PgUp", bytes: "\x1b[5~", scroll: true },
-	{ label: "PgDn", bytes: "\x1b[6~", scroll: true },
-];
 
 // A URL tapped in the terminal output. Only web links leave the app (a TUI can
 // print anything that looks like a link, including file: and custom schemes).
@@ -77,121 +59,32 @@ export function NativeTerminalScreen({
 	api,
 	task,
 	onClose,
+	autoFocus = false,
 }: {
 	api: AteamApi;
 	task: TaskDTO;
 	onClose: () => void;
+	/** Bring the keyboard up as soon as the terminal is ready (expanding from a
+	 *  Mission Control tile to type). */
+	autoFocus?: boolean;
 }) {
 	const termRef = useRef<SwiftTermHandle>(null);
-	const [terminalId, setTerminalId] = useState<string | null>(null);
-	const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
-	const [detail, setDetail] = useState("resolving session…");
 	const [attaching, setAttaching] = useState(false);
 	const keyboardUp = useKeyboardVisible();
 
-	const buffered = useRef<PtyDataEvent[]>([]);
-	const applied = useRef(false);
-	const lastSeq = useRef(-1);
-	const snapped = useRef(false);
-	const lastSize = useRef({ cols: 0, rows: 0 });
-
 	const feed = useCallback((data: string) => termRef.current?.feed(data), []);
+	// Same PTY contract as Mission Control's tiles (attach-if-live), plus: spawn a
+	// shell when the task has none, and size the PTY to this view.
+	const pty = useTaskPty({ api, taskId: task.id, feed, spawnIfNone: true, resizePty: true });
+	const { terminalId, status, lastSize, onSizeChange } = pty;
+	const [detail, setDetail] = useState<string | null>(null);
+	const shownDetail = detail ?? pty.detail;
 
-	// Resolve the PTY (attach-if-live, else spawn) and subscribe to its stream.
+	const onInput = pty.write;
+
 	useEffect(() => {
-		let cancelled = false;
-		let offData = () => {};
-		let offExit = () => {};
-		// The RPC client has no per-call timeout, so a half-open WS (common on mobile
-		// over Tailscale) makes a call hang forever with no error. Cap the fast resolve
-		// calls so a stall surfaces as an actionable error instead of "resolving…" limbo.
-		const withTimeout = <T,>(p: Promise<T>, what: string): Promise<T> =>
-			Promise.race([
-				p,
-				new Promise<T>((_, rej) =>
-					setTimeout(
-						() => rej(new Error(`${what} timed out (connection may have dropped)`)),
-						12000,
-					),
-				),
-			]);
-
-		(async () => {
-			try {
-				const live = await withTimeout(api.pty.listForTask(task.id), "listForTask");
-				let id = live[0]?.terminalId ?? null;
-				if (!id) {
-					setDetail("starting a shell on the box…");
-					id = (await withTimeout(api.pty.spawnShell({ taskId: task.id }), "spawnShell"))
-						.terminalId;
-				} else {
-					setDetail("attaching to the live agent…");
-				}
-				if (cancelled) return;
-				offData = api.pty.onData((e) => {
-					if (e.terminalId !== id) return;
-					if (!applied.current) {
-						buffered.current.push(e);
-						return;
-					}
-					if (e.seq > lastSeq.current) {
-						lastSeq.current = e.seq;
-						feed(e.data);
-					}
-				});
-				offExit = api.pty.onExit((e) => {
-					if (e.terminalId === id) setDetail(`session exited (code ${e.exitCode})`);
-				});
-				setTerminalId(id);
-				setStatus("live");
-			} catch (err) {
-				if (cancelled) return;
-				setStatus("error");
-				setDetail(err instanceof Error ? err.message : String(err));
-			}
-		})();
-		return () => {
-			cancelled = true;
-			offData();
-			offExit();
-		};
-	}, [api, task.id, feed]);
-
-	// The native view reports its size when laid out — use the first report as the
-	// "ready" signal (mirrors the webview's ready): resize the PTY, paint the
-	// snapshot, then flush chunks that streamed in while we were setting up.
-	const onSizeChange = useCallback(
-		async (cols: number, rows: number) => {
-			const id = terminalId;
-			if (!id) return;
-			lastSize.current = { cols, rows };
-			api.pty.resize(id, cols, rows);
-			if (snapped.current) return;
-			snapped.current = true;
-			try {
-				const snap = await api.pty.snapshot(id);
-				if (snap.data) feed(snap.data);
-				lastSeq.current = snap.seq;
-				for (const c of buffered.current) {
-					if (c.seq > lastSeq.current) {
-						lastSeq.current = c.seq;
-						feed(c.data);
-					}
-				}
-			} finally {
-				buffered.current = [];
-				applied.current = true;
-			}
-		},
-		[api, terminalId, feed],
-	);
-
-	const onInput = useCallback(
-		(data: string) => {
-			if (terminalId) api.pty.write(terminalId, data);
-		},
-		[api, terminalId],
-	);
+		if (autoFocus && status === "live") termRef.current?.focusKeyboard();
+	}, [autoFocus, status]);
 
 	// The terminal grows/shrinks with the keyboard (KeyboardAvoidingView). A
 	// full-screen TUI (Claude agents) doesn't always repaint cleanly after the rapid
@@ -199,6 +92,7 @@ export function NativeTerminalScreen({
 	// → rows) to force a SIGWINCH-driven full redraw at the final dimensions.
 	// Listens to frame changes (not show/hide): the native view hides the keyboard
 	// by swapping in an empty input view, which iOS reports as a frame change.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: lastSize is a ref from the hook
 	useEffect(() => {
 		let timer: ReturnType<typeof setTimeout> | null = null;
 		const settle = () => {
@@ -257,26 +151,9 @@ export function NativeTerminalScreen({
 	}, [api, terminalId, attaching]);
 
 	return (
-		<KeyboardAvoidingView
-			style={styles.root}
-			behavior={Platform.OS === "ios" ? "padding" : undefined}
-		>
-			<View style={styles.header}>
-				<Pressable style={styles.iconBtn} onPress={onClose} hitSlop={8}>
-					<Text style={styles.iconChevron}>‹</Text>
-				</Pressable>
-				<Text style={styles.title} numberOfLines={1}>
-					{task.name}
-				</Text>
-				<Pressable
-					style={styles.kbdBtn}
-					onPress={() => termRef.current?.blurKeyboard()}
-					hitSlop={8}
-				>
-					<Text style={styles.kbdText}>Hide ⌨</Text>
-				</Pressable>
-				<View style={[styles.dot, { backgroundColor: status === "error" ? C.red : C.green }]} />
-			</View>
+		// Rendered under the shell's navbar (which already avoids the keyboard).
+		<View style={styles.root}>
+			<TerminalStrip task={task} expanded onToggle={onClose} />
 			{terminalId ? (
 				<>
 					<SwiftTermView
@@ -286,40 +163,45 @@ export function NativeTerminalScreen({
 						onOpenLink={openTappedLink}
 						ref={termRef}
 					/>
-					<ScrollView
-						horizontal
-						showsHorizontalScrollIndicator={false}
-						style={styles.keyBar}
-						contentContainerStyle={[
-							styles.keyBarContent,
-							keyboardUp && styles.keyBarContentKeyboard,
-						]}
-						keyboardShouldPersistTaps="always"
-					>
-						<Pressable style={styles.key} onPress={attachImage} disabled={attaching} hitSlop={4}>
-							{attaching ? (
-								<ActivityIndicator color={C.ink} size="small" />
-							) : (
-								<Feather name="paperclip" size={16} color={C.ink} />
-							)}
-						</Pressable>
-						{KEYS.map((k) => (
+					<KeyBar
+						keyboardUp={keyboardUp}
+						onKey={send}
+						leading={
+							<>
+								{/* Back is the first key: the navbar above stays the shell's. */}
+								<Pressable style={keyStyles.key} onPress={onClose} hitSlop={4}>
+									<Feather name="arrow-left" size={16} color={C.ink} />
+								</Pressable>
+								<Pressable
+									style={keyStyles.key}
+									onPress={attachImage}
+									disabled={attaching}
+									hitSlop={4}
+								>
+									{attaching ? (
+										<ActivityIndicator color={C.ink} size="small" />
+									) : (
+										<Feather name="paperclip" size={16} color={C.ink} />
+									)}
+								</Pressable>
+							</>
+						}
+						trailing={
 							<Pressable
-								key={k.label}
-								style={styles.key}
-								onPress={() => send(k.bytes, k.scroll)}
+								style={keyStyles.key}
+								onPress={() => termRef.current?.blurKeyboard()}
 								hitSlop={4}
 							>
-								<Text style={styles.keyText}>{k.label}</Text>
+								<Feather name="chevron-down" size={16} color={C.ink} />
 							</Pressable>
-						))}
-					</ScrollView>
+						}
+					/>
 				</>
 			) : (
 				<View style={styles.center}>
 					{status === "error" ? (
 						<>
-							<Text style={styles.err}>{detail}</Text>
+							<Text style={styles.err}>{shownDetail}</Text>
 							<Pressable style={styles.retryBtn} onPress={onClose} hitSlop={8}>
 								<Text style={styles.retryText}>Back to board</Text>
 							</Pressable>
@@ -327,75 +209,18 @@ export function NativeTerminalScreen({
 					) : (
 						<>
 							<ActivityIndicator color={C.ink} />
-							<Text style={styles.hint}>{detail}</Text>
+							<Text style={styles.hint}>{shownDetail}</Text>
 						</>
 					)}
 				</View>
 			)}
-		</KeyboardAvoidingView>
+		</View>
 	);
 }
 
 const styles = StyleSheet.create({
-	root: { flex: 1, backgroundColor: C.bg, paddingTop: 60 },
-	header: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: 10,
-		paddingHorizontal: 14,
-		paddingBottom: 12,
-		borderBottomWidth: 1,
-		borderBottomColor: C.line,
-	},
-	iconBtn: {
-		width: 34,
-		height: 30,
-		borderRadius: 8,
-		backgroundColor: C.sunken,
-		borderWidth: 1,
-		borderColor: C.line,
-		alignItems: "center",
-		justifyContent: "center",
-	},
-	iconChevron: { color: C.ink, fontSize: 20, fontWeight: "700", marginTop: -2 },
-	title: { color: C.ink, fontSize: 15, fontWeight: "700", flex: 1 },
-	kbdBtn: {
-		paddingHorizontal: 10,
-		height: 28,
-		borderRadius: 7,
-		backgroundColor: C.sunken,
-		borderWidth: 1,
-		borderColor: C.line,
-		alignItems: "center",
-		justifyContent: "center",
-	},
-	kbdText: { color: C.muted, fontSize: 12, fontWeight: "600" },
-	dot: { width: 8, height: 8, borderRadius: 4 },
+	root: { flex: 1, backgroundColor: C.bg },
 	term: { flex: 1, backgroundColor: "#000" },
-	// No maxHeight (it would clip the bottom padding). Horizontal scroll handles
-	// overflow when the keys don't fit the width. Extra bottom padding lifts the row
-	// off the iOS home indicator.
-	keyBar: { flexGrow: 0, backgroundColor: C.surface, borderTopWidth: 1, borderTopColor: C.line },
-	keyBarContent: {
-		alignItems: "center",
-		gap: 8,
-		paddingHorizontal: 10,
-		paddingTop: 8,
-		paddingBottom: 30,
-	},
-	keyBarContentKeyboard: { paddingBottom: 8 },
-	key: {
-		minWidth: 44,
-		height: 34,
-		paddingHorizontal: 12,
-		borderRadius: 8,
-		backgroundColor: C.sunken,
-		borderWidth: 1,
-		borderColor: C.line,
-		alignItems: "center",
-		justifyContent: "center",
-	},
-	keyText: { color: C.ink, fontSize: 14, fontWeight: "600" },
 	retryBtn: {
 		marginTop: 8,
 		paddingHorizontal: 16,

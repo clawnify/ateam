@@ -18,7 +18,6 @@ const C = {
 	ink: "#e6e6ea",
 	muted: "#9a9aa6",
 	faint: "#6a6a75",
-	accent: "#7c5cff",
 	amber: "#fbbf24",
 };
 
@@ -162,7 +161,7 @@ export function Composer({
 						onPress={() => setAgentMode((v) => !v)}
 						hitSlop={4}
 					>
-						<Text style={[styles.modeText, agentMode && { color: C.accent }]}>agents</Text>
+						<Text style={[styles.modeText, agentMode && { color: C.ink }]}>agents</Text>
 					</Pressable>
 					{/* Send */}
 					<Pressable
@@ -235,14 +234,15 @@ const styles = StyleSheet.create({
 		maxHeight: 120,
 	},
 	fieldLabel: {
-		color: C.accent,
+		color: C.ink,
 		fontSize: 10,
 		fontWeight: "700",
 		letterSpacing: 1.1,
 		paddingLeft: 2,
 		marginBottom: -2,
 	},
-	row: { flexDirection: "row", alignItems: "center", gap: 6 },
+	// Breathing room between the prompt field and the controls under it.
+	row: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
 	spacer: { flex: 1 },
 	chip: {
 		flexDirection: "row",
@@ -256,7 +256,7 @@ const styles = StyleSheet.create({
 		alignItems: "center",
 		justifyContent: "center",
 	},
-	chipOn: { borderColor: C.accent, backgroundColor: "rgba(124,92,255,0.16)" },
+	chipOn: { borderColor: C.ink, backgroundColor: "rgba(230,230,234,0.12)" },
 	chipText: { color: C.muted, fontSize: 12, fontWeight: "600" },
 	chipTextOn: { color: C.ink },
 	mode: {
@@ -270,7 +270,7 @@ const styles = StyleSheet.create({
 		justifyContent: "center",
 	},
 	modeAuto: { borderColor: C.amber, backgroundColor: "rgba(251,191,36,0.13)" },
-	modeAgents: { borderColor: C.accent, backgroundColor: "rgba(124,92,255,0.16)" },
+	modeAgents: { borderColor: C.ink, backgroundColor: "rgba(230,230,234,0.12)" },
 	modeText: { color: C.muted, fontSize: 12, fontWeight: "600" },
 	send: {
 		width: 34,
