@@ -15,6 +15,7 @@ const NativeView: React.ComponentType<{
 	style?: StyleProp<ViewStyle>;
 	onInput?: (e: { nativeEvent: { data: string } }) => void;
 	onSizeChange?: (e: { nativeEvent: { cols: number; rows: number } }) => void;
+	onOpenLink?: (e: { nativeEvent: { url: string } }) => void;
 	ref?: React.Ref<NativeRef>;
 }> = requireNativeView("ExpoSwiftterm");
 
@@ -28,10 +29,11 @@ export interface SwiftTermViewProps {
 	style?: StyleProp<ViewStyle>;
 	onInput?: (data: string) => void;
 	onSizeChange?: (cols: number, rows: number) => void;
+	onOpenLink?: (url: string) => void;
 }
 
 export const SwiftTermView = React.forwardRef<SwiftTermHandle, SwiftTermViewProps>(
-	({ style, onInput, onSizeChange }, ref) => {
+	({ style, onInput, onSizeChange, onOpenLink }, ref) => {
 		const nativeRef = React.useRef<NativeRef>(null);
 		React.useImperativeHandle(ref, () => ({
 			feed: (text: string) => void nativeRef.current?.feed(text),
@@ -44,6 +46,7 @@ export const SwiftTermView = React.forwardRef<SwiftTermHandle, SwiftTermViewProp
 				style={style}
 				onInput={(e) => onInput?.(e.nativeEvent.data)}
 				onSizeChange={(e) => onSizeChange?.(e.nativeEvent.cols, e.nativeEvent.rows)}
+				onOpenLink={(e) => onOpenLink?.(e.nativeEvent.url)}
 			/>
 		);
 	},
