@@ -11,6 +11,16 @@ class ExpoSwifttermView: ExpoView {
   // Push events to JS.
   let onInput = EventDispatcher() // user keystrokes/selection → { data }
   let onSizeChange = EventDispatcher() // TUI needs cols/rows → { cols, rows }
+  let onOpenLink = EventDispatcher() // tapped a URL in the output → { url }
+
+  // Keyboard visibility is decoupled from first-responder status. The terminal
+  // stays first responder from mount (link taps, long-press selection and the
+  // Copy/Paste menu all need it, and none of them should drag the keyboard in or
+  // out); the keyboard itself is shown/hidden by swapping `inputView` — an empty
+  // view in place of the system keyboard. Without this, SwiftTerm's default
+  // (first responder == keyboard up) makes every tap a show/hide toggle.
+  private let noKeyboard = UIView(frame: .zero)
+  private(set) var keyboardShown = false
 
   required init(appContext: AppContext? = nil) {
     terminal = TerminalView(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
@@ -24,6 +34,8 @@ class ExpoSwifttermView: ExpoView {
     // Drop SwiftTerm's built-in accessory bar (esc/tab/arrows) — we render our own
     // shortcut toolbar in RN, so this is just the plain iPhone keyboard.
     terminal.inputAccessoryView = nil
+    terminal.inputView = noKeyboard
+    terminal.tapRequestsKeyboard = { [weak self] in self?.focusKeyboard() }
 
     // Auto Layout (not a hand-set frame) so the terminal's own layoutSubviews fires
     // with real bounds → processSizeChange computes the grid + renders.
@@ -42,10 +54,26 @@ class ExpoSwifttermView: ExpoView {
     terminal.feed(text: text)
   }
 
-  // Keyboard control (SwiftTerm is a first responder; it has no keyboard-avoidance
-  // of its own, so the RN side resizes the view and toggles focus).
-  func blurKeyboard() { _ = terminal.resignFirstResponder() }
-  func focusKeyboard() { _ = terminal.becomeFirstResponder() }
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    if window != nil, !terminal.isFirstResponder { _ = terminal.becomeFirstResponder() }
+  }
+
+  // Keyboard control. SwiftTerm has no keyboard-avoidance of its own, so the RN
+  // side resizes the view; here we only swap the input view (see `noKeyboard`).
+  func blurKeyboard() {
+    guard keyboardShown else { return }
+    keyboardShown = false
+    terminal.inputView = noKeyboard
+    terminal.reloadInputViews()
+  }
+  func focusKeyboard() {
+    if !terminal.isFirstResponder { _ = terminal.becomeFirstResponder() }
+    guard !keyboardShown else { return }
+    keyboardShown = true
+    terminal.inputView = nil
+    terminal.reloadInputViews()
+  }
 
   var cols: Int { terminal.getTerminal().cols }
   var rows: Int { terminal.getTerminal().rows }
@@ -61,7 +89,10 @@ extension ExpoSwifttermView: TerminalViewDelegate {
   func setTerminalTitle(source: TerminalView, title: String) {}
   func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
   func scrolled(source: TerminalView, position: Double) {}
-  func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {}
+  func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+    // Tapped URL → JS decides how to open it (Linking / in-app browser / editor).
+    onOpenLink(["url": link])
+  }
   func bell(source: TerminalView) {}
   func clipboardCopy(source: TerminalView, content: Data) {
     // Native selection → Copy menu lands here; put it on the iOS clipboard.

@@ -293,7 +293,10 @@ paste-a-URL door instead of the picker and skips the create-a-repo offer, becaus
 would accept the request and silently not do it.
 
 Its terminal is a real login shell on the box too, so re-logging into `claude` when a
-session expires and `gh auth refresh` also work from the app.
+session expires and `gh auth refresh` also work from the app. On the phone, tap the
+login URL the agent prints, even where it wraps across lines, and it opens in Safari;
+tapping the output never hides the keyboard (the **Hide** button does), and a long
+press selects text for Copy without bringing the keyboard up.
 
 ### Write a Tailscale ACL — this one isn't optional
 

@@ -12,6 +12,7 @@ import {
 	ActivityIndicator,
 	Keyboard,
 	KeyboardAvoidingView,
+	Linking,
 	Platform,
 	Pressable,
 	ScrollView,
@@ -53,6 +54,13 @@ const KEYS: { label: string; bytes: string; scroll?: boolean }[] = [
 	{ label: "PgUp", bytes: "\x1b[5~", scroll: true },
 	{ label: "PgDn", bytes: "\x1b[6~", scroll: true },
 ];
+
+// A URL tapped in the terminal output. Only web links leave the app (a TUI can
+// print anything that looks like a link, including file: and custom schemes).
+function openTappedLink(url: string) {
+	if (!/^https?:\/\//i.test(url)) return;
+	void Linking.openURL(url);
+}
 
 // Backslash-escape shell-special chars so a typed path survives the shell — same
 // convention the desktop terminal uses for dropped/attached file paths.
@@ -189,20 +197,25 @@ export function NativeTerminalScreen({
 	// full-screen TUI (Claude agents) doesn't always repaint cleanly after the rapid
 	// resize animation, so once it settles, nudge a repaint: jiggle the size (rows-1
 	// → rows) to force a SIGWINCH-driven full redraw at the final dimensions.
+	// Listens to frame changes (not show/hide): the native view hides the keyboard
+	// by swapping in an empty input view, which iOS reports as a frame change.
 	useEffect(() => {
-		const settle = () =>
-			setTimeout(() => {
+		let timer: ReturnType<typeof setTimeout> | null = null;
+		const settle = () => {
+			if (timer) clearTimeout(timer);
+			timer = setTimeout(() => {
+				timer = null;
 				const id = terminalId;
 				const { cols, rows } = lastSize.current;
 				if (!id || !cols || !rows) return;
 				api.pty.resize(id, cols, Math.max(1, rows - 1));
 				setTimeout(() => api.pty.resize(id, cols, rows), 120);
 			}, 350);
-		const show = Keyboard.addListener("keyboardDidShow", settle);
-		const hide = Keyboard.addListener("keyboardDidHide", settle);
+		};
+		const sub = Keyboard.addListener("keyboardDidChangeFrame", settle);
 		return () => {
-			show.remove();
-			hide.remove();
+			sub.remove();
+			if (timer) clearTimeout(timer);
 		};
 	}, [api, terminalId]);
 
@@ -270,6 +283,7 @@ export function NativeTerminalScreen({
 						style={styles.term}
 						onInput={onInput}
 						onSizeChange={onSizeChange}
+						onOpenLink={openTappedLink}
 						ref={termRef}
 					/>
 					<ScrollView

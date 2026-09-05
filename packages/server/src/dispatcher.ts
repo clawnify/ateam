@@ -54,6 +54,7 @@ import { createEditorHost, installCodeServer } from "./editor";
 import { refreshLoginPath } from "./login-env";
 import type { Engine } from "./engine";
 import { LOOP_TEMPLATES } from "./loops/templates";
+import { createSizeArbiter } from "./pty/size-arbiter";
 import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
 import { searchSessions } from "./session-search";
 import { createTaskInProject, type SpawnAgentInput, shell, spawnAgentInTask } from "./sessions";
@@ -115,11 +116,18 @@ const INSTALL_URL =
 /** An update is in flight in THIS process (see CH.systemUpdate). */
 let updating = false;
 
+/** Who is calling: one id per client connection (a desktop window, the phone). */
+export interface CallContext {
+	client: string;
+}
+
 export interface Dispatcher {
 	/** Method names this dispatcher handles (the non-native CH.* channels). */
 	readonly methods: string[];
 	/** Invoke a method with its positional args; throws on unknown method. */
-	handle(method: string, args: unknown[]): Promise<unknown>;
+	handle(method: string, args: unknown[], ctx?: CallContext): Promise<unknown>;
+	/** A client connection went away: release anything it held (its PTY sizing). */
+	release(client: string): void;
 }
 
 export function createDispatcher(engine: Engine): Dispatcher {
@@ -702,12 +710,6 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			spawnAgentInTask(services, engine.sendTaskUpdated, input),
 		[CH.ptySpawnShell]: async (input: { taskId: string }) =>
 			spawnShellInTask(requireTask(services, input.taskId)),
-		[CH.ptyWrite]: (terminalId: string, data: string) => {
-			services.pty.write(terminalId, data);
-		},
-		[CH.ptyResize]: (terminalId: string, cols: number, rows: number) => {
-			services.pty.resize(terminalId, cols, rows);
-		},
 		[CH.ptyKill]: async (terminalId: string) => {
 			// Stamp WHY before the exit lands: closing a tab is the one ending that
 			// means "I am done with this", so it must not come back as a restorable
@@ -780,12 +782,39 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 	} satisfies Record<string, (...args: never[]) => unknown>;
 
+	// ---- pty input/size: the only handlers that need to know WHO is calling ----
+	// One terminal, many viewers (desktop + phone on a box, two windows): the PTY's
+	// size follows the viewer the user is using, not whoever reported last. The
+	// arbiter (size-arbiter.ts) decides; the transport supplies the client id.
+	// A call with no context (an older desktop main, a test) counts as one
+	// anonymous viewer, which is exactly the old last-writer-wins behaviour.
+	const sizes = createSizeArbiter();
+	engine.on("ptyExit", (e) => sizes.forget(e.terminalId));
+	const contextual = {
+		[CH.ptyWrite]: (ctx: CallContext, terminalId: string, data: string) => {
+			const size = sizes.activity(terminalId, ctx.client);
+			if (size) services.pty.resize(terminalId, size.cols, size.rows);
+			services.pty.write(terminalId, data);
+		},
+		[CH.ptyResize]: (ctx: CallContext, terminalId: string, cols: number, rows: number) => {
+			const size = sizes.resize(terminalId, ctx.client, { cols, rows });
+			if (size) services.pty.resize(terminalId, size.cols, size.rows);
+		},
+	} satisfies Record<string, (ctx: CallContext, ...args: never[]) => unknown>;
+
 	return {
-		methods: Object.keys(handlers),
-		async handle(method: string, args: unknown[]): Promise<unknown> {
+		methods: [...Object.keys(handlers), ...Object.keys(contextual)],
+		async handle(method: string, args: unknown[], ctx?: CallContext): Promise<unknown> {
+			const c = (contextual as Record<string, (ctx: CallContext, ...a: unknown[]) => unknown>)[
+				method
+			];
+			if (c) return await c(ctx ?? ANONYMOUS, ...args);
 			const h = (handlers as Record<string, (...a: unknown[]) => unknown>)[method];
 			if (!h) throw new Error(`Unknown method: ${method}`);
 			return await h(...args);
 		},
+		release: (client) => sizes.dropClient(client),
 	};
 }
+
+const ANONYMOUS: CallContext = { client: "anonymous" };

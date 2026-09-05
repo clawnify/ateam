@@ -15,7 +15,7 @@ export {
 	recordConnection,
 	resolveTransport,
 } from "./connections";
-export type { Dispatcher } from "./dispatcher";
+export type { CallContext, Dispatcher } from "./dispatcher";
 export { createDispatcher } from "./dispatcher";
 export type { Engine, EngineOptions } from "./engine";
 export { createEngine } from "./engine";

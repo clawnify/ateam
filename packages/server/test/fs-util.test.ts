@@ -17,6 +17,7 @@ function makeEngine(userDataDir: string): Engine {
 			loopRunner: { describe: () => [] },
 			userDataDir,
 		},
+		on: () => () => {},
 		sendTaskUpdated: () => {},
 		sendLoopsUpdated: () => {},
 	} as unknown as Engine;

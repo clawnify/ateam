@@ -1380,6 +1380,7 @@ export function App() {
 							cardKey={activeCard?.key ?? null}
 							agents={agents}
 							envProtocol={envProtocol}
+							onInstallAgent={installAgentOn}
 							onChanged={refreshLoops}
 						/>
 					)}
