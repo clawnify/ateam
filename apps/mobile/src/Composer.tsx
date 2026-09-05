@@ -6,7 +6,7 @@
 // (cross-machine: the phone has no files the remote agent can read).
 
 import type { AgentDTO } from "@ateam/protocol";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { AgentIcon } from "./AgentIcon";
 import { useKeyboardVisible } from "./useKeyboardVisible";
@@ -58,6 +58,16 @@ export function Composer({
 	const [yolo, setYolo] = useState(false);
 	const [agentMode, setAgentMode] = useState(false);
 	const [pickerOpen, setPickerOpen] = useState(false);
+	// The agent list arrives after the first render, and it is per-BOX: the
+	// default picked above can turn out to be one this box hasn't got. Drop to
+	// the first it can actually run (the desktop composer does the same when you
+	// switch environment). If it has none, leave the pick alone and let the
+	// launch say so.
+	useEffect(() => {
+		if (!agents.length || agents.some((a) => a.id === agentId && a.available)) return;
+		const first = agents.find((a) => a.available);
+		if (first) setAgentId(first.id);
+	}, [agents, agentId]);
 	const current = pickable.find((a) => a.id === agentId) ?? pickable[0];
 	const keyboardUp = useKeyboardVisible();
 
@@ -111,14 +121,27 @@ export function Composer({
 									<Pressable
 										key={a.id}
 										style={styles.popRow}
+										disabled={!a.available}
 										onPress={() => {
 											setAgentId(a.id);
 											setPickerOpen(false);
 										}}
 									>
 										<AgentIcon agentId={a.id} size={16} />
-										<Text style={styles.popText}>{a.label}</Text>
-										{a.id === agentId ? <Text style={styles.popCheck}>✓</Text> : null}
+										<View style={styles.popTextWrap}>
+											<Text style={[styles.popText, !a.available && styles.popTextOff]}>
+												{a.label}
+											</Text>
+											{/* Listed but unpickable, rather than hidden: the box either has
+											    this agent or can be given it, and a row that quietly vanishes
+											    reads as "Ateam dropped support" instead of "install it here". */}
+											{!a.available ? (
+												<Text style={styles.popSub}>not installed on this box</Text>
+											) : null}
+										</View>
+										{a.id === agentId && a.available ? (
+											<Text style={styles.popCheck}>✓</Text>
+										) : null}
 									</Pressable>
 								))}
 							</View>
@@ -193,7 +216,10 @@ const styles = StyleSheet.create({
 		paddingHorizontal: 14,
 		paddingVertical: 12,
 	},
-	popText: { color: C.ink, fontSize: 15, flex: 1 },
+	popTextWrap: { flex: 1 },
+	popText: { color: C.ink, fontSize: 15 },
+	popTextOff: { color: C.faint },
+	popSub: { color: C.faint, fontSize: 11, marginTop: 2 },
 	popCheck: { color: C.ink, fontSize: 15, fontWeight: "700" },
 	caret: { color: C.muted, fontSize: 10, marginLeft: 2 },
 	input: {

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { BinaryPresence } from "@ateam/agents";
 import { type AteamDb, repo } from "@ateam/db";
 import { CH } from "@ateam/protocol";
 // Reuse the db package's in-memory bun:sqlite test db (better-sqlite3 can't load
@@ -16,7 +17,7 @@ import type { Engine } from "../src/engine";
 // A minimal fake Engine: a real in-memory db for the DB-backed handlers, stubs
 // for the pieces those handlers don't touch, and a spy on taskUpdated so we can
 // assert the extraction still emits it.
-function makeEngine(db: AteamDb) {
+function makeEngine(db: AteamDb, agentPresence: BinaryPresence = "present") {
 	const taskUpdated: string[] = [];
 	const spawned: { terminalId: string; args?: string[] }[] = [];
 	const engine = {
@@ -40,6 +41,11 @@ function makeEngine(db: AteamDb) {
 			hooksDir: "/tmp/hooks",
 			notifyScriptPath: "/tmp/notify.sh",
 			hookPort: 0,
+			// A launch refuses when the agent's CLI is missing (sessions.ts). Stub
+			// it: these tests are about what the dispatcher does with a tab, not
+			// about which agents happen to be installed on the machine running
+			// them — a CI runner has none.
+			probeAgent: async () => agentPresence,
 		},
 		sendTaskUpdated: (id: string) => taskUpdated.push(id),
 		sendLoopsUpdated: () => {},
@@ -310,6 +316,47 @@ describe("createDispatcher", () => {
 		expect(
 			await d.handle(CH.ptyRestoreSession, [{ taskId: task.id, terminalId: "term-dead" }]),
 		).toEqual({ terminalId: "term-back" });
+	});
+
+	// `restored` is a one-way door: the strip lists `stranded`/`reaped` and
+	// nothing else. So it must not be stamped until the replacement tab is
+	// actually up — otherwise a launch that fails (the agent's CLI is gone from
+	// this machine) retires the conversation with nothing to show for it, and
+	// there is no second chance to bring it back.
+	it("keeps a tab restorable when the relaunch fails", async () => {
+		const db = createTestDb();
+		const { engine, spawned } = makeEngine(db, "absent");
+		const d = createDispatcher(engine);
+		const project = repo.upsertProject(db, { repoPath: "/r/m", name: "M" });
+		const task = repo.createTask(db, {
+			projectId: project!.id,
+			name: "t",
+			slug: "t",
+			branch: "t",
+			baseBranch: "main",
+			worktreePath: "/r/m/wt",
+		});
+		const dead = repo.createSession(db, {
+			taskId: task.id,
+			agentId: "opencode",
+			terminalId: "term-dead",
+			agentSessionId: "conv-1",
+			cwd: "/r/m/wt",
+		});
+		repo.updateSession(db, dead.id, { exitedAt: 1, exitReason: "stranded" });
+
+		await expect(
+			d.handle(CH.ptyRestoreSession, [{ taskId: task.id, terminalId: "term-dead" }]),
+		).rejects.toThrow(/not on PATH/);
+
+		expect(spawned).toHaveLength(0);
+		expect(repo.getSessionByTerminal(db, "term-dead")?.exitReason).toBe("stranded");
+		// Still on the strip: install the agent, click again, get the tab back.
+		expect(
+			((await d.handle(CH.ptyListRestorable, [task.id])) as { terminalId: string }[]).map(
+				(x) => x.terminalId,
+			),
+		).toEqual(["term-dead"]);
 	});
 
 	it("refuses to restore a tab that was closed on purpose", async () => {

@@ -199,19 +199,62 @@ export function getAgent(id: string): AgentDefinition | undefined {
 	return AGENTS.find((a) => a.id === id);
 }
 
-/** Is the agent's binary on PATH? */
-export async function isAgentAvailable(bin: string): Promise<boolean> {
+/**
+ * What a probe learned about a binary. "unknown" is not a synonym for absent:
+ * it is the shell failing to answer, which must never be read as "this agent
+ * is not installed" by anything that would then refuse to work.
+ */
+export type BinaryPresence = "present" | "absent" | "unknown";
+
+/** The login shell a launch would use, when the caller doesn't name one. */
+const defaultShell = (): string => process.env.SHELL || "/bin/zsh";
+
+/**
+ * Generous next to a measured ~0.14s (`zsh -lc` on a Mac with a real
+ * .zprofile). A probe slower than this is a shell that cannot answer, and the
+ * caller is better served by "unknown" than by waiting.
+ */
+const PROBE_TIMEOUT_MS = 5_000;
+
+/**
+ * Ask the LOGIN SHELL whether `bin` resolves.
+ *
+ * Deliberately the same shell and flags a launch uses — sessions.ts spawns
+ * `$SHELL -l -c '<agent>; exec $SHELL -l'`, and the box installer verifies with
+ * `bash -lc '<install> && command -v <bin>'`. Probing `/bin/sh` with this
+ * process's own PATH instead would answer a different question: a GUI app on a
+ * Mac inherits launchd's PATH, and when the boot-time probe misses (see the
+ * three-layer fallback in login-env.ts) the dirs that `.zprofile` adds are
+ * exactly the ones missing here. That gap produces a FALSE ABSENT, and a false
+ * absent is what refuses a launch that would have worked.
+ *
+ * `bin` comes from this registry, never from user input, so it goes into the
+ * command line as-is.
+ */
+export async function probeAgentBinary(
+	bin: string,
+	shell: string = defaultShell(),
+): Promise<BinaryPresence> {
 	try {
-		await pexec("command", ["-v", bin], { shell: "/bin/sh" });
-		return true;
-	} catch {
-		try {
-			await pexec("which", [bin]);
-			return true;
-		} catch {
-			return false;
-		}
+		await pexec(shell, ["-lc", `command -v ${bin}`], { timeout: PROBE_TIMEOUT_MS });
+		return "present";
+	} catch (err) {
+		// Exit 1 is the shell answering "no such command" (POSIX `command -v`,
+		// verified on zsh, bash and sh). Every other ending is the probe itself
+		// failing: a timeout arrives as code null + killed, a missing shell as
+		// ENOENT, neither of which knows anything about the binary.
+		return (err as { code?: unknown }).code === 1 ? "absent" : "unknown";
 	}
+}
+
+/**
+ * Is the agent's binary on PATH? Conservative on purpose: this answers "may I
+ * OFFER this agent", where an unanswerable probe should hide it rather than
+ * advertise something that may not run. The guard that REFUSES a launch asks
+ * `probeAgentBinary` directly, so it can tell "no" apart from "don't know".
+ */
+export async function isAgentAvailable(bin: string, shell?: string): Promise<boolean> {
+	return (await probeAgentBinary(bin, shell)) === "present";
 }
 
 export interface AvailableAgent extends AgentDefinition {

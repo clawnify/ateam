@@ -36,11 +36,21 @@ interface SessionLog {
 	stopped: string[];
 	/** Task names that make the fake createTask throw (branch-collision sim). */
 	failNames: Set<string>;
+	/** Makes the fake spawnAgent throw, as the real one does when the agent's
+	 *  CLI is missing from the machine (see spawnAgentInTask). */
+	failSpawn: boolean;
 	liveTasks: Set<string>;
 }
 
 function makeLog(): SessionLog {
-	return { created: [], spawned: [], stopped: [], failNames: new Set(), liveTasks: new Set() };
+	return {
+		created: [],
+		spawned: [],
+		stopped: [],
+		failNames: new Set(),
+		failSpawn: false,
+		liveTasks: new Set(),
+	};
 }
 
 /** Fake session ops: record calls and create real task rows, so the
@@ -64,6 +74,7 @@ function makeRunner(log: SessionLog = makeLog(), onChanged?: () => void): LoopRu
 				return { taskId: task.id };
 			},
 			spawnAgent: async (input) => {
+				if (log.failSpawn) throw new Error("Claude Code isn't installed here");
 				log.spawned.push(input);
 				const terminalId = `term-${log.spawned.length}`;
 				// Mirror spawnAgentInTask: a launch records a session row, which is
@@ -287,6 +298,46 @@ describe("LoopRunner", () => {
 			agentId: "codex",
 			taskId,
 		});
+		runner.stop();
+	});
+
+	it("keeps its task when a run fails to launch, instead of building a new one each tick", async () => {
+		// The loop owns ONE task for its whole life, and config.taskId is the only
+		// record of which. A launch that throws (the agent's CLI is gone from this
+		// machine) must not cost the link: a loop that re-created its task every
+		// tick would quietly leave a branch and a worktree behind every hour.
+		const projectId = seedProject();
+		const log = makeLog();
+		log.failSpawn = true;
+		const runner = makeRunner(log);
+		runner.start();
+		const id = runner
+			.createUserLoop({
+				templateId: "agent-session",
+				name: "Nightly deps",
+				projectId,
+				config: { prompt: "update deps", agentId: "claude" },
+				intervalMs: 3_600_000,
+				cadenceMode: "fixed",
+			})
+			.find((l) => l.kind === "user")?.id as string;
+
+		await runner.runNow(id);
+		const taskId = repo.getLoop(db, id)?.config?.taskId as string;
+		expect(taskId).toBeTruthy();
+		expect(repo.getLoop(db, id)?.lastStatus).toBe("error");
+
+		// Second tick: same task, no second worktree.
+		await runner.runNow(id);
+		expect(log.created).toHaveLength(1);
+		expect(repo.getLoop(db, id)?.config?.taskId).toBe(taskId);
+
+		// And once the agent is back, the run lands in that same task.
+		log.failSpawn = false;
+		await runner.runNow(id);
+		expect(log.created).toHaveLength(1);
+		expect(log.spawned[0]).toMatchObject({ taskId });
+		expect(repo.getLoop(db, id)?.lastStatus).toBe("ok");
 		runner.stop();
 	});
 

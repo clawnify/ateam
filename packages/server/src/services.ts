@@ -1,3 +1,4 @@
+import type { BinaryPresence } from "@ateam/agents";
 import type { AgentSession, AteamDb, Project, Task } from "@ateam/db";
 import type { ProjectDTO, SessionDTO, TaskDTO } from "@ateam/protocol";
 import type { FollowUps } from "./follow-ups";
@@ -19,6 +20,13 @@ export interface Services {
 	loopRunner: LoopRunner;
 	/** One-shot follow-up turns, armed at launch and consumed at turn end. */
 	followUps: FollowUps;
+	/**
+	 * Does this machine have an agent's CLI? Asked before every launch, so it is
+	 * a seam for the same reason `pty` is: the real one shells out, and a test
+	 * would otherwise be asserting which agents happen to be installed on the
+	 * machine running it (a CI runner has none). Defaults to the real probe.
+	 */
+	probeAgent?: (bin: string) => Promise<BinaryPresence>;
 	/**
 	 * In-flight `seedWorktree` calls by task id. A task's row is created (and its
 	 * card announced) as soon as the worktree exists, so its dependencies are

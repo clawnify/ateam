@@ -686,12 +686,19 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			// mints its own ids, or a tab that started life as a `--continue`),
 			// fall back to the newest conversation in the worktree — the same best
 			// effort the app made before, now at least aimed at the right task.
-			repo.updateSession(db, dead.id, { exitReason: "restored" });
-			return spawnAgentInTask(services, engine.sendTaskUpdated, {
+			// Retire the old tab only once the new one is actually up. `restored`
+			// is a one-way door — the strip lists `stranded`/`reaped` and nothing
+			// else (repo.listRestorableSessions) — and a launch really can fail
+			// here: spawnAgentInTask refuses when the agent's CLI has gone missing
+			// from this machine. Stamping first would then retire the conversation
+			// with no tab to show for it, and no way back to it.
+			const spawned = await spawnAgentInTask(services, engine.sendTaskUpdated, {
 				taskId: task.id,
 				agentId: dead.agentId,
 				...(dead.agentSessionId ? { resumeSessionId: dead.agentSessionId } : { resume: true }),
 			});
+			repo.updateSession(db, dead.id, { exitReason: "restored" });
+			return spawned;
 		},
 	} satisfies Record<string, (...args: never[]) => unknown>;
 
