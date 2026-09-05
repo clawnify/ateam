@@ -28,6 +28,12 @@ export interface Services {
 	 */
 	probeAgent?: (bin: string) => Promise<BinaryPresence>;
 	/**
+	 * Re-resolve this machine's login PATH, adopting it if it moved; resolves to
+	 * whether it changed. A seam for the same reason `probeAgent` is: the real
+	 * one runs an interactive login shell. Defaults to the real refresh.
+	 */
+	refreshPath?: (opts?: { force?: boolean }) => Promise<boolean>;
+	/**
 	 * In-flight `seedWorktree` calls by task id. A task's row is created (and its
 	 * card announced) as soon as the worktree exists, so its dependencies are
 	 * still landing for up to a minute afterwards; anything that needs them —

@@ -19,6 +19,7 @@ import type {
 	DiffResultDTO,
 	DirListingDTO,
 	GitStatusSnapshot,
+	InstallAgentDTO,
 	KanbanColumn,
 	LoopDTO,
 	LoopTemplateDTO,
@@ -125,6 +126,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		},
 		agents: {
 			list: () => call<AgentDTO[]>(CH.agentsList),
+			install: (input) => call<InstallAgentDTO>(CH.agentsInstall, [input]),
 		},
 		editor: {
 			open:

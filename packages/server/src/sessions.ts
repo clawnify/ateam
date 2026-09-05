@@ -8,6 +8,7 @@ import { agentCommand, generateTaskTags, getAgent, probeAgentBinary } from "@ate
 import { repo, type Task } from "@ateam/db";
 import { createTask as gitCreateTask, seedWorktree } from "@ateam/git-core";
 import { buildAgentEnv, ensureClaudeHooks, ensureCodexHooks } from "./agent-setup";
+import { refreshLoginPath } from "./login-env";
 import type { Services } from "./services";
 
 export const shell = process.env.SHELL || "/bin/zsh";
@@ -121,7 +122,18 @@ export async function spawnAgentInTask(
 	// blocking work on a shell that failed to reply would be a worse bug than
 	// the one this prevents.
 	const probe = services.probeAgent ?? ((bin: string) => probeAgentBinary(bin, shell));
-	if ((await probe(agent.bin)) === "absent") {
+	const refresh = services.refreshPath ?? (() => refreshLoginPath({ db: services.db }));
+	let presence = await probe(agent.bin);
+	if (presence === "absent") {
+		// Before refusing, consider that this process's PATH is a snapshot taken
+		// when the engine started (login-env.ts). An agent installed since then is
+		// invisible to it, and a loop tick is exactly the caller that never opens
+		// the picker that would otherwise have re-resolved it. Re-resolve, and
+		// only re-probe if the PATH actually moved — rate-limited inside, so a
+		// genuinely missing agent doesn't pay for a login shell on every attempt.
+		if (await refresh()) presence = await probe(agent.bin);
+	}
+	if (presence === "absent") {
 		const install = agent.install ? ` Install it with: ${agent.install}` : "";
 		throw new Error(
 			`${agent.label} isn't installed here — \`${agent.bin}\` is not on PATH.${install}`,

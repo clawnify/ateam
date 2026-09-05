@@ -175,6 +175,15 @@ export interface TaskDTO {
 	triage: TaskTriage;
 }
 
+/** The outcome of installing an agent CLI on an engine's machine. */
+export interface InstallAgentDTO {
+	agentId: string;
+	/** Whether the binary is now on the login PATH the engine spawns from. */
+	available: boolean;
+	/** The one-time OAuth the user runs themselves, when the agent has one. */
+	loginCommand?: string;
+}
+
 export interface AgentDTO {
 	id: string;
 	label: string;
@@ -477,6 +486,7 @@ export const CH = {
 	loopsUpdate: "loops:update",
 	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
+	agentsInstall: "agents:install",
 	searchSessions: "search:sessions",
 	systemHello: "system:hello",
 	systemUpdate: "system:update",
@@ -619,6 +629,14 @@ export interface AteamApi {
 	};
 	agents: {
 		list(): Promise<AgentDTO[]>;
+		/**
+		 * Run this agent's official installer on the machine the engine is on, and
+		 * report what the machine looks like afterwards. `projectId` only says WHICH
+		 * engine (the same routing `loops.create` uses); the install is not scoped
+		 * to that project. Resolves once the CLI is on the login PATH, so a caller
+		 * can offer it immediately; rejects with the installer's own last words.
+		 */
+		install(input: { projectId: string; agentId: string }): Promise<InstallAgentDTO>;
 	};
 	search: {
 		/**
