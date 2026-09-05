@@ -24,6 +24,7 @@ class ExpoSwifttermView: ExpoView {
 
   required init(appContext: AppContext? = nil) {
     terminal = TerminalView(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
+    defaultFont = terminal.font
     super.init(appContext: appContext)
     clipsToBounds = true
     backgroundColor = .black
@@ -73,6 +74,16 @@ class ExpoSwifttermView: ExpoView {
     keyboardShown = true
     terminal.inputView = nil
     terminal.reloadInputViews()
+  }
+
+  private let defaultFont: UIFont
+
+  func setFontSize(_ size: Double?) {
+    guard let size, size > 0 else {
+      terminal.font = defaultFont
+      return
+    }
+    terminal.font = UIFont.monospacedSystemFont(ofSize: CGFloat(size), weight: .regular)
   }
 
   var cols: Int { terminal.getTerminal().cols }

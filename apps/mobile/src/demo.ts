@@ -39,7 +39,7 @@ const PROJECT: ProjectDTO = {
 	defaultBranch: "main",
 	githubOwner: "clawnify",
 	githubName: "ateam",
-	color: "#7c5cff",
+	color: "#e6e6ea",
 };
 
 const T0 = Date.now();
@@ -162,6 +162,9 @@ function handle(method: string, args: unknown[]): unknown {
 			return "/tmp/ateam-attachments/demo.png";
 		case CH.fsListDir:
 			return LISTING;
+		case CH.loopsList:
+		case CH.loopsTemplates:
+			return [];
 		default:
 			// pty:write, pty:resize, pty:kill and anything else → a bare ack.
 			return undefined;
