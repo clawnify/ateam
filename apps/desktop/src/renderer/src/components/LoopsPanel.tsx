@@ -105,6 +105,21 @@ function LoopForm({
 	const [agentId, setAgentId] = useState(
 		draft?.agentId ?? editing?.agentId ?? usable[0]?.id ?? "claude",
 	);
+	// A loop outlives the toolchain it was made with: the agent it is pinned to
+	// can be uninstalled while the loop keeps ticking (every run then fails at
+	// launch). Without its own option the <select> would show the FIRST agent
+	// while the state still held the missing one, and Save would write the
+	// missing one straight back — the one screen you come to to repair the loop
+	// would be unable to. So list it, marked, and let it be switched away from.
+	const options = usable.some((a) => a.id === agentId)
+		? usable
+		: [
+				...usable,
+				{
+					id: agentId,
+					label: `${agents.find((a) => a.id === agentId)?.label ?? agentId} (not installed)`,
+				},
+			];
 	const [everyMin, setEveryMin] = useState(
 		draft?.everyMin ??
 			(editing?.intervalMs ? String(Math.round(editing.intervalMs / 60_000)) : "60"),
@@ -187,7 +202,7 @@ function LoopForm({
 					<label>
 						Agent
 						<select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-							{usable.map((a) => (
+							{options.map((a) => (
 								<option key={a.id} value={a.id}>
 									{a.label}
 								</option>

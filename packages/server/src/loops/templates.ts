@@ -195,17 +195,24 @@ const agentSession: LoopTemplate = {
 			ctx.stopTaskSessions(task.id);
 		}
 
+		// Claim the task BEFORE the launch, not after. The loop owns one task for
+		// its whole life, and this link is the only record of which one; writing
+		// it after the spawn means a launch that throws (the agent's CLI is gone
+		// from this machine — see spawnAgentInTask) leaves the loop unlinked, so
+		// the NEXT tick builds another branch and worktree, and the one after
+		// that another. A failed run must cost nothing but the failure.
+		if (loopId && row) {
+			// Persist the link under `taskId`; drop the legacy key it migrated from.
+			const { lastTaskId: _legacy, ...rest } = row.config ?? {};
+			repo.updateLoop(ctx.db, loopId, { config: { ...rest, taskId: task.id } });
+		}
+
 		await ctx.spawnAgent({
 			taskId: task.id,
 			agentId,
 			prompt: `${stateInstructions(task.worktreePath)}\n\n---\n\n${prompt}`,
 			followUp,
 		});
-		if (loopId && row) {
-			// Persist the link under `taskId`; drop the legacy key it migrated from.
-			const { lastTaskId: _legacy, ...rest } = row.config ?? {};
-			repo.updateLoop(ctx.db, loopId, { config: { ...rest, taskId: task.id } });
-		}
 		return { summary: `run ${runNumber} started (${task.name})` };
 	},
 };

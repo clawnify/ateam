@@ -2,6 +2,7 @@ export type {
 	AgentDefinition,
 	AgentId,
 	AvailableAgent,
+	BinaryPresence,
 	PromptTransport,
 } from "./registry";
 export {
@@ -10,6 +11,7 @@ export {
 	getAgent,
 	isAgentAvailable,
 	listAgents,
+	probeAgentBinary,
 } from "./registry";
 export type { TagOptions } from "./tagging";
 export {
