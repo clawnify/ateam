@@ -39,6 +39,10 @@ beforeEach(() => {
 		hookPort: 0,
 		followUps: new FollowUps(),
 		pendingSeeds: new Map(),
+		// The launch refuses when the agent's CLI is missing (sessions.ts), and a
+		// CI runner has no agent CLIs at all. Stub it: this file is about what a
+		// resume does to the card, not about what is installed on the machine.
+		probeAgent: async () => "present" as const,
 	} as unknown as Services;
 	const project = repo.upsertProject(db, {
 		repoPath: "/tmp/repo",

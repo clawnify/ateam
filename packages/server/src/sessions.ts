@@ -4,7 +4,7 @@
 // dispatcher's tasksCreate / ptySpawnAgent handlers.
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { agentCommand, generateTaskTags, getAgent } from "@ateam/agents";
+import { agentCommand, generateTaskTags, getAgent, probeAgentBinary } from "@ateam/agents";
 import { repo, type Task } from "@ateam/db";
 import { createTask as gitCreateTask, seedWorktree } from "@ateam/git-core";
 import { buildAgentEnv, ensureClaudeHooks, ensureCodexHooks } from "./agent-setup";
@@ -103,6 +103,30 @@ export async function spawnAgentInTask(
 	if (!task) throw new Error(`Task not found: ${input.taskId}`);
 	const agent = getAgent(input.agentId);
 	if (!agent) throw new Error(`Unknown agent: ${input.agentId}`);
+
+	// The agent's CLI must exist on THIS machine before anything is written
+	// down. Without this the launch line (`<agent>; exec $SHELL -l` below) turns
+	// a missing binary into one line of shell output inside a pane that then
+	// sits there looking healthy: the card is filed `running`, a loop tick
+	// reports `run N started`, and nothing anywhere says the agent never ran.
+	// The check belongs HERE, ahead of the session row and the hooks, because
+	// this is the one path every launch takes — composer, relaunch, restored
+	// tab, phone, loop tick.
+	//
+	// A toolchain is not static: this fires for an agent that was installed
+	// yesterday and is gone today (a reboot, an uninstall, a PATH that moved),
+	// which no availability list captured at connect time can catch.
+	//
+	// Only a definite "absent" refuses. An unanswerable probe spawns anyway:
+	// blocking work on a shell that failed to reply would be a worse bug than
+	// the one this prevents.
+	const probe = services.probeAgent ?? ((bin: string) => probeAgentBinary(bin, shell));
+	if ((await probe(agent.bin)) === "absent") {
+		const install = agent.install ? ` Install it with: ${agent.install}` : "";
+		throw new Error(
+			`${agent.label} isn't installed here — \`${agent.bin}\` is not on PATH.${install}`,
+		);
+	}
 
 	// Deliberately NOT awaiting services.pendingSeeds here. Dependencies land
 	// under the agent while it works: seedNodeModules stages each tree outside
