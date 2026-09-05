@@ -57,6 +57,18 @@ export function TerminalView({
 			cursorBlink: true,
 			theme: { background: "#000000", foreground: "#e6e6ea" },
 			scrollback: 5000,
+			// A TUI that captures the mouse (OpenCode turns on modes 1000-1006 at
+			// startup; Claude Code never does) gets every drag as mouse reports, so
+			// xterm's own text selection is off. On macOS xterm offers no way around
+			// that unless this flag is set: Option+drag then selects text while the
+			// app keeps the mouse otherwise. Same convention as VS Code and iTerm2.
+			macOptionClickForcesSelection: true,
+			// Forcing selection also arms xterm's Option+click "move the cursor here"
+			// (its default), which types a path of arrow keys towards the click.
+			// Reproduced here: one Option+click on OpenCode's alt screen sent the
+			// renderer into an unbounded loop in that path computation and killed
+			// the window (out of memory). No agent wants those arrows anyway.
+			altClickMovesCursor: false,
 		});
 		const fit = new FitAddon();
 		term.loadAddon(fit);
