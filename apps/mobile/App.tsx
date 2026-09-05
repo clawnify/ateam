@@ -1103,6 +1103,7 @@ export default function App() {
 					api={conn.current.api}
 					agents={agents}
 					projectId={selectedProjectId}
+					boxProtocol={skew ?? PROTOCOL_VERSION}
 					editing={loopForm.editing}
 					onClose={() => setLoopForm(null)}
 					onSaved={(next) => {

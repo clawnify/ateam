@@ -291,6 +291,7 @@ export class LoopRunner {
 				prompt: typeof row.config?.prompt === "string" ? row.config.prompt : null,
 				agentId: typeof row.config?.agentId === "string" ? row.config.agentId : null,
 				followUp: typeof row.config?.followUp === "string" ? row.config.followUp : null,
+				yolo: typeof row.config?.yolo === "boolean" ? row.config.yolo : null,
 				// The loop's persistent task (lastTaskId = pre-persistent-era key).
 				taskId:
 					typeof row.config?.taskId === "string"

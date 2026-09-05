@@ -55,7 +55,14 @@
 // `createRemote` and silently ignores it, leaving a repo with no remote — which is
 // the one state that can never merge across engines — so `githubProjects` below is
 // what turns that silent no-op into a feature the client switches off.
-export const PROTOCOL_VERSION = 9;
+// v10: LoopDTO gained `yolo` — a loop run launches its agent permission-free (the
+// composer's Auto mode, now also on loops). Shape-wise a missing field reads as
+// "off", which is harmless; the damage is on the WRITE side, where a new desktop
+// saves yolo onto an older box that stores the config key and silently launches
+// every run permission-PROMPTED — a scheduled, unattended loop then wedges on the
+// first permission ask forever. `loopAutoMode` below is what turns that silent
+// downgrade into a feature the client knows to switch off.
+export const PROTOCOL_VERSION = 10;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -90,6 +97,11 @@ export const FEATURE_MIN_VERSION = {
 	 *  first with "Unknown method" and swallows the second, so both halves of "add a
 	 *  project from GitHub" are hidden rather than half-working. */
 	githubProjects: 9,
+	/** v10 added LoopDTO.yolo — a loop run launching its agent permission-free. A v9
+	 *  engine stores the config key and silently launches permission-prompted, which
+	 *  for an unattended scheduled loop means it wedges on the first permission ask.
+	 *  Hide the toggle rather than let it look saved. */
+	loopAutoMode: 10,
 } as const;
 
 export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
@@ -314,6 +326,8 @@ export interface LoopDTO {
 	agentId: string | null;
 	/** Optional second turn, sent once after the agent's first reply. */
 	followUp: string | null;
+	/** Whether each run launches its agent permission-free (the composer's Auto mode). */
+	yolo: boolean | null;
 	/** The loop's one persistent task — every run is a fresh session in it. */
 	taskId: string | null;
 	intervalMs: number | null;

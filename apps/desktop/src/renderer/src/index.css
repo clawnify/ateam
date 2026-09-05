@@ -2337,6 +2337,59 @@ input {
 	min-height: 56px;
 	font-family: inherit;
 }
+/* The loop form borrows the composer's foot pills (agent, environment, Auto);
+   the interval and a fixed-at-creation environment are the loop-specific two. */
+.comp-every {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 11.5px;
+	color: var(--text-dim);
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	padding: 5px 9px;
+	background: var(--bg-elev-2);
+	user-select: none;
+}
+.comp-every input {
+	width: 44px;
+	border: none;
+	background: transparent;
+	color: var(--text);
+	font-size: 12.5px;
+	text-align: right;
+	outline: none;
+	appearance: textfield;
+	-moz-appearance: textfield;
+}
+.comp-every input::-webkit-outer-spin-button,
+.comp-every input::-webkit-inner-spin-button {
+	-webkit-appearance: none;
+	margin: 0;
+}
+.comp-env-fixed {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	color: var(--text-dim);
+	border: 1px dashed var(--border);
+	border-radius: 7px;
+	padding: 5px 9px;
+}
+.comp-yolo:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+.loop-form .comp-prompt {
+	min-height: 72px;
+}
+.loop-auto {
+	display: inline-flex;
+	align-items: center;
+	color: var(--amber);
+	margin-left: 5px;
+}
 .loop-del {
 	display: inline-flex;
 	align-items: center;

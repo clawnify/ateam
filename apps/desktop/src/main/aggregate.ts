@@ -15,6 +15,7 @@
 // single-active path until this is proven and flag-gated in. It is the load-bearing
 // slice: hold N backends, route every call correctly, merge the board.
 import { CH } from "@ateam/protocol";
+import type { CallContext } from "@ateam/server";
 import type { Backend } from "./backend";
 import { withTimeout } from "./timeout";
 
@@ -124,7 +125,7 @@ function merge(results: unknown[]): unknown[] {
 
 export interface Aggregate {
 	/** Route/merge one request across the held backends (drop-in for Router.handle). */
-	handle(method: string, args: unknown[]): Promise<unknown>;
+	handle(method: string, args: unknown[], ctx?: CallContext): Promise<unknown>;
 	/** Invoke a method ON the engine that owns `ownerId` (fallback when unknown) —
 	 *  for calls whose own args carry no routable id (e.g. util:writeImageBytes
 	 *  must land on the engine whose agent will read the file). */
@@ -148,7 +149,7 @@ export function createAggregate(
 	const reg = new Map<string, Backend>();
 	const mergeTimeoutMs = opts.mergeTimeoutMs ?? MERGE_TIMEOUT_MS;
 
-	async function handle(method: string, args: unknown[]): Promise<unknown> {
+	async function handle(method: string, args: unknown[], ctx?: CallContext): Promise<unknown> {
 		if (MERGE.has(method)) {
 			const results = await Promise.all(
 				backends.map(async (b) => {
@@ -178,7 +179,7 @@ export function createAggregate(
 			const id = candidateId(args);
 			backend = (id && reg.get(id)) || fallback;
 		}
-		const result = await backend.handle(method, args);
+		const result = await backend.handle(method, args, ctx);
 		learn(reg, backend, result);
 		return result;
 	}

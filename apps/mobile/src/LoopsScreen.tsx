@@ -3,6 +3,7 @@
 // editing goes through LoopForm, which App renders as a modal so Home's plus
 // can open it too.
 import type { AgentDTO, AteamApi, LoopDTO, TaskDTO } from "@ateam/protocol";
+import { boxSupports } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useEffect, useState } from "react";
 import {
@@ -115,6 +116,7 @@ export function LoopsScreen({
 									<Text style={styles.cardTitle} numberOfLines={1}>
 										{l.title}
 									</Text>
+									{l.yolo ? <Text style={styles.autoChip}>auto</Text> : null}
 									<Text style={styles.cadence}>{everyLabel(l.intervalMs)}</Text>
 								</View>
 								{l.prompt ? (
@@ -174,6 +176,7 @@ export function LoopForm({
 	api,
 	agents,
 	projectId,
+	boxProtocol,
 	editing,
 	onClose,
 	onSaved,
@@ -181,6 +184,9 @@ export function LoopForm({
 	api: AteamApi;
 	agents: AgentDTO[];
 	projectId: string | null;
+	/** The box's protocol version, which gates Auto mode (a v9 box would store
+	 *  the flag and still launch permission-prompted, wedging an unattended run). */
+	boxProtocol: number;
 	editing: LoopDTO | null;
 	onClose: () => void;
 	onSaved: (loops: LoopDTO[]) => void;
@@ -197,6 +203,8 @@ export function LoopForm({
 	const [everyMin, setEveryMin] = useState(
 		editing?.intervalMs ? String(Math.round(editing.intervalMs / 60_000)) : "60",
 	);
+	const [yolo, setYolo] = useState(editing?.yolo ?? false);
+	const autoSupported = boxSupports("loopAutoMode", boxProtocol);
 	const [pickerOpen, setPickerOpen] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -208,7 +216,12 @@ export function LoopForm({
 		setSaving(true);
 		setError(null);
 		try {
-			const config = { prompt: prompt.trim(), agentId, followUp: followUp.trim() };
+			const config = {
+				prompt: prompt.trim(),
+				agentId,
+				followUp: followUp.trim(),
+				...(autoSupported ? { yolo } : {}),
+			};
 			const intervalMs = Number(everyMin) * 60_000;
 			const loops = editing
 				? await api.loops.update({
@@ -295,6 +308,21 @@ export function LoopForm({
 								</View>
 							</Pressable>
 						</Modal>
+						{autoSupported ? (
+							<>
+								<Text style={styles.label}>MODE</Text>
+								<Pressable
+									style={[styles.agentPill, yolo && styles.pillOn]}
+									onPress={() => setYolo((v) => !v)}
+								>
+									<Text style={styles.agentText}>{yolo ? "auto: on" : "auto: off"}</Text>
+								</Pressable>
+								<Text style={styles.help}>
+									Auto runs the agent permission-free, the composer's Auto mode. Off, an unattended
+									run can stall on its first permission ask.
+								</Text>
+							</>
+						) : null}
 						<Text style={styles.label}>PROMPT</Text>
 						<TextInput
 							style={[styles.input, styles.multiline]}
@@ -367,6 +395,16 @@ const styles = StyleSheet.create({
 	cardTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
 	cardTitle: { flex: 1, color: C.ink, fontSize: 15, fontWeight: "700" },
 	cadence: { color: C.muted, fontSize: 12 },
+	autoChip: {
+		color: C.amber,
+		fontSize: 10,
+		fontWeight: "700",
+		paddingHorizontal: 6,
+		paddingVertical: 2,
+		borderRadius: 5,
+		backgroundColor: "rgba(251,191,36,0.13)",
+		overflow: "hidden",
+	},
 	prompt: { color: C.muted, fontSize: 13, marginTop: 6 },
 	meta: { color: C.faint, fontSize: 12, marginTop: 6 },
 	ok: { color: C.muted },
@@ -428,6 +466,8 @@ const styles = StyleSheet.create({
 		borderColor: C.line,
 	},
 	agentText: { color: C.ink, fontSize: 14 },
+	pillOn: { borderColor: C.amber, backgroundColor: "rgba(251,191,36,0.13)" },
+	help: { color: C.faint, fontSize: 12 },
 	caret: { color: C.muted, fontSize: 10 },
 	backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 24 },
 	popover: {
