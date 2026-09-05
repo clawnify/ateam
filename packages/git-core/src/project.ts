@@ -66,22 +66,31 @@ export async function detectDefaultBranch(repoPath: string): Promise<string> {
 	);
 }
 
-async function detectGithubRepo(repoPath: string): Promise<GithubRepo | null> {
-	try {
-		const { stdout } = await pexec("gh", ["repo", "view", "--json", "owner,name"], {
-			cwd: repoPath,
-		});
-		const parsed = JSON.parse(stdout) as {
-			owner?: { login?: string };
-			name?: string;
-		};
-		if (parsed.owner?.login && parsed.name) {
-			return { owner: parsed.owner.login, name: parsed.name };
-		}
-	} catch {
-		/* gh missing, not authed, or not a GitHub remote — fine, local-only */
-	}
-	return null;
+// github.com/owner/name(.git), over https, ssh:// or scp-style git@github.com:owner/name.
+const GITHUB_URL = /github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i;
+
+/** owner/name from a GitHub clone URL, or null when it isn't one. */
+export function parseGithubRepo(url: string): GithubRepo | null {
+	const m = url.match(GITHUB_URL);
+	return m?.[1] && m[2] ? { owner: m[1], name: m[2] } : null;
+}
+
+/**
+ * The repo's GitHub identity, read from its `origin` URL. This is the only
+ * cross-engine-stable identity there is (see the desktop's unify.ts): the same repo
+ * cloned on this Mac and on a box is two rows with different paths and different
+ * UUIDs, and only owner/name reconciles them into one board card.
+ *
+ * Deliberately NOT `gh repo view`. That needs gh installed, authed AND online, so a
+ * box missing any of the three silently loses its identity; and with no argument it
+ * resolves through BaseRepo(), which reports a fork's PARENT. Two engines deriving
+ * identity two different ways is exactly what splits one repo into two cards. The
+ * origin URL is offline, instant, and the same on every machine that cloned it.
+ * Case is normalised by the consumer — GitHub treats owner/name case-insensitively.
+ */
+export async function detectGithubRepo(repoPath: string): Promise<GithubRepo | null> {
+	const url = await getOriginUrl(repoPath);
+	return url ? parseGithubRepo(url) : null;
 }
 
 /**
@@ -199,12 +208,12 @@ export async function cloneRepo(cloneUrl: string, dest: string): Promise<void> {
 	if (!/^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/.test(cloneUrl)) {
 		throw new GitCoreError("INVALID_NAME", `Unsupported clone URL "${cloneUrl}"`);
 	}
-	// github.com/owner/name(.git) — capture owner/name to prefer `gh` (auth) for GitHub.
-	const gh = cloneUrl.match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+	// A GitHub URL goes through `gh` to reuse its auth for private repos.
+	const gh = parseGithubRepo(cloneUrl);
 	try {
 		if (gh) {
 			try {
-				await pexec("gh", ["repo", "clone", `${gh[1]}/${gh[2]}`, dest]);
+				await pexec("gh", ["repo", "clone", `${gh.owner}/${gh.name}`, dest]);
 			} catch {
 				// `gh` may be unauthenticated in this process even when git can
 				// clone: hosts like boxd inject GH_TOKEN into login shells only,

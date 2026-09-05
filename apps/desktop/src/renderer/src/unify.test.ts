@@ -30,6 +30,19 @@ test("same GitHub repo across engines merges into one card with both members", (
 	expect(cards[0].members.map((m) => m.projectId)).toEqual(["pLocal", "pRemote"]);
 });
 
+// Two clones of one repo really do disagree on casing: this Mac cloned
+// github.com/clawnify/taskwindow, the box cloned github.com/clawnify/TaskWindow.
+// GitHub says those are the same repo, so the board must too.
+test("owner/name casing doesn't split a repo across engines", () => {
+	const local = project("pLocal", { githubOwner: "clawnify", githubName: "taskwindow" });
+	const remote = project("pRemote", { githubOwner: "Clawnify", githubName: "TaskWindow" });
+	const cards = unifyProjects([local, remote], { pLocal: null, pRemote: "hetzner" });
+
+	expect(cards).toHaveLength(1);
+	expect(cards[0].key).toBe("gh:clawnify/taskwindow");
+	expect(cards[0].members.map((m) => m.alias)).toEqual([null, "hetzner"]);
+});
+
 test("non-GitHub repos never merge — each stays its own card", () => {
 	const a = project("pA", { name: "scratch" });
 	const b = project("pB", { name: "scratch" }); // same name, no gh identity
