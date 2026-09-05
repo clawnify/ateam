@@ -3,7 +3,7 @@
 		"name": "Ateam Go",
 		"slug": "ateam",
 		"scheme": "ateamgo",
-		"version": "1.0.0",
+		"version": "1.0.2",
 		"orientation": "portrait",
 		"icon": "./assets/icon.png",
 		"userInterfaceStyle": "light",
@@ -20,7 +20,7 @@
 		"ios": {
 			"supportsTablet": true,
 			"bundleIdentifier": "com.clawnify.ateam",
-			"buildNumber": "10",
+			"buildNumber": "12",
 			"infoPlist": {
 				"ITSAppUsesNonExemptEncryption": false,
 				"NSLocalNetworkUsageDescription": "Ateam connects to a coding-agent server you run on your own machine or local network."
