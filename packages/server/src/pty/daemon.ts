@@ -26,6 +26,7 @@ import { dirname, join } from "node:path";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { Terminal } from "@xterm/headless";
 import * as pty from "node-pty";
+import { trackMouseEncoding } from "./snapshot-modes";
 
 const SOCK = process.env.ATEAM_PTY_SOCK || join(homedir(), ".ateam", "pty-daemon.sock");
 const SCROLLBACK = 5000; // lines of scrollback the emulator (and snapshot) keeps
@@ -37,6 +38,9 @@ interface Session {
 	// Headless emulator mirroring the PTY: source of truth for snapshot state.
 	term: Terminal;
 	serialize: SerializeAddon;
+	// The mouse encoding the app asked for, which serialize() cannot replay
+	// (see snapshot-modes.ts). Appended to every snapshot.
+	mouseEncoding: () => string;
 	exited: boolean;
 	cwd: string;
 	agentId: string;
@@ -98,6 +102,7 @@ function spawnSession(m: {
 		proc,
 		term,
 		serialize,
+		mouseEncoding: trackMouseEncoding(term),
 		exited: false,
 		cwd: m.cwd,
 		agentId: m.agentId ?? "shell",
@@ -179,7 +184,7 @@ function handleMessage(sock: net.Socket, m: Record<string, unknown>): void {
 			// xterm parses writes asynchronously; drain the queue with an empty
 			// write so the serialized snapshot reflects the very latest bytes
 			// (modes included) rather than a state a few frames stale.
-			s.term.write("", () => reply(s.serialize.serialize(), cutSeq));
+			s.term.write("", () => reply(s.serialize.serialize() + s.mouseEncoding(), cutSeq));
 			break;
 		}
 		case "list":
