@@ -44,6 +44,15 @@ describe("agentCommand", () => {
 		expect(agentCommand(opencode, { sessionId: "abc-123" })).toBe("opencode");
 	});
 
+	// Every registered agent must actually have a bypass flag: the Auto toggle
+	// renders for all of them, and an omission here turns it into a silent
+	// no-op — the launch is safe, the toggle was a lie.
+	it("makes Auto mode real for every agent, opencode included", () => {
+		expect(agentCommand(opencode, { yolo: true, prompt: "go" })).toBe(
+			"opencode --auto --prompt 'go'",
+		);
+	});
+
 	it("leaves agent mode alone — a board is not a conversation", () => {
 		expect(agentCommand(claude, { sessionId: "abc-123", agentMode: true, cwd: "/w" })).toBe(
 			"claude agents --cwd '/w'",

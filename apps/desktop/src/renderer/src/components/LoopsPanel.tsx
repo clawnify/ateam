@@ -1,17 +1,23 @@
 import { type AgentDTO, boxSupports, FEATURE_MIN_VERSION, type LoopDTO } from "@ateam/protocol";
 import {
 	AlertTriangle,
+	ArrowUp,
 	Check,
 	CheckCircle2,
+	Laptop,
 	Pencil,
 	Play,
 	Plus,
 	RefreshCw,
+	Server,
 	Trash2,
 	X,
+	Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { type Alias, aliasLabel, type EngineMember } from "../unify";
+import { AgentPicker } from "./AgentPicker";
+import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
 
 /** "in 45s" / "in 2m" / "now", or "—" when no next run is scheduled. */
 function untilLabel(nextRunAt: number | null, now: number): string {
@@ -57,6 +63,7 @@ interface LoopDraft {
 	projectId: string;
 	agentId: string;
 	everyMin: string;
+	yolo: boolean;
 }
 const drafts = new Map<string, LoopDraft>();
 const openForm = { creating: false, editingId: null as string | null };
@@ -66,7 +73,9 @@ const openForm = { creating: false, editingId: null as string | null };
  * `editing`, it patches that loop in place. The repo is the selected project, so
  * the only placement choice is WHICH environment runs it (this Mac or a box that
  * also has the repo); that's fixed at creation — moving a loop means delete +
- * recreate.
+ * recreate. Layout and controls mirror the New Task composer: name on top, the
+ * prompt as the big field, and a foot of the same pills (agent, environment,
+ * Auto mode) so the two dialogs read as one gesture.
  */
 function LoopForm({
 	editing,
@@ -74,6 +83,7 @@ function LoopForm({
 	members,
 	agents,
 	envProtocol,
+	onInstallAgent,
 	onSaved,
 	onCancel,
 }: {
@@ -82,6 +92,7 @@ function LoopForm({
 	members: EngineMember[];
 	agents: AgentDTO[];
 	envProtocol: Record<string, number>;
+	onInstallAgent?: (alias: string | null, agentId: string) => Promise<{ loginCommand?: string }>;
 	onSaved: () => void;
 	onCancel: () => void;
 }) {
@@ -107,44 +118,42 @@ function LoopForm({
 	);
 	// A loop outlives the toolchain it was made with: the agent it is pinned to
 	// can be uninstalled while the loop keeps ticking (every run then fails at
-	// launch). Without its own option the <select> would show the FIRST agent
-	// while the state still held the missing one, and Save would write the
-	// missing one straight back — the one screen you come to to repair the loop
-	// would be unable to. So list it, marked, and let it be switched away from.
-	const options = usable.some((a) => a.id === agentId)
-		? usable
-		: [
-				...usable,
-				{
-					id: agentId,
-					label: `${agents.find((a) => a.id === agentId)?.label ?? agentId} (not installed)`,
-				},
-			];
+	// launch). The AgentPicker keeps the value and marks the pill "not installed"
+	// rather than silently showing the first agent — Save would write the missing
+	// one straight back, and this is the one screen you come to to repair the loop.
 	const [everyMin, setEveryMin] = useState(
 		draft?.everyMin ??
 			(editing?.intervalMs ? String(Math.round(editing.intervalMs / 60_000)) : "60"),
 	);
+	const [yolo, setYolo] = useState(draft?.yolo ?? editing?.yolo ?? false);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
 	useEffect(() => {
-		drafts.set(draftKey, { name, prompt, followUp, projectId, agentId, everyMin });
-	}, [draftKey, name, prompt, followUp, projectId, agentId, everyMin]);
+		drafts.set(draftKey, { name, prompt, followUp, projectId, agentId, everyMin, yolo });
+	}, [draftKey, name, prompt, followUp, projectId, agentId, everyMin, yolo]);
 
 	const close = (done: () => void) => {
 		drafts.delete(draftKey);
 		done();
 	};
 
+	// The engine that will run this loop's sessions — the environment selected
+	// (fixed at creation when editing). Both version-gated features key off it:
+	// their config keys would be stored by an older box and silently ignored.
+	const ownerAlias: Alias = memberFor(members, projectId)?.alias ?? null;
+	const gatedBy = (feature: keyof typeof FEATURE_MIN_VERSION) => {
+		if (!ownerAlias) return null;
+		const version = envProtocol[ownerAlias];
+		return version !== undefined && !boxSupports(feature, version) ? version : null;
+	};
 	// A follow-up is delivered by the OWNING engine's turn-end hook, so a box on
 	// an older Ateam accepts the config key and then never acts on it. Gate on
 	// that engine, like cleanup does: local is never skewed with itself.
-	const followUpBlockedBy = (() => {
-		const alias: Alias = memberFor(members, projectId)?.alias ?? null;
-		if (!alias) return null;
-		const version = envProtocol[alias];
-		return version !== undefined && !boxSupports("followUps", version) ? version : null;
-	})();
+	const followUpBlockedBy = gatedBy("followUps");
+	// Same shape for Auto mode: an older engine stores the key and launches
+	// permission-prompted, which wedges an unattended loop on its first ask.
+	const autoBlockedBy = gatedBy("loopAutoMode");
 
 	const ready = prompt.trim() && projectId && Number(everyMin) >= 1;
 
@@ -162,6 +171,7 @@ function LoopForm({
 						prompt: prompt.trim(),
 						agentId,
 						followUp: followUpBlockedBy === null ? followUp.trim() : "",
+						yolo: autoBlockedBy === null ? yolo : false,
 					},
 				});
 			} else {
@@ -176,6 +186,7 @@ function LoopForm({
 						prompt: prompt.trim(),
 						agentId,
 						followUp: followUpBlockedBy === null ? followUp.trim() : "",
+						yolo: autoBlockedBy === null ? yolo : false,
 					},
 				});
 			}
@@ -187,69 +198,45 @@ function LoopForm({
 		}
 	};
 
+	// The composer's gesture: ⌘⏎ submits, Escape backs out.
+	const onKeys = (e: React.KeyboardEvent) => {
+		if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+			e.preventDefault();
+			void submit();
+		}
+		if (e.key === "Escape") onCancel();
+	};
+
+	// The EnvironmentPicker speaks aliases (null = this Mac); the loop's routing
+	// key is the projectId on that engine. One maps onto the other 1:1 — members
+	// are the engines holding this repo, one per alias.
+	const envOptions: EnvOption[] = members.map((m) => ({
+		alias: m.alias,
+		label: aliasLabel(m.alias),
+		disabled: false,
+	}));
+	const pickEnv = (alias: string | null) => {
+		const member = members.find((m) => m.alias === alias);
+		if (member) setProjectId(member.projectId);
+	};
+
 	return (
-		<div className="loop-card loop-form">
+		<div className="loop-card loop-form" onKeyDown={onKeys}>
 			<div className="loop-main">
-				<div className="loop-form-row">
-					<label>
-						Name
-						<input
-							value={name}
-							placeholder="Nightly deps"
-							onChange={(e) => setName(e.target.value)}
-						/>
-					</label>
-					<label>
-						Agent
-						<select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-							{options.map((a) => (
-								<option key={a.id} value={a.id}>
-									{a.label}
-								</option>
-							))}
-						</select>
-					</label>
+				<div className="comp-head">
+					<input
+						className="comp-name"
+						placeholder="Loop name (optional)"
+						value={name}
+						onChange={(e) => setName(e.target.value)}
+					/>
 				</div>
-				<div className="loop-form-row">
-					<label>
-						Environment
-						<select
-							value={projectId}
-							disabled={!!editing}
-							title={
-								editing
-									? "Fixed at creation — delete and recreate to move a loop"
-									: "Which machine runs this loop's sessions"
-							}
-							onChange={(e) => setProjectId(e.target.value)}
-						>
-							{members.map((m) => (
-								<option key={m.projectId} value={m.projectId}>
-									{aliasLabel(m.alias)}
-								</option>
-							))}
-						</select>
-					</label>
-					<label>
-						Every (min)
-						<input
-							type="number"
-							min={1}
-							value={everyMin}
-							onChange={(e) => setEveryMin(e.target.value)}
-						/>
-					</label>
-				</div>
-				<div className="loop-form-row">
-					<label>
-						Prompt — each run starts a fresh session with exactly this
-						<textarea
-							value={prompt}
-							placeholder="Update dependencies and open a PR."
-							onChange={(e) => setPrompt(e.target.value)}
-						/>
-					</label>
-				</div>
+				<textarea
+					className="comp-prompt"
+					placeholder="What should each run do?"
+					value={prompt}
+					onChange={(e) => setPrompt(e.target.value)}
+				/>
 				<div className="loop-form-row">
 					<label>
 						{followUpBlockedBy === null
@@ -263,6 +250,72 @@ function LoopForm({
 						/>
 					</label>
 				</div>
+				<div className="comp-foot">
+					<AgentPicker
+						agents={agents}
+						value={agentId}
+						onChange={setAgentId}
+						isAvailable={(id) => agents.find((a) => a.id === id)?.available ?? false}
+						alias={ownerAlias}
+						onInstallAgent={onInstallAgent}
+					/>
+					{editing ? (
+						<span
+							className="comp-env-fixed"
+							title="Fixed at creation — delete and recreate to move a loop"
+						>
+							{ownerAlias === null ? (
+								<Laptop size={14} strokeWidth={1.75} />
+							) : (
+								<Server size={14} strokeWidth={1.75} />
+							)}
+							<span>{aliasLabel(ownerAlias)}</span>
+						</span>
+					) : (
+						<EnvironmentPicker environments={envOptions} value={ownerAlias} onChange={pickEnv} />
+					)}
+					<label className="comp-every" title="How often each run fires">
+						<span>every</span>
+						<input
+							type="number"
+							min={1}
+							value={everyMin}
+							onChange={(e) => setEveryMin(e.target.value)}
+						/>
+						<span>min</span>
+					</label>
+					<button
+						type="button"
+						className={`iconbtn comp-yolo ${yolo ? "active" : ""}`}
+						title={
+							autoBlockedBy === null
+								? "Auto mode — each run launches permission-free"
+								: `Auto mode — needs Ateam v${FEATURE_MIN_VERSION.loopAutoMode} on this box (it runs v${autoBlockedBy})`
+						}
+						aria-label="Auto mode"
+						disabled={autoBlockedBy !== null}
+						onClick={() => setYolo((v) => !v)}
+					>
+						<Zap size={16} strokeWidth={1.75} />
+					</button>
+					<span className="spacer" />
+					<span className="muted" style={{ fontSize: 11 }}>
+						⌘⏎
+					</span>
+					<button
+						type="button"
+						className="comp-go"
+						disabled={saving || !ready}
+						title={editing ? "Save this loop (⌘⏎)" : "Create this loop (⌘⏎)"}
+						onClick={() => void submit()}
+					>
+						{editing ? (
+							<Check size={15} strokeWidth={2.25} />
+						) : (
+							<ArrowUp size={15} strokeWidth={2.25} />
+						)}
+					</button>
+				</div>
 				{error && (
 					<div className="loop-stat err">
 						<AlertTriangle size={13} /> {error}
@@ -270,10 +323,6 @@ function LoopForm({
 				)}
 			</div>
 			<div className="loop-actions">
-				<button type="button" className="navbtn" onClick={submit} disabled={saving || !ready}>
-					{editing ? <Check size={14} /> : <Plus size={14} />}
-					{editing ? "Save" : "Create"}
-				</button>
 				<button type="button" className="navbtn" onClick={() => close(onCancel)}>
 					<X size={14} /> Cancel
 				</button>
@@ -296,6 +345,7 @@ export function LoopsPanel({
 	cardKey,
 	agents,
 	envProtocol,
+	onInstallAgent,
 	onChanged,
 }: {
 	loops: LoopDTO[];
@@ -303,6 +353,8 @@ export function LoopsPanel({
 	cardKey: string | null;
 	agents: AgentDTO[];
 	envProtocol: Record<string, number>;
+	/** Install a coding agent on the selected environment — the composer's affordance. */
+	onInstallAgent?: (alias: string | null, agentId: string) => Promise<{ loginCommand?: string }>;
 	onChanged: () => void;
 }) {
 	const [busy, setBusy] = useState<string | null>(null);
@@ -388,6 +440,7 @@ export function LoopsPanel({
 					members={members}
 					agents={agents}
 					envProtocol={envProtocol}
+					onInstallAgent={onInstallAgent}
 					onSaved={() => {
 						onChanged();
 						setCreating(false);
@@ -409,6 +462,7 @@ export function LoopsPanel({
 						members={members}
 						agents={agents}
 						envProtocol={envProtocol}
+						onInstallAgent={onInstallAgent}
 						onSaved={() => {
 							onChanged();
 							setEditingId(null);
@@ -425,6 +479,14 @@ export function LoopsPanel({
 								</span>
 								<span className="loop-cadence muted">
 									{l.agentId ?? "claude"} · {everyLabel(l.intervalMs)}
+									{l.yolo && (
+										<span
+											className="loop-auto"
+											title="Auto mode — each run launches permission-free"
+										>
+											<Zap size={10} strokeWidth={2} />
+										</span>
+									)}
 								</span>
 							</div>
 							{l.prompt && <div className="loop-desc muted">{l.prompt}</div>}

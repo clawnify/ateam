@@ -23,6 +23,8 @@ export interface LoopSessionOps {
 		prompt: string;
 		/** Optional second turn, taken right after the first response. */
 		followUp?: string;
+		/** Launch permission-free — the composer's Auto mode (YOLO). */
+		yolo?: boolean;
 	}) => Promise<{ terminalId: string }>;
 	/** Kill a task's live PTYs (the previous run's idle pane). */
 	stopTaskSessions: (taskId: string) => void;

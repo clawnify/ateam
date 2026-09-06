@@ -130,3 +130,56 @@ describe("a half-open WebSocket", () => {
 		wss.close();
 	});
 });
+
+// The user's setup: one task open on the desktop AND on the phone, each its own
+// WebSocket to the box. The PTY has one size; it must follow the viewer in use,
+// not whichever xterm fitted itself last (which left the desktop rendered at
+// phone dimensions). serveRpc names each connection, so the dispatcher can tell
+// them apart — and releases the name when the connection closes.
+describe("two viewers of one terminal over ws", () => {
+	it("holds a second viewer's size back until it types, and releases on close", async () => {
+		const db = createTestDb();
+		const engine = makeEngine(db);
+		const calls: string[] = [];
+		(engine.services as unknown as { pty: unknown }).pty = {
+			has: () => true,
+			write: (id: string, data: string) => calls.push(`write ${id} ${data}`),
+			resize: (id: string, c: number, r: number) => calls.push(`resize ${id} ${c}x${r}`),
+		};
+		const dispatcher = createDispatcher(engine);
+		const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+		wss.on("connection", (sock) => serveRpc(engine, dispatcher, wsServerTransport(sock)));
+		await new Promise<void>((resolve) => wss.once("listening", resolve));
+		const { port } = wss.address() as AddressInfo;
+		const desk = wsClientTransport(`ws://127.0.0.1:${port}`);
+		const phone = wsClientTransport(`ws://127.0.0.1:${port}`);
+		const deskApi = buildAteamApi(createRpcClient(desk.transport), native);
+		const phoneApi = buildAteamApi(createRpcClient(phone.transport), native);
+		// pty.write/resize are fire-and-forget; a round-trip call fences them.
+		const settle = async () => {
+			await deskApi.tasks.list("none");
+			await phoneApi.tasks.list("none");
+		};
+
+		deskApi.pty.resize("t", 200, 50);
+		await settle();
+		phoneApi.pty.resize("t", 40, 20);
+		await settle();
+		expect(calls).toEqual(["resize t 200x50"]);
+
+		phoneApi.pty.write("t", "y");
+		await settle();
+		expect(calls.slice(1)).toEqual(["resize t 40x20", "write t y"]);
+
+		// The phone (now the owner) goes away: its hold is released, so the
+		// desktop's next report applies without it having to type first.
+		phone.close();
+		await new Promise((r) => setTimeout(r, 50));
+		deskApi.pty.resize("t", 201, 50);
+		await deskApi.tasks.list("none");
+		expect(calls.slice(3)).toEqual(["resize t 201x50"]);
+
+		desk.close();
+		wss.close();
+	});
+});

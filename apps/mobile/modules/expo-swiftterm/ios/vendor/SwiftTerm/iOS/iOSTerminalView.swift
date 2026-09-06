@@ -690,54 +690,77 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         contentOffset.y = max(0, CGFloat(lines) - bottomVisibleLine) * cellDimension.height
     }
     
+    // ATEAM PATCH (re-apply on SwiftTerm bump): touch-first single tap.
+    //
+    // Keyboard visibility is NOT tied to first-responder status. The host
+    // (ExpoSwifttermView) keeps this view first responder from mount and swaps
+    // `inputView` to show/hide the keyboard, so link taps, long-press selection and
+    // the Copy/Paste menu all work with the keyboard down. A tap therefore never
+    // toggles focus: it opens a link, else clears a selection, else asks the host
+    // for the keyboard when it lands near the CURSOR row — the universal "active
+    // input" location of any agent TUI (Claude/Codex/OpenCode keep their cursor in
+    // their input). Tapping the output/history does nothing to the keyboard.
+    public var tapRequestsKeyboard: (() -> Void)?
+
+    /// Link under a touch. Unlike `linkForClick`, this skips the hover-highlight
+    /// gate (`linkVisibleForClick`): touch has no hover, so on iOS that gate would
+    /// reject every implicit (plain-text) URL.
+    func linkForTouch(at position: Position) -> (link: String, params: [String:String])?
+    {
+        guard let match = terminal.linkMatch(at: .buffer(position), mode: .explicitAndImplicit) else {
+            return nil
+        }
+        if match.isExplicit,
+           let payload = payloadString(at: position),
+           let (url, params) = urlAndParamsFrom(payload: payload) {
+            return (url, params)
+        }
+        return (match.text, [:])
+    }
+
     @objc func singleTap (_ gestureRecognizer: UITapGestureRecognizer)
     {
         guard gestureRecognizer.view != nil, gestureRecognizer.state == .ended else { return }
 
-        // ATEAM PATCH (re-apply on SwiftTerm bump): the keyboard follows the tap
-        // relative to the CURSOR — the universal "active input" location for any agent
-        // (Claude/Codex/OpenCode all keep their cursor in their input). Tap near the
-        // cursor row → show the keyboard; tap the output/history → dismiss it. No
-        // hardcoded per-agent layout.
-        let tapRow = calculateTapHit(gesture: gestureRecognizer).grid.row
-        let cursorRow = terminal.displayBuffer.y + terminal.displayBuffer.yDisp
-        let nearInput = abs(tapRow - cursorRow) < 4
+        let tapHit = calculateTapHit(gesture: gestureRecognizer).grid
+        if let result = linkForTouch(at: tapHit) {
+            terminalDelegate?.requestOpenLink(source: self, link: result.link, params: result.params)
+            return
+        }
 
-        if isFirstResponder {
-            let tapHit = calculateTapHit(gesture: gestureRecognizer).grid
-            if let result = linkForClick(at: tapHit, hasCommandModifier: commandActive) {
-                terminalDelegate?.requestOpenLink(source: self, link: result.link, params: result.params)
-                return
+        let displayBuffer = terminal.displayBuffer
+        let cursorRow = displayBuffer.y + displayBuffer.yDisp
+        let nearInput = abs(tapHit.row - cursorRow) < 4
+
+        if allowMouseReporting && terminal.mouseMode.sendButtonPress() {
+            sharedMouseEvent(gestureRecognizer: gestureRecognizer, release: false)
+
+            if terminal.mouseMode.sendButtonRelease() {
+                sharedMouseEvent(gestureRecognizer: gestureRecognizer, release: true)
             }
-
-            if allowMouseReporting && terminal.mouseMode.sendButtonPress() {
-                sharedMouseEvent(gestureRecognizer: gestureRecognizer, release: false)
-
-                if terminal.mouseMode.sendButtonRelease() {
-                    sharedMouseEvent(gestureRecognizer: gestureRecognizer, release: true)
-                }
-            } else {
-                if selection.active {
-                    selection.selectNone()
-                    disableSelectionPanGesture()
-                }
-                if UIMenuController.shared.isMenuVisible {
-                    UIMenuController.shared.hideMenu()
-                } else {
-                    let location = gestureRecognizer.location(in: gestureRecognizer.view)
-                    let tapLoc = calculateTapHit(gesture: gestureRecognizer).grid
-                    let displayBuffer = terminal.displayBuffer
-                    if abs (tapLoc.col-displayBuffer.x) < 4 && abs (tapLoc.row - cursorRow) < 2 {
-                        showContextMenu (forRegion: makeContextMenuRegionForTap (point: location), pos: tapLoc)
-                    }
-                }
+        } else if selection.active {
+            selection.selectNone()
+            disableSelectionPanGesture()
+            if UIMenuController.shared.isMenuVisible {
+                UIMenuController.shared.hideMenu()
             }
             queuePendingDisplay()
-            // Tapped the output/history (not the input) → dismiss the keyboard.
-            if !nearInput { let _ = resignFirstResponder() }
-        } else if nearInput {
-            // Tapped in the input area while the keyboard is hidden → bring it up.
-            let _ = becomeFirstResponder ()
+            return
+        } else if UIMenuController.shared.isMenuVisible {
+            UIMenuController.shared.hideMenu()
+            return
+        } else if abs (tapHit.col-displayBuffer.x) < 4 && abs (tapHit.row - cursorRow) < 2 {
+            let location = gestureRecognizer.location(in: gestureRecognizer.view)
+            showContextMenu (forRegion: makeContextMenuRegionForTap (point: location), pos: tapHit)
+        }
+        queuePendingDisplay()
+
+        if nearInput {
+            if let request = tapRequestsKeyboard {
+                request()
+            } else {
+                let _ = becomeFirstResponder ()
+            }
         }
     }
     

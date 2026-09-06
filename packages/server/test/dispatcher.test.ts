@@ -52,6 +52,7 @@ function makeEngine(db: AteamDb, agentPresence: BinaryPresence = "present") {
 			// would leak out of this test into every one that shells out after it.
 			refreshPath: async () => false,
 		},
+		on: () => () => {},
 		sendTaskUpdated: (id: string) => taskUpdated.push(id),
 		sendLoopsUpdated: () => {},
 	} as unknown as Engine;
@@ -576,5 +577,68 @@ describe("createDispatcher", () => {
 		} finally {
 			await rm(base, { recursive: true, force: true });
 		}
+	});
+});
+
+// One terminal, two clients (the desktop and the phone on a box). Each serveRpc
+// connection passes its own client id; the dispatcher must let the PTY follow
+// the client in use rather than whichever reported its size last.
+describe("pty sizing across clients", () => {
+	function makeSpyEngine() {
+		const calls: string[] = [];
+		const engine = {
+			services: {
+				db: createTestDb(),
+				pty: {
+					has: () => true,
+					write: (id: string, data: string) => calls.push(`write ${id} ${data}`),
+					resize: (id: string, c: number, r: number) => calls.push(`resize ${id} ${c}x${r}`),
+				},
+				followUps: { arm() {}, discard() {} },
+				pendingSeeds: new Map(),
+				hooks: {},
+				mergeQueue: {},
+				loopRunner: { describe: () => [] },
+				probeAgent: async () => "present",
+				refreshPath: async () => false,
+			},
+			on: () => () => {},
+			sendTaskUpdated: () => {},
+			sendLoopsUpdated: () => {},
+		} as unknown as Engine;
+		return { engine, calls };
+	}
+
+	it("a second viewer's size is held back until it types, then restored on return", async () => {
+		const { engine, calls } = makeSpyEngine();
+		const d = createDispatcher(engine);
+		const desk = { client: "desk" };
+		const phone = { client: "phone" };
+		await d.handle(CH.ptyResize, ["t", 200, 50], desk);
+		await d.handle(CH.ptyResize, ["t", 40, 20], phone);
+		expect(calls).toEqual(["resize t 200x50"]);
+		// Typing on the phone applies its size before the keystroke lands.
+		await d.handle(CH.ptyWrite, ["t", "y"], phone);
+		expect(calls.slice(1)).toEqual(["resize t 40x20", "write t y"]);
+		// Typing on the desktop takes it back, no window resize needed.
+		await d.handle(CH.ptyWrite, ["t", "z"], desk);
+		expect(calls.slice(3)).toEqual(["resize t 200x50", "write t z"]);
+	});
+
+	it("a disconnected owner releases the size; a call with no context still works", async () => {
+		const { engine, calls } = makeSpyEngine();
+		const d = createDispatcher(engine);
+		await d.handle(CH.ptyResize, ["t", 200, 50], { client: "desk" });
+		await d.handle(CH.ptyResize, ["t", 40, 20], { client: "phone" });
+		d.release("desk");
+		await d.handle(CH.ptyResize, ["t", 40, 21], { client: "phone" });
+		expect(calls).toEqual(["resize t 200x50", "resize t 40x21"]);
+		// No context (an older caller): one anonymous viewer, last writer wins.
+		const e = makeSpyEngine();
+		const d2 = createDispatcher(e.engine);
+		await d2.handle(CH.ptyResize, ["t", 10, 10]);
+		await d2.handle(CH.ptyResize, ["t", 11, 11]);
+		await d2.handle(CH.ptyWrite, ["t", "k"]);
+		expect(e.calls).toEqual(["resize t 10x10", "resize t 11x11", "write t k"]);
 	});
 });

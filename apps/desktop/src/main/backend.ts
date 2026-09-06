@@ -4,7 +4,7 @@
 // Both satisfy one shape, so the IPC bridge (ipc.ts) and event forwarding (host.ts)
 // don't care which is active — they route to whatever Backend is current.
 import type { RpcClient } from "@ateam/protocol";
-import { createDispatcher, type Engine } from "@ateam/server";
+import { type CallContext, createDispatcher, type Engine } from "@ateam/server";
 
 /** The engine push-events forwarded to the renderer. */
 export type BackendEvent = "taskUpdated" | "taskRemoved" | "loopsUpdated" | "ptyData" | "ptyExit";
@@ -13,10 +13,14 @@ export interface Backend {
 	readonly kind: "local" | "remote";
 	/** The RPC method channels this backend serves (same set for local + remote). */
 	readonly methods: readonly string[];
-	/** Route one request; the IPC bridge awaits (or ignores, for send channels) this. */
-	handle(method: string, args: unknown[]): unknown | Promise<unknown>;
+	/** Route one request; the IPC bridge awaits (or ignores, for send channels) this.
+	 *  `ctx` names the calling window; only the local engine can use it (a box sees
+	 *  this whole desktop as one client, its own connection). */
+	handle(method: string, args: unknown[], ctx?: CallContext): unknown | Promise<unknown>;
 	/** Subscribe to a push-event; returns an unsubscribe. */
 	on(event: BackendEvent, cb: (payload: unknown) => void): () => void;
+	/** A calling window closed: release what the engine held for it. Local only. */
+	release?(client: string): void;
 	/** Release transport resources. No-op for local (the engine outlives swaps). */
 	dispose(): void;
 }
@@ -28,7 +32,9 @@ export interface Backend {
  */
 export interface Router {
 	readonly methods: readonly string[];
-	handle(method: string, args: unknown[]): unknown | Promise<unknown>;
+	handle(method: string, args: unknown[], ctx?: CallContext): unknown | Promise<unknown>;
+	/** A calling window closed (see Backend.release). */
+	release(client: string): void;
 	/** Invoke a method ON the engine that owns `ownerId` (local when unknown) — for
 	 *  calls whose own args carry no routable id, like staging an attachment on the
 	 *  machine whose agent will read it. */
@@ -43,9 +49,10 @@ export function localBackend(engine: Engine): Backend {
 	return {
 		kind: "local",
 		methods: dispatcher.methods,
-		handle: (method, args) => dispatcher.handle(method, args),
+		handle: (method, args, ctx) => dispatcher.handle(method, args, ctx),
 		// engine.on is typed per-event; the Backend surface is event-agnostic.
 		on: (event, cb) => engine.on(event, cb as never),
+		release: (client) => dispatcher.release(client),
 		dispose: () => {},
 	};
 }

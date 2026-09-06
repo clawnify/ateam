@@ -33,7 +33,6 @@ const C = {
 	ink: "#e6e6ea",
 	muted: "#9a9aa6",
 	faint: "#6a6a75",
-	accent: "#7c5cff",
 	red: "#f87171",
 };
 
@@ -261,7 +260,7 @@ export function TerminalScreen({
 							<Text style={styles.errText}>{detail}</Text>
 						) : (
 							<>
-								<ActivityIndicator color={C.accent} />
+								<ActivityIndicator color={C.ink} />
 								<Text style={styles.hint}>{detail}</Text>
 							</>
 						)}
@@ -306,7 +305,7 @@ const styles = StyleSheet.create({
 		borderBottomColor: C.line,
 	},
 	closeBtn: { paddingVertical: 4, paddingRight: 4 },
-	closeText: { color: C.accent, fontSize: 15, fontWeight: "600" },
+	closeText: { color: C.ink, fontSize: 15, fontWeight: "600" },
 	title: { color: C.ink, fontSize: 15, fontWeight: "700", flex: 1 },
 	kbdBtn: {
 		paddingHorizontal: 10,

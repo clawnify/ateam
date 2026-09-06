@@ -18,7 +18,9 @@ export interface AgentDefinition {
 	command: string;
 	/**
 	 * Extra flag(s) appended for "YOLO" mode (bypass permissions/approvals).
-	 * Omitted for agents that have no such flag (e.g. OpenCode).
+	 * Omitted for an agent that has no such flag — Auto mode then does nothing
+	 * for it, which is why an omission must be deliberate and verified against
+	 * the CLI's own --help.
 	 */
 	yoloFlag?: string;
 	/**
@@ -137,6 +139,11 @@ export const AGENTS = [
 		description: "Open-source coding agent for the terminal, IDE, and desktop.",
 		bin: "opencode",
 		command: "opencode",
+		// Top-level TUI flag: "auto-approve permissions that are not explicitly
+		// denied (dangerous!)" — opencode's own wording. Without it Auto mode
+		// silently did nothing for this agent: the launch was safe, the toggle
+		// was a lie.
+		yoloFlag: "--auto",
 		resumeCommand: "opencode --continue",
 		// Same shape as Codex: `-s/--session <id>` continues a named session,
 		// but nothing pins the id of a new one.

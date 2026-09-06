@@ -77,9 +77,28 @@ export interface NativeHandlers {
  * the desktop OS itself (native dialog/clipboard, window management) live here.
  */
 export function registerIpc(router: Router, native: NativeHandlers): void {
+	// The send channels are the terminal's input + size, and the engine needs to
+	// know WHICH window they come from: a terminal open in two windows must not
+	// have each window's size clobber the other's (see the server's size-arbiter).
+	// Name the window by its webContents and release it when the window goes.
+	const seen = new Set<number>();
+	const clientOf = (wc: Electron.WebContents): string => {
+		const client = `window:${wc.id}`;
+		if (!seen.has(wc.id)) {
+			seen.add(wc.id);
+			wc.once("destroyed", () => {
+				seen.delete(wc.id);
+				router.release(client);
+			});
+		}
+		return client;
+	};
 	for (const method of router.methods) {
 		if (SEND_CHANNELS.has(method)) {
-			ipcMain.on(method, (_e, ...args: unknown[]) => void router.handle(method, args));
+			ipcMain.on(
+				method,
+				(e, ...args: unknown[]) => void router.handle(method, args, { client: clientOf(e.sender) }),
+			);
 		} else {
 			ipcMain.handle(method, (_e, ...args: unknown[]) => router.handle(method, args));
 		}

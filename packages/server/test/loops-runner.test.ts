@@ -32,7 +32,7 @@ let db: AteamDb;
 /** Everything the fake session layer records, for assertions. */
 interface SessionLog {
 	created: { projectId: string; name: string }[];
-	spawned: { taskId: string; agentId: string; prompt: string }[];
+	spawned: { taskId: string; agentId: string; prompt: string; yolo?: boolean }[];
 	stopped: string[];
 	/** Task names that make the fake createTask throw (branch-collision sim). */
 	failNames: Set<string>;
@@ -510,6 +510,48 @@ describe("LoopRunner", () => {
 			});
 			await runner.runNow(id);
 			expect(log.spawned).toHaveLength(2);
+			runner.stop();
+		});
+
+		it("passes Auto mode through to the spawn, and off by default", async () => {
+			// The composer's YOLO, on a schedule. The flag must reach
+			// spawnAgentInTask — the exact same path a composer launch takes — and
+			// default OFF: a loop runs unattended, so anything but an explicit
+			// opt-in must launch permission-prompted.
+			const projectId = seedProject();
+			const log = makeLog();
+			const runner = makeRunner(log);
+			runner.start();
+			const on = runner
+				.createUserLoop({
+					templateId: "agent-session",
+					name: "Auto loop",
+					projectId,
+					config: { prompt: "update deps", yolo: true },
+				})
+				.find((l) => l.kind === "user")?.id as string;
+
+			await runner.runNow(on);
+			expect(log.spawned[0]).toMatchObject({ yolo: true });
+			const dto = runner.describe().find((l) => l.kind === "user");
+			expect(dto?.yolo).toBe(true); // what the panel's card renders
+
+			// A loop without the flag launches prompted — the historical behavior.
+			const off = runner
+				.createUserLoop({
+					templateId: "agent-session",
+					name: "Prompted loop",
+					projectId,
+					config: { prompt: "update deps" },
+				})
+				.find((l) => l.title === "Prompted loop")?.id as string;
+			await runner.runNow(off);
+			expect(log.spawned[1]).toMatchObject({ yolo: false });
+
+			// Editing it back off, in place, sticks.
+			await runner.updateUserLoop({ id: on, config: { yolo: false } });
+			await runner.runNow(on);
+			expect(log.spawned[2]).toMatchObject({ yolo: false });
 			runner.stop();
 		});
 
