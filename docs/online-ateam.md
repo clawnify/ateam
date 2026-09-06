@@ -295,8 +295,17 @@ would accept the request and silently not do it.
 Its terminal is a real login shell on the box too, so re-logging into `claude` when a
 session expires and `gh auth refresh` also work from the app. On the phone, tap the
 login URL the agent prints, even where it wraps across lines, and it opens in Safari;
-tapping the output never hides the keyboard (the **Hide** button does), and a long
-press selects text for Copy without bringing the keyboard up.
+tapping the output never hides the keyboard (the chevron key at the end of the
+shortcut bar does), and a long press selects text for Copy without bringing the
+keyboard up.
+
+The phone opens on **Home**, the desktop sidebar as a list: your projects, then the
+selected project's tasks in status order, then its loops. The pill in the navbar
+switches to **Board** (the kanban), **Mission Control** (two live terminals per
+page, paged with the control at the bottom right; tap a tile to highlight it and
+drive it from the shortcut bar, or expand it to type), and **Loops** (create, edit,
+run, pause and delete loops, the same ones the Mac shows). Opening a task keeps the
+navbar; the back arrow is the first key in the shortcut bar.
 
 ### Write a Tailscale ACL — this one isn't optional
 

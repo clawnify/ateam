@@ -16,6 +16,7 @@ const NativeView: React.ComponentType<{
 	onInput?: (e: { nativeEvent: { data: string } }) => void;
 	onSizeChange?: (e: { nativeEvent: { cols: number; rows: number } }) => void;
 	onOpenLink?: (e: { nativeEvent: { url: string } }) => void;
+	fontSize?: number;
 	ref?: React.Ref<NativeRef>;
 }> = requireNativeView("ExpoSwiftterm");
 
@@ -30,10 +31,12 @@ export interface SwiftTermViewProps {
 	onInput?: (data: string) => void;
 	onSizeChange?: (cols: number, rows: number) => void;
 	onOpenLink?: (url: string) => void;
+	/** Terminal font point size; omit for SwiftTerm's default. */
+	fontSize?: number;
 }
 
 export const SwiftTermView = React.forwardRef<SwiftTermHandle, SwiftTermViewProps>(
-	({ style, onInput, onSizeChange, onOpenLink }, ref) => {
+	({ style, onInput, onSizeChange, onOpenLink, fontSize }, ref) => {
 		const nativeRef = React.useRef<NativeRef>(null);
 		React.useImperativeHandle(ref, () => ({
 			feed: (text: string) => void nativeRef.current?.feed(text),
@@ -47,6 +50,7 @@ export const SwiftTermView = React.forwardRef<SwiftTermHandle, SwiftTermViewProp
 				onInput={(e) => onInput?.(e.nativeEvent.data)}
 				onSizeChange={(e) => onSizeChange?.(e.nativeEvent.cols, e.nativeEvent.rows)}
 				onOpenLink={(e) => onOpenLink?.(e.nativeEvent.url)}
+				fontSize={fontSize}
 			/>
 		);
 	},

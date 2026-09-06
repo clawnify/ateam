@@ -85,3 +85,24 @@ export async function saveConsent(): Promise<void> {
 		/* best-effort: a failed persist just asks again next launch, never less safe */
 	}
 }
+
+// The box version whose "older Ateam" banner the user dismissed, per box. The
+// banner returns on its own when the box reports a different version.
+const skewKey = (host: string) => `ateam.skewDismissed.${host}`;
+
+export async function loadDismissedSkew(host: string): Promise<number | null> {
+	try {
+		const v = await AsyncStorage.getItem(skewKey(host));
+		return v === null ? null : Number(v);
+	} catch {
+		return null;
+	}
+}
+
+export async function saveDismissedSkew(host: string, version: number): Promise<void> {
+	try {
+		await AsyncStorage.setItem(skewKey(host), String(version));
+	} catch {
+		/* best-effort — the banner just shows again next launch */
+	}
+}

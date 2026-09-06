@@ -835,6 +835,16 @@ export type { NativeClientApi } from "./client-api";
 export { buildAteamApi, requestBoxUpdate, serverHandshake } from "./client-api";
 // Transport-agnostic RPC framing + client (shared by every transport).
 export * from "./rpc";
+// Derived task tags (pure), shared by every client; icons are per-client.
+export {
+	MAX_TAGS,
+	matchesTagQuery,
+	TASK_TAG_RULES,
+	type TaskTagRule,
+	tagsFor,
+	taskTag,
+	taskTags,
+} from "./task-tags";
 // Reading an engine older than this client (the version gate is advisory now).
 export { NO_TRIAGE, tolerantRpc } from "./tolerate";
 export type { WsClient } from "./ws";
