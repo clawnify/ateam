@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { Terminal } from "@xterm/headless";
-import { trackMouseEncoding } from "../src/pty/snapshot-modes";
+import { trackMouseEncoding, withMouseEncoding } from "../src/pty/snapshot-modes";
 
 // What OpenCode 1.18 sends at startup (captured from a real PTY): alt screen,
 // bracketed paste, every mouse tracking mode, then SGR encoding.
@@ -37,7 +37,7 @@ describe("snapshot mouse encoding", () => {
 	test("a request split across PTY chunks is still seen", async () => {
 		const { write, encoding } = setup();
 		await write("\x1b[?1000h\x1b[?10");
-		expect(encoding()).toBe("");
+		expect(encoding()).toBe("\x1b[?1006l"); // tracking on, nothing asked yet
 		await write("06h");
 		expect(encoding()).toBe("\x1b[?1006h");
 	});
@@ -50,14 +50,27 @@ describe("snapshot mouse encoding", () => {
 		expect(encoding()).toBe("\x1b[?1016h");
 	});
 
-	test("resetting the encoding, or a full reset, drops it", async () => {
+	test("resetting the encoding states the default explicitly while tracking is on", async () => {
 		const { write, encoding } = setup();
 		await write(OPENCODE_STARTUP);
 		await write("\x1b[?1006l");
+		expect(encoding()).toBe("\x1b[?1006l");
+		// Tracking off too: nothing to say about the mouse at all.
+		await write("\x1b[?1000l\x1b[?1002l\x1b[?1003l");
 		expect(encoding()).toBe("");
-		await write("\x1b[?1006h");
+	});
+
+	test("a full reset drops everything", async () => {
+		const { write, encoding } = setup();
+		await write(OPENCODE_STARTUP);
 		await write("\x1bc");
 		expect(encoding()).toBe("");
+	});
+
+	test("tracking without any encoding request is stated as the default", async () => {
+		const { write, encoding } = setup();
+		await write("\x1b[?1000h");
+		expect(encoding()).toBe("\x1b[?1006l");
 	});
 
 	test("xterm's own handling still runs (handlers fall through)", async () => {
@@ -66,5 +79,33 @@ describe("snapshot mouse encoding", () => {
 		expect(term.modes.mouseTrackingMode).toBe("any");
 		await write("\x1b[?1003l");
 		expect(term.modes.mouseTrackingMode).toBe("none");
+	});
+});
+
+describe("withMouseEncoding (app-side fallback for old daemons)", () => {
+	test("adds SGR when tracking is on and no encoding is stated", () => {
+		const old = "\x1b[?1049h\x1b[?2004h\x1b[?1003hscreen";
+		expect(withMouseEncoding(old)).toBe(`${old}\x1b[?1006h`);
+	});
+
+	test("leaves a snapshot alone when the daemon stated an encoding", () => {
+		for (const stated of ["\x1b[?1006h", "\x1b[?1016h", "\x1b[?1006l"]) {
+			const s = `\x1b[?1003hscreen${stated}`;
+			expect(withMouseEncoding(s)).toBe(s);
+		}
+	});
+
+	test("leaves a snapshot alone when the app does not own the mouse", () => {
+		const s = "\x1b[?1049h\x1b[?2004hscreen";
+		expect(withMouseEncoding(s)).toBe(s);
+	});
+
+	test("end to end: a snapshot from a tracking daemon never gets a second opinion", async () => {
+		const { write, snapshot } = setup();
+		await write(OPENCODE_STARTUP);
+		await write("\x1b[?1006l");
+		const s = snapshot();
+		expect(s.endsWith("\x1b[?1006l")).toBe(true);
+		expect(withMouseEncoding(s)).toBe(s);
 	});
 });

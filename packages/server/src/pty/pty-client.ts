@@ -1,6 +1,9 @@
 import { spawn as spawnProc } from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
+import { withMouseEncoding } from "./snapshot-modes";
 
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
 const unb64 = (s: string) => Buffer.from(s, "base64").toString("utf8");
@@ -32,6 +35,12 @@ export class PtyClient extends EventEmitter {
 	private pending = new Map<number, (v: Record<string, unknown>) => void>();
 	private outbox: string[] = [];
 	private connecting = false;
+	// The daemon we are talking to runs older code than we shipped with. It
+	// outlives app updates by design, so this is the normal state right after
+	// an update; it is resolved by restarting it as soon as nothing runs in it.
+	private daemonStale = false;
+	private restartPending = false;
+	private ownBuild: string | null = null;
 
 	constructor(
 		private readonly daemonPath: string,
@@ -82,8 +91,47 @@ export class PtyClient extends EventEmitter {
 		});
 		s.on("close", () => {
 			this.sock = null;
+			if (this.restartPending) {
+				this.restartPending = false;
+				void this.ensureConnected();
+			}
 		});
 		s.on("error", () => {});
+	}
+
+	/** sha1 of the daemon file we would spawn; what an up-to-date daemon reports. */
+	private build(): string {
+		if (this.ownBuild === null) {
+			try {
+				this.ownBuild = createHash("sha1").update(readFileSync(this.daemonPath)).digest("hex");
+			} catch {
+				this.ownBuild = "";
+			}
+		}
+		return this.ownBuild;
+	}
+
+	private checkBuild(reported: string | undefined, liveCount: number): void {
+		const own = this.build();
+		// Unknown on either side: never restart on a guess. A daemon too old to
+		// report one cannot be asked to exit either; it goes on its next idle exit.
+		this.daemonStale = own !== "" && reported !== undefined && reported !== own;
+		if (!this.daemonStale) return;
+		if (liveCount === 0) {
+			this.restartDaemon();
+			return;
+		}
+		console.log(
+			`[ateam] PTY daemon is out of date; ${liveCount} open terminal(s) keep it alive, it restarts when the last one closes`,
+		);
+	}
+
+	private restartDaemon(): void {
+		if (this.restartPending || !this.sock) return;
+		console.log("[ateam] PTY daemon is out of date and idle: restarting it");
+		this.restartPending = true;
+		this.daemonStale = false;
+		this.sock.write(`${JSON.stringify({ t: "shutdown" })}\n`);
 	}
 
 	private onMessage(m: Record<string, unknown>): void {
@@ -92,6 +140,7 @@ export class PtyClient extends EventEmitter {
 				const terminals = (m.terminals as { terminalId: string }[]) ?? [];
 				this.live = new Set(terminals.map((t) => t.terminalId));
 				this.emit("attached", terminals);
+				this.checkBuild(m.build as string | undefined, terminals.length);
 				break;
 			}
 			case "data":
@@ -107,6 +156,7 @@ export class PtyClient extends EventEmitter {
 					terminalId: m.terminalId,
 					exitCode: m.exitCode,
 				});
+				if (this.daemonStale && this.live.size === 0) this.restartDaemon();
 				break;
 			case "snapshot":
 			case "list": {
@@ -217,7 +267,7 @@ export class PtyClient extends EventEmitter {
 	async snapshot(terminalId: string): Promise<{ data: string; seq: number }> {
 		const r = await this.request({ t: "snapshot", terminalId });
 		return {
-			data: r.data ? unb64(r.data as string) : "",
+			data: r.data ? withMouseEncoding(unb64(r.data as string)) : "",
 			seq: (r.seq as number) ?? 0,
 		};
 	}
