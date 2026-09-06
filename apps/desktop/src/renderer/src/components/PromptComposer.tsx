@@ -2,8 +2,9 @@ import type { AgentDTO } from "@ateam/protocol";
 import { ArrowUp, Paperclip, X, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { HostStatus } from "../../../shared/host";
+import { titleFromPrompt } from "../titleFromPrompt";
 import { AgentPicker } from "./AgentPicker";
-import { type EnvOption, EnvironmentPicker } from "./EnvironmentPicker";
+import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
 
 /** Last path segment, for a compact chip label. */
 function baseName(p: string): string {
@@ -17,11 +18,6 @@ function slugify(s: string): string {
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "")
 		.slice(0, 48);
-}
-
-/** Readable task name derived from the prompt's first words. */
-function titleFromPrompt(p: string): string {
-	return p.trim().split(/\s+/).slice(0, 6).join(" ").slice(0, 60);
 }
 
 /**

@@ -15,6 +15,7 @@ import {
 	Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { titleFromPrompt } from "../titleFromPrompt";
 import { type Alias, aliasLabel, type EngineMember } from "../unify";
 import { AgentPicker } from "./AgentPicker";
 import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
@@ -165,7 +166,7 @@ function LoopForm({
 			if (editing) {
 				await window.ateam.loops.update({
 					id: editing.id,
-					name: name.trim() || "Loop",
+					name: name.trim() || titleFromPrompt(prompt) || "Loop",
 					intervalMs: Number(everyMin) * 60_000,
 					config: {
 						prompt: prompt.trim(),
@@ -179,7 +180,7 @@ function LoopForm({
 				// engine owns the loop and runs every session there.
 				await window.ateam.loops.create({
 					templateId: "agent-session",
-					name: name.trim() || "Loop",
+					name: name.trim() || titleFromPrompt(prompt) || "Loop",
 					projectId,
 					intervalMs: Number(everyMin) * 60_000,
 					config: {
@@ -214,6 +215,9 @@ function LoopForm({
 		alias: m.alias,
 		label: aliasLabel(m.alias),
 		disabled: false,
+		// Surface a skewed box on the pill itself, like the composer does — the
+		// feature gates below read off the same engine.
+		skew: m.alias && envProtocol[m.alias] !== undefined ? envProtocol[m.alias] : undefined,
 	}));
 	const pickEnv = (alias: string | null) => {
 		const member = members.find((m) => m.alias === alias);
@@ -231,24 +235,27 @@ function LoopForm({
 						onChange={(e) => setName(e.target.value)}
 					/>
 				</div>
+				{/* biome-ignore lint/a11y/noAutofocus: the loop form should focus its prompt, like the composer */}
 				<textarea
+					autoFocus
 					className="comp-prompt"
 					placeholder="What should each run do?"
 					value={prompt}
 					onChange={(e) => setPrompt(e.target.value)}
 				/>
-				<div className="loop-form-row">
-					<label>
+				<div className="loop-followup">
+					<span>
 						{followUpBlockedBy === null
 							? "Follow-up (optional) — sent once, after the agent's first reply"
 							: `Follow-up — needs Ateam v${FEATURE_MIN_VERSION.followUps} on this box (it runs v${followUpBlockedBy})`}
-						<textarea
-							value={followUp}
-							disabled={followUpBlockedBy !== null}
-							placeholder="/check"
-							onChange={(e) => setFollowUp(e.target.value)}
-						/>
-					</label>
+					</span>
+					<textarea
+						className="comp-prompt"
+						value={followUp}
+						disabled={followUpBlockedBy !== null}
+						placeholder="/check"
+						onChange={(e) => setFollowUp(e.target.value)}
+					/>
 				</div>
 				<div className="comp-foot">
 					<AgentPicker
@@ -299,6 +306,9 @@ function LoopForm({
 						<Zap size={16} strokeWidth={1.75} />
 					</button>
 					<span className="spacer" />
+					<button type="button" className="navbtn" onClick={() => close(onCancel)}>
+						<X size={14} /> Cancel
+					</button>
 					<span className="muted" style={{ fontSize: 11 }}>
 						⌘⏎
 					</span>
@@ -321,11 +331,6 @@ function LoopForm({
 						<AlertTriangle size={13} /> {error}
 					</div>
 				)}
-			</div>
-			<div className="loop-actions">
-				<button type="button" className="navbtn" onClick={() => close(onCancel)}>
-					<X size={14} /> Cancel
-				</button>
 			</div>
 		</div>
 	);
