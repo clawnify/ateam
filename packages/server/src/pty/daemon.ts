@@ -19,7 +19,8 @@
 // bracketed paste once at startup, and once that `\x1b[?2004h` scrolls past the
 // retained window every new view attaches with paste broken (newlines arrive as
 // Enters instead of one bracketed block).
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import net, { connect as netConnect } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -29,6 +30,20 @@ import * as pty from "node-pty";
 import { trackMouseEncoding } from "./snapshot-modes";
 
 const SOCK = process.env.ATEAM_PTY_SOCK || join(homedir(), ".ateam", "pty-daemon.sock");
+// Identity of the code this process runs, reported in `hello` so the app can
+// tell whether the daemon it found is the one it shipped with. The daemon
+// outlives app updates by design, so without this a daemon fix never reaches
+// a user whose daemon never exits (see PtyClient for the restart policy).
+const BUILD = daemonBuild();
+function daemonBuild(): string {
+	const file = process.argv[1];
+	if (!file) return "";
+	try {
+		return createHash("sha1").update(readFileSync(file)).digest("hex");
+	} catch {
+		return "";
+	}
+}
 const SCROLLBACK = 5000; // lines of scrollback the emulator (and snapshot) keeps
 const IDLE_EXIT_MS = 10 * 60 * 1000; // exit if no sessions for 10 min
 
@@ -187,6 +202,12 @@ function handleMessage(sock: net.Socket, m: Record<string, unknown>): void {
 			s.term.write("", () => reply(s.serialize.serialize() + s.mouseEncoding(), cutSeq));
 			break;
 		}
+		// The app asks for this only when it has found the daemon out of date and
+		// nothing is running in it; refuse otherwise so a race with a fresh spawn
+		// can never take a live session down.
+		case "shutdown":
+			if (sessions.size === 0) process.exit(0);
+			break;
 		case "list":
 			sock.write(
 				`${JSON.stringify({
@@ -220,6 +241,7 @@ function startServer(): void {
 		sock.write(
 			`${JSON.stringify({
 				t: "hello",
+				build: BUILD,
 				terminals: [...sessions.values()].map((s) => ({
 					terminalId: s.id,
 					cwd: s.cwd,
