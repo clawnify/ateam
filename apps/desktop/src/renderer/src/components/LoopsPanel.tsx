@@ -15,7 +15,6 @@ import {
 	Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { titleFromPrompt } from "../titleFromPrompt";
 import { type Alias, aliasLabel, type EngineMember } from "../unify";
 import { AgentPicker } from "./AgentPicker";
 import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
@@ -156,7 +155,7 @@ function LoopForm({
 	// permission-prompted, which wedges an unattended loop on its first ask.
 	const autoBlockedBy = gatedBy("loopAutoMode");
 
-	const ready = prompt.trim() && projectId && Number(everyMin) >= 1;
+	const ready = name.trim() && prompt.trim() && projectId && Number(everyMin) >= 1;
 
 	const submit = async () => {
 		if (!ready) return;
@@ -166,7 +165,7 @@ function LoopForm({
 			if (editing) {
 				await window.ateam.loops.update({
 					id: editing.id,
-					name: name.trim() || titleFromPrompt(prompt) || "Loop",
+					name: name.trim(),
 					intervalMs: Number(everyMin) * 60_000,
 					config: {
 						prompt: prompt.trim(),
@@ -180,7 +179,7 @@ function LoopForm({
 				// engine owns the loop and runs every session there.
 				await window.ateam.loops.create({
 					templateId: "agent-session",
-					name: name.trim() || titleFromPrompt(prompt) || "Loop",
+					name: name.trim(),
 					projectId,
 					intervalMs: Number(everyMin) * 60_000,
 					config: {
@@ -230,7 +229,7 @@ function LoopForm({
 				<div className="comp-head">
 					<input
 						className="comp-name"
-						placeholder="Loop name (optional)"
+						placeholder="Loop name"
 						value={name}
 						onChange={(e) => setName(e.target.value)}
 					/>
