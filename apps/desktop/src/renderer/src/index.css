@@ -2303,39 +2303,28 @@ input {
 .loop-form {
 	flex-direction: column;
 	align-items: stretch;
-	gap: 10px;
+	padding: 18px 20px;
 }
-.loop-form .loop-actions {
-	justify-content: flex-end;
-}
-.loop-form-row {
-	display: flex;
-	gap: 12px;
-	flex-wrap: wrap;
-}
-.loop-form-row label {
+/* The form's sections live in .loop-main (a single child of .loop-card), so the
+   section spacing is this div's gap, not the card's. */
+.loop-form .loop-main {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: 14px;
+}
+.loop-followup {
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
 	font-size: 11px;
 	color: var(--text-dim);
-	flex: 1;
-	min-width: 160px;
 }
-.loop-form-row select,
-.loop-form-row input,
-.loop-form-row textarea {
-	background: var(--bg-elev-2);
-	border: 1px solid var(--border);
-	border-radius: 7px;
-	color: var(--text);
-	padding: 6px 8px;
-	font-size: 13px;
-}
-.loop-form-row textarea {
-	resize: vertical;
+.loop-followup .comp-prompt {
 	min-height: 56px;
-	font-family: inherit;
+}
+.loop-followup .comp-prompt:disabled,
+.loop-followup .comp-prompt:disabled::placeholder {
+	opacity: 0.5;
 }
 /* The loop form borrows the composer's foot pills (agent, environment, Auto);
    the interval and a fixed-at-creation environment are the loop-specific two. */
@@ -2343,24 +2332,24 @@ input {
 	display: inline-flex;
 	align-items: center;
 	gap: 5px;
-	font-size: 11.5px;
+	font-size: 13px;
 	color: var(--text-dim);
-	border: 1px solid var(--border);
-	border-radius: 7px;
-	padding: 5px 9px;
-	background: var(--bg-elev-2);
+	padding: 4px 6px;
 	user-select: none;
 }
 .comp-every input {
-	width: 44px;
+	width: 56px;
 	border: none;
 	background: transparent;
 	color: var(--text);
-	font-size: 12.5px;
+	font-size: 13px;
 	text-align: right;
-	outline: none;
+	padding: 0;
 	appearance: textfield;
 	-moz-appearance: textfield;
+}
+.comp-every:focus-within {
+	color: var(--text);
 }
 .comp-every input::-webkit-outer-spin-button,
 .comp-every input::-webkit-inner-spin-button {
@@ -2371,18 +2360,15 @@ input {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
-	font-size: 12px;
+	font-size: 13px;
 	color: var(--text-dim);
-	border: 1px dashed var(--border);
-	border-radius: 7px;
-	padding: 5px 9px;
-}
-.comp-yolo:disabled {
-	opacity: 0.35;
-	cursor: default;
+	padding: 4px 6px;
+	/* Locked, not disabled: the house idiom for "fixed at creation" is a dimmed
+	   pill (dashed means clickable-but-not-real, see .sess-tab.restorable). */
+	opacity: 0.65;
 }
 .loop-form .comp-prompt {
-	min-height: 72px;
+	width: 100%;
 }
 .loop-auto {
 	display: inline-flex;
