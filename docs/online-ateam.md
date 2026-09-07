@@ -218,8 +218,9 @@ ssh my-ateam-box "bash -lc 'ateam'"
 > and declining just closes the dialog. It binds loopback and is reached through
 > the SSH connection Ateam already holds, so no extra port is exposed. Budget
 > ~0.5–1 GB of RAM while it's open — on a 4 GB box that's about one agent
-> session's worth, so size the box accordingly. The button beside it (**Open
-> worktree in your editor**) instead opens *your own* VS Code over Remote-SSH.
+> session's worth, so size the box accordingly. With the editor open, the button
+> beside it (**Open worktree in your editor**) instead opens *your own* VS Code
+> over Remote-SSH.
 
 ## 5. Same box, from the iOS app
 

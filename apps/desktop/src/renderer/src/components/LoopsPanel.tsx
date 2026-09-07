@@ -14,7 +14,7 @@ import {
 	X,
 	Zap,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type Alias, aliasLabel, type EngineMember } from "../unify";
 import { AgentPicker } from "./AgentPicker";
 import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
@@ -100,6 +100,17 @@ function LoopForm({
 	// edited (or blank for a new one). Every change is mirrored back into the
 	// draft so a tab switch loses nothing.
 	const draft = drafts.get(draftKey);
+	// Where the cursor lands when the form opens. A new loop cannot be created
+	// without a name, so it starts there; an existing one already has its name,
+	// so it opens on the prompt, like the composer. Keyed by the loop's id, not
+	// by `editing` itself, so a re-render never yanks the cursor out of whatever
+	// the user is typing.
+	const nameRef = useRef<HTMLInputElement>(null);
+	const promptRef = useRef<HTMLTextAreaElement>(null);
+	const editingLoopId = editing?.id;
+	useEffect(() => {
+		(editingLoopId ? promptRef.current : nameRef.current)?.focus();
+	}, [editingLoopId]);
 	const [name, setName] = useState(draft?.name ?? editing?.title ?? "");
 	const [prompt, setPrompt] = useState(draft?.prompt ?? editing?.prompt ?? "");
 	const [followUp, setFollowUp] = useState(draft?.followUp ?? editing?.followUp ?? "");
@@ -228,15 +239,15 @@ function LoopForm({
 			<div className="loop-main">
 				<div className="comp-head">
 					<input
+						ref={nameRef}
 						className="comp-name"
 						placeholder="Loop name"
 						value={name}
 						onChange={(e) => setName(e.target.value)}
 					/>
 				</div>
-				{/* biome-ignore lint/a11y/noAutofocus: the loop form should focus its prompt, like the composer */}
 				<textarea
-					autoFocus
+					ref={promptRef}
 					className="comp-prompt"
 					placeholder="What should each run do?"
 					value={prompt}
