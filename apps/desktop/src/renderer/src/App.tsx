@@ -63,6 +63,7 @@ import { PromptComposer } from "./components/PromptComposer";
 import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
+import { PanelRightFilled } from "./components/PanelRightFilled";
 import { VscodeLogo } from "./components/VscodeLogo";
 import { activeTerminal, sessionTabs } from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
@@ -2117,28 +2118,33 @@ function TaskPanel({
 				    toggle changes nothing and offering it says otherwise. */}
 				{mainViewOpen && (
 					<IconButton
-						icon={PanelRight}
+						icon={termSide ? PanelRightFilled : PanelRight}
 						active={termSide}
 						label={termSide ? "Hide terminal sidebar" : "Show terminal sidebar"}
 						onClick={toggleTermSide}
 					/>
 				)}
-				<IconButton
-					icon={ExternalLink}
-					label={
-						alias === null
-							? "Open worktree in your editor"
-							: `Open worktree in your editor (Remote-SSH: ${alias})`
-					}
-					onClick={() =>
-						run(async () => {
-							// Optional on the API surface (the phone omits it) — the desktop
-							// preload always provides it.
-							const res = await window.ateam.utils.openInEditor?.(task.worktreePath, alias);
-							if (res && !res.ok) throw new Error(res.reason);
-						})
-					}
-				/>
+				{/* Handing the worktree to the real VS Code belongs to the editor, so it
+				    appears with it rather than sitting in the toolbar of a task nobody
+				    is editing. */}
+				{editorOpen && (
+					<IconButton
+						icon={ExternalLink}
+						label={
+							alias === null
+								? "Open worktree in your editor"
+								: `Open worktree in your editor (Remote-SSH: ${alias})`
+						}
+						onClick={() =>
+							run(async () => {
+								// Optional on the API surface (the phone omits it) — the desktop
+								// preload always provides it.
+								const res = await window.ateam.utils.openInEditor?.(task.worktreePath, alias);
+								if (res && !res.ok) throw new Error(res.reason);
+							})
+						}
+					/>
+				)}
 				<IconButton icon={GitCommitVertical} label="Commit all changes" onClick={commit} />
 				<IconButton
 					icon={ArrowUp}
