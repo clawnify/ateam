@@ -5,6 +5,13 @@
 // Opened read-only, and every failure is swallowed into "no history": another
 // tool's database is not ours to repair, and a locked or moved store must not
 // take the search down for the other harnesses.
+//
+// This is not the only place that asks OpenCode which sessions belong to a
+// directory: a resume asks the same question through the CLI instead
+// (`latestSessionInDir`, agents/registry.ts), because there a store that moved
+// must fail loudly rather than answer "no sessions here". The two are meant to
+// differ — search wants bulk text fast and tolerates gaps, a resume wants one
+// id and tolerates a second of latency.
 
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";

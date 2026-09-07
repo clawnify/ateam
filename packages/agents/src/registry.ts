@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 const pexec = promisify(execFile);
@@ -42,6 +43,28 @@ export interface AgentDefinition {
 	 * it. Every harness can do this; only some let us choose the id up front.
 	 */
 	resumeIdCommand?: string;
+	/**
+	 * Args that print this CLI's conversations as JSON — each with the directory
+	 * it belongs to — so a resume can pick the id itself.
+	 *
+	 * Set ONLY for a CLI whose own "resume last" is scoped wider than the cwd.
+	 * `resumeCommand` is documented as "the most recent conversation in the cwd",
+	 * and for Claude that is true (its transcripts are filed by cwd). OpenCode
+	 * files them by PROJECT, and it counts every git worktree of a repo as one
+	 * project — so `opencode --continue` in one task's worktree happily reopens
+	 * the conversation another task was having in its own. See
+	 * `latestSessionInDir`.
+	 *
+	 * Not a bug waiting on an upstream fix: OpenCode scopes a session by its
+	 * path RELATIVE to the project, which is "" for every worktree root, so all
+	 * of them share one scope (their issue #41562). Four earlier reports of it
+	 * were closed not-planned (#25963, #26099, #18890, #28972) and the PR that
+	 * scoped `--continue` to the worktree (#33521) was closed unmerged. Treat
+	 * this as permanently ours. If a later release does scope it, resuming by id
+	 * stays strictly more precise — it pins THE conversation, not the newest one
+	 * — so this only ever becomes redundant, never wrong.
+	 */
+	sessionListArgs?: readonly string[];
 	/**
 	 * "Agent mode" command — the tool's autonomous multi-agent surface (e.g.
 	 * Claude Code's `claude agents` board), launched in the task's worktree.
@@ -148,6 +171,10 @@ export const AGENTS = [
 		// Same shape as Codex: `-s/--session <id>` continues a named session,
 		// but nothing pins the id of a new one.
 		resumeIdCommand: "opencode --session",
+		// So the id can be read back out instead. `session list` prints the root
+		// sessions of the whole PROJECT newest-first, each with its `directory`
+		// — which is also why `--continue` alone reaches the wrong worktree.
+		sessionListArgs: ["session", "list", "--format", "json"],
 		install: "curl -fsSL https://opencode.ai/install | bash",
 		loginCommand: "opencode auth login",
 		// `opencode run` takes the message as positional arguments.
@@ -252,6 +279,83 @@ export async function probeAgentBinary(
 		// ENOENT, neither of which knows anything about the binary.
 		return (err as { code?: unknown }).code === 1 ? "absent" : "unknown";
 	}
+}
+
+/**
+ * What a scan for "the newest conversation in this directory" learned. `ok`
+ * false is not "there is none": it is the CLI failing to answer, which the
+ * caller must not read as "start fresh" — that would silently drop a
+ * conversation the user asked to come back to.
+ */
+export interface SessionScan {
+	ok: boolean;
+	id: string | null;
+}
+
+/** A scan is one `<bin> session list`; measured at ~1s, so this is generous. */
+const SESSION_SCAN_TIMEOUT_MS = 15_000;
+
+/**
+ * The newest conversation this agent holds for `cwd`, by its own id.
+ *
+ * Only for agents that declare `sessionListArgs` — the ones whose "resume last"
+ * reaches beyond the working directory. Every task is a git worktree of a repo
+ * that has many, so "the newest conversation in the project" is very often
+ * ANOTHER task's, and resuming it drops the user into a transcript about a
+ * different branch, in a pane that is nonetheless cd'd into theirs.
+ *
+ * Run through the LOGIN shell for the same reason the binary probe is: this
+ * process's PATH is a boot-time snapshot that can be missing what `.zprofile`
+ * adds (login-env.ts).
+ *
+ * Deliberately the CLI and not the store behind it, even though session search
+ * already opens OpenCode's SQLite directly (session-search/sources/opencode.ts)
+ * and would answer this in a millisecond instead of the ~0.9s a process boot
+ * costs. The two want different things. Search reads message bodies for many
+ * cwds on a keystroke path and degrades to "no history", which is harmless; a
+ * resume needs ONE authoritative id, once, and its wrong answers are expensive.
+ * A schema or store that moved (OpenCode is mid-migration to a v2 store) makes
+ * a direct query return zero rows, which reads as "no conversation here" and
+ * silently starts a fresh one over the conversation the user asked to come back
+ * to. Asking the binary cannot answer about the wrong store, and if its output
+ * shape moves the parse fails LOUDLY into `ok: false`, which the caller
+ * degrades safely. Keep both readers; they are not required to agree.
+ */
+export async function latestSessionInDir(
+	agent: AgentDefinition,
+	cwd: string,
+	shell: string = defaultShell(),
+): Promise<SessionScan> {
+	if (!agent.sessionListArgs) return { ok: false, id: null };
+	let out: string;
+	try {
+		const cmd = `${agent.bin} ${agent.sessionListArgs.join(" ")}`;
+		({ stdout: out } = await pexec(shell, ["-lc", cmd], {
+			cwd,
+			timeout: SESSION_SCAN_TIMEOUT_MS,
+			maxBuffer: 8 * 1024 * 1024,
+		}));
+	} catch {
+		return { ok: false, id: null };
+	}
+	let rows: unknown;
+	try {
+		rows = JSON.parse(out);
+	} catch {
+		// An empty store prints nothing at all, which IS an answer: no session
+		// here. Anything else unparseable is the output shape having moved.
+		return out.trim() === "" ? { ok: true, id: null } : { ok: false, id: null };
+	}
+	if (!Array.isArray(rows)) return { ok: false, id: null };
+	const here = resolve(cwd);
+	let best: { id: string; updated: number } | null = null;
+	for (const row of rows as Array<Record<string, unknown>>) {
+		if (typeof row?.id !== "string" || typeof row.directory !== "string") continue;
+		if (resolve(row.directory) !== here) continue;
+		const updated = typeof row.updated === "number" ? row.updated : 0;
+		if (!best || updated > best.updated) best = { id: row.id, updated };
+	}
+	return { ok: true, id: best?.id ?? null };
 }
 
 /** Installers download a runtime; the slow ones are minutes, not seconds. */
