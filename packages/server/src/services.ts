@@ -1,4 +1,4 @@
-import type { BinaryPresence } from "@ateam/agents";
+import type { AgentDefinition, BinaryPresence, SessionScan } from "@ateam/agents";
 import type { AgentSession, AteamDb, Project, Task } from "@ateam/db";
 import type { ProjectDTO, SessionDTO, TaskDTO } from "@ateam/protocol";
 import type { FollowUps } from "./follow-ups";
@@ -33,6 +33,13 @@ export interface Services {
 	 * one runs an interactive login shell. Defaults to the real refresh.
 	 */
 	refreshPath?: (opts?: { force?: boolean }) => Promise<boolean>;
+	/**
+	 * The newest conversation an agent holds for a directory, asked before a
+	 * resume that would otherwise reach outside it (`latestSessionInDir`). A
+	 * seam for the same reason the two above are: the real one shells out to the
+	 * agent's CLI. Defaults to the real scan.
+	 */
+	latestSession?: (agent: AgentDefinition, cwd: string) => Promise<SessionScan>;
 	/**
 	 * In-flight `seedWorktree` calls by task id. A task's row is created (and its
 	 * card announced) as soon as the worktree exists, so its dependencies are

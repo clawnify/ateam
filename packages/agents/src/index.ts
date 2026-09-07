@@ -4,6 +4,7 @@ export type {
 	AvailableAgent,
 	BinaryPresence,
 	PromptTransport,
+	SessionScan,
 } from "./registry";
 export {
 	AGENTS,
@@ -11,6 +12,7 @@ export {
 	getAgent,
 	installAgentCli,
 	isAgentAvailable,
+	latestSessionInDir,
 	listAgents,
 	probeAgentBinary,
 } from "./registry";

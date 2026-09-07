@@ -26,14 +26,23 @@ function createTestDb(): AteamDb {
 let db: AteamDb;
 let services: Services;
 let taskId: string;
+let spawned: { command: string; cwd: string } | null;
 const T0 = 1_700_000_000_000;
 
 beforeEach(() => {
 	db = createTestDb();
+	spawned = null;
 	const scratch = mkdtempSync(join(tmpdir(), "ateam-spawn-"));
 	services = {
 		db,
-		pty: { spawn: () => "pty", has: () => false },
+		pty: {
+			// `args` is `["-l", "-c", "<agent cmd>; exec <shell> -l"]`.
+			spawn: (o: { args: string[]; cwd: string }) => {
+				spawned = { command: o.args[2] ?? "", cwd: o.cwd };
+				return "pty";
+			},
+			has: () => false,
+		},
 		hooksDir: scratch,
 		notifyScriptPath: join(scratch, "notify.sh"),
 		hookPort: 0,
@@ -44,6 +53,9 @@ beforeEach(() => {
 		// resume does to the card, not about what is installed on the machine.
 		probeAgent: async () => "present" as const,
 		refreshPath: async () => false,
+		// Overridden per-test. Defaults to "asked, nothing here", which is what an
+		// agent with no conversation in this worktree looks like.
+		latestSession: async () => ({ ok: true, id: null }),
 	} as unknown as Services;
 	const project = repo.upsertProject(db, {
 		repoPath: "/tmp/repo",
@@ -103,5 +115,47 @@ describe("spawnAgentInTask on resume", () => {
 		});
 		const task = repo.getTask(db, taskId);
 		expect(task).toMatchObject({ column: "running", agentStatus: "running", lastEventAt: T0 });
+	});
+});
+
+// OpenCode files its conversations by project, and every git worktree of a repo
+// is one project to it — so `opencode --continue` in this task's worktree
+// reopens whichever task in the repo ran last. A resume has to name the id.
+describe("resuming an agent whose --continue reaches beyond the worktree", () => {
+	it("resumes THIS worktree's newest conversation by id", async () => {
+		services.latestSession = async () => ({ ok: true, id: "ses_here" });
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "opencode", resume: true });
+		expect(spawned?.command).toStartWith("opencode --session 'ses_here'");
+		expect(spawned?.command).not.toInclude("--continue");
+	});
+
+	it("records the id, so the next restore skips the scan", async () => {
+		services.latestSession = async () => ({ ok: true, id: "ses_here" });
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "opencode", resume: true });
+		expect(repo.listSessionsByTask(db, taskId)[0]).toMatchObject({
+			agentSessionId: "ses_here",
+		});
+	});
+
+	it("starts fresh when this worktree has no conversation yet", async () => {
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "opencode", resume: true });
+		expect(spawned?.command).toStartWith("opencode;");
+	});
+
+	it("falls back to --continue when the scan itself failed", async () => {
+		services.latestSession = async () => ({ ok: false, id: null });
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "opencode", resume: true });
+		expect(spawned?.command).toStartWith("opencode --continue");
+	});
+
+	it("leaves an agent whose --continue is cwd-scoped alone", async () => {
+		let scanned = false;
+		services.latestSession = async () => {
+			scanned = true;
+			return { ok: true, id: "ses_here" };
+		};
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", resume: true });
+		expect(scanned).toBe(false);
+		expect(spawned?.command).toStartWith("claude --continue");
 	});
 });

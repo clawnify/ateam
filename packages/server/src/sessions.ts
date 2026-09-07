@@ -4,7 +4,13 @@
 // dispatcher's tasksCreate / ptySpawnAgent handlers.
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { agentCommand, generateTaskTags, getAgent, probeAgentBinary } from "@ateam/agents";
+import {
+	agentCommand,
+	generateTaskTags,
+	getAgent,
+	latestSessionInDir,
+	probeAgentBinary,
+} from "@ateam/agents";
 import { repo, type Task } from "@ateam/db";
 import { createTask as gitCreateTask, seedWorktree } from "@ateam/git-core";
 import { buildAgentEnv, ensureClaudeHooks, ensureCodexHooks } from "./agent-setup";
@@ -148,6 +154,32 @@ export async function spawnAgentInTask(
 	// even appeared on a large monorepo. The card reports `preparing` while the
 	// copy is in flight, so the wait is visible instead of mysterious.
 
+	// "Resume the last conversation" is only ever aimed at THIS task, but not
+	// every CLI reads it that way. Claude files its transcripts by cwd, so
+	// `--continue` is already worktree-scoped; OpenCode files them by PROJECT
+	// and counts every git worktree of a repo as one project, so its
+	// `--continue` returns the newest conversation in ANY of them — reliably a
+	// sibling task's, since the newest one in this repo is whichever task ran
+	// last. That is a resume landing in the wrong branch's transcript, in a pane
+	// cd'd into the right one. So for those CLIs the id is picked here, from the
+	// conversations that actually belong to this worktree.
+	//
+	// A scan that could not run (`ok: false`) falls through to `--continue`: an
+	// imperfect resume beats silently starting a new conversation over one the
+	// user asked to come back to. A scan that ran and found nothing means this
+	// worktree has no conversation yet, so a fresh launch is the honest answer.
+	let resumeSessionId = input.resumeSessionId;
+	let resumeNewest = Boolean(input.resume);
+	if (resumeNewest && !resumeSessionId && agent.sessionListArgs) {
+		const scan = services.latestSession
+			? await services.latestSession(agent, task.worktreePath)
+			: await latestSessionInDir(agent, task.worktreePath, shell);
+		if (scan.ok) {
+			resumeSessionId = scan.id ?? undefined;
+			resumeNewest = false;
+		}
+	}
+
 	const terminalId = randomUUID();
 	// The conversation this tab holds. On a fresh launch we mint it — the
 	// terminal id doubles as the agent's session id, so the tab can be resumed
@@ -159,7 +191,7 @@ export async function spawnAgentInTask(
 	// or agent mode (a board, not a conversation). Recording the terminal id
 	// there would be a lie the restore then acts on.
 	const mintsId = Boolean(agent.sessionIdFlag) && !input.resume && !input.agentMode;
-	const agentSessionId = input.resumeSessionId ?? (mintsId ? terminalId : null);
+	const agentSessionId = resumeSessionId ?? (mintsId ? terminalId : null);
 	repo.createSession(services.db, {
 		taskId: task.id,
 		agentId: agent.id,
@@ -168,9 +200,9 @@ export async function spawnAgentInTask(
 		cwd: task.worktreePath,
 	});
 	// The tab this one is picking up is no longer waiting to be restored.
-	if (input.resumeSessionId) {
+	if (resumeSessionId) {
 		for (const prior of repo.listRestorableSessions(services.db, task.id)) {
-			if (prior.agentSessionId === input.resumeSessionId) {
+			if (prior.agentSessionId === resumeSessionId) {
 				repo.updateSession(services.db, prior.id, { exitReason: "restored" });
 			}
 		}
@@ -211,12 +243,12 @@ export async function spawnAgentInTask(
 	}
 	let agentCmd = agentCommand(agent, {
 		yolo: input.yolo,
-		resume: input.resume,
+		resume: resumeNewest,
 		agentMode: input.agentMode,
 		cwd: task.worktreePath,
 		prompt,
 		sessionId: agentSessionId ?? undefined,
-		resumeSessionId: input.resumeSessionId,
+		resumeSessionId,
 	});
 	if (agent.id === "codex") {
 		// Codex has no hooks, but `notify` invokes a program with a JSON
