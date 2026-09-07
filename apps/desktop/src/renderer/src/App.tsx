@@ -2112,12 +2112,17 @@ function TaskPanel({
 						});
 					}}
 				/>
-				<IconButton
-					icon={PanelRight}
-					active={termSide}
-					label={termSide ? "Hide terminal sidebar" : "Show terminal sidebar"}
-					onClick={toggleTermSide}
-				/>
+				{/* The terminal only docks BESIDE something. With no view over it, it is
+				    already full width (`termDocked || !mainViewOpen` below), so the
+				    toggle changes nothing and offering it says otherwise. */}
+				{mainViewOpen && (
+					<IconButton
+						icon={PanelRight}
+						active={termSide}
+						label={termSide ? "Hide terminal sidebar" : "Show terminal sidebar"}
+						onClick={toggleTermSide}
+					/>
+				)}
 				<IconButton
 					icon={ExternalLink}
 					label={
