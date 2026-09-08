@@ -875,7 +875,6 @@ export function App() {
 				{/* In rail mode the traffic lights own this strip; the toggle moves
 				    below them as the first tile. */}
 				<div className="side-top">
-					{!rail && <IconButton icon={PanelLeft} label="Collapse sidebar" onClick={toggleRail} />}
 					{!rail && (
 						<IconButton
 							icon={Settings}
@@ -885,6 +884,7 @@ export function App() {
 							onClick={() => goToView("settings")}
 						/>
 					)}
+					{!rail && <IconButton icon={PanelLeft} label="Collapse sidebar" onClick={toggleRail} />}
 				</div>
 
 				{rail ? (

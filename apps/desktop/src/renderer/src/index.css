@@ -2859,3 +2859,7 @@ input {
 .settings-foot code {
 	color: var(--text);
 }
+.settings-nav-item.active {
+	background: var(--bg-elev-2);
+	color: var(--text);
+}

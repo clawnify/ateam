@@ -175,6 +175,9 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 	const [result, setResult] = useState<SettingsResult | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [query, setQuery] = useState("");
+	// One section at a time, like every settings page a Mac user has met: the
+	// nav is the page's tabs, not an index into one long scroll.
+	const [active, setActive] = useState<SectionId>("general");
 	const searchRef = useRef<HTMLInputElement>(null);
 
 	useEffect(() => {
@@ -224,12 +227,25 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 		}
 	};
 
+	// A search looks across every section — a search confined to the section
+	// you happen to be on would miss the row you are looking for — so its
+	// results replace the section view while it is typed, grouped by where
+	// each row lives. Clearing it, or picking a section, returns to one section.
 	const q = query.trim().toLowerCase();
-	const visible = q
+	const matches = q
 		? ROWS.filter((r) => `${r.title} ${r.description}`.toLowerCase().includes(q))
-		: ROWS;
-	const jump = (id: SectionId) => {
-		document.getElementById(`settings-${id}`)?.scrollIntoView({ block: "start" });
+		: null;
+	const shown: { id: SectionId; label: string; rows: Row[] }[] = matches
+		? SECTIONS.map((sec) => ({ ...sec, rows: matches.filter((r) => r.section === sec.id) })).filter(
+				(sec) => sec.rows.length > 0,
+			)
+		: SECTIONS.filter((sec) => sec.id === active).map((sec) => ({
+				...sec,
+				rows: ROWS.filter((r) => r.section === sec.id),
+			}));
+	const pick = (id: SectionId) => {
+		setActive(id);
+		setQuery("");
 	};
 
 	return (
@@ -250,9 +266,9 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 					<button
 						type="button"
 						key={s.id}
-						className="navbtn settings-nav-item"
-						disabled={q !== "" && !visible.some((r) => r.section === s.id)}
-						onClick={() => jump(s.id)}
+						className={`navbtn settings-nav-item ${!matches && active === s.id ? "active" : ""}`}
+						aria-current={!matches && active === s.id ? "page" : undefined}
+						onClick={() => pick(s.id)}
 					>
 						{s.label}
 					</button>
@@ -274,14 +290,13 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 				)}
 				{!result ? (
 					<div className="empty">Loading settings…</div>
-				) : visible.length === 0 ? (
+				) : shown.length === 0 ? (
 					<div className="empty">No settings match “{query}”.</div>
 				) : (
-					SECTIONS.map((section) => {
-						const rows = visible.filter((r) => r.section === section.id);
-						if (rows.length === 0) return null;
+					shown.map((section) => {
+						const rows = section.rows;
 						return (
-							<section key={section.id} id={`settings-${section.id}`} className="settings-section">
+							<section key={section.id} className="settings-section">
 								<h3>{section.label}</h3>
 								<div className="settings-group">
 									{rows.map((row) => (
