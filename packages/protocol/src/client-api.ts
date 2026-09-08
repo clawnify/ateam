@@ -31,6 +31,7 @@ import type {
 	PtySnapshot,
 	SessionDTO,
 	SessionHitDTO,
+	SettingsResult,
 	SystemInfo,
 	TaskDTO,
 	UpdateLoopInput,
@@ -127,6 +128,10 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		agents: {
 			list: () => call<AgentDTO[]>(CH.agentsList),
 			install: (input) => call<InstallAgentDTO>(CH.agentsInstall, [input]),
+		},
+		settings: {
+			get: () => call<SettingsResult>(CH.settingsGet, []),
+			update: (patch) => call<SettingsResult>(CH.settingsUpdate, [patch]),
 		},
 		editor: {
 			open:

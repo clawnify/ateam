@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createEngine, type Engine } from "@ateam/server";
+import { CH } from "@ateam/protocol";
+import { createEngine, type Engine, readSettings } from "@ateam/server";
 import { app, BrowserWindow, dialog, Menu } from "electron";
 import { autoUpdater } from "electron-updater";
 import { APP_NAME } from "./app-name";
@@ -72,6 +73,16 @@ function setupAutoUpdate(): void {
 
 	autoUpdater.on("update-available", (info) => {
 		if (!manualCheck && (snoozed || info.version === skippedVersion())) return;
+		// Your call, in ~/.ateam/settings.json (client.autoDownloadUpdates): fetch
+		// it in the background and only ask at the end, when "Restart Now" is a
+		// real choice. Read here, not at startup, so a change takes effect on the
+		// next check without a relaunch. Skip / snooze above still win.
+		if (readSettings().settings.client.autoDownloadUpdates) {
+			void autoUpdater
+				.downloadUpdate()
+				.catch((err) => console.warn("[ateam] update download failed:", err));
+			return;
+		}
 		const notes =
 			typeof info.releaseNotes === "string" ? info.releaseNotes.replace(/<[^>]+>/g, "").trim() : "";
 		void dialog
@@ -172,6 +183,15 @@ function buildAppMenu(): void {
 							{
 								label: "Check for Updates…",
 								click: () => onCheckForUpdates(),
+							},
+							{ type: "separator" as const },
+							{
+								label: "Settings…",
+								accelerator: "CmdOrCtrl+,",
+								click: () => {
+									const w = BrowserWindow.getFocusedWindow();
+									if (w && !w.isDestroyed()) w.webContents.send(CH.evtOpenSettings);
+								},
 							},
 							{ type: "separator" as const },
 							{ role: "services" as const },

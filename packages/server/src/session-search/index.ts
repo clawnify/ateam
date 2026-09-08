@@ -15,6 +15,7 @@
 import { repo, type Task } from "@ateam/db";
 import type { SessionHitDTO } from "@ateam/protocol";
 import type { Services } from "../services";
+import { readSettings } from "../settings-file";
 import { type RankInput, rank } from "./rank";
 import { askAgent, buildPrompt, expandQuery, parseVerdicts } from "./rerank";
 import { claudeSource } from "./sources/claude";
@@ -111,7 +112,7 @@ export async function searchSessions(
 	// It is skipped when the user's own words already fill the shortlist: those
 	// are the queries where expansion changes nothing, and each model call costs
 	// several seconds of a click the user is waiting on.
-	const agentId = input.agentId ?? repo.getSettings(db).defaultAgentId ?? "claude";
+	const agentId = input.agentId ?? readSettings().settings.engine.defaultAgentId;
 	const typedOnly = rank(inputs, query, SHORTLIST);
 	const ranked =
 		typedOnly.length >= SHORTLIST

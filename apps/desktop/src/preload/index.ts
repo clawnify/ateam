@@ -48,6 +48,10 @@ const api: AteamApi = {
 		list: () => ipcRenderer.invoke(CH.agentsList),
 		install: (input) => ipcRenderer.invoke(CH.agentsInstall, input),
 	},
+	settings: {
+		get: () => ipcRenderer.invoke(CH.settingsGet),
+		update: (patch) => ipcRenderer.invoke(CH.settingsUpdate, patch),
+	},
 	editor: {
 		open: (taskId) => ipcRenderer.invoke(CH.editorOpenUrl, taskId),
 		install: (taskId) => ipcRenderer.invoke(CH.editorInstall, taskId),
@@ -109,6 +113,11 @@ const api: AteamApi = {
 			const handler = (_: unknown, task: TaskDTO) => cb(task);
 			ipcRenderer.on(CH.evtTaskUpdated, handler);
 			return () => ipcRenderer.off(CH.evtTaskUpdated, handler);
+		},
+		onOpenSettings: (cb: () => void) => {
+			const handler = () => cb();
+			ipcRenderer.on(CH.evtOpenSettings, handler);
+			return () => ipcRenderer.off(CH.evtOpenSettings, handler);
 		},
 		onTaskRemoved: (cb: (taskId: string) => void) => {
 			const handler = (_: unknown, taskId: string) => cb(taskId);

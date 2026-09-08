@@ -40,6 +40,7 @@ import {
 	RotateCw,
 	Rows2,
 	Server,
+	Settings,
 	SquareTerminal,
 	Trash2,
 	X,
@@ -65,6 +66,7 @@ import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
 import { PanelRightFilled } from "./components/PanelRightFilled";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { VscodeLogo } from "./components/VscodeLogo";
 import { activeTerminal, sessionTabs } from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
@@ -109,10 +111,11 @@ const MIN_SIDEBAR_W = 240;
 
 // Where collapsing a focused task takes you — it's whatever view the task was
 // opened over, so the tooltip has to name that view, not the board.
-const FOCUS_COLLAPSE_LABEL: Record<"board" | "mission" | "loops", string> = {
+const FOCUS_COLLAPSE_LABEL: Record<"board" | "mission" | "loops" | "settings", string> = {
 	board: "Show beside the board",
 	mission: "Back to Mission Control",
 	loops: "Back to Loops",
+	settings: "Back to Settings",
 };
 
 export function App() {
@@ -146,7 +149,7 @@ export function App() {
 	const [tasksByProject, setTasksByProject] = useState<Record<string, TaskDTO[]>>({});
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
-	const [view, setView] = useState<"board" | "mission" | "loops">("board");
+	const [view, setView] = useState<"board" | "mission" | "loops" | "settings">("board");
 	const [mcLayout, setMcLayoutState] = useState<McLayout>(
 		() => (localStorage.getItem("ateam.mcLayout") as McLayout) || "grid",
 	);
@@ -617,7 +620,7 @@ export function App() {
 			{
 				taskId: string | null;
 				mode: "side" | "full";
-				view: "board" | "mission" | "loops";
+				view: "board" | "mission" | "loops" | "settings";
 			}
 		>
 	>({});
@@ -705,10 +708,15 @@ export function App() {
 	};
 	// Tabs mean "show me this view". The focused task covers the view it belongs
 	// to, so switching tabs — including clicking the lit one — closes it.
-	const goToView = (v: "board" | "mission" | "loops") => {
+	const goToView = (v: "board" | "mission" | "loops" | "settings") => {
 		if (panelMode === "full") setSelectedTaskId(null);
 		setView(v);
 	};
+	// The menu's Settings… (⌘,) arrives from the main process. Held in a ref so
+	// the one subscription always calls the goToView of the latest render.
+	const goToViewRef = useRef(goToView);
+	goToViewRef.current = goToView;
+	useEffect(() => window.ateam.events.onOpenSettings?.(() => goToViewRef.current("settings")), []);
 
 	const addProject = () =>
 		run(async () => {
@@ -868,6 +876,15 @@ export function App() {
 				    below them as the first tile. */}
 				<div className="side-top">
 					{!rail && <IconButton icon={PanelLeft} label="Collapse sidebar" onClick={toggleRail} />}
+					{!rail && (
+						<IconButton
+							icon={Settings}
+							label="Settings"
+							shortcut="⌘,"
+							active={view === "settings"}
+							onClick={() => goToView("settings")}
+						/>
+					)}
 				</div>
 
 				{rail ? (
@@ -1375,6 +1392,8 @@ export function App() {
 							locked={mcLocked}
 							onExpand={openFromMission}
 						/>
+					) : view === "settings" ? (
+						<SettingsPanel agents={agents} />
 					) : (
 						<LoopsPanel
 							loops={activeLoops}

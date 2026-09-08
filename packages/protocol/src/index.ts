@@ -294,6 +294,48 @@ export interface MergeResultDTO {
 }
 
 export type MergeStrategy = "merge" | "squash" | "rebase";
+export type UpdateStrategy = "merge" | "rebase";
+
+/**
+ * User settings: `~/.ateam/settings.json`, hand-editable (server/settings-file.ts).
+ * One schema, two readers. `client` is read by the desktop on the machine
+ * running it; `engine` by whichever engine runs the work, so a box reads its
+ * own file. Only keys with a reader exist — a setting nothing reads is a lie.
+ */
+export interface EngineSettings {
+	/** Agent a new task launches with when the composer doesn't say. */
+	defaultAgentId: string;
+	/** How "Merge via PR" lands the branch. */
+	defaultMergeStrategy: MergeStrategy;
+	/** How "Update from base branch" brings the base in. */
+	defaultUpdateStrategy: UpdateStrategy;
+	/** Delete the remote branch once its PR has merged. */
+	deleteRemoteBranchOnMerge: boolean;
+}
+export interface ClientSettings {
+	/** Fetch an update in the background instead of asking first. */
+	autoDownloadUpdates: boolean;
+}
+export interface AteamSettings {
+	version: number;
+	client: ClientSettings;
+	engine: EngineSettings;
+}
+export interface SettingsPatch {
+	client?: Partial<ClientSettings>;
+	engine?: Partial<EngineSettings>;
+}
+/**
+ * `settings:get`'s answer: what is in force, where it came from, and a warning
+ * when the file could not be used as written (it was set aside as `.bad` and
+ * the defaults apply) — surfaced, never swallowed, so a hand edit cannot
+ * vanish without a trace.
+ */
+export interface SettingsResult {
+	settings: AteamSettings;
+	path: string;
+	warning?: string;
+}
 
 /**
  * Result of enqueuing a merge. The merge runs serialized per base branch, so
@@ -548,6 +590,8 @@ export const CH = {
 	utilWriteImageBytes: "util:writeImageBytes",
 	utilOpenInEditor: "util:openInEditor",
 	utilOpenBrowser: "util:openBrowser",
+	settingsGet: "settings:get",
+	settingsUpdate: "settings:update",
 	editorOpen: "editor:open",
 	editorOpenUrl: "editor:openUrl",
 	editorInstall: "editor:install",
@@ -563,6 +607,7 @@ export const CH = {
 	// main → renderer push events
 	evtPtyData: "evt:pty:data",
 	evtPtyExit: "evt:pty:exit",
+	evtOpenSettings: "evt:settings:open",
 	evtTaskUpdated: "evt:task:updated",
 	evtTaskRemoved: "evt:task:removed",
 	evtLoopsUpdated: "evt:loops:updated",
@@ -778,6 +823,11 @@ export interface AteamApi {
 		onTaskUpdated(cb: (task: TaskDTO) => void): () => void;
 		/** A task was removed (delete or cleanup) — drop it from every window. */
 		onTaskRemoved(cb: (taskId: string) => void): () => void;
+		/**
+		 * The app menu's Settings… (⌘,) — show the settings page in this window.
+		 * Optional: a client without an app menu (the phone) never receives it.
+		 */
+		onOpenSettings?(cb: () => void): () => void;
 	};
 	window: {
 		/**
@@ -791,6 +841,12 @@ export interface AteamApi {
 		 * dashboard. Read once at boot from the window's launch URL.
 		 */
 		boundProjectId(): string | null;
+	};
+	settings: {
+		/** The settings in force on this task's engine's machine. */
+		get(): Promise<SettingsResult>;
+		/** Patch one or more keys; answers with the full result, like `get`. */
+		update(patch: SettingsPatch): Promise<SettingsResult>;
 	};
 	utils: {
 		/**

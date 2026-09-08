@@ -30,6 +30,7 @@ import { reapableSessions } from "./pty/reap";
 import { makeStrandReconciler } from "./pty/reconcile";
 import { type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
+import { readSettings } from "./settings-file";
 
 export interface EngineOptions {
 	/** Where the SQLite db, hooks, and notify script live (app userData or ~/.ateam). */
@@ -400,19 +401,17 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		if (!task) return;
 		const project = repo.getProject(db, task.projectId);
 		if (!project) return;
-		const settings = repo.getSettings(db);
+		const { engine: settings } = readSettings().settings;
 		const requested = e.strategy ?? "";
 		const strategy = (
-			["merge", "squash", "rebase"].includes(requested)
-				? requested
-				: (settings.defaultMergeStrategy ?? "squash")
+			["merge", "squash", "rebase"].includes(requested) ? requested : settings.defaultMergeStrategy
 		) as MergeStrategy;
 		void mergeQueue.enqueue({
 			task,
 			repoPath: project.repoPath,
 			strategy,
-			updateStrategy: settings.defaultUpdateStrategy ?? "merge",
-			deleteRemoteBranch: settings.deleteRemoteBranchOnMerge ?? false,
+			updateStrategy: settings.defaultUpdateStrategy,
+			deleteRemoteBranch: settings.deleteRemoteBranchOnMerge,
 		});
 	});
 
