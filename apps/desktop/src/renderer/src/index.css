@@ -204,6 +204,20 @@ input {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
+/* How many sessions the tile stands for, when more than one: the tile has
+   room for one glyph, so the rest are a number. Opposite corner to the status
+   dot. */
+.rail-tile .rail-count {
+	position: absolute;
+	right: 3px;
+	bottom: 2px;
+	padding: 1px 3px;
+	border-radius: 4px;
+	background: var(--bg-elev);
+	font-size: 9px;
+	line-height: 1;
+	color: var(--text);
+}
 .rail-tile .corner {
 	position: absolute;
 	top: 3px;
@@ -414,6 +428,12 @@ input {
 .tasknode .ticon {
 	color: var(--text-dim);
 	flex: none;
+}
+/* One glyph per live session, on the sidebar row and the board card. */
+.glyphs {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
 }
 .tasknode .tname {
 	flex: 1;
@@ -975,7 +995,11 @@ input {
 .sess-tabs {
 	display: flex;
 	align-items: center;
-	gap: 2px;
+	align-self: stretch;
+	/* Tabs sit flush, VS Code style: the strip bleeds through the row's padding
+	   so a tab touches the row's top, bottom and left edges. */
+	gap: 0;
+	margin: -6px 0 -6px -10px;
 	min-width: 0;
 	overflow-x: auto;
 	/* A horizontal scrollbar must not shove the row taller than the icons. */
@@ -984,67 +1008,114 @@ input {
 .sess-tabs::-webkit-scrollbar {
 	display: none;
 }
-/* The `+` never scrolls away with the tabs — it's how you make the next one. */
+/* The `+` never scrolls away with the tabs — it's how you make the next one.
+   It shows only while the pointer is over the toolbar row (or it has keyboard
+   focus, or its menu is open): a control you reach for, not a permanent tab. */
 .sess-tabs > :last-child {
 	position: sticky;
 	right: 0;
 	flex: none;
+	margin-left: 4px;
 	background: var(--bg);
+	opacity: 0;
+	transition: opacity 0.1s;
 }
+.actions:hover .sess-tabs > :last-child,
+.sess-tabs > :last-child:focus-visible,
+.sess-tabs > [aria-expanded="true"] {
+	opacity: 1;
+}
+/* An editor tab: square, icon + name + close. Only the active one is a surface;
+   the rest sit on the row's own background, and it carries a white line along
+   its top — the VS Code accent line, in this chrome's only selection colour
+   (see the sidebar rows and the selected card). The line is a border on every
+   tab, transparent until lit, so lighting it never moves text. */
 .sess-tab {
 	display: flex;
 	align-items: center;
 	flex: none;
-	border-radius: 6px;
+	align-self: stretch;
+	padding: 0 6px 0 14px;
+	border-top: 1px solid transparent;
+	background: transparent;
 	color: var(--text-dim);
 }
 .sess-tab:hover {
-	background: var(--bg-elev);
+	color: var(--text);
 }
 .sess-tab.active {
 	background: var(--bg-elev-2);
 	color: var(--text);
+	border-top-color: var(--text);
 }
 /* A tab a restart took away: it holds no terminal until you click it, so it
    reads as an outline rather than a surface. Dashed, not merely faded — faded
    alone would say "disabled", and this one is the clickable kind. */
 .sess-tab.restorable {
 	border: 1px dashed var(--border);
+	padding-right: 10px;
 	opacity: 0.6;
 }
 .sess-tab.restorable:hover {
 	opacity: 1;
 }
-.sess-tab.restorable .sess-tab-name {
-	padding-right: 8px;
-}
 .sess-tab-name {
-	max-width: 140px;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	padding: 3px 2px 3px 8px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	max-width: 160px;
+	height: 100%;
+	padding: 0;
 	border: none;
+	border-radius: 0;
 	background: transparent;
 	color: inherit;
 	font-size: 12px;
 	cursor: pointer;
 }
+/* The tab is the surface, not its name: the generic button hover must not
+   paint a second, rounded one inside it. */
+.sess-tab-name:hover {
+	background: transparent;
+}
+.sess-tab-name > span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* The glyph: a brand mark for an agent, the terminal icon for a shell. A brand
+   mark keeps its colour, so it dims at rest like the VS Code logo in the
+   toolbar does, rather than outshining the tab it sits in. */
+.sess-tab-icon {
+	display: flex;
+	flex: none;
+}
+.sess-tab:not(.active) .sess-tab-icon {
+	opacity: 0.7;
+}
+/* The × shows on the active tab and on the one under the pointer (or focus);
+   the others keep its space so nothing shifts as you sweep across the strip. */
 .sess-tab-close {
 	display: grid;
 	place-items: center;
 	padding: 2px;
-	margin-right: 4px;
+	margin-left: 4px;
 	border: none;
 	background: transparent;
 	border-radius: 4px;
 	color: inherit;
-	opacity: 0.5;
+	opacity: 0;
 	cursor: pointer;
 }
-.sess-tab-close:hover {
+.sess-tab.active .sess-tab-close,
+.sess-tab:hover .sess-tab-close,
+.sess-tab:focus-within .sess-tab-close {
+	opacity: 0.6;
+}
+.sess-tab .sess-tab-close:hover {
 	opacity: 1;
-	background: var(--bg-elev-2);
+	background: rgba(255, 255, 255, 0.12);
 }
 
 /* panel body: terminal, or the changes view (files left · diff right) */
