@@ -1,3 +1,5 @@
+import { open } from "node:fs/promises";
+import { join } from "node:path";
 import { gitFor, safeRaw } from "./git-client";
 
 export interface DiffFile {
@@ -40,6 +42,37 @@ function parseNumstatInto(raw: string, into: Map<string, DiffFile>): void {
 	}
 }
 
+/**
+ * Line count + binary-ness of a file on disk, the way `git diff --numstat`
+ * would report it once added: a trailing partial line counts, and a NUL byte
+ * in the first 8000 bytes means binary (git's own heuristic). Streamed, so a
+ * stray large untracked file costs I/O, not memory.
+ */
+async function countNewFile(absPath: string): Promise<{ additions: number; binary: boolean }> {
+	const fh = await open(absPath, "r");
+	try {
+		const buf = Buffer.alloc(64 * 1024);
+		let lines = 0;
+		let first = true;
+		let lastByte = -1;
+		for (;;) {
+			const { bytesRead } = await fh.read(buf, 0, buf.length, null);
+			if (bytesRead === 0) break;
+			const chunk = buf.subarray(0, bytesRead);
+			if (first) {
+				first = false;
+				if (chunk.subarray(0, 8000).includes(0)) return { additions: 0, binary: true };
+			}
+			for (let i = chunk.indexOf(10); i !== -1; i = chunk.indexOf(10, i + 1)) lines++;
+			lastByte = chunk[bytesRead - 1] ?? lastByte;
+		}
+		if (lastByte !== -1 && lastByte !== 10) lines++;
+		return { additions: lines, binary: false };
+	} finally {
+		await fh.close();
+	}
+}
+
 export interface DiffInput {
 	worktreePath: string;
 	/** When provided, includes committed changes vs `origin/<base>` merge-base. */
@@ -58,32 +91,27 @@ export async function diff(input: DiffInput): Promise<DiffResult> {
 
 	if (input.baseBranch) {
 		parseNumstatInto(
-			await safeRaw(git, [
-				"diff",
-				"--numstat",
-				"--merge-base",
-				`origin/${input.baseBranch}`,
-			]),
+			await safeRaw(git, ["diff", "--numstat", "--merge-base", `origin/${input.baseBranch}`]),
 			files,
 		);
 	}
 	parseNumstatInto(await safeRaw(git, ["diff", "--numstat", "--staged"]), files);
 	parseNumstatInto(await safeRaw(git, ["diff", "--numstat"]), files);
 
-	// Untracked files never appear in `git diff`; list them explicitly.
-	const untracked = await safeRaw(git, [
-		"ls-files",
-		"--others",
-		"--exclude-standard",
-	]);
+	// Untracked files never appear in `git diff`; list them explicitly, with
+	// every line counted as an addition (what staging them would report).
+	const untracked = await safeRaw(git, ["ls-files", "--others", "--exclude-standard"]);
 	for (const line of untracked.split("\n")) {
 		const path = line.trim();
 		if (!path || files.has(path)) continue;
+		const counted = await countNewFile(join(input.worktreePath, path)).catch(() => ({
+			additions: 0,
+			binary: false,
+		}));
 		files.set(path, {
 			path,
-			additions: 0,
+			...counted,
 			deletions: 0,
-			binary: false,
 			untracked: true,
 		});
 	}
@@ -103,14 +131,18 @@ export interface FileDiffInput {
 /** The unified patch for a single file (lazily fetched by the viewer). */
 export async function fileDiff(input: FileDiffInput): Promise<string> {
 	const git = gitFor(input.worktreePath);
-	if (input.baseBranch) {
-		return safeRaw(git, [
-			"diff",
-			"--merge-base",
-			`origin/${input.baseBranch}`,
-			"--",
-			input.file,
-		]);
-	}
-	return safeRaw(git, ["diff", "--", input.file]);
+	const patch = input.baseBranch
+		? await safeRaw(git, ["diff", "--merge-base", `origin/${input.baseBranch}`, "--", input.file])
+		: await safeRaw(git, ["diff", "--", input.file]);
+	if (patch) return patch;
+
+	// `git diff` is silent on an untracked file (an agent's freshly created
+	// file that nothing staged yet). Diff it against nothing instead, which
+	// yields a regular "new file" patch. `--no-index` exits 1 on any difference
+	// with nothing on stderr, which simple-git reports as success.
+	const isUntracked = (
+		await safeRaw(git, ["ls-files", "--others", "--exclude-standard", "--", input.file])
+	).trim();
+	if (!isUntracked) return patch;
+	return safeRaw(git, ["diff", "--no-index", "--", "/dev/null", input.file]);
 }
