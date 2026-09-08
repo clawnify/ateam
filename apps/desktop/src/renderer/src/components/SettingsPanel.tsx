@@ -72,6 +72,20 @@ const ROWS: Row[] = [
 		),
 	},
 	{
+		id: "client.syncEngineSettingsToBoxes",
+		section: "general",
+		title: "Sync settings to boxes",
+		description:
+			"Treat this Mac's engine settings as the source of truth and push them to every box as it connects and whenever they change. Off: each box keeps its own, edited by selecting it.",
+		control: (s, { patch }) => (
+			<Switch
+				checked={s.client.syncEngineSettingsToBoxes}
+				label="Sync settings to boxes"
+				onChange={(v) => patch({ client: { syncEngineSettingsToBoxes: v } })}
+			/>
+		),
+	},
+	{
 		id: "engine.defaultAgentId",
 		section: "agents",
 		title: "Default agent",
@@ -317,8 +331,22 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 				)}
 				{result && (
 					<p className="settings-foot">
-						Stored in <code>{result.path}</code> on the machine you have selected. Edit it by hand
-						if you like; changes apply on the next read.
+						Stored in <code>{result.path}</code>
+						{result.machine === undefined
+							? " on the machine you have selected"
+							: result.machine === null
+								? " on this Mac"
+								: ` on "${result.machine}"`}
+						{result.syncedTo && result.syncedTo.length > 0
+							? `; engine settings synced to ${result.syncedTo.join(", ")}`
+							: ""}
+						{result.syncFailed && result.syncFailed.length > 0
+							? `; not synced to ${result.syncFailed.map((f) => `${f.alias} (${f.reason})`).join(", ")}`
+							: ""}
+						{result.syncedTo && !result.syncedTo.length && !result.syncFailed?.length
+							? "; engine settings sync to each box as it connects"
+							: ""}
+						. Edit it by hand if you like; changes apply on the next read.
 					</p>
 				)}
 			</div>

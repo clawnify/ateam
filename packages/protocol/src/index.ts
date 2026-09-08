@@ -315,6 +315,13 @@ export interface EngineSettings {
 export interface ClientSettings {
 	/** Fetch an update in the background instead of asking first. */
 	autoDownloadUpdates: boolean;
+	/**
+	 * This Mac's `engine.*` is the source of truth: pushed to every box as it
+	 * connects and again on every change, so a fresh box inherits your choices.
+	 * Off: each machine keeps its own file and the page edits whichever
+	 * environment is selected. `client.*` never syncs either way.
+	 */
+	syncEngineSettingsToBoxes: boolean;
 }
 export interface AteamSettings {
 	version: number;
@@ -335,6 +342,19 @@ export interface SettingsResult {
 	settings: AteamSettings;
 	path: string;
 	warning?: string;
+	/**
+	 * Filled in by the desktop, which alone knows the boxes. `machine` is whose
+	 * file this is (null = this Mac); `syncedTo` lists the boxes that took this
+	 * Mac's `engine.*` just now, present only while sync is on.
+	 */
+	machine?: string | null;
+	syncedTo?: string[];
+	/**
+	 * Connected boxes whose LAST push of `engine.*` failed, with why — an
+	 * engine older than settings sync being the ordinary reason. Reported so
+	 * "synced" is never claimed for a box that did not take it.
+	 */
+	syncFailed?: { alias: string; reason: string }[];
 }
 
 /**

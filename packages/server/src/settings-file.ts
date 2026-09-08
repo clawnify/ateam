@@ -29,6 +29,7 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 	version: SETTINGS_VERSION,
 	client: {
 		autoDownloadUpdates: false,
+		syncEngineSettingsToBoxes: true,
 	},
 	engine: {
 		defaultAgentId: "claude",
