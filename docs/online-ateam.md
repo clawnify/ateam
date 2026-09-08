@@ -222,6 +222,17 @@ ssh my-ateam-box "bash -lc 'ateam'"
 > beside it (**Open worktree in your editor**) instead opens *your own* VS Code
 > over Remote-SSH.
 
+> **Settings, and which machine's you are editing.** Settings live in
+> `~/.ateam/settings.json` on every machine, hand-editable. The **engine**
+> half (default agent, merge and update strategy, branch deletion) is read by
+> whichever engine runs the work, so a box reads its own file. With **Sync
+> settings to boxes** on (the default) this Mac's engine settings are the source
+> of truth and are pushed to a box as it connects and whenever they change, so a
+> fresh box inherits your choices; the settings page names the boxes it synced
+> to, and any it could not (a box on an Ateam older than settings sync takes
+> the next release first). Off, each box keeps its own, edited by selecting it.
+> The **client** half (updates, this toggle) is per machine and never syncs.
+
 ## 5. Same box, from the iOS app
 
 The phone can't run `ssh`, so it speaks to the **same daemon** over a WebSocket
