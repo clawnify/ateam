@@ -547,6 +547,7 @@ export const CH = {
 	utilAttachClipboardImage: "util:attachClipboardImage",
 	utilWriteImageBytes: "util:writeImageBytes",
 	utilOpenInEditor: "util:openInEditor",
+	utilOpenBrowser: "util:openBrowser",
 	editorOpen: "editor:open",
 	editorOpenUrl: "editor:openUrl",
 	editorInstall: "editor:install",
@@ -608,6 +609,14 @@ export type AttachDelivery =
  * a `host:port` endpoint that Remote-SSH can't resolve.
  */
 export type OpenInEditorResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Outcome of bringing up the browser an agent drives. Same shape as
+ * `OpenInEditorResult` and deliberately its own name: the reasons differ (no
+ * Chrome on this Mac, or a task whose browser lives on a box), and one type
+ * named for the editor would read as a copy-paste rather than a decision.
+ */
+export type OpenBrowserResult = { ok: true } | { ok: false; reason: string };
 
 /**
  * The in-app editor's default port on the engine's machine (code-server). Shared
@@ -827,6 +836,16 @@ export interface AteamApi {
 		 * affordance rather than offering one that can't work.
 		 */
 		openInEditor?(worktreePath: string, alias: string | null): Promise<OpenInEditorResult>;
+		/**
+		 * Bring up the browser the agents drive — the user's OWN Chrome, on THIS
+		 * machine, so every session it holds is already signed in and the agent
+		 * never faces a login wall. Client-native for the same reason
+		 * `openInEditor` is: a browser is a desktop app, not something the engine
+		 * can launch, and unlike the editor there is no Remote-SSH equivalent —
+		 * a task on a box needs a browser ON the box (docs/browser-box.md), so
+		 * that case reports a reason instead of silently raising this Mac's.
+		 */
+		openBrowser?(alias: string | null): Promise<OpenBrowserResult>;
 	};
 }
 

@@ -102,6 +102,7 @@ const api: AteamApi = {
 		writeImageBytes: (base64, ext) => ipcRenderer.invoke(CH.utilWriteImageBytes, base64, ext),
 		openInEditor: (worktreePath, alias) =>
 			ipcRenderer.invoke(CH.utilOpenInEditor, worktreePath, alias),
+		openBrowser: (alias) => ipcRenderer.invoke(CH.utilOpenBrowser, alias),
 	},
 	events: {
 		onTaskUpdated: (cb: (task: TaskDTO) => void) => {

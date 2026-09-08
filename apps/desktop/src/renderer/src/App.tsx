@@ -24,6 +24,7 @@ import {
 	FolderPlus,
 	GitCommitVertical,
 	GitMerge,
+	Globe,
 	History,
 	LayoutGrid,
 	Lock,
@@ -2140,6 +2141,32 @@ function TaskPanel({
 								// Optional on the API surface (the phone omits it) — the desktop
 								// preload always provides it.
 								const res = await window.ateam.utils.openInEditor?.(task.worktreePath, alias);
+								if (res && !res.ok) throw new Error(res.reason);
+							})
+						}
+					/>
+				)}
+				{/* After the editor and its controls, not between them: each app keeps its
+				    own controls beside it. This is the browser half of "hand this task to
+				    a real app" — your own Chrome, so every session it holds is already
+				    signed in and an agent never meets a login wall on its first useful
+				    step. Its own controls will land to the right of it in turn. */}
+				{/* Offered only where it can work, which is what the optional binding
+				    means (see the protocol's note on `openBrowser`). Without this the
+				    `?.` call swallows a missing binding and the button just does
+				    nothing when clicked — which is exactly how it looks when a dev
+				    session hot-reloads this file while the preload stays behind. */}
+				{window.ateam.utils.openBrowser && (
+					<IconButton
+						icon={Globe}
+						label={
+							alias === null
+								? "Open Chrome (the browser your agents drive)"
+								: "Open Chrome — a task on a box needs its own browser"
+						}
+						onClick={() =>
+							run(async () => {
+								const res = await window.ateam.utils.openBrowser?.(alias);
 								if (res && !res.ok) throw new Error(res.reason);
 							})
 						}
