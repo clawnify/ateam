@@ -51,7 +51,7 @@ export function FileDiffView({
 					</div>
 				) : files.length === 0 ? (
 					<div className="muted" style={{ padding: 12 }}>
-						No textual diff (binary or untracked file)
+						No textual diff (binary file)
 					</div>
 				) : (
 					files.map((f) => (
@@ -61,9 +61,7 @@ export function FileDiffView({
 							diffType={f.type}
 							hunks={f.hunks}
 						>
-							{(hunks) =>
-								hunks.map((h) => <Hunk key={h.content} hunk={h} />)
-							}
+							{(hunks) => hunks.map((h) => <Hunk key={h.content} hunk={h} />)}
 						</Diff>
 					))
 				)}
