@@ -1,5 +1,5 @@
 import type { AgentDefinition, BinaryPresence, SessionScan } from "@ateam/agents";
-import type { AgentSession, AteamDb, Project, Task } from "@ateam/db";
+import { type AgentSession, type AteamDb, type Project, repo, type Task } from "@ateam/db";
 import type { ProjectDTO, SessionDTO, TaskDTO } from "@ateam/protocol";
 import type { FollowUps } from "./follow-ups";
 import type { HookServer } from "./hooks/hook-server";
@@ -62,7 +62,25 @@ export function toProjectDTO(p: Project): ProjectDTO {
 	};
 }
 
-export function toTaskDTO(t: Task, preparing = false): TaskDTO {
+/**
+ * The agent behind each of a task's live sessions, oldest first: TaskDTO.agentIds.
+ * Liveness is the daemon's word (`pty.has`), never the session row's status —
+ * the same rule pty:listForTask follows, so the glyphs a card shows are exactly
+ * the tabs its panel would open.
+ */
+export function liveAgentIds(
+	db: AteamDb,
+	pty: { has(terminalId: string): boolean },
+	taskId: string,
+): string[] {
+	return repo
+		.listSessionsByTask(db, taskId)
+		.filter((s) => pty.has(s.terminalId))
+		.map((s) => s.agentId)
+		.reverse();
+}
+
+export function toTaskDTO(t: Task, preparing = false, agentIds: string[] = []): TaskDTO {
 	return {
 		id: t.id,
 		projectId: t.projectId,
@@ -75,6 +93,7 @@ export function toTaskDTO(t: Task, preparing = false): TaskDTO {
 		column: t.column,
 		agentStatus: t.agentStatus ?? null,
 		agentId: t.agentId ?? null,
+		agentIds,
 		mergeStatus: t.mergeStatus ?? null,
 		prNumber: t.prNumber ?? null,
 		prUrl: t.prUrl ?? null,

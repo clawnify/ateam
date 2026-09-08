@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { AgentDTO, SessionDTO } from "@ateam/protocol";
-import { activeTerminal, sessionTabs } from "./session-tabs";
+import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
 
 const AGENTS: AgentDTO[] = [
 	{ id: "claude", label: "Claude Code", description: "", available: true },
@@ -125,4 +125,17 @@ test("several stranded sessions each get their own numbered tab", () => {
 // A stranded tab holds no terminal, so it must never be what the panel shows.
 test("a stranded session is not something the view can land on", () => {
 	expect(activeTerminal([], null)).toBeNull();
+});
+
+test("a task's glyphs are its live sessions, falling back to the last agent launched", () => {
+	expect(taskGlyphs({ agentId: "claude", agentIds: ["claude", "shell", "claude"] })).toEqual([
+		"claude",
+		"shell",
+		"claude",
+	]);
+	// Nothing live: the task still reads as the agent that last ran here.
+	expect(taskGlyphs({ agentId: "claude", agentIds: [] })).toEqual(["claude"]);
+	// An engine too old to send the field reads the same as nothing live.
+	expect(taskGlyphs({ agentId: "codex" })).toEqual(["codex"]);
+	expect(taskGlyphs({ agentId: null })).toEqual([]);
 });
