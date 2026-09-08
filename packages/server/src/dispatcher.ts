@@ -58,7 +58,7 @@ import { readSettings, settingsPath, updateSettings } from "./settings-file";
 import type { Engine } from "./engine";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { createSizeArbiter } from "./pty/size-arbiter";
-import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
+import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
 import { searchSessions } from "./session-search";
 import { createTaskInProject, type SpawnAgentInput, shell, spawnAgentInTask } from "./sessions";
 
@@ -337,7 +337,11 @@ export function createDispatcher(engine: Engine): Dispatcher {
 
 		// ---- tasks ----
 		[CH.tasksList]: async (projectId: string) =>
-			repo.listTasks(db, projectId).map((t) => toTaskDTO(t, services.pendingSeeds.has(t.id))),
+			repo
+				.listTasks(db, projectId)
+				.map((t) =>
+					toTaskDTO(t, services.pendingSeeds.has(t.id), liveAgentIds(db, services.pty, t.id)),
+				),
 		[CH.tasksCreate]: async (input: {
 			projectId: string;
 			name: string;
@@ -371,14 +375,14 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.tasksMarkRead]: async (id: string) => {
 			const row = repo.updateTask(db, id, { isUnread: false });
 			engine.sendTaskUpdated(id);
-			return toTaskDTO(row!);
+			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
 		},
 		[CH.tasksSetColumn]: async (id: string, column: KanbanColumn) => {
 			const row = repo.updateTask(db, id, { column });
 			// Broadcast so every view (board, sidebar) reflects the move — e.g. the
 			// "Done" button under the terminal that sends a review task to merged.
 			engine.sendTaskUpdated(id);
-			return toTaskDTO(row!);
+			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
 		},
 
 		// Candidates for the interactive cleanup dialog: EVERY task in the project,

@@ -200,6 +200,15 @@ export interface TaskDTO {
 	column: KanbanColumn;
 	agentStatus: AgentStatus | null;
 	agentId: string | null;
+	/**
+	 * The agent behind each session that is live in this task right now, oldest
+	 * first — "shell" for a plain terminal. `agentId` above is the last agent
+	 * launched here and outlives its session; this is what is actually running,
+	 * so a task holding two agents and a shell shows all three. Empty when
+	 * nothing runs. Absent from an engine older than this field, which reads
+	 * the same as empty — a read-only addition, so no protocol bump.
+	 */
+	agentIds?: string[];
 	/** Merge-queue position; null when the task is not queued to merge. */
 	mergeStatus: MergeStatus | null;
 	prNumber: number | null;

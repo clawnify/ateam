@@ -11,6 +11,7 @@ import {
 	detectDefaultBranch,
 	detectMerged,
 	diff,
+	fileDiff,
 	initRepository,
 	parseGithubRepo,
 	parseWorktreeList,
@@ -583,6 +584,39 @@ describe("commit & diff", () => {
 		});
 		const x = after.files.find((f) => f.path === "x.txt");
 		expect(x?.additions).toBe(2);
+	});
+
+	// An agent's freshly created file is untracked: `git diff` is silent on it,
+	// so the viewer used to show "+0 -0" and an empty patch for real content.
+	it("reports an untracked file's lines and a new-file patch", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "new file" });
+		await Bun.write(join(task.worktreePath, "notes.md"), "# notes\n\nfirst\nlast without newline");
+		await Bun.write(join(task.worktreePath, "blob.bin"), new Uint8Array([0, 1, 2, 3]));
+
+		const d = await diff({ worktreePath: task.worktreePath, baseBranch: "main" });
+		const notes = d.files.find((f) => f.path === "notes.md");
+		expect(notes).toMatchObject({ untracked: true, additions: 4, deletions: 0, binary: false });
+		const blob = d.files.find((f) => f.path === "blob.bin");
+		expect(blob).toMatchObject({ untracked: true, additions: 0, binary: true });
+
+		const patch = await fileDiff({
+			worktreePath: task.worktreePath,
+			file: "notes.md",
+			baseBranch: "main",
+		});
+		expect(patch).toContain("new file mode");
+		expect(patch).toContain("+++ b/notes.md");
+		expect(patch).toContain("+last without newline");
+
+		// A file git already knows about keeps the ordinary path.
+		await Bun.write(join(task.worktreePath, "README.md"), "# temp repo\nmore\n");
+		const tracked = await fileDiff({
+			worktreePath: task.worktreePath,
+			file: "README.md",
+			baseBranch: "main",
+		});
+		expect(tracked).toContain("+more");
+		expect(tracked).not.toContain("new file mode");
 	});
 });
 

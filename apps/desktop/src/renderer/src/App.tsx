@@ -55,7 +55,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { AgentIcon } from "./components/AgentIcon";
+import { SessionGlyphs, SessionIcon } from "./components/AgentIcon";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { FileDiffView } from "./components/FileDiffView";
 import { IconButton } from "./components/IconButton";
@@ -68,7 +68,7 @@ import { usePrompt } from "./components/usePrompt";
 import { PanelRightFilled } from "./components/PanelRightFilled";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { VscodeLogo } from "./components/VscodeLogo";
-import { activeTerminal, sessionTabs } from "./session-tabs";
+import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge } from "./triage-order";
 import { type Alias, aliasLabel, type UnifiedProject, unifyProjects } from "./unify";
@@ -930,6 +930,9 @@ export function App() {
 						</button>
 						{visibleSidebarTasks.map((t) => {
 							const Icon = taskIcon(t.name);
+							// One tile, one glyph: the first live session, and a count when
+							// there are more — the row and the card have room to show them all.
+							const [glyph, ...rest] = taskGlyphs(t);
 							return (
 								<button
 									type="button"
@@ -938,11 +941,12 @@ export function App() {
 									title={t.name}
 									onClick={() => toggleTask(t)}
 								>
-									{t.agentId ? (
-										<AgentIcon agentId={t.agentId} size={16} />
+									{glyph ? (
+										<SessionIcon agentId={glyph} size={16} />
 									) : (
 										<Icon size={16} strokeWidth={1.75} />
 									)}
+									{rest.length > 0 && <span className="rail-count">{rest.length + 1}</span>}
 									{t.preparing ? (
 										<span className="corner preparing" />
 									) : (
@@ -1457,15 +1461,16 @@ function TaskRow({
 }) {
 	const Icon = taskIcon(t.name);
 	const tags = tagsFor(t);
+	const glyphs = taskGlyphs(t);
 	// Row and trailing slot are siblings so the trash click can't nest inside the
 	// row button (same pattern as proj-row / proj-open above). The status dot and
 	// delete button share the trailing slot and swap in place on hover.
 	return (
 		<div className="tasknode-row">
 			<button type="button" className={`tasknode ${selected ? "selected" : ""}`} onClick={onClick}>
-				{t.agentId ? (
-					<span className="ticon">
-						<AgentIcon agentId={t.agentId} size={14} />
+				{glyphs.length > 0 ? (
+					<span className="ticon glyphs">
+						<SessionGlyphs ids={glyphs} size={14} />
 					</span>
 				) : (
 					<Icon className="ticon" size={14} strokeWidth={1.75} />
@@ -1589,6 +1594,7 @@ function Board({
 						</h3>
 						{items.map((t) => {
 							const tags = tagsFor(t);
+							const glyphs = taskGlyphs(t);
 							const isSelected = t.id === selectedId;
 							return (
 								<motion.div
@@ -1656,7 +1662,11 @@ function Board({
 											{relativeAge(t.lastEventAt, Date.now()) && (
 												<span className="age">{relativeAge(t.lastEventAt, Date.now())}</span>
 											)}
-											{t.agentId && <AgentIcon agentId={t.agentId} size={15} />}
+											{glyphs.length > 0 && (
+												<span className="glyphs">
+													<SessionGlyphs ids={glyphs} size={15} />
+												</span>
+											)}
 										</span>
 									</div>
 								</motion.div>
@@ -2051,7 +2061,10 @@ function TaskPanel({
 									void restoreTab(session);
 								}}
 							>
-								{label}
+								<span className="sess-tab-icon">
+									<SessionIcon agentId={session.agentId} size={14} />
+								</span>
+								<span>{label}</span>
 							</button>
 							{/* A stranded tab has no process to kill, and it retires itself
 							    after one run of the app — so it carries no close button. */}
@@ -2063,7 +2076,7 @@ function TaskPanel({
 									title={`Close ${label}`}
 									onClick={() => closeSession(session, label)}
 								>
-									<X size={11} />
+									<X size={14} />
 								</button>
 							)}
 						</div>

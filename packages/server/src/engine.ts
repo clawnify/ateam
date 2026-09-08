@@ -28,7 +28,7 @@ import { MergeQueue } from "./merge-queue";
 import { PtyClient } from "./pty/pty-client";
 import { reapableSessions } from "./pty/reap";
 import { makeStrandReconciler } from "./pty/reconcile";
-import { type Services, toTaskDTO } from "./services";
+import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
 import { readSettings } from "./settings-file";
 
@@ -160,7 +160,12 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 
 	const sendTaskUpdated = (taskId: string): void => {
 		const task = repo.getTask(db, taskId);
-		if (task) emitter.emit("taskUpdated", toTaskDTO(task, pendingSeeds.has(taskId)));
+		if (task) {
+			emitter.emit(
+				"taskUpdated",
+				toTaskDTO(task, pendingSeeds.has(taskId), liveAgentIds(db, pty, taskId)),
+			);
+		}
 	};
 
 	// The detached PTY daemon survives restarts; daemonPath is run via execPath as
@@ -249,15 +254,19 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	): void => {
 		repo.updateSession(db, sessionId, { status: "stopped", exitedAt, exitReason });
 		const task = repo.getTask(db, taskId);
-		if (task && task.column === "running") {
+		if (!task) return;
+		if (task.column === "running") {
 			repo.updateTask(db, task.id, {
 				agentStatus: "stopped",
 				column:
 					task.prNumber != null || (task.gitStatus?.ahead ?? 0) > 0 ? "review" : "needs_attention",
 				...(markUnread ? { isUnread: true } : {}),
 			});
-			sendTaskUpdated(task.id);
 		}
+		// Announced whether or not the column moved: a session ending changes
+		// what the task is running (TaskDTO.agentIds), and a shell closing on a
+		// reviewed task would otherwise keep its glyph on the card for good.
+		sendTaskUpdated(task.id);
 	};
 
 	// PTY output/exit → emitted for the transport to forward.
