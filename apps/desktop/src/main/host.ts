@@ -7,6 +7,8 @@
 // listener — handshakes (gating the protocol version), and ADDS it: connecting
 // never drops the others.
 
+import { join } from "node:path";
+import { getAgent } from "@ateam/agents";
 import {
 	CH,
 	type ClientTransport,
@@ -14,23 +16,25 @@ import {
 	DEFAULT_EDITOR_PORT,
 	type EditorEndpointDTO,
 	type EditorOpenResult,
+	type EngineSettings,
 	PROTOCOL_VERSION,
-	tolerantRpc,
 	type ProjectDTO,
 	type RpcClient,
+	type SettingsResult,
 	type SystemInfo,
+	tolerantRpc,
 	wsClientTransport,
 } from "@ateam/protocol";
-import { getAgent } from "@ateam/agents";
 import {
 	buildCloudInit,
 	type ConnectionDTO,
 	type Engine,
 	endpointUrl,
 	forgetConnection,
-	hetznerProvider,
 	type HostTransport,
+	hetznerProvider,
 	listConnections,
+	readSettings,
 	recordConnection,
 	resolveTransport,
 	sshClientTransport,
@@ -38,7 +42,6 @@ import {
 } from "@ateam/server";
 import { app, ipcMain } from "electron";
 import WebSocket from "ws";
-import { join } from "node:path";
 import {
 	type BoxReadiness,
 	type CreateBoxSpec,
@@ -52,19 +55,19 @@ import {
 } from "../shared/host";
 import { type Aggregate, createAggregate } from "./aggregate";
 import {
-	createSecretStore,
-	generateBoxKey,
-	writeSshConfigEntry,
-	waitForSsh,
-	waitForTailscale,
-} from "./box-setup";
-import {
 	type Backend,
 	type BackendEvent,
 	localBackend,
 	type Router,
 	remoteBackend,
 } from "./backend";
+import {
+	createSecretStore,
+	generateBoxKey,
+	waitForSsh,
+	waitForTailscale,
+	writeSshConfigEntry,
+} from "./box-setup";
 import { editorForwardFlags, editorLocalPort } from "./editor-tunnel";
 import { withTimeout } from "./timeout";
 
@@ -252,6 +255,67 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		void connected().then((list) => broadcast(HOST_CH.evtConnectionsChanged, list));
 	}
 
+	// ---- settings sync ----
+	// With `client.syncEngineSettingsToBoxes` on, this Mac's `engine.*` is the
+	// source of truth and every box holds a mirror: pushed as a box connects and
+	// again on every change. A box still reads its own FILE, so a loop ticking
+	// with no desktop attached keeps working — the mirror is what makes that
+	// true. A push that fails (an engine too old to know `settings:update`, a
+	// box mid-sleep) is logged and never fails the connect or the edit.
+	// alias → null when its last push landed, else why it did not. Read only for
+	// boxes still held, so a box that left takes its entry's meaning with it.
+	const syncState = new Map<string, string | null>();
+	async function pushEngineSettings(engine: EngineSettings): Promise<void> {
+		await Promise.all(
+			[...backends].map(async ([alias, backend]) => {
+				if (alias === null) return;
+				try {
+					await withTimeout(
+						backend.handle(CH.settingsUpdate, [{ engine }]) as Promise<unknown>,
+						CONNECT_TIMEOUT_MS,
+					);
+					syncState.set(alias, null);
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					// The one reason we can name for the user: an engine from before
+					// settings sync existed. It takes the next release, which the
+					// desktop installs on a box that is behind (see connect).
+					const reason = /Unknown method/.test(msg)
+						? "its Ateam is older than settings sync; updates with the next release"
+						: msg;
+					syncState.set(alias, reason);
+					console.warn(`[ateam] settings sync to "${alias}" failed:`, msg);
+				}
+			}),
+		);
+	}
+	function syncReport(): Pick<SettingsResult, "syncedTo" | "syncFailed"> {
+		const syncedTo: string[] = [];
+		const syncFailed: { alias: string; reason: string }[] = [];
+		for (const alias of backends.keys()) {
+			if (alias === null) continue;
+			const state = syncState.get(alias);
+			if (state === null) syncedTo.push(alias);
+			else if (state !== undefined) syncFailed.push({ alias, reason: state });
+		}
+		syncedTo.sort();
+		syncFailed.sort((a, b) => a.alias.localeCompare(b.alias));
+		return { syncedTo, syncFailed };
+	}
+
+	// Settings are the one call not routed by task or by the selected
+	// environment. Sync on: get/update go to THIS Mac and an update fans out, so
+	// the page always edits the file that wins. Sync off: they follow the
+	// selected environment like everything else, and the page says so.
+	async function settingsCall(method: string, args: unknown[]): Promise<SettingsResult> {
+		if (!readSettings().settings.client.syncEngineSettingsToBoxes) {
+			return (await agg.handle(method, args)) as SettingsResult;
+		}
+		const r = (await local.handle(method, args)) as SettingsResult;
+		if (method === CH.settingsUpdate) await pushEngineSettings(r.settings.engine);
+		return { ...r, machine: null, ...syncReport() };
+	}
+
 	/**
 	 * Open the wire to a box. Which wire is a property of the connection, not of
 	 * the call site: an ssh_config alias gets the `attach` relay over OpenSSH; a
@@ -359,6 +423,12 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		backends.set(alias, backend);
 		backendList.push(backend); // the live aggregate now fans out to it too
 		unbinders.set(alias, bindEvents(backend));
+		// A fresh box inherits this Mac's engine settings the moment it is held.
+		// Deliberately not awaited: the connect is done, and a slow push must not
+		// hold the board back.
+		if (readSettings().settings.client.syncEngineSettingsToBoxes) {
+			void pushEngineSettings(readSettings().settings.engine);
+		}
 		// A closed wire must take its backend WITH it. Nothing else drops a dead engine:
 		// a call routed into one never settles (no per-call timeout), so it stayed on the
 		// board, green, swallowing every request — the exact opposite of the promise that
@@ -621,7 +691,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			},
 		});
 		if (r.code !== 0) {
-			throw new Error(`Couldn't read "${alias}" readiness (ssh exited ${r.code ?? "on a signal"}).`);
+			throw new Error(
+				`Couldn't read "${alias}" readiness (ssh exited ${r.code ?? "on a signal"}).`,
+			);
 		}
 		const val = (k: string) => out.match(new RegExp(`^${k}=(.*)$`, "m"))?.[1]?.trim() ?? "";
 		return {
@@ -646,7 +718,10 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 
 	const router: Router = {
 		methods: local.methods,
-		handle: (method, args, ctx) => agg.handle(method, args, ctx),
+		handle: (method, args, ctx) =>
+			method === CH.settingsGet || method === CH.settingsUpdate
+				? settingsCall(method, args)
+				: agg.handle(method, args, ctx),
 		release: (client) => local.release?.(client),
 		handleFor: (ownerId, method, args) => agg.handleFor(ownerId, method, args),
 		ownerKind: (ownerId) => agg.ownerKindOf(ownerId),

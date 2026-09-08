@@ -303,6 +303,68 @@ export interface MergeResultDTO {
 }
 
 export type MergeStrategy = "merge" | "squash" | "rebase";
+export type UpdateStrategy = "merge" | "rebase";
+
+/**
+ * User settings: `~/.ateam/settings.json`, hand-editable (server/settings-file.ts).
+ * One schema, two readers. `client` is read by the desktop on the machine
+ * running it; `engine` by whichever engine runs the work, so a box reads its
+ * own file. Only keys with a reader exist — a setting nothing reads is a lie.
+ */
+export interface EngineSettings {
+	/** Agent a new task launches with when the composer doesn't say. */
+	defaultAgentId: string;
+	/** How "Merge via PR" lands the branch. */
+	defaultMergeStrategy: MergeStrategy;
+	/** How "Update from base branch" brings the base in. */
+	defaultUpdateStrategy: UpdateStrategy;
+	/** Delete the remote branch once its PR has merged. */
+	deleteRemoteBranchOnMerge: boolean;
+}
+export interface ClientSettings {
+	/** Fetch an update in the background instead of asking first. */
+	autoDownloadUpdates: boolean;
+	/**
+	 * This Mac's `engine.*` is the source of truth: pushed to every box as it
+	 * connects and again on every change, so a fresh box inherits your choices.
+	 * Off: each machine keeps its own file and the page edits whichever
+	 * environment is selected. `client.*` never syncs either way.
+	 */
+	syncEngineSettingsToBoxes: boolean;
+}
+export interface AteamSettings {
+	version: number;
+	client: ClientSettings;
+	engine: EngineSettings;
+}
+export interface SettingsPatch {
+	client?: Partial<ClientSettings>;
+	engine?: Partial<EngineSettings>;
+}
+/**
+ * `settings:get`'s answer: what is in force, where it came from, and a warning
+ * when the file could not be used as written (it was set aside as `.bad` and
+ * the defaults apply) — surfaced, never swallowed, so a hand edit cannot
+ * vanish without a trace.
+ */
+export interface SettingsResult {
+	settings: AteamSettings;
+	path: string;
+	warning?: string;
+	/**
+	 * Filled in by the desktop, which alone knows the boxes. `machine` is whose
+	 * file this is (null = this Mac); `syncedTo` lists the boxes that took this
+	 * Mac's `engine.*` just now, present only while sync is on.
+	 */
+	machine?: string | null;
+	syncedTo?: string[];
+	/**
+	 * Connected boxes whose LAST push of `engine.*` failed, with why — an
+	 * engine older than settings sync being the ordinary reason. Reported so
+	 * "synced" is never claimed for a box that did not take it.
+	 */
+	syncFailed?: { alias: string; reason: string }[];
+}
 
 /**
  * Result of enqueuing a merge. The merge runs serialized per base branch, so
@@ -556,6 +618,9 @@ export const CH = {
 	utilAttachClipboardImage: "util:attachClipboardImage",
 	utilWriteImageBytes: "util:writeImageBytes",
 	utilOpenInEditor: "util:openInEditor",
+	utilOpenBrowser: "util:openBrowser",
+	settingsGet: "settings:get",
+	settingsUpdate: "settings:update",
 	editorOpen: "editor:open",
 	editorOpenUrl: "editor:openUrl",
 	editorInstall: "editor:install",
@@ -571,6 +636,7 @@ export const CH = {
 	// main → renderer push events
 	evtPtyData: "evt:pty:data",
 	evtPtyExit: "evt:pty:exit",
+	evtOpenSettings: "evt:settings:open",
 	evtTaskUpdated: "evt:task:updated",
 	evtTaskRemoved: "evt:task:removed",
 	evtLoopsUpdated: "evt:loops:updated",
@@ -617,6 +683,14 @@ export type AttachDelivery =
  * a `host:port` endpoint that Remote-SSH can't resolve.
  */
 export type OpenInEditorResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Outcome of bringing up the browser an agent drives. Same shape as
+ * `OpenInEditorResult` and deliberately its own name: the reasons differ (no
+ * Chrome on this Mac, or a task whose browser lives on a box), and one type
+ * named for the editor would read as a copy-paste rather than a decision.
+ */
+export type OpenBrowserResult = { ok: true } | { ok: false; reason: string };
 
 /**
  * The in-app editor's default port on the engine's machine (code-server). Shared
@@ -778,6 +852,11 @@ export interface AteamApi {
 		onTaskUpdated(cb: (task: TaskDTO) => void): () => void;
 		/** A task was removed (delete or cleanup) — drop it from every window. */
 		onTaskRemoved(cb: (taskId: string) => void): () => void;
+		/**
+		 * The app menu's Settings… (⌘,) — show the settings page in this window.
+		 * Optional: a client without an app menu (the phone) never receives it.
+		 */
+		onOpenSettings?(cb: () => void): () => void;
 	};
 	window: {
 		/**
@@ -791,6 +870,12 @@ export interface AteamApi {
 		 * dashboard. Read once at boot from the window's launch URL.
 		 */
 		boundProjectId(): string | null;
+	};
+	settings: {
+		/** The settings in force on this task's engine's machine. */
+		get(): Promise<SettingsResult>;
+		/** Patch one or more keys; answers with the full result, like `get`. */
+		update(patch: SettingsPatch): Promise<SettingsResult>;
 	};
 	utils: {
 		/**
@@ -836,6 +921,16 @@ export interface AteamApi {
 		 * affordance rather than offering one that can't work.
 		 */
 		openInEditor?(worktreePath: string, alias: string | null): Promise<OpenInEditorResult>;
+		/**
+		 * Bring up the browser the agents drive — the user's OWN Chrome, on THIS
+		 * machine, so every session it holds is already signed in and the agent
+		 * never faces a login wall. Client-native for the same reason
+		 * `openInEditor` is: a browser is a desktop app, not something the engine
+		 * can launch, and unlike the editor there is no Remote-SSH equivalent —
+		 * a task on a box needs a browser ON the box (docs/browser-box.md), so
+		 * that case reports a reason instead of silently raising this Mac's.
+		 */
+		openBrowser?(alias: string | null): Promise<OpenBrowserResult>;
 	};
 }
 

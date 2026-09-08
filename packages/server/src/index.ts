@@ -34,3 +34,10 @@ export type { SshClient, SshExecOptions, SshExecResult, SshOptions } from "./tra
 export { sshClientTransport, sshExec } from "./transport/ssh";
 export { streamClientTransport, streamServerTransport } from "./transport/stream";
 export { wsServerTransport } from "./transport/ws";
+export {
+	DEFAULT_SETTINGS,
+	readSettings,
+	SETTINGS_VERSION,
+	settingsPath,
+	updateSettings,
+} from "./settings-file";

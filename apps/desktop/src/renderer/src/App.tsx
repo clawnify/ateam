@@ -24,6 +24,7 @@ import {
 	FolderPlus,
 	GitCommitVertical,
 	GitMerge,
+	Globe,
 	History,
 	LayoutGrid,
 	Lock,
@@ -39,6 +40,7 @@ import {
 	RotateCw,
 	Rows2,
 	Server,
+	Settings,
 	SquareTerminal,
 	Trash2,
 	X,
@@ -64,6 +66,7 @@ import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
 import { PanelRightFilled } from "./components/PanelRightFilled";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { VscodeLogo } from "./components/VscodeLogo";
 import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
@@ -108,10 +111,11 @@ const MIN_SIDEBAR_W = 240;
 
 // Where collapsing a focused task takes you — it's whatever view the task was
 // opened over, so the tooltip has to name that view, not the board.
-const FOCUS_COLLAPSE_LABEL: Record<"board" | "mission" | "loops", string> = {
+const FOCUS_COLLAPSE_LABEL: Record<"board" | "mission" | "loops" | "settings", string> = {
 	board: "Show beside the board",
 	mission: "Back to Mission Control",
 	loops: "Back to Loops",
+	settings: "Back to Settings",
 };
 
 export function App() {
@@ -145,7 +149,7 @@ export function App() {
 	const [tasksByProject, setTasksByProject] = useState<Record<string, TaskDTO[]>>({});
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
-	const [view, setView] = useState<"board" | "mission" | "loops">("board");
+	const [view, setView] = useState<"board" | "mission" | "loops" | "settings">("board");
 	const [mcLayout, setMcLayoutState] = useState<McLayout>(
 		() => (localStorage.getItem("ateam.mcLayout") as McLayout) || "grid",
 	);
@@ -616,7 +620,7 @@ export function App() {
 			{
 				taskId: string | null;
 				mode: "side" | "full";
-				view: "board" | "mission" | "loops";
+				view: "board" | "mission" | "loops" | "settings";
 			}
 		>
 	>({});
@@ -704,10 +708,15 @@ export function App() {
 	};
 	// Tabs mean "show me this view". The focused task covers the view it belongs
 	// to, so switching tabs — including clicking the lit one — closes it.
-	const goToView = (v: "board" | "mission" | "loops") => {
+	const goToView = (v: "board" | "mission" | "loops" | "settings") => {
 		if (panelMode === "full") setSelectedTaskId(null);
 		setView(v);
 	};
+	// The menu's Settings… (⌘,) arrives from the main process. Held in a ref so
+	// the one subscription always calls the goToView of the latest render.
+	const goToViewRef = useRef(goToView);
+	goToViewRef.current = goToView;
+	useEffect(() => window.ateam.events.onOpenSettings?.(() => goToViewRef.current("settings")), []);
 
 	const addProject = () =>
 		run(async () => {
@@ -866,6 +875,15 @@ export function App() {
 				{/* In rail mode the traffic lights own this strip; the toggle moves
 				    below them as the first tile. */}
 				<div className="side-top">
+					{!rail && (
+						<IconButton
+							icon={Settings}
+							label="Settings"
+							shortcut="⌘,"
+							active={view === "settings"}
+							onClick={() => goToView("settings")}
+						/>
+					)}
 					{!rail && <IconButton icon={PanelLeft} label="Collapse sidebar" onClick={toggleRail} />}
 				</div>
 
@@ -1378,6 +1396,8 @@ export function App() {
 							locked={mcLocked}
 							onExpand={openFromMission}
 						/>
+					) : view === "settings" ? (
+						<SettingsPanel agents={agents} />
 					) : (
 						<LoopsPanel
 							loops={activeLoops}
@@ -2153,6 +2173,32 @@ function TaskPanel({
 								// Optional on the API surface (the phone omits it) — the desktop
 								// preload always provides it.
 								const res = await window.ateam.utils.openInEditor?.(task.worktreePath, alias);
+								if (res && !res.ok) throw new Error(res.reason);
+							})
+						}
+					/>
+				)}
+				{/* After the editor and its controls, not between them: each app keeps its
+				    own controls beside it. This is the browser half of "hand this task to
+				    a real app" — your own Chrome, so every session it holds is already
+				    signed in and an agent never meets a login wall on its first useful
+				    step. Its own controls will land to the right of it in turn. */}
+				{/* Offered only where it can work, which is what the optional binding
+				    means (see the protocol's note on `openBrowser`). Without this the
+				    `?.` call swallows a missing binding and the button just does
+				    nothing when clicked — which is exactly how it looks when a dev
+				    session hot-reloads this file while the preload stays behind. */}
+				{window.ateam.utils.openBrowser && (
+					<IconButton
+						icon={Globe}
+						label={
+							alias === null
+								? "Open Chrome (the browser your agents drive)"
+								: "Open Chrome — a task on a box needs its own browser"
+						}
+						onClick={() =>
+							run(async () => {
+								const res = await window.ateam.utils.openBrowser?.(alias);
 								if (res && !res.ok) throw new Error(res.reason);
 							})
 						}

@@ -49,9 +49,12 @@ import {
 	PROTOCOL_VERSION,
 	type RegisterProjectOptions,
 	type UpdateLoopInput,
+	type SettingsPatch,
+	type SettingsResult,
 } from "@ateam/protocol";
 import { createEditorHost, installCodeServer } from "./editor";
 import { refreshLoginPath } from "./login-env";
+import { readSettings, settingsPath, updateSettings } from "./settings-file";
 import type { Engine } from "./engine";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { createSizeArbiter } from "./pty/size-arbiter";
@@ -460,25 +463,25 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 		[CH.gitUpdate]: async (taskId: string) => {
 			const task = requireTask(services, taskId);
-			const settings = repo.getSettings(db);
+			const { engine } = readSettings().settings;
 			return updateFromBase({
 				worktreePath: task.worktreePath,
 				baseBranch: task.baseBranch,
-				strategy: settings.defaultUpdateStrategy ?? "merge",
+				strategy: engine.defaultUpdateStrategy,
 			});
 		},
 		[CH.gitMerge]: async (taskId: string, strategy: MergeStrategy) => {
 			const task = requireTask(services, taskId);
 			const project = requireProjectFor(services, task.projectId);
-			const settings = repo.getSettings(db);
+			const { engine } = readSettings().settings;
 			// Serialize through the merge queue: two branches targeting the same
 			// base never race; each absorbs the freshly-merged base before merging.
 			return mergeQueue.enqueue({
 				task,
 				repoPath: project.repoPath,
 				strategy,
-				updateStrategy: settings.defaultUpdateStrategy ?? "merge",
-				deleteRemoteBranch: settings.deleteRemoteBranchOnMerge ?? false,
+				updateStrategy: engine.defaultUpdateStrategy,
+				deleteRemoteBranch: engine.deleteRemoteBranchOnMerge,
 			});
 		},
 		[CH.gitDiff]: async (taskId: string) => {
@@ -707,6 +710,20 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			const loops = loopRunner.deleteUserLoop(id);
 			engine.sendLoopsUpdated();
 			return loops;
+		},
+
+		// ---- settings ----
+		// The file on THIS engine's machine: asked of a box, a box answers about
+		// its own. `engine.*` is what it will act on; `client.*` rides along so
+		// the desktop can show one page for the whole file.
+		[CH.settingsGet]: async (): Promise<SettingsResult> => {
+			const r = readSettings();
+			return { settings: r.settings, path: settingsPath(), warning: r.warning };
+		},
+		[CH.settingsUpdate]: async (patch: SettingsPatch): Promise<SettingsResult> => {
+			updateSettings(patch);
+			const r = readSettings();
+			return { settings: r.settings, path: settingsPath(), warning: r.warning };
 		},
 
 		// ---- pty ----
