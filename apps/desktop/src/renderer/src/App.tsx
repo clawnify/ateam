@@ -215,7 +215,9 @@ export function App() {
 		document.body.style.userSelect = "none";
 	};
 	const [taskSort, setTaskSortState] = useState<TaskSortMode>(
-		() => (localStorage.getItem("ateam.taskSort") as TaskSortMode) || "next",
+		// Default: last updated first. The list you scan is the list you just
+		// touched, so the freshest work sits at the top without a menu trip.
+		() => (localStorage.getItem("ateam.taskSort") as TaskSortMode) || "updated",
 	);
 	const [customOrder, setCustomOrder] = useState<string[]>([]);
 	const [cleanupOpen, setCleanupOpen] = useState(false);
