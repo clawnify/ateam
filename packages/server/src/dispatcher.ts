@@ -23,7 +23,6 @@ import {
 	commit,
 	createGithubRepo,
 	detectGithubRepo,
-	detectMerged,
 	diff,
 	errorMessage,
 	fileDiff,
@@ -34,7 +33,6 @@ import {
 	listRemoteRepos,
 	push,
 	registerProject,
-	trackingStatus,
 	updateFromBase,
 } from "@ateam/git-core";
 import {
@@ -43,7 +41,6 @@ import {
 	type CleanupCandidate,
 	type CreateLoopInput,
 	type DirEntryDTO,
-	type GitStatusSnapshot,
 	type KanbanColumn,
 	type MergeStrategy,
 	PROTOCOL_VERSION,
@@ -94,20 +91,6 @@ function requireProjectFor(services: Services, projectId: string) {
 	const project = repo.getProject(services.db, projectId);
 	if (!project) throw new Error(`Project not found: ${projectId}`);
 	return project;
-}
-
-async function computeGitStatus(
-	worktreePath: string,
-	baseBranch: string,
-): Promise<GitStatusSnapshot> {
-	const tracking = await trackingStatus(worktreePath);
-	const d = await diff({ worktreePath, baseBranch });
-	return {
-		ahead: tracking?.ahead ?? 0,
-		behind: tracking?.behind ?? 0,
-		dirty: d.files.length,
-		updatedAt: Date.now(),
-	};
 }
 
 /** Where install.sh is fetched from, matching the documented one-liner and the
@@ -186,39 +169,6 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		}
 		return { removable, kept };
 	}
-
-	// Detect merges done OUTSIDE Ateam (the agent ran `gh pr merge` in its
-	// terminal, or the PR was merged on github.com) and move the task to Done.
-	// Throttled per task; fire-and-forget so status replies stay fast.
-	const mergeCheckedAt = new Map<string, number>();
-	const detectExternalMerge = async (taskId: string): Promise<void> => {
-		if (Date.now() - (mergeCheckedAt.get(taskId) ?? 0) < 60_000) return;
-		mergeCheckedAt.set(taskId, Date.now());
-		const task = repo.getTask(db, taskId);
-		if (!task || task.column === "merged") return;
-		// Done only when the conversation ended on a plain text reply: the agent
-		// fired Stop (idle/stopped) and is not waiting on a question/permission.
-		const finished =
-			task.agentStatus == null || task.agentStatus === "idle" || task.agentStatus === "stopped";
-		if (!finished || task.column === "needs_attention") return;
-		try {
-			const res = await detectMerged({
-				worktreePath: task.worktreePath,
-				branch: task.branch,
-				baseBranch: task.baseBranch,
-			});
-			if (!res.merged) return;
-			repo.updateTask(db, task.id, {
-				column: "merged",
-				prState: "merged",
-				prNumber: res.prNumber ?? task.prNumber ?? null,
-				prUrl: res.prUrl ?? task.prUrl ?? null,
-			});
-			engine.sendTaskUpdated(task.id);
-		} catch {
-			/* offline or gh unavailable — retried on a later refresh */
-		}
-	};
 
 	/** Open a login shell in a task's worktree and record the session. */
 	const spawnShellInTask = (task: { id: string; worktreePath: string }) => {
@@ -494,10 +444,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 		[CH.gitStatus]: async (taskId: string) => {
 			const task = requireTask(services, taskId);
-			const snapshot = await computeGitStatus(task.worktreePath, task.baseBranch);
-			repo.updateTask(db, task.id, { gitStatus: snapshot });
-			if (task.column !== "merged") void detectExternalMerge(task.id);
-			return snapshot;
+			// Same probe the background pass uses, sharing its throttle — so
+			// re-rendering an open panel can't shell out on every render, and the
+			// sweep can't double-probe a worktree the panel just refreshed.
+			return (await engine.worktreeSweep.refresh(task.id)) ?? task.gitStatus ?? null;
 		},
 
 		// ---- agents ----

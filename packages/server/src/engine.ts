@@ -31,6 +31,7 @@ import { makeStrandReconciler } from "./pty/reconcile";
 import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
 import { readSettings } from "./settings-file";
+import { createWorktreeSweep, type WorktreeSweep } from "./worktree-sweep";
 
 export interface EngineOptions {
 	/** Where the SQLite db, hooks, and notify script live (app userData or ~/.ateam). */
@@ -67,6 +68,9 @@ export interface Engine {
 	sendTaskRemoved(taskId: string): void;
 	/** Emit the current loop list. */
 	sendLoopsUpdated(): void;
+	/** Keeps every task's git + PR facts fresh, not just the open one. The
+	 *  `CH.gitStatus` handler shares its throttle (see worktree-sweep.ts). */
+	readonly worktreeSweep: WorktreeSweep;
 	/** Connect to (or launch) the detached PTY daemon and learn live sessions. */
 	connectPty(): Promise<void>;
 	/** Start the user's scheduled loops (rebuilt from their persisted rows). */
@@ -382,6 +386,14 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	// Stamp the ending BEFORE the kill, exactly as the close-tab handler does:
 	// the exit handler above reads it back, and `reaped` is what puts the tab on
 	// the restorable strip instead of retiring it to history.
+	// Refresh git + PR facts for tasks nobody is looking at, so a list row can
+	// say something true about a worktree whose panel was never opened.
+	const worktreeSweep = createWorktreeSweep({
+		db,
+		onTaskUpdated: (taskId) => sendTaskUpdated(taskId),
+		isLive: (taskId) => repo.listSessionsByTask(db, taskId).some((s) => pty.has(s.terminalId)),
+	});
+
 	let reapTimer: ReturnType<typeof setInterval> | null = null;
 	const reapIdleSessions = (): void => {
 		const due = reapableSessions(repo.listOpenSessions(db), Date.now(), REAP_IDLE_MS);
@@ -431,6 +443,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			return () => emitter.off(event, listener as (...a: unknown[]) => void);
 		},
 		sendTaskUpdated,
+		worktreeSweep,
 		sendTaskRemoved(taskId: string) {
 			emitter.emit("taskRemoved", taskId);
 		},
@@ -443,11 +456,13 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		startLoops() {
 			loopRunner.start();
 			reapTimer ??= setInterval(reapIdleSessions, REAP_SWEEP_MS);
+			worktreeSweep.start();
 		},
 		stop() {
 			pty.disconnect();
 			hooks.stop();
 			loopRunner.stop();
+			worktreeSweep.stop();
 			if (reapTimer) {
 				clearInterval(reapTimer);
 				reapTimer = null;

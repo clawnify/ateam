@@ -400,7 +400,9 @@ input {
 	pointer-events: auto;
 }
 .tasknode-row:hover .task-trail .tstatus,
-.task-trail:focus-within .tstatus {
+.tasknode-row:hover .task-trail .tstate,
+.task-trail:focus-within .tstatus,
+.task-trail:focus-within .tstate {
 	opacity: 0;
 }
 .tasknode {
@@ -408,7 +410,12 @@ input {
 	align-items: center;
 	gap: 7px;
 	width: 100%;
-	padding: 5px 14px 5px 22px;
+	/* The right padding reserves the trailing slot. `.task-trail` is absolutely
+	   positioned, so it takes no space in this flex row and the name would
+	   otherwise ellipsize straight under the state glyph. Reserved constantly,
+	   not only when a glyph is present, so a task changing state never reflows
+	   its own row. */
+	padding: 5px 28px 5px 22px;
 	cursor: pointer;
 	font-size: 13px;
 	text-align: left;
@@ -459,6 +466,37 @@ input {
 .tstatus.stopped {
 	background: var(--text-dim);
 }
+/* Claims to be running but stopped advancing — the sidebar's copy of
+   `.ring.stalled`: hollow, not pulsing, so it reads as "no longer live". */
+.tstatus.stalled {
+	background: transparent;
+	border: 1.5px solid var(--text-dim);
+}
+/* The work's state, shown in the same trailing slot once no agent is attached
+   (see TriageGlyph). A glyph rather than a dot: these say something structural
+   about the branch, not which of four agent states it is in, and the shapes are
+   the ones the toolbar already uses for the same concepts. Sized to sit on the
+   dot's optical centre so the slot never shifts as a task changes state. */
+.tstate {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 14px;
+	height: 14px;
+	margin-right: 4px;
+	color: var(--text-dim);
+}
+.tstate.open {
+	color: var(--green);
+}
+.tstate.attention {
+	color: var(--amber);
+}
+.tstate.alert {
+	color: var(--red);
+}
+/* `.done` keeps the inherited dim: a landed branch is the calmest thing on the
+   list and must not compete with live work for attention. */
 /* Dependencies still copying in. Dim rather than a status colour — nothing is
    wrong and nothing is running yet — with the same pulse the rail uses, so it
    reads as work in progress instead of a fifth agent state. */
