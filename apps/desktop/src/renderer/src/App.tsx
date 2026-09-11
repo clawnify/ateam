@@ -8,6 +8,7 @@ import type {
 	SessionDTO,
 	SessionHitDTO,
 	TaskDTO,
+	TaskTriage,
 } from "@ateam/protocol";
 import { boxSupports, FEATURE_MIN_VERSION, PROTOCOL_VERSION } from "@ateam/protocol";
 import {
@@ -19,11 +20,13 @@ import {
 	ChevronDown,
 	ChevronRight,
 	ChevronUp,
+	CircleAlert,
 	Columns2,
 	ExternalLink,
 	FolderPlus,
 	GitCommitVertical,
 	GitMerge,
+	GitPullRequest,
 	Globe,
 	History,
 	LayoutGrid,
@@ -1448,6 +1451,49 @@ export function App() {
 	);
 }
 
+/**
+ * What the row's trailing slot says once no agent is attached.
+ *
+ * With a live agent the slot belongs to `agentStatus` (blue working, amber
+ * needs-you) — that is the most urgent thing a row can report. The rest of the
+ * time the useful question is the state of the WORK, which is exactly what
+ * `triage` answers, from the task row alone and with no git/gh calls. Before
+ * this, every such task wore the same green "idle" dot, so a task merged last
+ * week, one that never started, and one genuinely waiting on you were
+ * indistinguishable.
+ *
+ * `active` and `not_started` fall through to null deliberately: "recently
+ * touched" and "nothing here yet" are the row's resting state, and a glyph for
+ * them would be noise on every row.
+ */
+function TriageGlyph({ triage }: { triage: TaskTriage }) {
+	const props = { size: 12, strokeWidth: 2 } as const;
+	const glyph = (() => {
+		switch (triage.bucket) {
+			case "merged_done":
+				return { icon: <GitMerge {...props} />, tone: "done" };
+			case "merged_unfinished":
+				return { icon: <GitMerge {...props} />, tone: "attention" };
+			case "open_pr":
+				return { icon: <GitPullRequest {...props} />, tone: "open" };
+			case "unmerged_no_pr":
+				return { icon: <GitCommitVertical {...props} />, tone: "done" };
+			case "uncommitted":
+				return { icon: <GitCommitVertical {...props} />, tone: "attention" };
+			case "orphan":
+				return { icon: <CircleAlert {...props} />, tone: "alert" };
+			default:
+				return null;
+		}
+	})();
+	if (!glyph) return null;
+	return (
+		<span className={`tstate ${glyph.tone}`} title={triage.reason}>
+			{glyph.icon}
+		</span>
+	);
+}
+
 function TaskRow({
 	task: t,
 	selected,
@@ -1494,12 +1540,17 @@ function TaskRow({
 				    the one dot it gets — otherwise the trail is empty for the whole
 				    copy and the card looks idle while it is anything but. */}
 				{t.preparing ? (
+					<span className="tstatus preparing" title="Copying dependencies into the worktree…" />
+				) : t.agentStatus === "running" || t.agentStatus === "awaiting_input" ? (
+					// A live agent keeps this slot. `stalled` means it claims to be
+					// running but stopped advancing, so it wears the card's hollow
+					// treatment rather than the pulsing live one.
 					<span
-						className="tstatus preparing"
-						title="Copying dependencies into the worktree…"
+						className={`tstatus ${t.triage.bucket === "stalled" ? "stalled" : t.agentStatus}`}
+						title={t.triage.reason}
 					/>
 				) : (
-					t.agentStatus && <span className={`tstatus ${t.agentStatus}`} />
+					<TriageGlyph triage={t.triage} />
 				)}
 				<IconButton
 					icon={Trash2}
