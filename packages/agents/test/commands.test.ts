@@ -14,7 +14,7 @@ describe("agentCommand", () => {
 		expect(agentCommand(claude, { sessionId: "abc-123" })).toBe("claude --session-id 'abc-123'");
 	});
 
-	it("keeps the id alongside YOLO and the prompt", () => {
+	it("keeps the id alongside Auto mode and the prompt", () => {
 		expect(agentCommand(claude, { sessionId: "abc-123", yolo: true, prompt: "go" })).toBe(
 			"claude --permission-mode auto --session-id 'abc-123' 'go'",
 		);
@@ -44,12 +44,26 @@ describe("agentCommand", () => {
 		expect(agentCommand(opencode, { sessionId: "abc-123" })).toBe("opencode");
 	});
 
-	// Every registered agent must actually have a bypass flag: the Auto toggle
+	// Every registered agent must actually have an Auto flag: the Auto toggle
 	// renders for all of them, and an omission here turns it into a silent
 	// no-op — the launch is safe, the toggle was a lie.
 	it("makes Auto mode real for every agent, opencode included", () => {
 		expect(agentCommand(opencode, { yolo: true, prompt: "go" })).toBe(
 			"opencode --auto --prompt 'go'",
+		);
+	});
+
+	it("uses Codex automatic approval review for a fresh Auto launch", () => {
+		expect(agentCommand(codex, { yolo: true, prompt: "go" })).toBe("codex --approve-for-me 'go'");
+		expect(agentCommand(codex, { yolo: false, prompt: "go" })).toBe("codex 'go'");
+	});
+
+	it("keeps Codex automatic approval review when resuming", () => {
+		expect(agentCommand(codex, { yolo: true, resume: true })).toBe(
+			"codex resume --last --approve-for-me",
+		);
+		expect(agentCommand(codex, { yolo: true, resume: true, resumeSessionId: "old-1" })).toBe(
+			"codex resume 'old-1' --approve-for-me",
 		);
 	});
 
