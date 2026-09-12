@@ -347,8 +347,7 @@ input {
 	flex: none;
 }
 
-/* Project row = the selectable button + a hover-revealed "open in new window"
-   button overlaid at the right. */
+/* Project row = the selectable button + a hover-revealed actions menu. */
 .proj-row {
 	position: relative;
 }
