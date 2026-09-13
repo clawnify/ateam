@@ -86,6 +86,7 @@ export function toTaskDTO(t: Task, preparing = false, agentIds: string[] = []): 
 		projectId: t.projectId,
 		name: t.name,
 		description: t.description ?? null,
+		issueUrl: t.issueUrl ?? null,
 		slug: t.slug,
 		branch: t.branch,
 		baseBranch: t.baseBranch,

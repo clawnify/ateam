@@ -58,6 +58,9 @@ export const repo = {
 	},
 
 	// ---- tasks ----
+	findTaskByIssue(db: AteamDb, issueUrl: string) {
+		return db.select().from(tasks).where(eq(tasks.issueUrl, issueUrl)).get();
+	},
 	createTask(db: AteamDb, t: NewTask) {
 		return db.insert(tasks).values(t).returning().get();
 	},

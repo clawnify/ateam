@@ -642,3 +642,53 @@ describe("pty sizing across clients", () => {
 		expect(e.calls).toEqual(["resize t 10x10", "resize t 11x11", "write t k"]);
 	});
 });
+
+it("creates one linked worktree for concurrent issue starts and finds it after reopening the dispatcher", async () => {
+	const tmp = await makeTempRepoPair();
+	const db = createTestDb();
+	const { engine, spawned } = makeEngine(db);
+	try {
+		const project = repo.upsertProject(db, {
+			repoPath: tmp.work,
+			name: "R",
+			defaultBranch: "main",
+			githubOwner: "Acme",
+			githubName: "Repo",
+		})!;
+		const input = {
+			projectId: project.id,
+			name: "Fix issue",
+			issueNumber: 42,
+			description: "The issue details",
+			agentId: "claude",
+		};
+		const dispatcher = createDispatcher(engine);
+		type Result = {
+			task: { id: string; issueUrl: string; description: string; worktreePath: string };
+			created: boolean;
+		};
+		const results = (await Promise.all([
+			dispatcher.handle(CH.tasksCreateFromIssue, [input]),
+			dispatcher.handle(CH.tasksCreateFromIssue, [input]),
+		])) as Result[];
+		expect(results.map((r) => r.created)).toEqual([true, false]);
+		expect(results[0]!.task.id).toBe(results[1]!.task.id);
+		expect(results[0]!.task.issueUrl).toBe("https://github.com/acme/repo/issues/42");
+		expect(results[0]!.task.description).toBe(input.description);
+		expect(existsSync(results[0]!.task.worktreePath)).toBe(true);
+		expect(repo.listTasks(db, project.id)).toHaveLength(1);
+		expect(spawned).toHaveLength(0);
+		const again = (await createDispatcher(engine).handle(CH.tasksCreateFromIssue, [
+			input,
+		])) as Result;
+		expect(again.created).toBe(false);
+		expect(again.task.id).toBe(results[0]!.task.id);
+		await expect(
+			dispatcher.handle(CH.tasksCreateFromIssue, [{ ...input, issueNumber: -1 }]),
+		).rejects.toThrow("Invalid GitHub issue number");
+		expect(repo.listTasks(db, project.id)).toHaveLength(1);
+	} finally {
+		await Promise.all(engine.services.pendingSeeds.values());
+		await tmp.cleanup();
+	}
+});

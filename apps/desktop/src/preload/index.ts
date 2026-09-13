@@ -19,6 +19,7 @@ import {
 
 const api: AteamApi = {
 	projects: {
+		issues: (repository, refresh) => ipcRenderer.invoke(CH.projectsIssues, repository, refresh),
 		pick: () => ipcRenderer.invoke(CH.projectsPick),
 		register: (repoPath, opts) => ipcRenderer.invoke(CH.projectsRegister, repoPath, opts),
 		remoteUrl: (projectId) => ipcRenderer.invoke(CH.projectsRemoteUrl, projectId),
@@ -26,6 +27,7 @@ const api: AteamApi = {
 		remove: (id) => ipcRenderer.invoke(CH.projectsRemove, id),
 	},
 	tasks: {
+		createFromIssue: (input) => ipcRenderer.invoke(CH.tasksCreateFromIssue, input),
 		list: (projectId) => ipcRenderer.invoke(CH.tasksList, projectId),
 		create: (input) => ipcRenderer.invoke(CH.tasksCreate, input),
 		remove: (input) => ipcRenderer.invoke(CH.tasksRemove, input),

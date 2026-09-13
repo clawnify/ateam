@@ -10,6 +10,7 @@
 // them from its own OS (or, later, from server-fs RPC helpers).
 import type {
 	AgentDTO,
+	GithubIssuesDTO,
 	AteamApi,
 	AttachDelivery,
 	BoxUpdateStarted,
@@ -101,10 +102,14 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			pick: native.pick,
 			register: (repoPath, opts) => call<ProjectDTO>(CH.projectsRegister, [repoPath, opts]),
 			remoteUrl: (projectId) => call<string | null>(CH.projectsRemoteUrl, [projectId]),
+			issues: (repository, refresh) =>
+				call<GithubIssuesDTO>(CH.projectsIssues, [repository, refresh]),
 			list: () => call<ProjectDTO[]>(CH.projectsList),
 			remove: (id) => call<void>(CH.projectsRemove, [id]),
 		},
 		tasks: {
+			createFromIssue: (input) =>
+				call<{ task: TaskDTO; created: boolean }>(CH.tasksCreateFromIssue, [input]),
 			list: (projectId) => call<TaskDTO[]>(CH.tasksList, [projectId]),
 			create: (input) => call<TaskDTO>(CH.tasksCreate, [input]),
 			remove: (input) => call<void>(CH.tasksRemove, [input]),

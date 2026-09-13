@@ -62,7 +62,9 @@
 // every run permission-PROMPTED — a scheduled, unattended loop then wedges on the
 // first permission ask forever. `loopAutoMode` below is what turns that silent
 // downgrade into a feature the client knows to switch off.
-export const PROTOCOL_VERSION = 10;
+// v11: projects:issues and tasks:createFromIssue. Older engines reject the new
+// methods explicitly; issueUrl on reads is optional for old task DTOs.
+export const PROTOCOL_VERSION = 11;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -188,7 +190,32 @@ export interface GitStatusSnapshot {
 	updatedAt: number;
 }
 
+export interface GithubIssueDTO {
+	number: number;
+	title: string;
+	body: string;
+	url: string;
+	author: string;
+	labels: string[];
+}
+
+export interface GithubIssuesDTO {
+	issues: GithubIssueDTO[];
+	syncedAt: number | null;
+	error: string | null;
+}
+
+export interface CreateIssueTaskInput {
+	projectId: string;
+	name: string;
+	issueNumber: number;
+	description: string;
+	agentId?: string;
+}
+
 export interface TaskDTO {
+	/** Canonical source issue URL; absent on older engines. */
+	issueUrl?: string | null;
 	id: string;
 	projectId: string;
 	name: string;
@@ -581,12 +608,14 @@ export const CH = {
 	projectsRegister: "projects:register",
 	projectsClone: "projects:clone",
 	projectsRemoteUrl: "projects:remoteUrl",
+	projectsIssues: "projects:issues",
 	projectsRemoteRepos: "projects:remoteRepos",
 	projectsList: "projects:list",
 	projectsRemove: "projects:remove",
 	windowOpenProject: "window:openProject",
 	tasksList: "tasks:list",
 	tasksCreate: "tasks:create",
+	tasksCreateFromIssue: "tasks:createFromIssue",
 	tasksRemove: "tasks:remove",
 	tasksSetColumn: "tasks:setColumn",
 	tasksMarkRead: "tasks:markRead",
@@ -729,10 +758,13 @@ export interface AteamApi {
 		/** The project's `origin` remote URL, or null if local-only. Decides whether a
 		 *  task can run on a box (needs a remote to clone). id-routed to the owner. */
 		remoteUrl(projectId: string): Promise<string | null>;
+		/** Uses the client engine's gh login, including repos that run on a box. */
+		issues(repository: string, refresh?: boolean): Promise<GithubIssuesDTO>;
 		list(): Promise<ProjectDTO[]>;
 		remove(id: string): Promise<void>;
 	};
 	tasks: {
+		createFromIssue(input: CreateIssueTaskInput): Promise<{ task: TaskDTO; created: boolean }>;
 		list(projectId: string): Promise<TaskDTO[]>;
 		create(input: {
 			projectId: string;

@@ -40,6 +40,7 @@ import {
 	type BoxUpdateStarted,
 	type CleanupCandidate,
 	type CreateLoopInput,
+	type CreateIssueTaskInput,
 	type DirEntryDTO,
 	type KanbanColumn,
 	type MergeStrategy,
@@ -53,6 +54,8 @@ import { createEditorHost, installCodeServer } from "./editor";
 import { refreshLoginPath } from "./login-env";
 import { readSettings, settingsPath, updateSettings } from "./settings-file";
 import type { Engine } from "./engine";
+import { GithubIssues } from "./github-issues";
+import { createIssueTask } from "./issue-tasks";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { createSizeArbiter } from "./pty/size-arbiter";
 import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
@@ -125,6 +128,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		services.refreshPath ?? ((opts?: { force?: boolean }) => refreshLoginPath({ db, ...opts }));
 	// Lazy: no code-server process exists until the first editor:open.
 	const editorHost = createEditorHost();
+	const githubIssues = new GithubIssues();
 
 	// ---- cleanup: merged + idle + clean is a RECOMMENDATION, not a filter ----
 	// The rule below (merged, no live agent session, clean working tree) is the
@@ -195,6 +199,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 
 	const handlers = {
 		// ---- projects ----
+		[CH.projectsIssues]: async (repository: string, refresh = false) => {
+			await refreshPath();
+			return githubIssues.list(repository, refresh);
+		},
 		[CH.projectsRegister]: async (repoPath: string, opts?: RegisterProjectOptions) => {
 			// "Create a repository here instead" (GitHub-Desktop-style), after the client
 			// asked the user. When the folder doesn't exist yet, create it first — a
@@ -286,6 +294,13 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 
 		// ---- tasks ----
+		[CH.tasksCreateFromIssue]: async (input: CreateIssueTaskInput) => {
+			const result = await createIssueTask(services, engine.sendTaskUpdated, input);
+			return {
+				task: toTaskDTO(result.task, services.pendingSeeds.has(result.task.id)),
+				created: result.created,
+			};
+		},
 		[CH.tasksList]: async (projectId: string) =>
 			repo
 				.listTasks(db, projectId)

@@ -1,0 +1,94 @@
+.issue-card {
+	display: block;
+	width: 100%;
+	text-align: left;
+}
+.card.issue-card .name {
+	white-space: normal;
+	line-height: 1.5;
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+}
+.issue-source {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--green);
+	font-size: 11px;
+	margin-bottom: 8px;
+}
+.issue-source span {
+	color: var(--text-dim);
+}
+.issue-labels {
+	display: flex;
+	gap: 4px;
+	flex-wrap: wrap;
+	margin: 8px 0;
+}
+.issue-sync {
+	color: var(--text-dim);
+	font-size: 10px;
+	line-height: 1.5;
+	margin: 12px 0 8px;
+}
+.issue-panel .actions {
+	gap: 8px;
+	font-size: 11px;
+	color: var(--text-dim);
+}
+.issue-description {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	padding: 20px;
+}
+.issue-description h2 {
+	font-size: 20px;
+	font-weight: 500;
+	line-height: 1.4;
+	margin: 12px 0;
+}
+.issue-byline {
+	font-size: 11px;
+	color: var(--text-dim);
+}
+.issue-description .navbtn {
+	margin: 8px 0 16px;
+}
+.issue-body {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 12px;
+	line-height: 1.8;
+	border-top: 1px solid var(--border);
+	padding-top: 16px;
+}
+.issue-start {
+	padding: 16px 20px;
+	border-top: 1px solid var(--border);
+}
+.issue-start p {
+	font-size: 11px;
+	color: var(--text-dim);
+	margin: 0 0 12px;
+}
+.issue-start button {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.issue-sync {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+}
+.issue-sync output {
+	flex: 1;
+}
+.issue-link {
+	color: var(--text-dim);
+	white-space: nowrap;
+}
