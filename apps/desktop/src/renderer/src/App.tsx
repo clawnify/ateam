@@ -74,7 +74,7 @@ import { VscodeLogo } from "./components/VscodeLogo";
 import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge } from "./triage-order";
-import { type Alias, aliasLabel, type UnifiedProject, unifyProjects } from "./unify";
+import { type Alias, aliasLabel, type EngineMember, type UnifiedProject, unifyProjects } from "./unify";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
 	{ key: "todo", label: "Backlog" },
@@ -749,6 +749,22 @@ export function App() {
 		if (activeProjectId) setComposerOpen(true);
 	};
 
+	const removeProject = (member: EngineMember) =>
+		run(async () => {
+			const ok = await confirm(
+				"Remove project?",
+				`Remove "${member.project.name}" from Ateam on ${aliasLabel(member.alias)}? Its task history and loops will be removed from Ateam. Repository files, branches, and worktrees will stay on disk.`,
+			);
+			if (!ok) return;
+			await window.ateam.projects.remove(member.projectId);
+			delete viewMemRef.current[member.projectId];
+			setSelectedTaskId((cur) =>
+				tasksByProject[member.projectId]?.some((t) => t.id === cur) ? null : cur,
+			);
+			setLoops((prev) => prev.filter((loop) => loop.projectId !== member.projectId));
+			await loadProjects();
+		});
+
 	// Delete a task (and its worktree) straight from the sidebar. Confirm first,
 	// then reuse the same remove + force-fallback flow as the task panel menu.
 	// The onTaskRemoved event listener drops the row and clears the selection.
@@ -1006,18 +1022,14 @@ export function App() {
 											const multiEnv =
 												card.members.length > 1 || card.members.some((m) => m.alias !== null);
 											return (
-												// Double-click (or the hover button) detaches the project into its
-												// own window. Row and open-button are siblings so the button's
-												// click can't nest inside the row button.
-												<div
-													key={card.key}
-													className="proj-row"
-													onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
-												>
+												// Keep the menu beside the row button so its actions don't
+												// select or detach the project.
+												<div key={card.key} className="proj-row">
 													<button
 														type="button"
 														className={`proj ${active ? "active" : ""}`}
 														onClick={() => selectProject(primary.projectId)}
+														onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
 													>
 														<span
 															className={`dot ${alert ? `alert ${alert}` : ""}`}
@@ -1058,11 +1070,23 @@ export function App() {
 														)}
 													</button>
 													<span className="proj-open">
-														<IconButton
-															icon={ExternalLink}
-															label="Open in new window"
-															size={14}
-															onClick={() => window.ateam.window.openProject(primary.projectId)}
+														<Menu
+															label={`Actions for ${card.name}`}
+															items={[
+																{
+																	label: "Open in new window",
+																	icon: ExternalLink,
+																	onClick: () => window.ateam.window.openProject(primary.projectId),
+																},
+																...card.members.map((member) => ({
+																	label: multiEnv
+																		? `Remove from ${aliasLabel(member.alias)}…`
+																		: "Remove project…",
+																	icon: Trash2,
+																	danger: true,
+																	onClick: () => removeProject(member),
+																})),
+															]}
 														/>
 													</span>
 												</div>
