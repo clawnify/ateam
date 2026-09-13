@@ -73,9 +73,9 @@ export function NativeTerminalScreen({
 	const keyboardUp = useKeyboardVisible();
 
 	const feed = useCallback((data: string) => termRef.current?.feed(data), []);
-	// Same PTY contract as Mission Control's tiles (attach-if-live), plus: spawn a
-	// shell when the task has none, and size the PTY to this view.
-	const pty = useTaskPty({ api, taskId: task.id, feed, spawnIfNone: true, resizePty: true });
+	// Attach or restore like Mission Control. A task with no agent gets a shell
+	// when explicitly opened here; this view also sizes the PTY.
+	const pty = useTaskPty({ api, task, feed, spawnIfNone: true, resizePty: true });
 	const { terminalId, status, lastSize, onSizeChange } = pty;
 	const [detail, setDetail] = useState<string | null>(null);
 	const shownDetail = detail ?? pty.detail;

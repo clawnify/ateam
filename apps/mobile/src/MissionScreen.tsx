@@ -1,7 +1,7 @@
 // Mission Control: live terminals, two per page stacked one above the other,
 // in the same order as Home, paged vertically, edge to edge. Each tile attaches
-// to the task's live session (never spawns one). A tap highlights a tile, and
-// the shortcut bar at the bottom (esc, arrows, ^C, PgUp/PgDn) drives the
+// to the task's live session or restores its saved conversation. A tap highlights
+// a tile, and the shortcut bar at the bottom (esc, arrows, ^C, PgUp/PgDn) drives the
 // highlighted one, so an agent can be nudged without leaving. Typing text means
 // expanding to the full view, which opens with the keyboard up: the soft
 // keyboard leaves two tiles no space, so typing in place was dropped.
@@ -52,7 +52,7 @@ function Tile({
 }) {
 	const termRef = useRef<SwiftTermHandle>(null);
 	const feed = useCallback((data: string) => termRef.current?.feed(data), []);
-	const pty = useTaskPty({ api, taskId: task.id, feed, spawnIfNone: false, resizePty: true });
+	const pty = useTaskPty({ api, task, feed, spawnIfNone: false, resizePty: true });
 	register(pty.write);
 	return (
 		<Pressable style={[styles.tile, focused && styles.tileFocused]} onPress={onFocus}>
