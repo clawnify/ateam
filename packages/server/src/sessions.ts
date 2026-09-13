@@ -62,6 +62,7 @@ export async function createTaskInProject(
 		 */
 		agentId?: string;
 	},
+	issue?: { url: string; description: string },
 ): Promise<Task> {
 	const project = repo.getProject(services.db, input.projectId);
 	if (!project) throw new Error(`Project not found: ${input.projectId}`);
@@ -79,6 +80,8 @@ export async function createTaskInProject(
 		baseBranch: created.baseBranch,
 		worktreePath: created.worktreePath,
 		agentId: input.agentId ?? null,
+		issueUrl: issue?.url ?? null,
+		description: issue?.description ?? null,
 	});
 	// Broadcast so any other window showing this project gains the new card
 	// (renderers upsert). The caller also gets it — an idempotent upsert.

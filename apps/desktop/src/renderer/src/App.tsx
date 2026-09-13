@@ -1,5 +1,6 @@
 import type {
 	AgentDTO,
+	GithubIssueDTO,
 	ConnectionDTO,
 	DiffResultDTO,
 	KanbanColumn,
@@ -51,6 +52,7 @@ import {
 import { motion, Reorder } from "motion/react";
 import {
 	type CSSProperties,
+	type ReactNode,
 	type MouseEvent as ReactMouseEvent,
 	useCallback,
 	useEffect,
@@ -71,6 +73,8 @@ import { usePrompt } from "./components/usePrompt";
 import { PanelRightFilled } from "./components/PanelRightFilled";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { VscodeLogo } from "./components/VscodeLogo";
+import { GithubIssueCard, GithubIssuePanel } from "./components/GithubIssues";
+import { useGithubIssues } from "./useGithubIssues";
 import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge } from "./triage-order";
@@ -151,6 +155,8 @@ export function App() {
 	const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
 	const [tasksByProject, setTasksByProject] = useState<Record<string, TaskDTO[]>>({});
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+	const [selectedIssue, setSelectedIssue] = useState<GithubIssueDTO | null>(null);
+	const [composerIssue, setComposerIssue] = useState<GithubIssueDTO | null>(null);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [view, setView] = useState<"board" | "mission" | "loops" | "settings">("board");
 	const [mcLayout, setMcLayoutState] = useState<McLayout>(
@@ -390,6 +396,11 @@ export function App() {
 		[unifiedProjects, activeProjectId],
 	);
 	const activeMembers = activeCard?.members ?? [];
+	const issueRepository =
+		activeCard?.githubOwner && activeCard.githubName
+			? `${activeCard.githubOwner}/${activeCard.githubName}`.toLowerCase()
+			: null;
+	const issueSync = useGithubIssues(view === "board" ? issueRepository : null);
 	// Session search runs on each engine that holds this repo: the transcripts
 	// live on the machine that ran the agent, so a box searches its own disk.
 	const searchProjectIds = useMemo(
@@ -525,6 +536,16 @@ export function App() {
 		: activeProjectId
 			? (tasksByProject[activeProjectId] ?? [])
 			: [];
+	const linkedIssues = new Set(
+		activeTasks.flatMap((task) => (task.issueUrl ? [task.issueUrl.toLowerCase()] : [])),
+	);
+	const backlogIssues = issueSync.issues.filter(
+		(issue) => !linkedIssues.has(issue.url.toLowerCase()),
+	);
+	const visibleIssue =
+		!selectedTaskId && selectedIssue
+			? (backlogIssues.find((issue) => issue.url === selectedIssue.url) ?? null)
+			: null;
 	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
 	// Loops of the active repo card (whichever engine holds them), and the task
 	// each one owns. Loop-owned tasks show under LOOPS, not again under TASKS
@@ -746,6 +767,8 @@ export function App() {
 		});
 
 	const newTask = () => {
+		setComposerIssue(null);
+		setSelectedIssue(null);
 		if (activeProjectId) setComposerOpen(true);
 	};
 
@@ -805,7 +828,19 @@ export function App() {
 		run(async () => {
 			const card = activeCard;
 			if (!card) return;
+			const sourceIssue = composerIssue;
 			setComposerOpen(false);
+			setComposerIssue(null);
+			if (sourceIssue) {
+				const existing = activeTasks.find(
+					(task) => task.issueUrl?.toLowerCase() === sourceIssue.url.toLowerCase(),
+				);
+				if (existing) {
+					selectFromBoard(existing.id);
+					setSelectedIssue(null);
+					return;
+				}
+			}
 			// Resolve the engine's project row for this repo on the chosen environment.
 			let projectId: string;
 			if (input.alias === null) {
@@ -841,14 +876,28 @@ export function App() {
 					projectId = proj.id;
 				}
 			}
-			const task = await window.ateam.tasks.create({
-				projectId,
-				name: input.name,
-				agentId: input.agentId,
-			});
+			const taskInput = { projectId, name: input.name, agentId: input.agentId };
+			let task: TaskDTO;
+			let created = true;
+			if (sourceIssue) {
+				try {
+					const result = await window.ateam.tasks.createFromIssue({
+						...taskInput,
+						issueNumber: sourceIssue.number,
+						description: input.prompt,
+					});
+					task = result.task;
+					created = result.created;
+				} catch (error) {
+					if (/Unknown method/.test(String(error)))
+						throw new Error("Update Ateam on the selected box to start tasks from GitHub issues.");
+					throw error;
+				}
+			} else task = await window.ateam.tasks.create(taskInput);
+			setSelectedIssue(null);
 			// The created task's project is a member of the active card, so its tasks
 			// are already unioned into the board once loaded.
-			await loadTasks(projectId);
+			await loadTasks(task.projectId);
 			// Land the new task in whatever the user is actually looking at: a
 			// task open full-width hands its panel to the new one, the board
 			// opens it beside itself, and Mission Control just grows a tile.
@@ -860,6 +909,7 @@ export function App() {
 			// Loops shows only loop-owned tasks, so a new task would land
 			// somewhere it can't be seen; every other view keeps its place.
 			if (view === "loops") setView("board");
+			if (!created) return;
 			const { terminalId } = await window.ateam.pty.spawnAgent({
 				taskId: task.id,
 				agentId: input.agentId,
@@ -1385,9 +1435,55 @@ export function App() {
 						<>
 							<Board
 								tasks={filteredBoardTasks}
+								issues={backlogIssues.filter(
+									(issue) =>
+										!query ||
+										`${issue.title} #${issue.number} ${issue.labels.map((label) => `#${label}`).join(" ")}`
+											.toLowerCase()
+											.includes(query),
+								)}
+								issueStatus={
+									<div className="issue-sync">
+										<output>
+											{!issueRepository
+												? "No GitHub repository"
+												: issueSync.loading
+													? "Syncing GitHub issues…"
+													: issueSync.error
+														? `${issueSync.error}${issueSync.syncedAt ? " Showing last sync." : ""}`
+														: `${backlogIssues.length} open issues · ${issueSync.syncedAt ? "synced" : "loading"}`}
+										</output>
+										{issueRepository && (
+											<button
+												type="button"
+												className="iconbtn"
+												aria-label="Refresh GitHub issues"
+												title="Refresh GitHub issues"
+												disabled={issueSync.loading}
+												onClick={(event) => {
+													event.stopPropagation();
+													void issueSync.refresh(true);
+												}}
+											>
+												<RotateCw size={13} />
+											</button>
+										)}
+									</div>
+								}
+								selectedIssueNumber={visibleIssue?.number ?? null}
+								onSelectIssue={(issue) => {
+									setSelectedTaskId(null);
+									setSelectedIssue(issue);
+								}}
 								selectedId={selectedTaskId}
-								onSelect={selectFromBoard}
-								onDeselect={() => setSelectedTaskId(null)}
+								onSelect={(id) => {
+									setSelectedIssue(null);
+									selectFromBoard(id);
+								}}
+								onDeselect={() => {
+									setSelectedTaskId(null);
+									setSelectedIssue(null);
+								}}
 								// Badge a card only when it runs on a box — Local is the default, so
 								// tagging it would be noise. `null` = no badge.
 								originLabel={(t) => {
@@ -1395,6 +1491,16 @@ export function App() {
 									return a ? aliasLabel(a) : null;
 								}}
 							/>
+							{visibleIssue && (
+								<GithubIssuePanel
+									issue={visibleIssue}
+									onClose={() => setSelectedIssue(null)}
+									onStart={() => {
+										setComposerIssue(visibleIssue);
+										setComposerOpen(true);
+									}}
+								/>
+							)}
 							{selectedTask && (
 								<TaskPanel
 									task={selectedTask}
@@ -1452,13 +1558,22 @@ export function App() {
 			{composerOpen && activeCard && (
 				<PromptComposer
 					agents={agents}
+					initialName={composerIssue?.title}
+					initialPrompt={
+						composerIssue
+							? `${composerIssue.title}\n\n${composerIssue.url}\n\n${composerIssue.body}`
+							: undefined
+					}
 					environments={composerEnvs}
 					envAgents={envAgents}
 					onAdd={addTailscaleBox}
 					onInstall={installBox}
 					onForget={forgetBox}
 					onInstallAgent={installAgentOn}
-					onClose={() => setComposerOpen(false)}
+					onClose={() => {
+						setComposerOpen(false);
+						setComposerIssue(null);
+					}}
 					onCreate={composeTask}
 				/>
 			)}
@@ -1624,12 +1739,20 @@ function LoopRow({
 
 function Board({
 	tasks,
+	issues,
+	issueStatus,
+	selectedIssueNumber,
+	onSelectIssue,
 	selectedId,
 	onSelect,
 	onDeselect,
 	originLabel,
 }: {
 	tasks: TaskDTO[];
+	issues: GithubIssueDTO[];
+	issueStatus: ReactNode;
+	selectedIssueNumber: number | null;
+	onSelectIssue: (issue: GithubIssueDTO) => void;
 	selectedId: string | null;
 	onSelect: (id: string) => void;
 	onDeselect: () => void;
@@ -1667,8 +1790,24 @@ function Board({
 				return (
 					<div className="col" key={col.key}>
 						<h3>
-							{col.label} <span className="count">{items.length}</span>
+							{col.label}{" "}
+							<span className="count">
+								{items.length + (col.key === "todo" ? issues.length : 0)}
+							</span>
 						</h3>
+						{col.key === "todo" && issueStatus}
+						{col.key === "todo" && issues.length > 0 && (
+							<>
+								{issues.map((issue) => (
+									<GithubIssueCard
+										key={issue.number}
+										issue={issue}
+										selected={issue.number === selectedIssueNumber}
+										onSelect={() => onSelectIssue(issue)}
+									/>
+								))}
+							</>
+						)}
 						{items.map((t) => {
 							const tags = tagsFor(t);
 							const glyphs = taskGlyphs(t);
@@ -1731,6 +1870,17 @@ function Board({
 											<span>
 												↑{t.gitStatus.ahead} ↓{t.gitStatus.behind} · {t.gitStatus.dirty} changed
 											</span>
+										)}
+										{t.issueUrl && (
+											<a
+												className="issue-link"
+												href={t.issueUrl}
+												target="_blank"
+												rel="noreferrer"
+												onClick={(event) => event.stopPropagation()}
+											>
+												Issue #{t.issueUrl.split("/").pop()}
+											</a>
 										)}
 										{t.prNumber && <span>PR #{t.prNumber}</span>}
 										{/* Age and agent icon share one right-aligned group: the icon used to
