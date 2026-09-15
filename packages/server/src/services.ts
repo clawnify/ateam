@@ -100,7 +100,9 @@ export function toTaskDTO(t: Task, preparing = false, agentIds: string[] = []): 
 		prUrl: t.prUrl ?? null,
 		prState: t.prState ?? null,
 		gitStatus: t.gitStatus ?? null,
-		lastEventAt: t.lastEventAt ?? t.updatedAt ?? null,
+		// Background git/PR refreshes stamp updatedAt too. Tasks without hooks
+		// must keep a stable age instead of jumping to the top on every sweep.
+		lastEventAt: t.lastEventAt ?? t.createdAt ?? null,
 		isUnread: Boolean(t.isUnread),
 		preparing,
 		tags: t.tags ?? null,
