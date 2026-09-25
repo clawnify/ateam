@@ -73,6 +73,44 @@ export async function fetchGithubIssues(repository: string): Promise<GithubIssue
 	return parseIssuePages(JSON.parse(stdout), name);
 }
 
+/** Files a new issue with the gh login's identity. The body goes over stdin so it
+ * never lands on a command line or hits the argument-length limit. */
+export async function createGithubIssue(
+	repository: string,
+	input: { title: string; body: string },
+): Promise<GithubIssueDTO> {
+	const name = repositoryName(repository);
+	const title = typeof input?.title === "string" ? input.title.trim() : "";
+	if (!title) throw new Error("An issue title is required.");
+	if (typeof input.body !== "string") throw new Error("Invalid issue description.");
+	const request = exec(
+		"gh",
+		["api", "--hostname", "github.com", "--method", "POST", `repos/${name}/issues`, "--input", "-"],
+		{ timeout: 60_000, maxBuffer: 4 * 1024 * 1024 },
+	);
+	request.child.stdin?.end(JSON.stringify({ title, body: input.body }));
+	let stdout: string;
+	try {
+		({ stdout } = await request);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		if (/ENOENT/.test(message)) throw new Error("Install GitHub CLI (gh) to create issues.");
+		if (/auth login|GH_TOKEN|HTTP 40[13]/.test(message))
+			throw new Error(
+				"GitHub access failed. Check gh auth status and that this account can open issues on the repository.",
+			);
+		// gh prints GitHub's reason ("Issues are disabled for this repo (HTTP 410)").
+		const reason = String((error as { stderr?: unknown }).stderr ?? "")
+			.trim()
+			.split("\n")[0]
+			?.replace(/^gh: /, "");
+		throw new Error(`Could not create the GitHub issue${reason ? `: ${reason}` : "."}`);
+	}
+	const [issue] = parseIssuePages([[JSON.parse(stdout)]], name);
+	if (!issue) throw new Error("Invalid GitHub issue response.");
+	return issue;
+}
+
 /** Shared across windows. Coalesce requests and retain the last good result on
  * failure; bound the cache so visiting many projects cannot grow it forever. */
 export class GithubIssues {
@@ -81,7 +119,22 @@ export class GithubIssues {
 	constructor(
 		private fetchIssues = fetchGithubIssues,
 		private now = Date.now,
+		private createIssue = createGithubIssue,
 	) {}
+
+	/** Seeds the cache with the new issue: GitHub's list endpoint can lag a fresh
+	 * create, and the board should show it on the very next read. */
+	async create(repository: string, input: { title: string; body: string }) {
+		const key = repositoryName(repository);
+		const issue = await this.createIssue(key, input);
+		const cached = this.cache.get(key);
+		if (cached)
+			this.cache.set(key, {
+				...cached,
+				issues: [issue, ...cached.issues.filter((i) => i.number !== issue.number)],
+			});
+		return issue;
+	}
 
 	async list(repository: string, refresh = false): Promise<GithubIssuesDTO> {
 		const key = repositoryName(repository);
