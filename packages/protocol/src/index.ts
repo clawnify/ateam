@@ -64,7 +64,8 @@
 // downgrade into a feature the client knows to switch off.
 // v11: projects:issues and tasks:createFromIssue. Older engines reject the new
 // methods explicitly; issueUrl on reads is optional for old task DTOs.
-export const PROTOCOL_VERSION = 11;
+// v12: projects:createIssue files a GitHub issue with the client engine's gh login.
+export const PROTOCOL_VERSION = 12;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -203,6 +204,11 @@ export interface GithubIssuesDTO {
 	issues: GithubIssueDTO[];
 	syncedAt: number | null;
 	error: string | null;
+}
+
+export interface CreateGithubIssueInput {
+	title: string;
+	body: string;
 }
 
 export interface CreateIssueTaskInput {
@@ -609,6 +615,7 @@ export const CH = {
 	projectsClone: "projects:clone",
 	projectsRemoteUrl: "projects:remoteUrl",
 	projectsIssues: "projects:issues",
+	projectsCreateIssue: "projects:createIssue",
 	projectsRemoteRepos: "projects:remoteRepos",
 	projectsList: "projects:list",
 	projectsRemove: "projects:remove",
@@ -760,6 +767,8 @@ export interface AteamApi {
 		remoteUrl(projectId: string): Promise<string | null>;
 		/** Uses the client engine's gh login, including repos that run on a box. */
 		issues(repository: string, refresh?: boolean): Promise<GithubIssuesDTO>;
+		/** Same routing as `issues`: the repository string never names a box. */
+		createIssue(repository: string, input: CreateGithubIssueInput): Promise<GithubIssueDTO>;
 		list(): Promise<ProjectDTO[]>;
 		remove(id: string): Promise<void>;
 	};

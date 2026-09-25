@@ -20,6 +20,8 @@ import {
 const api: AteamApi = {
 	projects: {
 		issues: (repository, refresh) => ipcRenderer.invoke(CH.projectsIssues, repository, refresh),
+		createIssue: (repository, input) =>
+			ipcRenderer.invoke(CH.projectsCreateIssue, repository, input),
 		pick: () => ipcRenderer.invoke(CH.projectsPick),
 		register: (repoPath, opts) => ipcRenderer.invoke(CH.projectsRegister, repoPath, opts),
 		remoteUrl: (projectId) => ipcRenderer.invoke(CH.projectsRemoteUrl, projectId),

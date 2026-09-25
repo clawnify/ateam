@@ -73,7 +73,7 @@ import { usePrompt } from "./components/usePrompt";
 import { PanelRightFilled } from "./components/PanelRightFilled";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { VscodeLogo } from "./components/VscodeLogo";
-import { GithubIssueCard, GithubIssuePanel } from "./components/GithubIssues";
+import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
 import { useGithubIssues } from "./useGithubIssues";
 import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
@@ -157,6 +157,7 @@ export function App() {
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 	const [selectedIssue, setSelectedIssue] = useState<GithubIssueDTO | null>(null);
 	const [composerIssue, setComposerIssue] = useState<GithubIssueDTO | null>(null);
+	const [newIssueOpen, setNewIssueOpen] = useState(false);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [view, setView] = useState<"board" | "mission" | "loops" | "settings">("board");
 	const [mcLayout, setMcLayoutState] = useState<McLayout>(
@@ -1442,33 +1443,45 @@ export function App() {
 											.toLowerCase()
 											.includes(query),
 								)}
-								issueStatus={
-									<div className="issue-sync">
-										<output>
-											{!issueRepository
-												? "No GitHub repository"
-												: issueSync.loading
-													? "Syncing GitHub issues…"
-													: issueSync.error
-														? `${issueSync.error}${issueSync.syncedAt ? " Showing last sync." : ""}`
-														: `${backlogIssues.length} open issues · ${issueSync.syncedAt ? "synced" : "loading"}`}
-										</output>
-										{issueRepository && (
+								issueActions={
+									issueRepository && (
+										<span className="issue-actions">
 											<button
 												type="button"
 												className="iconbtn"
 												aria-label="Refresh GitHub issues"
 												title="Refresh GitHub issues"
-												disabled={issueSync.loading}
 												onClick={(event) => {
 													event.stopPropagation();
 													void issueSync.refresh(true);
 												}}
 											>
-												<RotateCw size={13} />
+												<RotateCw size={12} className={issueSync.loading ? "spin" : undefined} />
 											</button>
-										)}
-									</div>
+											<button
+												type="button"
+												className="iconbtn"
+												aria-label="New GitHub issue"
+												title="New GitHub issue"
+												onClick={(event) => {
+													event.stopPropagation();
+													setNewIssueOpen(true);
+												}}
+											>
+												<Plus size={13} />
+											</button>
+										</span>
+									)
+								}
+								issueStatus={
+									issueRepository && issueSync.error ? (
+										<div className="issue-sync">
+											<output>
+												{issueSync.error}
+												{issueSync.syncedAt ? " Showing last sync." : ""}
+											</output>
+										</div>
+									) : null
 								}
 								selectedIssueNumber={visibleIssue?.number ?? null}
 								onSelectIssue={(issue) => {
@@ -1553,6 +1566,18 @@ export function App() {
 					confirm={confirm}
 					reload={() => activeProjectId && loadTasks(activeProjectId)}
 					onClose={() => setCleanupOpen(false)}
+				/>
+			)}
+			{newIssueOpen && issueRepository && (
+				<NewIssueDialog
+					repository={issueRepository}
+					onClose={() => setNewIssueOpen(false)}
+					onCreated={(issue) => {
+						setNewIssueOpen(false);
+						setSelectedTaskId(null);
+						setSelectedIssue(issue);
+						void issueSync.refresh();
+					}}
 				/>
 			)}
 			{composerOpen && activeCard && (
@@ -1740,6 +1765,7 @@ function LoopRow({
 function Board({
 	tasks,
 	issues,
+	issueActions,
 	issueStatus,
 	selectedIssueNumber,
 	onSelectIssue,
@@ -1750,6 +1776,7 @@ function Board({
 }: {
 	tasks: TaskDTO[];
 	issues: GithubIssueDTO[];
+	issueActions: ReactNode;
 	issueStatus: ReactNode;
 	selectedIssueNumber: number | null;
 	onSelectIssue: (issue: GithubIssueDTO) => void;
@@ -1794,6 +1821,7 @@ function Board({
 							<span className="count">
 								{items.length + (col.key === "todo" ? issues.length : 0)}
 							</span>
+							{col.key === "todo" && issueActions}
 						</h3>
 						{col.key === "todo" && issueStatus}
 						{col.key === "todo" && issues.length > 0 && (

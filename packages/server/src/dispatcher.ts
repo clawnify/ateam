@@ -40,6 +40,7 @@ import {
 	type BoxUpdateStarted,
 	type CleanupCandidate,
 	type CreateLoopInput,
+	type CreateGithubIssueInput,
 	type CreateIssueTaskInput,
 	type DirEntryDTO,
 	type KanbanColumn,
@@ -202,6 +203,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.projectsIssues]: async (repository: string, refresh = false) => {
 			await refreshPath();
 			return githubIssues.list(repository, refresh);
+		},
+		[CH.projectsCreateIssue]: async (repository: string, input: CreateGithubIssueInput) => {
+			await refreshPath();
+			return githubIssues.create(repository, input);
 		},
 		[CH.projectsRegister]: async (repoPath: string, opts?: RegisterProjectOptions) => {
 			// "Create a repository here instead" (GitHub-Desktop-style), after the client
