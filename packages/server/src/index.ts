@@ -41,3 +41,4 @@ export {
 	settingsPath,
 	updateSettings,
 } from "./settings-file";
+export { credentialsPath, openRouterApiKey } from "./credentials-file";
