@@ -25,14 +25,22 @@ export const JEV_MODEL = "typesafe/jev-1.13";
 const DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
 
 /**
- * How sure an answer must be before it moves a card: Clawnify's "act" tier,
- * confidence 0.90, which for a yes/no answer is a probability of at least 0.95.
- * High on purpose. The model class's published weakness is precision (flags
- * that are not real), and a card moved wrongly is worse than one left where the
- * rule put it: the rule is the behaviour everyone already has.
- * Provisional until tuned against real turns.
+ * How sure an answer must be before it moves a card: confidence 0.60, which
+ * for a yes/no answer is a probability of at least 0.80. Clawnify's "confirm"
+ * tier, the band its stop judge uses for a cheap, bounded action; moving a
+ * card is that, and the user moves it back with one drag.
+ *
+ * Set from a live run (scripts/jev-calibrate.ts, 12 closing messages, 2026-09-26),
+ * not from the bands alone. The first setting, 0.90 ("act"), sat exactly where
+ * true answers land: a stalled promise scored 0.95 and an unfixable failure
+ * 0.94, so both stayed in Review. On turns that belong in Review the highest
+ * triggering answer was 0.40 (a finished turn offering optional extra work;
+ * "I'll keep an eye on CI" scored 0.48 as a promise, and claims_done 0.94 kept
+ * it in Review); true Needs-you answers were 0.94-0.98. 0.80 sits in that gap.
+ * At 0.80 the run matched 12/12.
+ * Twelve cases are not a corpus: retune from real board moves as they accrue.
  */
-export const MOVE_CONFIDENCE = 0.9;
+export const MOVE_CONFIDENCE = 0.6;
 
 /** The end of a long message is where a closing question sits. */
 const MAX_MESSAGE = 4_000;
@@ -94,7 +102,8 @@ const sureYes = (p: number) => p >= 0.5 && certainty(p) >= MOVE_CONFIDENCE;
  */
 export function decideStep(legs: JevLegs): TurnVerdict {
 	const reasons: [number, string][] = [];
-	if (sureYes(legs.asks_user)) reasons.push([legs.asks_user, "the agent is waiting on your answer"]);
+	if (sureYes(legs.asks_user))
+		reasons.push([legs.asks_user, "the agent is waiting on your answer"]);
 	if (sureYes(legs.blocked)) reasons.push([legs.blocked, "the agent reported it is blocked"]);
 	// A promise after finished work ("done; I will open the PR next time") is
 	// not a stall; only a promise instead of a result is.
