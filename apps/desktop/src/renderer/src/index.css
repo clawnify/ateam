@@ -2988,6 +2988,29 @@ input {
 	transform: translateX(14px);
 	background: var(--bg);
 }
+.settings-key {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.settings-key-note {
+	font-size: 12px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+.settings-input {
+	width: 220px;
+	background: var(--bg-elev-2);
+	color: var(--text);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 5px 8px;
+	font-size: 13px;
+}
+.settings-input:focus-visible {
+	outline: 1px solid var(--text);
+	outline-offset: -1px;
+}
 .settings-warning {
 	display: flex;
 	align-items: flex-start;

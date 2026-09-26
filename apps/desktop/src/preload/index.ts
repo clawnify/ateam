@@ -56,6 +56,10 @@ const api: AteamApi = {
 		get: () => ipcRenderer.invoke(CH.settingsGet),
 		update: (patch) => ipcRenderer.invoke(CH.settingsUpdate, patch),
 	},
+	credentials: {
+		get: () => ipcRenderer.invoke(CH.credentialsGet),
+		update: (patch) => ipcRenderer.invoke(CH.credentialsUpdate, patch),
+	},
 	editor: {
 		open: (taskId) => ipcRenderer.invoke(CH.editorOpenUrl, taskId),
 		install: (taskId) => ipcRenderer.invoke(CH.editorInstall, taskId),

@@ -18,6 +18,7 @@ import type {
 	CleanupCandidate,
 	CleanupReport,
 	CreateLoopInput,
+	CredentialsResult,
 	DiffResultDTO,
 	DirListingDTO,
 	GitStatusSnapshot,
@@ -140,6 +141,10 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		settings: {
 			get: () => call<SettingsResult>(CH.settingsGet, []),
 			update: (patch) => call<SettingsResult>(CH.settingsUpdate, [patch]),
+		},
+		credentials: {
+			get: () => call<CredentialsResult>(CH.credentialsGet, []),
+			update: (patch) => call<CredentialsResult>(CH.credentialsUpdate, [patch]),
 		},
 		editor: {
 			open:

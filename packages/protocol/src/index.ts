@@ -400,6 +400,32 @@ export interface SettingsResult {
 }
 
 /**
+ * Secrets live apart from settings: `~/.ateam/credentials.json` (0600) on the
+ * engine's machine (server/credentials-file.ts). `settings.json` is meant to be
+ * shared and `settings:get` hands the whole file to every client; a key must
+ * never travel either way. So the wire carries whether a key is set and its
+ * last four characters, never the key.
+ */
+export interface CredentialStatus {
+	set: boolean;
+	/** Last four characters, for recognising which key it is. */
+	hint?: string;
+	/** `env` when an environment variable supplies it, which the file cannot override. */
+	source?: "file" | "env";
+}
+export interface CredentialsResult {
+	openRouter: CredentialStatus;
+	path: string;
+	/** As SettingsResult: filled in by the desktop while sync is on. */
+	syncedTo?: string[];
+	syncFailed?: { alias: string; reason: string }[];
+}
+/** A key to store, or null to remove it. */
+export interface CredentialsPatch {
+	openRouterApiKey?: string | null;
+}
+
+/**
  * Result of enqueuing a merge. The merge runs serialized per base branch, so
  * the call resolves only once this task's turn completes (or it parks on a
  * genuine conflict / busy / error).
@@ -657,6 +683,8 @@ export const CH = {
 	utilOpenBrowser: "util:openBrowser",
 	settingsGet: "settings:get",
 	settingsUpdate: "settings:update",
+	credentialsGet: "credentials:get",
+	credentialsUpdate: "credentials:update",
 	editorOpen: "editor:open",
 	editorOpenUrl: "editor:openUrl",
 	editorInstall: "editor:install",
@@ -917,6 +945,12 @@ export interface AteamApi {
 		get(): Promise<SettingsResult>;
 		/** Patch one or more keys; answers with the full result, like `get`. */
 		update(patch: SettingsPatch): Promise<SettingsResult>;
+	};
+	credentials: {
+		/** Which keys are set on the engine's machine; never the keys themselves. */
+		get(): Promise<CredentialsResult>;
+		/** Store or remove a key; answers like `get`. */
+		update(patch: CredentialsPatch): Promise<CredentialsResult>;
 	};
 	utils: {
 		/**

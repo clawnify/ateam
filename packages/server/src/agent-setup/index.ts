@@ -39,7 +39,21 @@ esac
 # The reply is empty (204) unless this terminal has a follow-up armed, in which
 # case it is the agent's own continuation JSON and stdout is where it belongs.
 # A timeout or an unreachable app also yields empty, i.e. the old behaviour.
-BODY=$(curl -s -m 2 "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}&sessionId=\${CLAUDE_SESSION_ID:-}" 2>/dev/null || true)
+URL="http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}&sessionId=\${CLAUDE_SESSION_ID:-}"
+# A turn's end and a user's reply carry the text the board classifier reads
+# (Stop: last_assistant_message, UserPromptSubmit: prompt), so those two POST
+# the hook's input. Everything else, PreToolUse above all (every tool call,
+# with its arguments), stays a bodiless GET.
+case "$EVENT" in
+	Stop|UserReply)
+		if [ -n "$PAYLOAD" ]; then
+			BODY=$(printf '%s' "$PAYLOAD" | curl -s -m 2 --data-binary @- "$URL" 2>/dev/null || true)
+		else
+			BODY=$(curl -s -m 2 "$URL" 2>/dev/null || true)
+		fi
+		;;
+	*) BODY=$(curl -s -m 2 "$URL" 2>/dev/null || true) ;;
+esac
 [ -n "$BODY" ] && printf '%s' "$BODY"
 exit 0
 `;
@@ -63,7 +77,8 @@ esac
 # Same follow-up echo as notify.sh. The notify program is fire-and-forget, so a
 # follow-up only reaches the agent through .codex/hooks.json, where Stop shares
 # Claude's hook schema.
-BODY=$(curl -s -m 2 "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}" 2>/dev/null || true)
+# The payload rides along for the board classifier (see notify.sh).
+BODY=$(printf '%s' "$1" | curl -s -m 2 --data-binary @- "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}" 2>/dev/null || true)
 [ -n "$BODY" ] && printf '%s' "$BODY"
 exit 0
 `;
