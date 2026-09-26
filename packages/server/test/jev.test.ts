@@ -32,9 +32,11 @@ describe("decideStep", () => {
 		expect(decideStep(legs({ promises_future_work: 0.98, claims_done: 0.9 })).step).toBe("review");
 	});
 
-	it("leaves the card alone below the act threshold", () => {
-		// 0.9 is confidence 0.8: a lean, not a certainty, so the rule stands.
-		expect(decideStep(legs({ asks_user: 0.9 })).step).toBe("review");
+	it("leaves the card alone below the move threshold", () => {
+		// 0.75 is confidence 0.5: a lean, not a verdict, so the rule stands.
+		expect(decideStep(legs({ asks_user: 0.75 })).step).toBe("review");
+		// A finished turn offering optional extra work scored 0.36-0.40 live.
+		expect(decideStep(legs({ asks_user: 0.36 })).step).toBe("review");
 	});
 
 	it("reports the confidence of the answer that decided, not the weakest leg", () => {
