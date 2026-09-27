@@ -176,8 +176,8 @@ export function App() {
 	};
 	// Mission Control lock: locked freezes tile order for the whole visit (it
 	// re-snapshots the tasks-list order each time you land on Mission Control);
-	// unlocked follows the tasks-list order live, pinning only the tile being
-	// typed in.
+	// unlocked follows it live (Mission Control's own order once tiles have been
+	// dragged, see mcOrder), pinning only the tile being typed in.
 	const [mcLocked, setMcLockedState] = useState(() => localStorage.getItem("ateam.mcLock") === "1");
 	const setMcLocked = (v: boolean) => {
 		localStorage.setItem("ateam.mcLock", v ? "1" : "0");
@@ -628,6 +628,35 @@ export function App() {
 		() => orderedSidebarTasks.map((t) => t.id),
 		[orderedSidebarTasks],
 	);
+	// Mission Control's own tile order, per project, set by dragging tiles. It is
+	// kept apart from the sidebar's: moving a tile never reorders the list. Until
+	// the first drag it is empty and Mission Control follows the sidebar; after
+	// it, dragged tasks keep their places and tasks it doesn't know yet (new
+	// work) follow in sidebar order.
+	const [mcOrder, setMcOrder] = useState<string[]>([]);
+	useEffect(() => {
+		if (!activeProjectId) return;
+		try {
+			setMcOrder(
+				JSON.parse(localStorage.getItem(`ateam.mcOrder.${activeProjectId}`) ?? "[]") as string[],
+			);
+		} catch {
+			setMcOrder([]);
+		}
+	}, [activeProjectId]);
+	const missionOrderIds = useMemo(() => {
+		if (mcOrder.length === 0) return sidebarOrderIds;
+		// Drop tasks that no longer exist so the saved order can't grow forever.
+		const live = new Set(activeTasks.map((t) => t.id));
+		const kept = mcOrder.filter((id) => live.has(id));
+		const known = new Set(kept);
+		return [...kept, ...sidebarOrderIds.filter((id) => !known.has(id))];
+	}, [mcOrder, sidebarOrderIds, activeTasks]);
+	const reorderMission = (ids: string[]) => {
+		setMcOrder(ids);
+		if (activeProjectId)
+			localStorage.setItem(`ateam.mcOrder.${activeProjectId}`, JSON.stringify(ids));
+	};
 
 	// One box, two jobs, told apart by a leading `#`.
 	//
@@ -740,12 +769,6 @@ export function App() {
 			return;
 		}
 		openTask(t);
-	};
-	// Dragging a tile rewrites the one task order Mission Control follows, the
-	// sidebar's, so the drag lands there too as a Custom order.
-	const reorderFromMission = (ids: string[]) => {
-		setTaskSort("custom");
-		reorderTasks(ids);
 	};
 	// A session-search hit opens the task it ran in, and the exact terminal it
 	// ran in when that tab is still alive — the point of the search is to land
@@ -1408,7 +1431,7 @@ export function App() {
 								title={
 									mcLocked
 										? "Layout locked: tile order is frozen while you watch"
-										: "Lock layout (unlocked: tiles follow the tasks list order; the tile you type in stays put)"
+										: "Lock layout (unlocked: tiles follow the tasks list order until you drag them; the tile you type in stays put)"
 								}
 								aria-label="Lock layout"
 								aria-pressed={mcLocked}
@@ -1574,7 +1597,7 @@ export function App() {
 						<MissionControl
 							tasks={activeTasks}
 							agents={agents}
-							order={sidebarOrderIds}
+							order={missionOrderIds}
 							layout={mcLayout}
 							locked={mcLocked}
 							onExpand={openFromMission}
@@ -1585,7 +1608,7 @@ export function App() {
 								const t = activeTasks.find((x) => x.id === id);
 								if (t) openTask(t);
 							}}
-							onReorder={reorderFromMission}
+							onReorder={reorderMission}
 						/>
 					) : view === "settings" ? (
 						<SettingsPanel agents={agents} />
