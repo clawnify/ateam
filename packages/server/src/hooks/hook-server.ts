@@ -8,6 +8,42 @@ export interface HookEvent {
 	terminalId: string;
 	eventType: string;
 	sessionId?: string;
+	/** Stop: the agent's final message of the turn, when its hook sent one. */
+	lastAssistantMessage?: string;
+	/** UserReply: what the user typed. */
+	prompt?: string;
+}
+
+/** Longest text kept from a hook body; a turn's closing message is well inside it. */
+const MAX_HOOK_TEXT = 20_000;
+
+/**
+ * The text a hook's JSON input carries, by agent: Claude Code and Codex hooks
+ * send `last_assistant_message` on Stop and `prompt` on UserPromptSubmit (both
+ * documented schemas); Codex's `notify` program sends the hyphenated
+ * `last-assistant-message` and `input-messages`. Anything else, or a body that
+ * is not JSON, yields nothing, and the event is exactly what it was before.
+ */
+export function hookText(body: string): Pick<HookEvent, "lastAssistantMessage" | "prompt"> {
+	if (!body) return {};
+	let raw: unknown;
+	try {
+		raw = JSON.parse(body);
+	} catch {
+		return {};
+	}
+	if (!raw || typeof raw !== "object") return {};
+	const o = raw as Record<string, unknown>;
+	const str = (v: unknown) =>
+		typeof v === "string" && v.trim() ? v.slice(0, MAX_HOOK_TEXT) : undefined;
+	const inputs = o["input-messages"];
+	const lastInput = Array.isArray(inputs) ? inputs[inputs.length - 1] : undefined;
+	const out: Pick<HookEvent, "lastAssistantMessage" | "prompt"> = {};
+	const last = str(o.last_assistant_message) ?? str(o["last-assistant-message"]);
+	const prompt = str(o.prompt) ?? str(lastInput);
+	if (last) out.lastAssistantMessage = last;
+	if (prompt) out.prompt = prompt;
+	return out;
 }
 
 /** An agent asked to merge (via the `gh` shim) — routed into the merge queue. */
@@ -135,28 +171,50 @@ export class HookServer extends EventEmitter {
 						.catch((e) => json(500, { ok: false, reason: String(e) }));
 					return;
 				}
-				if (req.method === "GET" && url.pathname === "/hook/complete") {
-					const terminalId = url.searchParams.get("terminalId") ?? "";
-					const eventType = url.searchParams.get("eventType") ?? "";
-					const sessionId = url.searchParams.get("sessionId") ?? undefined;
-					if (terminalId && eventType) {
-						this.emit("hook", {
-							terminalId,
-							eventType,
-							sessionId,
-						} satisfies HookEvent);
-					}
-					// A turn that ends with a follow-up armed continues instead of
-					// stopping: this body IS the agent's Stop-hook output, echoed
-					// straight back by notify.sh. Every other request keeps the
-					// empty 204 it has always returned, so a session without a
-					// follow-up behaves exactly as before.
-					const followUp = terminalId ? this.followUp?.(terminalId, eventType) : undefined;
-					if (followUp) {
-						return json(200, { decision: "block", reason: followUp });
-					}
-					res.writeHead(204);
-					res.end();
+				// GET from every hook; POST, with the hook's own JSON input as the
+				// body, from the two that carry text (see notify.sh).
+				if (
+					(req.method === "GET" || req.method === "POST") &&
+					url.pathname === "/hook/complete"
+				) {
+					const complete = (body: string) => {
+						const terminalId = url.searchParams.get("terminalId") ?? "";
+						const eventType = url.searchParams.get("eventType") ?? "";
+						const sessionId = url.searchParams.get("sessionId") ?? undefined;
+						if (terminalId && eventType) {
+							this.emit("hook", {
+								terminalId,
+								eventType,
+								sessionId,
+								...hookText(body),
+							} satisfies HookEvent);
+						}
+						// A turn that ends with a follow-up armed continues instead of
+						// stopping: this body IS the agent's Stop-hook output, echoed
+						// straight back by notify.sh. Every other request keeps the
+						// empty 204 it has always returned, so a session without a
+						// follow-up behaves exactly as before.
+						const followUp = terminalId ? this.followUp?.(terminalId, eventType) : undefined;
+						if (followUp) {
+							return json(200, { decision: "block", reason: followUp });
+						}
+						res.writeHead(204);
+						res.end();
+					};
+					if (req.method === "GET") return complete("");
+					let body = "";
+					let tooBig = false;
+					req.on("data", (c) => {
+						if (tooBig) return;
+						body += c;
+						// A turn's text, not a transcript. Past this the text is
+						// dropped and the event still lands, bodiless.
+						if (body.length > 1_000_000) {
+							tooBig = true;
+							body = "";
+						}
+					});
+					req.on("end", () => complete(body));
 					return;
 				}
 				if (req.method === "GET" && url.pathname === "/merge/request") {

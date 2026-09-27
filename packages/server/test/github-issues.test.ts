@@ -1,6 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import type { GithubIssueDTO } from "@ateam/protocol";
-import { GithubIssues, parseIssuePages, repositoryName } from "../src/github-issues";
+import {
+	createGithubIssue,
+	GithubIssues,
+	parseIssuePages,
+	repositoryName,
+} from "../src/github-issues";
 
 const raw = (number: number) => ({
 	number,
@@ -96,5 +101,32 @@ describe("GitHub issues", () => {
 		expect(result.issues).toEqual([]);
 		expect(result.syncedAt).toBeNull();
 		expect(result.error).toContain("access failed");
+	});
+	it("shows a created issue on the next cached read and validates before calling gh", async () => {
+		let fetches = 0;
+		const created: { title: string; body: string }[] = [];
+		const sync = new GithubIssues(
+			async () => {
+				fetches++;
+				return [issue];
+			},
+			() => 1000,
+			async (_repository, input) => {
+				created.push(input);
+				return { ...issue, number: 2, title: input.title };
+			},
+		);
+		await sync.list("Acme/Repo");
+		const made = await sync.create("Acme/Repo", { title: "New", body: "Details" });
+		expect(made.number).toBe(2);
+		expect(created).toEqual([{ title: "New", body: "Details" }]);
+		expect((await sync.list("acme/repo")).issues.map((i) => i.number)).toEqual([2, 1]);
+		expect(fetches).toBe(1);
+		await expect(createGithubIssue("acme/repo", { title: "  ", body: "" })).rejects.toThrow(
+			"An issue title is required",
+		);
+		await expect(createGithubIssue("acme/..", { title: "x", body: "" })).rejects.toThrow(
+			"Invalid GitHub repository",
+		);
 	});
 });

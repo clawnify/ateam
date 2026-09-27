@@ -40,7 +40,10 @@ import {
 	type BoxUpdateStarted,
 	type CleanupCandidate,
 	type CreateLoopInput,
+	type CreateGithubIssueInput,
 	type CreateIssueTaskInput,
+	type CredentialsPatch,
+	type CredentialsResult,
 	type DirEntryDTO,
 	type KanbanColumn,
 	type MergeStrategy,
@@ -52,6 +55,7 @@ import {
 } from "@ateam/protocol";
 import { createEditorHost, installCodeServer } from "./editor";
 import { refreshLoginPath } from "./login-env";
+import { credentialStatus, credentialsPath, updateCredentials } from "./credentials-file";
 import { readSettings, settingsPath, updateSettings } from "./settings-file";
 import type { Engine } from "./engine";
 import { GithubIssues } from "./github-issues";
@@ -202,6 +206,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.projectsIssues]: async (repository: string, refresh = false) => {
 			await refreshPath();
 			return githubIssues.list(repository, refresh);
+		},
+		[CH.projectsCreateIssue]: async (repository: string, input: CreateGithubIssueInput) => {
+			await refreshPath();
+			return githubIssues.create(repository, input);
 		},
 		[CH.projectsRegister]: async (repoPath: string, opts?: RegisterProjectOptions) => {
 			// "Create a repository here instead" (GitHub-Desktop-style), after the client
@@ -689,6 +697,16 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			updateSettings(patch);
 			const r = readSettings();
 			return { settings: r.settings, path: settingsPath(), warning: r.warning };
+		},
+		// Secrets, beside settings but never in them (see credentials-file.ts).
+		// The answer says whether a key is set, never what it is.
+		[CH.credentialsGet]: async (): Promise<CredentialsResult> => ({
+			openRouter: credentialStatus(),
+			path: credentialsPath(),
+		}),
+		[CH.credentialsUpdate]: async (patch: CredentialsPatch): Promise<CredentialsResult> => {
+			updateCredentials(patch);
+			return { openRouter: credentialStatus(), path: credentialsPath() };
 		},
 
 		// ---- pty ----

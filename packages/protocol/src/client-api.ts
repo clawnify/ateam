@@ -10,6 +10,7 @@
 // them from its own OS (or, later, from server-fs RPC helpers).
 import type {
 	AgentDTO,
+	GithubIssueDTO,
 	GithubIssuesDTO,
 	AteamApi,
 	AttachDelivery,
@@ -17,6 +18,7 @@ import type {
 	CleanupCandidate,
 	CleanupReport,
 	CreateLoopInput,
+	CredentialsResult,
 	DiffResultDTO,
 	DirListingDTO,
 	GitStatusSnapshot,
@@ -104,6 +106,8 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			remoteUrl: (projectId) => call<string | null>(CH.projectsRemoteUrl, [projectId]),
 			issues: (repository, refresh) =>
 				call<GithubIssuesDTO>(CH.projectsIssues, [repository, refresh]),
+			createIssue: (repository, input) =>
+				call<GithubIssueDTO>(CH.projectsCreateIssue, [repository, input]),
 			list: () => call<ProjectDTO[]>(CH.projectsList),
 			remove: (id) => call<void>(CH.projectsRemove, [id]),
 		},
@@ -137,6 +141,10 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		settings: {
 			get: () => call<SettingsResult>(CH.settingsGet, []),
 			update: (patch) => call<SettingsResult>(CH.settingsUpdate, [patch]),
+		},
+		credentials: {
+			get: () => call<CredentialsResult>(CH.credentialsGet, []),
+			update: (patch) => call<CredentialsResult>(CH.credentialsUpdate, [patch]),
 		},
 		editor: {
 			open:

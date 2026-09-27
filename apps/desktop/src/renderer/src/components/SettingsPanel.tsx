@@ -1,6 +1,7 @@
 import type {
 	AgentDTO,
 	AteamSettings,
+	CredentialsResult,
 	MergeStrategy,
 	SettingsPatch,
 	SettingsResult,
@@ -25,12 +26,13 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
  * offered: a setting nothing acts on is a lie, however tidy the row.
  */
 
-type SectionId = "general" | "agents" | "git";
+type SectionId = "general" | "agents" | "git" | "ai";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
 	{ id: "general", label: "General" },
 	{ id: "agents", label: "Agents" },
 	{ id: "git", label: "Git" },
+	{ id: "ai", label: "AI" },
 ];
 
 interface Row {
@@ -44,6 +46,9 @@ interface Row {
 interface RowContext {
 	agents: AgentDTO[];
 	patch: (p: SettingsPatch) => void;
+	/** Which keys are set; null until loaded (or on an engine too old to say). */
+	credentials: CredentialsResult | null;
+	saveKey: (key: string | null) => Promise<void>;
 }
 
 const MERGE_STRATEGIES: { value: MergeStrategy; label: string }[] = [
@@ -160,7 +165,87 @@ const ROWS: Row[] = [
 			/>
 		),
 	},
+	{
+		id: "credentials.openRouter",
+		section: "ai",
+		title: "OpenRouter API key",
+		description:
+			"When an agent finishes a turn, Jev, a small decision model on OpenRouter, reads its last message and moves the card to Needs you if the agent is waiting on you. Without a key, a finished turn always goes to Review. The agent's last message and your last reply are sent to OpenRouter.",
+		control: (_s, { credentials, saveKey }) => <KeyField status={credentials} onSave={saveKey} />,
+	},
 ];
+
+/**
+ * A secret's row: an empty field to paste into, or, once saved, only its last
+ * four characters and a way to remove it. The key is never read back; the
+ * engine answers whether one is set, not what it is.
+ */
+function KeyField({
+	status,
+	onSave,
+}: {
+	status: CredentialsResult | null;
+	onSave: (key: string | null) => Promise<void>;
+}) {
+	const [draft, setDraft] = useState("");
+	const [busy, setBusy] = useState(false);
+	const run = async (key: string | null) => {
+		setBusy(true);
+		try {
+			await onSave(key);
+			setDraft("");
+		} finally {
+			setBusy(false);
+		}
+	};
+	if (!status) return <span className="settings-key-note">Unavailable</span>;
+	const key = status.openRouter;
+	if (key.set && key.source === "env") {
+		return (
+			<span className="settings-key-note" title="Set in the engine's environment">
+				OPENROUTER_API_KEY ····{key.hint}
+			</span>
+		);
+	}
+	if (key.set) {
+		return (
+			<div className="settings-key">
+				<span className="settings-key-note">Saved ····{key.hint}</span>
+				<button
+					type="button"
+					className="navbtn danger"
+					disabled={busy}
+					onClick={() => void run(null)}
+				>
+					Remove
+				</button>
+			</div>
+		);
+	}
+	return (
+		<form
+			className="settings-key"
+			onSubmit={(e) => {
+				e.preventDefault();
+				if (draft.trim()) void run(draft.trim());
+			}}
+		>
+			<input
+				className="settings-input"
+				type="password"
+				placeholder="sk-or-…"
+				aria-label="OpenRouter API key"
+				autoComplete="off"
+				spellCheck={false}
+				value={draft}
+				onChange={(e) => setDraft(e.target.value)}
+			/>
+			<button type="submit" className="navbtn" disabled={busy || !draft.trim()}>
+				Save
+			</button>
+		</form>
+	);
+}
 
 function Switch({
 	checked,
@@ -187,6 +272,7 @@ function Switch({
 
 export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 	const [result, setResult] = useState<SettingsResult | null>(null);
+	const [credentials, setCredentials] = useState<CredentialsResult | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [query, setQuery] = useState("");
 	// One section at a time, like every settings page a Mac user has met: the
@@ -202,9 +288,25 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 				if (!cancelled) setResult(r);
 			})
 			.catch((e) => setError(String(e)));
+		// Separate from settings on purpose, and allowed to fail alone: an engine
+		// from before credentials existed still shows every other row.
+		window.ateam.credentials
+			.get()
+			.then((r) => {
+				if (!cancelled) setCredentials(r);
+			})
+			.catch(() => {});
 		return () => {
 			cancelled = true;
 		};
+	}, []);
+
+	const saveKey = useCallback(async (key: string | null) => {
+		try {
+			setCredentials(await window.ateam.credentials.update({ openRouterApiKey: key }));
+		} catch (e) {
+			setError(String(e));
+		}
 	}, []);
 
 	// Optimistic: the row reflects the change at once, the file catches up, and
@@ -320,7 +422,7 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 												<div className="settings-row-desc">{row.description}</div>
 											</div>
 											<div className="settings-row-control">
-												{row.control(result.settings, { agents, patch })}
+												{row.control(result.settings, { agents, patch, credentials, saveKey })}
 											</div>
 										</div>
 									))}
@@ -329,7 +431,7 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 						);
 					})
 				)}
-				{result && (
+				{result && shown.some((sec) => sec.id !== "ai") && (
 					<p className="settings-foot">
 						Stored in <code>{result.path}</code>
 						{result.machine === undefined
@@ -347,6 +449,19 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 							? "; engine settings sync to each box as it connects"
 							: ""}
 						. Edit it by hand if you like; changes apply on the next read.
+					</p>
+				)}
+				{credentials && shown.some((sec) => sec.id === "ai") && (
+					<p className="settings-foot">
+						Keys are stored in <code>{credentials.path}</code>, readable only by you and never in
+						settings.json
+						{credentials.syncedTo && credentials.syncedTo.length > 0
+							? `; synced to ${credentials.syncedTo.join(", ")}`
+							: ""}
+						{credentials.syncFailed && credentials.syncFailed.length > 0
+							? `; not synced to ${credentials.syncFailed.map((f) => `${f.alias} (${f.reason})`).join(", ")}`
+							: ""}
+						.
 					</p>
 				)}
 			</div>

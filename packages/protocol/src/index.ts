@@ -64,7 +64,8 @@
 // downgrade into a feature the client knows to switch off.
 // v11: projects:issues and tasks:createFromIssue. Older engines reject the new
 // methods explicitly; issueUrl on reads is optional for old task DTOs.
-export const PROTOCOL_VERSION = 11;
+// v12: projects:createIssue files a GitHub issue with the client engine's gh login.
+export const PROTOCOL_VERSION = 12;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -203,6 +204,11 @@ export interface GithubIssuesDTO {
 	issues: GithubIssueDTO[];
 	syncedAt: number | null;
 	error: string | null;
+}
+
+export interface CreateGithubIssueInput {
+	title: string;
+	body: string;
 }
 
 export interface CreateIssueTaskInput {
@@ -391,6 +397,32 @@ export interface SettingsResult {
 	 * "synced" is never claimed for a box that did not take it.
 	 */
 	syncFailed?: { alias: string; reason: string }[];
+}
+
+/**
+ * Secrets live apart from settings: `~/.ateam/credentials.json` (0600) on the
+ * engine's machine (server/credentials-file.ts). `settings.json` is meant to be
+ * shared and `settings:get` hands the whole file to every client; a key must
+ * never travel either way. So the wire carries whether a key is set and its
+ * last four characters, never the key.
+ */
+export interface CredentialStatus {
+	set: boolean;
+	/** Last four characters, for recognising which key it is. */
+	hint?: string;
+	/** `env` when an environment variable supplies it, which the file cannot override. */
+	source?: "file" | "env";
+}
+export interface CredentialsResult {
+	openRouter: CredentialStatus;
+	path: string;
+	/** As SettingsResult: filled in by the desktop while sync is on. */
+	syncedTo?: string[];
+	syncFailed?: { alias: string; reason: string }[];
+}
+/** A key to store, or null to remove it. */
+export interface CredentialsPatch {
+	openRouterApiKey?: string | null;
 }
 
 /**
@@ -609,6 +641,7 @@ export const CH = {
 	projectsClone: "projects:clone",
 	projectsRemoteUrl: "projects:remoteUrl",
 	projectsIssues: "projects:issues",
+	projectsCreateIssue: "projects:createIssue",
 	projectsRemoteRepos: "projects:remoteRepos",
 	projectsList: "projects:list",
 	projectsRemove: "projects:remove",
@@ -650,6 +683,8 @@ export const CH = {
 	utilOpenBrowser: "util:openBrowser",
 	settingsGet: "settings:get",
 	settingsUpdate: "settings:update",
+	credentialsGet: "credentials:get",
+	credentialsUpdate: "credentials:update",
 	editorOpen: "editor:open",
 	editorOpenUrl: "editor:openUrl",
 	editorInstall: "editor:install",
@@ -760,6 +795,8 @@ export interface AteamApi {
 		remoteUrl(projectId: string): Promise<string | null>;
 		/** Uses the client engine's gh login, including repos that run on a box. */
 		issues(repository: string, refresh?: boolean): Promise<GithubIssuesDTO>;
+		/** Same routing as `issues`: the repository string never names a box. */
+		createIssue(repository: string, input: CreateGithubIssueInput): Promise<GithubIssueDTO>;
 		list(): Promise<ProjectDTO[]>;
 		remove(id: string): Promise<void>;
 	};
@@ -908,6 +945,12 @@ export interface AteamApi {
 		get(): Promise<SettingsResult>;
 		/** Patch one or more keys; answers with the full result, like `get`. */
 		update(patch: SettingsPatch): Promise<SettingsResult>;
+	};
+	credentials: {
+		/** Which keys are set on the engine's machine; never the keys themselves. */
+		get(): Promise<CredentialsResult>;
+		/** Store or remove a key; answers like `get`. */
+		update(patch: CredentialsPatch): Promise<CredentialsResult>;
 	};
 	utils: {
 		/**
