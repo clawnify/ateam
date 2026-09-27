@@ -174,10 +174,10 @@ export function App() {
 		localStorage.setItem("ateam.mcLayout", l);
 		setMcLayoutState(l);
 	};
-	// Mission Control lock: locked freezes tile order for the whole visit (it
-	// re-snapshots the tasks-list order each time you land on Mission Control);
-	// unlocked follows the tasks-list order live, pinning only the tile being
-	// typed in.
+	// Mission Control lock: locked freezes tile order for the whole visit and
+	// lets you arrange it by dragging tiles (see mcOrder); it re-snapshots that
+	// order each time you land on Mission Control. Unlocked follows the
+	// tasks-list order live, pinning only the tile being typed in.
 	const [mcLocked, setMcLockedState] = useState(() => localStorage.getItem("ateam.mcLock") === "1");
 	const setMcLocked = (v: boolean) => {
 		localStorage.setItem("ateam.mcLock", v ? "1" : "0");
@@ -628,6 +628,36 @@ export function App() {
 		() => orderedSidebarTasks.map((t) => t.id),
 		[orderedSidebarTasks],
 	);
+	// Mission Control's own tile order, per project, set by dragging tiles while
+	// the layout is locked. It is kept apart from the sidebar's: moving a tile
+	// never reorders the list. Locked, Mission Control uses it, with tasks it
+	// doesn't know yet (new work) after it in sidebar order; before the first
+	// drag it is empty and locking snapshots the sidebar order as it always did.
+	// Unlocked ignores it and follows the sidebar live.
+	const [mcOrder, setMcOrder] = useState<string[]>([]);
+	useEffect(() => {
+		if (!activeProjectId) return;
+		try {
+			setMcOrder(
+				JSON.parse(localStorage.getItem(`ateam.mcOrder.${activeProjectId}`) ?? "[]") as string[],
+			);
+		} catch {
+			setMcOrder([]);
+		}
+	}, [activeProjectId]);
+	const missionOrderIds = useMemo(() => {
+		if (!mcLocked || mcOrder.length === 0) return sidebarOrderIds;
+		// Drop tasks that no longer exist so the saved order can't grow forever.
+		const live = new Set(activeTasks.map((t) => t.id));
+		const kept = mcOrder.filter((id) => live.has(id));
+		const known = new Set(kept);
+		return [...kept, ...sidebarOrderIds.filter((id) => !known.has(id))];
+	}, [mcLocked, mcOrder, sidebarOrderIds, activeTasks]);
+	const reorderMission = (ids: string[]) => {
+		setMcOrder(ids);
+		if (activeProjectId)
+			localStorage.setItem(`ateam.mcOrder.${activeProjectId}`, JSON.stringify(ids));
+	};
 
 	// One box, two jobs, told apart by a leading `#`.
 	//
@@ -740,12 +770,6 @@ export function App() {
 			return;
 		}
 		openTask(t);
-	};
-	// Dragging a tile rewrites the one task order Mission Control follows, the
-	// sidebar's, so the drag lands there too as a Custom order.
-	const reorderFromMission = (ids: string[]) => {
-		setTaskSort("custom");
-		reorderTasks(ids);
 	};
 	// A session-search hit opens the task it ran in, and the exact terminal it
 	// ran in when that tab is still alive — the point of the search is to land
@@ -1407,8 +1431,8 @@ export function App() {
 								className={`navbtn icon ${mcLocked ? "active" : ""}`}
 								title={
 									mcLocked
-										? "Layout locked: tile order is frozen while you watch"
-										: "Lock layout (unlocked: tiles follow the tasks list order; the tile you type in stays put)"
+										? "Layout locked: tile order is frozen while you watch; drag a tile's title bar to rearrange"
+										: "Lock layout to arrange tiles yourself (unlocked: tiles follow the tasks list order; the tile you type in stays put)"
 								}
 								aria-label="Lock layout"
 								aria-pressed={mcLocked}
@@ -1574,7 +1598,7 @@ export function App() {
 						<MissionControl
 							tasks={activeTasks}
 							agents={agents}
-							order={sidebarOrderIds}
+							order={missionOrderIds}
 							layout={mcLayout}
 							locked={mcLocked}
 							onExpand={openFromMission}
@@ -1585,7 +1609,7 @@ export function App() {
 								const t = activeTasks.find((x) => x.id === id);
 								if (t) openTask(t);
 							}}
-							onReorder={reorderFromMission}
+							onReorder={reorderMission}
 						/>
 					) : view === "settings" ? (
 						<SettingsPanel agents={agents} />
@@ -2774,18 +2798,21 @@ function MissionControl({
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [flip]);
 
-	// Locked: snapshot the sidebar's ordering the moment we land here (or flip
-	// the lock on) and freeze it, so terminals never shuffle under you while
+	// Locked: snapshot `order` (Mission Control's own order when one was dragged,
+	// else the sidebar's) the moment we land here (or flip the lock on) and
+	// freeze it, so terminals never shuffle under you while
 	// you watch (e.g. "sort by updated" would otherwise reorder live as agents
 	// emit events). Unlocked: follow the sidebar's live order, except the tile
 	// being typed in keeps its slot (see focusedRef). Tasks not in the active
 	// rank sort to the end.
-	const orderRef = useRef(order);
-	orderRef.current = order;
 	const [frozenRank, setFrozenRank] = useState(() => new Map(order.map((id, i) => [id, i])));
-	useEffect(() => {
-		if (locked) setFrozenRank(new Map(orderRef.current.map((id, i) => [id, i])));
-	}, [locked]);
+	// Snapshot during render, not in an effect, so the render that flips the
+	// lock already carries the new rank and the forced re-sort below uses it.
+	const [lockSeen, setLockSeen] = useState(locked);
+	if (lockSeen !== locked) {
+		setLockSeen(locked);
+		if (locked) setFrozenRank(new Map(order.map((id, i) => [id, i])));
+	}
 	const liveRank = useMemo(() => new Map(order.map((id, i) => [id, i])), [order]);
 	const rank = locked ? frozenRank : liveRank;
 
@@ -2804,7 +2831,10 @@ function MissionControl({
 	// courtesies: a new order that only permutes the visible page is skipped
 	// there (see below), and while a tile is being typed in it keeps the slot
 	// it currently occupies on screen.
-	const resort = useCallback(() => {
+	// `force` skips the visible-page courtesy below: flipping the lock is an
+	// explicit request for the other order, so it must show even when it only
+	// permutes the tiles already on screen.
+	const resort = useCallback((force = false) => {
 		const r = rankRef.current;
 		const next = [...sessionsRef.current];
 		// Stable sort; V8's stable sort keeps equal-rank ties in encounter order.
@@ -2826,7 +2856,7 @@ function MissionControl({
 			const sameSet =
 				prevWin.length === nextWin.length &&
 				prevWin.every((p) => nextWin.some((n) => n.task.id === p.task.id));
-			if (sameSet && prevWin.length > 0) {
+			if (sameSet && prevWin.length > 0 && !force) {
 				// Keep the on-screen arrangement but take next's tile objects,
 				// which carry the freshly fetched task DTOs and session lists.
 				const fresh = new Map(nextWin.map((t) => [t.task.id, t]));
@@ -2851,12 +2881,15 @@ function MissionControl({
 	}, []);
 
 	// Re-sort when the sidebar order changes (only matters unlocked) or the
-	// lock flips off and the live order takes over again. rankRef is synced
+	// lock flips either way and the other order takes over. rankRef is synced
 	// here (not at render time) so the effect legitimately depends on rank.
+	const lastLockedRef = useRef(locked);
 	useEffect(() => {
 		rankRef.current = rank;
-		resort();
-	}, [rank, resort]);
+		const flipped = lastLockedRef.current !== locked;
+		lastLockedRef.current = locked;
+		resort(flipped);
+	}, [rank, locked, resort]);
 
 	// Sessions announce themselves, so this listens instead of polling. Both spawn
 	// paths broadcast taskUpdated and a dying PTY broadcasts ptyExit — including from
@@ -2969,14 +3002,15 @@ function MissionControl({
 		el.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")?.focus();
 	});
 
-	// Drag a tile by its bar onto another tile and the two trade places; nothing
-	// else moves, so the rest of the page stays where the eye left it.
+	// Locked only: drag a tile by its bar onto another tile and the two trade
+	// places; nothing else moves, so the rest of the page stays where the eye
+	// left it. Unlocked, tiles follow the sidebar live, which would undo a drag.
 	const dragIdRef = useRef<string | null>(null);
 	const [dropTarget, setDropTarget] = useState<string | null>(null);
 	const swapTiles = (a: string, b: string) => {
 		const ta = tiles.find((t) => t.task.id === a);
 		const tb = tiles.find((t) => t.task.id === b);
-		if (!ta || !tb || ta === tb) return;
+		if (!locked || !ta || !tb || ta === tb) return;
 		const next = tiles.map((t) => (t === ta ? tb : t === tb ? ta : t));
 		// Write the tiles' new sequence into the slots tiles occupy in the full
 		// task order, leaving tasks without a tile where they are. Tile tasks
@@ -2990,7 +3024,7 @@ function MissionControl({
 		// Show it now: the page-permutation courtesy in resort would otherwise
 		// keep the old arrangement when the new order arrives.
 		setTiles(next);
-		if (locked) setFrozenRank(new Map(full.map((id, i) => [id, i])));
+		setFrozenRank(new Map(full.map((id, i) => [id, i])));
 		onReorder(full);
 	};
 
@@ -3085,9 +3119,13 @@ function MissionControl({
 						>
 							{/* biome-ignore lint/a11y/noStaticElementInteractions: a pointer drag handle; the sidebar's Custom order is the same ordering. */}
 							<div
-								className="bar"
-								draggable
-								title="Drag onto another tile to swap them"
+								className={`bar ${locked ? "movable" : ""}`}
+								draggable={locked}
+								title={
+									locked
+										? "Drag onto another tile to swap them"
+										: "Lock the layout to arrange tiles by dragging"
+								}
 								onDragStart={(e) => {
 									dragIdRef.current = task.id;
 									e.dataTransfer.setData(MC_TILE_MIME, task.id);

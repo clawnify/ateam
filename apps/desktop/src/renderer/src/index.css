@@ -1170,33 +1170,18 @@ input {
 }
 /* slim bar under each terminal: `+` menu (attach files, …) */
 .term-toolbar {
-	position: relative;
 	display: flex;
 	align-items: center;
-	/* The + sits centered under the terminal, where the eye already is. */
-	justify-content: center;
 	gap: 2px;
 	padding: 2px 6px;
 	border-top: 1px solid var(--border);
 	flex: none;
 }
-/* A bigger + than the ghost icon default: it's the bar's one action. */
-.term-toolbar .iconbtn {
-	width: 32px;
-	height: 32px;
-}
-.term-toolbar .iconbtn svg {
-	width: 20px;
-	height: 20px;
-}
 
-/* "Done" action: compact so it clears the toolbar's top/bottom edges, pinned
-   to the far right of the bar (absolute, so it never pulls the + off center). */
+/* "Done" action: compact so it clears the toolbar's top/bottom edges,
+   pushed to the far right of the bar. */
 .term-done {
-	position: absolute;
-	right: 6px;
-	top: 50%;
-	transform: translateY(-50%);
+	margin-left: auto;
 	padding: 1px 10px;
 	font-size: 11px;
 	font-weight: 500;
@@ -1496,8 +1481,6 @@ input {
 	pointer-events: none;
 }
 .mc .tile .bar {
-	/* The bar is the drag handle for swapping tiles. */
-	cursor: grab;
 	height: 26px;
 	background: var(--bg-elev);
 	display: flex;
@@ -1507,6 +1490,10 @@ input {
 	font-size: 11px;
 	color: var(--text-dim);
 	flex: none;
+}
+/* While the layout is locked the bar is the drag handle for swapping tiles. */
+.mc .tile .bar.movable {
+	cursor: grab;
 }
 /* The expand button must fit inside the 26px bar. */
 .mc .tile .bar .iconbtn {
