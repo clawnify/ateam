@@ -1481,8 +1481,6 @@ input {
 	pointer-events: none;
 }
 .mc .tile .bar {
-	/* The bar is the drag handle for swapping tiles. */
-	cursor: grab;
 	height: 26px;
 	background: var(--bg-elev);
 	display: flex;
@@ -1492,6 +1490,10 @@ input {
 	font-size: 11px;
 	color: var(--text-dim);
 	flex: none;
+}
+/* While the layout is locked the bar is the drag handle for swapping tiles. */
+.mc .tile .bar.movable {
+	cursor: grab;
 }
 /* The expand button must fit inside the 26px bar. */
 .mc .tile .bar .iconbtn {
