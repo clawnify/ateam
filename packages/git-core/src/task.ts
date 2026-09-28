@@ -215,11 +215,13 @@ async function copyEnvFiles(
 	repoPath: string,
 	worktreePath: string,
 	entries: string[],
+	signal?: AbortSignal,
 ): Promise<void> {
 	for (const rel of entries) {
 		if (!isEnvFile(basename(rel))) continue;
 		try {
 			if (!(await stat(join(repoPath, rel))).isFile()) continue;
+			if (signal?.aborted) return;
 			const dest = join(worktreePath, rel);
 			await mkdir(dirname(dest), { recursive: true });
 			await cp(join(repoPath, rel), dest);
@@ -266,6 +268,7 @@ async function seedNodeModules(
 	repoPath: string,
 	worktreePath: string,
 	entries: string[],
+	signal?: AbortSignal,
 ): Promise<void> {
 	// Stage OUTSIDE the worktree, then move each finished tree in. Two reasons,
 	// both learned the hard way:
@@ -295,8 +298,12 @@ async function seedNodeModules(
 			const staged = join(staging, rel);
 			const dest = join(worktreePath, rel);
 			try {
+				if (signal?.aborted) return;
 				await mkdir(dirname(staged), { recursive: true });
-				await pexec(CLONE_CP, [...CLONE_ARGS, join(repoPath, rel), staged]);
+				await pexec(CLONE_CP, [...CLONE_ARGS, join(repoPath, rel), staged], { signal });
+				// The worktree may have been deleted during the copy; `mkdir -p`
+				// below would bring its directory back.
+				if (signal?.aborted) return;
 				await mkdir(dirname(dest), { recursive: true });
 				await rename(staged, dest);
 			} catch {
@@ -351,6 +358,11 @@ export async function createTask(input: CreateTaskInput): Promise<TaskInfo> {
 export interface SeedWorktreeInput {
 	repoPath: string;
 	worktreePath: string;
+	/**
+	 * Aborted when the task is deleted mid-seed: nothing more is written into the
+	 * worktree, and the clone in flight is killed rather than waited out.
+	 */
+	signal?: AbortSignal;
 }
 
 /**
@@ -370,16 +382,18 @@ export interface SeedWorktreeInput {
  * own install — never a task that failed to be created.
  */
 export async function seedWorktree(input: SeedWorktreeInput): Promise<void> {
+	const { signal } = input;
 	const entries = await listUnversionedEntries(input.repoPath);
+	if (signal?.aborted) return;
 	// Carry the Supabase link over so the worktree's CLI is already linked.
 	await copySupabaseLink(input.repoPath, input.worktreePath);
 	// Carry env files (.env*, .dev.vars*) over, including nested ones, so the
 	// worktree can run the app without re-creating its local secrets.
-	await copyEnvFiles(input.repoPath, input.worktreePath, entries);
+	await copyEnvFiles(input.repoPath, input.worktreePath, entries, signal);
 	// Carry the installed dependencies over as a copy-on-write clone, so the
 	// worktree can typecheck and run immediately instead of paying a full
 	// install (and Electron's 244 MB extract) per task.
-	await seedNodeModules(input.repoPath, input.worktreePath, entries);
+	await seedNodeModules(input.repoPath, input.worktreePath, entries, signal);
 }
 
 export interface RemoveTaskInput {

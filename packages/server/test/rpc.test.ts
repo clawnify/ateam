@@ -6,6 +6,7 @@ import { createTestDb } from "../../db/test/helpers/test-db";
 import { createDispatcher } from "../src/dispatcher";
 import type { Engine } from "../src/engine";
 import { serveRpc } from "../src/rpc";
+import { WorktreeGuard } from "../src/worktree-guard";
 
 // In-memory transport pair: whatever one side sends, the other receives — the
 // stand-in for Electron IPC / SSH stdio, proving the layer is transport-neutral.
@@ -39,6 +40,7 @@ function makeEngine(db: AteamDb): Engine {
 			mergeQueue: {},
 			loopRunner: { describe: () => [] },
 			pendingSeeds: new Map(),
+			worktreeGuard: new WorktreeGuard(),
 		},
 		on: (event: string, cb: (p: unknown) => void) => {
 			ee.on(event, cb);

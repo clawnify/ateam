@@ -11,7 +11,12 @@ import type {
 	TaskDTO,
 	TaskTriage,
 } from "@ateam/protocol";
-import { boxSupports, FEATURE_MIN_VERSION, PROTOCOL_VERSION } from "@ateam/protocol";
+import {
+	boxSupports,
+	FEATURE_MIN_VERSION,
+	PROTOCOL_VERSION,
+	TASK_REMOVING_ERROR,
+} from "@ateam/protocol";
 import {
 	ArrowDownToLine,
 	ArrowUp,
@@ -261,7 +266,11 @@ export function App() {
 		try {
 			await fn();
 		} catch (e) {
-			setError(e instanceof Error ? e.message : String(e));
+			const msg = e instanceof Error ? e.message : String(e);
+			// The engine refusing to launch into a task mid-delete: expected when
+			// the delete's own kill makes the open panel auto-resume its agent.
+			if (msg.includes(TASK_REMOVING_ERROR)) return;
+			setError(msg);
 		}
 	}, []);
 
