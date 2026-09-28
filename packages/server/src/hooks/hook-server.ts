@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import http from "node:http";
+import { describeMergeResult, type MergeEnqueueDTO } from "@ateam/protocol";
 import { type BoardHandlers, dispatchMcp } from "./board-mcp";
 
 export type { BoardHandlers };
@@ -53,6 +54,13 @@ export interface MergeRequestEvent {
 }
 
 /**
+ * Runs an agent's merge request through the queue and resolves with its
+ * outcome, or null when the terminal belongs to no task (the shim then falls
+ * back to the real `gh`).
+ */
+export type MergeHandler = (e: MergeRequestEvent) => Promise<MergeEnqueueDTO | null>;
+
+/**
  * Asks whether a finished turn should be continued with a follow-up prompt.
  * Returning text turns the agent's own `Stop` into another turn; returning
  * undefined lets it stop. Consuming is the resolver's job (see `FollowUps`).
@@ -65,18 +73,25 @@ const LOCAL_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
 /**
  * Tiny localhost HTTP server that agent hooks ping to report lifecycle events.
  * GET /hook/complete?terminalId=&eventType=&sessionId= → emits "hook".
- * GET /merge/request?terminalId=&strategy=          → emits "merge-request".
+ * GET /merge/request?terminalId=&strategy=          → answers once the merge
+ *   settles: 200 merged, 409 not merged (the body says why), 404 no such task.
  * GET-with-query is trivial to emit from a shell hook with no JSON escaping.
  */
 export class HookServer extends EventEmitter {
 	private server?: http.Server;
 	private board?: BoardHandlers;
 	private followUp?: FollowUpResolver;
+	private merge?: MergeHandler;
 	port = 0;
 
 	/** Wire the Board Organizer's request/response tool handlers. */
 	setBoardHandlers(handlers: BoardHandlers): void {
 		this.board = handlers;
+	}
+
+	/** Wire the merge queue behind the gh shim's `/merge/request`. */
+	setMergeHandler(handler: MergeHandler): void {
+		this.merge = handler;
 	}
 
 	/** Wire the one-shot follow-up lookup consulted at every turn end. */
@@ -220,17 +235,30 @@ export class HookServer extends EventEmitter {
 				if (req.method === "GET" && url.pathname === "/merge/request") {
 					const terminalId = url.searchParams.get("terminalId") ?? "";
 					const strategy = url.searchParams.get("strategy") ?? undefined;
-					if (terminalId) {
-						this.emit("merge-request", {
-							terminalId,
-							strategy,
-						} satisfies MergeRequestEvent);
-						res.writeHead(202);
+					if (!terminalId) {
+						res.writeHead(400);
 						res.end();
 						return;
 					}
-					res.writeHead(400);
-					res.end();
+					if (!this.merge) {
+						res.writeHead(503);
+						res.end();
+						return;
+					}
+					// Held open until the merge settles, so the agent that asked reads
+					// the real outcome (conflicts included) instead of "queued".
+					const text = (status: number, body: string) => {
+						res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
+						res.end(`${body}\n`);
+					};
+					this.merge({ terminalId, strategy }).then(
+						(r) => {
+							if (!r) return text(404, "Ateam: this terminal belongs to no task.");
+							text(r.ok ? 200 : 409, describeMergeResult(r));
+						},
+						(err) =>
+							text(500, `Ateam: merge failed: ${err instanceof Error ? err.message : String(err)}`),
+					);
 					return;
 				}
 				res.writeHead(404);

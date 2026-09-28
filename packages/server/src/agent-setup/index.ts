@@ -87,7 +87,11 @@ exit 0
  * A `gh` shim placed FIRST on each agent's PATH. It intercepts `gh pr merge`
  * and routes it into Ateam's merge queue (so two agents merging into the same
  * base can't race); every other gh call passes straight through to the real gh.
- * If the app isn't reachable it falls back to a real merge rather than blocking.
+ * It waits for the queue's verdict and prints it, exiting non-zero when nothing
+ * merged (a conflict, a closed PR, an error), so the agent that asked can act on
+ * it. Only an unreachable app (curl exit 7) or a terminal that belongs to no
+ * task falls back to a real merge: a timeout or dropped connection may leave a
+ * job running, and a second real merge must not race it.
  * Only agent PTYs get this dir on PATH — the main process keeps the real gh.
  */
 const GH_SHIM = `#!/bin/sh
@@ -108,11 +112,22 @@ if [ "$1" = "pr" ] && [ "$2" = "merge" ] && [ -n "$PORT" ] && [ -n "$TID" ]; the
 			--rebase) STRAT=rebase ;;
 		esac
 	done
-	if curl -s -m 3 "http://127.0.0.1:\${PORT}/merge/request?terminalId=\${TID}&strategy=\${STRAT}" >/dev/null 2>&1; then
-		echo "Ateam: merge queued. Ateam serializes merges per base branch so concurrent merges never conflict — this PR will merge in turn and the board will show its status. Do not re-run 'gh pr merge'."
-		exit 0
+	echo "Ateam: merging through the queue (merges into a base branch run one at a time)..." >&2
+	OUT=$(curl -s -m 900 -w '\\n%{http_code}' "http://127.0.0.1:\${PORT}/merge/request?terminalId=\${TID}&strategy=\${STRAT}")
+	RC=$?
+	if [ "$RC" -eq 0 ]; then
+		CODE=$(printf '%s\\n' "$OUT" | tail -n 1)
+		MSG=$(printf '%s\\n' "$OUT" | sed '$d')
+		case "$CODE" in
+			200) printf '%s\\n' "$MSG"; exit 0 ;;
+			404) ;;
+			*) printf '%s\\n' "$MSG" >&2; exit 1 ;;
+		esac
+	elif [ "$RC" -ne 7 ]; then
+		echo "Ateam: no answer from the merge queue (curl exit $RC); the merge may still be running. Check the board before running 'gh pr merge' again." >&2
+		exit 1
 	fi
-	# App unreachable — fall through to a real merge rather than blocking.
+	# App unreachable, or not a task terminal: fall through to a real merge.
 fi
 
 if [ -n "$REAL_GH" ]; then

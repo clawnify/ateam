@@ -833,6 +833,11 @@ input {
 	font-size: 11px;
 	color: var(--text-dim);
 }
+/* The task's place in the merge queue. A parked conflict is the one state
+   that needs you, so only it takes a color. */
+.card .meta .merge-status.conflict {
+	color: var(--red);
+}
 /* Why this card sits where it does (the triage reason). Sits between the
    branch and the git counts, dimmer than both so it reads as a caption. */
 .card .triage {
