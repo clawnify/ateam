@@ -13,6 +13,7 @@ import type {
 } from "@ateam/protocol";
 import {
 	boxSupports,
+	describeMergeResult,
 	FEATURE_MIN_VERSION,
 	PROTOCOL_VERSION,
 	TASK_REMOVING_ERROR,
@@ -2003,6 +2004,11 @@ function Board({
 											</a>
 										)}
 										{t.prNumber && <span>PR #{t.prNumber}</span>}
+										{t.mergeStatus && (
+											<span className={`merge-status ${t.mergeStatus}`}>
+												{t.mergeStatus === "conflict" ? "merge conflict" : t.mergeStatus}
+											</span>
+										)}
 										{/* Age and agent icon share one right-aligned group: the icon used to
 									    be absolutely positioned and sat on top of the age label. */}
 										<span className="meta-end">
@@ -2562,8 +2568,13 @@ function TaskPanel({
 					label="Update from base branch"
 					onClick={() =>
 						run(async () => {
-							await window.ateam.git.update(task.id);
+							const r = await window.ateam.git.update(task.id);
 							refreshDiff();
+							if (r.status === "conflicts") {
+								throw new Error(
+									`Update hit conflicts in ${r.conflicts.join(", ")}. Resolve them in the worktree.`,
+								);
+							}
 						})
 					}
 				/>
@@ -2572,8 +2583,11 @@ function TaskPanel({
 					label="Merge via PR (squash) + update local main"
 					onClick={() =>
 						run(async () => {
-							await window.ateam.git.merge(task.id, "squash");
+							const r = await window.ateam.git.merge(task.id, "squash");
 							refreshDiff();
+							// \`run\` shows a thrown error as the toast; a merge that did not
+							// happen used to come back as a value and vanish.
+							if (!r.ok) throw new Error(describeMergeResult(r).replace(/^Ateam: /, ""));
 						})
 					}
 				/>
