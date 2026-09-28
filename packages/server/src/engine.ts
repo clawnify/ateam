@@ -25,6 +25,7 @@ import { ensureLoginEnv } from "./login-env";
 import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
+import { applyAgentQuit, columnAfterExit } from "./pty/agent-quit";
 import { PtyClient } from "./pty/pty-client";
 import { reapableSessions } from "./pty/reap";
 import { makeStrandReconciler } from "./pty/reconcile";
@@ -265,8 +266,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		if (task.column === "running") {
 			repo.updateTask(db, task.id, {
 				agentStatus: "stopped",
-				column:
-					task.prNumber != null || (task.gitStatus?.ahead ?? 0) > 0 ? "review" : "needs_attention",
+				column: columnAfterExit(task),
 				...(markUnread ? { isUnread: true } : {}),
 			});
 		}
@@ -339,6 +339,20 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	hooks.on("hook", (e: HookEvent) => {
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
+		if (e.eventType === "AgentExit") {
+			repo.recordEvent(db, {
+				sessionId: session.id,
+				terminalId: e.terminalId,
+				eventType: e.eventType,
+				rawAgentSessionId: null,
+			});
+			// The agent quit and its pane lives on as a shell (see pty/agent-quit.ts).
+			// Its follow-up can never be delivered now.
+			followUps.discard(e.terminalId);
+			const taskId = applyAgentQuit(db, pty, session);
+			if (taskId) sendTaskUpdated(taskId);
+			return;
+		}
 		const status = mapEventToStatus(e.eventType);
 		repo.updateSession(db, session.id, {
 			status,

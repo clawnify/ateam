@@ -2935,10 +2935,16 @@ function MissionControl({
 				);
 				if (cancelled) return;
 				// listForTask hands sessions back latest-first; reverse so the tabs
-				// read oldest to newest, exactly as they do in the task panel.
+				// read oldest to newest, exactly as they do in the task panel. A
+				// session whose agent quit (`stopped` while its PTY lives on as a
+				// shell) is not an agent to watch, so it gets no tab here, and a task
+				// left with none gets no tile. The task panel still has it.
 				sessionsRef.current = perTask
-					.filter(({ sessions }) => sessions.length > 0)
-					.map(({ task, sessions }) => ({ task, sessions: [...sessions].reverse() }));
+					.map(({ task, sessions }) => ({
+						task,
+						sessions: sessions.filter((s) => s.status !== "stopped").reverse(),
+					}))
+					.filter(({ sessions }) => sessions.length > 0);
 				resort();
 			} finally {
 				inFlight = false;
