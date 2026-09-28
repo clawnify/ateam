@@ -1636,6 +1636,12 @@ export function App() {
 						</>
 					) : view === "mission" ? (
 						<MissionControl
+							// One instance per project: tiles, page, pinned tabs and the
+							// lock snapshot all belong to the project, and the session
+							// fetch runs on mount and on events only, so a project switch
+							// that kept this instance showed the last project's tiles
+							// until some agent happened to emit an event.
+							key={activeCard?.key ?? activeProjectId}
 							tasks={activeTasks}
 							agents={agents}
 							order={missionOrderIds}
@@ -2876,6 +2882,9 @@ function MissionControl({
 	// Latest unsorted tile list, kept so a re-sort (order change, lock flip,
 	// blur) doesn't need a fresh round of listForTask calls.
 	const sessionsRef = useRef<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
+	// False until the first session fetch lands, so a fresh mount shows an empty
+	// grid for that moment rather than flashing "No live agents yet".
+	const [loaded, setLoaded] = useState(false);
 	const rankRef = useRef(rank);
 	const lockedRef = useRef(locked);
 	lockedRef.current = locked;
@@ -2976,6 +2985,7 @@ function MissionControl({
 					}))
 					.filter(({ sessions }) => sessions.length > 0);
 				resort();
+				setLoaded(true);
 			} finally {
 				inFlight = false;
 			}
@@ -3088,6 +3098,7 @@ function MissionControl({
 	};
 
 	if (tiles.length === 0) {
+		if (!loaded) return <div className="mc" data-layout={layout} />;
 		return (
 			<div className="mc" data-layout={layout}>
 				<div className="empty">
