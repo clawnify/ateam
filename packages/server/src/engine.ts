@@ -32,6 +32,7 @@ import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
 import { readSettings } from "./settings-file";
 import { createTurnClassifier } from "./turn-classifier";
+import { WorktreeGuard } from "./worktree-guard";
 import { createWorktreeSweep, type WorktreeSweep } from "./worktree-sweep";
 
 export interface EngineOptions {
@@ -239,6 +240,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		loopRunner,
 		followUps,
 		pendingSeeds,
+		worktreeGuard: new WorktreeGuard(),
 	};
 
 	// Record an agent's exit: close the session and file its card. Shared by the

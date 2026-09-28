@@ -10,6 +10,7 @@ import * as schema from "../../db/src/schema";
 import { FollowUps } from "../src/follow-ups";
 import type { Services } from "../src/services";
 import { spawnAgentInTask } from "../src/sessions";
+import { WorktreeGuard } from "../src/worktree-guard";
 
 // Opening a stopped task auto-resumes its conversation, so a resume must be
 // side-effect free on the board: the card keeps its column, status and "last
@@ -48,6 +49,7 @@ beforeEach(() => {
 		hookPort: 0,
 		followUps: new FollowUps(),
 		pendingSeeds: new Map(),
+		worktreeGuard: new WorktreeGuard(),
 		// The launch refuses when the agent's CLI is missing (sessions.ts), and a
 		// CI runner has no agent CLIs at all. Stub it: this file is about what a
 		// resume does to the card, not about what is installed on the machine.
