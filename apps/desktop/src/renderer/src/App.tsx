@@ -35,6 +35,7 @@ import {
 	GitMerge,
 	GitPullRequest,
 	Globe,
+	Grid3x2,
 	History,
 	LayoutGrid,
 	LayoutPanelLeft,
@@ -102,12 +103,14 @@ type TaskSortMode = "next" | "status" | "updated" | "custom";
 // How agent tiles are arranged: "grid" is a 2x2 overview (tiles half the
 // window wide and tall), "main" gives the first tile the full-height left half
 // and stacks the next two in the right half, "split" lays them side-by-side at
-// full window height, "stack" stacks them full-width. Extra tiles go to
+// full window height, "stack" stacks them full-width, "grid3x2" is three
+// columns by two rows (and tucks the sidebar into its rail while shown, since
+// a third column is only readable with the width back). Extra tiles go to
 // further pages, flipped via the bottom-right pager or Cmd/Ctrl+Alt+Up/Down.
-type McLayout = "grid" | "main" | "split" | "stack";
+type McLayout = "grid" | "grid3x2" | "main" | "split" | "stack";
 
 // Tiles per page: how many terminals each layout actually shows at once.
-const MC_PAGE_SIZE: Record<McLayout, number> = { grid: 4, main: 3, split: 2, stack: 1 };
+const MC_PAGE_SIZE: Record<McLayout, number> = { grid: 4, grid3x2: 6, main: 3, split: 2, stack: 1 };
 
 // dataTransfer type a tile's bar carries while dragged, so a tile only lights
 // up as a drop target for another tile, never for a file dragged in from Finder
@@ -206,9 +209,21 @@ export function App() {
 	// A mutation's return and the push event both carry ONE engine's loops, so
 	// every refresh re-lists the union.
 	const refreshLoops = useCallback(() => void window.ateam.loops.list().then(setLoops), []);
-	const [rail, setRail] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
+	const [railPref, setRailPref] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
+	// Mission Control's 3x2 grid collapses the sidebar for as long as it is on
+	// screen, without touching the saved preference: leaving the layout or the
+	// view puts back whatever you had. Expanding it by hand while there holds
+	// until you leave.
+	const autoRail = view === "mission" && mcLayout === "grid3x2";
+	const [railKept, setRailKept] = useState(false);
+	if (!autoRail && railKept) setRailKept(false);
+	const rail = autoRail ? !railKept : railPref;
 	const toggleRail = () => {
-		setRail((r) => {
+		if (autoRail) {
+			setRailKept((k) => !k);
+			return;
+		}
+		setRailPref((r) => {
 			localStorage.setItem("ateam.sidebarRail", r ? "0" : "1");
 			return !r;
 		});
@@ -1419,6 +1434,7 @@ export function App() {
 							{(
 								[
 									["grid", LayoutGrid, "Grid"],
+									["grid3x2", Grid3x2, "3x2 grid"],
 									["main", LayoutPanelLeft, "Main + side"],
 									["split", Columns2, "Split"],
 									["stack", Rows2, "Stack"],
@@ -3226,6 +3242,9 @@ function MissionControl({
 						disabled={clampedPage === pageCount - 1}
 						onClick={() => flip(1)}
 					/>
+					<span className="keys" aria-hidden="true">
+						⌘⌥↑↓
+					</span>
 				</div>
 			)}
 		</div>
