@@ -1386,6 +1386,11 @@ input {
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	grid-auto-rows: 50%;
 }
+/* 3x2: three columns, two rows (a page holds six). */
+.mc[data-layout="grid3x2"] {
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	grid-auto-rows: 50%;
+}
 /* Main + side: the first tile takes the full-height left half, the next two
    stack in the right half (a page holds three). Auto-placement fills the right
    column's two rows once the first tile spans both. */
@@ -1435,6 +1440,14 @@ input {
 	color: var(--text-dim);
 	font-variant-numeric: tabular-nums;
 	padding: 2px 0;
+}
+/* The flip shortcut, spelled out so it's learnable without hovering. */
+.mcpager .keys {
+	font-size: 9px;
+	color: var(--text-dim);
+	padding: 2px 0 1px;
+	border-top: 1px solid var(--border);
+	margin-top: 2px;
 }
 
 /* layout picker (segmented control in the topbar) */
