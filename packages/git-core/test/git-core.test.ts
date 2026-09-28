@@ -380,6 +380,22 @@ describe("updateFromBase", () => {
 		expect(existsSync(join(a.worktreePath, "feature.txt"))).toBe(true);
 		expect(existsSync(join(b.worktreePath, "feature.txt"))).toBe(false);
 	});
+
+	// A conflicted `git merge` exits 1 with nothing on stderr, which simple-git
+	// resolves as success: this used to come back "clean" over a worktree left
+	// mid-merge, and the merge queue then merged the PR anyway.
+	it.each(["merge", "rebase"] as const)("reports a %s conflict as conflicts", async (strategy) => {
+		const t = await createTask({ repoPath: repo.work, name: `clash ${strategy}` });
+		await commitFile(t.worktreePath, "README.md", "# task side\n", "task edit");
+		await advanceOrigin(repo, { file: "README.md", content: "# main side\n" });
+
+		const res = await updateFromBase({
+			worktreePath: t.worktreePath,
+			baseBranch: "main",
+			strategy,
+		});
+		expect(res).toEqual({ status: "conflicts", conflicts: ["README.md"] });
+	});
 });
 
 describe("updateLocalMain — Stage B safety (no GitHub needed)", () => {

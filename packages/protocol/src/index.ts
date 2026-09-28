@@ -434,7 +434,31 @@ export type MergeEnqueueDTO =
 	| { ok: true; prNumber: number | null; prUrl: string | null }
 	| { ok: false; reason: "conflict"; conflicts: string[] }
 	| { ok: false; reason: "busy" }
+	| { ok: false; reason: "not-mergeable"; message: string }
 	| { ok: false; reason: "error"; message: string };
+
+/**
+ * One human- and agent-readable line (or a few) for a merge outcome. The gh
+ * shim prints it into the agent's terminal and the desktop shows it as a toast,
+ * so a merge that did not happen is never silent on either surface.
+ */
+export function describeMergeResult(r: MergeEnqueueDTO): string {
+	if (r.ok) return r.prNumber != null ? `Ateam: merged PR #${r.prNumber}.` : "Ateam: merged.";
+	switch (r.reason) {
+		case "conflict":
+			return [
+				"Ateam: not merged. Absorbing the latest base branch hit conflicts in:",
+				...r.conflicts.map((f) => `  ${f}`),
+				"The merge (or rebase) is left in progress in this worktree. Resolve the conflicts, finish it (git add + git commit --no-edit, or git rebase --continue), then run 'gh pr merge' again.",
+			].join("\n");
+		case "busy":
+			return "Ateam: this task's merge is already queued or running; the board shows its status. Do not re-run 'gh pr merge'.";
+		case "not-mergeable":
+			return `Ateam: not merged: ${r.message}.`;
+		case "error":
+			return `Ateam: merge failed: ${r.message}`;
+	}
+}
 
 /** A Loop (periodic reconciler) as shown in the Loops panel. */
 export interface LoopDTO {

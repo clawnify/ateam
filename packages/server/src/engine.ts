@@ -425,20 +425,21 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 
 	// Agent ran `gh pr merge` in its terminal → the gh shim routed it here.
 	// Resolve the task from the terminal and enqueue, so terminal merges and the
-	// in-app Merge button share one serialized queue per base branch.
-	hooks.on("merge-request", (e: MergeRequestEvent) => {
+	// in-app Merge button share one serialized queue per base branch. The outcome
+	// goes back to the shim, so the agent reads it in its own terminal.
+	hooks.setMergeHandler(async (e: MergeRequestEvent) => {
 		const session = repo.getSessionByTerminal(db, e.terminalId);
-		if (!session) return;
+		if (!session) return null;
 		const task = repo.getTask(db, session.taskId);
-		if (!task) return;
+		if (!task) return null;
 		const project = repo.getProject(db, task.projectId);
-		if (!project) return;
+		if (!project) return null;
 		const { engine: settings } = readSettings().settings;
 		const requested = e.strategy ?? "";
 		const strategy = (
 			["merge", "squash", "rebase"].includes(requested) ? requested : settings.defaultMergeStrategy
 		) as MergeStrategy;
-		void mergeQueue.enqueue({
+		return mergeQueue.enqueue({
 			task,
 			repoPath: project.repoPath,
 			strategy,

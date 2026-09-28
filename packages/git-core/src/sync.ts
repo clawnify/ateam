@@ -78,24 +78,31 @@ export interface UpdateResult {
  * task's worktree. `fetch` updates only `refs/remotes/origin/*` (never a local
  * branch or another worktree's working tree); the merge/rebase mutates only
  * this worktree.
+ *
+ * Conflicts are read from the index, never inferred from a throw: simple-git
+ * rejects only on a non-zero exit WITH stderr, and a conflicted `git merge`
+ * exits 1 with everything on stdout, so it resolved as "clean" and the merge
+ * queue went on to merge the PR over a worktree left mid-merge.
  */
 export async function updateFromBase(
 	input: UpdateFromBaseInput,
 ): Promise<UpdateResult> {
 	const git = gitFor(input.worktreePath);
 	await git.raw(["fetch", "origin", input.baseBranch]);
+	let failure: unknown;
 	try {
 		if (input.strategy === "rebase") {
 			await git.raw(["rebase", `origin/${input.baseBranch}`]);
 		} else {
 			await git.raw(["merge", "--no-edit", `origin/${input.baseBranch}`]);
 		}
-		return { status: "clean", conflicts: [] };
 	} catch (err) {
-		const conflicts = await listConflicts(input.worktreePath);
-		if (conflicts.length > 0) return { status: "conflicts", conflicts };
-		throw err;
+		failure = err;
 	}
+	const conflicts = await listConflicts(input.worktreePath);
+	if (conflicts.length > 0) return { status: "conflicts", conflicts };
+	if (failure) throw failure;
+	return { status: "clean", conflicts: [] };
 }
 
 async function listConflicts(worktreePath: string): Promise<string[]> {
