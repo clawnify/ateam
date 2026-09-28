@@ -8,6 +8,7 @@ import { createDispatcher } from "../src/dispatcher";
 import type { Engine } from "../src/engine";
 import { serveRpc } from "../src/rpc";
 import { streamClientTransport, streamServerTransport } from "../src/transport/stream";
+import { WorktreeGuard } from "../src/worktree-guard";
 
 // Same fake engine as stream.test.ts: enough services for the dispatcher's
 // read/update paths, with sendTaskUpdated wired to actually emit the event.
@@ -20,6 +21,7 @@ function makeEngine(db: AteamDb): Engine {
 			mergeQueue: {},
 			loopRunner: { describe: () => [] },
 			pendingSeeds: new Map(),
+			worktreeGuard: new WorktreeGuard(),
 		},
 		on: (event: string, cb: (p: unknown) => void) => {
 			ee.on(event, cb);

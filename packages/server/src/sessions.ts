@@ -96,15 +96,31 @@ export async function createTaskInProject(
 	const seeding = seedWorktree({
 		repoPath: project.repoPath,
 		worktreePath: created.worktreePath,
+		signal: services.worktreeGuard.seedSignal(row.id),
 	})
 		.catch(() => {})
-		.finally(() => services.pendingSeeds.delete(row.id));
+		.finally(() => {
+			services.pendingSeeds.delete(row.id);
+			services.worktreeGuard.seedDone(row.id);
+		});
 	services.pendingSeeds.set(row.id, seeding);
 	return row;
 }
 
 /** Launch a coding agent in a task's worktree and record the session. */
-export async function spawnAgentInTask(
+export function spawnAgentInTask(
+	services: Services,
+	notifyTaskUpdated: (taskId: string) => void,
+	input: SpawnAgentInput,
+): Promise<{ terminalId: string }> {
+	// Tracked, so deleting the task waits for a launch already under way instead
+	// of racing it (see worktree-guard.ts).
+	return services.worktreeGuard.launch(input.taskId, () =>
+		launchAgent(services, notifyTaskUpdated, input),
+	);
+}
+
+async function launchAgent(
 	services: Services,
 	notifyTaskUpdated: (taskId: string) => void,
 	input: SpawnAgentInput,
@@ -182,6 +198,11 @@ export async function spawnAgentInTask(
 			resumeNewest = false;
 		}
 	}
+
+	// A delete may have begun during the probes above; it is waiting on this
+	// launch, so stop before writing anything rather than start an agent it
+	// would kill a moment later.
+	services.worktreeGuard.assertWritable(task.id);
 
 	const terminalId = randomUUID();
 	// The conversation this tab holds. On a fresh launch we mint it — the

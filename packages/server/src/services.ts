@@ -7,6 +7,7 @@ import type { LoopRunner } from "./loops/runner";
 import type { MergeQueue } from "./merge-queue";
 import type { PtyClient } from "./pty/pty-client";
 import { triageTask } from "./task-triage";
+import type { WorktreeGuard } from "./worktree-guard";
 
 export interface Services {
 	db: AteamDb;
@@ -48,6 +49,8 @@ export interface Services {
 	 * so `await map.get(id)` is the whole protocol.
 	 */
 	pendingSeeds: Map<string, Promise<void>>;
+	/** Keeps launches and seeding out of a worktree while it is deleted. */
+	worktreeGuard: WorktreeGuard;
 }
 
 export function toProjectDTO(p: Project): ProjectDTO {

@@ -248,6 +248,28 @@ describe("createTask isolation", () => {
 		);
 	});
 
+	// A task deleted mid-seed: the seed's writes all `mkdir -p` their parent, so
+	// one landing after the delete brings the worktree directory back, holding
+	// secrets and dependencies that no task owns.
+	it("writes nothing into the worktree once its seed is aborted", async () => {
+		await writeFile(join(repo.work, ".gitignore"), "node_modules/\n");
+		await writeFile(join(repo.work, ".env"), "SECRET=1\n");
+		await mkdir(join(repo.work, "node_modules", "dep"), { recursive: true });
+		await writeFile(join(repo.work, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
+		const task = await createTask({ repoPath: repo.work, name: "deleted mid seed" });
+		await rm(task.worktreePath, { recursive: true, force: true });
+
+		const aborted = new AbortController();
+		aborted.abort();
+		await seedWorktree({
+			repoPath: repo.work,
+			worktreePath: task.worktreePath,
+			signal: aborted.signal,
+		});
+
+		expect(existsSync(task.worktreePath)).toBe(false);
+	});
+
 	it("stages dependencies outside the worktree and leaves no scrap behind", async () => {
 		// The copy takes ~25s on a real monorepo and the agent no longer waits for
 		// it, so a tree copied in place would be visible half-populated — worse

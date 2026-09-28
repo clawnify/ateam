@@ -730,6 +730,14 @@ export type OpenBrowserResult = { ok: true } | { ok: false; reason: string };
  */
 export const DEFAULT_EDITOR_PORT = 8390;
 
+/**
+ * What a launch into a task that is mid-delete throws. Shared because the
+ * desktop drops it silently: the delete kills the task's agent, the open panel
+ * auto-resumes it, and the engine refuses — expected, not something to show.
+ * An error crosses IPC as its message only, so the text is the contract.
+ */
+export const TASK_REMOVING_ERROR = "This task is being deleted";
+
 /** Where the engine's embedded editor (code-server) answers, on ITS machine. */
 export interface EditorEndpointDTO {
 	port: number;
