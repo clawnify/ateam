@@ -281,7 +281,13 @@ async function launchAgent(
 		const codexNotify = join(services.hooksDir, "codex-notify.sh");
 		agentCmd = agentCmd.replace(/^codex/, `codex -c 'notify=["sh","${codexNotify}"]'`);
 	}
-	const command = `${agentCmd}; exec ${shell} -l`;
+	// The pane outlives the agent (the `exec` keeps it usable as a shell), so the
+	// agent's own exit is otherwise invisible: no PTY exit fires, and the session
+	// would claim running / awaiting_input for as long as the shell stays open.
+	// One more call to the same notify script says it quit (pty/agent-quit.ts,
+	// AgentExit). Quoted: on macOS the script lives under "Application Support".
+	const notify = `'${services.notifyScriptPath.replace(/'/g, `'\\''`)}'`;
+	const command = `${agentCmd}; sh ${notify} AgentExit; exec ${shell} -l`;
 	services.pty.spawn({
 		terminalId,
 		shell,

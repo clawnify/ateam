@@ -69,7 +69,8 @@ export function toProjectDTO(p: Project): ProjectDTO {
  * The agent behind each of a task's live sessions, oldest first: TaskDTO.agentIds.
  * Liveness is the daemon's word (`pty.has`), never the session row's status —
  * the same rule pty:listForTask follows, so the glyphs a card shows are exactly
- * the tabs its panel would open.
+ * the tabs its panel would open. A live session whose agent quit (`stopped`,
+ * see pty/agent-quit.ts) is a shell now, and is drawn as one.
  */
 export function liveAgentIds(
 	db: AteamDb,
@@ -79,7 +80,7 @@ export function liveAgentIds(
 	return repo
 		.listSessionsByTask(db, taskId)
 		.filter((s) => pty.has(s.terminalId))
-		.map((s) => s.agentId)
+		.map((s) => (s.status === "stopped" ? "shell" : s.agentId))
 		.reverse();
 }
 

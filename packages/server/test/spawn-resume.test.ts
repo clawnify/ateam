@@ -83,6 +83,14 @@ beforeEach(() => {
 	taskId = task.id;
 });
 
+describe("the launch line", () => {
+	it("reports the agent's exit before the pane falls back to a shell", async () => {
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude" });
+		const notify = services.notifyScriptPath;
+		expect(spawned?.command).toMatch(new RegExp(`; sh '${notify}' AgentExit; exec \\S+ -l$`));
+	});
+});
+
 describe("spawnAgentInTask on resume", () => {
 	it("`--continue` leaves column, status and last activity untouched", async () => {
 		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", resume: true });
