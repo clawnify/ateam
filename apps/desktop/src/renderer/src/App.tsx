@@ -112,6 +112,12 @@ type McLayout = "grid" | "grid3x2" | "main" | "split" | "stack";
 // Tiles per page: how many terminals each layout actually shows at once.
 const MC_PAGE_SIZE: Record<McLayout, number> = { grid: 4, grid3x2: 6, main: 3, split: 2, stack: 1 };
 
+// A saved layout, or null when unset or naming one that no longer exists.
+function storedMcLayout(key: string): McLayout | null {
+	const v = localStorage.getItem(key);
+	return v && v in MC_PAGE_SIZE ? (v as McLayout) : null;
+}
+
 // dataTransfer type a tile's bar carries while dragged, so a tile only lights
 // up as a drop target for another tile, never for a file dragged in from Finder
 // (that drop belongs to the terminal, which types the path).
@@ -176,12 +182,20 @@ export function App() {
 	const [newIssueOpen, setNewIssueOpen] = useState(false);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [view, setView] = useState<"board" | "mission" | "loops" | "settings">("board");
-	const [mcLayout, setMcLayoutState] = useState<McLayout>(
-		() => (localStorage.getItem("ateam.mcLayout") as McLayout) || "grid",
-	);
+	// Layout is per project: one project may run twice the terminals of another.
+	// Read during render, not synced in an effect, so switching projects never
+	// paints a frame of the previous project's layout (which would also flick
+	// the 3x2 rail). A project never set falls back to the old app-wide choice.
+	const [mcLayoutSet, setMcLayoutSet] = useState<Record<string, McLayout>>({});
+	const mcLayout =
+		(activeProjectId &&
+			(mcLayoutSet[activeProjectId] ?? storedMcLayout(`ateam.mcLayout.${activeProjectId}`))) ||
+		storedMcLayout("ateam.mcLayout") ||
+		"grid";
 	const setMcLayout = (l: McLayout) => {
-		localStorage.setItem("ateam.mcLayout", l);
-		setMcLayoutState(l);
+		if (!activeProjectId) return;
+		localStorage.setItem(`ateam.mcLayout.${activeProjectId}`, l);
+		setMcLayoutSet((m) => ({ ...m, [activeProjectId]: l }));
 	};
 	// Mission Control lock: locked freezes tile order for the whole visit and
 	// lets you arrange it by dragging tiles (see mcOrder); it re-snapshots that
