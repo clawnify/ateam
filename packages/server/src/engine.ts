@@ -31,6 +31,7 @@ import { makeStrandReconciler } from "./pty/reconcile";
 import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
 import { readSettings } from "./settings-file";
+import { createTurnClassifier } from "./turn-classifier";
 import { WorktreeGuard } from "./worktree-guard";
 import { createWorktreeSweep, type WorktreeSweep } from "./worktree-sweep";
 
@@ -330,6 +331,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		);
 	});
 
+	// With an OpenRouter key, Jev may re-file a finished turn the rule filed in
+	// Review (turn-classifier.ts). Without one it never calls out.
+	const turns = createTurnClassifier({ db, notifyTaskUpdated: sendTaskUpdated, log: opts.log });
+
 	// Agent status hooks → update session/task, drive the kanban column.
 	hooks.on("hook", (e: HookEvent) => {
 		const session = repo.getSessionByTerminal(db, e.terminalId);
@@ -381,6 +386,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				isUnread: mapEventToUnread(e.eventType, ownedByLoop),
 			});
 			sendTaskUpdated(task.id);
+			if (e.eventType === "UserReply" && e.prompt) turns.userReplied(task.id, e.prompt);
+			// Every Stop, message or not: it also retires any verdict still in
+			// flight for the previous turn.
+			if (e.eventType === "Stop") void turns.turnEnded(task.id, e.lastAssistantMessage);
 		}
 	});
 
