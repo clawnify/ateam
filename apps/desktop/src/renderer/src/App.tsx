@@ -106,7 +106,7 @@ type TaskSortMode = "next" | "status" | "updated" | "custom";
 // full window height, "stack" stacks them full-width, "grid3x2" is three
 // columns by two rows (and tucks the sidebar into its rail while shown, since
 // a third column is only readable with the width back). Extra tiles go to
-// further pages, flipped via the bottom-right pager or Cmd/Ctrl+Alt+Up/Down.
+// further pages, flipped via the bottom-right pager or Ctrl/Cmd+Up/Down.
 type McLayout = "grid" | "grid3x2" | "main" | "split" | "stack";
 
 // Tiles per page: how many terminals each layout actually shows at once.
@@ -2842,11 +2842,15 @@ function MissionControl({
 		dirRef.current = d;
 		setPage((p) => Math.max(0, Math.min(pageCountRef.current - 1, p + d)));
 	}, []);
-	// Cmd/Ctrl+Alt+Up/Down flips pages. Capture phase so it wins over the
-	// focused xterm textarea; the combo is one no shell binding uses.
+	// Ctrl+Up/Down flips pages, and Cmd+Up/Down too: a PC keyboard's "ctrl" is
+	// macOS Control, but people read it as Cmd, so either works. Capture phase
+	// so it wins over the focused xterm textarea, which means a tile's shell
+	// never sees these while Mission Control is open. macOS binds Ctrl+Up/Down
+	// to Mission Control / App Exposé by default and swallows them before the
+	// app; remapping those in System Settings frees them.
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (!e.altKey || !(e.metaKey || e.ctrlKey)) return;
+			if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
 			if (e.key === "ArrowDown") flip(1);
 			else if (e.key === "ArrowUp") flip(-1);
 			else return;
@@ -3251,7 +3255,7 @@ function MissionControl({
 					<IconButton
 						icon={ChevronUp}
 						label="Previous terminals"
-						shortcut="⌘⌥↑"
+						shortcut="⌃↑"
 						size={14}
 						disabled={clampedPage === 0}
 						onClick={() => flip(-1)}
@@ -3262,13 +3266,13 @@ function MissionControl({
 					<IconButton
 						icon={ChevronDown}
 						label="Next terminals"
-						shortcut="⌘⌥↓"
+						shortcut="⌃↓"
 						size={14}
 						disabled={clampedPage === pageCount - 1}
 						onClick={() => flip(1)}
 					/>
 					<span className="keys" aria-hidden="true">
-						⌘⌥↑↓
+						⌃↑↓
 					</span>
 				</div>
 			)}
