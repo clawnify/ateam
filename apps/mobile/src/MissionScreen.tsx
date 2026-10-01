@@ -107,7 +107,7 @@ export function MissionScreen({
 		},
 		[height],
 	);
-	// The desktop's ⌘⌥↑ / ⌘⌥↓, as buttons: flip a page and let the pager settle
+	// The desktop's ⌃↑ / ⌃↓ (or ⌘), as buttons: flip a page and let the pager settle
 	// there (onMomentumScrollEnd then records it).
 	const flip = useCallback(
 		(d: number) => {
