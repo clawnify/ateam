@@ -86,7 +86,13 @@ import { useGithubIssues } from "./useGithubIssues";
 import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge } from "./triage-order";
-import { type Alias, aliasLabel, type EngineMember, type UnifiedProject, unifyProjects } from "./unify";
+import {
+	type Alias,
+	aliasLabel,
+	type EngineMember,
+	type UnifiedProject,
+	unifyProjects,
+} from "./unify";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
 	{ key: "todo", label: "Backlog" },
@@ -205,6 +211,15 @@ export function App() {
 	const setMcLocked = (v: boolean) => {
 		localStorage.setItem("ateam.mcLock", v ? "1" : "0");
 		setMcLockedState(v);
+	};
+	// Which work Mission Control tiles: the tasks (the sidebar's TASKS list) or
+	// the loops' own tasks (its LOOPS list), never both on one grid.
+	const [mcMode, setMcModeState] = useState<"tasks" | "loops">(() =>
+		localStorage.getItem("ateam.mcMode") === "loops" ? "loops" : "tasks",
+	);
+	const setMcMode = (m: "tasks" | "loops") => {
+		localStorage.setItem("ateam.mcMode", m);
+		setMcModeState(m);
 	};
 	// The Mission Control tile with the white edge: set by clicking a task in the
 	// sidebar or by clicking into a tile. A sidebar click also sends a jump (seq
@@ -684,14 +699,29 @@ export function App() {
 			setMcOrder([]);
 		}
 	}, [activeProjectId]);
+	// Loops mode follows the sidebar's LOOPS list the way Tasks mode follows TASKS.
+	const loopOrderIds = useMemo(
+		() => activeLoops.flatMap((l) => (l.taskId ? [l.taskId] : [])),
+		[activeLoops],
+	);
+	const missionTasks = useMemo(
+		() =>
+			mcMode === "loops"
+				? activeTasks.filter((t) => loopTaskIds.has(t.id))
+				: activeTasks.filter((t) => !loopTaskIds.has(t.id)),
+		[mcMode, activeTasks, loopTaskIds],
+	);
 	const missionOrderIds = useMemo(() => {
-		if (!mcLocked || mcOrder.length === 0) return sidebarOrderIds;
+		const base = mcMode === "loops" ? loopOrderIds : sidebarOrderIds;
+		if (!mcLocked || mcOrder.length === 0) return base;
 		// Drop tasks that no longer exist so the saved order can't grow forever.
+		// Both modes share the saved order: the other mode's ids stay in it,
+		// tile-less here, so a drag in one mode keeps the other's arrangement.
 		const live = new Set(activeTasks.map((t) => t.id));
 		const kept = mcOrder.filter((id) => live.has(id));
 		const known = new Set(kept);
-		return [...kept, ...sidebarOrderIds.filter((id) => !known.has(id))];
-	}, [mcLocked, mcOrder, sidebarOrderIds, activeTasks]);
+		return [...kept, ...base.filter((id) => !known.has(id))];
+	}, [mcMode, mcLocked, mcOrder, loopOrderIds, sidebarOrderIds, activeTasks]);
 	const reorderMission = (ids: string[]) => {
 		setMcOrder(ids);
 		if (activeProjectId)
@@ -1432,6 +1462,28 @@ export function App() {
 							Loops
 						</div>
 					</div>
+					{/* Left of the centered search, beside the tab it belongs to: the
+					    right side is already full of layout buttons. */}
+					{mcGridShown && (
+						<div className="mclayout mcmodes" role="group" aria-label="Show">
+							{(
+								[
+									["tasks", "Tasks"],
+									["loops", "Loops"],
+								] as const
+							).map(([mode, label]) => (
+								<button
+									key={mode}
+									type="button"
+									className={`navbtn mcmode ${mcMode === mode ? "active" : ""}`}
+									aria-pressed={mcMode === mode}
+									onClick={() => setMcMode(mode)}
+								>
+									{label}
+								</button>
+							))}
+						</div>
+					)}
 					{/* Centered task search — absolutely centered in the topbar so the
 					    tabs on the left and action buttons on the right don't shift it. */}
 					<TaskSearch
@@ -1640,9 +1692,11 @@ export function App() {
 							// lock snapshot all belong to the project, and the session
 							// fetch runs on mount and on events only, so a project switch
 							// that kept this instance showed the last project's tiles
-							// until some agent happened to emit an event.
-							key={activeCard?.key ?? activeProjectId}
-							tasks={activeTasks}
+							// until some agent happened to emit an event. Same for the
+							// Tasks/Loops switch: a new mode is a new set of tiles.
+							key={`${activeCard?.key ?? activeProjectId}:${mcMode}`}
+							mode={mcMode}
+							tasks={missionTasks}
 							agents={agents}
 							order={missionOrderIds}
 							layout={mcLayout}
@@ -2769,6 +2823,7 @@ function TaskPanel({
 }
 
 function MissionControl({
+	mode,
 	tasks,
 	agents,
 	order,
@@ -2781,6 +2836,8 @@ function MissionControl({
 	onJumpMissing,
 	onReorder,
 }: {
+	/** Which list `tasks` was drawn from; only the empty state differs. */
+	mode: "tasks" | "loops";
 	tasks: TaskDTO[];
 	/** Agent catalog, for naming a session's tab the way the task panel does. */
 	agents: AgentDTO[];
@@ -3105,11 +3162,18 @@ function MissionControl({
 		if (!loaded) return <div className="mc" data-layout={layout} />;
 		return (
 			<div className="mc" data-layout={layout}>
-				<div className="empty">
-					No live agents yet.
-					<br />
-					Launch agents from the Board to watch them work side by side here.
-				</div>
+				{mode === "loops" ? (
+					<div className="empty">
+						No loop sessions running.
+						<br />A loop shows up here while its session is live.
+					</div>
+				) : (
+					<div className="empty">
+						No live agents yet.
+						<br />
+						Launch agents from the Board to watch them work side by side here.
+					</div>
+				)}
 			</div>
 		);
 	}
