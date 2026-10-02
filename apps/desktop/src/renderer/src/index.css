@@ -1474,6 +1474,18 @@ input {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
+/* text variant: the Tasks / Loops switch */
+.mcmodes {
+	margin-left: 8px;
+}
+.navbtn.mcmode {
+	height: 26px;
+	padding: 0 9px;
+}
+.navbtn.mcmode.active {
+	background: var(--bg-elev-2);
+	color: var(--text);
+}
 .mc .tile {
 	position: relative;
 	/* Square and flush; highlighting only recolors this edge, so the tile never
