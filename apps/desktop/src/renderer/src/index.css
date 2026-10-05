@@ -2401,14 +2401,6 @@ input {
 .tasknode.loop-paused {
 	opacity: 0.5;
 }
-/* Float the LOOPS section to the sidebar's bottom while there's spare room —
-   free space only exists once every section is capped at its content height,
-   so as soon as the lists fill the sidebar the auto margin collapses and the
-   section simply follows Tasks. */
-.loops-side-section {
-	margin-top: auto;
-}
-
 .conn-install-log {
 	margin: 4px 0 2px;
 	max-height: 140px;
