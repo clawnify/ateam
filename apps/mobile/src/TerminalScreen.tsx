@@ -23,6 +23,7 @@ import {
 	View,
 } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
+import { resolveTaskPty } from "./resolve-task-pty";
 import { buildTerminalHtml } from "./terminal-html";
 
 const C = {
@@ -87,15 +88,14 @@ export function TerminalScreen({
 
 		(async () => {
 			try {
-				const live = await api.pty.listForTask(task.id);
-				let id = live[0]?.terminalId ?? null;
-				if (!id) {
-					setDetail("starting a shell on the box…");
-					id = (await api.pty.spawnShell({ taskId: task.id })).terminalId;
-				} else {
-					setDetail("attaching to the live agent…");
-				}
-				if (cancelled) return;
+				const id = await resolveTaskPty(
+					api,
+					{ id: task.id, agentId: task.agentId },
+					true,
+					() => cancelled,
+				);
+				if (cancelled || !id) return;
+				setDetail("attached to session");
 
 				// Subscribe BEFORE the snapshot so chunks arriving during it are buffered
 				// and replayed in order (seq-dedupe) — never doubled, never dropped.
@@ -133,7 +133,7 @@ export function TerminalScreen({
 			for (const t of redrawTimers.current) clearTimeout(t);
 			// Detach only — the session (and the running agent) lives on.
 		};
-	}, [api, task.id, inject]);
+	}, [api, task.id, task.agentId, inject]);
 
 	// Bridge messages from the webview (xterm) back to the PTY.
 	const onMessage = useCallback(

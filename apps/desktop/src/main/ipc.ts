@@ -1,7 +1,13 @@
 import { spawn } from "node:child_process";
 import { accessSync, constants, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { extname, join } from "node:path";
-import { type AttachDelivery, CH, type OpenInEditorResult } from "@ateam/protocol";
+import {
+	type AttachDelivery,
+	CH,
+	type OpenBrowserResult,
+	type OpenInEditorResult,
+} from "@ateam/protocol";
 import { endpointUrl } from "@ateam/server";
 import { clipboard, dialog, ipcMain, nativeImage } from "electron";
 import type { Router } from "./backend";
@@ -51,6 +57,29 @@ function findEditor(): string | null {
 			} catch {
 				/* not here — keep looking */
 			}
+		}
+	}
+	return null;
+}
+
+/**
+ * Where Chrome lives on a Mac. An app bundle, not a binary on PATH, so this is a
+ * path check rather than the PATH walk `findEditor` needs — and `open -a` wants
+ * the bundle anyway.
+ */
+const CHROME_APPS = [
+	"/Applications/Google Chrome.app",
+	join(homedir(), "Applications", "Google Chrome.app"),
+];
+
+/** The installed Chrome bundle, or null if this Mac has none. */
+function findChrome(): string | null {
+	for (const app of CHROME_APPS) {
+		try {
+			accessSync(app, constants.R_OK);
+			return app;
+		} catch {
+			/* not here — keep looking */
 		}
 	}
 	return null;
@@ -209,6 +238,30 @@ export function registerIpc(router: Router, native: NativeHandlers): void {
 	// task on a box, VS Code's Remote-SSH opens the box-side path over the same
 	// ssh_config alias Ateam already connects with — the box needs no editor
 	// installed, the client pushes a server there on first connect.
+	// Bring up the browser the agents drive. Client-native like the editor above,
+	// but with no Remote-SSH equivalent: VS Code can attach to a box over ssh,
+	// Chrome cannot, and raising THIS Mac's browser for a task whose work happens
+	// on a box would show the wrong machine's pages. That case says so instead —
+	// a box gets its own headed Chrome (docs/browser-box.md), which isn't built yet.
+	ipcMain.handle(
+		CH.utilOpenBrowser,
+		async (_e, alias: string | null): Promise<OpenBrowserResult> => {
+			if (alias !== null) {
+				return {
+					ok: false,
+					reason: `"${alias}" runs this task on a box, and a box needs its own browser — this Mac's Chrome would show the wrong machine's pages. Not built yet (docs/browser-box.md).`,
+				};
+			}
+			const app = findChrome();
+			if (!app) return { ok: false, reason: "Google Chrome isn't installed on this Mac." };
+			// `open -a` raises Chrome when it is already running, which is the common
+			// case: the agent has been driving it through the TaskWindow extension and
+			// this button is how you go and watch. Detached so it outlives Ateam.
+			spawn("open", ["-a", app], { detached: true, stdio: "ignore" }).unref();
+			return { ok: true };
+		},
+	);
+
 	ipcMain.handle(
 		CH.utilOpenInEditor,
 		async (_e, worktreePath: string, alias: string | null): Promise<OpenInEditorResult> => {

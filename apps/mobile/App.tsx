@@ -517,9 +517,9 @@ function Shell({
 
 			{openTask ? (
 				<Term
-					key={connGen}
+					key={`${connGen}:${openTask.id}`}
 					api={api}
-					task={openTask}
+					task={tasks.find((t) => t.id === openTask.id) ?? openTask}
 					onClose={onCloseTask}
 					autoFocus={openTaskFocus}
 				/>
@@ -997,7 +997,11 @@ export default function App() {
 			try {
 				// Agent mode supplies an explicit name; normal mode derives it from the prompt.
 				const name = input.name?.trim() || titleFromPrompt(input.prompt) || "task";
-				const task = await api.tasks.create({ projectId: selectedProjectId, name });
+				const task = await api.tasks.create({
+					projectId: selectedProjectId,
+					name,
+					agentId: input.agentId,
+				});
 				await api.pty.spawnAgent({
 					taskId: task.id,
 					agentId: input.agentId,
@@ -1005,7 +1009,8 @@ export default function App() {
 					agentMode: input.agentMode,
 					prompt: input.prompt || undefined,
 				});
-				setTasks((prev) => [task, ...prev.filter((t) => t.id !== task.id)]);
+				// Task events from launch already carry newer status and agent data.
+				setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [task, ...prev]));
 				setOpenTask(task);
 			} catch (err) {
 				setError(err instanceof Error ? err.message : String(err));

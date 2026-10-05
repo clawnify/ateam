@@ -1,3 +1,5 @@
+import { SquareTerminal } from "lucide-react";
+
 // Brand glyphs for the agent that a task is using. Shown on task cards and in
 // the Tasks sidebar in place of the inferred task icon.
 export function AgentIcon({
@@ -46,4 +48,23 @@ export function AgentIcon({
 		default:
 			return null;
 	}
+}
+
+/** The glyph for one session: the agent's brand mark, or the terminal icon for a shell. */
+export function SessionIcon({ agentId, size = 14 }: { agentId: string; size?: number }) {
+	if (agentId === "shell") return <SquareTerminal size={size} strokeWidth={1.75} />;
+	return <AgentIcon agentId={agentId} size={size} />;
+}
+
+/**
+ * One glyph per session, in order. Keys number repeats of a kind ("claude-1",
+ * "claude-2") the way the panel's tabs do, so two Claudes are two glyphs.
+ */
+export function SessionGlyphs({ ids, size = 14 }: { ids: string[]; size?: number }) {
+	const seen = new Map<string, number>();
+	return ids.map((id) => {
+		const n = (seen.get(id) ?? 0) + 1;
+		seen.set(id, n);
+		return <SessionIcon key={`${id}-${n}`} agentId={id} size={size} />;
+	});
 }

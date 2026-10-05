@@ -18,7 +18,9 @@ export interface AgentDefinition {
 	 */
 	command: string;
 	/**
-	 * Extra flag(s) appended for "YOLO" mode (bypass permissions/approvals).
+	 * Extra flag(s) appended for Auto mode. Prefer the CLI's native automatic
+	 * approval mode over bypassing permissions and sandboxing when available.
+	 * The legacy `yoloFlag` name does not imply that safeguards are disabled.
 	 * Omitted for an agent that has no such flag — Auto mode then does nothing
 	 * for it, which is why an omission must be deliberate and verified against
 	 * the CLI's own --help.
@@ -102,7 +104,7 @@ export interface HeadlessInvocation {
 	lastMessageFlag?: string;
 }
 
-// Registry of the supported agent CLIs. Command lines and the YOLO bypass
+// Registry of the supported agent CLIs. Command lines and the Auto mode
 // flags come from each tool's own documented CLI surface. `command` is the
 // SAFE default; `yoloFlag` is what makes it autonomous.
 export const AGENTS = [
@@ -139,7 +141,9 @@ export const AGENTS = [
 		description: "OpenAI's coding agent for reading, modifying, and running code across tasks.",
 		bin: "codex",
 		command: "codex",
-		yoloFlag: "--dangerously-bypass-approvals-and-sandbox",
+		// Verified with `codex --help` and `codex resume --help` (0.154.0):
+		// automatic approval review with the workspace-write sandbox retained.
+		yoloFlag: "--approve-for-me",
 		resumeCommand: "codex resume --last",
 		// `codex resume [SESSION_ID]` takes a UUID, but Codex mints it itself —
 		// there is no flag to hand it one, so its tabs stay unrestorable until
@@ -182,7 +186,7 @@ export const AGENTS = [
 	},
 ] as const satisfies readonly AgentDefinition[];
 
-/** Build the launch command line for an agent (YOLO, resume, or agent-mode variants). */
+/** Build the launch command line for an agent (Auto, resume, or agent-mode variants). */
 export function agentCommand(
 	agent: AgentDefinition,
 	opts: {

@@ -248,6 +248,28 @@ describe("createTask isolation", () => {
 		);
 	});
 
+	// A task deleted mid-seed: the seed's writes all `mkdir -p` their parent, so
+	// one landing after the delete brings the worktree directory back, holding
+	// secrets and dependencies that no task owns.
+	it("writes nothing into the worktree once its seed is aborted", async () => {
+		await writeFile(join(repo.work, ".gitignore"), "node_modules/\n");
+		await writeFile(join(repo.work, ".env"), "SECRET=1\n");
+		await mkdir(join(repo.work, "node_modules", "dep"), { recursive: true });
+		await writeFile(join(repo.work, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
+		const task = await createTask({ repoPath: repo.work, name: "deleted mid seed" });
+		await rm(task.worktreePath, { recursive: true, force: true });
+
+		const aborted = new AbortController();
+		aborted.abort();
+		await seedWorktree({
+			repoPath: repo.work,
+			worktreePath: task.worktreePath,
+			signal: aborted.signal,
+		});
+
+		expect(existsSync(task.worktreePath)).toBe(false);
+	});
+
 	it("stages dependencies outside the worktree and leaves no scrap behind", async () => {
 		// The copy takes ~25s on a real monorepo and the agent no longer waits for
 		// it, so a tree copied in place would be visible half-populated — worse
@@ -357,6 +379,22 @@ describe("updateFromBase", () => {
 		expect(res.status).toBe("clean");
 		expect(existsSync(join(a.worktreePath, "feature.txt"))).toBe(true);
 		expect(existsSync(join(b.worktreePath, "feature.txt"))).toBe(false);
+	});
+
+	// A conflicted `git merge` exits 1 with nothing on stderr, which simple-git
+	// resolves as success: this used to come back "clean" over a worktree left
+	// mid-merge, and the merge queue then merged the PR anyway.
+	it.each(["merge", "rebase"] as const)("reports a %s conflict as conflicts", async (strategy) => {
+		const t = await createTask({ repoPath: repo.work, name: `clash ${strategy}` });
+		await commitFile(t.worktreePath, "README.md", "# task side\n", "task edit");
+		await advanceOrigin(repo, { file: "README.md", content: "# main side\n" });
+
+		const res = await updateFromBase({
+			worktreePath: t.worktreePath,
+			baseBranch: "main",
+			strategy,
+		});
+		expect(res).toEqual({ status: "conflicts", conflicts: ["README.md"] });
 	});
 });
 

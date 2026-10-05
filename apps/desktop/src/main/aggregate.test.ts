@@ -152,3 +152,22 @@ test("handleFor routes an id-less call to the engine that owns the terminal", as
 	expect(local.calls).toContain(CH.utilWriteImageBytes);
 	expect(agg.ownerKindOf("term-unknown")).toBe("local");
 });
+
+test("issue reads use this Mac's login and created issue tasks retain their owning engine", async () => {
+	const local = fake("local", { [CH.projectsIssues]: () => ({ issues: [] }) });
+	const remote = fake("remote", {
+		[CH.projectsList]: () => [{ id: "box-project" }],
+		[CH.tasksCreateFromIssue]: () => ({ task: { id: "issue-task" }, created: true }),
+		[CH.ptySpawnShell]: () => ({ terminalId: "issue-terminal" }),
+	});
+	const agg = createAggregate([local, remote], local);
+	await agg.handle(CH.projectsList, []);
+	await agg.handle(CH.projectsIssues, ["acme/repo"]);
+	expect(local.calls).toContain(CH.projectsIssues);
+	expect(remote.calls).not.toContain(CH.projectsIssues);
+	await agg.handle(CH.tasksCreateFromIssue, [{ projectId: "box-project", issueNumber: 1 }]);
+	expect(agg.ownerOf.get("issue-task")).toBe(remote);
+	await agg.handle(CH.ptySpawnShell, [{ taskId: "issue-task" }]);
+	expect(remote.calls).toContain(CH.ptySpawnShell);
+	expect(local.calls).not.toContain(CH.ptySpawnShell);
+});

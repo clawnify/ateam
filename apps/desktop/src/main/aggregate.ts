@@ -34,6 +34,7 @@ const MERGE_TIMEOUT_MS = 10_000;
 /** Entity-scoped calls — route to the backend that owns the id in the args. */
 const ENTITY = new Set<string>([
 	CH.tasksList, // projectId
+	CH.tasksCreateFromIssue,
 	CH.tasksCreate, // {projectId}
 	CH.tasksRemove,
 	CH.tasksSetColumn,
@@ -98,6 +99,9 @@ function learn(reg: Map<string, Backend>, backend: Backend, result: unknown): vo
 			for (const k of ["id", "terminalId"]) {
 				if (typeof o[k] === "string") reg.set(o[k] as string, backend);
 			}
+			// createFromIssue returns { task, created }, including an existing task
+			// on a repeated start. Its next launch must still reach this engine.
+			if (o.task) add(o.task);
 		}
 	};
 	if (Array.isArray(result)) for (const item of result) add(item);

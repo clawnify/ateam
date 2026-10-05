@@ -148,6 +148,7 @@ export function bootstrap(db: SqliteExecutor): void {
 	for (const sql of [
 		"ALTER TABLE tasks ADD COLUMN agent_id TEXT",
 		"ALTER TABLE tasks ADD COLUMN description TEXT",
+		"ALTER TABLE tasks ADD COLUMN issue_url TEXT",
 		"ALTER TABLE tasks ADD COLUMN merge_status TEXT",
 		"ALTER TABLE tasks ADD COLUMN tags TEXT",
 		"ALTER TABLE loops ADD COLUMN kind TEXT NOT NULL DEFAULT 'builtin'",
@@ -175,4 +176,6 @@ export function bootstrap(db: SqliteExecutor): void {
 			/* column already exists */
 		}
 	}
+	// The column must exist before an older database can create this index.
+	db.exec("CREATE INDEX IF NOT EXISTS tasks_issue_url_idx ON tasks (issue_url)");
 }

@@ -85,6 +85,7 @@ export const tasks = sqliteTable(
 			.references(() => projects.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
 		description: text("description"),
+		issueUrl: text("issue_url"),
 		slug: text("slug").notNull(),
 		branch: text("branch").notNull(),
 		baseBranch: text("base_branch").notNull(),
@@ -116,6 +117,7 @@ export const tasks = sqliteTable(
 	},
 	(t) => [
 		index("tasks_project_idx").on(t.projectId),
+		index("tasks_issue_url_idx").on(t.issueUrl),
 		index("tasks_branch_idx").on(t.branch),
 		index("tasks_column_idx").on(t.column),
 	],
@@ -173,6 +175,17 @@ export const layouts = sqliteTable("layouts", {
 	updatedAt: epochMs("updated_at"),
 });
 
+/**
+ * What the ENGINE records about its own machine: `hookPort` and `loginPath`,
+ * runtime cache it writes itself. Not user preferences — those live in
+ * `~/.ateam/settings.json` (server/settings-file.ts), where a human can read,
+ * grep, diff and sync them.
+ *
+ * The preference-shaped columns below (`default_*`, `delete_*`, `terminal_*`,
+ * `notifications_muted`) are DEPRECATED: nothing outside tests ever wrote them,
+ * and their readers now take the file. They stay only because dropping a
+ * column is a table rebuild in SQLite; do not wire anything new to them.
+ */
 export const settings = sqliteTable("settings", {
 	id: integer("id").primaryKey().default(1),
 	defaultWorktreesRoot: text("default_worktrees_root"),

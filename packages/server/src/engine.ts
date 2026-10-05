@@ -25,11 +25,16 @@ import { ensureLoginEnv } from "./login-env";
 import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
+import { applyAgentQuit, columnAfterExit } from "./pty/agent-quit";
 import { PtyClient } from "./pty/pty-client";
 import { reapableSessions } from "./pty/reap";
 import { makeStrandReconciler } from "./pty/reconcile";
-import { type Services, toTaskDTO } from "./services";
+import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
+import { readSettings } from "./settings-file";
+import { createTurnClassifier } from "./turn-classifier";
+import { WorktreeGuard } from "./worktree-guard";
+import { createWorktreeSweep, type WorktreeSweep } from "./worktree-sweep";
 
 export interface EngineOptions {
 	/** Where the SQLite db, hooks, and notify script live (app userData or ~/.ateam). */
@@ -66,6 +71,9 @@ export interface Engine {
 	sendTaskRemoved(taskId: string): void;
 	/** Emit the current loop list. */
 	sendLoopsUpdated(): void;
+	/** Keeps every task's git + PR facts fresh, not just the open one. The
+	 *  `CH.gitStatus` handler shares its throttle (see worktree-sweep.ts). */
+	readonly worktreeSweep: WorktreeSweep;
 	/** Connect to (or launch) the detached PTY daemon and learn live sessions. */
 	connectPty(): Promise<void>;
 	/** Start the user's scheduled loops (rebuilt from their persisted rows). */
@@ -159,7 +167,12 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 
 	const sendTaskUpdated = (taskId: string): void => {
 		const task = repo.getTask(db, taskId);
-		if (task) emitter.emit("taskUpdated", toTaskDTO(task, pendingSeeds.has(taskId)));
+		if (task) {
+			emitter.emit(
+				"taskUpdated",
+				toTaskDTO(task, pendingSeeds.has(taskId), liveAgentIds(db, pty, taskId)),
+			);
+		}
 	};
 
 	// The detached PTY daemon survives restarts; daemonPath is run via execPath as
@@ -228,6 +241,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		loopRunner,
 		followUps,
 		pendingSeeds,
+		worktreeGuard: new WorktreeGuard(),
 	};
 
 	// Record an agent's exit: close the session and file its card. Shared by the
@@ -248,15 +262,18 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	): void => {
 		repo.updateSession(db, sessionId, { status: "stopped", exitedAt, exitReason });
 		const task = repo.getTask(db, taskId);
-		if (task && task.column === "running") {
+		if (!task) return;
+		if (task.column === "running") {
 			repo.updateTask(db, task.id, {
 				agentStatus: "stopped",
-				column:
-					task.prNumber != null || (task.gitStatus?.ahead ?? 0) > 0 ? "review" : "needs_attention",
+				column: columnAfterExit(task),
 				...(markUnread ? { isUnread: true } : {}),
 			});
-			sendTaskUpdated(task.id);
 		}
+		// Announced whether or not the column moved: a session ending changes
+		// what the task is running (TaskDTO.agentIds), and a shell closing on a
+		// reviewed task would otherwise keep its glyph on the card for good.
+		sendTaskUpdated(task.id);
 	};
 
 	// PTY output/exit → emitted for the transport to forward.
@@ -314,10 +331,28 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		);
 	});
 
+	// With an OpenRouter key, Jev may re-file a finished turn the rule filed in
+	// Review (turn-classifier.ts). Without one it never calls out.
+	const turns = createTurnClassifier({ db, notifyTaskUpdated: sendTaskUpdated, log: opts.log });
+
 	// Agent status hooks → update session/task, drive the kanban column.
 	hooks.on("hook", (e: HookEvent) => {
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
+		if (e.eventType === "AgentExit") {
+			repo.recordEvent(db, {
+				sessionId: session.id,
+				terminalId: e.terminalId,
+				eventType: e.eventType,
+				rawAgentSessionId: null,
+			});
+			// The agent quit and its pane lives on as a shell (see pty/agent-quit.ts).
+			// Its follow-up can never be delivered now.
+			followUps.discard(e.terminalId);
+			const taskId = applyAgentQuit(db, pty, session);
+			if (taskId) sendTaskUpdated(taskId);
+			return;
+		}
 		const status = mapEventToStatus(e.eventType);
 		repo.updateSession(db, session.id, {
 			status,
@@ -365,6 +400,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				isUnread: mapEventToUnread(e.eventType, ownedByLoop),
 			});
 			sendTaskUpdated(task.id);
+			if (e.eventType === "UserReply" && e.prompt) turns.userReplied(task.id, e.prompt);
+			// Every Stop, message or not: it also retires any verdict still in
+			// flight for the previous turn.
+			if (e.eventType === "Stop") void turns.turnEnded(task.id, e.lastAssistantMessage);
 		}
 	});
 
@@ -372,6 +411,14 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	// Stamp the ending BEFORE the kill, exactly as the close-tab handler does:
 	// the exit handler above reads it back, and `reaped` is what puts the tab on
 	// the restorable strip instead of retiring it to history.
+	// Refresh git + PR facts for tasks nobody is looking at, so a list row can
+	// say something true about a worktree whose panel was never opened.
+	const worktreeSweep = createWorktreeSweep({
+		db,
+		onTaskUpdated: (taskId) => sendTaskUpdated(taskId),
+		isLive: (taskId) => repo.listSessionsByTask(db, taskId).some((s) => pty.has(s.terminalId)),
+	});
+
 	let reapTimer: ReturnType<typeof setInterval> | null = null;
 	const reapIdleSessions = (): void => {
 		const due = reapableSessions(repo.listOpenSessions(db), Date.now(), REAP_IDLE_MS);
@@ -392,27 +439,26 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 
 	// Agent ran `gh pr merge` in its terminal → the gh shim routed it here.
 	// Resolve the task from the terminal and enqueue, so terminal merges and the
-	// in-app Merge button share one serialized queue per base branch.
-	hooks.on("merge-request", (e: MergeRequestEvent) => {
+	// in-app Merge button share one serialized queue per base branch. The outcome
+	// goes back to the shim, so the agent reads it in its own terminal.
+	hooks.setMergeHandler(async (e: MergeRequestEvent) => {
 		const session = repo.getSessionByTerminal(db, e.terminalId);
-		if (!session) return;
+		if (!session) return null;
 		const task = repo.getTask(db, session.taskId);
-		if (!task) return;
+		if (!task) return null;
 		const project = repo.getProject(db, task.projectId);
-		if (!project) return;
-		const settings = repo.getSettings(db);
+		if (!project) return null;
+		const { engine: settings } = readSettings().settings;
 		const requested = e.strategy ?? "";
 		const strategy = (
-			["merge", "squash", "rebase"].includes(requested)
-				? requested
-				: (settings.defaultMergeStrategy ?? "squash")
+			["merge", "squash", "rebase"].includes(requested) ? requested : settings.defaultMergeStrategy
 		) as MergeStrategy;
-		void mergeQueue.enqueue({
+		return mergeQueue.enqueue({
 			task,
 			repoPath: project.repoPath,
 			strategy,
-			updateStrategy: settings.defaultUpdateStrategy ?? "merge",
-			deleteRemoteBranch: settings.deleteRemoteBranchOnMerge ?? false,
+			updateStrategy: settings.defaultUpdateStrategy,
+			deleteRemoteBranch: settings.deleteRemoteBranchOnMerge,
 		});
 	});
 
@@ -423,6 +469,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			return () => emitter.off(event, listener as (...a: unknown[]) => void);
 		},
 		sendTaskUpdated,
+		worktreeSweep,
 		sendTaskRemoved(taskId: string) {
 			emitter.emit("taskRemoved", taskId);
 		},
@@ -435,11 +482,13 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		startLoops() {
 			loopRunner.start();
 			reapTimer ??= setInterval(reapIdleSessions, REAP_SWEEP_MS);
+			worktreeSweep.start();
 		},
 		stop() {
 			pty.disconnect();
 			hooks.stop();
 			loopRunner.stop();
+			worktreeSweep.stop();
 			if (reapTimer) {
 				clearInterval(reapTimer);
 				reapTimer = null;

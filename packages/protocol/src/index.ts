@@ -62,7 +62,10 @@
 // every run permission-PROMPTED — a scheduled, unattended loop then wedges on the
 // first permission ask forever. `loopAutoMode` below is what turns that silent
 // downgrade into a feature the client knows to switch off.
-export const PROTOCOL_VERSION = 10;
+// v11: projects:issues and tasks:createFromIssue. Older engines reject the new
+// methods explicitly; issueUrl on reads is optional for old task DTOs.
+// v12: projects:createIssue files a GitHub issue with the client engine's gh login.
+export const PROTOCOL_VERSION = 12;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -188,7 +191,37 @@ export interface GitStatusSnapshot {
 	updatedAt: number;
 }
 
+export interface GithubIssueDTO {
+	number: number;
+	title: string;
+	body: string;
+	url: string;
+	author: string;
+	labels: string[];
+}
+
+export interface GithubIssuesDTO {
+	issues: GithubIssueDTO[];
+	syncedAt: number | null;
+	error: string | null;
+}
+
+export interface CreateGithubIssueInput {
+	title: string;
+	body: string;
+}
+
+export interface CreateIssueTaskInput {
+	projectId: string;
+	name: string;
+	issueNumber: number;
+	description: string;
+	agentId?: string;
+}
+
 export interface TaskDTO {
+	/** Canonical source issue URL; absent on older engines. */
+	issueUrl?: string | null;
 	id: string;
 	projectId: string;
 	name: string;
@@ -200,6 +233,15 @@ export interface TaskDTO {
 	column: KanbanColumn;
 	agentStatus: AgentStatus | null;
 	agentId: string | null;
+	/**
+	 * The agent behind each session that is live in this task right now, oldest
+	 * first — "shell" for a plain terminal. `agentId` above is the last agent
+	 * launched here and outlives its session; this is what is actually running,
+	 * so a task holding two agents and a shell shows all three. Empty when
+	 * nothing runs. Absent from an engine older than this field, which reads
+	 * the same as empty — a read-only addition, so no protocol bump.
+	 */
+	agentIds?: string[];
 	/** Merge-queue position; null when the task is not queued to merge. */
 	mergeStatus: MergeStatus | null;
 	prNumber: number | null;
@@ -294,6 +336,94 @@ export interface MergeResultDTO {
 }
 
 export type MergeStrategy = "merge" | "squash" | "rebase";
+export type UpdateStrategy = "merge" | "rebase";
+
+/**
+ * User settings: `~/.ateam/settings.json`, hand-editable (server/settings-file.ts).
+ * One schema, two readers. `client` is read by the desktop on the machine
+ * running it; `engine` by whichever engine runs the work, so a box reads its
+ * own file. Only keys with a reader exist — a setting nothing reads is a lie.
+ */
+export interface EngineSettings {
+	/** Agent a new task launches with when the composer doesn't say. */
+	defaultAgentId: string;
+	/** How "Merge via PR" lands the branch. */
+	defaultMergeStrategy: MergeStrategy;
+	/** How "Update from base branch" brings the base in. */
+	defaultUpdateStrategy: UpdateStrategy;
+	/** Delete the remote branch once its PR has merged. */
+	deleteRemoteBranchOnMerge: boolean;
+}
+export interface ClientSettings {
+	/** Fetch an update in the background instead of asking first. */
+	autoDownloadUpdates: boolean;
+	/**
+	 * This Mac's `engine.*` is the source of truth: pushed to every box as it
+	 * connects and again on every change, so a fresh box inherits your choices.
+	 * Off: each machine keeps its own file and the page edits whichever
+	 * environment is selected. `client.*` never syncs either way.
+	 */
+	syncEngineSettingsToBoxes: boolean;
+}
+export interface AteamSettings {
+	version: number;
+	client: ClientSettings;
+	engine: EngineSettings;
+}
+export interface SettingsPatch {
+	client?: Partial<ClientSettings>;
+	engine?: Partial<EngineSettings>;
+}
+/**
+ * `settings:get`'s answer: what is in force, where it came from, and a warning
+ * when the file could not be used as written (it was set aside as `.bad` and
+ * the defaults apply) — surfaced, never swallowed, so a hand edit cannot
+ * vanish without a trace.
+ */
+export interface SettingsResult {
+	settings: AteamSettings;
+	path: string;
+	warning?: string;
+	/**
+	 * Filled in by the desktop, which alone knows the boxes. `machine` is whose
+	 * file this is (null = this Mac); `syncedTo` lists the boxes that took this
+	 * Mac's `engine.*` just now, present only while sync is on.
+	 */
+	machine?: string | null;
+	syncedTo?: string[];
+	/**
+	 * Connected boxes whose LAST push of `engine.*` failed, with why — an
+	 * engine older than settings sync being the ordinary reason. Reported so
+	 * "synced" is never claimed for a box that did not take it.
+	 */
+	syncFailed?: { alias: string; reason: string }[];
+}
+
+/**
+ * Secrets live apart from settings: `~/.ateam/credentials.json` (0600) on the
+ * engine's machine (server/credentials-file.ts). `settings.json` is meant to be
+ * shared and `settings:get` hands the whole file to every client; a key must
+ * never travel either way. So the wire carries whether a key is set and its
+ * last four characters, never the key.
+ */
+export interface CredentialStatus {
+	set: boolean;
+	/** Last four characters, for recognising which key it is. */
+	hint?: string;
+	/** `env` when an environment variable supplies it, which the file cannot override. */
+	source?: "file" | "env";
+}
+export interface CredentialsResult {
+	openRouter: CredentialStatus;
+	path: string;
+	/** As SettingsResult: filled in by the desktop while sync is on. */
+	syncedTo?: string[];
+	syncFailed?: { alias: string; reason: string }[];
+}
+/** A key to store, or null to remove it. */
+export interface CredentialsPatch {
+	openRouterApiKey?: string | null;
+}
 
 /**
  * Result of enqueuing a merge. The merge runs serialized per base branch, so
@@ -304,7 +434,31 @@ export type MergeEnqueueDTO =
 	| { ok: true; prNumber: number | null; prUrl: string | null }
 	| { ok: false; reason: "conflict"; conflicts: string[] }
 	| { ok: false; reason: "busy" }
+	| { ok: false; reason: "not-mergeable"; message: string }
 	| { ok: false; reason: "error"; message: string };
+
+/**
+ * One human- and agent-readable line (or a few) for a merge outcome. The gh
+ * shim prints it into the agent's terminal and the desktop shows it as a toast,
+ * so a merge that did not happen is never silent on either surface.
+ */
+export function describeMergeResult(r: MergeEnqueueDTO): string {
+	if (r.ok) return r.prNumber != null ? `Ateam: merged PR #${r.prNumber}.` : "Ateam: merged.";
+	switch (r.reason) {
+		case "conflict":
+			return [
+				"Ateam: not merged. Absorbing the latest base branch hit conflicts in:",
+				...r.conflicts.map((f) => `  ${f}`),
+				"The merge (or rebase) is left in progress in this worktree. Resolve the conflicts, finish it (git add + git commit --no-edit, or git rebase --continue), then run 'gh pr merge' again.",
+			].join("\n");
+		case "busy":
+			return "Ateam: this task's merge is already queued or running; the board shows its status. Do not re-run 'gh pr merge'.";
+		case "not-mergeable":
+			return `Ateam: not merged: ${r.message}.`;
+		case "error":
+			return `Ateam: merge failed: ${r.message}`;
+	}
+}
 
 /** A Loop (periodic reconciler) as shown in the Loops panel. */
 export interface LoopDTO {
@@ -510,12 +664,15 @@ export const CH = {
 	projectsRegister: "projects:register",
 	projectsClone: "projects:clone",
 	projectsRemoteUrl: "projects:remoteUrl",
+	projectsIssues: "projects:issues",
+	projectsCreateIssue: "projects:createIssue",
 	projectsRemoteRepos: "projects:remoteRepos",
 	projectsList: "projects:list",
 	projectsRemove: "projects:remove",
 	windowOpenProject: "window:openProject",
 	tasksList: "tasks:list",
 	tasksCreate: "tasks:create",
+	tasksCreateFromIssue: "tasks:createFromIssue",
 	tasksRemove: "tasks:remove",
 	tasksSetColumn: "tasks:setColumn",
 	tasksMarkRead: "tasks:markRead",
@@ -547,6 +704,11 @@ export const CH = {
 	utilAttachClipboardImage: "util:attachClipboardImage",
 	utilWriteImageBytes: "util:writeImageBytes",
 	utilOpenInEditor: "util:openInEditor",
+	utilOpenBrowser: "util:openBrowser",
+	settingsGet: "settings:get",
+	settingsUpdate: "settings:update",
+	credentialsGet: "credentials:get",
+	credentialsUpdate: "credentials:update",
 	editorOpen: "editor:open",
 	editorOpenUrl: "editor:openUrl",
 	editorInstall: "editor:install",
@@ -562,6 +724,7 @@ export const CH = {
 	// main → renderer push events
 	evtPtyData: "evt:pty:data",
 	evtPtyExit: "evt:pty:exit",
+	evtOpenSettings: "evt:settings:open",
 	evtTaskUpdated: "evt:task:updated",
 	evtTaskRemoved: "evt:task:removed",
 	evtLoopsUpdated: "evt:loops:updated",
@@ -610,6 +773,14 @@ export type AttachDelivery =
 export type OpenInEditorResult = { ok: true } | { ok: false; reason: string };
 
 /**
+ * Outcome of bringing up the browser an agent drives. Same shape as
+ * `OpenInEditorResult` and deliberately its own name: the reasons differ (no
+ * Chrome on this Mac, or a task whose browser lives on a box), and one type
+ * named for the editor would read as a copy-paste rather than a decision.
+ */
+export type OpenBrowserResult = { ok: true } | { ok: false; reason: string };
+
+/**
  * The in-app editor's default port on the engine's machine (code-server). Shared
  * between the engine (which binds it) and the desktop's SSH forward (which is
  * opened at connect time, before the engine is asked) — so both sides must agree.
@@ -617,6 +788,14 @@ export type OpenInEditorResult = { ok: true } | { ok: false; reason: string };
  * port in system:hello if that override ever matters.
  */
 export const DEFAULT_EDITOR_PORT = 8390;
+
+/**
+ * What a launch into a task that is mid-delete throws. Shared because the
+ * desktop drops it silently: the delete kills the task's agent, the open panel
+ * auto-resumes it, and the engine refuses — expected, not something to show.
+ * An error crosses IPC as its message only, so the text is the contract.
+ */
+export const TASK_REMOVING_ERROR = "This task is being deleted";
 
 /** Where the engine's embedded editor (code-server) answers, on ITS machine. */
 export interface EditorEndpointDTO {
@@ -646,10 +825,15 @@ export interface AteamApi {
 		/** The project's `origin` remote URL, or null if local-only. Decides whether a
 		 *  task can run on a box (needs a remote to clone). id-routed to the owner. */
 		remoteUrl(projectId: string): Promise<string | null>;
+		/** Uses the client engine's gh login, including repos that run on a box. */
+		issues(repository: string, refresh?: boolean): Promise<GithubIssuesDTO>;
+		/** Same routing as `issues`: the repository string never names a box. */
+		createIssue(repository: string, input: CreateGithubIssueInput): Promise<GithubIssueDTO>;
 		list(): Promise<ProjectDTO[]>;
 		remove(id: string): Promise<void>;
 	};
 	tasks: {
+		createFromIssue(input: CreateIssueTaskInput): Promise<{ task: TaskDTO; created: boolean }>;
 		list(projectId: string): Promise<TaskDTO[]>;
 		create(input: {
 			projectId: string;
@@ -769,6 +953,11 @@ export interface AteamApi {
 		onTaskUpdated(cb: (task: TaskDTO) => void): () => void;
 		/** A task was removed (delete or cleanup) — drop it from every window. */
 		onTaskRemoved(cb: (taskId: string) => void): () => void;
+		/**
+		 * The app menu's Settings… (⌘,) — show the settings page in this window.
+		 * Optional: a client without an app menu (the phone) never receives it.
+		 */
+		onOpenSettings?(cb: () => void): () => void;
 	};
 	window: {
 		/**
@@ -782,6 +971,18 @@ export interface AteamApi {
 		 * dashboard. Read once at boot from the window's launch URL.
 		 */
 		boundProjectId(): string | null;
+	};
+	settings: {
+		/** The settings in force on this task's engine's machine. */
+		get(): Promise<SettingsResult>;
+		/** Patch one or more keys; answers with the full result, like `get`. */
+		update(patch: SettingsPatch): Promise<SettingsResult>;
+	};
+	credentials: {
+		/** Which keys are set on the engine's machine; never the keys themselves. */
+		get(): Promise<CredentialsResult>;
+		/** Store or remove a key; answers like `get`. */
+		update(patch: CredentialsPatch): Promise<CredentialsResult>;
 	};
 	utils: {
 		/**
@@ -827,6 +1028,16 @@ export interface AteamApi {
 		 * affordance rather than offering one that can't work.
 		 */
 		openInEditor?(worktreePath: string, alias: string | null): Promise<OpenInEditorResult>;
+		/**
+		 * Bring up the browser the agents drive — the user's OWN Chrome, on THIS
+		 * machine, so every session it holds is already signed in and the agent
+		 * never faces a login wall. Client-native for the same reason
+		 * `openInEditor` is: a browser is a desktop app, not something the engine
+		 * can launch, and unlike the editor there is no Remote-SSH equivalent —
+		 * a task on a box needs a browser ON the box (docs/browser-box.md), so
+		 * that case reports a reason instead of silently raising this Mac's.
+		 */
+		openBrowser?(alias: string | null): Promise<OpenBrowserResult>;
 	};
 }
 

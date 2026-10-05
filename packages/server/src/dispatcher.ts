@@ -23,7 +23,6 @@ import {
 	commit,
 	createGithubRepo,
 	detectGithubRepo,
-	detectMerged,
 	diff,
 	errorMessage,
 	fileDiff,
@@ -34,7 +33,6 @@ import {
 	listRemoteRepos,
 	push,
 	registerProject,
-	trackingStatus,
 	updateFromBase,
 } from "@ateam/git-core";
 import {
@@ -42,20 +40,29 @@ import {
 	type BoxUpdateStarted,
 	type CleanupCandidate,
 	type CreateLoopInput,
+	type CreateGithubIssueInput,
+	type CreateIssueTaskInput,
+	type CredentialsPatch,
+	type CredentialsResult,
 	type DirEntryDTO,
-	type GitStatusSnapshot,
 	type KanbanColumn,
 	type MergeStrategy,
 	PROTOCOL_VERSION,
 	type RegisterProjectOptions,
 	type UpdateLoopInput,
+	type SettingsPatch,
+	type SettingsResult,
 } from "@ateam/protocol";
 import { createEditorHost, installCodeServer } from "./editor";
 import { refreshLoginPath } from "./login-env";
+import { credentialStatus, credentialsPath, updateCredentials } from "./credentials-file";
+import { readSettings, settingsPath, updateSettings } from "./settings-file";
 import type { Engine } from "./engine";
+import { GithubIssues } from "./github-issues";
+import { createIssueTask } from "./issue-tasks";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { createSizeArbiter } from "./pty/size-arbiter";
-import { type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
+import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
 import { searchSessions } from "./session-search";
 import { createTaskInProject, type SpawnAgentInput, shell, spawnAgentInTask } from "./sessions";
 
@@ -93,20 +100,6 @@ function requireProjectFor(services: Services, projectId: string) {
 	return project;
 }
 
-async function computeGitStatus(
-	worktreePath: string,
-	baseBranch: string,
-): Promise<GitStatusSnapshot> {
-	const tracking = await trackingStatus(worktreePath);
-	const d = await diff({ worktreePath, baseBranch });
-	return {
-		ahead: tracking?.ahead ?? 0,
-		behind: tracking?.behind ?? 0,
-		dirty: d.files.length,
-		updatedAt: Date.now(),
-	};
-}
-
 /** Where install.sh is fetched from, matching the documented one-liner and the
  *  desktop's own SSH install: raw `main`, so a box always runs the current script
  *  even when its own dist is months old. */
@@ -139,6 +132,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		services.refreshPath ?? ((opts?: { force?: boolean }) => refreshLoginPath({ db, ...opts }));
 	// Lazy: no code-server process exists until the first editor:open.
 	const editorHost = createEditorHost();
+	const githubIssues = new GithubIssues();
 
 	// ---- cleanup: merged + idle + clean is a RECOMMENDATION, not a filter ----
 	// The rule below (merged, no live agent session, clean working tree) is the
@@ -184,41 +178,9 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		return { removable, kept };
 	}
 
-	// Detect merges done OUTSIDE Ateam (the agent ran `gh pr merge` in its
-	// terminal, or the PR was merged on github.com) and move the task to Done.
-	// Throttled per task; fire-and-forget so status replies stay fast.
-	const mergeCheckedAt = new Map<string, number>();
-	const detectExternalMerge = async (taskId: string): Promise<void> => {
-		if (Date.now() - (mergeCheckedAt.get(taskId) ?? 0) < 60_000) return;
-		mergeCheckedAt.set(taskId, Date.now());
-		const task = repo.getTask(db, taskId);
-		if (!task || task.column === "merged") return;
-		// Done only when the conversation ended on a plain text reply: the agent
-		// fired Stop (idle/stopped) and is not waiting on a question/permission.
-		const finished =
-			task.agentStatus == null || task.agentStatus === "idle" || task.agentStatus === "stopped";
-		if (!finished || task.column === "needs_attention") return;
-		try {
-			const res = await detectMerged({
-				worktreePath: task.worktreePath,
-				branch: task.branch,
-				baseBranch: task.baseBranch,
-			});
-			if (!res.merged) return;
-			repo.updateTask(db, task.id, {
-				column: "merged",
-				prState: "merged",
-				prNumber: res.prNumber ?? task.prNumber ?? null,
-				prUrl: res.prUrl ?? task.prUrl ?? null,
-			});
-			engine.sendTaskUpdated(task.id);
-		} catch {
-			/* offline or gh unavailable — retried on a later refresh */
-		}
-	};
-
 	/** Open a login shell in a task's worktree and record the session. */
 	const spawnShellInTask = (task: { id: string; worktreePath: string }) => {
+		services.worktreeGuard.assertWritable(task.id);
 		const terminalId = randomUUID();
 		repo.createSession(db, {
 			taskId: task.id,
@@ -242,6 +204,14 @@ export function createDispatcher(engine: Engine): Dispatcher {
 
 	const handlers = {
 		// ---- projects ----
+		[CH.projectsIssues]: async (repository: string, refresh = false) => {
+			await refreshPath();
+			return githubIssues.list(repository, refresh);
+		},
+		[CH.projectsCreateIssue]: async (repository: string, input: CreateGithubIssueInput) => {
+			await refreshPath();
+			return githubIssues.create(repository, input);
+		},
 		[CH.projectsRegister]: async (repoPath: string, opts?: RegisterProjectOptions) => {
 			// "Create a repository here instead" (GitHub-Desktop-style), after the client
 			// asked the user. When the folder doesn't exist yet, create it first — a
@@ -333,8 +303,19 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 
 		// ---- tasks ----
+		[CH.tasksCreateFromIssue]: async (input: CreateIssueTaskInput) => {
+			const result = await createIssueTask(services, engine.sendTaskUpdated, input);
+			return {
+				task: toTaskDTO(result.task, services.pendingSeeds.has(result.task.id)),
+				created: result.created,
+			};
+		},
 		[CH.tasksList]: async (projectId: string) =>
-			repo.listTasks(db, projectId).map((t) => toTaskDTO(t, services.pendingSeeds.has(t.id))),
+			repo
+				.listTasks(db, projectId)
+				.map((t) =>
+					toTaskDTO(t, services.pendingSeeds.has(t.id), liveAgentIds(db, services.pty, t.id)),
+				),
 		[CH.tasksCreate]: async (input: {
 			projectId: string;
 			name: string;
@@ -347,16 +328,18 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.tasksRemove]: async (input: { id: string; deleteBranch?: boolean; force?: boolean }) => {
 			const task = requireTask(services, input.id);
 			const project = requireProjectFor(services, task.projectId);
-			// Tear down any live agent/shell sessions in this worktree first.
-			for (const s of repo.listSessionsByTask(db, task.id)) {
-				services.pty.kill(s.terminalId);
-			}
-			await gitRemoveTask({
-				repoPath: project.repoPath,
-				worktreePath: task.worktreePath,
-				branch: task.branch,
-				deleteBranch: input.deleteBranch,
-				force: input.force,
+			await services.worktreeGuard.remove(task.id, services.pendingSeeds.get(task.id), async () => {
+				// Tear down any live agent/shell sessions in this worktree first.
+				for (const s of repo.listSessionsByTask(db, task.id)) {
+					services.pty.kill(s.terminalId);
+				}
+				await gitRemoveTask({
+					repoPath: project.repoPath,
+					worktreePath: task.worktreePath,
+					branch: task.branch,
+					deleteBranch: input.deleteBranch,
+					force: input.force,
+				});
 			});
 			repo.deleteTask(db, task.id);
 			// Drop the card from every window (not just the caller's).
@@ -368,14 +351,14 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.tasksMarkRead]: async (id: string) => {
 			const row = repo.updateTask(db, id, { isUnread: false });
 			engine.sendTaskUpdated(id);
-			return toTaskDTO(row!);
+			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
 		},
 		[CH.tasksSetColumn]: async (id: string, column: KanbanColumn) => {
 			const row = repo.updateTask(db, id, { column });
 			// Broadcast so every view (board, sidebar) reflects the move — e.g. the
 			// "Done" button under the terminal that sends a review task to merged.
 			engine.sendTaskUpdated(id);
-			return toTaskDTO(row!);
+			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
 		},
 
 		// Candidates for the interactive cleanup dialog: EVERY task in the project,
@@ -420,13 +403,15 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				try {
 					// force:false → git refuses if the tree somehow became dirty between
 					// classify and now; deleteBranch:true (branch -d refuses unmerged).
-					await gitRemoveTask({
-						repoPath: project.repoPath,
-						worktreePath: task.worktreePath,
-						branch: task.branch,
-						deleteBranch: true,
-						force: false,
-					});
+					await services.worktreeGuard.remove(task.id, services.pendingSeeds.get(task.id), () =>
+						gitRemoveTask({
+							repoPath: project.repoPath,
+							worktreePath: task.worktreePath,
+							branch: task.branch,
+							deleteBranch: true,
+							force: false,
+						}),
+					);
 					repo.deleteTask(db, task.id);
 					engine.sendTaskRemoved(task.id);
 					removed.push({ id: task.id, name: task.name, branch: task.branch });
@@ -456,25 +441,25 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 		[CH.gitUpdate]: async (taskId: string) => {
 			const task = requireTask(services, taskId);
-			const settings = repo.getSettings(db);
+			const { engine } = readSettings().settings;
 			return updateFromBase({
 				worktreePath: task.worktreePath,
 				baseBranch: task.baseBranch,
-				strategy: settings.defaultUpdateStrategy ?? "merge",
+				strategy: engine.defaultUpdateStrategy,
 			});
 		},
 		[CH.gitMerge]: async (taskId: string, strategy: MergeStrategy) => {
 			const task = requireTask(services, taskId);
 			const project = requireProjectFor(services, task.projectId);
-			const settings = repo.getSettings(db);
+			const { engine } = readSettings().settings;
 			// Serialize through the merge queue: two branches targeting the same
 			// base never race; each absorbs the freshly-merged base before merging.
 			return mergeQueue.enqueue({
 				task,
 				repoPath: project.repoPath,
 				strategy,
-				updateStrategy: settings.defaultUpdateStrategy ?? "merge",
-				deleteRemoteBranch: settings.deleteRemoteBranchOnMerge ?? false,
+				updateStrategy: engine.defaultUpdateStrategy,
+				deleteRemoteBranch: engine.deleteRemoteBranchOnMerge,
 			});
 		},
 		[CH.gitDiff]: async (taskId: string) => {
@@ -487,10 +472,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 		[CH.gitStatus]: async (taskId: string) => {
 			const task = requireTask(services, taskId);
-			const snapshot = await computeGitStatus(task.worktreePath, task.baseBranch);
-			repo.updateTask(db, task.id, { gitStatus: snapshot });
-			if (task.column !== "merged") void detectExternalMerge(task.id);
-			return snapshot;
+			// Same probe the background pass uses, sharing its throttle — so
+			// re-rendering an open panel can't shell out on every render, and the
+			// sweep can't double-probe a worktree the panel just refreshed.
+			return (await engine.worktreeSweep.refresh(task.id)) ?? task.gitStatus ?? null;
 		},
 
 		// ---- agents ----
@@ -703,6 +688,30 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			const loops = loopRunner.deleteUserLoop(id);
 			engine.sendLoopsUpdated();
 			return loops;
+		},
+
+		// ---- settings ----
+		// The file on THIS engine's machine: asked of a box, a box answers about
+		// its own. `engine.*` is what it will act on; `client.*` rides along so
+		// the desktop can show one page for the whole file.
+		[CH.settingsGet]: async (): Promise<SettingsResult> => {
+			const r = readSettings();
+			return { settings: r.settings, path: settingsPath(), warning: r.warning };
+		},
+		[CH.settingsUpdate]: async (patch: SettingsPatch): Promise<SettingsResult> => {
+			updateSettings(patch);
+			const r = readSettings();
+			return { settings: r.settings, path: settingsPath(), warning: r.warning };
+		},
+		// Secrets, beside settings but never in them (see credentials-file.ts).
+		// The answer says whether a key is set, never what it is.
+		[CH.credentialsGet]: async (): Promise<CredentialsResult> => ({
+			openRouter: credentialStatus(),
+			path: credentialsPath(),
+		}),
+		[CH.credentialsUpdate]: async (patch: CredentialsPatch): Promise<CredentialsResult> => {
+			updateCredentials(patch);
+			return { openRouter: credentialStatus(), path: credentialsPath() };
 		},
 
 		// ---- pty ----

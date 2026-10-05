@@ -123,6 +123,17 @@ export interface DetectMergedResult {
 	merged: boolean;
 	prNumber: number | null;
 	prUrl: string | null;
+	/**
+	 * The PR's state as GitHub reports it (uppercase, like `PrStatus` below),
+	 * or null when there is no PR, gh is unavailable, or the answer came from
+	 * the merge-commit fallback rather than a PR.
+	 *
+	 * `merged` stays the authoritative "did this land" answer — it is also true
+	 * for the no-PR fallback, where `state` is null. This field is free: the
+	 * `gh pr view` that answers `merged` already returns it, and callers were
+	 * throwing it away and then reporting every un-merged PR as no PR at all.
+	 */
+	state: "OPEN" | "MERGED" | "CLOSED" | null;
 }
 
 /**
@@ -142,7 +153,7 @@ export async function detectMerged(input: {
 	try {
 		tip = (await git.raw(["rev-parse", input.branch])).trim();
 	} catch {
-		return { merged: false, prNumber: null, prUrl: null };
+		return { merged: false, prNumber: null, prUrl: null, state: null };
 	}
 
 	try {
@@ -166,14 +177,18 @@ export async function detectMerged(input: {
 					merged: true,
 					prNumber: p.number ?? null,
 					prUrl: p.url ?? null,
+					state: "MERGED",
 				};
 			}
-			// Stale PR — fall through to the local merge-commit check.
+			// Stale PR — fall through to the local merge-commit check. `state`
+			// stays null there: we just decided not to trust this PR, so it must
+			// not be persisted as this branch's state either.
 		} else if (p.state === "OPEN" || p.state === "CLOSED") {
 			return {
 				merged: false,
 				prNumber: p.number ?? null,
 				prUrl: p.url ?? null,
+				state: p.state,
 			};
 		}
 	} catch {
@@ -197,9 +212,9 @@ export async function detectMerged(input: {
 		const merged = mergeParents
 			.split("\n")
 			.some((line) => line.trim().split(/\s+/).slice(1).includes(tip));
-		return { merged, prNumber: null, prUrl: null };
+		return { merged, prNumber: null, prUrl: null, state: null };
 	} catch {
-		return { merged: false, prNumber: null, prUrl: null };
+		return { merged: false, prNumber: null, prUrl: null, state: null };
 	}
 }
 

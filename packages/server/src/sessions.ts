@@ -62,6 +62,7 @@ export async function createTaskInProject(
 		 */
 		agentId?: string;
 	},
+	issue?: { url: string; description: string },
 ): Promise<Task> {
 	const project = repo.getProject(services.db, input.projectId);
 	if (!project) throw new Error(`Project not found: ${input.projectId}`);
@@ -79,6 +80,8 @@ export async function createTaskInProject(
 		baseBranch: created.baseBranch,
 		worktreePath: created.worktreePath,
 		agentId: input.agentId ?? null,
+		issueUrl: issue?.url ?? null,
+		description: issue?.description ?? null,
 	});
 	// Broadcast so any other window showing this project gains the new card
 	// (renderers upsert). The caller also gets it — an idempotent upsert.
@@ -93,15 +96,31 @@ export async function createTaskInProject(
 	const seeding = seedWorktree({
 		repoPath: project.repoPath,
 		worktreePath: created.worktreePath,
+		signal: services.worktreeGuard.seedSignal(row.id),
 	})
 		.catch(() => {})
-		.finally(() => services.pendingSeeds.delete(row.id));
+		.finally(() => {
+			services.pendingSeeds.delete(row.id);
+			services.worktreeGuard.seedDone(row.id);
+		});
 	services.pendingSeeds.set(row.id, seeding);
 	return row;
 }
 
 /** Launch a coding agent in a task's worktree and record the session. */
-export async function spawnAgentInTask(
+export function spawnAgentInTask(
+	services: Services,
+	notifyTaskUpdated: (taskId: string) => void,
+	input: SpawnAgentInput,
+): Promise<{ terminalId: string }> {
+	// Tracked, so deleting the task waits for a launch already under way instead
+	// of racing it (see worktree-guard.ts).
+	return services.worktreeGuard.launch(input.taskId, () =>
+		launchAgent(services, notifyTaskUpdated, input),
+	);
+}
+
+async function launchAgent(
 	services: Services,
 	notifyTaskUpdated: (taskId: string) => void,
 	input: SpawnAgentInput,
@@ -180,6 +199,11 @@ export async function spawnAgentInTask(
 		}
 	}
 
+	// A delete may have begun during the probes above; it is waiting on this
+	// launch, so stop before writing anything rather than start an agent it
+	// would kill a moment later.
+	services.worktreeGuard.assertWritable(task.id);
+
 	const terminalId = randomUUID();
 	// The conversation this tab holds. On a fresh launch we mint it — the
 	// terminal id doubles as the agent's session id, so the tab can be resumed
@@ -257,7 +281,13 @@ export async function spawnAgentInTask(
 		const codexNotify = join(services.hooksDir, "codex-notify.sh");
 		agentCmd = agentCmd.replace(/^codex/, `codex -c 'notify=["sh","${codexNotify}"]'`);
 	}
-	const command = `${agentCmd}; exec ${shell} -l`;
+	// The pane outlives the agent (the `exec` keeps it usable as a shell), so the
+	// agent's own exit is otherwise invisible: no PTY exit fires, and the session
+	// would claim running / awaiting_input for as long as the shell stays open.
+	// One more call to the same notify script says it quit (pty/agent-quit.ts,
+	// AgentExit). Quoted: on macOS the script lives under "Application Support".
+	const notify = `'${services.notifyScriptPath.replace(/'/g, `'\\''`)}'`;
+	const command = `${agentCmd}; sh ${notify} AgentExit; exec ${shell} -l`;
 	services.pty.spawn({
 		terminalId,
 		shell,

@@ -82,8 +82,18 @@ export interface MergeQueueDeps {
  */
 export class MergeQueue {
 	private readonly queue = new SerialQueue();
+	/**
+	 * Tasks with a job queued or running in THIS process. The source of truth for
+	 * "busy", not the row's `mergeStatus`: that column outlives the process (a
+	 * restart mid-merge would leave `merging` forever) and also holds the parked
+	 * `conflict`, and either used to refuse every later merge of the task.
+	 */
+	private readonly inFlight = new Set<string>();
 
-	constructor(private readonly deps: MergeQueueDeps) {}
+	constructor(private readonly deps: MergeQueueDeps) {
+		// Nothing is in flight in a fresh process; a stale badge would lie.
+		repo.clearStaleMergeStatuses(deps.db);
+	}
 
 	private key(repoPath: string, baseBranch: string): string {
 		return `${repoPath}::${baseBranch}`;
@@ -98,17 +108,20 @@ export class MergeQueue {
 	 * Enqueue a merge. Returns once this task's merge settles. The task is marked
 	 * `queued` synchronously (visible on the board immediately), then flips to
 	 * `updating`/`merging` as it leaves the queue. A task already in flight is
-	 * not re-enqueued.
+	 * not re-enqueued; one parked on `conflict` is, so the retry after resolving
+	 * it goes through.
 	 */
 	enqueue(input: MergeJobInput): Promise<MergeJobResult> {
 		const { task } = input;
-		const fresh = repo.getTask(this.deps.db, task.id);
-		if (fresh?.mergeStatus) {
+		if (this.inFlight.has(task.id)) {
 			// Already queued/updating/merging — double-click or shim+UI overlap.
 			return Promise.resolve({ ok: false, reason: "busy" });
 		}
+		this.inFlight.add(task.id);
 		this.setStatus(task.id, "queued");
-		return this.queue.enqueue(this.key(input.repoPath, task.baseBranch), () => this.runJob(input));
+		return this.queue
+			.enqueue(this.key(input.repoPath, task.baseBranch), () => this.runJob(input))
+			.finally(() => this.inFlight.delete(task.id));
 	}
 
 	private async runJob(input: MergeJobInput): Promise<MergeJobResult> {

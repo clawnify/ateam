@@ -14,6 +14,7 @@ import { createDispatcher } from "../src/dispatcher";
 import type { Engine } from "../src/engine";
 import { serveRpc } from "../src/rpc";
 import { wsServerTransport } from "../src/transport/ws";
+import { WorktreeGuard } from "../src/worktree-guard";
 
 // The mobile shape: the phone speaks the platform-global WebSocket to the box's
 // opt-in WS listener. This exercises the WHOLE path — wsServerTransport ↔ real ws
@@ -28,6 +29,7 @@ function makeEngine(db: AteamDb): Engine {
 			mergeQueue: {},
 			loopRunner: { describe: () => [] },
 			pendingSeeds: new Map(),
+			worktreeGuard: new WorktreeGuard(),
 		},
 		on: (event: string, cb: (p: unknown) => void) => {
 			ee.on(event, cb);

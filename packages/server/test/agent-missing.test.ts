@@ -11,6 +11,7 @@ import * as schema from "../../db/src/schema";
 import { FollowUps } from "../src/follow-ups";
 import type { Services } from "../src/services";
 import { spawnAgentInTask } from "../src/sessions";
+import { WorktreeGuard } from "../src/worktree-guard";
 
 // An agent CLI can be there on Monday and gone on Tuesday — uninstalled, or a
 // PATH that moved under a reboot. The launch line is `<agent>; exec $SHELL -l`,
@@ -56,6 +57,7 @@ function servicesWith(
 		hookPort: 0,
 		followUps: new FollowUps(),
 		pendingSeeds: new Map(),
+		worktreeGuard: new WorktreeGuard(),
 		probeAgent: async () =>
 			answers ? (answers.shift() ?? "absent") : (presence as BinaryPresence),
 		refreshPath: async () => {

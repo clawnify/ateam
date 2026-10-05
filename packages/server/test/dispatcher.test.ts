@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { BinaryPresence } from "@ateam/agents";
 import { type AteamDb, repo } from "@ateam/db";
 import { gitFor } from "@ateam/git-core";
-import { CH } from "@ateam/protocol";
+import { CH, TASK_REMOVING_ERROR } from "@ateam/protocol";
 // Reuse the db package's in-memory bun:sqlite test db (better-sqlite3 can't load
 // under Bun). Cross-package test helper — the DRY source of a test AteamDb.
 import { createTestDb } from "../../db/test/helpers/test-db";
@@ -14,6 +14,7 @@ import { createTestDb } from "../../db/test/helpers/test-db";
 import { makeTempRepoPair } from "../../git-core/test/helpers/temp-repo";
 import { createDispatcher } from "../src/dispatcher";
 import type { Engine } from "../src/engine";
+import { WorktreeGuard } from "../src/worktree-guard";
 
 // A minimal fake Engine: a real in-memory db for the DB-backed handlers, stubs
 // for the pieces those handlers don't touch, and a spy on taskUpdated so we can
@@ -35,6 +36,7 @@ function makeEngine(db: AteamDb, agentPresence: BinaryPresence = "present") {
 			},
 			followUps: { arm() {}, discard() {} },
 			pendingSeeds: new Map(),
+			worktreeGuard: new WorktreeGuard(),
 			hooks: {},
 			mergeQueue: {},
 			loopRunner: { describe: () => [] },
@@ -54,6 +56,7 @@ function makeEngine(db: AteamDb, agentPresence: BinaryPresence = "present") {
 		},
 		on: () => () => {},
 		sendTaskUpdated: (id: string) => taskUpdated.push(id),
+		sendTaskRemoved: () => {},
 		sendLoopsUpdated: () => {},
 	} as unknown as Engine;
 	return { engine, taskUpdated, spawned };
@@ -187,6 +190,88 @@ describe("createDispatcher", () => {
 
 		const after = (await d.handle(CH.tasksList, [project!.id])) as { preparing: boolean }[];
 		expect(after[0]?.preparing).toBe(false);
+	});
+
+	// The delete's own kill is what brings a writer back: an open task panel sees
+	// its agent exit and auto-resumes it, and that launch wrote
+	// `.claude/settings.local.json` into the worktree while git was unlinking it.
+	// git's last rmdir then failed with "Directory not empty", the row survived,
+	// and the resumed agent ran on in a directory no task owned.
+	it("refuses the auto-resume a delete's kill triggers, so the worktree really goes", async () => {
+		const tmp = await makeTempRepoPair();
+		try {
+			const db = createTestDb();
+			const { engine, spawned } = makeEngine(db);
+			const services = engine.services as unknown as Record<string, unknown>;
+			services.latestSession = async () => ({ ok: false });
+			const d = createDispatcher(engine);
+			const project = repo.upsertProject(db, {
+				repoPath: tmp.work,
+				name: "doomed",
+				defaultBranch: "main",
+			});
+			const task = (await d.handle(CH.tasksCreate, [
+				{ projectId: project!.id, name: "delete me while open", agentId: "claude" },
+			])) as { id: string };
+			await Promise.all(engine.services.pendingSeeds.values());
+			await d.handle(CH.ptySpawnAgent, [{ taskId: task.id, agentId: "claude" }]);
+			const worktree = repo.getTask(db, task.id)!.worktreePath;
+
+			// Stand-in for the panel: every kill is answered with a resume.
+			const resumes: Promise<unknown>[] = [];
+			(services.pty as { kill: () => void }).kill = () => {
+				resumes.push(
+					d
+						.handle(CH.ptySpawnAgent, [{ taskId: task.id, agentId: "claude", resume: true }])
+						.then(
+							() => "launched",
+							(e: Error) => e.message,
+						),
+				);
+			};
+			const launchesBefore = spawned.length;
+
+			await d.handle(CH.tasksRemove, [{ id: task.id, deleteBranch: true, force: true }]);
+
+			expect(resumes).toHaveLength(1);
+			expect(await resumes[0]).toBe(TASK_REMOVING_ERROR);
+			expect(existsSync(worktree)).toBe(false);
+			expect(spawned.length).toBe(launchesBefore);
+			expect(repo.getTask(db, task.id)).toBeUndefined();
+		} finally {
+			await tmp.cleanup();
+		}
+	});
+
+	// A delete git refuses (a dirty tree without force) must not leave the task
+	// locked: the desktop asks "Force delete?" and the user may say no.
+	it("lets a task launch again after a delete that git refused", async () => {
+		const tmp = await makeTempRepoPair();
+		try {
+			const db = createTestDb();
+			const { engine } = makeEngine(db);
+			const d = createDispatcher(engine);
+			const project = repo.upsertProject(db, {
+				repoPath: tmp.work,
+				name: "kept",
+				defaultBranch: "main",
+			});
+			const task = (await d.handle(CH.tasksCreate, [
+				{ projectId: project!.id, name: "keep me after all" },
+			])) as { id: string };
+			await Promise.all(engine.services.pendingSeeds.values());
+			await d.handle(CH.ptySpawnShell, [{ taskId: task.id }]);
+			await Bun.write(join(repo.getTask(db, task.id)!.worktreePath, "dirty.txt"), "wip");
+
+			await expect(d.handle(CH.tasksRemove, [{ id: task.id }])).rejects.toThrow();
+
+			const again = (await d.handle(CH.ptySpawnShell, [{ taskId: task.id }])) as {
+				terminalId: string;
+			};
+			expect(again.terminalId).toBeTruthy();
+		} finally {
+			await tmp.cleanup();
+		}
 	});
 
 	// --- tabs a restart took away ---------------------------------------------
@@ -596,6 +681,7 @@ describe("pty sizing across clients", () => {
 				},
 				followUps: { arm() {}, discard() {} },
 				pendingSeeds: new Map(),
+				worktreeGuard: new WorktreeGuard(),
 				hooks: {},
 				mergeQueue: {},
 				loopRunner: { describe: () => [] },
@@ -641,4 +727,54 @@ describe("pty sizing across clients", () => {
 		await d2.handle(CH.ptyWrite, ["t", "k"]);
 		expect(e.calls).toEqual(["resize t 10x10", "resize t 11x11", "write t k"]);
 	});
+});
+
+it("creates one linked worktree for concurrent issue starts and finds it after reopening the dispatcher", async () => {
+	const tmp = await makeTempRepoPair();
+	const db = createTestDb();
+	const { engine, spawned } = makeEngine(db);
+	try {
+		const project = repo.upsertProject(db, {
+			repoPath: tmp.work,
+			name: "R",
+			defaultBranch: "main",
+			githubOwner: "Acme",
+			githubName: "Repo",
+		})!;
+		const input = {
+			projectId: project.id,
+			name: "Fix issue",
+			issueNumber: 42,
+			description: "The issue details",
+			agentId: "claude",
+		};
+		const dispatcher = createDispatcher(engine);
+		type Result = {
+			task: { id: string; issueUrl: string; description: string; worktreePath: string };
+			created: boolean;
+		};
+		const results = (await Promise.all([
+			dispatcher.handle(CH.tasksCreateFromIssue, [input]),
+			dispatcher.handle(CH.tasksCreateFromIssue, [input]),
+		])) as Result[];
+		expect(results.map((r) => r.created)).toEqual([true, false]);
+		expect(results[0]!.task.id).toBe(results[1]!.task.id);
+		expect(results[0]!.task.issueUrl).toBe("https://github.com/acme/repo/issues/42");
+		expect(results[0]!.task.description).toBe(input.description);
+		expect(existsSync(results[0]!.task.worktreePath)).toBe(true);
+		expect(repo.listTasks(db, project.id)).toHaveLength(1);
+		expect(spawned).toHaveLength(0);
+		const again = (await createDispatcher(engine).handle(CH.tasksCreateFromIssue, [
+			input,
+		])) as Result;
+		expect(again.created).toBe(false);
+		expect(again.task.id).toBe(results[0]!.task.id);
+		await expect(
+			dispatcher.handle(CH.tasksCreateFromIssue, [{ ...input, issueNumber: -1 }]),
+		).rejects.toThrow("Invalid GitHub issue number");
+		expect(repo.listTasks(db, project.id)).toHaveLength(1);
+	} finally {
+		await Promise.all(engine.services.pendingSeeds.values());
+		await tmp.cleanup();
+	}
 });

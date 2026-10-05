@@ -9,7 +9,7 @@
 // reconcile and come back here as RESTORABLE tabs: they hold no process, they
 // sit at the end of the strip, and clicking one spawns a terminal that resumes
 // the same conversation. Everything else about a tab is unchanged.
-import type { AgentDTO, SessionDTO } from "@ateam/protocol";
+import type { AgentDTO, SessionDTO, TaskDTO } from "@ateam/protocol";
 
 export interface SessionTab {
 	session: SessionDTO;
@@ -72,4 +72,17 @@ export function activeTerminal(sessions: SessionDTO[], current: string | null): 
 	let best: SessionDTO | null = null;
 	for (const s of pool) if (!best || (s.lastEventAt ?? 0) >= (best.lastEventAt ?? 0)) best = s;
 	return best?.terminalId ?? null;
+}
+
+/**
+ * What a task shows for what runs in it — the sidebar row, the rail tile and
+ * the board card all draw from this. One glyph per live session, oldest first
+ * (TaskDTO.agentIds), so two agents and a shell read as three glyphs, not as
+ * whichever agent launched last. When nothing is live, the last agent launched
+ * here: an idle Claude task still reads as a Claude task. Empty for a task no
+ * agent has touched, which falls back to the icon inferred from its name.
+ */
+export function taskGlyphs(task: Pick<TaskDTO, "agentId" | "agentIds">): string[] {
+	if (task.agentIds?.length) return task.agentIds;
+	return task.agentId ? [task.agentId] : [];
 }

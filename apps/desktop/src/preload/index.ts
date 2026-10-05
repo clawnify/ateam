@@ -19,6 +19,9 @@ import {
 
 const api: AteamApi = {
 	projects: {
+		issues: (repository, refresh) => ipcRenderer.invoke(CH.projectsIssues, repository, refresh),
+		createIssue: (repository, input) =>
+			ipcRenderer.invoke(CH.projectsCreateIssue, repository, input),
 		pick: () => ipcRenderer.invoke(CH.projectsPick),
 		register: (repoPath, opts) => ipcRenderer.invoke(CH.projectsRegister, repoPath, opts),
 		remoteUrl: (projectId) => ipcRenderer.invoke(CH.projectsRemoteUrl, projectId),
@@ -26,6 +29,7 @@ const api: AteamApi = {
 		remove: (id) => ipcRenderer.invoke(CH.projectsRemove, id),
 	},
 	tasks: {
+		createFromIssue: (input) => ipcRenderer.invoke(CH.tasksCreateFromIssue, input),
 		list: (projectId) => ipcRenderer.invoke(CH.tasksList, projectId),
 		create: (input) => ipcRenderer.invoke(CH.tasksCreate, input),
 		remove: (input) => ipcRenderer.invoke(CH.tasksRemove, input),
@@ -47,6 +51,14 @@ const api: AteamApi = {
 	agents: {
 		list: () => ipcRenderer.invoke(CH.agentsList),
 		install: (input) => ipcRenderer.invoke(CH.agentsInstall, input),
+	},
+	settings: {
+		get: () => ipcRenderer.invoke(CH.settingsGet),
+		update: (patch) => ipcRenderer.invoke(CH.settingsUpdate, patch),
+	},
+	credentials: {
+		get: () => ipcRenderer.invoke(CH.credentialsGet),
+		update: (patch) => ipcRenderer.invoke(CH.credentialsUpdate, patch),
 	},
 	editor: {
 		open: (taskId) => ipcRenderer.invoke(CH.editorOpenUrl, taskId),
@@ -102,12 +114,18 @@ const api: AteamApi = {
 		writeImageBytes: (base64, ext) => ipcRenderer.invoke(CH.utilWriteImageBytes, base64, ext),
 		openInEditor: (worktreePath, alias) =>
 			ipcRenderer.invoke(CH.utilOpenInEditor, worktreePath, alias),
+		openBrowser: (alias) => ipcRenderer.invoke(CH.utilOpenBrowser, alias),
 	},
 	events: {
 		onTaskUpdated: (cb: (task: TaskDTO) => void) => {
 			const handler = (_: unknown, task: TaskDTO) => cb(task);
 			ipcRenderer.on(CH.evtTaskUpdated, handler);
 			return () => ipcRenderer.off(CH.evtTaskUpdated, handler);
+		},
+		onOpenSettings: (cb: () => void) => {
+			const handler = () => cb();
+			ipcRenderer.on(CH.evtOpenSettings, handler);
+			return () => ipcRenderer.off(CH.evtOpenSettings, handler);
 		},
 		onTaskRemoved: (cb: (taskId: string) => void) => {
 			const handler = (_: unknown, taskId: string) => cb(taskId);

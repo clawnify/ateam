@@ -1,5 +1,6 @@
-// Home: the desktop sidebar as a phone list. A Tasks section in status order
-// (Review, Needs You, In Progress, Backlog) and a Loops section below, each row
+// Home: the desktop sidebar as a phone list. A Tasks section, last updated
+// first (tap the header to switch to status order: Review, Needs You, In
+// Progress, Backlog), and a Loops section below, each row
 // an icon, a name and a status dot. Tap a task for its terminal; tap a loop for
 // its task's terminal, or the Loops tab if it has never run.
 import type { LoopDTO, ProjectDTO, TaskDTO } from "@ateam/protocol";
@@ -116,7 +117,7 @@ export function HomeScreen({
 	onOpenLoops: () => void;
 	onNewLoop: () => void;
 }) {
-	const [sort, setSort] = useState<TaskSort>("status");
+	const [sort, setSort] = useState<TaskSort>("updated");
 	const [projectsOpen, setProjectsOpen] = useState(true);
 	const [tasksOpen, setTasksOpen] = useState(true);
 	const [loopsOpen, setLoopsOpen] = useState(true);

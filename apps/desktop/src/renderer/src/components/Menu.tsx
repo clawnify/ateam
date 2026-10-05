@@ -71,6 +71,8 @@ export function Menu({
 				ref={btnRef}
 				className="iconbtn"
 				aria-label={label}
+				aria-haspopup="menu"
+				aria-expanded={pos !== null}
 				title={label}
 				onClick={toggle}
 			>
