@@ -60,11 +60,35 @@ import { readSettings, settingsPath, updateSettings } from "./settings-file";
 import type { Engine } from "./engine";
 import { GithubIssues } from "./github-issues";
 import { createIssueTask } from "./issue-tasks";
+import { nextCronRun } from "./loops/runner";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { createSizeArbiter } from "./pty/size-arbiter";
 import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
 import { searchSessions } from "./session-search";
 import { createTaskInProject, type SpawnAgentInput, shell, spawnAgentInTask } from "./sessions";
+
+/**
+ * The schedule fields of a loops:create/update, when given: an interval of at
+ * least a minute, or a 5-field cron in a real IANA zone that runs again. Never
+ * both, so a loop is never half one and half the other.
+ */
+function checkLoopSchedule(input: { intervalMs?: number; cron?: string; timeZone?: string }): void {
+	if (input.cron != null && input.intervalMs != null) {
+		throw new Error("A loop runs on an interval or a schedule, not both");
+	}
+	if (input.intervalMs != null && !(input.intervalMs >= 60_000)) {
+		throw new Error("Loop interval must be at least 1 minute");
+	}
+	if (input.cron == null) return;
+	if (!input.timeZone) throw new Error("A scheduled loop needs a time zone");
+	let next: number | null;
+	try {
+		next = nextCronRun({ pattern: input.cron, timeZone: input.timeZone }, Date.now());
+	} catch (e) {
+		throw new Error(`Invalid schedule: ${e instanceof Error ? e.message : String(e)}`);
+	}
+	if (next == null) throw new Error("That schedule never runs");
+}
 
 /** Project display name from the repo's README H1 (md or HTML), if present. */
 function readmeTitle(repoPath: string): string | null {
@@ -659,15 +683,19 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			})),
 		[CH.loopsCreate]: (input: CreateLoopInput) => {
 			// A loop is a user-scheduled agent session: it needs a prompt, a project
-			// on THIS engine (that's what makes it local or remote), and an interval.
+			// on THIS engine (that's what makes it local or remote), and a schedule.
 			const prompt = typeof input.config?.prompt === "string" ? input.config.prompt.trim() : "";
 			if (!prompt) throw new Error("A loop needs a prompt");
 			if (!input.projectId) throw new Error("A loop needs a project");
 			requireProjectFor(services, input.projectId);
-			if (!input.intervalMs || input.intervalMs < 60_000) {
-				throw new Error("Loop interval must be at least 1 minute");
+			if (input.cron == null && input.intervalMs == null) {
+				throw new Error("A loop needs a schedule");
 			}
-			const loops = loopRunner.createUserLoop({ ...input, cadenceMode: "fixed" });
+			checkLoopSchedule(input);
+			const loops = loopRunner.createUserLoop({
+				...input,
+				cadenceMode: input.cron != null ? "cron" : "fixed",
+			});
 			engine.sendLoopsUpdated();
 			return loops;
 		},
@@ -677,9 +705,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				const prompt = typeof input.config.prompt === "string" ? input.config.prompt.trim() : "";
 				if (!prompt) throw new Error("A loop needs a prompt");
 			}
-			if (input.intervalMs != null && input.intervalMs < 60_000) {
-				throw new Error("Loop interval must be at least 1 minute");
-			}
+			checkLoopSchedule(input);
 			const loops = loopRunner.updateUserLoop(input);
 			engine.sendLoopsUpdated();
 			return loops;

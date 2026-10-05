@@ -65,7 +65,14 @@
 // v11: projects:issues and tasks:createFromIssue. Older engines reject the new
 // methods explicitly; issueUrl on reads is optional for old task DTOs.
 // v12: projects:createIssue files a GitHub issue with the client engine's gh login.
-export const PROTOCOL_VERSION = 12;
+// v13: loops can run on a calendar ("every day at 09:00") as well as on an
+// interval. LoopDTO gained `cron` + `timeZone` and `cadence` gained "cron";
+// loops:create/update accept them. Shape-wise a missing field reads as "no
+// calendar schedule", which is harmless; the damage is on the WRITE side. A v12
+// engine rejects a create with no interval, which is loud, but on update it
+// drops the unknown keys and keeps the old interval while the save looks
+// successful. `loopSchedules` below hides the option instead.
+export const PROTOCOL_VERSION = 13;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -105,6 +112,10 @@ export const FEATURE_MIN_VERSION = {
 	 *  for an unattended scheduled loop means it wedges on the first permission ask.
 	 *  Hide the toggle rather than let it look saved. */
 	loopAutoMode: 10,
+	/** v13 added calendar schedules (LoopDTO.cron + timeZone). A v12 engine ignores
+	 *  them on update and keeps the old interval, so the save would look applied and
+	 *  not be. Hide "Every day at" rather than let it look saved. */
+	loopSchedules: 13,
 } as const;
 
 export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
@@ -473,7 +484,8 @@ export interface LoopDTO {
 	templateId: string | null;
 	projectId: string | null;
 	enabled: boolean;
-	cadence: "fixed" | "self_paced";
+	/** "fixed" runs every `intervalMs`; "cron" runs on the `cron` calendar in `timeZone`. */
+	cadence: "fixed" | "self_paced" | "cron";
 	/** The prompt each run hands the agent (agent-session loops). */
 	prompt: string | null;
 	/** Which coding agent each run launches (agent-session loops). */
@@ -485,12 +497,48 @@ export interface LoopDTO {
 	/** The loop's one persistent task — every run is a fresh session in it. */
 	taskId: string | null;
 	intervalMs: number | null;
+	/** 5-field cron, for `cadence: "cron"` (see dailyCron). Null otherwise. */
+	cron: string | null;
+	/** IANA zone the cron is read in: whoever set it, so a UTC box still fires at their 9:00. */
+	timeZone: string | null;
 	lastRunAt: number | null;
 	nextRunAt: number | null;
 	lastStatus: "ok" | "error" | "done" | null;
 	lastSummary: string | null;
 	lastError: string | null;
 	runs: number;
+}
+
+/** The cron a "daily at HH:MM" schedule is stored as: "09:30" -> "30 9 * * *". */
+export function dailyCron(time: string): string {
+	const [h, m] = time.split(":").map(Number);
+	return `${m} ${h} * * *`;
+}
+
+/** "HH:MM" when `cron` is a daily schedule (the only calendar the UI writes), else null. */
+export function dailyTimeOf(cron: string | null): string | null {
+	const m = cron?.match(/^(\d{1,2}) (\d{1,2}) \* \* \*$/);
+	if (!m) return null;
+	const [, min = "", hour = ""] = m;
+	return `${hour.padStart(2, "0")}:${min.padStart(2, "0")}`;
+}
+
+/**
+ * How a loop's schedule reads: "every 15m", "every 2h", "daily 09:00". The zone is
+ * named only when it is not the viewer's own, since a bare 09:00 means "yours".
+ */
+export function loopScheduleLabel(
+	loop: Pick<LoopDTO, "intervalMs" | "cron" | "timeZone">,
+	viewerTimeZone?: string,
+): string {
+	if (loop.cron) {
+		const at = dailyTimeOf(loop.cron);
+		const zone = loop.timeZone && loop.timeZone !== viewerTimeZone ? ` ${loop.timeZone}` : "";
+		return at ? `daily ${at}${zone}` : `cron ${loop.cron}${zone}`;
+	}
+	if (loop.intervalMs == null) return "";
+	const min = Math.round(loop.intervalMs / 60_000);
+	return min < 60 || min % 60 !== 0 ? `every ${min}m` : `every ${min / 60}h`;
 }
 
 /** A loop template the user can instantiate, with its configurable params. */
@@ -514,7 +562,11 @@ export interface CreateLoopInput {
 	name: string;
 	projectId?: string;
 	config?: Record<string, unknown>;
+	/** Run every this many ms. Give this OR `cron`. */
 	intervalMs?: number;
+	/** Run on this 5-field cron, read in `timeZone` (required with it). Needs v13. */
+	cron?: string;
+	timeZone?: string;
 	enabled?: boolean;
 }
 
@@ -528,7 +580,11 @@ export interface CreateLoopInput {
 export interface UpdateLoopInput {
 	id: string;
 	name?: string;
+	/** Switch to (or re-time) an interval schedule. Give this OR `cron`; neither keeps the schedule. */
 	intervalMs?: number;
+	/** Switch to (or re-time) a calendar schedule, with `timeZone`. Needs v13. */
+	cron?: string;
+	timeZone?: string;
 	config?: Record<string, unknown>;
 }
 

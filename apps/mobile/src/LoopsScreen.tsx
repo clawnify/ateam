@@ -3,7 +3,7 @@
 // editing goes through LoopForm, which App renders as a modal so Home's plus
 // can open it too.
 import type { AgentDTO, AteamApi, LoopDTO, TaskDTO } from "@ateam/protocol";
-import { boxSupports } from "@ateam/protocol";
+import { boxSupports, loopScheduleLabel } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useEffect, useState } from "react";
 import {
@@ -30,7 +30,8 @@ function untilLabel(nextRunAt: number | null, now: number): string {
 	if (ms <= 0) return "now";
 	const s = Math.round(ms / 1000);
 	if (s < 60) return `in ${s}s`;
-	return `in ${Math.round(s / 60)}m`;
+	if (s < 5400) return `in ${Math.round(s / 60)}m`;
+	return `in ${Math.round(s / 3600)}h`;
 }
 
 /** "12s ago" / "3m ago" / "never". */
@@ -42,12 +43,8 @@ function agoLabel(lastRunAt: number | null, now: number): string {
 	return `${Math.round(s / 3600)}h ago`;
 }
 
-/** "every 5m" / "every 2h". */
-function everyLabel(intervalMs: number | null): string {
-	if (intervalMs == null) return "";
-	const min = Math.round(intervalMs / 60_000);
-	return min < 60 ? `every ${min}m` : `every ${Math.round(min / 60)}h`;
-}
+/** This device's zone: a loop's "daily 09:00" names its zone only when it differs. */
+const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 export function LoopsScreen({
 	api,
@@ -117,7 +114,7 @@ export function LoopsScreen({
 										{l.title}
 									</Text>
 									{l.yolo ? <Text style={styles.autoChip}>auto</Text> : null}
-									<Text style={styles.cadence}>{everyLabel(l.intervalMs)}</Text>
+									<Text style={styles.cadence}>{loopScheduleLabel(l, LOCAL_TZ)}</Text>
 								</View>
 								{l.prompt ? (
 									<Text style={styles.prompt} numberOfLines={2}>
@@ -209,7 +206,11 @@ export function LoopForm({
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const current = pickable.find((a) => a.id === agentId) ?? pickable[0];
-	const ready = prompt.trim().length > 0 && Number(everyMin) >= 1 && (editing || projectId);
+	// A calendar ("daily 09:00") is set on the desktop: shown read-only here, and
+	// a save sends no interval, which would silently turn it into one.
+	const onCalendar = !!editing?.cron;
+	const ready =
+		prompt.trim().length > 0 && (onCalendar || Number(everyMin) >= 1) && (editing || projectId);
 
 	const save = async () => {
 		if (!ready) return;
@@ -227,7 +228,7 @@ export function LoopForm({
 				? await api.loops.update({
 						id: editing.id,
 						name: name.trim() || "Loop",
-						intervalMs,
+						...(onCalendar ? {} : { intervalMs }),
 						config,
 					})
 				: await api.loops.create({
@@ -341,15 +342,26 @@ export function LoopForm({
 							placeholderTextColor={C.faint}
 							multiline
 						/>
-						<Text style={styles.label}>EVERY (MINUTES)</Text>
-						<TextInput
-							style={styles.input}
-							value={everyMin}
-							onChangeText={setEveryMin}
-							keyboardType="number-pad"
-							placeholder="60"
-							placeholderTextColor={C.faint}
-						/>
+						{onCalendar && editing ? (
+							<>
+								<Text style={styles.label}>SCHEDULE</Text>
+								<Text style={styles.meta}>
+									{loopScheduleLabel(editing, LOCAL_TZ)}. Change it on the desktop.
+								</Text>
+							</>
+						) : (
+							<>
+								<Text style={styles.label}>EVERY (MINUTES)</Text>
+								<TextInput
+									style={styles.input}
+									value={everyMin}
+									onChangeText={setEveryMin}
+									keyboardType="number-pad"
+									placeholder="60"
+									placeholderTextColor={C.faint}
+								/>
+							</>
+						)}
 						{error ? <Text style={styles.formError}>{error}</Text> : null}
 						{!editing && !projectId ? (
 							<Text style={styles.formError}>Pick a project first.</Text>

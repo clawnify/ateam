@@ -72,7 +72,7 @@ import { SessionGlyphs, SessionIcon } from "./components/AgentIcon";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { FileDiffView } from "./components/FileDiffView";
 import { IconButton } from "./components/IconButton";
-import { LoopsPanel } from "./components/LoopsPanel";
+import { LoopForm, LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
 import { PromptComposer } from "./components/PromptComposer";
 import { TaskSearch } from "./components/TaskSearch";
@@ -231,6 +231,10 @@ export function App() {
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
 	const [loopsCollapsed, setLoopsCollapsed] = useState(false);
+	// The open loop dialog: `editId: null` creates, an id edits that loop. Owned
+	// here, not by LoopsPanel, so the sidebar's "+" opens it over any view, the
+	// way the task composer opens.
+	const [loopDialog, setLoopDialog] = useState<{ editId: string | null } | null>(null);
 	// Every engine's loops (merged), for the sidebar LOOPS section and the Loops
 	// tab (both scoped to the selected project). Each loop owns one persistent
 	// task (loop.taskId); those tasks show under LOOPS.
@@ -627,6 +631,14 @@ export function App() {
 		const memberIds = new Set(activeMembers.map((m) => m.projectId));
 		return loops.filter((l) => l.projectId != null && memberIds.has(l.projectId));
 	}, [loops, activeMembers]);
+	// The loop an edit dialog targets. If it leaves scope (deleted elsewhere, or
+	// the project switched) the dialog closes rather than edit a loop that's gone.
+	const editingLoop = loopDialog?.editId
+		? (activeLoops.find((l) => l.id === loopDialog.editId) ?? null)
+		: null;
+	useEffect(() => {
+		if (loopDialog?.editId && !editingLoop) setLoopDialog(null);
+	}, [loopDialog, editingLoop]);
 	// Sidebar LOOPS rows: the active (enabled) loops first, paused ones after,
 	// so what is actually running is always at the top of the list. The Loops
 	// tab keeps the engine's order so a loop doesn't jump when toggled there.
@@ -1401,7 +1413,7 @@ export function App() {
 								<IconButton
 									icon={Plus}
 									label="New loop"
-									onClick={() => setView("loops")}
+									onClick={() => setLoopDialog({ editId: null })}
 									disabled={!activeProjectId}
 								/>
 							</div>
@@ -1420,7 +1432,7 @@ export function App() {
 													loop={l}
 													task={task}
 													selected={task != null && task.id === sidebarSelectedId}
-													onClick={() => (task ? toggleTask(task) : setView("loops"))}
+													onClick={() => (task ? toggleTask(task) : goToView("loops"))}
 												/>
 											);
 										})
@@ -1724,11 +1736,9 @@ export function App() {
 						<LoopsPanel
 							loops={activeLoops}
 							members={activeMembers}
-							cardKey={activeCard?.key ?? null}
-							agents={agents}
-							envProtocol={envProtocol}
-							onInstallAgent={installAgentOn}
 							onChanged={refreshLoops}
+							onNew={() => setLoopDialog({ editId: null })}
+							onEdit={(id) => setLoopDialog({ editId: id })}
 						/>
 					)}
 				</div>
@@ -1774,6 +1784,24 @@ export function App() {
 						setComposerIssue(null);
 					}}
 					onCreate={composeTask}
+				/>
+			)}
+			{loopDialog && activeCard && (loopDialog.editId === null || editingLoop) && (
+				<LoopForm
+					key={loopDialog.editId ?? "new"}
+					editing={editingLoop ?? undefined}
+					members={activeMembers}
+					agents={agents}
+					envProtocol={envProtocol}
+					onInstallAgent={installAgentOn}
+					onCancel={() => setLoopDialog(null)}
+					onSaved={() => {
+						refreshLoops();
+						// The sidebar's Loops section starts collapsed: open it so a new
+						// loop lands somewhere visible, whichever view is behind the dialog.
+						if (loopDialog.editId === null) setLoopsCollapsed(false);
+						setLoopDialog(null);
+					}}
 				/>
 			)}
 			{promptUi}

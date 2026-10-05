@@ -108,6 +108,8 @@ export function bootstrap(db: SqliteExecutor): void {
 			config TEXT,
 			cadence_mode TEXT,
 			interval_ms INTEGER,
+			cron TEXT,
+			time_zone TEXT,
 			enabled INTEGER NOT NULL DEFAULT 1,
 			last_run_at INTEGER,
 			next_run_at INTEGER,
@@ -158,6 +160,8 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE loops ADD COLUMN config TEXT",
 		"ALTER TABLE loops ADD COLUMN cadence_mode TEXT",
 		"ALTER TABLE loops ADD COLUMN interval_ms INTEGER",
+		"ALTER TABLE loops ADD COLUMN cron TEXT",
+		"ALTER TABLE loops ADD COLUMN time_zone TEXT",
 		// Every row that predates this column is an ssh_config alias — the only
 		// kind of connection that existed — so the default backfills correctly.
 		"ALTER TABLE hosts ADD COLUMN transport TEXT NOT NULL DEFAULT 'ssh'",

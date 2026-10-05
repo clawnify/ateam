@@ -2469,13 +2469,8 @@ input {
 	border-radius: 5px;
 	padding: 1px 5px;
 }
-.loop-form {
-	flex-direction: column;
-	align-items: stretch;
-	padding: 18px 20px;
-}
-/* The form's sections live in .loop-main (a single child of .loop-card), so the
-   section spacing is this div's gap, not the card's. */
+/* The form's sections live in .loop-main (the dialog's single child), so the
+   section spacing is this div's gap, not the dialog's. */
 .loop-form .loop-main {
 	display: flex;
 	flex-direction: column;
@@ -2507,7 +2502,7 @@ input {
 	user-select: none;
 }
 .comp-every input {
-	width: 56px;
+	width: 40px;
 	border: none;
 	background: transparent;
 	color: var(--text);
@@ -2516,6 +2511,12 @@ input {
 	padding: 0;
 	appearance: textfield;
 	-moz-appearance: textfield;
+}
+/* The time of day for "Every day at": the native control, in the dark chrome. */
+.comp-every input[type="time"] {
+	width: auto;
+	text-align: left;
+	color-scheme: dark;
 }
 .comp-every:focus-within {
 	color: var(--text);

@@ -180,7 +180,12 @@ describe("createDispatcher", () => {
 
 		const seeds = engine.services.pendingSeeds;
 		let release!: () => void;
-		seeds.set(task.id, new Promise<void>((r) => { release = r; }));
+		seeds.set(
+			task.id,
+			new Promise<void>((r) => {
+				release = r;
+			}),
+		);
 
 		const during = (await d.handle(CH.tasksList, [project!.id])) as { preparing: boolean }[];
 		expect(during[0]?.preparing).toBe(true);
@@ -726,6 +731,37 @@ describe("pty sizing across clients", () => {
 		await d2.handle(CH.ptyResize, ["t", 11, 11]);
 		await d2.handle(CH.ptyWrite, ["t", "k"]);
 		expect(e.calls).toEqual(["resize t 10x10", "resize t 11x11", "write t k"]);
+	});
+
+	describe("loop schedules", () => {
+		const update = (input: Record<string, unknown>) =>
+			createDispatcher(makeEngine(createTestDb()).engine).handle(CH.loopsUpdate, [
+				{ id: "l1", ...input },
+			]);
+
+		it("rejects an interval under a minute", async () => {
+			await expect(update({ intervalMs: 30_000 })).rejects.toThrow("at least 1 minute");
+		});
+		it("rejects an interval and a calendar together", async () => {
+			await expect(
+				update({ intervalMs: 60_000, cron: "0 9 * * *", timeZone: "UTC" }),
+			).rejects.toThrow("not both");
+		});
+		it("rejects a calendar without a zone, a bad zone, or a bad pattern", async () => {
+			await expect(update({ cron: "0 9 * * *" })).rejects.toThrow("time zone");
+			await expect(update({ cron: "0 9 * * *", timeZone: "Mars/Olympus" })).rejects.toThrow(
+				"Invalid schedule",
+			);
+			await expect(update({ cron: "every morning", timeZone: "UTC" })).rejects.toThrow(
+				"Invalid schedule",
+			);
+			await expect(update({ cron: "* * * * * *", timeZone: "UTC" })).rejects.toThrow(
+				"Invalid schedule",
+			);
+		});
+		it("rejects a calendar that never comes round", async () => {
+			await expect(update({ cron: "0 9 31 2 *", timeZone: "UTC" })).rejects.toThrow("never runs");
+		});
 	});
 });
 
