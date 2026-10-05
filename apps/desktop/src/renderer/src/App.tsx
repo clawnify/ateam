@@ -708,8 +708,8 @@ export function App() {
 	}, [activeProjectId]);
 	// Loops mode follows the sidebar's LOOPS list the way Tasks mode follows TASKS.
 	const loopOrderIds = useMemo(
-		() => activeLoops.flatMap((l) => (l.taskId ? [l.taskId] : [])),
-		[activeLoops],
+		() => sidebarLoops.flatMap((l) => (l.taskId ? [l.taskId] : [])),
+		[sidebarLoops],
 	);
 	const missionTasks = useMemo(
 		() =>
