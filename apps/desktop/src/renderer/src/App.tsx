@@ -230,7 +230,7 @@ export function App() {
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
-	const [loopsCollapsed, setLoopsCollapsed] = useState(true);
+	const [loopsCollapsed, setLoopsCollapsed] = useState(false);
 	// Every engine's loops (merged), for the sidebar LOOPS section and the Loops
 	// tab (both scoped to the selected project). Each loop owns one persistent
 	// task (loop.taskId); those tasks show under LOOPS.
@@ -627,6 +627,13 @@ export function App() {
 		const memberIds = new Set(activeMembers.map((m) => m.projectId));
 		return loops.filter((l) => l.projectId != null && memberIds.has(l.projectId));
 	}, [loops, activeMembers]);
+	// Sidebar LOOPS rows: the active (enabled) loops first, paused ones after,
+	// so what is actually running is always at the top of the list. The Loops
+	// tab keeps the engine's order so a loop doesn't jump when toggled there.
+	const sidebarLoops = useMemo(
+		() => [...activeLoops].sort((a, b) => Number(b.enabled) - Number(a.enabled)),
+		[activeLoops],
+	);
 	const loopTaskIds = useMemo(() => {
 		const ids = new Set<string>();
 		for (const l of loops) if (l.taskId) ids.add(l.taskId);
@@ -701,8 +708,8 @@ export function App() {
 	}, [activeProjectId]);
 	// Loops mode follows the sidebar's LOOPS list the way Tasks mode follows TASKS.
 	const loopOrderIds = useMemo(
-		() => activeLoops.flatMap((l) => (l.taskId ? [l.taskId] : [])),
-		[activeLoops],
+		() => sidebarLoops.flatMap((l) => (l.taskId ? [l.taskId] : [])),
+		[sidebarLoops],
 	);
 	const missionTasks = useMemo(
 		() =>
@@ -1374,10 +1381,10 @@ export function App() {
 
 						{/* LOOPS accordion — the active repo's scheduled agent sessions.
 						    Each loop owns one persistent task; clicking a row opens that
-						    task's terminal (or the Loops tab before its first run).
-						    loops-side-section floats it to the sidebar's bottom while
-						    there is spare room; a long task list pushes it down. */}
-						<div className="side-section loops-side-section">
+						    task's terminal (or the Loops tab before its first run). It
+						    stacks right under Tasks like every other accordion, so a
+						    collapsed Tasks brings it straight up. */}
+						<div className="side-section">
 							<div className="section-head tasks-head">
 								<button
 									type="button"
@@ -1400,10 +1407,10 @@ export function App() {
 							</div>
 							{!loopsCollapsed && (
 								<div className="side-list">
-									{activeLoops.length === 0 ? (
+									{sidebarLoops.length === 0 ? (
 										<div className="tree-empty">No loops</div>
 									) : (
-										activeLoops.map((l) => {
+										sidebarLoops.map((l) => {
 											const task = l.taskId
 												? (activeTasks.find((t) => t.id === l.taskId) ?? null)
 												: null;
