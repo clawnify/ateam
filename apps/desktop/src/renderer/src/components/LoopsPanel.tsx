@@ -1,4 +1,12 @@
-import { type AgentDTO, boxSupports, FEATURE_MIN_VERSION, type LoopDTO } from "@ateam/protocol";
+import {
+	type AgentDTO,
+	boxSupports,
+	dailyCron,
+	dailyTimeOf,
+	FEATURE_MIN_VERSION,
+	type LoopDTO,
+	loopScheduleLabel,
+} from "@ateam/protocol";
 import {
 	AlertTriangle,
 	ArrowUp,
@@ -18,6 +26,7 @@ import { useEffect, useRef, useState } from "react";
 import { type Alias, aliasLabel, type EngineMember } from "../unify";
 import { AgentPicker } from "./AgentPicker";
 import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
+import { SCHEDULE_PRESETS, type ScheduleKind, SchedulePicker } from "./SchedulePicker";
 
 /** "in 45s" / "in 2m" / "now", or "—" when no next run is scheduled. */
 function untilLabel(nextRunAt: number | null, now: number): string {
@@ -26,7 +35,8 @@ function untilLabel(nextRunAt: number | null, now: number): string {
 	if (ms <= 0) return "now";
 	const s = Math.round(ms / 1000);
 	if (s < 60) return `in ${s}s`;
-	return `in ${Math.round(s / 60)}m`;
+	if (s < 5400) return `in ${Math.round(s / 60)}m`;
+	return `in ${Math.round(s / 3600)}h`;
 }
 
 /** "12s ago" / "3m ago" / "never". */
@@ -38,11 +48,20 @@ function agoLabel(lastRunAt: number | null, now: number): string {
 	return `${Math.round(s / 3600)}h ago`;
 }
 
-/** "every 5m" / "every 2h". */
-function everyLabel(intervalMs: number | null): string {
-	if (intervalMs == null) return "";
-	const min = Math.round(intervalMs / 60_000);
-	return min < 60 ? `every ${min}m` : `every ${Math.round(min / 60)}h`;
+/** This machine's zone: what "every day at 09:00" means for whoever sets it. */
+const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/** Which kind of schedule a loop has, for the picker: a preset, custom, or a calendar. */
+function scheduleKindOf(loop: LoopDTO | undefined): ScheduleKind {
+	if (loop?.cron) {
+		return dailyTimeOf(loop.cron)
+			? { kind: "daily" }
+			: { kind: "other", label: loopScheduleLabel(loop, LOCAL_TZ) };
+	}
+	const min = loop?.intervalMs ? Math.round(loop.intervalMs / 60_000) : 60;
+	return SCHEDULE_PRESETS.some((p) => p.minutes === min)
+		? { kind: "preset", minutes: min }
+		: { kind: "custom" };
 }
 
 /** The engine holding the copy of the repo this loop was created on. */
@@ -51,25 +70,8 @@ function memberFor(members: EngineMember[], projectId: string | null): EngineMem
 	return members.find((m) => m.projectId === projectId) ?? null;
 }
 
-// A half-written loop must survive a tab switch (the panel unmounts with the
-// tab). Drafts live at module scope, keyed by the loop being edited (or
-// "new:<card>" for the create form — a draft belongs to the repo it was started
-// on), together with which form was open — restored on mount, cleared only on
-// save or an explicit Cancel.
-interface LoopDraft {
-	name: string;
-	prompt: string;
-	followUp: string;
-	projectId: string;
-	agentId: string;
-	everyMin: string;
-	yolo: boolean;
-}
-const drafts = new Map<string, LoopDraft>();
-const openForm = { creating: false, editingId: null as string | null };
-
 /**
- * Inline form for a loop — a scheduled agent session on an environment. With
+ * The loop dialog, for a scheduled agent session on an environment. With
  * `editing`, it patches that loop in place. The repo is the selected project, so
  * the only placement choice is WHICH environment runs it (this Mac or a box that
  * also has the repo); that's fixed at creation — moving a loop means delete +
@@ -77,9 +79,8 @@ const openForm = { creating: false, editingId: null as string | null };
  * prompt as the big field, and a foot of the same pills (agent, environment,
  * Auto mode) so the two dialogs read as one gesture.
  */
-function LoopForm({
+export function LoopForm({
 	editing,
-	draftKey,
 	members,
 	agents,
 	envProtocol,
@@ -88,7 +89,6 @@ function LoopForm({
 	onCancel,
 }: {
 	editing?: LoopDTO;
-	draftKey: string;
 	members: EngineMember[];
 	agents: AgentDTO[];
 	envProtocol: Record<string, number>;
@@ -96,10 +96,6 @@ function LoopForm({
 	onSaved: () => void;
 	onCancel: () => void;
 }) {
-	// Resume the surviving draft for this form, falling back to the loop being
-	// edited (or blank for a new one). Every change is mirrored back into the
-	// draft so a tab switch loses nothing.
-	const draft = drafts.get(draftKey);
 	// Where the cursor lands when the form opens. A new loop cannot be created
 	// without a name, so it starts there; an existing one already has its name,
 	// so it opens on the prompt, like the composer. Keyed by the loop's id, not
@@ -111,43 +107,33 @@ function LoopForm({
 	useEffect(() => {
 		(editingLoopId ? promptRef.current : nameRef.current)?.focus();
 	}, [editingLoopId]);
-	const [name, setName] = useState(draft?.name ?? editing?.title ?? "");
-	const [prompt, setPrompt] = useState(draft?.prompt ?? editing?.prompt ?? "");
-	const [followUp, setFollowUp] = useState(draft?.followUp ?? editing?.followUp ?? "");
+	const [name, setName] = useState(editing?.title ?? "");
+	const [prompt, setPrompt] = useState(editing?.prompt ?? "");
+	const [followUp, setFollowUp] = useState(editing?.followUp ?? "");
 	// Default environment: this Mac when it has the repo, else the first box.
 	const [projectId, setProjectId] = useState(
-		draft?.projectId ??
-			editing?.projectId ??
+		editing?.projectId ??
 			members.find((m) => m.alias === null)?.projectId ??
 			members[0]?.projectId ??
 			"",
 	);
 	// Only agents actually installed on this machine can run a session.
 	const usable = agents.filter((a) => a.available);
-	const [agentId, setAgentId] = useState(
-		draft?.agentId ?? editing?.agentId ?? usable[0]?.id ?? "claude",
-	);
+	const [agentId, setAgentId] = useState(editing?.agentId ?? usable[0]?.id ?? "claude");
 	// A loop outlives the toolchain it was made with: the agent it is pinned to
 	// can be uninstalled while the loop keeps ticking (every run then fails at
 	// launch). The AgentPicker keeps the value and marks the pill "not installed"
 	// rather than silently showing the first agent — Save would write the missing
 	// one straight back, and this is the one screen you come to to repair the loop.
+	const [schedule, setSchedule] = useState<ScheduleKind>(() => scheduleKindOf(editing));
+	// The inputs beside the picker: minutes for Custom, a wall-clock time for daily.
 	const [everyMin, setEveryMin] = useState(
-		draft?.everyMin ??
-			(editing?.intervalMs ? String(Math.round(editing.intervalMs / 60_000)) : "60"),
+		editing?.intervalMs ? String(Math.round(editing.intervalMs / 60_000)) : "60",
 	);
-	const [yolo, setYolo] = useState(draft?.yolo ?? editing?.yolo ?? false);
+	const [dailyAt, setDailyAt] = useState(dailyTimeOf(editing?.cron ?? null) ?? "09:00");
+	const [yolo, setYolo] = useState(editing?.yolo ?? false);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-
-	useEffect(() => {
-		drafts.set(draftKey, { name, prompt, followUp, projectId, agentId, everyMin, yolo });
-	}, [draftKey, name, prompt, followUp, projectId, agentId, everyMin, yolo]);
-
-	const close = (done: () => void) => {
-		drafts.delete(draftKey);
-		done();
-	};
 
 	// The engine that will run this loop's sessions — the environment selected
 	// (fixed at creation when editing). Both version-gated features key off it:
@@ -165,8 +151,28 @@ function LoopForm({
 	// Same shape for Auto mode: an older engine stores the key and launches
 	// permission-prompted, which wedges an unattended loop on its first ask.
 	const autoBlockedBy = gatedBy("loopAutoMode");
+	// And for calendars: an older engine drops `cron` on update and keeps the old
+	// interval, so the save would look applied and not be.
+	const scheduleBlockedBy = gatedBy("loopSchedules");
 
-	const ready = name.trim() && prompt.trim() && projectId && Number(everyMin) >= 1;
+	// The schedule fields to send. A calendar keeps the zone it was set in (so
+	// re-saving from another machine doesn't shift it); a new one takes this
+	// machine's. "other" is a calendar this form can't edit: send nothing, keep it.
+	const scheduleInput = (): { intervalMs?: number; cron?: string; timeZone?: string } => {
+		if (schedule.kind === "preset") return { intervalMs: schedule.minutes * 60_000 };
+		if (schedule.kind === "custom") return { intervalMs: Number(everyMin) * 60_000 };
+		if (schedule.kind === "daily") {
+			return { cron: dailyCron(dailyAt), timeZone: editing?.timeZone ?? LOCAL_TZ };
+		}
+		return {};
+	};
+	const scheduleReady =
+		schedule.kind === "custom"
+			? Number(everyMin) >= 1
+			: schedule.kind === "daily"
+				? /^\d{2}:\d{2}$/.test(dailyAt)
+				: true;
+	const ready = name.trim() && prompt.trim() && projectId && scheduleReady;
 
 	const submit = async () => {
 		if (!ready) return;
@@ -177,7 +183,7 @@ function LoopForm({
 				await window.ateam.loops.update({
 					id: editing.id,
 					name: name.trim(),
-					intervalMs: Number(everyMin) * 60_000,
+					...scheduleInput(),
 					config: {
 						prompt: prompt.trim(),
 						agentId,
@@ -192,7 +198,7 @@ function LoopForm({
 					templateId: "agent-session",
 					name: name.trim(),
 					projectId,
-					intervalMs: Number(everyMin) * 60_000,
+					...scheduleInput(),
 					config: {
 						prompt: prompt.trim(),
 						agentId,
@@ -201,7 +207,7 @@ function LoopForm({
 					},
 				});
 			}
-			close(onSaved);
+			onSaved();
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -235,112 +241,142 @@ function LoopForm({
 	};
 
 	return (
-		<div className="loop-card loop-form" onKeyDown={onKeys}>
-			<div className="loop-main">
-				<div className="comp-head">
-					<input
-						ref={nameRef}
-						className="comp-name"
-						placeholder="Loop name"
-						value={name}
-						onChange={(e) => setName(e.target.value)}
-					/>
-				</div>
-				<textarea
-					ref={promptRef}
-					className="comp-prompt"
-					placeholder="What should each run do?"
-					value={prompt}
-					onChange={(e) => setPrompt(e.target.value)}
-				/>
-				<div className="loop-followup">
-					<span>
-						{followUpBlockedBy === null
-							? "Follow-up (optional) — sent once, after the agent's first reply"
-							: `Follow-up — needs Ateam v${FEATURE_MIN_VERSION.followUps} on this box (it runs v${followUpBlockedBy})`}
-					</span>
-					<textarea
-						className="comp-prompt"
-						value={followUp}
-						disabled={followUpBlockedBy !== null}
-						placeholder="/check"
-						onChange={(e) => setFollowUp(e.target.value)}
-					/>
-				</div>
-				<div className="comp-foot">
-					<AgentPicker
-						agents={agents}
-						value={agentId}
-						onChange={setAgentId}
-						isAvailable={(id) => agents.find((a) => a.id === id)?.available ?? false}
-						alias={ownerAlias}
-						onInstallAgent={onInstallAgent}
-					/>
-					{editing ? (
-						<span
-							className="comp-env-fixed"
-							title="Fixed at creation — delete and recreate to move a loop"
-						>
-							{ownerAlias === null ? (
-								<Laptop size={14} strokeWidth={1.75} />
-							) : (
-								<Server size={14} strokeWidth={1.75} />
-							)}
-							<span>{aliasLabel(ownerAlias)}</span>
-						</span>
-					) : (
-						<EnvironmentPicker environments={envOptions} value={ownerAlias} onChange={pickEnv} />
-					)}
-					<label className="comp-every" title="How often each run fires">
-						<span>every</span>
+		<div className="overlay" role="presentation" onMouseDown={onCancel}>
+			<div
+				className="dialog composer loop-form"
+				role="dialog"
+				aria-modal="true"
+				aria-label={editing ? "Edit loop" : "New loop"}
+				onMouseDown={(e) => e.stopPropagation()}
+				onKeyDown={onKeys}
+			>
+				<div className="loop-main">
+					<div className="comp-head">
 						<input
-							type="number"
-							min={1}
-							value={everyMin}
-							onChange={(e) => setEveryMin(e.target.value)}
+							ref={nameRef}
+							className="comp-name"
+							placeholder="Loop name"
+							value={name}
+							onChange={(e) => setName(e.target.value)}
 						/>
-						<span>min</span>
-					</label>
-					<button
-						type="button"
-						className={`iconbtn comp-yolo ${yolo ? "active" : ""}`}
-						title={
-							autoBlockedBy === null
-								? "Auto mode — each run launches permission-free"
-								: `Auto mode — needs Ateam v${FEATURE_MIN_VERSION.loopAutoMode} on this box (it runs v${autoBlockedBy})`
-						}
-						aria-label="Auto mode"
-						disabled={autoBlockedBy !== null}
-						onClick={() => setYolo((v) => !v)}
-					>
-						<Zap size={16} strokeWidth={1.75} />
-					</button>
-					<span className="spacer" />
-					<button type="button" className="navbtn" onClick={() => close(onCancel)}>
-						<X size={14} /> Cancel
-					</button>
-					<span className="muted" style={{ fontSize: 11 }}>
-						⌘⏎
-					</span>
-					<button
-						type="button"
-						className="comp-go"
-						disabled={saving || !ready}
-						title={editing ? "Save this loop (⌘⏎)" : "Create this loop (⌘⏎)"}
-						onClick={() => void submit()}
-					>
-						{editing ? (
-							<Check size={15} strokeWidth={2.25} />
-						) : (
-							<ArrowUp size={15} strokeWidth={2.25} />
-						)}
-					</button>
-				</div>
-				{error && (
-					<div className="loop-stat err">
-						<AlertTriangle size={13} /> {error}
 					</div>
-				)}
+					<textarea
+						ref={promptRef}
+						className="comp-prompt"
+						placeholder="What should each run do?"
+						value={prompt}
+						onChange={(e) => setPrompt(e.target.value)}
+					/>
+					<div className="loop-followup">
+						<span>
+							{followUpBlockedBy === null
+								? "Follow-up (optional) — sent once, after the agent's first reply"
+								: `Follow-up — needs Ateam v${FEATURE_MIN_VERSION.followUps} on this box (it runs v${followUpBlockedBy})`}
+						</span>
+						<textarea
+							className="comp-prompt"
+							value={followUp}
+							disabled={followUpBlockedBy !== null}
+							placeholder="/check"
+							onChange={(e) => setFollowUp(e.target.value)}
+						/>
+					</div>
+					<div className="comp-foot">
+						<AgentPicker
+							agents={agents}
+							value={agentId}
+							onChange={setAgentId}
+							isAvailable={(id) => agents.find((a) => a.id === id)?.available ?? false}
+							alias={ownerAlias}
+							onInstallAgent={onInstallAgent}
+						/>
+						{editing ? (
+							<span
+								className="comp-env-fixed"
+								title="Fixed at creation — delete and recreate to move a loop"
+							>
+								{ownerAlias === null ? (
+									<Laptop size={14} strokeWidth={1.75} />
+								) : (
+									<Server size={14} strokeWidth={1.75} />
+								)}
+								<span>{aliasLabel(ownerAlias)}</span>
+							</span>
+						) : (
+							<EnvironmentPicker environments={envOptions} value={ownerAlias} onChange={pickEnv} />
+						)}
+						<SchedulePicker
+							value={schedule}
+							onChange={setSchedule}
+							dailyBlockedReason={
+								scheduleBlockedBy === null
+									? null
+									: `Needs Ateam v${FEATURE_MIN_VERSION.loopSchedules} on this box (it runs v${scheduleBlockedBy})`
+							}
+						/>
+						{schedule.kind === "daily" && (
+							<label className="comp-every" title={`Your time (${editing?.timeZone ?? LOCAL_TZ})`}>
+								<input
+									type="time"
+									aria-label="Time of day"
+									value={dailyAt}
+									onChange={(e) => setDailyAt(e.target.value)}
+								/>
+							</label>
+						)}
+						{schedule.kind === "custom" && (
+							<label className="comp-every" title="Minutes between runs">
+								<input
+									type="number"
+									min={1}
+									aria-label="Minutes between runs"
+									value={everyMin}
+									onChange={(e) => setEveryMin(e.target.value)}
+								/>
+								<span>min</span>
+							</label>
+						)}
+						<button
+							type="button"
+							className={`iconbtn comp-yolo ${yolo ? "active" : ""}`}
+							title={
+								autoBlockedBy === null
+									? "Auto mode — each run launches permission-free"
+									: `Auto mode — needs Ateam v${FEATURE_MIN_VERSION.loopAutoMode} on this box (it runs v${autoBlockedBy})`
+							}
+							aria-label="Auto mode"
+							disabled={autoBlockedBy !== null}
+							onClick={() => setYolo((v) => !v)}
+						>
+							<Zap size={16} strokeWidth={1.75} />
+						</button>
+						<span className="spacer" />
+						<button type="button" className="navbtn" onClick={onCancel}>
+							<X size={14} /> Cancel
+						</button>
+						<span className="muted" style={{ fontSize: 11 }}>
+							⌘⏎
+						</span>
+						<button
+							type="button"
+							className="comp-go"
+							disabled={saving || !ready}
+							title={editing ? "Save this loop (⌘⏎)" : "Create this loop (⌘⏎)"}
+							onClick={() => void submit()}
+						>
+							{editing ? (
+								<Check size={15} strokeWidth={2.25} />
+							) : (
+								<ArrowUp size={15} strokeWidth={2.25} />
+							)}
+						</button>
+					</div>
+					{error && (
+						<div className="loop-stat err">
+							<AlertTriangle size={13} /> {error}
+						</div>
+					)}
+				</div>
 			</div>
 		</div>
 	);
@@ -357,49 +393,25 @@ function LoopForm({
 export function LoopsPanel({
 	loops,
 	members,
-	cardKey,
-	agents,
-	envProtocol,
-	onInstallAgent,
 	onChanged,
+	onNew,
+	onEdit,
 }: {
 	loops: LoopDTO[];
 	members: EngineMember[];
-	cardKey: string | null;
-	agents: AgentDTO[];
-	envProtocol: Record<string, number>;
-	/** Install a coding agent on the selected environment — the composer's affordance. */
-	onInstallAgent?: (alias: string | null, agentId: string) => Promise<{ loginCommand?: string }>;
 	onChanged: () => void;
+	/** Open the New loop dialog (App owns it, so the sidebar's "+" opens it too). */
+	onNew: () => void;
+	/** Open the edit dialog for this loop. */
+	onEdit: (id: string) => void;
 }) {
 	const [busy, setBusy] = useState<string | null>(null);
-	// Which form is open survives a tab switch, like the draft itself.
-	const [creating, setCreatingState] = useState(openForm.creating);
-	const [editingId, setEditingIdState] = useState<string | null>(openForm.editingId);
-	const setCreating = (v: boolean) => {
-		openForm.creating = v;
-		setCreatingState(v);
-	};
-	const setEditingId = (v: string | null) => {
-		openForm.editingId = v;
-		setEditingIdState(v);
-	};
 	const [now, setNow] = useState(() => Date.now());
 
 	useEffect(() => {
 		const tick = setInterval(() => setNow(Date.now()), 1000);
 		return () => clearInterval(tick);
 	}, []);
-
-	// A loop being edited that left this project's scope (project switched, or the
-	// loop was deleted elsewhere) would leave its form behind; close it so the
-	// panel always reflects the selected project.
-	useEffect(() => {
-		if (openForm.editingId && !loops.some((l) => l.id === openForm.editingId)) {
-			openForm.editingId = null;
-			setEditingIdState(null);
-		}
-	}, [loops]);
 
 	const toggle = async (l: LoopDTO) => {
 		await window.ateam.loops.setEnabled(l.id, !l.enabled);
@@ -437,7 +449,7 @@ export function LoopsPanel({
 			<div className="loops-head">
 				<div className="loops-head-row">
 					<h2>Loops</h2>
-					<button type="button" className="navbtn" onClick={() => setCreating(!creating)}>
+					<button type="button" className="navbtn" onClick={onNew}>
 						<Plus size={14} /> New loop
 					</button>
 				</div>
@@ -449,117 +461,77 @@ export function LoopsPanel({
 				</p>
 			</div>
 
-			{creating && (
-				<LoopForm
-					draftKey={`new:${cardKey ?? ""}`}
-					members={members}
-					agents={agents}
-					envProtocol={envProtocol}
-					onInstallAgent={onInstallAgent}
-					onSaved={() => {
-						onChanged();
-						setCreating(false);
-					}}
-					onCancel={() => setCreating(false)}
-				/>
-			)}
+			{loops.length === 0 && <div className="empty">No loops on this project. Create one.</div>}
 
-			{loops.length === 0 && !creating && (
-				<div className="empty">No loops on this project. Create one.</div>
-			)}
-
-			{loops.map((l) =>
-				editingId === l.id ? (
-					<LoopForm
-						key={l.id}
-						editing={l}
-						draftKey={l.id}
-						members={members}
-						agents={agents}
-						envProtocol={envProtocol}
-						onInstallAgent={onInstallAgent}
-						onSaved={() => {
-							onChanged();
-							setEditingId(null);
-						}}
-						onCancel={() => setEditingId(null)}
-					/>
-				) : (
-					<div key={l.id} className={`loop-card ${l.enabled ? "" : "off"}`}>
-						<div className="loop-main">
-							<div className="loop-title">
-								<span>{l.title}</span>
-								<span className="loop-tag">
-									{aliasLabel(memberFor(members, l.projectId)?.alias ?? null)}
-								</span>
-								<span className="loop-cadence muted">
-									{l.agentId ?? "claude"} · {everyLabel(l.intervalMs)}
-									{l.yolo && (
-										<span
-											className="loop-auto"
-											title="Auto mode — each run launches permission-free"
-										>
-											<Zap size={10} strokeWidth={2} />
-										</span>
-									)}
-								</span>
-							</div>
-							{l.prompt && <div className="loop-desc muted">{l.prompt}</div>}
-							<div className="loop-meta">
-								{l.lastStatus === "error" ? (
-									<span className="loop-stat err">
-										<AlertTriangle size={13} /> {l.lastError ?? "error"}
-									</span>
-								) : (
-									<span className="loop-stat ok">
-										<CheckCircle2 size={13} />
-										{l.lastSummary ?? "not run yet"}
+			{loops.map((l) => (
+				<div key={l.id} className={`loop-card ${l.enabled ? "" : "off"}`}>
+					<div className="loop-main">
+						<div className="loop-title">
+							<span>{l.title}</span>
+							<span className="loop-tag">
+								{aliasLabel(memberFor(members, l.projectId)?.alias ?? null)}
+							</span>
+							<span className="loop-cadence muted">
+								{l.agentId ?? "claude"} · {loopScheduleLabel(l, LOCAL_TZ)}
+								{l.yolo && (
+									<span className="loop-auto" title="Auto mode — each run launches permission-free">
+										<Zap size={10} strokeWidth={2} />
 									</span>
 								)}
-								<span className="muted">· ran {agoLabel(l.lastRunAt, now)}</span>
-								<span className="muted">· {l.runs} runs</span>
-								{l.enabled && <span className="muted">· next {untilLabel(l.nextRunAt, now)}</span>}
-							</div>
+							</span>
 						</div>
-
-						<div className="loop-actions">
-							<button
-								type="button"
-								className="navbtn"
-								onClick={() => runNow(l)}
-								disabled={busy === l.id}
-								title="Run this loop now"
-							>
-								{busy === l.id ? <RefreshCw size={14} className="spin" /> : <Play size={14} />}
-								Run now
-							</button>
-							<label className="loop-toggle" title="Enable or pause this loop">
-								<input type="checkbox" checked={l.enabled} onChange={() => void toggle(l)} />
-								<span>{l.enabled ? "On" : "Off"}</span>
-							</label>
-							<button
-								type="button"
-								className="loop-del loop-edit"
-								title="Edit this loop"
-								onClick={() => {
-									setCreating(false);
-									setEditingId(l.id);
-								}}
-							>
-								<Pencil size={14} />
-							</button>
-							<button
-								type="button"
-								className="loop-del"
-								title="Delete this loop"
-								onClick={() => void remove(l)}
-							>
-								<Trash2 size={14} />
-							</button>
+						{l.prompt && <div className="loop-desc muted">{l.prompt}</div>}
+						<div className="loop-meta">
+							{l.lastStatus === "error" ? (
+								<span className="loop-stat err">
+									<AlertTriangle size={13} /> {l.lastError ?? "error"}
+								</span>
+							) : (
+								<span className="loop-stat ok">
+									<CheckCircle2 size={13} />
+									{l.lastSummary ?? "not run yet"}
+								</span>
+							)}
+							<span className="muted">· ran {agoLabel(l.lastRunAt, now)}</span>
+							<span className="muted">· {l.runs} runs</span>
+							{l.enabled && <span className="muted">· next {untilLabel(l.nextRunAt, now)}</span>}
 						</div>
 					</div>
-				),
-			)}
+
+					<div className="loop-actions">
+						<button
+							type="button"
+							className="navbtn"
+							onClick={() => runNow(l)}
+							disabled={busy === l.id}
+							title="Run this loop now"
+						>
+							{busy === l.id ? <RefreshCw size={14} className="spin" /> : <Play size={14} />}
+							Run now
+						</button>
+						<label className="loop-toggle" title="Enable or pause this loop">
+							<input type="checkbox" checked={l.enabled} onChange={() => void toggle(l)} />
+							<span>{l.enabled ? "On" : "Off"}</span>
+						</label>
+						<button
+							type="button"
+							className="loop-del loop-edit"
+							title="Edit this loop"
+							onClick={() => onEdit(l.id)}
+						>
+							<Pencil size={14} />
+						</button>
+						<button
+							type="button"
+							className="loop-del"
+							title="Delete this loop"
+							onClick={() => void remove(l)}
+						>
+							<Trash2 size={14} />
+						</button>
+					</div>
+				</div>
+			))}
 		</div>
 	);
 }

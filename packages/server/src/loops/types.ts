@@ -4,12 +4,14 @@ import type { AteamDb } from "@ateam/db";
 export type LoopScope = "global" | "per_task";
 
 /**
- * How often a loop runs. `fixed` is a steady interval; `self_paced` lets each
- * run choose the next delay within bounds (modeled on Claude Code's `/loop`:
- * tight while work is active, loose when quiet, and able to end itself).
+ * How often a loop runs. `fixed` is a steady interval; `cron` is a calendar
+ * ("every day at 09:00") read in an IANA zone; `self_paced` lets each run
+ * choose the next delay within bounds (modeled on Claude Code's `/loop`: tight
+ * while work is active, loose when quiet, and able to end itself).
  */
 export type LoopCadence =
 	| { mode: "fixed"; everyMs: number }
+	| { mode: "cron"; pattern: string; timeZone: string }
 	| { mode: "self_paced"; minMs: number; maxMs: number };
 
 /** The session capabilities a loop run gets, wired in by the engine. */

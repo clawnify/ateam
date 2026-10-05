@@ -44,7 +44,7 @@ export type SessionExitReason = "closed" | "exited" | "stranded" | "reaped" | "r
 export type MergeStatus = "queued" | "updating" | "merging" | "conflict";
 
 /** Cadence of a Loop: a fixed cron-like interval, or self-paced like /loop. */
-export type LoopCadenceMode = "fixed" | "self_paced";
+export type LoopCadenceMode = "fixed" | "self_paced" | "cron";
 
 /** Outcome class of a Loop's last run, surfaced in the Loops panel. */
 export type LoopRunStatus = "ok" | "error" | "done";
@@ -241,6 +241,9 @@ export const loops = sqliteTable(
 		/** Cadence override for user loops; null falls back to template default. */
 		cadenceMode: text("cadence_mode").$type<LoopCadenceMode>(),
 		intervalMs: integer("interval_ms"),
+		/** For cadenceMode "cron": a 5-field cron, read in `timeZone` (IANA). */
+		cron: text("cron"),
+		timeZone: text("time_zone"),
 		enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
 		lastRunAt: integer("last_run_at"),
 		nextRunAt: integer("next_run_at"),

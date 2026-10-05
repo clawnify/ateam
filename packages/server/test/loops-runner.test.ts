@@ -4,7 +4,7 @@ import type { AteamDb } from "@ateam/db";
 import { bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
-import { LoopRunner } from "../src/loops/runner";
+import { LoopRunner, nextCronRun } from "../src/loops/runner";
 import type { LoopDefinition } from "../src/loops/types";
 
 function createTestDb(): AteamDb {
@@ -782,6 +782,163 @@ describe("LoopRunner", () => {
 			restarted.start();
 			expect(dueInMs(restarted, id)).toBeGreaterThan(HOUR - 2_000);
 			restarted.stop();
+		});
+	});
+
+	// "Every day at 09:00": a calendar slot read in the zone of whoever set it,
+	// with the same restart rules as an interval (resume, or catch up ONCE).
+	describe("calendar schedules", () => {
+		const HOUR = 3_600_000;
+		const DAILY = { pattern: "0 9 * * *", timeZone: "Europe/Amsterdam" };
+
+		/** The wall-clock "HH:MM" of `ms` in Amsterdam. */
+		const amsterdam = (ms: number) =>
+			new Intl.DateTimeFormat("en-GB", {
+				timeZone: DAILY.timeZone,
+				hour: "2-digit",
+				minute: "2-digit",
+			}).format(ms);
+
+		function createDaily(runner: LoopRunner, projectId: string): string {
+			return runner
+				.createUserLoop({
+					templateId: "agent-session",
+					name: "Morning triage",
+					projectId,
+					config: { prompt: "triage", agentId: "claude" },
+					cadenceMode: "cron",
+					cron: DAILY.pattern,
+					timeZone: DAILY.timeZone,
+				})
+				.find((l) => l.kind === "user")?.id as string;
+		}
+		const dto = (runner: LoopRunner, id: string) => runner.describe().find((l) => l.id === id);
+
+		it("is strictly after its input, so a slot never schedules itself", () => {
+			const slot = Date.UTC(2027, 0, 1, 9, 0, 0);
+			expect(nextCronRun({ pattern: "0 9 * * *", timeZone: "UTC" }, slot)).toBe(slot + 24 * HOUR);
+		});
+
+		it("keeps the wall-clock time across a DST change", () => {
+			// Amsterdam springs forward on 2027-03-28: 09:00 is 08:00Z before, 07:00Z after.
+			expect(nextCronRun(DAILY, Date.UTC(2027, 2, 26, 10))).toBe(Date.UTC(2027, 2, 27, 8));
+			expect(nextCronRun(DAILY, Date.UTC(2027, 2, 27, 10))).toBe(Date.UTC(2027, 2, 28, 7));
+		});
+
+		it("rejects a seconds field: a loop must not run every second", () => {
+			expect(() => nextCronRun({ pattern: "* * * * * *", timeZone: "UTC" }, Date.now())).toThrow();
+		});
+
+		it("schedules a new daily loop at the next 09:00 in its zone", () => {
+			const runner = makeRunner();
+			runner.start();
+			const id = createDaily(runner, seedProject());
+			const loop = dto(runner, id);
+			expect(loop?.cadence).toBe("cron");
+			expect(loop?.cron).toBe(DAILY.pattern);
+			expect(loop?.timeZone).toBe(DAILY.timeZone);
+			expect(loop?.intervalMs).toBeNull();
+			expect(amsterdam(loop?.nextRunAt as number)).toBe("09:00");
+			expect((loop?.nextRunAt as number) - Date.now()).toBeLessThanOrEqual(24 * HOUR);
+			runner.stop();
+
+			// …and rebuilds it from the row after a restart.
+			const restarted = makeRunner();
+			restarted.start();
+			expect(dto(restarted, id)?.cron).toBe(DAILY.pattern);
+			restarted.stop();
+		});
+
+		it("catches a missed day up once, shortly after start", () => {
+			const projectId = seedProject();
+			const runner = makeRunner();
+			runner.start();
+			const id = createDaily(runner, projectId);
+			runner.stop();
+			// The Mac was shut for two days: both 09:00s were missed.
+			repo.updateLoop(db, id, { lastRunAt: Date.now() - 48 * HOUR });
+
+			const restarted = makeRunner();
+			restarted.start();
+			const due = (dto(restarted, id)?.nextRunAt as number) - Date.now();
+			expect(due).toBeGreaterThan(0);
+			expect(due).toBeLessThan(90_000);
+			restarted.stop();
+		});
+
+		it("a scheduled tick moves on to the NEXT slot, even if its timer woke early", async () => {
+			const runner = makeRunner();
+			runner.start();
+			const id = createDaily(runner, seedProject());
+			// The timer fired before its 09:00 slot (timers can wake early), and the
+			// run was instant. Computing from "now" would land on that same slot again.
+			const slot = nextCronRun(DAILY, Date.now()) as number;
+			repo.updateLoop(db, id, { nextRunAt: slot });
+			const internals = runner as unknown as {
+				instances: Map<string, unknown>;
+				fire: (inst: unknown, force: boolean) => Promise<void>;
+			};
+			await internals.fire(internals.instances.get(id), false);
+			expect(repo.getLoop(db, id)?.nextRunAt as number).toBeGreaterThan(slot + HOUR);
+			runner.stop();
+		});
+
+		it("switches between interval and calendar, re-timing a never-run loop", () => {
+			const runner = makeRunner();
+			runner.start();
+			const id = runner
+				.createUserLoop({
+					templateId: "agent-session",
+					name: "Flip",
+					projectId: seedProject(),
+					config: { prompt: "p", agentId: "claude" },
+					cadenceMode: "fixed",
+					intervalMs: 15 * 60_000,
+				})
+				.find((l) => l.kind === "user")?.id as string;
+
+			runner.updateUserLoop({ id, cron: DAILY.pattern, timeZone: DAILY.timeZone });
+			// Not the stale "in 15 minutes" slot from the interval it had.
+			expect(amsterdam(dto(runner, id)?.nextRunAt as number)).toBe("09:00");
+			expect(dto(runner, id)?.intervalMs).toBeNull();
+
+			runner.updateUserLoop({ id, intervalMs: 2 * HOUR });
+			expect(dto(runner, id)?.cadence).toBe("fixed");
+			expect(dto(runner, id)?.cron).toBeNull();
+			expect(dto(runner, id)?.intervalMs).toBe(2 * HOUR);
+			runner.stop();
+		});
+
+		it("an edit that names no schedule keeps the calendar", () => {
+			const runner = makeRunner();
+			runner.start();
+			const id = createDaily(runner, seedProject());
+			runner.updateUserLoop({ id, name: "Renamed", config: { prompt: "new" } });
+			expect(dto(runner, id)?.cron).toBe(DAILY.pattern);
+			expect(dto(runner, id)?.title).toBe("Renamed");
+			runner.stop();
+		});
+
+		it("does not fire at once when the wait is longer than setTimeout allows", async () => {
+			const log = makeLog();
+			const runner = makeRunner(log);
+			runner.start();
+			// 40 days is past 2^31-1 ms; a raw setTimeout would clamp it to ~0.
+			const id = runner
+				.createUserLoop({
+					templateId: "agent-session",
+					name: "Monthly",
+					projectId: seedProject(),
+					config: { prompt: "p", agentId: "claude" },
+					cadenceMode: "fixed",
+					intervalMs: 40 * 24 * HOUR,
+				})
+				.find((l) => l.kind === "user")?.id as string;
+			await new Promise((r) => setTimeout(r, 200));
+			// Any fire at all, launched or failed, leaves a status behind.
+			expect(repo.getLoop(db, id)?.lastStatus).toBeNull();
+			expect(log.spawned).toHaveLength(0);
+			runner.stop();
 		});
 	});
 });

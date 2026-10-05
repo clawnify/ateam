@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AteamDb, Loop, LoopCadenceMode } from "@ateam/db";
 import { repo } from "@ateam/db";
 import type { LoopDTO } from "@ateam/protocol";
+import { Cron } from "croner";
 import { getTemplate } from "./templates";
 import type {
 	LoopCadence,
@@ -17,6 +18,25 @@ import type {
  * connections), short enough that a missed tick still feels prompt.
  */
 const SETTLE_MS = 60_000;
+/** setTimeout fires AT ONCE past 2^31-1 ms (~24.8 days), so longer waits go in hops. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/**
+ * The first time a cron cadence fires strictly after `after` (epoch ms), or null
+ * if it never fires again. 5-field only: a seconds field would let a loop spawn
+ * an agent session every second. Throws on a bad pattern or zone, which is how
+ * loops:create/update validate one.
+ */
+export function nextCronRun(
+	c: { pattern: string; timeZone: string },
+	after: number,
+): number | null {
+	return (
+		new Cron(c.pattern, { timezone: c.timeZone, mode: "5-part" })
+			.nextRun(new Date(after))
+			?.getTime() ?? null
+	);
+}
 
 interface Instance {
 	def: LoopDefinition;
@@ -51,6 +71,8 @@ export interface CreateUserLoopInput {
 	config?: Record<string, unknown>;
 	cadenceMode?: LoopCadenceMode;
 	intervalMs?: number;
+	cron?: string;
+	timeZone?: string;
 	enabled?: boolean;
 }
 
@@ -119,9 +141,11 @@ export class LoopRunner {
 			loopId: row.id,
 		};
 		const cadence: LoopCadence =
-			row.cadenceMode === "fixed" && row.intervalMs
-				? { mode: "fixed", everyMs: row.intervalMs }
-				: template.defaultCadence;
+			row.cadenceMode === "cron" && row.cron && row.timeZone
+				? { mode: "cron", pattern: row.cron, timeZone: row.timeZone }
+				: row.cadenceMode === "fixed" && row.intervalMs
+					? { mode: "fixed", everyMs: row.intervalMs }
+					: template.defaultCadence;
 		return {
 			id: row.id,
 			title: row.name ?? template.title,
@@ -148,6 +172,8 @@ export class LoopRunner {
 			config: input.config ?? {},
 			cadenceMode: input.cadenceMode ?? null,
 			intervalMs: input.intervalMs ?? null,
+			cron: input.cron ?? null,
+			timeZone: input.timeZone ?? null,
 			enabled: input.enabled ?? true,
 		});
 		const row = repo.getLoop(this.deps.db, id);
@@ -164,19 +190,46 @@ export class LoopRunner {
 	 * config so runtime keys like lastTaskId survive), rebuild the definition,
 	 * and reschedule from now with the new interval. Project/template are fixed
 	 * at creation — changing environment is delete + recreate.
+	 *
+	 * The schedule changes only when one is given: `intervalMs` makes it an
+	 * interval, `cron` (+ `timeZone`) a calendar. An edit with neither, like
+	 * renaming from a client that doesn't know calendars, keeps the schedule.
 	 */
 	updateUserLoop(input: {
 		id: string;
 		name?: string;
 		intervalMs?: number;
+		cron?: string;
+		timeZone?: string;
 		config?: Record<string, unknown>;
 	}): LoopDTO[] {
 		const row = repo.getLoop(this.deps.db, input.id);
 		if (!row || row.kind !== "user") throw new Error(`Loop not found: ${input.id}`);
+		const schedule =
+			input.cron != null
+				? {
+						cadenceMode: "cron" as const,
+						cron: input.cron,
+						timeZone: input.timeZone ?? null,
+						intervalMs: null,
+					}
+				: input.intervalMs != null
+					? {
+							cadenceMode: "fixed" as const,
+							intervalMs: input.intervalMs,
+							cron: null,
+							timeZone: null,
+						}
+					: {};
+		// A calendar slot is not an interval: a never-run loop's stored nextRunAt was
+		// computed under the OLD schedule and would fire it at the wrong time, so a
+		// change into, out of, or within a calendar recomputes from now.
+		const calendarChanged =
+			"cadenceMode" in schedule && (schedule.cadenceMode === "cron" || row.cadenceMode === "cron");
 		repo.updateLoop(this.deps.db, input.id, {
 			name: input.name ?? row.name,
-			intervalMs: input.intervalMs ?? row.intervalMs,
-			cadenceMode: "fixed",
+			...schedule,
+			...(calendarChanged ? { nextRunAt: null } : {}),
 			config: { ...row.config, ...(input.config ?? {}) },
 		});
 		const updated = repo.getLoop(this.deps.db, input.id);
@@ -299,7 +352,12 @@ export class LoopRunner {
 						: typeof row.config?.lastTaskId === "string"
 							? row.config.lastTaskId
 							: null,
-				intervalMs: row.intervalMs ?? (cadence?.mode === "fixed" ? cadence.everyMs : null),
+				intervalMs:
+					cadence?.mode === "cron"
+						? null
+						: (row.intervalMs ?? (cadence?.mode === "fixed" ? cadence.everyMs : null)),
+				cron: cadence?.mode === "cron" ? cadence.pattern : null,
+				timeZone: cadence?.mode === "cron" ? cadence.timeZone : null,
 				lastRunAt: row.lastRunAt ?? null,
 				nextRunAt: row.nextRunAt ?? null,
 				lastStatus: row.lastStatus ?? null,
@@ -335,7 +393,20 @@ export class LoopRunner {
 	 */
 	private initialDelay(def: LoopDefinition, row?: Loop): number {
 		// Self-paced loops do a first pass soon after boot regardless.
-		if (def.cadence.mode !== "fixed") return Math.min(2000, def.cadence.minMs);
+		if (def.cadence.mode === "self_paced") return Math.min(2000, def.cadence.minMs);
+		if (def.cadence.mode === "cron") {
+			// Same rule on a calendar: the slot after the last run (or the slot a
+			// never-run loop was waiting for), and an overdue one runs once, settled.
+			const now = Date.now();
+			const due =
+				row?.lastRunAt != null
+					? nextCronRun(def.cadence, row.lastRunAt)
+					: (row?.nextRunAt ?? nextCronRun(def.cadence, now));
+			// Unreachable for a validated loop (loops:create/update reject a cron
+			// with no next run); look again in a day rather than spin.
+			if (due == null) return 86_400_000;
+			return due <= now ? SETTLE_MS : due - now;
+		}
 		const everyMs = def.cadence.everyMs;
 		if (!row) return everyMs;
 		const due = row.lastRunAt != null ? row.lastRunAt + everyMs : (row.nextRunAt ?? null);
@@ -346,10 +417,21 @@ export class LoopRunner {
 
 	private schedule(inst: Instance, delayMs: number): void {
 		if (inst.timer) clearTimeout(inst.timer);
-		repo.updateLoop(this.deps.db, inst.loopId, { nextRunAt: Date.now() + delayMs });
-		inst.timer = setTimeout(() => {
-			void this.fire(inst, false);
-		}, delayMs);
+		const dueAt = Date.now() + delayMs;
+		repo.updateLoop(this.deps.db, inst.loopId, { nextRunAt: dueAt });
+		this.arm(inst, dueAt);
+	}
+
+	/** Wait for `dueAt` in hops of at most MAX_TIMER_MS, then fire. */
+	private arm(inst: Instance, dueAt: number): void {
+		const wait = dueAt - Date.now();
+		inst.timer = setTimeout(
+			() => {
+				if (wait > MAX_TIMER_MS) this.arm(inst, dueAt);
+				else void this.fire(inst, false);
+			},
+			Math.min(Math.max(wait, 0), MAX_TIMER_MS),
+		);
 	}
 
 	private async fire(inst: Instance, force: boolean, manual = false): Promise<void> {
@@ -403,13 +485,21 @@ export class LoopRunner {
 			this.deps.onChanged?.();
 			return;
 		}
-		this.schedule(inst, this.nextDelay(inst.def, outcome));
+		// A scheduled tick computes the next slot from the one it fired for, so a
+		// timer that wakes a hair early can't land on the same calendar slot twice;
+		// Run now starts from now.
+		const from = force ? Date.now() : Math.max(Date.now(), row.nextRunAt ?? 0);
+		this.schedule(inst, this.nextDelay(inst.def, outcome, from));
 		// After the reschedule, so the pushed DTO carries the new nextRunAt too.
 		this.deps.onChanged?.();
 	}
 
-	private nextDelay(def: LoopDefinition, outcome: LoopOutcome): number {
+	private nextDelay(def: LoopDefinition, outcome: LoopOutcome, from: number): number {
 		if (def.cadence.mode === "fixed") return def.cadence.everyMs;
+		if (def.cadence.mode === "cron") {
+			const next = nextCronRun(def.cadence, from);
+			return next == null ? 86_400_000 : Math.max(0, next - Date.now());
+		}
 		const { minMs, maxMs } = def.cadence;
 		const want = outcome.nextDelayMs ?? maxMs; // back off when unspecified
 		return Math.max(minMs, Math.min(maxMs, want));
