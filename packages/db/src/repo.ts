@@ -58,6 +58,9 @@ export const repo = {
 	},
 
 	// ---- tasks ----
+	findTaskByIssue(db: AteamDb, issueUrl: string) {
+		return db.select().from(tasks).where(eq(tasks.issueUrl, issueUrl)).get();
+	},
 	createTask(db: AteamDb, t: NewTask) {
 		return db.insert(tasks).values(t).returning().get();
 	},
@@ -81,6 +84,18 @@ export const repo = {
 			.where(eq(tasks.id, id))
 			.run();
 		return repo.getTask(db, id);
+	},
+
+	/**
+	 * Drop merge-queue positions left by a previous process (queued/updating/
+	 * merging cannot be true at startup). A parked `conflict` is kept: it still
+	 * describes the worktree.
+	 */
+	clearStaleMergeStatuses(db: AteamDb) {
+		db.update(tasks)
+			.set({ mergeStatus: null })
+			.where(inArray(tasks.mergeStatus, ["queued", "updating", "merging"]))
+			.run();
 	},
 
 	deleteTask(db: AteamDb, id: string) {

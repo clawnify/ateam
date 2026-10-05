@@ -39,6 +39,8 @@ export function PromptComposer({
 	variant = "task",
 	sessionAlias,
 	defaultAgentId,
+	initialName = "",
+	initialPrompt = "",
 	environments = [],
 	envAgents,
 	onAdd,
@@ -55,6 +57,8 @@ export function PromptComposer({
 	sessionAlias?: string | null;
 	/** Preselect this agent (a task's existing agent) instead of the first available. */
 	defaultAgentId?: string;
+	initialName?: string;
+	initialPrompt?: string;
 	/** Where the task can run: this Mac + each ~/.ssh/config box. `alias` null = Local.
 	 *  A box is disabled when the repo can't run there (no GitHub identity to clone).
 	 *  Unused by the session variant, which has no environment to choose. */
@@ -80,8 +84,8 @@ export function PromptComposer({
 		alias: string | null;
 	}) => void;
 }) {
-	const [name, setName] = useState("");
-	const [prompt, setPrompt] = useState("");
+	const [name, setName] = useState(initialName);
+	const [prompt, setPrompt] = useState(initialPrompt);
 	const session = variant === "session";
 	const [agentId, setAgentId] = useState(
 		defaultAgentId ?? agents.find((a) => a.available)?.id ?? "claude",

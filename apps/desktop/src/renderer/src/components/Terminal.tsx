@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { FileUp, ImageUp, Plus } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { terminalScroll } from "../terminal-scroll";
 import { Menu } from "./Menu";
 
 /**
@@ -73,6 +74,8 @@ export function TerminalView({
 		const fit = new FitAddon();
 		term.loadAddon(fit);
 		term.open(el);
+		const scroll = terminalScroll(term, el);
+		let disposed = false;
 		termRef.current = term;
 		try {
 			fit.fit();
@@ -201,19 +204,24 @@ export function TerminalView({
 		// chunk can slip in between the flush and flipping `ready`.
 		let ready = false;
 		let pending: { data: string; seq: number }[] = [];
+		const writeOutput = (data: string) => {
+			const following = scroll.following;
+			term.write(data);
+			if (following) scroll.bottom();
+		};
 		const offData = window.ateam.pty.onData((e) => {
 			if (e.terminalId !== terminalId) return;
-			if (ready) term.write(e.data);
+			if (ready) writeOutput(e.data);
 			else pending.push({ data: e.data, seq: e.seq });
 		});
 
 		void window.ateam.pty.snapshot(terminalId).then(({ data, seq }) => {
+			if (disposed) return;
 			if (data) term.write(data);
 			for (const c of pending) if (c.seq > seq) term.write(c.data);
 			pending = [];
 			ready = true;
-			// Scroll only once everything queued above has actually rendered.
-			term.write("", () => term.scrollToBottom());
+			scroll.bottom();
 		});
 
 		const disposeInput = term.onData((d) => window.ateam.pty.write(terminalId, d));
@@ -247,6 +255,7 @@ export function TerminalView({
 					wasHidden = true;
 					return;
 				}
+				const following = scroll.following;
 				try {
 					fit.fit();
 				} catch {
@@ -271,7 +280,7 @@ export function TerminalView({
 				if (gridChanged || boxChanged || justRevealed) {
 					term.refresh(0, term.rows - 1);
 				}
-				if (gridChanged || justRevealed) term.scrollToBottom();
+				if ((gridChanged && following) || justRevealed) scroll.bottom();
 			});
 		};
 		const ro = new ResizeObserver(syncSize);
@@ -284,6 +293,8 @@ export function TerminalView({
 		syncSize();
 
 		return () => {
+			disposed = true;
+			scroll.dispose();
 			cancelAnimationFrame(raf);
 			el.removeEventListener("mousedown", focusTerm);
 			el.removeEventListener("dragover", onDragOver);

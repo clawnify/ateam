@@ -10,12 +10,15 @@
 // them from its own OS (or, later, from server-fs RPC helpers).
 import type {
 	AgentDTO,
+	GithubIssueDTO,
+	GithubIssuesDTO,
 	AteamApi,
 	AttachDelivery,
 	BoxUpdateStarted,
 	CleanupCandidate,
 	CleanupReport,
 	CreateLoopInput,
+	CredentialsResult,
 	DiffResultDTO,
 	DirListingDTO,
 	GitStatusSnapshot,
@@ -101,10 +104,16 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			pick: native.pick,
 			register: (repoPath, opts) => call<ProjectDTO>(CH.projectsRegister, [repoPath, opts]),
 			remoteUrl: (projectId) => call<string | null>(CH.projectsRemoteUrl, [projectId]),
+			issues: (repository, refresh) =>
+				call<GithubIssuesDTO>(CH.projectsIssues, [repository, refresh]),
+			createIssue: (repository, input) =>
+				call<GithubIssueDTO>(CH.projectsCreateIssue, [repository, input]),
 			list: () => call<ProjectDTO[]>(CH.projectsList),
 			remove: (id) => call<void>(CH.projectsRemove, [id]),
 		},
 		tasks: {
+			createFromIssue: (input) =>
+				call<{ task: TaskDTO; created: boolean }>(CH.tasksCreateFromIssue, [input]),
 			list: (projectId) => call<TaskDTO[]>(CH.tasksList, [projectId]),
 			create: (input) => call<TaskDTO>(CH.tasksCreate, [input]),
 			remove: (input) => call<void>(CH.tasksRemove, [input]),
@@ -132,6 +141,10 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		settings: {
 			get: () => call<SettingsResult>(CH.settingsGet, []),
 			update: (patch) => call<SettingsResult>(CH.settingsUpdate, [patch]),
+		},
+		credentials: {
+			get: () => call<CredentialsResult>(CH.credentialsGet, []),
+			update: (patch) => call<CredentialsResult>(CH.credentialsUpdate, [patch]),
 		},
 		editor: {
 			open:

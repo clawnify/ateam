@@ -39,7 +39,21 @@ esac
 # The reply is empty (204) unless this terminal has a follow-up armed, in which
 # case it is the agent's own continuation JSON and stdout is where it belongs.
 # A timeout or an unreachable app also yields empty, i.e. the old behaviour.
-BODY=$(curl -s -m 2 "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}&sessionId=\${CLAUDE_SESSION_ID:-}" 2>/dev/null || true)
+URL="http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}&sessionId=\${CLAUDE_SESSION_ID:-}"
+# A turn's end and a user's reply carry the text the board classifier reads
+# (Stop: last_assistant_message, UserPromptSubmit: prompt), so those two POST
+# the hook's input. Everything else, PreToolUse above all (every tool call,
+# with its arguments), stays a bodiless GET.
+case "$EVENT" in
+	Stop|UserReply)
+		if [ -n "$PAYLOAD" ]; then
+			BODY=$(printf '%s' "$PAYLOAD" | curl -s -m 2 --data-binary @- "$URL" 2>/dev/null || true)
+		else
+			BODY=$(curl -s -m 2 "$URL" 2>/dev/null || true)
+		fi
+		;;
+	*) BODY=$(curl -s -m 2 "$URL" 2>/dev/null || true) ;;
+esac
 [ -n "$BODY" ] && printf '%s' "$BODY"
 exit 0
 `;
@@ -63,7 +77,8 @@ esac
 # Same follow-up echo as notify.sh. The notify program is fire-and-forget, so a
 # follow-up only reaches the agent through .codex/hooks.json, where Stop shares
 # Claude's hook schema.
-BODY=$(curl -s -m 2 "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}" 2>/dev/null || true)
+# The payload rides along for the board classifier (see notify.sh).
+BODY=$(printf '%s' "$1" | curl -s -m 2 --data-binary @- "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}" 2>/dev/null || true)
 [ -n "$BODY" ] && printf '%s' "$BODY"
 exit 0
 `;
@@ -72,7 +87,11 @@ exit 0
  * A `gh` shim placed FIRST on each agent's PATH. It intercepts `gh pr merge`
  * and routes it into Ateam's merge queue (so two agents merging into the same
  * base can't race); every other gh call passes straight through to the real gh.
- * If the app isn't reachable it falls back to a real merge rather than blocking.
+ * It waits for the queue's verdict and prints it, exiting non-zero when nothing
+ * merged (a conflict, a closed PR, an error), so the agent that asked can act on
+ * it. Only an unreachable app (curl exit 7) or a terminal that belongs to no
+ * task falls back to a real merge: a timeout or dropped connection may leave a
+ * job running, and a second real merge must not race it.
  * Only agent PTYs get this dir on PATH — the main process keeps the real gh.
  */
 const GH_SHIM = `#!/bin/sh
@@ -93,11 +112,22 @@ if [ "$1" = "pr" ] && [ "$2" = "merge" ] && [ -n "$PORT" ] && [ -n "$TID" ]; the
 			--rebase) STRAT=rebase ;;
 		esac
 	done
-	if curl -s -m 3 "http://127.0.0.1:\${PORT}/merge/request?terminalId=\${TID}&strategy=\${STRAT}" >/dev/null 2>&1; then
-		echo "Ateam: merge queued. Ateam serializes merges per base branch so concurrent merges never conflict — this PR will merge in turn and the board will show its status. Do not re-run 'gh pr merge'."
-		exit 0
+	echo "Ateam: merging through the queue (merges into a base branch run one at a time)..." >&2
+	OUT=$(curl -s -m 900 -w '\\n%{http_code}' "http://127.0.0.1:\${PORT}/merge/request?terminalId=\${TID}&strategy=\${STRAT}")
+	RC=$?
+	if [ "$RC" -eq 0 ]; then
+		CODE=$(printf '%s\\n' "$OUT" | tail -n 1)
+		MSG=$(printf '%s\\n' "$OUT" | sed '$d')
+		case "$CODE" in
+			200) printf '%s\\n' "$MSG"; exit 0 ;;
+			404) ;;
+			*) printf '%s\\n' "$MSG" >&2; exit 1 ;;
+		esac
+	elif [ "$RC" -ne 7 ]; then
+		echo "Ateam: no answer from the merge queue (curl exit $RC); the merge may still be running. Check the board before running 'gh pr merge' again." >&2
+		exit 1
 	fi
-	# App unreachable — fall through to a real merge rather than blocking.
+	# App unreachable, or not a task terminal: fall through to a real merge.
 fi
 
 if [ -n "$REAL_GH" ]; then

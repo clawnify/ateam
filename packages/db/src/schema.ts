@@ -85,6 +85,7 @@ export const tasks = sqliteTable(
 			.references(() => projects.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
 		description: text("description"),
+		issueUrl: text("issue_url"),
 		slug: text("slug").notNull(),
 		branch: text("branch").notNull(),
 		baseBranch: text("base_branch").notNull(),
@@ -116,6 +117,7 @@ export const tasks = sqliteTable(
 	},
 	(t) => [
 		index("tasks_project_idx").on(t.projectId),
+		index("tasks_issue_url_idx").on(t.issueUrl),
 		index("tasks_branch_idx").on(t.branch),
 		index("tasks_column_idx").on(t.column),
 	],

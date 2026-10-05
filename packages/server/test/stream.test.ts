@@ -8,6 +8,7 @@ import { createDispatcher } from "../src/dispatcher";
 import type { Engine } from "../src/engine";
 import { serveRpc } from "../src/rpc";
 import { streamClientTransport, streamServerTransport } from "../src/transport/stream";
+import { WorktreeGuard } from "../src/worktree-guard";
 
 // The SSH shape: readable !== writable. Two pipes cross-wire a client and server
 // exactly like a child process's stdout/stdin, without spawning ssh.
@@ -20,6 +21,7 @@ function makeEngine(db: AteamDb): Engine {
 			mergeQueue: {},
 			loopRunner: { describe: () => [] },
 			pendingSeeds: new Map(),
+			worktreeGuard: new WorktreeGuard(),
 		},
 		on: (event: string, cb: (p: unknown) => void) => {
 			ee.on(event, cb);

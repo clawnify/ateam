@@ -25,12 +25,15 @@ import { ensureLoginEnv } from "./login-env";
 import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
+import { applyAgentQuit, columnAfterExit } from "./pty/agent-quit";
 import { PtyClient } from "./pty/pty-client";
 import { reapableSessions } from "./pty/reap";
 import { makeStrandReconciler } from "./pty/reconcile";
 import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
 import { readSettings } from "./settings-file";
+import { createTurnClassifier } from "./turn-classifier";
+import { WorktreeGuard } from "./worktree-guard";
 import { createWorktreeSweep, type WorktreeSweep } from "./worktree-sweep";
 
 export interface EngineOptions {
@@ -238,6 +241,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		loopRunner,
 		followUps,
 		pendingSeeds,
+		worktreeGuard: new WorktreeGuard(),
 	};
 
 	// Record an agent's exit: close the session and file its card. Shared by the
@@ -262,8 +266,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		if (task.column === "running") {
 			repo.updateTask(db, task.id, {
 				agentStatus: "stopped",
-				column:
-					task.prNumber != null || (task.gitStatus?.ahead ?? 0) > 0 ? "review" : "needs_attention",
+				column: columnAfterExit(task),
 				...(markUnread ? { isUnread: true } : {}),
 			});
 		}
@@ -328,10 +331,28 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		);
 	});
 
+	// With an OpenRouter key, Jev may re-file a finished turn the rule filed in
+	// Review (turn-classifier.ts). Without one it never calls out.
+	const turns = createTurnClassifier({ db, notifyTaskUpdated: sendTaskUpdated, log: opts.log });
+
 	// Agent status hooks → update session/task, drive the kanban column.
 	hooks.on("hook", (e: HookEvent) => {
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
+		if (e.eventType === "AgentExit") {
+			repo.recordEvent(db, {
+				sessionId: session.id,
+				terminalId: e.terminalId,
+				eventType: e.eventType,
+				rawAgentSessionId: null,
+			});
+			// The agent quit and its pane lives on as a shell (see pty/agent-quit.ts).
+			// Its follow-up can never be delivered now.
+			followUps.discard(e.terminalId);
+			const taskId = applyAgentQuit(db, pty, session);
+			if (taskId) sendTaskUpdated(taskId);
+			return;
+		}
 		const status = mapEventToStatus(e.eventType);
 		repo.updateSession(db, session.id, {
 			status,
@@ -379,6 +400,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				isUnread: mapEventToUnread(e.eventType, ownedByLoop),
 			});
 			sendTaskUpdated(task.id);
+			if (e.eventType === "UserReply" && e.prompt) turns.userReplied(task.id, e.prompt);
+			// Every Stop, message or not: it also retires any verdict still in
+			// flight for the previous turn.
+			if (e.eventType === "Stop") void turns.turnEnded(task.id, e.lastAssistantMessage);
 		}
 	});
 
@@ -414,20 +439,21 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 
 	// Agent ran `gh pr merge` in its terminal → the gh shim routed it here.
 	// Resolve the task from the terminal and enqueue, so terminal merges and the
-	// in-app Merge button share one serialized queue per base branch.
-	hooks.on("merge-request", (e: MergeRequestEvent) => {
+	// in-app Merge button share one serialized queue per base branch. The outcome
+	// goes back to the shim, so the agent reads it in its own terminal.
+	hooks.setMergeHandler(async (e: MergeRequestEvent) => {
 		const session = repo.getSessionByTerminal(db, e.terminalId);
-		if (!session) return;
+		if (!session) return null;
 		const task = repo.getTask(db, session.taskId);
-		if (!task) return;
+		if (!task) return null;
 		const project = repo.getProject(db, task.projectId);
-		if (!project) return;
+		if (!project) return null;
 		const { engine: settings } = readSettings().settings;
 		const requested = e.strategy ?? "";
 		const strategy = (
 			["merge", "squash", "rebase"].includes(requested) ? requested : settings.defaultMergeStrategy
 		) as MergeStrategy;
-		void mergeQueue.enqueue({
+		return mergeQueue.enqueue({
 			task,
 			repoPath: project.repoPath,
 			strategy,

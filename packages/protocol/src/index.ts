@@ -62,14 +62,17 @@
 // every run permission-PROMPTED — a scheduled, unattended loop then wedges on the
 // first permission ask forever. `loopAutoMode` below is what turns that silent
 // downgrade into a feature the client knows to switch off.
-// v11: loops can run on a calendar ("every day at 09:00") as well as on an
+// v11: projects:issues and tasks:createFromIssue. Older engines reject the new
+// methods explicitly; issueUrl on reads is optional for old task DTOs.
+// v12: projects:createIssue files a GitHub issue with the client engine's gh login.
+// v13: loops can run on a calendar ("every day at 09:00") as well as on an
 // interval. LoopDTO gained `cron` + `timeZone` and `cadence` gained "cron";
 // loops:create/update accept them. Shape-wise a missing field reads as "no
-// calendar schedule", which is harmless; the damage is on the WRITE side. A v10
+// calendar schedule", which is harmless; the damage is on the WRITE side. A v12
 // engine rejects a create with no interval, which is loud, but on update it
 // drops the unknown keys and keeps the old interval while the save looks
 // successful. `loopSchedules` below hides the option instead.
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 13;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -109,10 +112,10 @@ export const FEATURE_MIN_VERSION = {
 	 *  for an unattended scheduled loop means it wedges on the first permission ask.
 	 *  Hide the toggle rather than let it look saved. */
 	loopAutoMode: 10,
-	/** v11 added calendar schedules (LoopDTO.cron + timeZone). A v10 engine ignores
+	/** v13 added calendar schedules (LoopDTO.cron + timeZone). A v12 engine ignores
 	 *  them on update and keeps the old interval, so the save would look applied and
 	 *  not be. Hide "Every day at" rather than let it look saved. */
-	loopSchedules: 11,
+	loopSchedules: 13,
 } as const;
 
 export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
@@ -199,7 +202,37 @@ export interface GitStatusSnapshot {
 	updatedAt: number;
 }
 
+export interface GithubIssueDTO {
+	number: number;
+	title: string;
+	body: string;
+	url: string;
+	author: string;
+	labels: string[];
+}
+
+export interface GithubIssuesDTO {
+	issues: GithubIssueDTO[];
+	syncedAt: number | null;
+	error: string | null;
+}
+
+export interface CreateGithubIssueInput {
+	title: string;
+	body: string;
+}
+
+export interface CreateIssueTaskInput {
+	projectId: string;
+	name: string;
+	issueNumber: number;
+	description: string;
+	agentId?: string;
+}
+
 export interface TaskDTO {
+	/** Canonical source issue URL; absent on older engines. */
+	issueUrl?: string | null;
 	id: string;
 	projectId: string;
 	name: string;
@@ -378,6 +411,32 @@ export interface SettingsResult {
 }
 
 /**
+ * Secrets live apart from settings: `~/.ateam/credentials.json` (0600) on the
+ * engine's machine (server/credentials-file.ts). `settings.json` is meant to be
+ * shared and `settings:get` hands the whole file to every client; a key must
+ * never travel either way. So the wire carries whether a key is set and its
+ * last four characters, never the key.
+ */
+export interface CredentialStatus {
+	set: boolean;
+	/** Last four characters, for recognising which key it is. */
+	hint?: string;
+	/** `env` when an environment variable supplies it, which the file cannot override. */
+	source?: "file" | "env";
+}
+export interface CredentialsResult {
+	openRouter: CredentialStatus;
+	path: string;
+	/** As SettingsResult: filled in by the desktop while sync is on. */
+	syncedTo?: string[];
+	syncFailed?: { alias: string; reason: string }[];
+}
+/** A key to store, or null to remove it. */
+export interface CredentialsPatch {
+	openRouterApiKey?: string | null;
+}
+
+/**
  * Result of enqueuing a merge. The merge runs serialized per base branch, so
  * the call resolves only once this task's turn completes (or it parks on a
  * genuine conflict / busy / error).
@@ -386,7 +445,31 @@ export type MergeEnqueueDTO =
 	| { ok: true; prNumber: number | null; prUrl: string | null }
 	| { ok: false; reason: "conflict"; conflicts: string[] }
 	| { ok: false; reason: "busy" }
+	| { ok: false; reason: "not-mergeable"; message: string }
 	| { ok: false; reason: "error"; message: string };
+
+/**
+ * One human- and agent-readable line (or a few) for a merge outcome. The gh
+ * shim prints it into the agent's terminal and the desktop shows it as a toast,
+ * so a merge that did not happen is never silent on either surface.
+ */
+export function describeMergeResult(r: MergeEnqueueDTO): string {
+	if (r.ok) return r.prNumber != null ? `Ateam: merged PR #${r.prNumber}.` : "Ateam: merged.";
+	switch (r.reason) {
+		case "conflict":
+			return [
+				"Ateam: not merged. Absorbing the latest base branch hit conflicts in:",
+				...r.conflicts.map((f) => `  ${f}`),
+				"The merge (or rebase) is left in progress in this worktree. Resolve the conflicts, finish it (git add + git commit --no-edit, or git rebase --continue), then run 'gh pr merge' again.",
+			].join("\n");
+		case "busy":
+			return "Ateam: this task's merge is already queued or running; the board shows its status. Do not re-run 'gh pr merge'.";
+		case "not-mergeable":
+			return `Ateam: not merged: ${r.message}.`;
+		case "error":
+			return `Ateam: merge failed: ${r.message}`;
+	}
+}
 
 /** A Loop (periodic reconciler) as shown in the Loops panel. */
 export interface LoopDTO {
@@ -481,7 +564,7 @@ export interface CreateLoopInput {
 	config?: Record<string, unknown>;
 	/** Run every this many ms. Give this OR `cron`. */
 	intervalMs?: number;
-	/** Run on this 5-field cron, read in `timeZone` (required with it). Needs v11. */
+	/** Run on this 5-field cron, read in `timeZone` (required with it). Needs v13. */
 	cron?: string;
 	timeZone?: string;
 	enabled?: boolean;
@@ -499,7 +582,7 @@ export interface UpdateLoopInput {
 	name?: string;
 	/** Switch to (or re-time) an interval schedule. Give this OR `cron`; neither keeps the schedule. */
 	intervalMs?: number;
-	/** Switch to (or re-time) a calendar schedule, with `timeZone`. Needs v11. */
+	/** Switch to (or re-time) a calendar schedule, with `timeZone`. Needs v13. */
 	cron?: string;
 	timeZone?: string;
 	config?: Record<string, unknown>;
@@ -637,12 +720,15 @@ export const CH = {
 	projectsRegister: "projects:register",
 	projectsClone: "projects:clone",
 	projectsRemoteUrl: "projects:remoteUrl",
+	projectsIssues: "projects:issues",
+	projectsCreateIssue: "projects:createIssue",
 	projectsRemoteRepos: "projects:remoteRepos",
 	projectsList: "projects:list",
 	projectsRemove: "projects:remove",
 	windowOpenProject: "window:openProject",
 	tasksList: "tasks:list",
 	tasksCreate: "tasks:create",
+	tasksCreateFromIssue: "tasks:createFromIssue",
 	tasksRemove: "tasks:remove",
 	tasksSetColumn: "tasks:setColumn",
 	tasksMarkRead: "tasks:markRead",
@@ -677,6 +763,8 @@ export const CH = {
 	utilOpenBrowser: "util:openBrowser",
 	settingsGet: "settings:get",
 	settingsUpdate: "settings:update",
+	credentialsGet: "credentials:get",
+	credentialsUpdate: "credentials:update",
 	editorOpen: "editor:open",
 	editorOpenUrl: "editor:openUrl",
 	editorInstall: "editor:install",
@@ -757,6 +845,14 @@ export type OpenBrowserResult = { ok: true } | { ok: false; reason: string };
  */
 export const DEFAULT_EDITOR_PORT = 8390;
 
+/**
+ * What a launch into a task that is mid-delete throws. Shared because the
+ * desktop drops it silently: the delete kills the task's agent, the open panel
+ * auto-resumes it, and the engine refuses — expected, not something to show.
+ * An error crosses IPC as its message only, so the text is the contract.
+ */
+export const TASK_REMOVING_ERROR = "This task is being deleted";
+
 /** Where the engine's embedded editor (code-server) answers, on ITS machine. */
 export interface EditorEndpointDTO {
 	port: number;
@@ -785,10 +881,15 @@ export interface AteamApi {
 		/** The project's `origin` remote URL, or null if local-only. Decides whether a
 		 *  task can run on a box (needs a remote to clone). id-routed to the owner. */
 		remoteUrl(projectId: string): Promise<string | null>;
+		/** Uses the client engine's gh login, including repos that run on a box. */
+		issues(repository: string, refresh?: boolean): Promise<GithubIssuesDTO>;
+		/** Same routing as `issues`: the repository string never names a box. */
+		createIssue(repository: string, input: CreateGithubIssueInput): Promise<GithubIssueDTO>;
 		list(): Promise<ProjectDTO[]>;
 		remove(id: string): Promise<void>;
 	};
 	tasks: {
+		createFromIssue(input: CreateIssueTaskInput): Promise<{ task: TaskDTO; created: boolean }>;
 		list(projectId: string): Promise<TaskDTO[]>;
 		create(input: {
 			projectId: string;
@@ -932,6 +1033,12 @@ export interface AteamApi {
 		get(): Promise<SettingsResult>;
 		/** Patch one or more keys; answers with the full result, like `get`. */
 		update(patch: SettingsPatch): Promise<SettingsResult>;
+	};
+	credentials: {
+		/** Which keys are set on the engine's machine; never the keys themselves. */
+		get(): Promise<CredentialsResult>;
+		/** Store or remove a key; answers like `get`. */
+		update(patch: CredentialsPatch): Promise<CredentialsResult>;
 	};
 	utils: {
 		/**

@@ -1,5 +1,6 @@
 import type {
 	AgentDTO,
+	GithubIssueDTO,
 	ConnectionDTO,
 	DiffResultDTO,
 	KanbanColumn,
@@ -10,7 +11,13 @@ import type {
 	TaskDTO,
 	TaskTriage,
 } from "@ateam/protocol";
-import { boxSupports, FEATURE_MIN_VERSION, PROTOCOL_VERSION } from "@ateam/protocol";
+import {
+	boxSupports,
+	describeMergeResult,
+	FEATURE_MIN_VERSION,
+	PROTOCOL_VERSION,
+	TASK_REMOVING_ERROR,
+} from "@ateam/protocol";
 import {
 	ArrowDownToLine,
 	ArrowUp,
@@ -28,8 +35,10 @@ import {
 	GitMerge,
 	GitPullRequest,
 	Globe,
+	Grid3x2,
 	History,
 	LayoutGrid,
+	LayoutPanelLeft,
 	Lock,
 	LockOpen,
 	Maximize2,
@@ -51,6 +60,7 @@ import {
 import { motion, Reorder } from "motion/react";
 import {
 	type CSSProperties,
+	type ReactNode,
 	type MouseEvent as ReactMouseEvent,
 	useCallback,
 	useEffect,
@@ -71,10 +81,18 @@ import { usePrompt } from "./components/usePrompt";
 import { PanelRightFilled } from "./components/PanelRightFilled";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { VscodeLogo } from "./components/VscodeLogo";
+import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
+import { useGithubIssues } from "./useGithubIssues";
 import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge } from "./triage-order";
-import { type Alias, aliasLabel, type UnifiedProject, unifyProjects } from "./unify";
+import {
+	type Alias,
+	aliasLabel,
+	type EngineMember,
+	type UnifiedProject,
+	unifyProjects,
+} from "./unify";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
 	{ key: "todo", label: "Backlog" },
@@ -89,13 +107,27 @@ type TaskSortMode = "next" | "status" | "updated" | "custom";
 
 // ---- mission control layout ----
 // How agent tiles are arranged: "grid" is a 2x2 overview (tiles half the
-// window wide and tall), "split" lays them side-by-side at full window
-// height, "stack" stacks them full-width. Extra tiles go to further pages,
-// flipped via the bottom-right pager or Cmd/Ctrl+Alt+Up/Down.
-type McLayout = "grid" | "split" | "stack";
+// window wide and tall), "main" gives the first tile the full-height left half
+// and stacks the next two in the right half, "split" lays them side-by-side at
+// full window height, "stack" stacks them full-width, "grid3x2" is three
+// columns by two rows (and tucks the sidebar into its rail while shown, since
+// a third column is only readable with the width back). Extra tiles go to
+// further pages, flipped via the bottom-right pager or Ctrl/Cmd+Up/Down.
+type McLayout = "grid" | "grid3x2" | "main" | "split" | "stack";
 
 // Tiles per page: how many terminals each layout actually shows at once.
-const MC_PAGE_SIZE: Record<McLayout, number> = { grid: 4, split: 2, stack: 1 };
+const MC_PAGE_SIZE: Record<McLayout, number> = { grid: 4, grid3x2: 6, main: 3, split: 2, stack: 1 };
+
+// A saved layout, or null when unset or naming one that no longer exists.
+function storedMcLayout(key: string): McLayout | null {
+	const v = localStorage.getItem(key);
+	return v && v in MC_PAGE_SIZE ? (v as McLayout) : null;
+}
+
+// dataTransfer type a tile's bar carries while dragged, so a tile only lights
+// up as a drop target for another tile, never for a file dragged in from Finder
+// (that drop belongs to the terminal, which types the path).
+const MC_TILE_MIME = "application/x-ateam-tile";
 
 // Status order: what needs the user's eyes first.
 const STATUS_RANK: Record<KanbanColumn, number> = {
@@ -151,28 +183,54 @@ export function App() {
 	const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
 	const [tasksByProject, setTasksByProject] = useState<Record<string, TaskDTO[]>>({});
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+	const [selectedIssue, setSelectedIssue] = useState<GithubIssueDTO | null>(null);
+	const [composerIssue, setComposerIssue] = useState<GithubIssueDTO | null>(null);
+	const [newIssueOpen, setNewIssueOpen] = useState(false);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [view, setView] = useState<"board" | "mission" | "loops" | "settings">("board");
-	const [mcLayout, setMcLayoutState] = useState<McLayout>(
-		() => (localStorage.getItem("ateam.mcLayout") as McLayout) || "grid",
-	);
+	// Layout is per project: one project may run twice the terminals of another.
+	// Read during render, not synced in an effect, so switching projects never
+	// paints a frame of the previous project's layout (which would also flick
+	// the 3x2 rail). A project never set falls back to the old app-wide choice.
+	const [mcLayoutSet, setMcLayoutSet] = useState<Record<string, McLayout>>({});
+	const mcLayout =
+		(activeProjectId &&
+			(mcLayoutSet[activeProjectId] ?? storedMcLayout(`ateam.mcLayout.${activeProjectId}`))) ||
+		storedMcLayout("ateam.mcLayout") ||
+		"grid";
 	const setMcLayout = (l: McLayout) => {
-		localStorage.setItem("ateam.mcLayout", l);
-		setMcLayoutState(l);
+		if (!activeProjectId) return;
+		localStorage.setItem(`ateam.mcLayout.${activeProjectId}`, l);
+		setMcLayoutSet((m) => ({ ...m, [activeProjectId]: l }));
 	};
-	// Mission Control lock: locked freezes tile order for the whole visit (it
-	// re-snapshots the tasks-list order each time you land on Mission Control);
-	// unlocked follows the tasks-list order live, pinning only the tile being
-	// typed in.
+	// Mission Control lock: locked freezes tile order for the whole visit and
+	// lets you arrange it by dragging tiles (see mcOrder); it re-snapshots that
+	// order each time you land on Mission Control. Unlocked follows the
+	// tasks-list order live, pinning only the tile being typed in.
 	const [mcLocked, setMcLockedState] = useState(() => localStorage.getItem("ateam.mcLock") === "1");
 	const setMcLocked = (v: boolean) => {
 		localStorage.setItem("ateam.mcLock", v ? "1" : "0");
 		setMcLockedState(v);
 	};
+	// Which work Mission Control tiles: the tasks (the sidebar's TASKS list) or
+	// the loops' own tasks (its LOOPS list), never both on one grid.
+	const [mcMode, setMcModeState] = useState<"tasks" | "loops">(() =>
+		localStorage.getItem("ateam.mcMode") === "loops" ? "loops" : "tasks",
+	);
+	const setMcMode = (m: "tasks" | "loops") => {
+		localStorage.setItem("ateam.mcMode", m);
+		setMcModeState(m);
+	};
+	// The Mission Control tile with the white edge: set by clicking a task in the
+	// sidebar or by clicking into a tile. A sidebar click also sends a jump (seq
+	// makes a repeat click on the same task a fresh request) so the grid pages to
+	// that tile and focuses its terminal.
+	const [mcHighlightId, setMcHighlightId] = useState<string | null>(null);
+	const [mcJump, setMcJump] = useState<{ id: string; seq: number } | null>(null);
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
 	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
-	const [loopsCollapsed, setLoopsCollapsed] = useState(true);
+	const [loopsCollapsed, setLoopsCollapsed] = useState(false);
 	// The open loop dialog: `editId: null` creates, an id edits that loop. Owned
 	// here, not by LoopsPanel, so the sidebar's "+" opens it over any view, the
 	// way the task composer opens.
@@ -184,9 +242,21 @@ export function App() {
 	// A mutation's return and the push event both carry ONE engine's loops, so
 	// every refresh re-lists the union.
 	const refreshLoops = useCallback(() => void window.ateam.loops.list().then(setLoops), []);
-	const [rail, setRail] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
+	const [railPref, setRailPref] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
+	// Mission Control's 3x2 grid collapses the sidebar for as long as it is on
+	// screen, without touching the saved preference: leaving the layout or the
+	// view puts back whatever you had. Expanding it by hand while there holds
+	// until you leave.
+	const autoRail = view === "mission" && mcLayout === "grid3x2";
+	const [railKept, setRailKept] = useState(false);
+	if (!autoRail && railKept) setRailKept(false);
+	const rail = autoRail ? !railKept : railPref;
 	const toggleRail = () => {
-		setRail((r) => {
+		if (autoRail) {
+			setRailKept((k) => !k);
+			return;
+		}
+		setRailPref((r) => {
 			localStorage.setItem("ateam.sidebarRail", r ? "0" : "1");
 			return !r;
 		});
@@ -245,7 +315,11 @@ export function App() {
 		try {
 			await fn();
 		} catch (e) {
-			setError(e instanceof Error ? e.message : String(e));
+			const msg = e instanceof Error ? e.message : String(e);
+			// The engine refusing to launch into a task mid-delete: expected when
+			// the delete's own kill makes the open panel auto-resume its agent.
+			if (msg.includes(TASK_REMOVING_ERROR)) return;
+			setError(msg);
 		}
 	}, []);
 
@@ -394,6 +468,11 @@ export function App() {
 		[unifiedProjects, activeProjectId],
 	);
 	const activeMembers = activeCard?.members ?? [];
+	const issueRepository =
+		activeCard?.githubOwner && activeCard.githubName
+			? `${activeCard.githubOwner}/${activeCard.githubName}`.toLowerCase()
+			: null;
+	const issueSync = useGithubIssues(view === "board" ? issueRepository : null);
 	// Session search runs on each engine that holds this repo: the transcripts
 	// live on the machine that ran the agent, so a box searches its own disk.
 	const searchProjectIds = useMemo(
@@ -529,7 +608,22 @@ export function App() {
 		: activeProjectId
 			? (tasksByProject[activeProjectId] ?? [])
 			: [];
+	const linkedIssues = new Set(
+		activeTasks.flatMap((task) => (task.issueUrl ? [task.issueUrl.toLowerCase()] : [])),
+	);
+	const backlogIssues = issueSync.issues.filter(
+		(issue) => !linkedIssues.has(issue.url.toLowerCase()),
+	);
+	const visibleIssue =
+		!selectedTaskId && selectedIssue
+			? (backlogIssues.find((issue) => issue.url === selectedIssue.url) ?? null)
+			: null;
 	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
+	// Mission Control's grid is on screen (not covered by a full-width task).
+	// There the sidebar lights the highlighted tile's task instead of the
+	// selection, since a click there highlights rather than opens.
+	const mcGridShown = view === "mission" && !(selectedTask && panelMode === "full");
+	const sidebarSelectedId = mcGridShown ? mcHighlightId : selectedTaskId;
 	// Loops of the active repo card (whichever engine holds them), and the task
 	// each one owns. Loop-owned tasks show under LOOPS, not again under TASKS
 	// (they stay on the board — it's the status surface).
@@ -545,6 +639,13 @@ export function App() {
 	useEffect(() => {
 		if (loopDialog?.editId && !editingLoop) setLoopDialog(null);
 	}, [loopDialog, editingLoop]);
+	// Sidebar LOOPS rows: the active (enabled) loops first, paused ones after,
+	// so what is actually running is always at the top of the list. The Loops
+	// tab keeps the engine's order so a loop doesn't jump when toggled there.
+	const sidebarLoops = useMemo(
+		() => [...activeLoops].sort((a, b) => Number(b.enabled) - Number(a.enabled)),
+		[activeLoops],
+	);
 	const loopTaskIds = useMemo(() => {
 		const ids = new Set<string>();
 		for (const l of loops) if (l.taskId) ids.add(l.taskId);
@@ -600,6 +701,51 @@ export function App() {
 		() => orderedSidebarTasks.map((t) => t.id),
 		[orderedSidebarTasks],
 	);
+	// Mission Control's own tile order, per project, set by dragging tiles while
+	// the layout is locked. It is kept apart from the sidebar's: moving a tile
+	// never reorders the list. Locked, Mission Control uses it, with tasks it
+	// doesn't know yet (new work) after it in sidebar order; before the first
+	// drag it is empty and locking snapshots the sidebar order as it always did.
+	// Unlocked ignores it and follows the sidebar live.
+	const [mcOrder, setMcOrder] = useState<string[]>([]);
+	useEffect(() => {
+		if (!activeProjectId) return;
+		try {
+			setMcOrder(
+				JSON.parse(localStorage.getItem(`ateam.mcOrder.${activeProjectId}`) ?? "[]") as string[],
+			);
+		} catch {
+			setMcOrder([]);
+		}
+	}, [activeProjectId]);
+	// Loops mode follows the sidebar's LOOPS list the way Tasks mode follows TASKS.
+	const loopOrderIds = useMemo(
+		() => sidebarLoops.flatMap((l) => (l.taskId ? [l.taskId] : [])),
+		[sidebarLoops],
+	);
+	const missionTasks = useMemo(
+		() =>
+			mcMode === "loops"
+				? activeTasks.filter((t) => loopTaskIds.has(t.id))
+				: activeTasks.filter((t) => !loopTaskIds.has(t.id)),
+		[mcMode, activeTasks, loopTaskIds],
+	);
+	const missionOrderIds = useMemo(() => {
+		const base = mcMode === "loops" ? loopOrderIds : sidebarOrderIds;
+		if (!mcLocked || mcOrder.length === 0) return base;
+		// Drop tasks that no longer exist so the saved order can't grow forever.
+		// Both modes share the saved order: the other mode's ids stay in it,
+		// tile-less here, so a drag in one mode keeps the other's arrangement.
+		const live = new Set(activeTasks.map((t) => t.id));
+		const kept = mcOrder.filter((id) => live.has(id));
+		const known = new Set(kept);
+		return [...kept, ...base.filter((id) => !known.has(id))];
+	}, [mcMode, mcLocked, mcOrder, loopOrderIds, sidebarOrderIds, activeTasks]);
+	const reorderMission = (ids: string[]) => {
+		setMcOrder(ids);
+		if (activeProjectId)
+			localStorage.setItem(`ateam.mcOrder.${activeProjectId}`, JSON.stringify(ids));
+	};
 
 	// One box, two jobs, told apart by a leading `#`.
 	//
@@ -701,6 +847,16 @@ export function App() {
 			setSelectedTaskId(null);
 			return;
 		}
+		// Over the Mission Control grid a sidebar click points at the task's tile
+		// (white edge, keyboard focus) rather than covering the grid. A task with
+		// no live session has no tile, so Mission Control hands it back and it
+		// opens full width as before (see onJumpMissing).
+		if (mcGridShown) {
+			markRead(t.id);
+			setMcHighlightId(t.id);
+			setMcJump((j) => ({ id: t.id, seq: (j?.seq ?? 0) + 1 }));
+			return;
+		}
 		openTask(t);
 	};
 	// A session-search hit opens the task it ran in, and the exact terminal it
@@ -758,8 +914,26 @@ export function App() {
 		});
 
 	const newTask = () => {
+		setComposerIssue(null);
+		setSelectedIssue(null);
 		if (activeProjectId) setComposerOpen(true);
 	};
+
+	const removeProject = (member: EngineMember) =>
+		run(async () => {
+			const ok = await confirm(
+				"Remove project?",
+				`Remove "${member.project.name}" from Ateam on ${aliasLabel(member.alias)}? Its task history and loops will be removed from Ateam. Repository files, branches, and worktrees will stay on disk.`,
+			);
+			if (!ok) return;
+			await window.ateam.projects.remove(member.projectId);
+			delete viewMemRef.current[member.projectId];
+			setSelectedTaskId((cur) =>
+				tasksByProject[member.projectId]?.some((t) => t.id === cur) ? null : cur,
+			);
+			setLoops((prev) => prev.filter((loop) => loop.projectId !== member.projectId));
+			await loadProjects();
+		});
 
 	// Delete a task (and its worktree) straight from the sidebar. Confirm first,
 	// then reuse the same remove + force-fallback flow as the task panel menu.
@@ -801,7 +975,19 @@ export function App() {
 		run(async () => {
 			const card = activeCard;
 			if (!card) return;
+			const sourceIssue = composerIssue;
 			setComposerOpen(false);
+			setComposerIssue(null);
+			if (sourceIssue) {
+				const existing = activeTasks.find(
+					(task) => task.issueUrl?.toLowerCase() === sourceIssue.url.toLowerCase(),
+				);
+				if (existing) {
+					selectFromBoard(existing.id);
+					setSelectedIssue(null);
+					return;
+				}
+			}
 			// Resolve the engine's project row for this repo on the chosen environment.
 			let projectId: string;
 			if (input.alias === null) {
@@ -837,14 +1023,28 @@ export function App() {
 					projectId = proj.id;
 				}
 			}
-			const task = await window.ateam.tasks.create({
-				projectId,
-				name: input.name,
-				agentId: input.agentId,
-			});
+			const taskInput = { projectId, name: input.name, agentId: input.agentId };
+			let task: TaskDTO;
+			let created = true;
+			if (sourceIssue) {
+				try {
+					const result = await window.ateam.tasks.createFromIssue({
+						...taskInput,
+						issueNumber: sourceIssue.number,
+						description: input.prompt,
+					});
+					task = result.task;
+					created = result.created;
+				} catch (error) {
+					if (/Unknown method/.test(String(error)))
+						throw new Error("Update Ateam on the selected box to start tasks from GitHub issues.");
+					throw error;
+				}
+			} else task = await window.ateam.tasks.create(taskInput);
+			setSelectedIssue(null);
 			// The created task's project is a member of the active card, so its tasks
 			// are already unioned into the board once loaded.
-			await loadTasks(projectId);
+			await loadTasks(task.projectId);
 			// Land the new task in whatever the user is actually looking at: a
 			// task open full-width hands its panel to the new one, the board
 			// opens it beside itself, and Mission Control just grows a tile.
@@ -856,6 +1056,7 @@ export function App() {
 			// Loops shows only loop-owned tasks, so a new task would land
 			// somewhere it can't be seen; every other view keeps its place.
 			if (view === "loops") setView("board");
+			if (!created) return;
 			const { terminalId } = await window.ateam.pty.spawnAgent({
 				taskId: task.id,
 				agentId: input.agentId,
@@ -954,7 +1155,7 @@ export function App() {
 								<button
 									type="button"
 									key={t.id}
-									className={`rail-tile ${t.id === selectedTaskId ? "active" : ""}`}
+									className={`rail-tile ${t.id === sidebarSelectedId ? "active" : ""}`}
 									title={t.name}
 									onClick={() => toggleTask(t)}
 								>
@@ -1018,18 +1219,14 @@ export function App() {
 											const multiEnv =
 												card.members.length > 1 || card.members.some((m) => m.alias !== null);
 											return (
-												// Double-click (or the hover button) detaches the project into its
-												// own window. Row and open-button are siblings so the button's
-												// click can't nest inside the row button.
-												<div
-													key={card.key}
-													className="proj-row"
-													onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
-												>
+												// Keep the menu beside the row button so its actions don't
+												// select or detach the project.
+												<div key={card.key} className="proj-row">
 													<button
 														type="button"
 														className={`proj ${active ? "active" : ""}`}
 														onClick={() => selectProject(primary.projectId)}
+														onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
 													>
 														<span
 															className={`dot ${alert ? `alert ${alert}` : ""}`}
@@ -1070,11 +1267,23 @@ export function App() {
 														)}
 													</button>
 													<span className="proj-open">
-														<IconButton
-															icon={ExternalLink}
-															label="Open in new window"
-															size={14}
-															onClick={() => window.ateam.window.openProject(primary.projectId)}
+														<Menu
+															label={`Actions for ${card.name}`}
+															items={[
+																{
+																	label: "Open in new window",
+																	icon: ExternalLink,
+																	onClick: () => window.ateam.window.openProject(primary.projectId),
+																},
+																...card.members.map((member) => ({
+																	label: multiEnv
+																		? `Remove from ${aliasLabel(member.alias)}…`
+																		: "Remove project…",
+																	icon: Trash2,
+																	danger: true,
+																	onClick: () => removeProject(member),
+																})),
+															]}
 														/>
 													</span>
 												</div>
@@ -1157,7 +1366,7 @@ export function App() {
 												<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
 													<TaskRow
 														task={t}
-														selected={t.id === selectedTaskId}
+														selected={t.id === sidebarSelectedId}
 														onClick={() => toggleTask(t)}
 														onDelete={() => deleteTask(t)}
 													/>
@@ -1171,7 +1380,7 @@ export function App() {
 											<motion.div key={t.id} layout transition={springy}>
 												<TaskRow
 													task={t}
-													selected={t.id === selectedTaskId}
+													selected={t.id === sidebarSelectedId}
 													onClick={() => toggleTask(t)}
 													onDelete={() => deleteTask(t)}
 												/>
@@ -1184,10 +1393,10 @@ export function App() {
 
 						{/* LOOPS accordion — the active repo's scheduled agent sessions.
 						    Each loop owns one persistent task; clicking a row opens that
-						    task's terminal (or the Loops tab before its first run).
-						    loops-side-section floats it to the sidebar's bottom while
-						    there is spare room; a long task list pushes it down. */}
-						<div className="side-section loops-side-section">
+						    task's terminal (or the Loops tab before its first run). It
+						    stacks right under Tasks like every other accordion, so a
+						    collapsed Tasks brings it straight up. */}
+						<div className="side-section">
 							<div className="section-head tasks-head">
 								<button
 									type="button"
@@ -1210,10 +1419,10 @@ export function App() {
 							</div>
 							{!loopsCollapsed && (
 								<div className="side-list">
-									{activeLoops.length === 0 ? (
+									{sidebarLoops.length === 0 ? (
 										<div className="tree-empty">No loops</div>
 									) : (
-										activeLoops.map((l) => {
+										sidebarLoops.map((l) => {
 											const task = l.taskId
 												? (activeTasks.find((t) => t.id === l.taskId) ?? null)
 												: null;
@@ -1222,7 +1431,7 @@ export function App() {
 													key={l.id}
 													loop={l}
 													task={task}
-													selected={task != null && task.id === selectedTaskId}
+													selected={task != null && task.id === sidebarSelectedId}
 													onClick={() => (task ? toggleTask(task) : goToView("loops"))}
 												/>
 											);
@@ -1272,6 +1481,28 @@ export function App() {
 							Loops
 						</div>
 					</div>
+					{/* Left of the centered search, beside the tab it belongs to: the
+					    right side is already full of layout buttons. */}
+					{mcGridShown && (
+						<div className="mclayout mcmodes" role="group" aria-label="Show">
+							{(
+								[
+									["tasks", "Tasks"],
+									["loops", "Loops"],
+								] as const
+							).map(([mode, label]) => (
+								<button
+									key={mode}
+									type="button"
+									className={`navbtn mcmode ${mcMode === mode ? "active" : ""}`}
+									aria-pressed={mcMode === mode}
+									onClick={() => setMcMode(mode)}
+								>
+									{label}
+								</button>
+							))}
+						</div>
+					)}
 					{/* Centered task search — absolutely centered in the topbar so the
 					    tabs on the left and action buttons on the right don't shift it. */}
 					<TaskSearch
@@ -1283,11 +1514,13 @@ export function App() {
 						onOpenSession={openSessionHit}
 					/>
 					<div className="spacer" />
-					{view === "mission" && !(selectedTask && panelMode === "full") && (
+					{mcGridShown && (
 						<div className="mclayout" role="group" aria-label="Layout">
 							{(
 								[
 									["grid", LayoutGrid, "Grid"],
+									["grid3x2", Grid3x2, "3x2 grid"],
+									["main", LayoutPanelLeft, "Main + side"],
 									["split", Columns2, "Split"],
 									["stack", Rows2, "Stack"],
 								] as const
@@ -1309,8 +1542,8 @@ export function App() {
 								className={`navbtn icon ${mcLocked ? "active" : ""}`}
 								title={
 									mcLocked
-										? "Layout locked: tile order is frozen while you watch"
-										: "Lock layout (unlocked: tiles follow the tasks list order; the tile you type in stays put)"
+										? "Layout locked: tile order is frozen while you watch; drag a tile's title bar to rearrange"
+										: "Lock layout to arrange tiles yourself (unlocked: tiles follow the tasks list order; the tile you type in stays put)"
 								}
 								aria-label="Lock layout"
 								aria-pressed={mcLocked}
@@ -1373,9 +1606,67 @@ export function App() {
 						<>
 							<Board
 								tasks={filteredBoardTasks}
+								issues={backlogIssues.filter(
+									(issue) =>
+										!query ||
+										`${issue.title} #${issue.number} ${issue.labels.map((label) => `#${label}`).join(" ")}`
+											.toLowerCase()
+											.includes(query),
+								)}
+								issueActions={
+									issueRepository && (
+										<span className="issue-actions">
+											<button
+												type="button"
+												className="iconbtn"
+												aria-label="Refresh GitHub issues"
+												title="Refresh GitHub issues"
+												onClick={(event) => {
+													event.stopPropagation();
+													void issueSync.refresh(true);
+												}}
+											>
+												<RotateCw size={12} className={issueSync.loading ? "spin" : undefined} />
+											</button>
+											<button
+												type="button"
+												className="iconbtn"
+												aria-label="New GitHub issue"
+												title="New GitHub issue"
+												onClick={(event) => {
+													event.stopPropagation();
+													setNewIssueOpen(true);
+												}}
+											>
+												<Plus size={13} />
+											</button>
+										</span>
+									)
+								}
+								issueStatus={
+									issueRepository && issueSync.error ? (
+										<div className="issue-sync">
+											<output>
+												{issueSync.error}
+												{issueSync.syncedAt ? " Showing last sync." : ""}
+											</output>
+										</div>
+									) : null
+								}
+								selectedIssueNumber={visibleIssue?.number ?? null}
+								onSelectIssue={(issue) => {
+									setSelectedTaskId(null);
+									setSelectedIssue(issue);
+								}}
 								selectedId={selectedTaskId}
-								onSelect={selectFromBoard}
-								onDeselect={() => setSelectedTaskId(null)}
+								onSelect={(id) => {
+									setSelectedIssue(null);
+									selectFromBoard(id);
+								}}
+								onDeselect={() => {
+									setSelectedTaskId(null);
+									setSelectedIssue(null);
+								}}
 								// Badge a card only when it runs on a box — Local is the default, so
 								// tagging it would be noise. `null` = no badge.
 								originLabel={(t) => {
@@ -1383,6 +1674,16 @@ export function App() {
 									return a ? aliasLabel(a) : null;
 								}}
 							/>
+							{visibleIssue && (
+								<GithubIssuePanel
+									issue={visibleIssue}
+									onClose={() => setSelectedIssue(null)}
+									onStart={() => {
+										setComposerIssue(visibleIssue);
+										setComposerOpen(true);
+									}}
+								/>
+							)}
 							{selectedTask && (
 								<TaskPanel
 									task={selectedTask}
@@ -1406,12 +1707,28 @@ export function App() {
 						</>
 					) : view === "mission" ? (
 						<MissionControl
-							tasks={activeTasks}
+							// One instance per project: tiles, page, pinned tabs and the
+							// lock snapshot all belong to the project, and the session
+							// fetch runs on mount and on events only, so a project switch
+							// that kept this instance showed the last project's tiles
+							// until some agent happened to emit an event. Same for the
+							// Tasks/Loops switch: a new mode is a new set of tiles.
+							key={`${activeCard?.key ?? activeProjectId}:${mcMode}`}
+							mode={mcMode}
+							tasks={missionTasks}
 							agents={agents}
-							order={sidebarOrderIds}
+							order={missionOrderIds}
 							layout={mcLayout}
 							locked={mcLocked}
 							onExpand={openFromMission}
+							highlightId={mcHighlightId}
+							onHighlight={setMcHighlightId}
+							jump={mcJump}
+							onJumpMissing={(id) => {
+								const t = activeTasks.find((x) => x.id === id);
+								if (t) openTask(t);
+							}}
+							onReorder={reorderMission}
 						/>
 					) : view === "settings" ? (
 						<SettingsPanel agents={agents} />
@@ -1435,16 +1752,37 @@ export function App() {
 					onClose={() => setCleanupOpen(false)}
 				/>
 			)}
+			{newIssueOpen && issueRepository && (
+				<NewIssueDialog
+					repository={issueRepository}
+					onClose={() => setNewIssueOpen(false)}
+					onCreated={(issue) => {
+						setNewIssueOpen(false);
+						setSelectedTaskId(null);
+						setSelectedIssue(issue);
+						void issueSync.refresh();
+					}}
+				/>
+			)}
 			{composerOpen && activeCard && (
 				<PromptComposer
 					agents={agents}
+					initialName={composerIssue?.title}
+					initialPrompt={
+						composerIssue
+							? `${composerIssue.title}\n\n${composerIssue.url}\n\n${composerIssue.body}`
+							: undefined
+					}
 					environments={composerEnvs}
 					envAgents={envAgents}
 					onAdd={addTailscaleBox}
 					onInstall={installBox}
 					onForget={forgetBox}
 					onInstallAgent={installAgentOn}
-					onClose={() => setComposerOpen(false)}
+					onClose={() => {
+						setComposerOpen(false);
+						setComposerIssue(null);
+					}}
 					onCreate={composeTask}
 				/>
 			)}
@@ -1628,12 +1966,22 @@ function LoopRow({
 
 function Board({
 	tasks,
+	issues,
+	issueActions,
+	issueStatus,
+	selectedIssueNumber,
+	onSelectIssue,
 	selectedId,
 	onSelect,
 	onDeselect,
 	originLabel,
 }: {
 	tasks: TaskDTO[];
+	issues: GithubIssueDTO[];
+	issueActions: ReactNode;
+	issueStatus: ReactNode;
+	selectedIssueNumber: number | null;
+	onSelectIssue: (issue: GithubIssueDTO) => void;
 	selectedId: string | null;
 	onSelect: (id: string) => void;
 	onDeselect: () => void;
@@ -1671,8 +2019,25 @@ function Board({
 				return (
 					<div className="col" key={col.key}>
 						<h3>
-							{col.label} <span className="count">{items.length}</span>
+							{col.label}{" "}
+							<span className="count">
+								{items.length + (col.key === "todo" ? issues.length : 0)}
+							</span>
+							{col.key === "todo" && issueActions}
 						</h3>
+						{col.key === "todo" && issueStatus}
+						{col.key === "todo" && issues.length > 0 && (
+							<>
+								{issues.map((issue) => (
+									<GithubIssueCard
+										key={issue.number}
+										issue={issue}
+										selected={issue.number === selectedIssueNumber}
+										onSelect={() => onSelectIssue(issue)}
+									/>
+								))}
+							</>
+						)}
 						{items.map((t) => {
 							const tags = tagsFor(t);
 							const glyphs = taskGlyphs(t);
@@ -1736,7 +2101,23 @@ function Board({
 												↑{t.gitStatus.ahead} ↓{t.gitStatus.behind} · {t.gitStatus.dirty} changed
 											</span>
 										)}
+										{t.issueUrl && (
+											<a
+												className="issue-link"
+												href={t.issueUrl}
+												target="_blank"
+												rel="noreferrer"
+												onClick={(event) => event.stopPropagation()}
+											>
+												Issue #{t.issueUrl.split("/").pop()}
+											</a>
+										)}
 										{t.prNumber && <span>PR #{t.prNumber}</span>}
+										{t.mergeStatus && (
+											<span className={`merge-status ${t.mergeStatus}`}>
+												{t.mergeStatus === "conflict" ? "merge conflict" : t.mergeStatus}
+											</span>
+										)}
 										{/* Age and agent icon share one right-aligned group: the icon used to
 									    be absolutely positioned and sat on top of the age label. */}
 										<span className="meta-end">
@@ -2296,8 +2677,13 @@ function TaskPanel({
 					label="Update from base branch"
 					onClick={() =>
 						run(async () => {
-							await window.ateam.git.update(task.id);
+							const r = await window.ateam.git.update(task.id);
 							refreshDiff();
+							if (r.status === "conflicts") {
+								throw new Error(
+									`Update hit conflicts in ${r.conflicts.join(", ")}. Resolve them in the worktree.`,
+								);
+							}
 						})
 					}
 				/>
@@ -2306,8 +2692,11 @@ function TaskPanel({
 					label="Merge via PR (squash) + update local main"
 					onClick={() =>
 						run(async () => {
-							await window.ateam.git.merge(task.id, "squash");
+							const r = await window.ateam.git.merge(task.id, "squash");
 							refreshDiff();
+							// \`run\` shows a thrown error as the toast; a merge that did not
+							// happen used to come back as a value and vanish.
+							if (!r.ok) throw new Error(describeMergeResult(r).replace(/^Ateam: /, ""));
 						})
 					}
 				/>
@@ -2469,13 +2858,21 @@ function TaskPanel({
 }
 
 function MissionControl({
+	mode,
 	tasks,
 	agents,
 	order,
 	layout,
 	locked,
 	onExpand,
+	highlightId,
+	onHighlight,
+	jump,
+	onJumpMissing,
+	onReorder,
 }: {
+	/** Which list `tasks` was drawn from; only the empty state differs. */
+	mode: "tasks" | "loops";
 	tasks: TaskDTO[];
 	/** Agent catalog, for naming a session's tab the way the task panel does. */
 	agents: AgentDTO[];
@@ -2483,6 +2880,15 @@ function MissionControl({
 	layout: McLayout;
 	locked: boolean;
 	onExpand: (task: TaskDTO, terminalId: string) => void;
+	/** The tile drawn with the white edge. */
+	highlightId: string | null;
+	onHighlight: (taskId: string) => void;
+	/** A sidebar click: page to this task's tile and focus its terminal. */
+	jump: { id: string; seq: number } | null;
+	/** The jumped-to task has no tile (no live session). */
+	onJumpMissing: (taskId: string) => void;
+	/** A tile drag produced this full task order. */
+	onReorder: (ids: string[]) => void;
 }) {
 	// One tile per TASK, not per session: a task with an agent and two shells is
 	// one piece of work, and splaying it across three identically-titled tiles
@@ -2500,6 +2906,8 @@ function MissionControl({
 	>({});
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
+	const tilesRef = useRef(tiles);
+	tilesRef.current = tiles;
 
 	// Pages instead of a scroll area: each layout shows a fixed number of tiles
 	// at once, and the rest live on further pages. "In view" is then a crisp
@@ -2526,11 +2934,15 @@ function MissionControl({
 		dirRef.current = d;
 		setPage((p) => Math.max(0, Math.min(pageCountRef.current - 1, p + d)));
 	}, []);
-	// Cmd/Ctrl+Alt+Up/Down flips pages. Capture phase so it wins over the
-	// focused xterm textarea; the combo is one no shell binding uses.
+	// Ctrl+Up/Down flips pages, and Cmd+Up/Down too: a PC keyboard's "ctrl" is
+	// macOS Control, but people read it as Cmd, so either works. Capture phase
+	// so it wins over the focused xterm textarea, which means a tile's shell
+	// never sees these while Mission Control is open. macOS binds Ctrl+Up/Down
+	// to Mission Control / App Exposé by default and swallows them before the
+	// app; remapping those in System Settings frees them.
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (!e.altKey || !(e.metaKey || e.ctrlKey)) return;
+			if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
 			if (e.key === "ArrowDown") flip(1);
 			else if (e.key === "ArrowUp") flip(-1);
 			else return;
@@ -2541,18 +2953,21 @@ function MissionControl({
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [flip]);
 
-	// Locked: snapshot the sidebar's ordering the moment we land here (or flip
-	// the lock on) and freeze it, so terminals never shuffle under you while
+	// Locked: snapshot `order` (Mission Control's own order when one was dragged,
+	// else the sidebar's) the moment we land here (or flip the lock on) and
+	// freeze it, so terminals never shuffle under you while
 	// you watch (e.g. "sort by updated" would otherwise reorder live as agents
 	// emit events). Unlocked: follow the sidebar's live order, except the tile
 	// being typed in keeps its slot (see focusedRef). Tasks not in the active
 	// rank sort to the end.
-	const orderRef = useRef(order);
-	orderRef.current = order;
 	const [frozenRank, setFrozenRank] = useState(() => new Map(order.map((id, i) => [id, i])));
-	useEffect(() => {
-		if (locked) setFrozenRank(new Map(orderRef.current.map((id, i) => [id, i])));
-	}, [locked]);
+	// Snapshot during render, not in an effect, so the render that flips the
+	// lock already carries the new rank and the forced re-sort below uses it.
+	const [lockSeen, setLockSeen] = useState(locked);
+	if (lockSeen !== locked) {
+		setLockSeen(locked);
+		if (locked) setFrozenRank(new Map(order.map((id, i) => [id, i])));
+	}
 	const liveRank = useMemo(() => new Map(order.map((id, i) => [id, i])), [order]);
 	const rank = locked ? frozenRank : liveRank;
 
@@ -2563,6 +2978,9 @@ function MissionControl({
 	// Latest unsorted tile list, kept so a re-sort (order change, lock flip,
 	// blur) doesn't need a fresh round of listForTask calls.
 	const sessionsRef = useRef<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
+	// False until the first session fetch lands, so a fresh mount shows an empty
+	// grid for that moment rather than flashing "No live agents yet".
+	const [loaded, setLoaded] = useState(false);
 	const rankRef = useRef(rank);
 	const lockedRef = useRef(locked);
 	lockedRef.current = locked;
@@ -2571,7 +2989,10 @@ function MissionControl({
 	// courtesies: a new order that only permutes the visible page is skipped
 	// there (see below), and while a tile is being typed in it keeps the slot
 	// it currently occupies on screen.
-	const resort = useCallback(() => {
+	// `force` skips the visible-page courtesy below: flipping the lock is an
+	// explicit request for the other order, so it must show even when it only
+	// permutes the tiles already on screen.
+	const resort = useCallback((force = false) => {
 		const r = rankRef.current;
 		const next = [...sessionsRef.current];
 		// Stable sort; V8's stable sort keeps equal-rank ties in encounter order.
@@ -2593,7 +3014,7 @@ function MissionControl({
 			const sameSet =
 				prevWin.length === nextWin.length &&
 				prevWin.every((p) => nextWin.some((n) => n.task.id === p.task.id));
-			if (sameSet && prevWin.length > 0) {
+			if (sameSet && prevWin.length > 0 && !force) {
 				// Keep the on-screen arrangement but take next's tile objects,
 				// which carry the freshly fetched task DTOs and session lists.
 				const fresh = new Map(nextWin.map((t) => [t.task.id, t]));
@@ -2618,12 +3039,15 @@ function MissionControl({
 	}, []);
 
 	// Re-sort when the sidebar order changes (only matters unlocked) or the
-	// lock flips off and the live order takes over again. rankRef is synced
+	// lock flips either way and the other order takes over. rankRef is synced
 	// here (not at render time) so the effect legitimately depends on rank.
+	const lastLockedRef = useRef(locked);
 	useEffect(() => {
 		rankRef.current = rank;
-		resort();
-	}, [rank, resort]);
+		const flipped = lastLockedRef.current !== locked;
+		lastLockedRef.current = locked;
+		resort(flipped);
+	}, [rank, locked, resort]);
 
 	// Sessions announce themselves, so this listens instead of polling. Both spawn
 	// paths broadcast taskUpdated and a dying PTY broadcasts ptyExit — including from
@@ -2646,11 +3070,18 @@ function MissionControl({
 				);
 				if (cancelled) return;
 				// listForTask hands sessions back latest-first; reverse so the tabs
-				// read oldest to newest, exactly as they do in the task panel.
+				// read oldest to newest, exactly as they do in the task panel. A
+				// session whose agent quit (`stopped` while its PTY lives on as a
+				// shell) is not an agent to watch, so it gets no tab here, and a task
+				// left with none gets no tile. The task panel still has it.
 				sessionsRef.current = perTask
-					.filter(({ sessions }) => sessions.length > 0)
-					.map(({ task, sessions }) => ({ task, sessions: [...sessions].reverse() }));
+					.map(({ task, sessions }) => ({
+						task,
+						sessions: sessions.filter((s) => s.status !== "stopped").reverse(),
+					}))
+					.filter(({ sessions }) => sessions.length > 0);
 				resort();
+				setLoaded(true);
 			} finally {
 				inFlight = false;
 			}
@@ -2704,14 +3135,80 @@ function MissionControl({
 		});
 	}, [onScreen]);
 
+	// A sidebar click lands here: flip to the page holding that task's tile and
+	// focus its terminal once the tile is on screen. Only jumps sent while
+	// mounted count; the one left over from a previous visit is not a request.
+	const handledJumpRef = useRef(jump?.seq ?? 0);
+	const onJumpMissingRef = useRef(onJumpMissing);
+	onJumpMissingRef.current = onJumpMissing;
+	const pendingFocusRef = useRef<string | null>(null);
+	const tileEls = useRef(new Map<string, HTMLDivElement>());
+	useEffect(() => {
+		if (!jump || jump.seq === handledJumpRef.current) return;
+		handledJumpRef.current = jump.seq;
+		const i = tilesRef.current.findIndex((t) => t.task.id === jump.id);
+		if (i < 0) {
+			onJumpMissingRef.current(jump.id);
+			return;
+		}
+		const target = Math.floor(i / pageSizeRef.current);
+		dirRef.current = Math.sign(target - pageRef.current);
+		setPage(target);
+		pendingFocusRef.current = jump.id;
+	}, [jump]);
+	// Every render, cheaply: runs after the flipped page's terminals mounted
+	// (children's effects run first, and each focuses itself on mount), so this
+	// focus is the one that sticks.
+	useEffect(() => {
+		const id = pendingFocusRef.current;
+		const el = id ? tileEls.current.get(id) : undefined;
+		if (!el) return;
+		pendingFocusRef.current = null;
+		el.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")?.focus();
+	});
+
+	// Locked only: drag a tile by its bar onto another tile and the two trade
+	// places; nothing else moves, so the rest of the page stays where the eye
+	// left it. Unlocked, tiles follow the sidebar live, which would undo a drag.
+	const dragIdRef = useRef<string | null>(null);
+	const [dropTarget, setDropTarget] = useState<string | null>(null);
+	const swapTiles = (a: string, b: string) => {
+		const ta = tiles.find((t) => t.task.id === a);
+		const tb = tiles.find((t) => t.task.id === b);
+		if (!locked || !ta || !tb || ta === tb) return;
+		const next = tiles.map((t) => (t === ta ? tb : t === tb ? ta : t));
+		// Write the tiles' new sequence into the slots tiles occupy in the full
+		// task order, leaving tasks without a tile where they are. Tile tasks
+		// the order lacks (loop tasks, which the sidebar lists apart) join the
+		// end so their new place is recorded too.
+		const tileIds = next.map((t) => t.task.id);
+		const onTiles = new Set(tileIds);
+		const base = [...order, ...tileIds.filter((id) => !order.includes(id))];
+		let k = 0;
+		const full = base.map((id) => (onTiles.has(id) ? (tileIds[k++] ?? id) : id));
+		// Show it now: the page-permutation courtesy in resort would otherwise
+		// keep the old arrangement when the new order arrives.
+		setTiles(next);
+		setFrozenRank(new Map(full.map((id, i) => [id, i])));
+		onReorder(full);
+	};
+
 	if (tiles.length === 0) {
+		if (!loaded) return <div className="mc" data-layout={layout} />;
 		return (
 			<div className="mc" data-layout={layout}>
-				<div className="empty">
-					No live agents yet.
-					<br />
-					Launch agents from the Board to watch them work side by side here.
-				</div>
+				{mode === "loops" ? (
+					<div className="empty">
+						No loop sessions running.
+						<br />A loop shows up here while its session is live.
+					</div>
+				) : (
+					<div className="empty">
+						No live agents yet.
+						<br />
+						Launch agents from the Board to watch them work side by side here.
+					</div>
+				)}
 			</div>
 		);
 	}
@@ -2737,7 +3234,13 @@ function MissionControl({
 					return (
 						<motion.div
 							key={task.id}
-							className="tile"
+							ref={(el: HTMLDivElement | null) => {
+								if (el) tileEls.current.set(task.id, el);
+								else tileEls.current.delete(task.id);
+							}}
+							className={`tile ${task.id === highlightId ? "highlighted" : ""} ${
+								task.id === dropTarget ? "drop" : ""
+							}`}
 							// A reorder swaps terminals in and out of a page in silence — the
 							// same four boxes, different work inside them — so the change had
 							// to be announced. Tiles that keep their place glide to it (the
@@ -2753,6 +3256,27 @@ function MissionControl({
 							// when the xterm textarea inside the tile gains/loses focus.
 							onFocus={() => {
 								focusedRef.current = task.id;
+								onHighlight(task.id);
+							}}
+							// The bar isn't focusable, so a click on it highlights here.
+							onPointerDown={() => onHighlight(task.id)}
+							onDragOver={(e) => {
+								if (!e.dataTransfer.types.includes(MC_TILE_MIME)) return;
+								e.preventDefault();
+								e.dataTransfer.dropEffect = "move";
+								const over = dragIdRef.current === task.id ? null : task.id;
+								if (dropTarget !== over) setDropTarget(over);
+							}}
+							onDragLeave={(e) => {
+								if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+								setDropTarget((d) => (d === task.id ? null : d));
+							}}
+							onDrop={(e) => {
+								const from = e.dataTransfer.getData(MC_TILE_MIME);
+								if (!from) return;
+								e.preventDefault();
+								setDropTarget(null);
+								swapTiles(from, task.id);
 							}}
 							onBlur={(e) => {
 								// Ignore focus moving within the same tile (e.g. from the bar's
@@ -2766,7 +3290,25 @@ function MissionControl({
 								resort();
 							}}
 						>
-							<div className="bar">
+							{/* biome-ignore lint/a11y/noStaticElementInteractions: a pointer drag handle; the sidebar's Custom order is the same ordering. */}
+							<div
+								className={`bar ${locked ? "movable" : ""}`}
+								draggable={locked}
+								title={
+									locked
+										? "Drag onto another tile to swap them"
+										: "Lock the layout to arrange tiles by dragging"
+								}
+								onDragStart={(e) => {
+									dragIdRef.current = task.id;
+									e.dataTransfer.setData(MC_TILE_MIME, task.id);
+									e.dataTransfer.effectAllowed = "move";
+								}}
+								onDragEnd={() => {
+									dragIdRef.current = null;
+									setDropTarget(null);
+								}}
+							>
 								<span>{task.name}</span>
 								<span className="muted">· {task.branch}</span>
 								<span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
@@ -2812,7 +3354,7 @@ function MissionControl({
 					<IconButton
 						icon={ChevronUp}
 						label="Previous terminals"
-						shortcut="⌘⌥↑"
+						shortcut="⌃↑"
 						size={14}
 						disabled={clampedPage === 0}
 						onClick={() => flip(-1)}
@@ -2823,11 +3365,14 @@ function MissionControl({
 					<IconButton
 						icon={ChevronDown}
 						label="Next terminals"
-						shortcut="⌘⌥↓"
+						shortcut="⌃↓"
 						size={14}
 						disabled={clampedPage === pageCount - 1}
 						onClick={() => flip(1)}
 					/>
+					<span className="keys" aria-hidden="true">
+						⌃↑↓
+					</span>
 				</div>
 			)}
 		</div>

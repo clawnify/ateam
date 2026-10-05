@@ -12,6 +12,8 @@ import { getAgent } from "@ateam/agents";
 import {
 	CH,
 	type ClientTransport,
+	type CredentialsPatch,
+	type CredentialsResult,
 	createRpcClient,
 	DEFAULT_EDITOR_PORT,
 	type EditorEndpointDTO,
@@ -34,6 +36,7 @@ import {
 	type HostTransport,
 	hetznerProvider,
 	listConnections,
+	openRouterApiKey,
 	readSettings,
 	recordConnection,
 	resolveTransport,
@@ -316,6 +319,59 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return { ...r, machine: null, ...syncReport() };
 	}
 
+	// Credentials follow the same routing, with one difference in what a push
+	// may do. A box can hold a key set by hand on the box, so a Mac with no key
+	// never clears it on connect; only an explicit removal here does. The key
+	// travels only over the box's own wire (SSH or Tailscale), to a box you
+	// already run agents on.
+	const credSyncState = new Map<string, string | null>();
+	async function pushCredentials(patch: CredentialsPatch): Promise<void> {
+		await Promise.all(
+			[...backends].map(async ([alias, backend]) => {
+				if (alias === null) return;
+				try {
+					await withTimeout(
+						backend.handle(CH.credentialsUpdate, [patch]) as Promise<unknown>,
+						CONNECT_TIMEOUT_MS,
+					);
+					credSyncState.set(alias, null);
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					const reason = /Unknown method/.test(msg)
+						? "its Ateam is older than key sync; updates with the next release"
+						: msg;
+					credSyncState.set(alias, reason);
+					console.warn(`[ateam] key sync to "${alias}" failed:`, msg);
+				}
+			}),
+		);
+	}
+	async function credentialsCall(method: string, args: unknown[]): Promise<CredentialsResult> {
+		if (!readSettings().settings.client.syncEngineSettingsToBoxes) {
+			return (await agg.handle(method, args)) as CredentialsResult;
+		}
+		const r = (await local.handle(method, args)) as CredentialsResult;
+		if (method === CH.credentialsUpdate) {
+			const patch = args[0] as CredentialsPatch;
+			// What is in force here, so a key this Mac takes from its environment
+			// reaches the boxes too; a removal is pushed as the removal it was.
+			await pushCredentials(
+				patch.openRouterApiKey === null
+					? { openRouterApiKey: null }
+					: { openRouterApiKey: openRouterApiKey() ?? null },
+			);
+		}
+		const syncedTo: string[] = [];
+		const syncFailed: { alias: string; reason: string }[] = [];
+		for (const alias of backends.keys()) {
+			if (alias === null) continue;
+			const state = credSyncState.get(alias);
+			if (state === null) syncedTo.push(alias);
+			else if (state !== undefined) syncFailed.push({ alias, reason: state });
+		}
+		return { ...r, syncedTo: syncedTo.sort(), syncFailed };
+	}
+
 	/**
 	 * Open the wire to a box. Which wire is a property of the connection, not of
 	 * the call site: an ssh_config alias gets the `attach` relay over OpenSSH; a
@@ -428,6 +484,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// hold the board back.
 		if (readSettings().settings.client.syncEngineSettingsToBoxes) {
 			void pushEngineSettings(readSettings().settings.engine);
+			const key = openRouterApiKey();
+			if (key) void pushCredentials({ openRouterApiKey: key });
 		}
 		// A closed wire must take its backend WITH it. Nothing else drops a dead engine:
 		// a call routed into one never settles (no per-call timeout), so it stayed on the
@@ -721,7 +779,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		handle: (method, args, ctx) =>
 			method === CH.settingsGet || method === CH.settingsUpdate
 				? settingsCall(method, args)
-				: agg.handle(method, args, ctx),
+				: method === CH.credentialsGet || method === CH.credentialsUpdate
+					? credentialsCall(method, args)
+					: agg.handle(method, args, ctx),
 		release: (client) => local.release?.(client),
 		handleFor: (ownerId, method, args) => agg.handleFor(ownerId, method, args),
 		ownerKind: (ownerId) => agg.ownerKindOf(ownerId),

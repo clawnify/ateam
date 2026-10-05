@@ -40,6 +40,10 @@ import {
 	type BoxUpdateStarted,
 	type CleanupCandidate,
 	type CreateLoopInput,
+	type CreateGithubIssueInput,
+	type CreateIssueTaskInput,
+	type CredentialsPatch,
+	type CredentialsResult,
 	type DirEntryDTO,
 	type KanbanColumn,
 	type MergeStrategy,
@@ -51,8 +55,11 @@ import {
 } from "@ateam/protocol";
 import { createEditorHost, installCodeServer } from "./editor";
 import { refreshLoginPath } from "./login-env";
+import { credentialStatus, credentialsPath, updateCredentials } from "./credentials-file";
 import { readSettings, settingsPath, updateSettings } from "./settings-file";
 import type { Engine } from "./engine";
+import { GithubIssues } from "./github-issues";
+import { createIssueTask } from "./issue-tasks";
 import { nextCronRun } from "./loops/runner";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { createSizeArbiter } from "./pty/size-arbiter";
@@ -149,6 +156,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		services.refreshPath ?? ((opts?: { force?: boolean }) => refreshLoginPath({ db, ...opts }));
 	// Lazy: no code-server process exists until the first editor:open.
 	const editorHost = createEditorHost();
+	const githubIssues = new GithubIssues();
 
 	// ---- cleanup: merged + idle + clean is a RECOMMENDATION, not a filter ----
 	// The rule below (merged, no live agent session, clean working tree) is the
@@ -196,6 +204,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 
 	/** Open a login shell in a task's worktree and record the session. */
 	const spawnShellInTask = (task: { id: string; worktreePath: string }) => {
+		services.worktreeGuard.assertWritable(task.id);
 		const terminalId = randomUUID();
 		repo.createSession(db, {
 			taskId: task.id,
@@ -219,6 +228,14 @@ export function createDispatcher(engine: Engine): Dispatcher {
 
 	const handlers = {
 		// ---- projects ----
+		[CH.projectsIssues]: async (repository: string, refresh = false) => {
+			await refreshPath();
+			return githubIssues.list(repository, refresh);
+		},
+		[CH.projectsCreateIssue]: async (repository: string, input: CreateGithubIssueInput) => {
+			await refreshPath();
+			return githubIssues.create(repository, input);
+		},
 		[CH.projectsRegister]: async (repoPath: string, opts?: RegisterProjectOptions) => {
 			// "Create a repository here instead" (GitHub-Desktop-style), after the client
 			// asked the user. When the folder doesn't exist yet, create it first — a
@@ -310,6 +327,13 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 
 		// ---- tasks ----
+		[CH.tasksCreateFromIssue]: async (input: CreateIssueTaskInput) => {
+			const result = await createIssueTask(services, engine.sendTaskUpdated, input);
+			return {
+				task: toTaskDTO(result.task, services.pendingSeeds.has(result.task.id)),
+				created: result.created,
+			};
+		},
 		[CH.tasksList]: async (projectId: string) =>
 			repo
 				.listTasks(db, projectId)
@@ -328,16 +352,18 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.tasksRemove]: async (input: { id: string; deleteBranch?: boolean; force?: boolean }) => {
 			const task = requireTask(services, input.id);
 			const project = requireProjectFor(services, task.projectId);
-			// Tear down any live agent/shell sessions in this worktree first.
-			for (const s of repo.listSessionsByTask(db, task.id)) {
-				services.pty.kill(s.terminalId);
-			}
-			await gitRemoveTask({
-				repoPath: project.repoPath,
-				worktreePath: task.worktreePath,
-				branch: task.branch,
-				deleteBranch: input.deleteBranch,
-				force: input.force,
+			await services.worktreeGuard.remove(task.id, services.pendingSeeds.get(task.id), async () => {
+				// Tear down any live agent/shell sessions in this worktree first.
+				for (const s of repo.listSessionsByTask(db, task.id)) {
+					services.pty.kill(s.terminalId);
+				}
+				await gitRemoveTask({
+					repoPath: project.repoPath,
+					worktreePath: task.worktreePath,
+					branch: task.branch,
+					deleteBranch: input.deleteBranch,
+					force: input.force,
+				});
 			});
 			repo.deleteTask(db, task.id);
 			// Drop the card from every window (not just the caller's).
@@ -401,13 +427,15 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				try {
 					// force:false → git refuses if the tree somehow became dirty between
 					// classify and now; deleteBranch:true (branch -d refuses unmerged).
-					await gitRemoveTask({
-						repoPath: project.repoPath,
-						worktreePath: task.worktreePath,
-						branch: task.branch,
-						deleteBranch: true,
-						force: false,
-					});
+					await services.worktreeGuard.remove(task.id, services.pendingSeeds.get(task.id), () =>
+						gitRemoveTask({
+							repoPath: project.repoPath,
+							worktreePath: task.worktreePath,
+							branch: task.branch,
+							deleteBranch: true,
+							force: false,
+						}),
+					);
 					repo.deleteTask(db, task.id);
 					engine.sendTaskRemoved(task.id);
 					removed.push({ id: task.id, name: task.name, branch: task.branch });
@@ -700,6 +728,16 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			updateSettings(patch);
 			const r = readSettings();
 			return { settings: r.settings, path: settingsPath(), warning: r.warning };
+		},
+		// Secrets, beside settings but never in them (see credentials-file.ts).
+		// The answer says whether a key is set, never what it is.
+		[CH.credentialsGet]: async (): Promise<CredentialsResult> => ({
+			openRouter: credentialStatus(),
+			path: credentialsPath(),
+		}),
+		[CH.credentialsUpdate]: async (patch: CredentialsPatch): Promise<CredentialsResult> => {
+			updateCredentials(patch);
+			return { openRouter: credentialStatus(), path: credentialsPath() };
 		},
 
 		// ---- pty ----
