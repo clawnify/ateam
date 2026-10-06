@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { GitCoreError } from "./errors";
-import { gitFor } from "./git-client";
+import { gitFor, safeRaw } from "./git-client";
 import { push, trackingStatus } from "./sync";
 import { parseWorktreeList } from "./worktree-list";
 
@@ -145,20 +145,28 @@ export interface DetectMergedResult {
  */
 export async function detectMerged(input: {
 	worktreePath: string;
+	/** The task's own branch, used only when the worktree's HEAD names none. */
 	branch: string;
 	baseBranch: string;
 }): Promise<DetectMergedResult> {
 	const git = gitFor(input.worktreePath);
+	// Ask about the branch the worktree is ON, not the one the task was created
+	// with: an agent often cuts a fresh branch inside its worktree (a loop opens
+	// one per run), and that is the branch whose PR gets merged. Detached HEAD,
+	// or HEAD on base itself, has no PR of its own, so keep the task's branch.
+	const current = (await safeRaw(git, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+	const branch =
+		current && current !== "HEAD" && current !== input.baseBranch ? current : input.branch;
 	let tip = "";
 	try {
-		tip = (await git.raw(["rev-parse", input.branch])).trim();
+		tip = (await git.raw(["rev-parse", branch])).trim();
 	} catch {
 		return { merged: false, prNumber: null, prUrl: null, state: null };
 	}
 
 	try {
 		const out = await gh(
-			["pr", "view", input.branch, "--json", "number,state,url,headRefOid"],
+			["pr", "view", branch, "--json", "number,state,url,headRefOid"],
 			input.worktreePath,
 		);
 		const p = JSON.parse(out) as {

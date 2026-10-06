@@ -488,6 +488,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 		[CH.gitDiff]: async (taskId: string) => {
 			const task = requireTask(services, taskId);
+			await engine.worktreeSweep.freshenBase(task);
 			return diff({ worktreePath: task.worktreePath, baseBranch: task.baseBranch });
 		},
 		[CH.gitFileDiff]: async (taskId: string, file: string) => {
