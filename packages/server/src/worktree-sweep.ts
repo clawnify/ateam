@@ -15,7 +15,7 @@
  */
 
 import { type AteamDb, repo, type Task } from "@ateam/db";
-import { detectMerged, diff, trackingStatus } from "@ateam/git-core";
+import { detectMerged, diff, fetchBase, trackingStatus } from "@ateam/git-core";
 import type { GitStatusSnapshot, PrState } from "@ateam/protocol";
 
 /** How often the background pass runs. */
@@ -27,6 +27,11 @@ export const SWEEP_MS = 90_000;
 export const PROBE_THROTTLE_MS = 60_000;
 /** Worktrees probed per pass. Each costs git calls plus at most one `gh`. */
 export const SWEEP_BATCH = 12;
+/**
+ * Floor between two fetches of the same repo's base. Every worktree of a repo
+ * shares its `origin/<base>` ref, so this is per repo, not per task.
+ */
+export const FETCH_THROTTLE_MS = 5 * 60_000;
 
 export async function computeGitStatus(
 	worktreePath: string,
@@ -57,6 +62,13 @@ export interface WorktreeSweep {
 	 * RPC always has something to answer with).
 	 */
 	refresh(taskId: string): Promise<GitStatusSnapshot | null>;
+	/**
+	 * Bring the task's `origin/<base>` up to date before anything is counted
+	 * against it. A merge done outside Ateam (an agent's `gh pr merge`, the
+	 * GitHub UI) never fetches here, and a stale base makes every merged line
+	 * look unmerged. Best-effort and throttled per repo; never throws.
+	 */
+	freshenBase(task: Task): Promise<void>;
 	start(): void;
 	stop(): void;
 }
@@ -77,6 +89,20 @@ export function createWorktreeSweep(deps: SweepDeps): WorktreeSweep {
 	/** Round-robin cursor, so a project with more tasks than SWEEP_BATCH still
 	 *  gets every one of them refreshed, just over several passes. */
 	let cursor = 0;
+	/** Last fetch per repo + base, and the one in flight so callers share it. */
+	const fetchedAt = new Map<string, number>();
+	const fetching = new Map<string, Promise<void>>();
+
+	function freshenBase(task: Task): Promise<void> {
+		const key = `${task.projectId}\0${task.baseBranch}`;
+		const inFlight = fetching.get(key);
+		if (inFlight) return inFlight;
+		if (Date.now() - (fetchedAt.get(key) ?? 0) < FETCH_THROTTLE_MS) return Promise.resolve();
+		fetchedAt.set(key, Date.now());
+		const run = fetchBase(task.worktreePath, task.baseBranch).finally(() => fetching.delete(key));
+		fetching.set(key, run);
+		return run;
+	}
 
 	/**
 	 * Persist the PR facts we just learned. Deliberately split from the column
@@ -122,6 +148,7 @@ export function createWorktreeSweep(deps: SweepDeps): WorktreeSweep {
 		let changed = false;
 		let snapshot: GitStatusSnapshot | null = null;
 		try {
+			await freshenBase(task);
 			snapshot = await computeGitStatus(task.worktreePath, task.baseBranch);
 			repo.updateTask(db, task.id, { gitStatus: snapshot });
 			changed = true;
@@ -180,6 +207,7 @@ export function createWorktreeSweep(deps: SweepDeps): WorktreeSweep {
 	let running = false;
 	return {
 		refresh,
+		freshenBase,
 		start() {
 			timer ??= setInterval(() => {
 				// Overlap guard: a slow pass (many worktrees, a hung `gh`) must not

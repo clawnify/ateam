@@ -38,7 +38,8 @@ export interface TaskInfo {
 const FETCH_TIMEOUT_MS = 5_000;
 
 /**
- * Refresh `refs/remotes/origin/<base>` before we branch off it.
+ * Refresh `refs/remotes/origin/<base>` before we branch off it (and before
+ * the server counts a task's diff against it, see worktree-sweep).
  *
  * That ref is a LOCAL CACHE, and nothing on this path used to update it: the
  * only fetches in git-core are in `updateFromBase` and the merge flow, so the
@@ -66,7 +67,7 @@ const FETCH_TIMEOUT_MS = 5_000;
  * which covers transfer rate, not connect), so bounding it any tighter would
  * mean bypassing simple-git entirely for this one call.
  */
-async function fetchBase(repoPath: string, baseBranch: string): Promise<void> {
+export async function fetchBase(repoPath: string, baseBranch: string): Promise<void> {
 	try {
 		await gitFor(repoPath, {
 			abort: AbortSignal.timeout(FETCH_TIMEOUT_MS),

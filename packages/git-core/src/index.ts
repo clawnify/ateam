@@ -42,7 +42,7 @@ export type {
 	SeedWorktreeInput,
 	TaskInfo,
 } from "./task";
-export { createTask, removeTask, seedWorktree } from "./task";
+export { createTask, fetchBase, removeTask, seedWorktree } from "./task";
 export type { GitClient } from "./types";
 export { slugify } from "./util";
 export type { WorktreeRecord } from "./worktree-list";

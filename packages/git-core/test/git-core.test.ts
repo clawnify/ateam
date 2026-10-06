@@ -507,6 +507,31 @@ describe("detectMerged — external merge detection (no GitHub needed)", () => {
 		expect(res.merged).toBe(false);
 	});
 
+	it("follows the branch the worktree is on, not the one the task was created with", async () => {
+		// An agent (or a loop run) cuts a fresh branch inside its worktree and
+		// that branch is the one that gets merged.
+		const task = await createTask({ repoPath: repo.work, name: "switched" });
+		await simpleGit(task.worktreePath).checkoutLocalBranch("catalog/today");
+		await commitFile(task.worktreePath, "cat.txt", "c\n", "catalog");
+		await push({ worktreePath: task.worktreePath, branch: "catalog/today" });
+
+		const clone = await mkdtemp(join(repo.dir, "merge-"));
+		await simpleGit().clone(repo.origin, clone);
+		const g = simpleGit(clone);
+		await g.addConfig("user.email", "tester@ateam.dev");
+		await g.addConfig("user.name", "Ateam Tester");
+		await g.raw(["fetch", "origin", "catalog/today"]);
+		await g.raw(["merge", "--no-ff", "--no-edit", "origin/catalog/today"]);
+		await g.push("origin", "main");
+
+		const res = await detectMerged({
+			worktreePath: task.worktreePath,
+			branch: task.branch,
+			baseBranch: "main",
+		});
+		expect(res.merged).toBe(true);
+	});
+
 	it("does NOT mistake a fresh branch with no own commits for a merge", async () => {
 		// Regression: containment-based detection flagged brand-new branches as
 		// merged (their tip is trivially contained in base).
@@ -655,6 +680,92 @@ describe("commit & diff", () => {
 		});
 		expect(tracked).toContain("+more");
 		expect(tracked).not.toContain("new file mode");
+	});
+});
+
+/** Squash-merge `branch` into origin/main from a throwaway clone, the way
+ *  `gh pr merge --squash` lands it: one new commit, the branch's own commits
+ *  never becoming ancestors of main. */
+async function squashMergeOnOrigin(r: TempRepo, branch: string): Promise<void> {
+	const clone = await mkdtemp(join(r.dir, "squash-"));
+	await simpleGit().clone(r.origin, clone);
+	const g = simpleGit(clone);
+	await g.addConfig("user.email", "tester@ateam.dev");
+	await g.addConfig("user.name", "Ateam Tester");
+	await g.raw(["fetch", "origin", branch]);
+	await g.raw(["merge", "--squash", `origin/${branch}`]);
+	await g.commit(`squash ${branch}`);
+	await g.push("origin", "main");
+}
+
+const lines = (from: number, to: number) =>
+	Array.from({ length: to - from + 1 }, (_, i) => `${from + i}\n`).join("");
+
+describe("diff after a squash merge", () => {
+	it("stops counting what already landed, even after base edits the same files", async () => {
+		// base has a 20-line file; the branch appends to it and adds a new file.
+		await advanceOrigin(repo, { file: "big.txt", content: lines(1, 20) });
+		await simpleGit(repo.work).pull("origin", "main");
+		const task = await createTask({ repoPath: repo.work, name: "squashed" });
+		await commitFile(task.worktreePath, "big.txt", lines(1, 30), "append");
+		await commitFile(task.worktreePath, "added.txt", "a\nb\n", "add");
+		await push({ worktreePath: task.worktreePath, branch: task.branch });
+		await squashMergeOnOrigin(repo, task.branch);
+
+		// Until origin/main is fetched the merge is invisible: that is what the
+		// server's freshenBase is for.
+		const stale = await diff({ worktreePath: task.worktreePath, baseBranch: "main" });
+		expect(stale.files.map((f) => f.path)).toEqual(["added.txt", "big.txt"]);
+
+		await simpleGit(task.worktreePath).fetch("origin", "main");
+		const landed = await diff({ worktreePath: task.worktreePath, baseBranch: "main" });
+		expect(landed.files).toEqual([]);
+
+		// Base moves on: a different region of the file the branch extended,
+		// and the file the branch created (an add/add conflict for merge-tree).
+		await advanceOrigin(repo, { file: "big.txt", content: `ONE\n${lines(2, 30)}` });
+		await advanceOrigin(repo, { file: "added.txt", content: "a\nb\nc\n" });
+		await simpleGit(task.worktreePath).fetch("origin", "main");
+		const later = await diff({ worktreePath: task.worktreePath, baseBranch: "main" });
+		expect(later.files).toEqual([]);
+
+		// Work done after the merge counts, and only that work.
+		await Bun.write(join(task.worktreePath, "big.txt"), `${lines(1, 30)}31\n`);
+		const after = await diff({ worktreePath: task.worktreePath, baseBranch: "main" });
+		expect(after.files).toMatchObject([{ path: "big.txt", additions: 1, deletions: 0 }]);
+		const patch = await fileDiff({
+			worktreePath: task.worktreePath,
+			file: "big.txt",
+			baseBranch: "main",
+		});
+		expect(patch).toContain("+31");
+		expect(patch).not.toContain("+21");
+	});
+
+	it("leaves an unmerged branch's counts alone, conflicts included", async () => {
+		await advanceOrigin(repo, { file: "big.txt", content: lines(1, 20) });
+		await simpleGit(repo.work).pull("origin", "main");
+		const task = await createTask({ repoPath: repo.work, name: "in flight" });
+		await commitFile(task.worktreePath, "big.txt", `${lines(1, 19)}MINE\n`, "mine");
+		await commitFile(task.worktreePath, "new.txt", "n\n", "new");
+		// base rewrites the same line: a genuine conflict, still the branch's work.
+		await advanceOrigin(repo, { file: "big.txt", content: `${lines(1, 19)}THEIRS\n` });
+		await simpleGit(task.worktreePath).fetch("origin", "main");
+
+		const d = await diff({ worktreePath: task.worktreePath, baseBranch: "main" });
+		expect(d.files).toMatchObject([
+			{ path: "big.txt", additions: 1, deletions: 1 },
+			{ path: "new.txt", additions: 1, deletions: 0 },
+		]);
+	});
+
+	it("counts committed and uncommitted edits to the same file together", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "both" });
+		await commitFile(task.worktreePath, "n.txt", lines(1, 5), "five");
+		await Bun.write(join(task.worktreePath, "n.txt"), lines(1, 6));
+
+		const d = await diff({ worktreePath: task.worktreePath, baseBranch: "main" });
+		expect(d.files).toMatchObject([{ path: "n.txt", additions: 6, deletions: 0 }]);
 	});
 });
 
