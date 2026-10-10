@@ -62,7 +62,16 @@ export interface LoopRunnerDeps {
 	 * happens to re-list.
 	 */
 	onChanged?: () => void;
+	/**
+	 * The master switch (settings `engine.loopsPaused`). Asked on every fire, so
+	 * flipping it needs no reschedule: a paused tick is skipped and the loop
+	 * keeps its slot, and Run now is refused. Absent = never paused.
+	 */
+	paused?: () => boolean;
 }
+
+/** Why Run now refused, worded for the panel that shows it. */
+export const LOOPS_PAUSED_MESSAGE = "All loops are paused. Resume them to run one.";
 
 export interface CreateUserLoopInput {
 	templateId: string;
@@ -313,11 +322,14 @@ export class LoopRunner {
 	async runNow(loopId: string, opts: { manual?: boolean } = {}): Promise<void> {
 		const inst = this.instances.get(loopId);
 		if (!inst) return;
+		const manual = opts.manual ?? true;
+		// Before the timer is cleared, so a refused run leaves the schedule as it was.
+		if (manual && this.deps.paused?.()) throw new Error(LOOPS_PAUSED_MESSAGE);
 		if (inst.timer) {
 			clearTimeout(inst.timer);
 			inst.timer = null;
 		}
-		await this.fire(inst, true, opts.manual ?? true);
+		await this.fire(inst, true, manual);
 	}
 
 	list(): Loop[] {
@@ -450,7 +462,11 @@ export class LoopRunner {
 		let status: "ok" | "error" | "done" = "ok";
 		let error: string | null = null;
 		try {
-			outcome = await inst.def.run(ctx);
+			// A skip, not a run: the loop keeps its schedule and resumes on its next
+			// slot once unpaused, with no backlog of missed ticks.
+			outcome = this.deps.paused?.()
+				? { skipped: true, summary: "Skipped: all loops are paused" }
+				: await inst.def.run(ctx);
 			status = outcome.done ? "done" : "ok";
 		} catch (err) {
 			status = "error";

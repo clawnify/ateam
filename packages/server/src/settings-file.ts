@@ -36,6 +36,7 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 		defaultMergeStrategy: "squash",
 		defaultUpdateStrategy: "merge",
 		deleteRemoteBranchOnMerge: false,
+		loopsPaused: false,
 	},
 };
 

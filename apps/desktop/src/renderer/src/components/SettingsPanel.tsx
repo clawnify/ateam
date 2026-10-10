@@ -111,6 +111,20 @@ const ROWS: Row[] = [
 		),
 	},
 	{
+		id: "engine.loopsPaused",
+		section: "agents",
+		title: "Pause all loops",
+		description:
+			"No loop starts while this is on: scheduled runs are skipped and Run now is refused. Each loop keeps its schedule and picks up at its next slot once you turn this off.",
+		control: (s, { patch }) => (
+			<Switch
+				checked={s.engine.loopsPaused}
+				label="Pause all loops"
+				onChange={(v) => patch({ engine: { loopsPaused: v } })}
+			/>
+		),
+	},
+	{
 		id: "engine.defaultMergeStrategy",
 		section: "git",
 		title: "Merge strategy",
