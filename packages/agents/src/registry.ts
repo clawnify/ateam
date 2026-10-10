@@ -144,6 +144,10 @@ export const AGENTS = [
 		// Verified with `codex --help` and `codex resume --help` (0.154.0):
 		// automatic approval review with the workspace-write sandbox retained.
 		yoloFlag: "--approve-for-me",
+		// Only the fallback: `--last` reaches a sibling worktree's newer thread,
+		// so a resume reads this worktree's id out of Codex's thread index first
+		// (server/src/codex-threads.ts) and lands here only if that store can't
+		// be read.
 		resumeCommand: "codex resume --last",
 		// `codex resume [SESSION_ID]` takes a UUID, but Codex mints it itself —
 		// there is no flag to hand it one, so its tabs stay unrestorable until

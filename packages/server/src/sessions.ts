@@ -14,6 +14,7 @@ import {
 import { repo, type Task } from "@ateam/db";
 import { createTask as gitCreateTask, seedWorktree } from "@ateam/git-core";
 import { buildAgentEnv, ensureClaudeHooks, ensureCodexHooks } from "./agent-setup";
+import { latestCodexThreadInDir } from "./codex-threads";
 import { refreshLoginPath } from "./login-env";
 import type { Services } from "./services";
 
@@ -180,8 +181,9 @@ async function launchAgent(
 	// `--continue` returns the newest conversation in ANY of them — reliably a
 	// sibling task's, since the newest one in this repo is whichever task ran
 	// last. That is a resume landing in the wrong branch's transcript, in a pane
-	// cd'd into the right one. So for those CLIs the id is picked here, from the
-	// conversations that actually belong to this worktree.
+	// cd'd into the right one. Codex's `resume --last` reaches across worktrees
+	// the same way (codex-threads.ts). So for those CLIs the id is picked here,
+	// from the conversations that actually belong to this worktree.
 	//
 	// A scan that could not run (`ok: false`) falls through to `--continue`: an
 	// imperfect resume beats silently starting a new conversation over one the
@@ -189,10 +191,13 @@ async function launchAgent(
 	// worktree has no conversation yet, so a fresh launch is the honest answer.
 	let resumeSessionId = input.resumeSessionId;
 	let resumeNewest = Boolean(input.resume);
-	if (resumeNewest && !resumeSessionId && agent.sessionListArgs) {
+	const scopesResume = Boolean(agent.sessionListArgs) || agent.id === "codex";
+	if (resumeNewest && !resumeSessionId && scopesResume) {
 		const scan = services.latestSession
 			? await services.latestSession(agent, task.worktreePath)
-			: await latestSessionInDir(agent, task.worktreePath, shell);
+			: agent.id === "codex"
+				? latestCodexThreadInDir(task.worktreePath)
+				: await latestSessionInDir(agent, task.worktreePath, shell);
 		if (scan.ok) {
 			resumeSessionId = scan.id ?? undefined;
 			resumeNewest = false;
