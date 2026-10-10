@@ -36,9 +36,10 @@ export interface Services {
 	refreshPath?: (opts?: { force?: boolean }) => Promise<boolean>;
 	/**
 	 * The newest conversation an agent holds for a directory, asked before a
-	 * resume that would otherwise reach outside it (`latestSessionInDir`). A
-	 * seam for the same reason the two above are: the real one shells out to the
-	 * agent's CLI. Defaults to the real scan.
+	 * resume that would otherwise reach outside it (`latestSessionInDir`, or
+	 * `latestCodexThreadInDir` for Codex). A seam for the same reason the two
+	 * above are: the real one shells out to the agent's CLI or opens its store.
+	 * Defaults to the real scan.
 	 */
 	latestSession?: (agent: AgentDefinition, cwd: string) => Promise<SessionScan>;
 	/**
