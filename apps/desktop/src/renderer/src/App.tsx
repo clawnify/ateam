@@ -1736,6 +1736,7 @@ export function App() {
 						<LoopsPanel
 							loops={activeLoops}
 							members={activeMembers}
+							envProtocol={envProtocol}
 							onChanged={refreshLoops}
 							onNew={() => setLoopDialog({ editId: null })}
 							onEdit={(id) => setLoopDialog({ editId: id })}

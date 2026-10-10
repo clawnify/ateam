@@ -4,7 +4,7 @@ import type { AteamDb } from "@ateam/db";
 import { bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
-import { LoopRunner, nextCronRun } from "../src/loops/runner";
+import { LOOPS_PAUSED_MESSAGE, LoopRunner, nextCronRun } from "../src/loops/runner";
 import type { LoopDefinition } from "../src/loops/types";
 
 function createTestDb(): AteamDb {
@@ -55,10 +55,15 @@ function makeLog(): SessionLog {
 
 /** Fake session ops: record calls and create real task rows, so the
  *  agent-session template's liveness/link checks see real state. */
-function makeRunner(log: SessionLog = makeLog(), onChanged?: () => void): LoopRunner {
+function makeRunner(
+	log: SessionLog = makeLog(),
+	onChanged?: () => void,
+	paused?: () => boolean,
+): LoopRunner {
 	return new LoopRunner({
 		db,
 		onChanged,
+		paused,
 		sessions: {
 			createTask: async (input) => {
 				if (log.failNames.has(input.name)) throw new Error(`branch exists: ${input.name}`);
@@ -156,6 +161,50 @@ describe("LoopRunner", () => {
 		expect(loop.lastStatus).toBe("error");
 		expect(loop.lastError).toBe("boom");
 		expect(runner.describe()).toHaveLength(1); // still scheduled
+		runner.stop();
+	});
+
+	it("while paused, skips a scheduled tick and keeps the loop's schedule", async () => {
+		let calls = 0;
+		let paused = true;
+		const runner = makeRunner(makeLog(), undefined, () => paused);
+		runner.register(
+			makeDef("a", async () => {
+				calls++;
+				return { summary: "ran" };
+			}),
+		);
+		runner.start();
+
+		await runner.runNow("a", { manual: false });
+		expect(calls).toBe(0);
+		const [loop] = runner.describe();
+		expect(loop).toMatchObject({ runs: 0, lastRunAt: null, enabled: true });
+		expect(loop.lastSummary).toBe("Skipped: all loops are paused");
+		expect(loop.nextRunAt).toBeGreaterThan(Date.now()); // still scheduled
+
+		paused = false;
+		await runner.runNow("a", { manual: false });
+		expect(calls).toBe(1);
+		expect(runner.describe()[0].runs).toBe(1);
+		runner.stop();
+	});
+
+	it("while paused, refuses Run now and leaves the schedule alone", async () => {
+		let calls = 0;
+		const runner = makeRunner(makeLog(), undefined, () => true);
+		runner.register(
+			makeDef("a", async () => {
+				calls++;
+				return {};
+			}),
+		);
+		runner.start();
+		const before = runner.describe()[0].nextRunAt;
+
+		await expect(runner.runNow("a")).rejects.toThrow(LOOPS_PAUSED_MESSAGE);
+		expect(calls).toBe(0);
+		expect(runner.describe()[0]).toMatchObject({ runs: 0, nextRunAt: before });
 		runner.stop();
 	});
 
