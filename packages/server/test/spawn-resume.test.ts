@@ -168,4 +168,19 @@ describe("resuming an agent whose --continue reaches beyond the worktree", () =>
 		expect(scanned).toBe(false);
 		expect(spawned?.command).toStartWith("claude --continue");
 	});
+
+	// `codex resume --last` reopened a sibling worktree's newer thread.
+	it("resumes THIS worktree's Codex thread by id, not --last", async () => {
+		services.latestSession = async () => ({ ok: true, id: "01a12665-here" });
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "codex", resume: true });
+		// Ateam slots its `-c notify=…` hook between `codex` and the subcommand.
+		expect(spawned?.command).toMatch(/^codex .* resume '01a12665-here';/);
+		expect(spawned?.command).not.toInclude("--last");
+	});
+
+	it("falls back to codex resume --last when the thread index can't be read", async () => {
+		services.latestSession = async () => ({ ok: false, id: null });
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "codex", resume: true });
+		expect(spawned?.command).toMatch(/^codex .* resume --last;/);
+	});
 });
