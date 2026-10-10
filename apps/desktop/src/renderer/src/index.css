@@ -2460,6 +2460,33 @@ input {
 	justify-content: space-between;
 	gap: 12px;
 }
+.loops-head-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.loops-paused {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	border: 1px solid var(--amber);
+	border-radius: 9px;
+	padding: 10px 14px;
+	font-size: 12px;
+	color: var(--text);
+}
+.loops-paused > svg {
+	flex: none;
+	margin-top: 1px;
+	color: var(--amber);
+}
+.loops-paused-miss {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-top: 4px;
+	color: var(--amber);
+}
 .loop-tag {
 	font-size: 10px;
 	text-transform: uppercase;

@@ -6,6 +6,7 @@ import {
 	FEATURE_MIN_VERSION,
 	type LoopDTO,
 	loopScheduleLabel,
+	type SettingsResult,
 } from "@ateam/protocol";
 import {
 	AlertTriangle,
@@ -13,6 +14,7 @@ import {
 	Check,
 	CheckCircle2,
 	Laptop,
+	Pause,
 	Pencil,
 	Play,
 	Plus,
@@ -393,12 +395,15 @@ export function LoopForm({
 export function LoopsPanel({
 	loops,
 	members,
+	envProtocol,
 	onChanged,
 	onNew,
 	onEdit,
 }: {
 	loops: LoopDTO[];
 	members: EngineMember[];
+	/** alias ("local" for this Mac) → the protocol each connected engine speaks. */
+	envProtocol: Record<string, number>;
 	onChanged: () => void;
 	/** Open the New loop dialog (App owns it, so the sidebar's "+" opens it too). */
 	onNew: () => void;
@@ -407,11 +412,48 @@ export function LoopsPanel({
 }) {
 	const [busy, setBusy] = useState<string | null>(null);
 	const [now, setNow] = useState(() => Date.now());
+	// The master switch, `engine.loopsPaused` in settings.json. With settings
+	// sync on (the default) the Mac's file is pushed to every box, so one switch
+	// stops loops everywhere; the result names any box that did not take it.
+	const [settings, setSettings] = useState<SettingsResult | null>(null);
+	const paused = settings?.settings.engine.loopsPaused ?? false;
+	// Boxes the pause did not reach: a push that failed, and (sync on) a box whose
+	// Ateam predates the switch, which takes the key and keeps running its loops.
+	const notPaused = new Map((settings?.syncFailed ?? []).map((f) => [f.alias, f.reason]));
+	if (settings?.syncedTo !== undefined) {
+		for (const [alias, version] of Object.entries(envProtocol)) {
+			if (alias !== "local" && !notPaused.has(alias) && !boxSupports("loopsPause", version)) {
+				notPaused.set(alias, "its Ateam is older than Pause all; update the box");
+			}
+		}
+	}
 
 	useEffect(() => {
 		const tick = setInterval(() => setNow(Date.now()), 1000);
 		return () => clearInterval(tick);
 	}, []);
+
+	useEffect(() => {
+		let cancelled = false;
+		window.ateam.settings
+			.get()
+			.then((r) => {
+				if (!cancelled) setSettings(r);
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
+	const setAllPaused = async (loopsPaused: boolean) => {
+		setBusy("all");
+		try {
+			setSettings(await window.ateam.settings.update({ engine: { loopsPaused } }));
+		} finally {
+			setBusy(null);
+		}
+	};
 
 	const toggle = async (l: LoopDTO) => {
 		await window.ateam.loops.setEnabled(l.id, !l.enabled);
@@ -449,9 +491,23 @@ export function LoopsPanel({
 			<div className="loops-head">
 				<div className="loops-head-row">
 					<h2>Loops</h2>
-					<button type="button" className="navbtn" onClick={onNew}>
-						<Plus size={14} /> New loop
-					</button>
+					<div className="loops-head-actions">
+						<button
+							type="button"
+							className="navbtn"
+							disabled={!settings || busy === "all"}
+							onClick={() => void setAllPaused(!paused)}
+							title={
+								paused ? "Let loops run on their schedules again" : "Stop every loop from starting"
+							}
+						>
+							{paused ? <Play size={14} /> : <Pause size={14} />}
+							{paused ? "Resume all" : "Pause all"}
+						</button>
+						<button type="button" className="navbtn" onClick={onNew}>
+							<Plus size={14} /> New loop
+						</button>
+					</div>
 				</div>
 				<p className="muted">
 					A loop starts a coding-agent session with the same prompt on a schedule. Each loop owns
@@ -460,6 +516,24 @@ export function LoopsPanel({
 					you only see the selected project's.
 				</p>
 			</div>
+
+			{paused && settings && (
+				<div className="loops-paused">
+					<Pause size={14} />
+					<div>
+						<strong>All loops are paused.</strong> No loop will start, on a schedule or by Run now,
+						until you resume.
+						{settings.syncedTo === undefined && (
+							<> Settings sync is off, so this covers the selected environment only.</>
+						)}
+						{[...notPaused].map(([alias, reason]) => (
+							<div key={alias} className="loops-paused-miss">
+								<AlertTriangle size={12} /> Not paused on {alias}: {reason}
+							</div>
+						))}
+					</div>
+				</div>
+			)}
 
 			{loops.length === 0 && <div className="empty">No loops on this project. Create one.</div>}
 
@@ -494,7 +568,12 @@ export function LoopsPanel({
 							)}
 							<span className="muted">· ran {agoLabel(l.lastRunAt, now)}</span>
 							<span className="muted">· {l.runs} runs</span>
-							{l.enabled && <span className="muted">· next {untilLabel(l.nextRunAt, now)}</span>}
+							{l.enabled &&
+								(paused ? (
+									<span className="muted">· paused</span>
+								) : (
+									<span className="muted">· next {untilLabel(l.nextRunAt, now)}</span>
+								))}
 						</div>
 					</div>
 
@@ -503,8 +582,8 @@ export function LoopsPanel({
 							type="button"
 							className="navbtn"
 							onClick={() => runNow(l)}
-							disabled={busy === l.id}
-							title="Run this loop now"
+							disabled={busy === l.id || paused}
+							title={paused ? "All loops are paused" : "Run this loop now"}
 						>
 							{busy === l.id ? <RefreshCw size={14} className="spin" /> : <Play size={14} />}
 							Run now

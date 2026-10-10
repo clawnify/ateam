@@ -202,6 +202,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		// — otherwise the UI keeps the pre-tick DTOs (no taskId, stale telemetry)
 		// until some unrelated event happens to re-list.
 		onChanged: () => emitter.emit("loopsUpdated", loopRunner.describe()),
+		paused: () => readSettings().settings.engine.loopsPaused,
 		sessions: {
 			createTask: async (input) => {
 				const task = await createTaskInProject(services, sendTaskUpdated, input);

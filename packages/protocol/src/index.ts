@@ -72,7 +72,10 @@
 // engine rejects a create with no interval, which is loud, but on update it
 // drops the unknown keys and keeps the old interval while the save looks
 // successful. `loopSchedules` below hides the option instead.
-export const PROTOCOL_VERSION = 13;
+// v14: settings `engine.loopsPaused`, the switch that stops every loop. Nothing
+// on the wire changed shape, but a v13 engine stores the key and keeps running
+// its loops, so `loopsPause` below names such a box as not paused.
+export const PROTOCOL_VERSION = 14;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -116,6 +119,10 @@ export const FEATURE_MIN_VERSION = {
 	 *  them on update and keeps the old interval, so the save would look applied and
 	 *  not be. Hide "Every day at" rather than let it look saved. */
 	loopSchedules: 13,
+	/** v14 added `engine.loopsPaused`. A v13 engine takes the settings push and
+	 *  keeps starting loops, so the Loops banner names it as not paused rather
+	 *  than let "All loops are paused" cover it. */
+	loopsPause: 14,
 } as const;
 
 export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
@@ -364,6 +371,11 @@ export interface EngineSettings {
 	defaultUpdateStrategy: UpdateStrategy;
 	/** Delete the remote branch once its PR has merged. */
 	deleteRemoteBranchOnMerge: boolean;
+	/**
+	 * Every loop on this engine is off: a scheduled tick is skipped and Run now
+	 * is refused. Read on every tick, so a hand edit takes effect at the next one.
+	 */
+	loopsPaused: boolean;
 }
 export interface ClientSettings {
 	/** Fetch an update in the background instead of asking first. */
