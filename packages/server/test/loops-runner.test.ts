@@ -4,7 +4,7 @@ import type { AteamDb } from "@ateam/db";
 import { bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
-import { LOOPS_PAUSED_MESSAGE, LoopRunner, nextCronRun } from "../src/loops/runner";
+import { LoopRunner, nextCronRun } from "../src/loops/runner";
 import type { LoopDefinition } from "../src/loops/types";
 
 function createTestDb(): AteamDb {
@@ -190,21 +190,29 @@ describe("LoopRunner", () => {
 		runner.stop();
 	});
 
-	it("while paused, refuses Run now and leaves the schedule alone", async () => {
+	it("while paused, Run now still runs the loop, and the next scheduled tick still skips", async () => {
 		let calls = 0;
 		const runner = makeRunner(makeLog(), undefined, () => true);
 		runner.register(
 			makeDef("a", async () => {
 				calls++;
-				return {};
+				return { summary: "ran" };
 			}),
 		);
 		runner.start();
-		const before = runner.describe()[0].nextRunAt;
 
-		await expect(runner.runNow("a")).rejects.toThrow(LOOPS_PAUSED_MESSAGE);
-		expect(calls).toBe(0);
-		expect(runner.describe()[0]).toMatchObject({ runs: 0, nextRunAt: before });
+		await runner.runNow("a");
+		expect(calls).toBe(1);
+		const [loop] = runner.describe();
+		expect(loop).toMatchObject({ runs: 1, lastSummary: "ran" });
+		expect(loop.lastRunAt).not.toBeNull();
+
+		await runner.runNow("a", { manual: false });
+		expect(calls).toBe(1);
+		expect(runner.describe()[0]).toMatchObject({
+			runs: 1,
+			lastSummary: "Skipped: all loops are paused",
+		});
 		runner.stop();
 	});
 
