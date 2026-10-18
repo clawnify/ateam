@@ -372,8 +372,9 @@ export interface EngineSettings {
 	/** Delete the remote branch once its PR has merged. */
 	deleteRemoteBranchOnMerge: boolean;
 	/**
-	 * Every loop on this engine is off: a scheduled tick is skipped and Run now
-	 * is refused. Read on every tick, so a hand edit takes effect at the next one.
+	 * Every loop's schedule on this engine is off: a scheduled tick is skipped,
+	 * but Run now still runs. Read on every tick, so a hand edit takes effect at
+	 * the next one.
 	 */
 	loopsPaused: boolean;
 }

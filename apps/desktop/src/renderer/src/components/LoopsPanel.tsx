@@ -521,8 +521,8 @@ export function LoopsPanel({
 				<div className="loops-paused">
 					<Pause size={14} />
 					<div>
-						<strong>All loops are paused.</strong> No loop will start, on a schedule or by Run now,
-						until you resume.
+						<strong>All loops are paused.</strong> No loop will start on its schedule until you
+						resume. Run now still runs one.
 						{settings.syncedTo === undefined && (
 							<> Settings sync is off, so this covers the selected environment only.</>
 						)}
@@ -582,8 +582,8 @@ export function LoopsPanel({
 							type="button"
 							className="navbtn"
 							onClick={() => runNow(l)}
-							disabled={busy === l.id || paused}
-							title={paused ? "All loops are paused" : "Run this loop now"}
+							disabled={busy === l.id}
+							title="Run this loop now"
 						>
 							{busy === l.id ? <RefreshCw size={14} className="spin" /> : <Play size={14} />}
 							Run now

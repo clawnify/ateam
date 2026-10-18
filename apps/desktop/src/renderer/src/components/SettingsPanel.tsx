@@ -115,7 +115,7 @@ const ROWS: Row[] = [
 		section: "agents",
 		title: "Pause all loops",
 		description:
-			"No loop starts while this is on: scheduled runs are skipped and Run now is refused. Each loop keeps its schedule and picks up at its next slot once you turn this off.",
+			"No loop starts on its own while this is on: scheduled runs are skipped, but Run now still works. Each loop keeps its schedule and picks up at its next slot once you turn this off.",
 		control: (s, { patch }) => (
 			<Switch
 				checked={s.engine.loopsPaused}
