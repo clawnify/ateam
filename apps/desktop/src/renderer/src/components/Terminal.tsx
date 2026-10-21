@@ -2,8 +2,12 @@ import type { AttachDelivery } from "@ateam/protocol";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { FileUp, ImageUp, Plus } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { checkGrammar } from "../grammar/check";
+import { DraftTracker, retype } from "../grammar/draft";
+import type { GrammarIssue } from "../grammar/filter";
 import { terminalScroll } from "../terminal-scroll";
+import { GrammarFixes } from "./GrammarFixes";
 import { Menu } from "./Menu";
 
 /**
@@ -32,14 +36,18 @@ const writeDelivery = (terminalId: string, d: AttachDelivery) => {
  * One xterm.js view bound to a main-process PTY by terminalId. Replays the
  * ring-buffer snapshot on mount (so re-attaching shows recent scrollback),
  * streams live output, and forwards keystrokes + resize back to the PTY.
- * A slim toolbar underneath offers a `+` menu (e.g. attach files by path).
+ * A slim toolbar underneath offers a `+` menu (e.g. attach files by path) and,
+ * for an agent session, a grammar check of the prompt being typed.
  */
 export function TerminalView({
 	terminalId,
+	grammar = false,
 	showDone,
 	onDone,
 }: {
 	terminalId: string;
+	/** Grammar-check the prompt as it's typed. For agent sessions, not a shell. */
+	grammar?: boolean;
 	/** Show a "Done" action in the toolbar (e.g. task is in Review). */
 	showDone?: boolean;
 	/** Called when Done is clicked — the parent owns the status change. */
@@ -47,6 +55,10 @@ export function TerminalView({
 }) {
 	const ref = useRef<HTMLDivElement>(null);
 	const termRef = useRef<Terminal | null>(null);
+	const [issues, setIssues] = useState<GrammarIssue[]>([]);
+	const grammarRef = useRef(grammar);
+	grammarRef.current = grammar;
+	const applyFixRef = useRef<(result: string) => void>(() => {});
 
 	useEffect(() => {
 		const el = ref.current;
@@ -224,7 +236,72 @@ export function TerminalView({
 			scroll.bottom();
 		});
 
-		const disposeInput = term.onData((d) => window.ateam.pty.write(terminalId, d));
+		// Grammar: follow the draft from our own keystrokes (see DraftTracker) and
+		// lint it once typing pauses. A submit, or a draft we lost track of, clears
+		// the count straight away rather than leaving stale issues up.
+		const draft = new DraftTracker();
+		let lintTimer = 0;
+		let lintSeq = 0;
+		let checked = ""; // the draft the shown issues were found in
+		let fixing = false; // a suggestion is being typed in (see applyFixRef)
+		let injecting = false; // the onData now firing is the fix's own keystroke
+		let heldKeys: string[] = []; // what you typed meanwhile, sent once it's done
+		const forward = (d: string) => {
+			window.ateam.pty.write(terminalId, d);
+			if (!grammarRef.current) return;
+			draft.feed(d);
+			clearTimeout(lintTimer);
+			const text = draft.draft;
+			const seq = ++lintSeq;
+			if (!text || !/\p{L}{2}/u.test(text)) {
+				setIssues((cur) => (cur.length ? [] : cur));
+				return;
+			}
+			lintTimer = window.setTimeout(() => {
+				void checkGrammar(text).then((found) => {
+					if (seq !== lintSeq || disposed) return;
+					checked = text;
+					setIssues(found);
+				});
+			}, 500);
+		};
+		const disposeInput = term.onData((d) => {
+			if (fixing && !injecting) heldKeys.push(d);
+			else forward(d);
+		});
+
+		// Apply a suggestion by editing the agent's input the way you would:
+		// backspace to where the fix starts, then retype the rest. Both go through
+		// term.input/paste, so onData above forwards them and keeps the tracker in
+		// step. Only while the draft is still the one the issues were found in, so
+		// a stale suggestion can never land on text that has moved. Keys you press
+		// while it runs are held and sent after, or they'd land mid-fix.
+		const inject = (d: string, paste = false) => {
+			injecting = true; // onData fires synchronously inside input/paste
+			if (paste) term.paste(d);
+			else term.input(d);
+			injecting = false;
+		};
+		applyFixRef.current = async (result) => {
+			const from = draft.draft;
+			if (fixing || from === null || from !== checked) return;
+			const { backspaces, tail } = retype(from, result);
+			// Without bracketed paste a newline would reach the agent as Enter.
+			if (tail.includes("\n") && !term.modes.bracketedPasteMode) return;
+			fixing = true;
+			setIssues([]);
+			for (let i = 0; i < backspaces && !disposed; i++) {
+				inject("\x7f");
+				// One key per write, paced like key repeat: an agent that reads a
+				// burst of backspaces as one chunk may take it as text, not keys.
+				await new Promise((r) => setTimeout(r, 12));
+			}
+			if (!disposed && tail) inject(tail, tail.includes("\n"));
+			fixing = false;
+			for (const d of heldKeys) forward(d);
+			heldKeys = [];
+			term.focus();
+		};
 
 		// Resize handling. Layout toggles fire several ResizeObserver callbacks
 		// in quick succession (sometimes while the element is mid-layout at zero
@@ -294,6 +371,7 @@ export function TerminalView({
 
 		return () => {
 			disposed = true;
+			clearTimeout(lintTimer);
 			scroll.dispose();
 			cancelAnimationFrame(raf);
 			el.removeEventListener("mousedown", focusTerm);
@@ -348,6 +426,7 @@ export function TerminalView({
 						{ label: "Files…", icon: FileUp, onClick: addFiles },
 					]}
 				/>
+				{grammar && <GrammarFixes issues={issues} onApply={(r) => applyFixRef.current(r)} />}
 				{showDone && (
 					<button type="button" className="term-done primary" onClick={onDone}>
 						Done

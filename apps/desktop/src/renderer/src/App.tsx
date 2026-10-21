@@ -2764,6 +2764,9 @@ function TaskPanel({
 					{terminalId ? (
 						<TerminalView
 							terminalId={terminalId}
+							grammar={tabs.some(
+								({ session }) => session.terminalId === terminalId && session.agentId !== "shell",
+							)}
 							showDone={task.column === "review"}
 							onDone={() =>
 								run(async () => {
@@ -3345,7 +3348,10 @@ function MissionControl({
 									))}
 								</div>
 							)}
-							<TerminalView terminalId={shown} />
+							<TerminalView
+								terminalId={shown}
+								grammar={sessions.some((s) => s.terminalId === shown && s.agentId !== "shell")}
+							/>
 						</motion.div>
 					);
 				})}
