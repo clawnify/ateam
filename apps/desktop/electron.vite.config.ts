@@ -78,6 +78,11 @@ export default defineConfig({
 			alias: { "@": resolve(__dirname, "src/renderer/src") },
 		},
 		plugins: [react()],
+		// harper.js finds its wasm with `new URL("harper_wasm_bg.wasm", import.meta.url)`.
+		// Dev pre-bundling moves the module into .vite/deps, where that file isn't.
+		optimizeDeps: { exclude: ["harper.js"] },
+		// The grammar worker is a module worker, and harper.js code-splits.
+		worker: { format: "es" },
 		build: {
 			rollupOptions: {
 				input: { index: resolve(__dirname, "src/renderer/index.html") },
