@@ -148,18 +148,78 @@ sudo tailscale serve --bg --tcp 8787 tcp://localhost:8787
 Then point the phone at `<tailnet-ip>:8787`. The engine only ever binds loopback,
 so it's reachable from your tailnet and nowhere else — the same posture as a VPS.
 
-**Turn auto-hibernate off on any box the phone uses.** boxd cold-snapshots an idle
-machine — the default is `auto_hibernate: 14400s`, four hours — which takes
-`tailscaled` down with it, and **the phone cannot wake it**: waking needs the boxd
-CLI or API, which the iOS app knows nothing about. Otherwise you open the app away
-from your desk and find a dead endpoint with no way to revive it.
+A hibernated box takes `tailscaled` down with it, and **the phone's traffic does
+not wake it**: the tailnet path goes straight to the VM, never through boxd's
+proxy, which is the only thing that wakes a machine. See the next section for how
+Ateam manages sleep. Traffic relays through DERP rather than a direct path (fine
+for JSON-RPC, laggier for PTY output).
 
-```bash
-boxd machine config set mybox auto-hibernate.timeout 0   # 0 disables
-```
+## Sleep and wake
 
-Two caveats: traffic relays through DERP rather than a direct path (fine for
-JSON-RPC, laggier for PTY output), and this is manual per box.
+The engine manages a boxd box's sleep itself: once no agent has
+worked for `engine.idleSleepMinutes` (Settings → General, default 60, 0 never),
+it lets boxd hibernate the box, and it wakes the box for the next loop tick. The
+box keeps every process and session; it bills disk only while asleep, against
+about €61 a month for a 2 vCPU box left running (boxd pricing, Oct 2026).
+
+How it works, and why each piece is the way it is. Every row was measured on real
+boxes on 2026-10-21:
+
+| Behaviour | Measured |
+|---|---|
+| Inbound SSH through boxd wakes a hibernated box | Woke and answered in 3.0s |
+| boxd's API with an API key (`GetVm`, `WakeVm`), what Ateam Go does | Hibernated to running in 1.5s, sign-in included; the tailnet answered 1.6s later |
+| Tailnet traffic to a hibernated or standby box | No reply; the box stays asleep |
+| HTTPS to `*.boxd.sh` | `503` (bot protection); the box stays asleep |
+| An idle SSH session with keepalives | Does not keep the box awake |
+| `tailscaled` on the box | Keeps it awake forever while outbound traffic counts |
+| `idle.ignore-outbound on` with that `tailscaled` | Hibernated within 80s of a 60s timeout |
+| A `run` job (`every(...)`) on a box boxd hibernated itself | boxd woke it ~30s early; the job fired on time |
+| The same job on a box hibernated with `boxd machine hibernate` | Not woken; the job fired once, late, on the next wake |
+| A Node timer due while the box slept | Fires the moment the box wakes (the clock keeps counting) |
+| A process running at hibernation | Still running after the wake |
+
+When to sleep is decided by the engine for every provider
+(`packages/server/src/sleep/control.ts`); this is how its boxd driver
+(`sleep/boxd.ts`) carries that out. It never hibernates the box itself, because a
+box hibernated on command is not woken for its jobs. It steers boxd's own timer
+instead:
+
+- **Hold** (`auto-hibernate.timeout 0`) while an agent is working, for the idle
+  window after, and for a fresh window whenever a client attaches. An idle
+  connection is not traffic boxd counts, so without this a box woken to start a
+  task would fall asleep under you.
+- **Release** (`idle.ignore-outbound on`, `auto-hibernate.timeout 60`) once idle.
+  Ignoring outbound is what lets a box with `tailscaled`, a worktree sweep and git
+  fetches go quiet at all; only a connection opened to the box keeps it up.
+- Before releasing, the engine registers a one-minute `run` job for the next loop
+  tick (`~/.ateam/boxd/loop-wake.run.ts`), which boxd wakes the box for. A box
+  whose image has no `run` (one created 2026-08-04 had none; one created
+  2026-10-21 did) stays held while it has a live loop, because a loop that
+  silently never runs is worse than a box that stays up.
+
+What wakes a sleeping box: connecting from the desktop (picking it, or starting a
+task there), `boxd machine wake <vm>`, or a loop tick. The desktop leaves a box it
+finds hibernated at launch asleep, labelled "asleep, wakes when you use it",
+instead of waking every box each time the app starts (it asks `boxd machine list`,
+which wakes nothing).
+
+The phone can't wake a box over the tailnet, so Ateam Go asks boxd's API instead:
+on its connection screen, set **Provider** to boxd and enter the machine's boxd
+name and a boxd API key. Saving the key checks it with boxd at once, and
+connecting (or opening the app) checks the machine's state and wakes it first.
+The key lives in the iOS Keychain and is shared by every boxd box on the phone.
+boxd keys can't be limited to waking or to one machine; a key acts on its whole
+boxd org, so keep your Ateam boxes in an org of their own and give the phone that
+org's key (`boxd auth keys create <name> --org <org>` on a current CLI).
+
+Two more things measured along the way:
+
+- **The box's clock is not synchronised.** `timedatectl` reports `NTP service:
+  inactive`, and one box ran 110s behind after weeks of hibernating. A cron loop
+  fires that much late. A freshly created box was exact.
+- **Only the in-VM CLI knows `idle.ignore-outbound`.** The laptop CLI at 0.2.10
+  rejects it; inside the box it applies to the machine it runs on.
 
 ## Gotchas
 
@@ -179,5 +239,5 @@ JSON-RPC, laggier for PTY output), and this is manual per box.
   default and its tailnet node goes `offline, last seen …`; the node is fine and its
   key hasn't expired — there's simply no host running. `boxd machine wake <vm>` brings
   it back, keeping its state and the *same* tailnet IP, and systemd restarts the
-  engine. See the iOS section for turning it off.
+  engine. See "Sleep and wake" for how the engine manages it.
 - **`boxd snapshots save`**, not `create`.

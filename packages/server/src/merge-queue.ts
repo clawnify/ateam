@@ -104,6 +104,11 @@ export class MergeQueue {
 		return this.queue.depth(this.key(repoPath, baseBranch));
 	}
 
+	/** Any merge queued or running, against any base. */
+	busy(): boolean {
+		return this.inFlight.size > 0;
+	}
+
 	/**
 	 * Enqueue a merge. Returns once this task's merge settles. The task is marked
 	 * `queued` synchronously (visible on the board immediately), then flips to

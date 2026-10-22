@@ -78,6 +78,12 @@ export interface Engine {
 	connectPty(): Promise<void>;
 	/** Start the user's scheduled loops (rebuilt from their persisted rows). */
 	startLoops(): void;
+	/**
+	 * Is an agent doing work right now: a live agent session mid-turn, a task
+	 * still being prepared, or a merge in flight. A session waiting on the user
+	 * or finished with its turn is not work. What keeps a box awake.
+	 */
+	isWorking(): boolean;
 	/** Detach the client and stop hooks/loops — never kills PTY sessions. */
 	stop(): void;
 	/** Stop just the hook server (used by the headless smoke check). */
@@ -484,6 +490,14 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			loopRunner.start();
 			reapTimer ??= setInterval(reapIdleSessions, REAP_SWEEP_MS);
 			worktreeSweep.start();
+		},
+		isWorking() {
+			if (pendingSeeds.size > 0 || mergeQueue.busy()) return true;
+			// The row's status says mid-turn; the daemon says the process is still
+			// there (a row can strand at "running" after an exit nobody watched).
+			return repo
+				.listOpenSessions(db)
+				.some((s) => s.status === "running" && s.agentId !== "shell" && pty.has(s.terminalId));
 		},
 		stop() {
 			pty.disconnect();

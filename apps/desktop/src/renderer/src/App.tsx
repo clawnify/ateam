@@ -576,6 +576,7 @@ export function App() {
 				// `known` is only set by a successful connect, so a config alias we've
 				// never reached is one the engine has probably never been installed on.
 				needsSetup: !c.known,
+				asleep: c.asleep,
 				// Set only for a connect the app made on its own, where there was no
 				// caller to show the error to — an upgrade that failed reads as an
 				// ordinary offline box without it.

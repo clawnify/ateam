@@ -18,10 +18,10 @@ all. That's what the pages here record.
 
 ## Providers
 
-| Provider | Kind | Desktop | iOS |
-| --- | --- | --- | --- |
-| [Hetzner](hetzner.md) | VPS — Ateam can create one for you in-app | ✅ | ✅ |
-| [boxd](boxd.md) | persistent KVM microVMs, driven by their CLI | ✅ via boxd's SSH proxy | ⚠️ works, but needs manual Tailscale setup |
+| Provider | Kind | Desktop | iOS | Sleeps when idle |
+| --- | --- | --- | --- | --- |
+| [Hetzner](hetzner.md) | VPS — Ateam can create one for you in-app | ✅ | ✅ | no: a powered-off server still bills |
+| [boxd](boxd.md) | persistent KVM microVMs, driven by their CLI | ✅ via boxd's SSH proxy | ⚠️ works, but needs manual Tailscale setup | ✅ and the phone wakes it ([how](boxd.md#sleep-and-wake)) |
 
 Any other VPS (EC2, a home server, …) works the same way as Hetzner without a page
 of its own — see [`../online-ateam.md`](../online-ateam.md), the reference
@@ -34,11 +34,38 @@ walkthrough these pages assume you've skimmed.
 > API client whose breakage looks like an Ateam bug. This directory is for the
 > other kind: services you drive with their own CLI, which need no code from us.
 
+## Sleep and wake
+
+Letting a box sleep while no agent works on it, and waking it again, is the one
+thing a provider page can't do on its own: it takes code, maintained in-tree like
+provisioning. It sits behind three seams, so nothing outside them names a
+provider, and adding one is a file per seam:
+
+| What | Where | What a provider adds |
+| --- | --- | --- |
+| The engine lets its box sleep, and wakes it for loop ticks | `packages/server/src/sleep/` | a `SleepDriver` (hold, release, arm a wake) beside `boxd.ts`, and a line in `index.ts` |
+| The desktop leaves a sleeping box asleep at launch | `packages/server/src/connections.ts` | a `SleepCheck`: which ssh aliases are its machines, and which are asleep |
+| The phone wakes a box before connecting | `packages/protocol/src/providers.ts` and `apps/mobile/src/wake.ts` | a definition declaring the inputs a wake needs (an account key, a machine name), and an adapter that wakes with them |
+
+When to sleep is the engine's call for every provider (`sleep/control.ts`): only
+it can tell an agent mid-turn from one waiting on you. The phone's definition is
+data, so the connection screen asks for exactly what a provider declares and says
+nothing about the others. The adapter is code because no two providers wake a box
+the same way: boxd exchanges a key for a token and speaks gRPC-web, most others
+take one REST call with a bearer token (Fly Machines, Hetzner, DigitalOcean,
+Codespaces, Coder, Daytona, e2b, Morph, Render), and AWS signs every request. Once
+a second REST provider is wanted, a request recipe in the definition can stand in
+for adapter code across that group.
+
+Before adding one, check that sleeping saves anything there: Hetzner and
+DigitalOcean bill a powered-off server.
+
 ## Adding a provider
 
 Open a PR with two files — `docs/providers/<id>.md` using the template below, and
 `assets/providers/<id>.svg` — and add a row to the table above. Docs and an asset;
-no code changes are needed or wanted.
+no code changes are needed or wanted. Sleep and wake support (above) is the
+exception: that is code, maintained in-tree.
 
 **Every page must carry a `Verified against` line.** These pages rot fast: ours was
 wrong within eight days of being written, and confidently-wrong setup instructions

@@ -10,6 +10,7 @@
 // Lives in @ateam/server beside sshClientTransport (both are client primitives),
 // and is deliberately NOT on AteamApi — managing connections is a client concern
 // *about* choosing an engine, not something a remote engine serves.
+import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -125,6 +126,76 @@ export function readSshHosts(configPath: string = DEFAULT_SSH_CONFIG): SshHost[]
 			for (const host of stanza) host.user = value;
 		}
 	}
+	return out;
+}
+
+/** The boxd machine an ssh alias names (`mybox.boxd`, `mybox.boxd.sh` → `mybox`), or null. */
+export function boxdMachineOf(alias: string): string | null {
+	const m = /^([^.]+)\.boxd(\.sh)?$/i.exec(alias);
+	return m?.[1] ?? null;
+}
+
+/**
+ * The boxd machines asleep right now (hibernated or in standby), read through
+ * this Mac's `boxd` CLI. Listing does not wake anything. Null when the answer
+ * isn't available (no CLI, logged out), so callers fall back to connecting.
+ */
+function sleepingBoxdMachines(): Promise<Set<string> | null> {
+	return new Promise((resolve) => {
+		execFile("boxd", ["machine", "list", "--json"], { timeout: 10_000 }, (err, stdout) => {
+			if (err) return resolve(null);
+			try {
+				const rows: unknown = JSON.parse(stdout);
+				if (!Array.isArray(rows)) return resolve(null);
+				const asleep = new Set<string>();
+				for (const r of rows as { name?: unknown; status?: unknown }[]) {
+					if (typeof r.name === "string" && (r.status === "hibernated" || r.status === "standby")) {
+						asleep.add(r.name);
+					}
+				}
+				resolve(asleep);
+			} catch {
+				resolve(null);
+			}
+		});
+	});
+}
+
+/**
+ * How this Mac tells, without waking anything, which of one provider's boxes are
+ * asleep. Connecting to a sleeping box over SSH wakes it, so the launch reconnect
+ * asks first and leaves sleepers alone. Adding a provider is one entry here.
+ */
+export interface SleepCheck {
+	/** The provider's machine an ssh alias names, or null when it isn't one of its boxes. */
+	machineOf(alias: string): string | null;
+	/** Its machines asleep right now, or null when that can't be told (no CLI, logged out). */
+	asleep(): Promise<Set<string> | null>;
+}
+
+const SLEEP_CHECKS: SleepCheck[] = [{ machineOf: boxdMachineOf, asleep: sleepingBoxdMachines }];
+
+/**
+ * The aliases whose boxes are asleep right now. Only a provider that owns one of
+ * these aliases is asked, and one that can't answer leaves its boxes out, so they
+ * are connected (and woken) as before.
+ */
+export async function sleepingAliases(
+	aliases: string[],
+	checks: SleepCheck[] = SLEEP_CHECKS,
+): Promise<Set<string>> {
+	const out = new Set<string>();
+	await Promise.all(
+		checks.map(async (check) => {
+			const mine = aliases.flatMap((alias) => {
+				const machine = check.machineOf(alias);
+				return machine ? [{ alias, machine }] : [];
+			});
+			if (mine.length === 0) return;
+			const asleep = await check.asleep();
+			for (const { alias, machine } of mine) if (asleep?.has(machine)) out.add(alias);
+		}),
+	);
 	return out;
 }
 

@@ -61,6 +61,15 @@ const UPDATE_STRATEGIES: { value: UpdateStrategy; label: string }[] = [
 	{ value: "rebase", label: "Rebase" },
 ];
 
+const IDLE_SLEEP_OPTIONS: { value: number; label: string }[] = [
+	{ value: 15, label: "After 15 minutes" },
+	{ value: 30, label: "After 30 minutes" },
+	{ value: 60, label: "After 1 hour" },
+	{ value: 120, label: "After 2 hours" },
+	{ value: 240, label: "After 4 hours" },
+	{ value: 0, label: "Never" },
+];
+
 const ROWS: Row[] = [
 	{
 		id: "client.autoDownloadUpdates",
@@ -89,6 +98,35 @@ const ROWS: Row[] = [
 				onChange={(v) => patch({ client: { syncEngineSettingsToBoxes: v } })}
 			/>
 		),
+	},
+	{
+		id: "engine.idleSleepMinutes",
+		section: "general",
+		title: "Let idle boxes sleep",
+		description:
+			"Let a box sleep once no agent has been working on it for this long, on providers where Ateam can. A sleeping box keeps its sessions, and connecting to it or starting a task wakes it in a few seconds. This Mac and always-on servers are not affected.",
+		control: (s, { patch }) => {
+			// A box whose engine predates this setting doesn't report it; it would
+			// default to an hour like every other engine.
+			const minutes = s.engine.idleSleepMinutes ?? 60;
+			return (
+				<select
+					className="settings-select"
+					value={String(minutes)}
+					onChange={(e) => patch({ engine: { idleSleepMinutes: Number(e.target.value) } })}
+				>
+					{/* A hand-edited value outside the presets still shows as itself. */}
+					{(IDLE_SLEEP_OPTIONS.some((o) => o.value === minutes)
+						? IDLE_SLEEP_OPTIONS
+						: [{ value: minutes, label: `After ${minutes} minutes` }, ...IDLE_SLEEP_OPTIONS]
+					).map((o) => (
+						<option key={o.value} value={String(o.value)}>
+							{o.label}
+						</option>
+					))}
+				</select>
+			);
+		},
 	},
 	{
 		id: "engine.defaultAgentId",

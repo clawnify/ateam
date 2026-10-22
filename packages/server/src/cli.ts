@@ -28,6 +28,8 @@ import { createDispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
 import { createEngine } from "./engine";
 import { serveRpc } from "./rpc";
+import { readSettings } from "./settings-file";
+import { detectSleepDriver, type SleepControl, startSleepControl } from "./sleep";
 import { socketServerTransport } from "./transport/socket";
 import { wsServerTransport } from "./transport/ws";
 
@@ -42,6 +44,9 @@ const DATA_DIR = process.env.ATEAM_DATA_DIR ?? join(homedir(), ".ateam");
 // executing script's own path (realpath-resolved, so a `bin` symlink still lands
 // in the dist dir beside daemon.js) is what's portable across boxes.
 const SELF = process.argv[1] ? realpathSync(process.argv[1]) : "";
+
+// Set once a provider that can put this box to sleep is found (see maybeStartIdleSleep).
+let sleepControl: SleepControl | null = null;
 
 async function runDaemon(): Promise<void> {
 	// Single-instance guard: if a daemon already serves SOCK, bow out — do NOT
@@ -83,7 +88,7 @@ async function runDaemon(): Promise<void> {
 	const server = createServer({ allowHalfOpen: true }, (sock: Socket) => {
 		// Each client gets its own serveRpc over one connection; the engine (and
 		// its PTY sessions) is shared and outlives any single client.
-		serveRpc(engine, dispatcher, socketServerTransport(sock));
+		serveClient(engine, dispatcher, socketServerTransport(sock));
 	});
 	server.on("error", (err: NodeJS.ErrnoException) => {
 		// Lost a startup race: another daemon bound SOCK between our probe and
@@ -114,6 +119,47 @@ async function runDaemon(): Promise<void> {
 	});
 
 	maybeStartWsListener(engine, dispatcher);
+	void maybeStartIdleSleep(engine);
+}
+
+/**
+ * Serve one client, on either transport. Attaching counts as work for the sleep
+ * control: an idle connection is not traffic a provider sees, so a box a client
+ * just woke would otherwise fall asleep under it. Every transport goes through
+ * here, so none can forget that.
+ */
+function serveClient(
+	engine: Engine,
+	dispatcher: Dispatcher,
+	transport: Parameters<typeof serveRpc>[2],
+): void {
+	sleepControl?.touch();
+	serveRpc(engine, dispatcher, transport);
+}
+
+/**
+ * On a provider that can put this box to sleep (see sleep/index.ts), let it sleep
+ * once no agent has worked for `idleSleepMinutes`, and wake it for loop ticks.
+ * Anywhere else no driver answers and this does nothing.
+ */
+async function maybeStartIdleSleep(engine: Engine): Promise<void> {
+	const log = (line: string) => console.log(line);
+	const driver = await detectSleepDriver(log);
+	if (!driver) return;
+	log(`[ateam] on ${driver.where}: letting it sleep when idle`);
+	sleepControl = await startSleepControl(driver, {
+		working: () => engine.isWorking(),
+		nextLoopAt: () => {
+			if (readSettings().settings.engine.loopsPaused) return null;
+			const live = engine.services.loopRunner.describe().filter((l) => l.enabled);
+			if (live.length === 0) return null;
+			// A live loop with no slot yet is about to be scheduled: treat it as due now.
+			if (live.some((l) => l.nextRunAt == null)) return Date.now();
+			return Math.min(...live.map((l) => l.nextRunAt as number));
+		},
+		idleMinutes: () => readSettings().settings.engine.idleSleepMinutes,
+		log,
+	});
 }
 
 /**
@@ -145,7 +191,7 @@ function maybeStartWsListener(engine: Engine, dispatcher: Dispatcher): void {
 	wss.on("connection", (sock) => {
 		// Each client gets its own serveRpc; the engine (and its PTY sessions) is
 		// shared and outlives any single client — same contract as the socket path.
-		serveRpc(engine, dispatcher, wsServerTransport(sock));
+		serveClient(engine, dispatcher, wsServerTransport(sock));
 	});
 	wss.on("error", (err: Error) => {
 		console.error(`[ateam] WS listener error: ${err.message}`);

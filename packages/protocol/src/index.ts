@@ -377,6 +377,13 @@ export interface EngineSettings {
 	 * the next one.
 	 */
 	loopsPaused: boolean;
+	/**
+	 * Let the box sleep once no agent has been working for this many minutes; 0
+	 * never does. Only an engine on a provider that can put its box to sleep reads
+	 * it (packages/server/src/sleep), so a Mac or a plain VPS ignores it. A sleeping
+	 * box keeps its sessions, and the next connection wakes it.
+	 */
+	idleSleepMinutes: number;
 }
 export interface ClientSettings {
 	/** Fetch an update in the background instead of asking first. */
@@ -685,6 +692,12 @@ export interface ConnectionDTO {
 	inSshConfig: boolean;
 	/** We've recorded at least one successful connection (has a saved record). */
 	known: boolean;
+	/**
+	 * A box this app found asleep at launch and so left alone: holding
+	 * it would have woken it. Connecting (picking it, or starting a task there)
+	 * wakes it. Set only by the desktop, and only until that connect.
+	 */
+	asleep?: boolean;
 }
 
 /**
@@ -1113,6 +1126,13 @@ export interface AteamApi {
 export type { NativeClientApi } from "./client-api";
 // Client-side binding of the AteamApi surface over an RpcClient.
 export { buildAteamApi, requestBoxUpdate, serverHandshake } from "./client-api";
+// Box providers as data: what a client asks the user for to wake a sleeping box.
+export {
+	PROVIDERS,
+	type ProviderDefinition,
+	type ProviderInput,
+	providerById,
+} from "./providers";
 // Transport-agnostic RPC framing + client (shared by every transport).
 export * from "./rpc";
 // Derived task tags (pure), shared by every client; icons are per-client.
