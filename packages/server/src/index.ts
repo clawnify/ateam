@@ -14,6 +14,7 @@ export {
 	readSshHosts,
 	recordConnection,
 	resolveTransport,
+	sleepingAliases,
 } from "./connections";
 export type { CallContext, Dispatcher } from "./dispatcher";
 export { createDispatcher } from "./dispatcher";

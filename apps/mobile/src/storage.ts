@@ -2,6 +2,7 @@
 // reinstalls — otherwise every launch (and every rebuild) starts blank and you
 // retype the box's Tailscale IP. AsyncStorage is RN's simple key-value store.
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
 
 const KEY = "ateam.connection";
 const PROJECT_KEY = "ateam.selectedProject";
@@ -10,6 +11,9 @@ const PREVIEW_PORT_KEY = "ateam.previewPort";
 export interface SavedConnection {
 	host: string;
 	port: string;
+	/** The provider the phone wakes this box through before connecting, with this
+	 *  box's own inputs (its machine name). The account inputs live in the Keychain. */
+	provider?: { id: string; box: Record<string, string> };
 }
 
 export async function loadConnection(): Promise<SavedConnection | null> {
@@ -84,6 +88,38 @@ export async function saveConsent(): Promise<void> {
 	} catch {
 		/* best-effort: a failed persist just asks again next launch, never less safe */
 	}
+}
+
+// A provider's account inputs (its API key), what the phone wakes a sleeping box
+// with. In the iOS Keychain, never AsyncStorage: a provider key can usually act on
+// far more than one box. One set per provider, shared by every box there; which box
+// to wake rides on the connection.
+const accountItem = (providerId: string, key: string) => `ateam.provider.${providerId}.${key}`;
+
+export async function loadProviderAccount(
+	providerId: string,
+	keys: string[],
+): Promise<Record<string, string>> {
+	const out: Record<string, string> = {};
+	for (const key of keys) {
+		try {
+			const value = await SecureStore.getItemAsync(accountItem(providerId, key));
+			if (value) out[key] = value;
+		} catch {
+			/* unreadable reads as unset: the field just asks again */
+		}
+	}
+	return out;
+}
+
+/** Save one account input, or remove it with null. Throws: a value that didn't save must not look saved. */
+export async function saveProviderAccount(
+	providerId: string,
+	key: string,
+	value: string | null,
+): Promise<void> {
+	if (value) await SecureStore.setItemAsync(accountItem(providerId, key), value);
+	else await SecureStore.deleteItemAsync(accountItem(providerId, key));
 }
 
 // The box version whose "older Ateam" banner the user dismissed, per box. The

@@ -5,12 +5,15 @@ import { join } from "node:path";
 import { repo } from "@ateam/db";
 import { createTestDb } from "../../db/test/helpers/test-db";
 import {
+	boxdMachineOf,
 	endpointUrl,
 	forgetConnection,
 	listConnections,
 	readSshHosts,
 	recordConnection,
 	resolveTransport,
+	type SleepCheck,
+	sleepingAliases,
 } from "../src/connections";
 
 function writeConfig(content: string): string {
@@ -249,5 +252,53 @@ describe("resolveTransport", () => {
 		const row = listConnections(db, cfg).find((c) => c.alias === "100.72.63.61:8787");
 		expect(row).toMatchObject({ transport: "ws", inSshConfig: false, known: true });
 		expect(listConnections(db, cfg).find((c) => c.alias === "devbox")?.transport).toBe("ssh");
+	});
+});
+
+describe("boxdMachineOf", () => {
+	it("names the boxd machine behind an alias, and nothing else", () => {
+		expect(boxdMachineOf("ateam-probe.boxd")).toBe("ateam-probe");
+		expect(boxdMachineOf("ateam-probe.boxd.sh")).toBe("ateam-probe");
+		// boxd's shared defaults entry is not a machine, nor is any other host.
+		expect(boxdMachineOf("boxd.sh")).toBeNull();
+		expect(boxdMachineOf("hetzner-box")).toBeNull();
+		expect(boxdMachineOf("100.81.40.73:8787")).toBeNull();
+	});
+});
+
+describe("sleepingAliases", () => {
+	/** A provider whose aliases end in `.<suffix>`, with these machines asleep (null: can't tell). */
+	function check(suffix: string, asleep: string[] | null, asked: string[]): SleepCheck {
+		return {
+			machineOf: (alias) =>
+				alias.endsWith(`.${suffix}`) ? alias.slice(0, -suffix.length - 1) : null,
+			asleep: async () => {
+				asked.push(suffix);
+				return asleep ? new Set(asleep) : null;
+			},
+		};
+	}
+
+	it("names the aliases whose machines are asleep, across providers", async () => {
+		const asked: string[] = [];
+		const sleeping = await sleepingAliases(
+			["a.one", "b.one", "c.two", "plain-vps"],
+			[check("one", ["a"], asked), check("two", ["c"], asked)],
+		);
+		expect([...sleeping].sort()).toEqual(["a.one", "c.two"]);
+	});
+
+	it("asks only providers that own one of the aliases", async () => {
+		const asked: string[] = [];
+		await sleepingAliases(
+			["a.one", "plain-vps"],
+			[check("one", [], asked), check("two", [], asked)],
+		);
+		expect(asked).toEqual(["one"]);
+	});
+
+	it("a provider that can't answer leaves its boxes to be connected", async () => {
+		const sleeping = await sleepingAliases(["a.one"], [check("one", null, [])]);
+		expect(sleeping.size).toBe(0);
 	});
 });

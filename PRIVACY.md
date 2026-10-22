@@ -1,6 +1,6 @@
 # Privacy Policy — Ateam & Ateam Go
 
-**Effective date: August 20, 2026**
+**Effective date: October 21, 2026**
 
 Ateam (the desktop app) and Ateam Go (the iOS companion app) are local-first
 tools published by Clawnify. This policy describes what data the apps handle,
@@ -20,11 +20,15 @@ on our behalf.
 Ateam Go stores a small amount of data locally on your phone, and only there:
 
 - the host and port of the last machine you connected to,
-- your last-selected project, and
-- your preview-port preference.
+- your last-selected project,
+- your preview-port preference, and
+- if you have the app wake your machine through its provider (below), the
+  provider you picked, the machine's name there, and your API key for that
+  provider, which is kept in the iOS Keychain.
 
-This exists solely so the app reopens where you left off. It never leaves the
-device, and deleting the app deletes it.
+This exists solely so the app reopens where you left off. Apart from the
+provider key and machine name, which go to that provider as described below, it
+never leaves the device, and deleting the app deletes it.
 
 The Ateam desktop app stores your projects, tasks, and settings in a local
 database on your computer. That data likewise never leaves your machine through
@@ -42,6 +46,20 @@ intermediary server, and Clawnify is not part of the connection.
 If you attach a photo from your library, it is sent to your own machine over
 that same private connection so the agent running there can use it. Photo
 library access is invoked only when you explicitly attach an image.
+
+### Waking a machine through its provider (optional)
+
+If your machine is hosted with a provider that can put it to sleep, you can pick
+that provider on the connection screen and enter your API key for it. Ateam Go
+then contacts that provider's API before connecting, to check whether the
+machine is asleep and wake it if so, and once when you save the key, to check
+that it works. It sends only your API key and the machine's name, under your own
+account and that provider's terms and privacy policy. The providers it can
+contact, and the addresses it uses:
+
+- [boxd](https://boxd.sh): `app.boxd.sh` and `boxd.sh`
+
+With no provider picked, Ateam Go contacts none of them.
 
 ## AI coding agents
 
