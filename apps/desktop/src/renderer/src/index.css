@@ -1183,6 +1183,39 @@ input {
 	flex: none;
 }
 
+/* Grammar corrections for the prompt being typed: the first suggestion per
+   problem, clipped when the bar runs out of room. */
+.grammar-inline {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	padding-left: 4px;
+	color: var(--text-dim);
+	font-size: 11px;
+}
+.grammar-inline > svg {
+	flex: none;
+	margin-right: 2px;
+}
+.grammar-sugg {
+	padding: 1px 6px;
+	background: transparent;
+	border: none;
+	border-radius: 4px;
+	color: var(--text);
+	font: inherit;
+	line-height: 16px;
+	cursor: pointer;
+	user-select: none;
+}
+.grammar-sugg:hover,
+.grammar-sugg.active {
+	background: var(--bg-elev-2);
+}
+
 /* "Done" action: compact so it clears the toolbar's top/bottom edges,
    pushed to the far right of the bar. */
 .term-done {
