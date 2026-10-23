@@ -40,6 +40,7 @@ import {
 	readSettings,
 	recordConnection,
 	resolveTransport,
+	sleepingAliases,
 	sshClientTransport,
 	sshExec,
 } from "@ateam/server";
@@ -187,6 +188,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// has no caller, so its failures used to vanish into a catch and read to the user
 	// as an ordinary offline box. Keyed by alias, cleared the moment one succeeds.
 	const connectFailures = new Map<string, string>();
+	// Boxes the startup sweep found asleep and left alone (see below).
+	// Cleared by the connect that wakes one.
+	const asleep = new Set<string>();
 	// Per-alias event unsubscribers, so disconnecting one box stops only its stream.
 	const unbinders = new Map<string | null, () => void>();
 	// Per-alias health probes (ws only) — cleared on disconnect so a dropped box
@@ -460,6 +464,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		}
 
 		connectFailures.delete(alias);
+		asleep.delete(alias);
 		recordConnection(db, {
 			hostAlias: alias,
 			transport: wire ?? "ssh",
@@ -797,9 +802,25 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// (`known`), so reconnect those. Detached and in parallel: the board must never
 	// wait on a box that's asleep, and each connect broadcasts its own arrival, which
 	// the renderer reconciles additively — so tasks fill in as engines answer.
-	for (const c of listConnections(db)) {
-		if (!c.known) continue;
-		void connect(c.alias).catch((err: unknown) => {
+	//
+	// Except a box that is asleep: an SSH connect wakes it, so reconnecting at
+	// launch would wake every sleeping box, each for a whole idle window, just
+	// because the app started. Those stay asleep until used. Each provider's own
+	// CLI answers for its boxes without waking any (sleepingAliases); a provider
+	// that can't answer leaves its boxes to be reconnected as before.
+	const known = listConnections(db).filter((c) => c.known);
+	void sleepingAliases(known.map((c) => c.alias)).then((sleeping) => {
+		for (const c of known) {
+			if (sleeping.has(c.alias)) {
+				asleep.add(c.alias);
+				continue;
+			}
+			reconnectAtLaunch(c.alias);
+		}
+		if (asleep.size > 0) broadcastConnections();
+	});
+	function reconnectAtLaunch(alias: string): void {
+		void connect(alias).catch((err: unknown) => {
 			// Unreachable, asleep, or an upgrade that didn't take. connect() already closed
 			// its own transport, and the connections list still renders the box from the
 			// offline cache, so leaving it disconnected is the honest outcome. The REASON,
@@ -809,7 +830,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			// A box that is merely BEHIND is not an error any more: connect() upgrades it
 			// over SSH and comes back held, which is the only path that reaches an SSH box
 			// without waiting for a user gesture.
-			connectFailures.set(c.alias, err instanceof Error ? err.message : String(err));
+			connectFailures.set(alias, err instanceof Error ? err.message : String(err));
 			broadcastConnections();
 		});
 	}
@@ -839,7 +860,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 
 	return {
 		router,
-		list: async (): Promise<ConnectionDTO[]> => listConnections(db),
+		list: async (): Promise<ConnectionDTO[]> =>
+			listConnections(db).map((c) => (asleep.has(c.alias) ? { ...c, asleep: true } : c)),
 		connect,
 		disconnect,
 		forget,

@@ -8,8 +8,15 @@
 // #0c0c0e canvas, ink/white for the primary action and every highlight (no accent
 // hue), amber/blue/green status. Connection = ALWAYS a WebSocket to a Tailscale address (RN can't spawn
 // ssh; WireGuard is the auth boundary).
-import type { AgentDTO, AteamApi, LoopDTO, ProjectDTO, TaskDTO } from "@ateam/protocol";
-import { PROTOCOL_VERSION } from "@ateam/protocol";
+import type {
+	AgentDTO,
+	AteamApi,
+	LoopDTO,
+	ProjectDTO,
+	ProviderDefinition,
+	TaskDTO,
+} from "@ateam/protocol";
+import { PROTOCOL_VERSION, providerById } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -43,16 +50,26 @@ import {
 	loadConsent,
 	loadDismissedSkew,
 	loadPreviewPort,
+	loadProviderAccount,
 	loadSelectedProject,
 	saveConnection,
 	saveConsent,
 	saveDismissedSkew,
 	savePreviewPort,
+	saveProviderAccount,
 	saveSelectedProject,
 } from "./src/storage";
 import { type Tab, TabStrip } from "./src/TabStrip";
 import { TerminalScreen } from "./src/TerminalScreen";
 import { sortTasks } from "./src/task-order";
+import {
+	filled,
+	type InputValues,
+	inputsAt,
+	WAKE_PROVIDERS,
+	type WakeAdapter,
+	wakeAdapter,
+} from "./src/wake";
 
 // SPIKE flag: evaluate the native SwiftTerm terminal (native scroll/select/copy)
 // vs the xterm-in-webview one. Flip back to false to fall back to the webview.
@@ -180,6 +197,7 @@ function Field({
 	onChangeText,
 	placeholder,
 	keyboardType,
+	secure,
 	last,
 }: {
 	label: string;
@@ -187,6 +205,7 @@ function Field({
 	onChangeText: (t: string) => void;
 	placeholder: string;
 	keyboardType?: "default" | "numeric";
+	secure?: boolean;
 	last?: boolean;
 }) {
 	return (
@@ -201,9 +220,23 @@ function Field({
 				autoCapitalize="none"
 				autoCorrect={false}
 				keyboardType={keyboardType ?? "default"}
+				secureTextEntry={secure}
 			/>
 		</View>
 	);
+}
+
+/** A provider's account inputs (its key), from the Keychain. */
+function loadAccount(def: ProviderDefinition): Promise<InputValues> {
+	return loadProviderAccount(
+		def.id,
+		inputsAt(def, "account").map((i) => i.key),
+	);
+}
+
+/** Which of a provider's account inputs have a saved value. */
+function savedFlags(def: ProviderDefinition, account: InputValues): Record<string, boolean> {
+	return Object.fromEntries(inputsAt(def, "account").map((i) => [i.key, Boolean(account[i.key])]));
 }
 
 function ConnectionScreen({
@@ -218,11 +251,32 @@ function ConnectionScreen({
 	connecting,
 	connected,
 	error,
+	providerId,
+	onPickProvider,
+	boxValues,
+	setBoxValue,
+	accountSaved,
+	onSaveAccount,
+	onRemoveAccount,
+	waking,
 }: {
 	host: string;
 	port: string;
 	setHost: (t: string) => void;
 	setPort: (t: string) => void;
+	/** The provider this box is woken through, or null for none. */
+	providerId: string | null;
+	onPickProvider: (id: string | null) => void;
+	/** This box's own inputs for that provider (its machine name). */
+	boxValues: InputValues;
+	setBoxValue: (key: string, value: string) => void;
+	/** Which of the provider's account inputs are in the Keychain (never read back). */
+	accountSaved: Record<string, boolean>;
+	/** Checks the values with the provider, then saves them; resolves whether that worked. */
+	onSaveAccount: (def: ProviderDefinition, values: InputValues) => Promise<boolean>;
+	onRemoveAccount: (def: ProviderDefinition) => void;
+	/** The provider a box is being woken through right now, or null. */
+	waking: string | null;
 	onConnect: () => void;
 	onBack: () => void;
 	onDisconnect: () => void;
@@ -231,6 +285,19 @@ function ConnectionScreen({
 	connected: boolean;
 	error: string | null;
 }) {
+	const [picking, setPicking] = useState(false);
+	const [drafts, setDrafts] = useState<InputValues>({});
+	const def = WAKE_PROVIDERS.find((p) => p.id === providerId) ?? null;
+	const boxInputs = def ? inputsAt(def, "box") : [];
+	const accountInputs = def ? inputsAt(def, "account") : [];
+	const unsaved = accountInputs.filter((i) => !accountSaved[i.key]);
+	const keyLabel = accountInputs.length === 1 ? (accountInputs[0]?.label ?? "Key") : "Keys";
+	const draftsFilled = unsaved.every((i) => (drafts[i.key] ?? "").trim() !== "");
+	const inputRows = [
+		...boxInputs.map((input) => ({ input, value: boxValues[input.key] ?? "", draft: false })),
+		...unsaved.map((input) => ({ input, value: drafts[input.key] ?? "", draft: true })),
+	];
+	const options: (ProviderDefinition | null)[] = [null, ...WAKE_PROVIDERS];
 	return (
 		<View style={styles.root}>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
@@ -277,9 +344,88 @@ function ConnectionScreen({
 							onChangeText={setPort}
 							placeholder="8787"
 							keyboardType="numeric"
-							last
 						/>
+						<Pressable
+							style={styles.fieldRow}
+							onPress={() => setPicking((p) => !p)}
+							hitSlop={4}
+							accessibilityRole="button"
+							accessibilityLabel={`Provider: ${def?.label ?? "None"}`}
+						>
+							<Text style={styles.fieldLabel}>Provider</Text>
+							<Text style={styles.pickerValue}>{def?.label ?? "None"} ›</Text>
+						</Pressable>
 					</View>
+
+					{picking ? (
+						<View style={[styles.formCard, styles.pickerCard]}>
+							{options.map((p, i) => (
+								<Pressable
+									key={p?.id ?? "none"}
+									style={[styles.pickerOption, i < options.length - 1 && styles.fieldDivider]}
+									onPress={() => {
+										setPicking(false);
+										setDrafts({});
+										onPickProvider(p?.id ?? null);
+									}}
+									accessibilityRole="button"
+								>
+									<View style={styles.pickerText}>
+										<Text style={styles.pickerTitle}>{p?.label ?? "None"}</Text>
+										<Text style={styles.pickerHint}>
+											{p?.wake?.hint ?? "Connect without waking the box"}
+										</Text>
+									</View>
+									{(p?.id ?? null) === (def?.id ?? null) ? (
+										<Feather name="check" size={15} color={C.ink} />
+									) : null}
+								</Pressable>
+							))}
+						</View>
+					) : def && inputRows.length > 0 ? (
+						<View style={[styles.formCard, styles.pickerCard]}>
+							{inputRows.map(({ input, value, draft }, i) => (
+								<Field
+									key={input.key}
+									label={input.label}
+									value={value}
+									onChangeText={(t) =>
+										draft ? setDrafts((d) => ({ ...d, [input.key]: t })) : setBoxValue(input.key, t)
+									}
+									placeholder={input.placeholder}
+									secure={input.secret}
+									last={i === inputRows.length - 1}
+								/>
+							))}
+						</View>
+					) : null}
+					{!picking && def && accountInputs.length > 0 ? (
+						unsaved.length === 0 ? (
+							<Pressable
+								style={styles.demoBtn}
+								onPress={() => onRemoveAccount(def)}
+								hitSlop={6}
+								accessibilityLabel={`Remove the saved ${def.label} ${keyLabel}`}
+							>
+								<Text style={styles.demoText}>{keyLabel} saved · Remove</Text>
+							</Pressable>
+						) : draftsFilled ? (
+							<Pressable
+								style={styles.demoBtn}
+								onPress={() =>
+									void onSaveAccount(def, drafts).then((ok) => {
+										if (ok) setDrafts({});
+									})
+								}
+								hitSlop={6}
+							>
+								<Text style={styles.demoText}>Save {keyLabel}</Text>
+							</Pressable>
+						) : null
+					) : null}
+					{!picking && def?.wake ? <Text style={styles.formNote}>{def.wake.note}</Text> : null}
+
+					{waking ? <Text style={styles.formNote}>Waking the box through {waking}…</Text> : null}
 
 					{!connected ? (
 						<View style={styles.demoRow}>
@@ -609,6 +755,19 @@ export default function App() {
 	const [loopForm, setLoopForm] = useState<{ editing: LoopDTO | null } | null>(null);
 	const [host, setHost] = useState("");
 	const [port, setPort] = useState("8787");
+	// Waking a sleeping box through its provider before connecting (src/wake.ts).
+	// The provider and this box's inputs ride on the saved connection; the
+	// provider's account inputs (its key) live in the Keychain and are only ever
+	// held here, in a ref, never in render state.
+	const [providerId, setProviderId] = useState<string | null>(null);
+	const [boxValues, setBoxValues] = useState<InputValues>({});
+	const [accountSaved, setAccountSaved] = useState<Record<string, boolean>>({});
+	const [waking, setWaking] = useState<string | null>(null);
+	const wakeTarget = useRef<{ id: string | null; box: InputValues }>({ id: null, box: {} });
+	wakeTarget.current = { id: providerId, box: boxValues };
+	const accounts = useRef<Record<string, InputValues>>({});
+	// One adapter per provider and key, so its session (boxd's lasts an hour) is reused across connects.
+	const waker = useRef<{ sig: string; adapter: WakeAdapter } | null>(null);
 	const [connecting, setConnecting] = useState(false);
 	const [connected, setConnected] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -714,7 +873,11 @@ export default function App() {
 	const [consentOpen, setConsentOpen] = useState(false);
 
 	const connectTo = useCallback(
-		async (h: string, p: string): Promise<boolean> => {
+		// `wake`: the user just asked for this box (Connect, opening or returning to
+		// the app), so a hibernated boxd box is woken first. Never from the drop
+		// reconnect loop: a box that went to sleep on its own stays asleep until
+		// someone actually wants it.
+		async (h: string, p: string, wake = false): Promise<boolean> => {
 			const port = p || "8787";
 			// Nothing leaves the phone until the disclosure has been accepted. Guarding
 			// HERE rather than on the Connect button covers every route in: the button,
@@ -730,7 +893,31 @@ export default function App() {
 			}
 			setConnecting(true);
 			setError(null);
+			const wakeFor = wakeTarget.current;
+			const def = providerById(wakeFor.id);
+			let wakeError: string | null = null;
 			try {
+				const account = def ? (accounts.current[def.id] ?? {}) : {};
+				if (wake && def && filled(def, "box", wakeFor.box) && filled(def, "account", account)) {
+					const sig = `${def.id}\n${JSON.stringify(account)}`;
+					if (waker.current?.sig !== sig) {
+						const made = wakeAdapter(def, account);
+						waker.current = made ? { sig, adapter: made } : null;
+					}
+					const adapter = waker.current?.adapter;
+					if (adapter) {
+						setWaking(def.label);
+						try {
+							await adapter.ensureAwake(wakeFor.box);
+						} catch (err) {
+							// Still try the box: it may be up, and a key problem must not
+							// cost a connection that would have worked.
+							wakeError = err instanceof Error ? err.message : String(err);
+						} finally {
+							setWaking(null);
+						}
+					}
+				}
 				conn.current?.close();
 				const c = await connect(`ws://${h}:${port}`, {
 					onClose: () => {
@@ -747,7 +934,11 @@ export default function App() {
 				conn.current = c;
 				target.current = { host: h, port };
 				backoff.current = 0;
-				await saveConnection({ host: h, port });
+				await saveConnection({
+					host: h,
+					port,
+					...(def ? { provider: { id: def.id, box: wakeFor.box } } : {}),
+				});
 				setConnected(true);
 				const nextSkew = c.skewed ? c.info.protocolVersion : null;
 				setSkew(nextSkew);
@@ -769,7 +960,10 @@ export default function App() {
 			} catch (err) {
 				conn.current = null;
 				setConnected(false);
-				setError(err instanceof Error ? err.message : String(err));
+				const msg = err instanceof Error ? err.message : String(err);
+				setError(
+					wakeError ? `${msg}. Waking it through ${def?.label} failed too: ${wakeError}` : msg,
+				);
 				return false;
 			} finally {
 				setConnecting(false);
@@ -800,29 +994,32 @@ export default function App() {
 
 	// Reattach to the intended box: try once, and on failure schedule a capped
 	// exponential backoff retry (1s → 15s) so a still-down box keeps getting picked up.
-	const reconnect = useCallback(async () => {
-		const t = target.current;
-		if (!t || attempting.current) return;
-		if (retryTimer.current) {
-			clearTimeout(retryTimer.current);
-			retryTimer.current = null;
-		}
-		attempting.current = true;
-		let ok = false;
-		try {
-			ok = await connectTo(t.host, t.port);
-		} finally {
-			attempting.current = false;
-		}
-		if (!ok && target.current) {
-			const delay = Math.min(15_000, 1_000 * 2 ** backoff.current);
-			backoff.current += 1;
-			retryTimer.current = setTimeout(() => {
+	const reconnect = useCallback(
+		async (wake = false) => {
+			const t = target.current;
+			if (!t || attempting.current) return;
+			if (retryTimer.current) {
+				clearTimeout(retryTimer.current);
 				retryTimer.current = null;
-				void reconnect();
-			}, delay);
-		}
-	}, [connectTo]);
+			}
+			attempting.current = true;
+			let ok = false;
+			try {
+				ok = await connectTo(t.host, t.port, wake);
+			} finally {
+				attempting.current = false;
+			}
+			if (!ok && target.current) {
+				const delay = Math.min(15_000, 1_000 * 2 ** backoff.current);
+				backoff.current += 1;
+				retryTimer.current = setTimeout(() => {
+					retryTimer.current = null;
+					void reconnect();
+				}, delay);
+			}
+		},
+		[connectTo],
+	);
 
 	// Break the connectTo ⇄ reconnect cycle: connectTo's onClose calls through this ref.
 	useEffect(() => {
@@ -839,7 +1036,7 @@ export default function App() {
 				const alive = conn.current ? await conn.current.ping() : false;
 				if (!alive) {
 					backoff.current = 0;
-					void reconnect();
+					void reconnect(true);
 				}
 			})();
 		});
@@ -854,12 +1051,69 @@ export default function App() {
 		[],
 	);
 
+	const onPickProvider = useCallback(async (id: string | null) => {
+		const def = providerById(id);
+		setProviderId(def?.id ?? null);
+		setError(null); // an error about the provider just left behind is stale now
+		if (!def) {
+			setAccountSaved({});
+			return;
+		}
+		const account = accounts.current[def.id] ?? (await loadAccount(def));
+		accounts.current[def.id] = account;
+		setAccountSaved(savedFlags(def, account));
+	}, []);
+
+	const setBoxValue = useCallback(
+		(key: string, value: string) => setBoxValues((v) => ({ ...v, [key]: value })),
+		[],
+	);
+
+	// Saving checks the key with the provider first, one cheap signed-in call, so a
+	// key that doesn't work is reported now rather than as a failed wake later.
+	const onSaveAccount = useCallback(
+		async (def: ProviderDefinition, values: InputValues): Promise<boolean> => {
+			const entered = Object.entries(values).map(([key, value]) => [key, value.trim()] as const);
+			const account = { ...(accounts.current[def.id] ?? {}), ...Object.fromEntries(entered) };
+			try {
+				await wakeAdapter(def, account)?.check();
+				for (const [key, value] of entered) await saveProviderAccount(def.id, key, value);
+				accounts.current[def.id] = account;
+				waker.current = null;
+				setAccountSaved(savedFlags(def, account));
+				setError(null);
+				return true;
+			} catch (err) {
+				setError(
+					`Couldn't save the ${def.label} key: ${err instanceof Error ? err.message : String(err)}`,
+				);
+				return false;
+			}
+		},
+		[],
+	);
+
+	const onRemoveAccount = useCallback(async (def: ProviderDefinition) => {
+		try {
+			for (const input of inputsAt(def, "account")) {
+				await saveProviderAccount(def.id, input.key, null);
+			}
+			accounts.current[def.id] = {};
+			waker.current = null;
+			setAccountSaved({});
+		} catch (err) {
+			setError(
+				`Couldn't remove the ${def.label} key: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+	}, []);
+
 	const onConnect = useCallback(() => {
 		if (!host.trim()) {
 			setError("Enter the box's Tailscale IP or hostname.");
 			return;
 		}
-		void connectTo(host.trim(), port.trim());
+		void connectTo(host.trim(), port.trim(), true);
 	}, [host, port, connectTo]);
 
 	// Enter demo mode: a fully offline Connection (canned board + terminal). No box, no
@@ -889,7 +1143,7 @@ export default function App() {
 		void saveConsent();
 		const pending = pendingConnect.current;
 		pendingConnect.current = null;
-		if (pending) void connectTo(pending.host, pending.port);
+		if (pending) void connectTo(pending.host, pending.port, true);
 	}, [connectTo]);
 
 	// Declining is not a dead end: the demo is offline, so it needs no consent at all.
@@ -931,6 +1185,16 @@ export default function App() {
 				loadPreviewPort(),
 				loadConsent(),
 			]);
+			const savedDef = providerById(saved?.provider?.id);
+			if (savedDef && saved?.provider) {
+				const account = await loadAccount(savedDef);
+				accounts.current[savedDef.id] = account;
+				// The ref too: the reattach below runs before the next render would set it.
+				wakeTarget.current = { id: savedDef.id, box: saved.provider.box };
+				setProviderId(savedDef.id);
+				setBoxValues(saved.provider.box);
+				setAccountSaved(savedFlags(savedDef, account));
+			}
 			if (saved?.host) setDismissedSkew(await loadDismissedSkew(saved.host));
 			// Read in the same batch as the connection, so the auto-reattach below can't
 			// race ahead of it and show the disclosure to someone who already accepted.
@@ -940,7 +1204,7 @@ export default function App() {
 			if (!saved?.host) return;
 			setHost(saved.host);
 			setPort(saved.port);
-			void connectTo(saved.host, saved.port);
+			void connectTo(saved.host, saved.port, true);
 		})();
 	}, []);
 
@@ -1055,6 +1319,14 @@ export default function App() {
 				connecting={connecting}
 				connected={connected}
 				error={error}
+				providerId={providerId}
+				onPickProvider={(id) => void onPickProvider(id)}
+				boxValues={boxValues}
+				setBoxValue={setBoxValue}
+				accountSaved={accountSaved}
+				onSaveAccount={onSaveAccount}
+				onRemoveAccount={(def) => void onRemoveAccount(def)}
+				waking={waking}
 			/>
 		);
 	}
@@ -1320,6 +1592,19 @@ const styles = StyleSheet.create({
 	},
 	demoText: { color: C.ink, fontSize: 14, fontWeight: "700" },
 	formNote: { color: C.faint, fontSize: 12, lineHeight: 18, marginTop: 18, paddingHorizontal: 2 },
+	pickerValue: { color: C.ink, fontSize: 14, paddingVertical: 8 },
+	pickerCard: { marginTop: 8 },
+	pickerOption: {
+		flexDirection: "row",
+		alignItems: "center",
+		justifyContent: "space-between",
+		paddingHorizontal: 14,
+		paddingVertical: 10,
+		gap: 12,
+	},
+	pickerText: { flex: 1, gap: 2 },
+	pickerTitle: { color: C.ink, fontSize: 14 },
+	pickerHint: { color: C.faint, fontSize: 12 },
 	mono: { color: C.muted, fontVariant: ["tabular-nums"] },
 
 	// board

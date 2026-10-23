@@ -37,6 +37,7 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 		defaultUpdateStrategy: "merge",
 		deleteRemoteBranchOnMerge: false,
 		loopsPaused: false,
+		idleSleepMinutes: 60,
 	},
 };
 
