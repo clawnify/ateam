@@ -22,7 +22,6 @@ import { existsSync, mkdirSync, openSync, realpathSync, unlinkSync } from "node:
 import { connect, createServer, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { WebSocketServer } from "ws";
 import type { Dispatcher } from "./dispatcher";
 import { createDispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
@@ -32,6 +31,7 @@ import { readSettings } from "./settings-file";
 import { detectSleepDriver, type SleepControl, startSleepControl } from "./sleep";
 import { socketServerTransport } from "./transport/socket";
 import { wsServerTransport } from "./transport/ws";
+import { startWsListener } from "./ws-listener";
 
 const SOCK = process.env.ATEAM_RPC_SOCK ?? join(homedir(), ".ateam", "rpc.sock");
 // Where a daemon started from here keeps its state. Shared with the notice
@@ -187,17 +187,14 @@ function maybeStartWsListener(engine: Engine, dispatcher: Dispatcher): void {
 		);
 		process.exit(1);
 	}
-	const wss = new WebSocketServer({ host, port });
-	wss.on("connection", (sock) => {
+	startWsListener({
+		host,
+		port,
 		// Each client gets its own serveRpc; the engine (and its PTY sessions) is
 		// shared and outlives any single client — same contract as the socket path.
-		serveClient(engine, dispatcher, wsServerTransport(sock));
+		onConnection: (sock) => serveClient(engine, dispatcher, wsServerTransport(sock)),
+		log: (line) => console.log(line),
 	});
-	wss.on("error", (err: Error) => {
-		console.error(`[ateam] WS listener error: ${err.message}`);
-		process.exit(1);
-	});
-	wss.on("listening", () => console.log(`[ateam] daemon also listening on ws://${host}:${port}`));
 }
 
 /**
