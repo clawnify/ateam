@@ -223,6 +223,12 @@ Two more things measured along the way:
 
 ## Gotchas
 
+- **On a box created from boxd's current image, older engines don't start at all.**
+  The image ships Node v24.21.0, and engines up to v0.1.65 abort at startup with
+  `Assertion failed: (env) != nullptr` (from better-sqlite3 11.x), before logging
+  anything: `~/.ateam/daemon.log` holds only a native stack, and the installer's
+  handshake reports `<no reply>`. Later engines pin better-sqlite3 13, which starts
+  fine there (measured 2026-10-23). A box on Node 24.18.0 was unaffected.
 - **`RPC connection closed` is not a credential error.** A missing credential fails
   fast and loudly with `could not read Username for 'https://github.com'`, and
   public repos clone with no credentials at all. If provisioning drops the
