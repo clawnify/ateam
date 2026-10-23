@@ -585,10 +585,12 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// must be EXACTLY a host:port endpoint — never anything that could break the pipe.
 		if (wsAddr && !endpointUrl(wsAddr)) throw new Error(`"${wsAddr}" is not a host:port endpoint`);
 
-		// Reuse install.sh verbatim. With an explicit address, bake it in; otherwise
-		// derive the box's OWN tailnet IP on the box, so the phone's WebSocket listener
-		// is set up automatically when the box is on Tailscale. An empty ATEAM_WS_ADDR
-		// means "daemon service only, no listener" — install.sh treats it as unset.
+		// Reuse install.sh verbatim. An explicit address is baked in. Otherwise the box's
+		// OWN tailnet IP is offered as ATEAM_WS_ADDR_DEFAULT, and only when that IP is on
+		// one of the box's interfaces: with Tailscale in userspace mode, as on boxd, it
+		// isn't, and binding it fails. install.sh uses that default only when the box's
+		// unit has no address yet, because an upgrade must never replace one that works.
+		// An empty default is the same as none.
 		// Pin the box to THIS app's release, the way VS Code keys its remote server to
 		// the client's commit. Unpinned, the box takes `releases/latest` and drifts away
 		// from the desktop the moment a newer release lands, which is the skew this whole
@@ -600,10 +602,11 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		const pin = app.isPackaged ? `ATEAM_VERSION=v${app.getVersion()} ` : "";
 		const pipeline = wsAddr
 			? `curl -fsSL ${INSTALL_URL} | ${pin}ATEAM_WS_ADDR=${wsAddr} bash -s -- --service`
-			: // Single-quoted JS so the shell's ${ip:+…} parameter expansion stays literal.
-				"ip=$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | head -1 || true); " +
+			: // Single-quoted JS so the shell's ${tsip:+…} parameter expansion stays literal.
+				"tsip=$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | head -1 || true); " +
+				'[ -n "$tsip" ] && ip -4 -o addr show 2>/dev/null | grep -qF " $tsip/" || tsip=; ' +
 				`curl -fsSL ${INSTALL_URL} | ${pin}` +
-				'ATEAM_WS_ADDR="${ip:+$ip:' +
+				'ATEAM_WS_ADDR_DEFAULT="${tsip:+$tsip:' +
 				WS_DEFAULT_PORT +
 				'}" bash -s -- --service';
 

@@ -22,6 +22,9 @@
 #   ATEAM_WS_ADDR   <tailnet-ip>:<port> for the iOS app's WebSocket listener,
 #                   baked into the unit by --service. On a re-run without it, an
 #                   address already in the unit is kept rather than dropped.
+#   ATEAM_WS_ADDR_DEFAULT  an address used only when neither ATEAM_WS_ADDR nor an
+#                   existing unit names one. The desktop passes the box's tailnet
+#                   IP this way, so an upgrade never replaces an address that works.
 #
 # Node: the dist externalizes two native modules — better-sqlite3 and the
 # prebuilt node-pty fork — so the box needs a Node whose ABI both ship binaries
@@ -214,11 +217,12 @@ if [ -n "$OLD_PID" ]; then
 	pkill -f "$DAEMON_PAT" 2>/dev/null || true
 	sleep 1
 	info "stopped the old daemon (pid $OLD_PID); its agents keep running"
-	# A systemd-managed daemon comes straight back on its own here (a signal counts
-	# as failure, so `Restart=on-failure` fires), and that is fine: whatever starts
-	# from now on runs the dist installed above. So this deliberately does NOT wait
-	# for the pid to stay gone, which would race that restart and fail a healthy
-	# box. The invariant that actually matters is asserted by the verify below.
+	# Under systemd this does NOT come back on its own: SIGTERM is one of the signals
+	# systemd counts as a clean exit, so `Restart=on-failure` leaves the unit stopped
+	# until the service step below restarts it. A run that dies in between leaves the
+	# box served by whatever engine starts next (the verify step's, or the next
+	# `ateam attach`), outside systemd and without the phone's listener. Whatever
+	# starts from here on runs the dist installed above; the verify below asserts it.
 else
 	info "no daemon was running"
 fi
@@ -314,6 +318,8 @@ if [ "$WANT_SERVICE" = 1 ]; then
 	# removing the phone's only way in, with the daemon still apparently healthy.
 	# An explicit ATEAM_WS_ADDR always wins; otherwise inherit whichever unit has
 	# one — including the OTHER scope's, so a user→system upgrade keeps the address.
+	# The caller's default (ATEAM_WS_ADDR_DEFAULT) applies only when neither an
+	# explicit address nor a unit has one.
 	WS_ADDR="${ATEAM_WS_ADDR:-}"
 	if [ -z "$WS_ADDR" ]; then
 		for u in "$UNIT" "$SYS_UNIT" "$USER_UNIT"; do
@@ -325,14 +331,18 @@ if [ "$WANT_SERVICE" = 1 ]; then
 			fi
 		done
 	fi
+	if [ -z "$WS_ADDR" ] && [ -n "${ATEAM_WS_ADDR_DEFAULT:-}" ]; then
+		WS_ADDR="$ATEAM_WS_ADDR_DEFAULT"
+		info "setting ATEAM_WS_ADDR=$WS_ADDR"
+	fi
 
 	emit_unit() {
 		echo '[Unit]'
 		echo 'Description=Ateam engine daemon'
 		if [ "$SERVICE_SCOPE" = system ]; then
 			# The WS listener binds the Tailscale IP, so that address must exist
-			# before the bind. If it doesn't the daemon exits and the restart loop
-			# below retries until Tailscale is up. (Meaningless in a user unit:
+			# before the bind. If it doesn't yet, the listener retries in the
+			# background until it does. (Meaningless in a user unit:
 			# network-online.target lives in the SYSTEM manager, not the user one.)
 			echo 'Wants=network-online.target'
 			echo 'After=network-online.target tailscaled.service'
