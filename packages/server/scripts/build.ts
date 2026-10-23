@@ -52,7 +52,13 @@ writeFileSync(
 			private: true,
 			bin: { ateam: "./cli.js" },
 			dependencies: {
-				"better-sqlite3": "^11.8.1",
+				// 13, not the ^11 the workspace pins (the desktop runs its engine inside
+				// Electron, with its own copy). 11.x aborts at startup on newer Node 24
+				// (boxd's image ships v24.21.0): `Assertion failed: (env) != nullptr` in
+				// RemoveEnvironmentCleanupHook, before the engine logs a line. 13 ships
+				// its Node-API binaries inside the package, so the box still needs no
+				// compiler and one build serves Node 22 and 24.
+				"better-sqlite3": "^13.0.3",
 				"node-pty": "npm:@homebridge/node-pty-prebuilt-multiarch@^0.13.1",
 			},
 		},
