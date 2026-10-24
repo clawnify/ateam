@@ -9,11 +9,13 @@ import {
 	endpointUrl,
 	forgetConnection,
 	listConnections,
+	pausedSprites,
 	readSshHosts,
 	recordConnection,
 	resolveTransport,
 	type SleepCheck,
 	sleepingAliases,
+	spriteMachineOf,
 } from "../src/connections";
 
 function writeConfig(content: string): string {
@@ -263,6 +265,37 @@ describe("boxdMachineOf", () => {
 		expect(boxdMachineOf("boxd.sh")).toBeNull();
 		expect(boxdMachineOf("hetzner-box")).toBeNull();
 		expect(boxdMachineOf("100.81.40.73:8787")).toBeNull();
+	});
+});
+
+describe("spriteMachineOf", () => {
+	it("names the Sprite behind a `<name>.sprite` alias, and nothing else", () => {
+		expect(spriteMachineOf("ateam-box.sprite")).toBe("ateam-box");
+		expect(spriteMachineOf("ateam-box.sprites.app")).toBeNull();
+		expect(spriteMachineOf("ateam-probe.boxd")).toBeNull();
+		expect(spriteMachineOf("hetzner-box")).toBeNull();
+	});
+});
+
+describe("pausedSprites", () => {
+	// The shape `sprite list --json` printed on 2026-10-24.
+	const list = (sprites: { name: string; status: string }[]) =>
+		JSON.stringify({ sprites, org: { name: "my-org", running: 0, warm: 0, cold: 0 } });
+
+	it("counts warm and cold as paused, running as awake", () => {
+		const out = pausedSprites(
+			list([
+				{ name: "a", status: "warm" },
+				{ name: "b", status: "cold" },
+				{ name: "c", status: "running" },
+			]),
+		);
+		expect(out && [...out].sort()).toEqual(["a", "b"]);
+	});
+
+	it("is null for output it can't read, so the launch connects as before", () => {
+		expect(pausedSprites("not json")).toBeNull();
+		expect(pausedSprites(JSON.stringify({ data: [] }))).toBeNull();
 	});
 });
 

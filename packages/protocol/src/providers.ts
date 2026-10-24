@@ -48,6 +48,23 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
 				"machine in its org, so give the phone one for an org that holds only your Ateam boxes.",
 		},
 	},
+	{
+		id: "sprites",
+		label: "Sprites",
+		wake: {
+			inputs: [
+				{ key: "machine", label: "Sprite", placeholder: "mybox", scope: "box" },
+				// The whole token Sprites shows: org-slug/org-id/token-id/token-value.
+				{ key: "token", label: "API token", placeholder: "my-org/…", scope: "account", secret: true },
+			],
+			hint: "Wakes a paused Sprite before connecting",
+			note:
+				"Before connecting, the phone asks Sprites to wake this Sprite and keep it up for two " +
+				"minutes while it connects. The token stays in this phone's Keychain and goes only to " +
+				"Sprites. A Sprites token works on every Sprite in its organization, so give the phone " +
+				"one for an organization that holds only your Ateam boxes.",
+		},
+	},
 ];
 
 export function providerById(id: string | null | undefined): ProviderDefinition | undefined {

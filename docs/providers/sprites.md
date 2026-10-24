@@ -3,15 +3,16 @@
 [Sprites](https://sprites.dev) are persistent Linux microVMs on [Fly.io](https://fly.io):
 hardware-isolated, 8 vCPUs, a 100 GB disk that survives every sleep, and billed by
 actual CPU and memory use while running. A Sprite pauses on its own a few seconds
-after nothing is using it, and paused time isn't billed. That last part is what
-makes it different from every other box here: **an agent left working on a Sprite
-with no client attached gets paused too.** Read [Sleeping](#sleeping) before you
-leave one working.
+after nothing is using it, and paused time isn't billed. An agent working inside
+doesn't count as use, so the engine holds the Sprite awake while agents work and
+lets it pause once they've been idle a while. See [Sleeping](#sleeping).
 
-**Verified against** Ateam v0.1.66 · sprite CLI 2026-10-20-hotfix.1 · 2026-10-24
+**Verified against** Ateam v0.1.66 (setup), and the sleep and wake engine from the
+release after it · sprite CLI 2026-10-20-hotfix.1 · 2026-10-24
 
-> **Sleep and wake support:** not yet. Ateam's engine can't hold a Sprite awake while
-> an agent works, and nothing wakes a Sprite for a loop tick. See [Sleeping](#sleeping).
+> **Sleep and wake** needs an engine newer than v0.1.66 on the box, and Ateam Go newer
+> than 1.2.0 for the phone to wake a paused Sprite. An older engine doesn't hold the
+> Sprite, so an agent left working with no client attached is paused within seconds.
 
 ## Create a box
 
@@ -115,8 +116,14 @@ was paused: about 2s from cold.
 
 ## iOS
 
-The phone reaches a Sprite over Tailscale, but only while something else keeps the
-Sprite awake. It can't wake one, and an open phone connection doesn't keep it awake.
+The phone reaches a Sprite over Tailscale. A paused Sprite doesn't answer there, so
+on the phone's connection screen set **Provider** to **Sprites** and enter the
+Sprite's name and a Sprites API token: create one at
+[sprites.dev/account](https://sprites.dev/account) and paste the whole `my-org/…`
+string. Before connecting, the phone asks Sprites to wake the Sprite and hold it
+for two minutes; once the phone attaches, the engine holds it as for any client. A
+Sprites token works on every Sprite in its organization, so give the phone one for
+an organization that holds only your Ateam boxes.
 
 Tailscale runs in its normal kernel mode (`/dev/net/tun` is there), as a service:
 
@@ -148,10 +155,8 @@ What we measured:
 | Phone-style WebSocket to a paused Sprite | Timed out; the Sprite stayed paused |
 | Tailnet back after a wake | About 6s while a hold kept the Sprite up. Without a hold it went back to sleep first: no answer in the ~20s it stayed awake |
 | An idle WebSocket open over the tailnet | Doesn't count as activity: the Sprite paused under it when the hold ran out |
-
-So the phone needs two things Ateam doesn't have for Sprites yet: a wake through the
-Sprites API that also takes a short hold, and an engine that holds the Sprite while
-a client is connected. Until then, use the phone while the desktop is attached.
+| The phone's wake, Sprite paused | Woken and held in 2.5s; the tailnet answered 4.8s after the call |
+| The phone attached | The engine took its own hold the same second, beside the phone's |
 
 ## Sleeping
 
@@ -165,16 +170,23 @@ What we measured on one Sprite, with the engine installed as above:
 | Paused a few minutes, then woken | Engine and its PTY daemon (which owns the agents) still running |
 | Stopped (after a longer sleep, or a restart) | Only services come back: the engine does, agents and their sessions don't |
 | A [task hold](https://docs.fly.io/sprites/keeping-sprites-running.md) of 2 minutes | Stayed awake exactly until it expired, then paused at once |
+| The engine, its idle window (set to 1 minute) over | Deleted its hold at the minute; the Sprite paused the same second |
+| Woken again by anything | The engine holds it for a fresh idle window, as on every provider |
 
-So on a Sprite, an agent keeps working while the desktop is attached. Detach, and it's
-paused mid-turn within seconds; it resumes where it was if you come back soon, and
-is gone if the Sprite was stopped in between. Ateam's engine doesn't take a task
-hold yet, which is the fix: hold the Sprite while an agent works, and let it sleep
-when none is. Two limits are Fly's, and stay either way:
+So without a hold, an agent is paused mid-turn seconds after you detach. The engine
+holds the Sprite with a task (`ateam-engine`, on the Sprite's own API socket) while
+an agent works or a client connects, renews it every few minutes, and deletes it
+once no agent has worked for the idle window (**Settings**, an hour by default). Fly
+pauses the Sprite as soon as nothing else is going on.
 
-- **No scheduler.** A paused Sprite can't wake itself, so nothing fires a loop on
-  time while it sleeps. An engine that holds the Sprite would keep it awake while
-  any loop is on.
+A connected desktop keeps a Sprite awake by itself: Fly counts its SSH connection as
+activity.
+
+Two limits are Fly's:
+
+- **No scheduler.** A paused Sprite can't wake itself, so the engine keeps a Sprite
+  with a loop on held (awake, and billed for what it uses) rather than let the loop
+  miss its tick.
 - **Restarts that lose recent writes.** Sprites on the `sbd` storage driver (check
   `echo $SPRITE_STORAGE_DRIVER`) can restart on their own a minute or two after
   waking, losing about the last minute of disk writes
@@ -186,8 +198,10 @@ when none is. Two limits are Fly's, and stay either way:
 - **An open `sprite console` keeps the Sprite awake** while its prompt produces
   output, and it's easy to forget one: `sprite create` opens a console and leaves it
   running. `sprite sessions list` shows them; `sprite sessions kill <id>` closes one.
-- **`sprite info` status lags.** It said `cold` while processes were running. Don't
-  read sleep state from it.
+- **The status Sprites reports lags** (`sprite info`, `sprite list`, the API). It said
+  `cold` for a Sprite running a command. Ateam reads it only to skip connecting to a
+  sleeping Sprite at launch, where a wrong `cold` costs nothing: the Sprite wakes the
+  moment you use it.
 - **`sprite proxy --ssh` refuses keys.** The built-in SSH emulation answered
   `Permission denied (publickey)` for every key we tried, including the one sshd
   accepted. Use a real sshd and `-W :22` as above.

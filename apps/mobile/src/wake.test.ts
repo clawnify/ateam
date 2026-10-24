@@ -18,6 +18,14 @@ describe("wake providers", () => {
 		expect(inputsAt(boxd, "account").map((i) => [i.key, i.secret])).toEqual([["apiKey", true]]);
 	});
 
+	test("Sprites asks for the Sprite per box and a token per account", () => {
+		const sprites = providerById("sprites");
+		if (!sprites) throw new Error("sprites is defined");
+		expect(inputsAt(sprites, "box").map((i) => i.key)).toEqual(["machine"]);
+		expect(inputsAt(sprites, "account").map((i) => [i.key, i.secret])).toEqual([["token", true]]);
+		expect(wakeAdapter(sprites, { token: "my-org/1/2/t" })).not.toBeNull();
+	});
+
 	test("an input counts as filled only with something other than spaces", () => {
 		const boxd = providerById("boxd");
 		if (!boxd) throw new Error("boxd is defined");

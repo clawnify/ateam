@@ -6,6 +6,7 @@
 // Pure TS, no React Native imports, so it runs under bun test.
 import { PROVIDERS, type ProviderDefinition, type ProviderInput } from "@ateam/protocol";
 import { createBoxdClient, ensureAwake } from "./boxd";
+import { createSpritesClient } from "./sprites";
 
 /** Input values by `ProviderInput.key`. */
 export type InputValues = Record<string, string>;
@@ -23,6 +24,17 @@ const ADAPTERS: Partial<Record<string, (account: InputValues) => WakeAdapter>> =
 		const client = createBoxdClient((account.apiKey ?? "").trim());
 		return {
 			ensureAwake: (box) => ensureAwake(client, (box.machine ?? "").trim()),
+			check: () => client.check(),
+		};
+	},
+	sprites: (account) => {
+		const client = createSpritesClient((account.token ?? "").trim());
+		return {
+			// Sprites' reported status lags, so the state it was found in is not known.
+			ensureAwake: async (box) => {
+				await client.wake((box.machine ?? "").trim());
+				return "unknown";
+			},
 			check: () => client.check(),
 		};
 	},

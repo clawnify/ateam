@@ -162,6 +162,48 @@ function sleepingBoxdMachines(): Promise<Set<string> | null> {
 }
 
 /**
+ * The Sprite an ssh alias names, or null: `mybox.sprite` → `mybox`, the alias
+ * docs/providers/sprites.md sets up (Sprites' CLI writes no ssh config itself).
+ */
+export function spriteMachineOf(alias: string): string | null {
+	const m = /^([^.]+)\.sprite$/i.exec(alias);
+	return m?.[1] ?? null;
+}
+
+/** The Sprites `sprite list --json` reports paused ("warm" or "cold"), or null for any other shape. */
+export function pausedSprites(stdout: string): Set<string> | null {
+	try {
+		const list: unknown = JSON.parse(stdout);
+		const rows = (list as { sprites?: unknown } | null)?.sprites;
+		if (!Array.isArray(rows)) return null;
+		const paused = new Set<string>();
+		for (const r of rows as { name?: unknown; status?: unknown }[]) {
+			if (typeof r.name === "string" && (r.status === "warm" || r.status === "cold")) {
+				paused.add(r.name);
+			}
+		}
+		return paused;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The Sprites paused right now, read through this Mac's `sprite` CLI (its default
+ * org). Listing wakes nothing. The status Sprites reports lags: it has said "cold"
+ * for a Sprite that was running a command, so a running Sprite can be left
+ * unconnected at launch, where it wakes the moment it's used. Null when the CLI
+ * can't answer (not installed, logged out), so callers fall back to connecting.
+ */
+function sleepingSprites(): Promise<Set<string> | null> {
+	return new Promise((resolve) => {
+		execFile("sprite", ["list", "--json"], { timeout: 10_000 }, (err, stdout) =>
+			resolve(err ? null : pausedSprites(stdout)),
+		);
+	});
+}
+
+/**
  * How this Mac tells, without waking anything, which of one provider's boxes are
  * asleep. Connecting to a sleeping box over SSH wakes it, so the launch reconnect
  * asks first and leaves sleepers alone. Adding a provider is one entry here.
@@ -173,7 +215,10 @@ export interface SleepCheck {
 	asleep(): Promise<Set<string> | null>;
 }
 
-const SLEEP_CHECKS: SleepCheck[] = [{ machineOf: boxdMachineOf, asleep: sleepingBoxdMachines }];
+const SLEEP_CHECKS: SleepCheck[] = [
+	{ machineOf: boxdMachineOf, asleep: sleepingBoxdMachines },
+	{ machineOf: spriteMachineOf, asleep: sleepingSprites },
+];
 
 /**
  * The aliases whose boxes are asleep right now. Only a provider that owns one of
