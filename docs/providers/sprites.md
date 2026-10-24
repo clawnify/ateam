@@ -133,8 +133,12 @@ by recreating its service:
 ```bash
 sprite-env services delete ateam
 sprite-env services create ateam --cmd bash --args "-lc,exec ateam daemon" \
-  --env ATEAM_WS_ADDR=<tailnet-ip>:8787 --needs tailscaled
+  --env ATEAM_WS_ADDR=<tailnet-ip>:8787
 ```
+
+The engine keeps retrying its phone port until Tailscale has the address, so it
+doesn't need to wait for `tailscaled` (and the desktop's SSH path doesn't depend on
+Tailscale starting).
 
 What we measured:
 
@@ -142,7 +146,7 @@ What we measured:
 | --- | --- |
 | tailscaled running, nothing attached | Still paused within seconds. Unlike [boxd](boxd.md), Tailscale doesn't keep the box up |
 | Phone-style WebSocket to a paused Sprite | Timed out; the Sprite stayed paused |
-| Tailnet back after a wake | About 6s, longer than a Sprite stays awake on its own, so a wake needs a hold |
+| Tailnet back after a wake | About 6s while a hold kept the Sprite up. Without a hold it went back to sleep first: no answer in the ~20s it stayed awake |
 | An idle WebSocket open over the tailnet | Doesn't count as activity: the Sprite paused under it when the hold ran out |
 
 So the phone needs two things Ateam doesn't have for Sprites yet: a wake through the
@@ -166,10 +170,11 @@ So on a Sprite, an agent keeps working while the desktop is attached. Detach, an
 paused mid-turn within seconds; it resumes where it was if you come back soon, and
 is gone if the Sprite was stopped in between. Ateam's engine doesn't take a task
 hold yet, which is the fix: hold the Sprite while an agent works, and let it sleep
-when none is. Two things keep that from shipping:
+when none is. Two limits are Fly's, and stay either way:
 
-- **No scheduler.** A paused Sprite can't wake itself, so a loop has nothing to fire
-  it on time. Something outside has to call the Sprite.
+- **No scheduler.** A paused Sprite can't wake itself, so nothing fires a loop on
+  time while it sleeps. An engine that holds the Sprite would keep it awake while
+  any loop is on.
 - **Restarts that lose recent writes.** Sprites on the `sbd` storage driver (check
   `echo $SPRITE_STORAGE_DRIVER`) can restart on their own a minute or two after
   waking, losing about the last minute of disk writes
