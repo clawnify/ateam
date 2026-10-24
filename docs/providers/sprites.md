@@ -36,9 +36,20 @@ processes are Sprite *services* (`sprite-env services`), not systemd units.
 ## GitHub credentials
 
 Nothing is wired up: no credential helper, and `gh` isn't logged in. Run
-`gh auth login` on the box. Sprites also has
-[Connectors](https://docs.fly.io/sprites/concepts/connectors.md), which keep a
-GitHub token out of the box entirely. Ateam hasn't been tested with them.
+`gh auth login` on the box.
+
+Sprites' GitHub [Connector](https://docs.fly.io/sprites/concepts/connectors.md)
+doesn't replace that. It keeps the token out of the box by proxying GitHub's REST
+API through `https://api.sprites.dev/v1/gateway/github/<connection-id>/…`, and that
+part works, private org repos included. But it carries no git: `git ls-remote`
+against the gateway answers `repository not found`, and it gives `gh` no token.
+Ateam clones and pushes with git and opens PRs with `gh`, so the box still needs its
+own login.
+
+Every Sprite also ships a `sprite-api-gateway` skill for Claude Code, Codex, Cursor
+and Gemini, which calls the gateway "the only supported way to access external APIs
+from a Sprite". With a connector set up, an agent on the box may use it for GitHub
+API calls instead of `gh`.
 
 **Set your own git identity.** Every Sprite ships a global one, `Sprite
 <noreply@sprites.dev>`, and the installer's readiness check reports it as `[ok]`.
