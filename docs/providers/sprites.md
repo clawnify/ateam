@@ -44,7 +44,9 @@ API through `https://api.sprites.dev/v1/gateway/github/<connection-id>/…`, and
 part works, private org repos included. But it carries no git: `git ls-remote`
 against the gateway answers `repository not found`, and it gives `gh` no token.
 Ateam clones and pushes with git and opens PRs with `gh`, so the box still needs its
-own login.
+own login. Without one, **Add a project from GitHub** opens with no repos: Ateam
+lists them with `gh api user/repos`, which answers `please run: gh auth login`, even
+though the same query through the gateway returns them all.
 
 Every Sprite also ships a `sprite-api-gateway` skill for Claude Code, Codex, Cursor
 and Gemini, which calls the gateway "the only supported way to access external APIs
