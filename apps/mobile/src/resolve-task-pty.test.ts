@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { AteamApi, SessionDTO } from "@ateam/protocol";
-import { resolveTaskPty } from "./resolve-task-pty";
+import { resolveTaskPty, resolveTaskShell } from "./resolve-task-pty";
 
 const task = { id: "task", agentId: "claude" };
 function session(terminalId: string, agentId = "claude"): SessionDTO {
@@ -114,5 +114,30 @@ describe("mobile conversation selection", () => {
 		await expect(resolveTaskPty(api, task, true)).rejects.toThrow("agent missing");
 		expect(pty.spawnShell).not.toHaveBeenCalled();
 		expect(await resolveTaskPty(api, task, true)).toBe("restored");
+	});
+});
+
+describe("the task's Shell tab", () => {
+	test("reopens the newest live shell rather than the agent or an older shell", async () => {
+		const { api, pty } = setup([
+			session("agent"),
+			session("newer-shell", "shell"),
+			session("older-shell", "shell"),
+		]);
+		expect(await resolveTaskShell(api, task.id)).toBe("newer-shell");
+		expect(pty.spawnShell).not.toHaveBeenCalled();
+	});
+	test("starts one shell for a task that has only its agent, even when opened twice at once", async () => {
+		const { api, pty } = setup([session("agent")]);
+		expect(
+			await Promise.all([resolveTaskShell(api, task.id), resolveTaskShell(api, task.id)]),
+		).toEqual(["shell", "shell"]);
+		expect(pty.spawnShell).toHaveBeenCalledTimes(1);
+		expect(pty.spawnShell).toHaveBeenCalledWith({ taskId: "task" });
+	});
+	test("does not start a shell after the user switches away during lookup", async () => {
+		const { api, pty } = setup();
+		expect(await resolveTaskShell(api, task.id, () => true)).toBeNull();
+		expect(pty.spawnShell).not.toHaveBeenCalled();
 	});
 });

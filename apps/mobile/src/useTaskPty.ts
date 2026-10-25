@@ -1,10 +1,10 @@
-// Attach a terminal view to a task's PTY on the box. Shared by the full terminal
-// screen and Mission Control's tiles: attach or restore the conversation,
-// then paint the snapshot and stream every later chunk
+// Attach a terminal view to a PTY on the box. Shared by the full terminal screen,
+// Mission Control's tiles and the box terminal: find or start the PTY, then paint
+// the snapshot and stream every later chunk
 // in sequence order, buffering what arrives before the view has reported a size.
 import type { AteamApi, PtyDataEvent, TaskDTO } from "@ateam/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { resolveTaskPty } from "./resolve-task-pty";
+import { resolveTaskPty, resolveTaskShell } from "./resolve-task-pty";
 
 export type PtyStatus = "connecting" | "live" | "error" | "none";
 
@@ -18,6 +18,24 @@ export interface TaskPty {
 	/** The view's first size report is the "ready" signal that triggers the snapshot. */
 	onSizeChange: (cols: number, rows: number) => void;
 	write: (data: string) => void;
+}
+
+/** Find or start a task's terminal: its agent's conversation, or with `shell` the
+ *  worktree's shell. Stable while its inputs are, so it can drive usePty. */
+export function useTaskOpen(
+	api: AteamApi,
+	task: Pick<TaskDTO, "id" | "agentId">,
+	spawnIfNone: boolean,
+	shell = false,
+) {
+	const { id: taskId, agentId } = task;
+	return useCallback(
+		(cancelled: () => boolean) =>
+			shell
+				? resolveTaskShell(api, taskId, cancelled)
+				: resolveTaskPty(api, { id: taskId, agentId }, spawnIfNone, cancelled),
+		[api, taskId, agentId, spawnIfNone, shell],
+	);
 }
 
 export function useTaskPty({
@@ -36,7 +54,24 @@ export function useTaskPty({
 	/** Whether size reports resize the PTY on the box. */
 	resizePty: boolean;
 }): TaskPty {
-	const { id: taskId, agentId } = task;
+	return usePty({ api, open: useTaskOpen(api, task, spawnIfNone), feed, resizePty });
+}
+
+export function usePty({
+	api,
+	open,
+	feed,
+	resizePty,
+}: {
+	api: AteamApi;
+	/** Find or start the PTY to show; null when there is none. A new function
+	 *  re-attaches, so keep it stable. */
+	open: (cancelled: () => boolean) => Promise<string | null>;
+	/** Push raw PTY bytes into the terminal view. */
+	feed: (data: string) => void;
+	/** Whether size reports resize the PTY on the box. */
+	resizePty: boolean;
+}): TaskPty {
 	const [terminalId, setTerminalId] = useState<string | null>(null);
 	const [status, setStatus] = useState<PtyStatus>("connecting");
 	const [detail, setDetail] = useState("resolving session…");
@@ -78,9 +113,7 @@ export function useTaskPty({
 
 		(async () => {
 			try {
-				const id = await withTimeout(
-					resolveTaskPty(api, { id: taskId, agentId }, spawnIfNone, () => cancelled),
-				);
+				const id = await withTimeout(open(() => cancelled));
 				if (cancelled) return;
 				if (!id) {
 					setStatus("none");
@@ -117,7 +150,7 @@ export function useTaskPty({
 			offData();
 			offExit();
 		};
-	}, [api, taskId, agentId, feed, spawnIfNone]);
+	}, [api, open, feed]);
 
 	const onSizeChange = useCallback(
 		async (cols: number, rows: number) => {

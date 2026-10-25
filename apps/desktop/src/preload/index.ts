@@ -87,6 +87,7 @@ const api: AteamApi = {
 	pty: {
 		spawnAgent: (input) => ipcRenderer.invoke(CH.ptySpawnAgent, input),
 		spawnShell: (input) => ipcRenderer.invoke(CH.ptySpawnShell, input),
+		boxShell: () => ipcRenderer.invoke(CH.ptyBoxShell),
 		write: (terminalId, data) => ipcRenderer.send(CH.ptyWrite, terminalId, data),
 		resize: (terminalId, cols, rows) => ipcRenderer.send(CH.ptyResize, terminalId, cols, rows),
 		kill: (terminalId) => ipcRenderer.invoke(CH.ptyKill, terminalId),

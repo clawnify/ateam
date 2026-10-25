@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BinaryPresence } from "@ateam/agents";
 import { type AteamDb, repo } from "@ateam/db";
@@ -813,4 +813,58 @@ it("creates one linked worktree for concurrent issue starts and finds it after r
 		await Promise.all(engine.services.pendingSeeds.values());
 		await tmp.cleanup();
 	}
+});
+
+describe("pty:boxShell", () => {
+	// The box's own shell: one per box, reopened while it lives, replaced once it ends.
+	async function boxShellSetup() {
+		const { engine, spawned } = makeEngine(createTestDb());
+		const dir = await mkdtemp(join(tmpdir(), "ateam-box-shell-"));
+		const live = new Set<string>();
+		const services = engine.services as unknown as {
+			userDataDir: string;
+			pty: { has: (t: string) => boolean; spawn: (o: { terminalId: string }) => void };
+		};
+		services.userDataDir = dir;
+		services.pty.has = (t) => live.has(t);
+		const spawn = services.pty.spawn;
+		services.pty.spawn = (o) => {
+			spawn(o);
+			live.add(o.terminalId);
+		};
+		const open = async () =>
+			(await createDispatcher(engine).handle(CH.ptyBoxShell, [])) as { terminalId: string };
+		return { spawned, live, open, cleanup: () => rm(dir, { recursive: true, force: true }) };
+	}
+
+	it("opens one login shell in the home folder, and reopens it while it lives", async () => {
+		const box = await boxShellSetup();
+		try {
+			const first = await box.open();
+			// A second client, or the same one after an engine restart (a fresh dispatcher).
+			expect(await box.open()).toEqual(first);
+			expect(box.spawned).toHaveLength(1);
+			expect(box.spawned[0]).toMatchObject({
+				terminalId: first.terminalId,
+				cwd: homedir(),
+				args: ["-l"],
+			});
+		} finally {
+			await box.cleanup();
+		}
+	});
+
+	it("starts a fresh one once the old one has ended", async () => {
+		const box = await boxShellSetup();
+		try {
+			const first = await box.open();
+			box.live.delete(first.terminalId);
+			const second = await box.open();
+			expect(second.terminalId).not.toBe(first.terminalId);
+			expect(box.spawned).toHaveLength(2);
+			expect(await box.open()).toEqual(second);
+		} finally {
+			await box.cleanup();
+		}
+	});
 });

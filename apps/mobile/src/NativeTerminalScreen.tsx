@@ -7,7 +7,7 @@
 import type { AteamApi, TaskDTO } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import * as ImagePicker from "expo-image-picker";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Keyboard,
@@ -24,7 +24,7 @@ import {
 import { KeyBar, keyStyles } from "./KeyBar";
 import { TerminalStrip } from "./TerminalStrip";
 import { useKeyboardVisible } from "./useKeyboardVisible";
-import { useTaskPty } from "./useTaskPty";
+import { usePty, useTaskOpen } from "./useTaskPty";
 
 const C = {
 	bg: "#0c0c0e",
@@ -68,14 +68,56 @@ export function NativeTerminalScreen({
 	 *  Mission Control tile to type). */
 	autoFocus?: boolean;
 }) {
+	// The desktop's tabs, as a switch: the agent's conversation, or a shell in the
+	// worktree. A task with no agent already opens on a shell, so it has no switch.
+	const hasAgent = !!task.agentId && task.agentId !== "shell";
+	const [shellOn, setShellOn] = useState(false);
+	const shell = hasAgent && shellOn;
+	// Attach or restore like Mission Control.
+	const open = useTaskOpen(api, task, true, shell);
+	return (
+		<NativeTerminal
+			api={api}
+			open={open}
+			onClose={onClose}
+			autoFocus={autoFocus}
+			strip={
+				<TerminalStrip
+					task={task}
+					expanded
+					onToggle={onClose}
+					shell={shell}
+					onShell={hasAgent ? setShellOn : undefined}
+				/>
+			}
+		/>
+	);
+}
+
+/** A terminal under its strip, for whichever PTY `open` finds or starts. This
+ *  view also sizes the PTY. */
+export function NativeTerminal({
+	api,
+	open,
+	strip,
+	onClose,
+	autoFocus = false,
+}: {
+	api: AteamApi;
+	/** Find or start the PTY to show (see usePty). */
+	open: (cancelled: () => boolean) => Promise<string | null>;
+	/** The bar above the terminal. */
+	strip: ReactNode;
+	onClose: () => void;
+	/** Bring the keyboard up as soon as the terminal is ready. */
+	autoFocus?: boolean;
+}) {
 	const termRef = useRef<SwiftTermHandle>(null);
 	const [attaching, setAttaching] = useState(false);
 	const keyboardUp = useKeyboardVisible();
 
 	const feed = useCallback((data: string) => termRef.current?.feed(data), []);
-	// Attach or restore like Mission Control. A task with no agent gets a shell
-	// when explicitly opened here; this view also sizes the PTY.
-	const pty = useTaskPty({ api, task, feed, spawnIfNone: true, resizePty: true });
+	const pty = usePty({ api, open, feed, resizePty: true });
 	const { terminalId, status, lastSize, onSizeChange } = pty;
 	const [detail, setDetail] = useState<string | null>(null);
 	const shownDetail = detail ?? pty.detail;
@@ -153,7 +195,7 @@ export function NativeTerminalScreen({
 	return (
 		// Rendered under the shell's navbar (which already avoids the keyboard).
 		<View style={styles.root}>
-			<TerminalStrip task={task} expanded onToggle={onClose} />
+			{strip}
 			{terminalId ? (
 				<>
 					<SwiftTermView
