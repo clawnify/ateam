@@ -11,6 +11,7 @@
 
 import type { DirListingDTO, ProjectDTO, RemoteRepoDTO } from "@ateam/protocol";
 import { boxSupports } from "@ateam/protocol";
+import Feather from "@expo/vector-icons/Feather";
 import { useCallback, useEffect, useState } from "react";
 import {
 	ActivityIndicator,
@@ -42,10 +43,13 @@ export function ProjectBrowser({
 	conn,
 	onClose,
 	onRegistered,
+	onOpenTerminal,
 }: {
 	conn: Connection;
 	onClose: () => void;
 	onRegistered: (project: ProjectDTO) => void;
+	/** Leave for the box terminal, where gh gets signed in. */
+	onOpenTerminal?: () => void;
 }) {
 	const api = conn.api;
 	// A pre-v9 box has no repo list and silently ignores `createRemote`, so those two
@@ -243,9 +247,18 @@ export function ProjectBrowser({
 					) : (
 						<ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
 							{shown.length === 0 ? (
-								<Text style={styles.empty}>
-									{repos?.length ? "no match" : "no repos — is gh signed in on this box?"}
-								</Text>
+								<>
+									<Text style={styles.empty}>
+										{repos?.length ? "no match" : "no repos — is gh signed in on this box?"}
+									</Text>
+									{/* A first visit lands here before gh is signed in, which happens in a terminal. */}
+									{!repos?.length && onOpenTerminal ? (
+										<Pressable style={styles.terminalBtn} onPress={onOpenTerminal} hitSlop={8}>
+											<Feather name="terminal" size={14} color={C.ink} />
+											<Text style={styles.terminalBtnText}>Open Box terminal</Text>
+										</Pressable>
+									) : null}
+								</>
 							) : (
 								shown.map((r) => (
 									<Pressable
@@ -403,6 +416,18 @@ const styles = StyleSheet.create({
 	},
 	addText: { color: "#15151a", fontSize: 13, fontWeight: "800" },
 	empty: { color: C.faint, fontSize: 13, textAlign: "center", paddingVertical: 24 },
+	terminalBtn: {
+		flexDirection: "row",
+		alignItems: "center",
+		alignSelf: "center",
+		gap: 8,
+		paddingHorizontal: 14,
+		paddingVertical: 10,
+		borderRadius: 8,
+		borderWidth: 1,
+		borderColor: C.line,
+	},
+	terminalBtnText: { color: C.ink, fontSize: 13, fontWeight: "600" },
 	hint: {
 		color: C.faint,
 		fontSize: 11,

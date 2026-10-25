@@ -62,3 +62,17 @@ export async function resolveTaskPty(
 	if (!spawnIfNone) return null;
 	return launchOnce(api, task.id, () => api.pty.spawnShell({ taskId: task.id }));
 }
+
+/** The task's shell in its worktree, beside the agent: the newest live one (a
+ *  desktop Shell tab counts), else a new one. */
+export async function resolveTaskShell(
+	api: AteamApi,
+	taskId: string,
+	cancelled: () => boolean = () => false,
+): Promise<string | null> {
+	const live = await api.pty.listForTask(taskId);
+	if (cancelled()) return null;
+	const shell = live.find((s) => s.agentId === "shell");
+	if (shell) return shell.terminalId;
+	return launchOnce(api, `${taskId}:shell`, () => api.pty.spawnShell({ taskId }));
+}

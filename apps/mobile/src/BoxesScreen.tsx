@@ -90,7 +90,7 @@ export function BoxesScreen({
 			<ScrollView
 				contentContainerStyle={styles.content}
 				showsVerticalScrollIndicator={false}
-				// A tap on the list's background closes an open card, like iOS Mail.
+				// Scrolling the list closes an open card, like iOS Mail.
 				onScrollBeginDrag={() => onSwipeOpen(null)}
 			>
 				<View style={styles.column}>

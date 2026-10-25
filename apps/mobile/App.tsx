@@ -37,6 +37,7 @@ import {
 } from "react-native";
 import { AgentIcon } from "./src/AgentIcon";
 import { BoxesScreen } from "./src/BoxesScreen";
+import { BoxTerminalScreen } from "./src/BoxTerminalScreen";
 import { boxKey, removeBox, type SavedBox, touchBox } from "./src/boxes";
 import { Composer, type ComposerSubmit } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
@@ -578,6 +579,8 @@ function Shell({
 	openTaskFocus,
 	onCloseTask,
 	onExpandTask,
+	boxTerminalOpen,
+	onBoxTerminal,
 	onDismissSkew,
 	connGen,
 }: {
@@ -617,6 +620,9 @@ function Shell({
 	onCloseTask: () => void;
 	/** Expand a Mission Control tile: open its terminal ready to type. */
 	onExpandTask: (task: TaskDTO) => void;
+	/** Whether the box terminal (outside every project) fills the view under the navbar. */
+	boxTerminalOpen: boolean;
+	onBoxTerminal: (open: boolean) => void;
 	/** Hide the version banner for this box version (it returns when the version changes). */
 	onDismissSkew: () => void;
 	/** Keys the terminal so an auto-reattach remounts it onto the fresh api. */
@@ -629,6 +635,8 @@ function Shell({
 		shown.filter((t) => t.column !== "merged" && t.agentStatus !== null),
 		"status",
 	);
+	// A full terminal (a task's, or the box's) covers the tab's content.
+	const covered = openTask !== null || boxTerminalOpen;
 	return (
 		<KeyboardAvoidingView
 			style={styles.root}
@@ -645,12 +653,25 @@ function Shell({
 						onChange={(t) => {
 							// A tab tap from the full terminal leaves it, like the desktop.
 							onCloseTask();
+							onBoxTerminal(false);
 							onTab(t);
 						}}
 					/>
 				</View>
-				{/* Right-hand spacer keeps the tabs centered against the status dot. */}
-				<View style={styles.previewHit} />
+				{/* As wide as the status dot's slot, so the tabs stay centered. */}
+				<Pressable
+					style={styles.boxTerminalHit}
+					onPress={() => {
+						onCloseTask();
+						onBoxTerminal(!boxTerminalOpen);
+					}}
+					hitSlop={10}
+					accessibilityRole="button"
+					accessibilityLabel="Box terminal"
+					accessibilityState={{ selected: boxTerminalOpen }}
+				>
+					<Feather name="terminal" size={18} color={boxTerminalOpen ? C.ink : C.muted} />
+				</Pressable>
 			</View>
 
 			{/* The board still works on a skewed box, so this states the risk and offers
@@ -694,8 +715,18 @@ function Shell({
 					onClose={onCloseTask}
 					autoFocus={openTaskFocus}
 				/>
+			) : boxTerminalOpen ? (
+				<BoxTerminalScreen
+					key={`${connGen}:box`}
+					api={api}
+					onClose={() => onBoxTerminal(false)}
+					onUpdateBox={onUpdateBox}
+					updating={updating}
+					updateError={updateError}
+					boxAtLatest={boxAtLatest}
+				/>
 			) : null}
-			{!openTask && tab === "board" && (
+			{!covered && tab === "board" && (
 				<ScrollView
 					style={styles.board}
 					contentContainerStyle={styles.boardContent}
@@ -733,7 +764,7 @@ function Shell({
 					</View>
 				</ScrollView>
 			)}
-			{!openTask && tab === "home" && (
+			{!covered && tab === "home" && (
 				<HomeScreen
 					projects={projects}
 					selectedProjectId={selectedProjectId}
@@ -747,10 +778,10 @@ function Shell({
 					onNewLoop={onNewLoop}
 				/>
 			)}
-			{!openTask && tab === "mission" && (
+			{!covered && tab === "mission" && (
 				<MissionScreen api={api} tasks={missionTasks} onExpand={onExpandTask} />
 			)}
-			{!openTask && tab === "loops" && (
+			{!covered && tab === "loops" && (
 				<LoopsScreen
 					api={api}
 					loops={loops}
@@ -762,7 +793,7 @@ function Shell({
 				/>
 			)}
 
-			{!openTask && (tab === "board" || tab === "home") && (
+			{!covered && (tab === "board" || tab === "home") && (
 				<Composer agents={agents} busy={creating} onSubmit={onCreate} />
 			)}
 		</KeyboardAvoidingView>
@@ -833,6 +864,7 @@ export default function App() {
 	const [creating, setCreating] = useState(false);
 	const [openTask, setOpenTask] = useState<TaskDTO | null>(null);
 	const [openTaskFocus, setOpenTaskFocus] = useState(false);
+	const [boxTerminalOpen, setBoxTerminalOpen] = useState(false);
 	// The box version whose banner was dismissed; the banner comes back when the
 	// box reports a different one. Persisted per box.
 	const [dismissedSkew, setDismissedSkew] = useState<number | null>(null);
@@ -1023,11 +1055,17 @@ export default function App() {
 				// exactly how an update ends, so this is where the spinner stops.
 				setUpdatingBox(false);
 				setConnGen((g) => g + 1);
-				void c.api.agents.list().then(setAgents);
+				// A box switched to meanwhile has its own agents; this late list isn't them.
+				void c.api.agents.list().then((a) => {
+					if (conn.current === c) setAgents(a);
+				});
 				if (opts.navigate) {
 					setView("board");
 					setTab("home");
 					setEditingKey(null);
+					// Terminals belong to the box being left.
+					setOpenTask(null);
+					setBoxTerminalOpen(false);
 				}
 				const projs = await refresh();
 				// A box with no project has nothing to show, so a connect the user asked for
@@ -1270,11 +1308,14 @@ export default function App() {
 			retryTimer.current = null;
 		}
 		conn.current?.close();
-		conn.current = demoConnection();
+		const demo = demoConnection();
+		conn.current = demo;
 		setConnected(true);
 		setError(null);
 		setConnGen((g) => g + 1);
-		void conn.current.api.agents.list().then(setAgents);
+		void demo.api.agents.list().then((a) => {
+			if (conn.current === demo) setAgents(a);
+		});
 		setView("board");
 		setTab("home");
 		await refresh();
@@ -1451,6 +1492,11 @@ export default function App() {
 					selectProject(project.id);
 					void refresh();
 				}}
+				onOpenTerminal={() => {
+					setBrowserOpen(false);
+					setOpenTask(null);
+					setBoxTerminalOpen(true);
+				}}
 			/>
 		);
 	}
@@ -1565,6 +1611,8 @@ export default function App() {
 					setOpenTaskFocus(true);
 					setOpenTask(t);
 				}}
+				boxTerminalOpen={conn.current ? boxTerminalOpen : false}
+				onBoxTerminal={setBoxTerminalOpen}
 				onDismissSkew={() => {
 					if (skew === null) return;
 					setDismissedSkew(skew);
@@ -1630,7 +1678,7 @@ const styles = StyleSheet.create({
 	statusHit: { width: 44, alignItems: "flex-start", justifyContent: "center" },
 	statusDot: { width: 12, height: 12, borderRadius: 6 },
 	headerCenter: { flex: 1, alignItems: "center" },
-	previewHit: { width: 44, alignItems: "flex-end", justifyContent: "center" },
+	boxTerminalHit: { width: 44, alignItems: "flex-end", justifyContent: "center" },
 	projPill: {
 		flexDirection: "row",
 		alignItems: "center",

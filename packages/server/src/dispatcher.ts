@@ -226,6 +226,32 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		return { terminalId };
 	};
 
+	/** The box's own shell, in its home folder and outside every project: where a
+	 *  first visit signs into gh or a secrets CLI before any project exists. One per
+	 *  box. `box-shell` in the data dir names its terminal, so the next call, from any
+	 *  client and after any engine restart (the PTY daemon keeps it), reopens it
+	 *  rather than starting a second. No session row: those belong to a task. */
+	const openBoxShell = () => {
+		const record = join(services.userDataDir, "box-shell");
+		let kept = "";
+		try {
+			kept = readFileSync(record, "utf8").trim();
+		} catch {
+			/* none opened yet */
+		}
+		if (kept && services.pty.has(kept)) return { terminalId: kept };
+		const terminalId = randomUUID();
+		services.pty.spawn({
+			terminalId,
+			shell,
+			args: ["-l"],
+			cwd: homedir(),
+			env: { ...process.env },
+		});
+		writeFileSync(record, `${terminalId}\n`);
+		return { terminalId };
+	};
+
 	const handlers = {
 		// ---- projects ----
 		[CH.projectsIssues]: async (repository: string, refresh = false) => {
@@ -747,6 +773,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			spawnAgentInTask(services, engine.sendTaskUpdated, input),
 		[CH.ptySpawnShell]: async (input: { taskId: string }) =>
 			spawnShellInTask(requireTask(services, input.taskId)),
+		[CH.ptyBoxShell]: async () => openBoxShell(),
 		[CH.ptyKill]: async (terminalId: string) => {
 			// Stamp WHY before the exit lands: closing a tab is the one ending that
 			// means "I am done with this", so it must not come back as a restorable

@@ -75,7 +75,10 @@
 // v14: settings `engine.loopsPaused`, the switch that stops every loop. Nothing
 // on the wire changed shape, but a v13 engine stores the key and keeps running
 // its loops, so `loopsPause` below names such a box as not paused.
-export const PROTOCOL_VERSION = 14;
+// v15: pty:boxShell, the box's own shell outside every project (one per box,
+// reopened). A new method, so no gate: a v14 engine answers "Unknown method" and
+// the phone points at Update box instead.
+export const PROTOCOL_VERSION = 15;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -802,6 +805,7 @@ export const CH = {
 	editorInstall: "editor:install",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
+	ptyBoxShell: "pty:boxShell",
 	ptyWrite: "pty:write",
 	ptyResize: "pty:resize",
 	ptyKill: "pty:kill",
@@ -1024,6 +1028,9 @@ export interface AteamApi {
 			resumeSessionId?: string;
 		}): Promise<{ terminalId: string }>;
 		spawnShell(input: { taskId: string }): Promise<{ terminalId: string }>;
+		/** The box's own shell, in its home folder and outside every project: the one
+		 *  already running, else a new one. One per box; it runs until it exits. */
+		boxShell(): Promise<{ terminalId: string }>;
 		write(terminalId: string, data: string): void;
 		resize(terminalId: string, cols: number, rows: number): void;
 		kill(terminalId: string): void;

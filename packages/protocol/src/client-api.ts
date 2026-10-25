@@ -171,6 +171,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		pty: {
 			spawnAgent: (input) => call<{ terminalId: string }>(CH.ptySpawnAgent, [input]),
 			spawnShell: (input) => call<{ terminalId: string }>(CH.ptySpawnShell, [input]),
+			boxShell: () => call<{ terminalId: string }>(CH.ptyBoxShell, []),
 			// Fire-and-forget in the API; over RPC each still gets a (tiny) ack frame.
 			// shortcut: per-keystroke ptyWrite pays a round-trip ack. Fine over SSH
 			// (bytes are tiny); add a one-way "notify" frame if it ever shows latency.

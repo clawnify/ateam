@@ -112,6 +112,9 @@ const TRANSCRIPT =
 	"  theme immediately. Want me to open a PR?\r\n\r\n" +
 	"\x1b[1m>\x1b[0m \x1b[7m \x1b[0m\r\n";
 
+// What a shell shows instead: the Shell tab in the worktree, the box terminal in ~.
+const prompt = (dir: string) => `\x1b[32mdemo@box\x1b[0m:\x1b[34m${dir}\x1b[0m$ `;
+
 function sessionFor(taskId: string): SessionDTO {
 	const t = TASKS.find((x) => x.id === taskId);
 	return {
@@ -153,11 +156,21 @@ function handle(method: string, args: unknown[]): unknown {
 		case CH.ptyListForTask:
 			return [sessionFor(String(args[0]))];
 		case CH.ptySpawnShell:
-			return { terminalId: `demo-term-${(args[0] as { taskId: string }).taskId}` };
+			return { terminalId: `demo-shell-${(args[0] as { taskId: string }).taskId}` };
+		case CH.ptyBoxShell:
+			return { terminalId: "demo-box-shell" };
 		case CH.ptySpawnAgent:
 			return { terminalId: "demo-term-new" };
-		case CH.ptySnapshot:
-			return { data: TRANSCRIPT, seq: 0 } satisfies PtySnapshot;
+		case CH.ptySnapshot: {
+			const id = String(args[0]);
+			const data =
+				id === "demo-box-shell"
+					? prompt("~")
+					: id.startsWith("demo-shell-")
+						? prompt("~/ateam")
+						: TRANSCRIPT;
+			return { data, seq: 0 } satisfies PtySnapshot;
+		}
 		case CH.utilWriteImageBytes:
 			return "/tmp/ateam-attachments/demo.png";
 		case CH.fsListDir:
