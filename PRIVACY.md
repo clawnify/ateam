@@ -1,6 +1,6 @@
 # Privacy Policy — Ateam & Ateam Go
 
-**Effective date: October 24, 2026**
+**Effective date: October 25, 2026**
 
 Ateam (the desktop app) and Ateam Go (the iOS companion app) are local-first
 tools published by Clawnify. This policy describes what data the apps handle,
@@ -19,16 +19,19 @@ on our behalf.
 
 Ateam Go stores a small amount of data locally on your phone, and only there:
 
-- the host and port of the last machine you connected to,
+- the machines you have connected to, each with its host and port and, if you
+  have the app wake it through its provider (below), the provider you picked
+  and the machine's name there. Each one stays in the app's list until you
+  remove it,
 - your last-selected project,
 - your preview-port preference, and
-- if you have the app wake your machine through its provider (below), the
-  provider you picked, the machine's name there, and your API key for that
-  provider, which is kept in the iOS Keychain.
+- your API key for each provider you have the app wake a machine through, which
+  is kept in the iOS Keychain.
 
-This exists solely so the app reopens where you left off. Apart from the
-provider key and machine name, which go to that provider as described below, it
-never leaves the device, and deleting the app deletes it.
+This exists solely so the app reopens where you left off and you can switch
+machines without retyping them. Apart from the provider key and machine name,
+which go to that provider as described below, it never leaves the device, and
+deleting the app deletes it.
 
 The Ateam desktop app stores your projects, tasks, and settings in a local
 database on your computer. That data likewise never leaves your machine through
