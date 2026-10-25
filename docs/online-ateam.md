@@ -254,6 +254,10 @@ That writes a `systemd --user` unit carrying `ATEAM_WS_ADDR`, enables lingering 
 survives logout **and reboot**, and starts it. No sudo — enabling lingering for your
 own user is unprivileged.
 
+The address is also kept in `~/.ateam/ws-addr`, which every engine on the box reads,
+so a daemon started any other way (an `ateam attach` that found none running, say)
+still serves the phone, and later upgrades keep the address without re-exporting it.
+
 The address **must be the box's own `100.x`**: a wildcard bind (`0.0.0.0` / `::`) is
 refused and the daemon exits. This socket carries no auth of its own, exactly like
 the unix socket — the tailnet is the auth boundary.
@@ -406,7 +410,7 @@ The connection menu surfaces the real error inline. Common ones:
 | The agent picker is empty | The agent CLI isn't on the box's **login** PATH: `ssh <box> "bash -lc 'command -v claude'"`. |
 | **"<Agent> isn't installed here"** when a task or loop starts | Exactly what it says, checked against the login shell the launch uses. It is normal for an agent that *used* to work: an uninstall, or a PATH that moved under a reboot, takes it away from a task or loop that is still pinned to it. Install it from the composer's agent picker (**Install** next to the greyed-out agent, which runs the official installer on that environment), or repoint the task/loop at an agent the machine has. Installing anywhere else works too — a terminal, `brew` — and the app picks it up without a restart. A loop keeps its task across the failure, so nothing accumulates while it is broken. |
 | The iOS app won't connect (but the desktop does) | The daemon is down — the desktop restarts one over SSH just by connecting, so it hides this. Check `systemctl status ateam` (or `--user`, depending on the unit); if it was OOM-killed, `journalctl -u ateam \| grep oom` shows it. See [Keeping the daemon alive](#keeping-the-daemon-alive). |
-| The iOS app won't connect | In order: is Tailscale's VPN toggle on on the phone (green only proves the path, not that anything is listening); is a daemon running at all (`systemctl status ateam`, or `--user` for a user unit); does it say `also listening on ws://…` (if not it started before `ATEAM_WS_ADDR` was set — restart it); does `sudo ufw status` allow the **tailscale0 interface**, not just port 22. |
+| The iOS app won't connect | In order: is Tailscale's VPN toggle on on the phone (green only proves the path, not that anything is listening); is a daemon running at all (`systemctl status ateam`, or `--user` for a user unit); does it say `also listening on ws://…` (if not, it started before the address was set: check `~/.ateam/ws-addr` and restart it); does `sudo ufw status` allow the **tailscale0 interface**, not just port 22. |
 
 ## Notes
 

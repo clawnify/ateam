@@ -8,23 +8,26 @@
 # the dist in place. Files are only ever created or overwritten, never removed.
 #
 # Options:
-#   --service       also install a systemd unit so the daemon survives logout,
-#                   reboot and an OOM kill (required for the iOS app, which cannot
-#                   start a daemon on demand the way the desktop does over SSH).
-#                   A SYSTEM unit where passwordless sudo is available, a `--user`
-#                   one otherwise — only the former can stop the kernel from
-#                   picking the daemon over the agents it supervises.
+#   --service       also run the engine as a service, so it comes back after logout
+#                   and reboot (required for the iOS app, which cannot start a daemon
+#                   on demand the way the desktop does over SSH). Under systemd, a
+#                   SYSTEM unit where passwordless sudo is available, a `--user` one
+#                   otherwise: only the former can stop the kernel from picking the
+#                   daemon over the agents it supervises. On a Sprite (no systemd), a
+#                   Sprite service, which starts the engine when the Sprite boots.
+#                   A re-run on a box that already has either keeps it.
 #
 # Env knobs:
 #   ATEAM_VERSION   release tag to install (default: the latest release)
 #   ATEAM_TARBALL   URL *or* local path to an ateam-server.tar.gz, bypassing the
 #                   release lookup (dev/air-gapped installs)
-#   ATEAM_WS_ADDR   <tailnet-ip>:<port> for the iOS app's WebSocket listener,
-#                   baked into the unit by --service. On a re-run without it, an
-#                   address already in the unit is kept rather than dropped.
-#   ATEAM_WS_ADDR_DEFAULT  an address used only when neither ATEAM_WS_ADDR nor an
-#                   existing unit names one. The desktop passes the box's tailnet
-#                   IP this way, so an upgrade never replaces an address that works.
+#   ATEAM_WS_ADDR   <tailnet-ip>:<port> for the iOS app's WebSocket listener. Kept in
+#                   ~/.ateam/ws-addr, which every engine on the box reads however it
+#                   was started, and in the systemd unit by --service. On a re-run
+#                   without it, the address the box already uses is kept.
+#   ATEAM_WS_ADDR_DEFAULT  an address used only when neither ATEAM_WS_ADDR nor the
+#                   box already has one. The desktop passes the box's tailnet IP this
+#                   way, so an upgrade never replaces an address that works.
 #
 # Node: the dist externalizes two native modules — better-sqlite3 and the
 # prebuilt node-pty fork — so the box needs a Node whose ABI both ship binaries
@@ -37,6 +40,23 @@ APP_DIR="$HOME/ateam-app"
 BIN_DIR="$HOME/.local/bin"
 WANT_SERVICE=0
 if [ "${1:-}" = "--service" ]; then WANT_SERVICE=1; fi
+# The engine's data dir, resolved as cli.ts does; the phone's address is kept in it.
+DATA_DIR="${ATEAM_DATA_DIR:-$HOME/.ateam}"
+WS_ADDR_FILE="$DATA_DIR/ws-addr"
+SYS_UNIT=/etc/systemd/system/ateam.service
+USER_UNIT="$HOME/.config/systemd/user/ateam.service"
+SPRITE_ENV="$(command -v sprite-env 2>/dev/null || true)"
+if [ -z "$SPRITE_ENV" ] && [ -x /.sprite/bin/sprite-env ]; then SPRITE_ENV=/.sprite/bin/sprite-env; fi
+# What supervises the engine here. systemd only when it actually is the init: a
+# Sprite ships a systemctl binary with nothing behind it, so every systemctl call
+# there fails. /run/systemd/system is the marker sd_booted() checks.
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null; then
+	SVC_MGR=systemd
+elif [ -n "$SPRITE_ENV" ]; then
+	SVC_MGR=sprite
+else
+	SVC_MGR=none
+fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -50,6 +70,9 @@ die() {
 # The running engine daemon, identified by the one command line it always has:
 # APP_DIR is fixed, and the systemd unit execs that same launcher.
 DAEMON_PAT='ateam-app/cli\.js daemon'
+# The PTY daemon, which owns every live agent session (its children).
+PTY_PAT='ateam-app/daemon\.js'
+RPC_SOCK="${ATEAM_RPC_SOCK:-$HOME/.ateam/rpc.sock}"
 # `|| true` earns its place: pgrep exits 1 when nothing matches, and under
 # `pipefail` that becomes the substitution's status, which would trip `set -e` on
 # the ordinary "no daemon running" case.
@@ -195,6 +218,103 @@ if ! bash -lc 'command -v ateam' >/dev/null 2>&1; then
 fi
 info "login shell resolves: $(bash -lc 'command -v ateam')"
 
+# ------------------------------------------------------- phone address ------
+
+# Upgrading IS re-running this script, and a phone user who doesn't re-export
+# ATEAM_WS_ADDR must not lose the phone's only way in. An explicit ATEAM_WS_ADDR
+# wins; else whatever the box already serves the phone on: a systemd unit of either
+# scope (so a user to system upgrade keeps it), the Sprite's service, the address
+# file. Only then the caller's ATEAM_WS_ADDR_DEFAULT.
+#
+# Written to the file BEFORE the old daemon stops, so the one the verify step
+# starts, and any later `ateam attach` spawn, serves the phone too. An address kept
+# only in a service's environment was lost by every daemon started any other way.
+WS_ADDR="${ATEAM_WS_ADDR:-}"
+WS_FROM="ATEAM_WS_ADDR"
+if [ -z "$WS_ADDR" ]; then
+	for u in "$SYS_UNIT" "$USER_UNIT"; do
+		[ -f "$u" ] || continue
+		WS_ADDR="$(sed -n 's/^Environment=ATEAM_WS_ADDR=//p' "$u" | tail -1)"
+		if [ -n "$WS_ADDR" ]; then
+			WS_FROM="$u"
+			break
+		fi
+	done
+fi
+if [ -z "$WS_ADDR" ] && [ "$SVC_MGR" = sprite ]; then
+	WS_ADDR="$("$SPRITE_ENV" services get ateam 2>/dev/null | "$NODE" -e '
+		let s = "";
+		process.stdin.on("data", (d) => (s += d)).on("end", () => {
+			try { process.stdout.write(JSON.parse(s).env?.ATEAM_WS_ADDR ?? ""); } catch {}
+		});' || true)"
+	if [ -n "$WS_ADDR" ]; then WS_FROM="the Sprite's ateam service"; fi
+fi
+if [ -z "$WS_ADDR" ] && [ -f "$WS_ADDR_FILE" ]; then
+	WS_ADDR="$(head -1 "$WS_ADDR_FILE" | tr -d '[:space:]')"
+	if [ -n "$WS_ADDR" ]; then WS_FROM="$WS_ADDR_FILE"; fi
+fi
+if [ -z "$WS_ADDR" ] && [ -n "${ATEAM_WS_ADDR_DEFAULT:-}" ]; then
+	WS_ADDR="$ATEAM_WS_ADDR_DEFAULT"
+	WS_FROM="ATEAM_WS_ADDR_DEFAULT"
+fi
+if [ -n "$WS_ADDR" ]; then
+	mkdir -p "$DATA_DIR"
+	printf '%s\n' "$WS_ADDR" >"$WS_ADDR_FILE"
+	info "phone listener: $WS_ADDR (from $WS_FROM), kept in $WS_ADDR_FILE"
+fi
+
+# ------------------------------------------------------ Sprite service ------
+
+# On a Sprite the service must own the engine and must never be restarted.
+# Measured on a Sprite: sprite-env restarts a service whose process exits (at once
+# after exit 0, with backoff otherwise), and stopping, restarting or deleting a
+# service, or restarting it after an exit, kills every process it started, setsid
+# or not. The PTY daemon holding every live agent is one of those. So the service
+# runs a keeper loop that never exits: when the engine stops (this upgrade, or a
+# crash) the loop starts it again from the installed dist, and the PTY daemon is
+# untouched. A quick exit means another engine owns the socket, so it waits longer.
+# An older service that execs the engine directly is moved to the loop, but only
+# while no agent runs, since moving it means deleting it. No commas: sprite-env
+# splits --args on them.
+KEEPER=': ateam-keeper; while :; do s=$SECONDS; ateam daemon; if [ $((SECONDS - s)) -lt 10 ]; then sleep 30; else sleep 1; fi; done'
+SPRITE_PLAN=""
+# "<exists> <is the keeper> <pid sprite-env has for it, or ->", each 0/1.
+sprite_service() {
+	"$SPRITE_ENV" services get ateam 2>/dev/null | "$NODE" -e '
+		let s = "";
+		process.stdin.on("data", (d) => (s += d)).on("end", () => {
+			try {
+				const j = JSON.parse(s);
+				const keeper = (j.args || []).join(" ").includes("ateam-keeper");
+				process.stdout.write(`1 ${keeper ? 1 : 0} ${j.state?.pid ?? "-"}`);
+			} catch {
+				process.stdout.write("0 0 -");
+			}
+		});' || echo "0 0 -"
+}
+if [ "$SVC_MGR" = sprite ]; then
+	read -r SVC_EXISTS SVC_KEEPER SVC_PID <<<"$(sprite_service)"
+	if [ "$WANT_SERVICE" = 0 ] && [ "$SVC_EXISTS" = 1 ]; then WANT_SERVICE=1; fi
+	# A live agent is a child of a PTY daemon; check every one there is.
+	SESSIONS=""
+	for p in $(pgrep -f "$PTY_PAT" 2>/dev/null || true); do
+		if [ -n "$(pgrep -P "$p" 2>/dev/null | head -1 || true)" ]; then SESSIONS=1; fi
+	done
+	if [ "$SVC_EXISTS" = 1 ] && [ "$SVC_KEEPER" = 1 ]; then
+		SPRITE_PLAN=keeper
+	elif [ "$SVC_EXISTS" = 1 ] && [ -z "$SESSIONS" ]; then
+		SPRITE_PLAN=migrate
+	elif [ "$SVC_EXISTS" = 1 ] && [ "$SVC_PID" != - ] && kill -0 "$SVC_PID" 2>/dev/null; then
+		die "agents are running under this Sprite's ateam service, and restarting its engine would end them. Re-run this installer when no agent is running."
+	elif [ "$SVC_EXISTS" = 1 ]; then
+		# sprite-env lost track of the service's process (its pid is gone), so stopping
+		# the engine below triggers no restart and the agents keep running.
+		SPRITE_PLAN=outside
+	elif [ "$WANT_SERVICE" = 1 ]; then
+		SPRITE_PLAN=create
+	fi
+fi
+
 # ------------------------------------------------------------- restart ------
 
 step "[6/7] stop the daemon still running the old dist"
@@ -211,7 +331,8 @@ step "[6/7] stop the daemon still running the old dist"
 #
 # Stopped rather than restarted, because nothing needs to own the socket yet: the
 # verify below spawns one from the NEW dist (which is what `ateam attach` does
-# when none is live), and --service hands that to systemd right after.
+# when none is live), and the service step hands that to systemd right after. A
+# Sprite's service is deliberately left alone; the service step says why.
 OLD_PID="$(daemon_pid)"
 if [ -n "$OLD_PID" ]; then
 	pkill -f "$DAEMON_PAT" 2>/dev/null || true
@@ -221,10 +342,34 @@ if [ -n "$OLD_PID" ]; then
 	# systemd counts as a clean exit, so `Restart=on-failure` leaves the unit stopped
 	# until the service step below restarts it. A run that dies in between leaves the
 	# box served by whatever engine starts next (the verify step's, or the next
-	# `ateam attach`), outside systemd and without the phone's listener. Whatever
-	# starts from here on runs the dist installed above; the verify below asserts it.
+	# `ateam attach`), outside systemd but still on the phone's address, from the
+	# file written above. Whatever starts from here on runs the dist installed
+	# above; the verify below asserts it.
 else
 	info "no daemon was running"
+fi
+
+if [ "$SPRITE_PLAN" = migrate ]; then
+	step "move the Sprite service to the keeper loop (no agent is running)"
+	"$SPRITE_ENV" services delete ateam >/dev/null 2>&1 || true
+	sleep 1
+fi
+if [ "$SPRITE_PLAN" = migrate ] || [ "$SPRITE_PLAN" = create ]; then
+	"$SPRITE_ENV" services create ateam --cmd bash --args "-lc,$KEEPER" --no-stream >/dev/null
+	info "the ateam service now keeps the engine running, and starts it when the Sprite boots"
+fi
+# Under the keeper the new engine comes from the loop. Wait for it to own the
+# socket, or the handshake's `ateam attach` would spawn a second one outside it.
+if [ "$SPRITE_PLAN" = keeper ] || [ "$SPRITE_PLAN" = migrate ] || [ "$SPRITE_PLAN" = create ]; then
+	KEPT=""
+	for _ in $(seq 1 40); do
+		if ss -lx 2>/dev/null | grep -F "$RPC_SOCK" >/dev/null && [ -n "$(daemon_pid)" ]; then
+			KEPT=1
+			break
+		fi
+		sleep 1
+	done
+	if [ -z "$KEPT" ]; then die "the Sprite's keeper loop didn't bring the engine up: sprite-env services get ateam"; fi
 fi
 
 # -------------------------------------------------------------- verify ------
@@ -275,14 +420,24 @@ fi
 # Opt-in (`install.sh --service`). Without it the daemon is started on demand by
 # the first `ateam attach`, which is enough for the desktop but NOT for the phone:
 # the WebSocket only exists once a daemon is already running, and nothing brings
-# one back after a reboot.
-if [ "$WANT_SERVICE" = 1 ]; then
-	if ! command -v systemctl >/dev/null; then
-		die "no systemd on this box — start 'ateam daemon' from your own init instead"
-	fi
+# one back after a reboot. A box that already runs the engine as a service keeps
+# it on a plain re-run, instead of being left on the verify step's daemon outside
+# it (how PR #283 found boxes).
+if [ "$WANT_SERVICE" = 0 ] && [ "$SVC_MGR" = systemd ] && { [ -f "$SYS_UNIT" ] || [ -f "$USER_UNIT" ]; }; then
+	WANT_SERVICE=1
+fi
 
-	SYS_UNIT=/etc/systemd/system/ateam.service
-	USER_UNIT="$HOME/.config/systemd/user/ateam.service"
+if [ "$SVC_MGR" = sprite ]; then
+	# Settled before the old daemon stopped: see "Sprite service" above.
+	if [ "$SPRITE_PLAN" = outside ]; then
+		info "NOTE: this Sprite's ateam service predates the keeper loop, and agents are"
+		info "running, so it was left alone. Re-run this installer when no agent is running"
+		info "to move it; until then an engine crash restarts the service and ends them."
+	fi
+elif [ "$WANT_SERVICE" = 1 ]; then
+	if [ "$SVC_MGR" != systemd ]; then
+		die "no systemd (and not a Sprite) on this box: start 'ateam daemon' from your own init instead"
+	fi
 
 	# A SYSTEM unit whenever we can escalate without a password, a user unit otherwise.
 	# A user unit cannot protect this daemon, for three reasons that only bite under
@@ -313,28 +468,8 @@ if [ "$WANT_SERVICE" = 1 ]; then
 		mkdir -p "$(dirname "$UNIT")"
 	fi
 
-	# Upgrading IS re-running this script, and a phone user who doesn't re-export
-	# ATEAM_WS_ADDR would otherwise get a rewritten unit without it — silently
-	# removing the phone's only way in, with the daemon still apparently healthy.
-	# An explicit ATEAM_WS_ADDR always wins; otherwise inherit whichever unit has
-	# one — including the OTHER scope's, so a user→system upgrade keeps the address.
-	# The caller's default (ATEAM_WS_ADDR_DEFAULT) applies only when neither an
-	# explicit address nor a unit has one.
-	WS_ADDR="${ATEAM_WS_ADDR:-}"
-	if [ -z "$WS_ADDR" ]; then
-		for u in "$UNIT" "$SYS_UNIT" "$USER_UNIT"; do
-			[ -f "$u" ] || continue
-			WS_ADDR="$(sed -n 's/^Environment=ATEAM_WS_ADDR=//p' "$u" | tail -1)"
-			if [ -n "$WS_ADDR" ]; then
-				info "keeping ATEAM_WS_ADDR=$WS_ADDR from $u"
-				break
-			fi
-		done
-	fi
-	if [ -z "$WS_ADDR" ] && [ -n "${ATEAM_WS_ADDR_DEFAULT:-}" ]; then
-		WS_ADDR="$ATEAM_WS_ADDR_DEFAULT"
-		info "setting ATEAM_WS_ADDR=$WS_ADDR"
-	fi
+	# WS_ADDR was resolved before the old daemon stopped (see "phone address"), so
+	# the unit keeps carrying the address the box already used.
 
 	emit_unit() {
 		echo '[Unit]'
@@ -459,6 +594,29 @@ if [ "$WANT_SERVICE" = 1 ]; then
 		info "systemd user manager, which only a new login restarts. The desktop"
 		info "recovers on its own over SSH; the iOS app cannot. Grant sudo and"
 		info "re-run this installer to upgrade it to a system service."
+	fi
+fi
+
+# ----------------------------------------------------------- phone port -----
+
+# Checked rather than assumed: a daemon that came up without the address answered
+# every handshake above and still left the phone dark. A warning, not a failure:
+# the listener keeps retrying until Tailscale has the address, so a box whose
+# tailnet is still coming up gets there on its own. grep without -q reads all of
+# its input, so `pipefail` can't turn a match into a SIGPIPE'd failure.
+if [ -n "$WS_ADDR" ] && command -v ss >/dev/null; then
+	LISTENING=""
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		if ss -ltn 2>/dev/null | awk 'NR > 1 { print $4 }' | grep -xF "$WS_ADDR" >/dev/null; then
+			LISTENING=1
+			break
+		fi
+		sleep 1
+	done
+	if [ -n "$LISTENING" ]; then
+		info "phone listener up on $WS_ADDR"
+	else
+		info "WARNING: nothing listens on $WS_ADDR yet, so the phone can't connect (is Tailscale up?)"
 	fi
 fi
 

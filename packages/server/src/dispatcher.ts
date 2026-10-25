@@ -586,7 +586,8 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		//             that inheritance (not this) is what usually keeps the phone's
 		//             listener alive; this only covers a box with no unit written yet.
 		//   --service because a box reachable by phone is one under systemd; that is
-		//             what restarts it after an OOM kill.
+		//             what restarts it after an OOM kill. On a Sprite the installer
+		//             keeps its Sprite service instead, without restarting it.
 		[CH.systemUpdate]: async (): Promise<BoxUpdateStarted> => {
 			// Same expression cli.ts resolves the socket with, so the log lands beside the
 			// daemon's own even when ATEAM_RPC_SOCK moves it off the default path.
