@@ -178,6 +178,9 @@ boxes on 2026-10-21:
 | The same job on a box hibernated with `boxd machine hibernate` | Not woken; the job fired once, late, on the next wake |
 | A Node timer due while the box slept | Fires the moment the box wakes (the clock keeps counting) |
 | A process running at hibernation | Still running after the wake |
+| `auto-suspend.timeout 60` with the hibernate timer off (2026-10-25) | Suspended (`standby`) 70s after the last connection: a hold that only stops hibernation doesn't stop this |
+| Both timers off, the engine's hold (2026-10-25) | Still running 3.5 minutes after the last connection |
+| Suspend off, hibernate 60s, the engine's release (2026-10-25) | Hibernated 76s after the last connection |
 
 When to sleep is decided by the engine for every provider
 (`packages/server/src/sleep/control.ts`); this is how its boxd driver
@@ -185,6 +188,10 @@ When to sleep is decided by the engine for every provider
 box hibernated on command is not woken for its jobs. It steers boxd's own timer
 instead:
 
+- **Both** turn boxd's other idle timer off (`auto-suspend.timeout 0`). It's off on
+  a new machine, but when on it suspends a held box under a working agent, and a
+  released one would suspend instead of hibernating, which is not the state loops
+  were measured waking from.
 - **Hold** (`auto-hibernate.timeout 0`) while an agent is working, for the idle
   window after, and for a fresh window whenever a client attaches. An idle
   connection is not traffic boxd counts, so without this a box woken to start a
@@ -241,6 +248,12 @@ Two more things measured along the way:
   database silently mis-route git operations and hide one fork's tasks. Delete it
   before `boxd snapshots save`, and log `gh` out first — forks inherit credentials
   too.
+- **Every machine has a public HTTPS route.** `https://<name>.boxd.sh` forwards to
+  port `auto` by default, which serves the first of 80, 443, 8080, 8000, 3000 or
+  5173 that is listening: behind boxd's bot protection, but with no login. So an
+  agent's dev server is on the internet the moment it starts. Ateam doesn't use the
+  route (previews go over Tailscale), so point it at a port nothing uses:
+  `boxd machine proxy set-port --vm <name> --port 1` (`--port auto` undoes it).
 - **A hibernated box looks like a Tailscale failure.** An idle machine hibernates by
   default and its tailnet node goes `offline, last seen …`; the node is fine and its
   key hasn't expired — there's simply no host running. `boxd machine wake <vm>` brings

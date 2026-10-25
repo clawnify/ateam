@@ -144,20 +144,24 @@ describe("sleep control on boxd", () => {
 		}
 	}
 
+	// boxd's other idle timer, off on every hold and release: on, it suspends a held box.
+	const SUSPEND_OFF = "boxd machine config set auto-suspend.timeout 0";
+
 	it("holds at start, releases through boxd's own timer after the idle hour", async () => {
 		const h = harness();
 		const { stop, tick } = await h.start();
-		expect(h.calls).toEqual(["boxd machine config set auto-hibernate.timeout 0"]);
+		expect(h.calls).toEqual([SUSPEND_OFF, "boxd machine config set auto-hibernate.timeout 0"]);
 		await minutes(h, tick, 60);
 		// Never `boxd machine hibernate`: a box hibernated on command is not woken for jobs.
-		expect(h.calls.slice(1)).toEqual([
+		expect(h.calls.slice(2)).toEqual([
 			"boxd machine config set idle.ignore-outbound on",
+			SUSPEND_OFF,
 			`boxd machine config set auto-hibernate.timeout ${RELEASE_S}`,
 		]);
 		// Work again: held, once.
 		h.setWorking(true);
 		await minutes(h, tick, 3);
-		expect(h.calls.slice(3)).toEqual(["boxd machine config set auto-hibernate.timeout 0"]);
+		expect(h.calls.slice(5)).toEqual([SUSPEND_OFF, "boxd machine config set auto-hibernate.timeout 0"]);
 		stop();
 	});
 
@@ -187,7 +191,7 @@ describe("sleep control on boxd", () => {
 		const h = harness({ nextLoopAt: at });
 		const { stop, tick } = await h.start();
 		await minutes(h, tick, 60);
-		expect(h.calls.slice(1, 2)).toEqual([`run ${h.wakeScriptPath}`]);
+		expect(h.calls.slice(2, 3)).toEqual([`run ${h.wakeScriptPath}`]);
 		expect(readFileSync(h.wakeScriptPath, "utf8")).toBe(loopWakeScript(at));
 		expect(h.calls.at(-1)).toBe(`boxd machine config set auto-hibernate.timeout ${RELEASE_S}`);
 		stop();
@@ -197,7 +201,7 @@ describe("sleep control on boxd", () => {
 		const h = harness({ run: false, nextLoopAt: 5 * HOUR });
 		const { stop, tick } = await h.start();
 		await minutes(h, tick, 120);
-		expect(h.calls).toEqual(["boxd machine config set auto-hibernate.timeout 0"]);
+		expect(h.calls).toEqual([SUSPEND_OFF, "boxd machine config set auto-hibernate.timeout 0"]);
 		stop();
 	});
 });
