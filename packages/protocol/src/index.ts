@@ -395,6 +395,12 @@ export interface ClientSettings {
 	 * environment is selected. `client.*` never syncs either way.
 	 */
 	syncEngineSettingsToBoxes: boolean;
+	/**
+	 * With an OpenRouter key, Jev decides which of the grammar check's issues
+	 * are real mistakes and hides the rest. Sends the draft prompt to
+	 * OpenRouter while you type. No key: every issue shows, as with it off.
+	 */
+	filterGrammarWithJev: boolean;
 }
 export interface AteamSettings {
 	version: number;

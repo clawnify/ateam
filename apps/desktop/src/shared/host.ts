@@ -5,6 +5,15 @@
 // free), so both the node (main/preload) and web (renderer) tsconfigs resolve it.
 import type { ConnectionDTO, ProjectDTO, SystemInfo } from "@ateam/protocol";
 
+/** One grammar issue as the judge needs it (mirrors @ateam/server's GrammarJudgeIssue). */
+export interface GrammarJudgeIssue {
+	start: number;
+	end: number;
+	problem: string;
+	message: string;
+	suggestions: string[];
+}
+
 /** Renderer↔main channels for listing/choosing/observing the connected engines. */
 export const HOST_CH = {
 	list: "host:list",
@@ -35,6 +44,8 @@ export const HOST_CH = {
 	saveSecrets: "host:saveSecrets",
 	/** The provider's live catalog (regions + sizes) for the given/saved token. */
 	providerOptions: "host:providerOptions",
+	/** Which of the grammar check's issues to show (see AteamHost.judgeGrammar). */
+	judgeGrammar: "host:judgeGrammar",
 	evtConnectionsChanged: "evt:host:connections",
 	/** Streamed installer output (stdout+stderr) during host:install. */
 	evtInstallLog: "evt:host:install-log",
@@ -170,6 +181,13 @@ export interface AteamHost {
 	saveSecrets(patch: { hetznerToken?: string; tailscaleAuthKey?: string }): Promise<SecretsStatus>;
 	/** The provider's real regions + sizes for the given token (or the saved one). */
 	providerOptions(token?: string): Promise<ProviderOptions>;
+	/**
+	 * Per issue, whether to show it, decided by Jev with this Mac's OpenRouter
+	 * key (never sent to the renderer). Null when it won't or couldn't decide:
+	 * no key, `client.filterGrammarWithJev` off, or no answer in time. The
+	 * renderer then shows every issue.
+	 */
+	judgeGrammar(draft: string, issues: GrammarJudgeIssue[]): Promise<boolean[] | null>;
 	/** Fires with the full connected set whenever an engine is added or removed. */
 	onConnectionsChanged(cb: (connected: HostStatus[]) => void): () => void;
 	/** Subscribe to installer output during install()/createBox(); returns an unsubscribe. */

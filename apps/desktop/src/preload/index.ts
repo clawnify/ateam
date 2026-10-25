@@ -166,6 +166,7 @@ const host: AteamHost = {
 	secretsStatus: () => ipcRenderer.invoke(HOST_CH.secretsStatus),
 	saveSecrets: (patch) => ipcRenderer.invoke(HOST_CH.saveSecrets, patch),
 	providerOptions: (token) => ipcRenderer.invoke(HOST_CH.providerOptions, token),
+	judgeGrammar: (draft, issues) => ipcRenderer.invoke(HOST_CH.judgeGrammar, draft, issues),
 	onConnectionsChanged: (cb: (connected: HostStatus[]) => void) => {
 		const handler = (_: unknown, connected: HostStatus[]) => cb(connected);
 		ipcRenderer.on(HOST_CH.evtConnectionsChanged, handler);

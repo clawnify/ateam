@@ -20,6 +20,8 @@ export type { CallContext, Dispatcher } from "./dispatcher";
 export { createDispatcher } from "./dispatcher";
 export type { Engine, EngineOptions } from "./engine";
 export { createEngine } from "./engine";
+export type { GrammarJudgeIssue, GrammarVerdict } from "./grammar-jev";
+export { judgeGrammar } from "./grammar-jev";
 export type { BoxProvider, CreatedServer, CreateServerInput, ProviderOptions } from "./provision";
 export {
 	buildCloudInit,

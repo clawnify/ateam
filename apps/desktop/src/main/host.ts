@@ -28,6 +28,7 @@ import {
 	wsClientTransport,
 } from "@ateam/protocol";
 import {
+	judgeGrammar as askJevAboutGrammar,
 	buildCloudInit,
 	type ConnectionDTO,
 	type Engine,
@@ -50,6 +51,7 @@ import {
 	type BoxReadiness,
 	type CreateBoxSpec,
 	type CreateProgressEvent,
+	type GrammarJudgeIssue,
 	HOST_CH,
 	type HostStatus,
 	type InstallAgentResult,
@@ -167,6 +169,8 @@ export interface Host {
 	saveSecrets(patch: { hetznerToken?: string; tailscaleAuthKey?: string }): SecretsStatus;
 	/** The provider's real regions + sizes for the given token (or the saved one). */
 	providerOptions(token?: string): Promise<ProviderOptions>;
+	/** Which grammar issues to show, by Jev with this Mac's key; null = show them all. */
+	judgeGrammar(draft: string, issues: GrammarJudgeIssue[]): Promise<boolean[] | null>;
 }
 
 export interface HostDeps {
@@ -645,6 +649,19 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return hetznerProvider.fetchOptions(t);
 	}
 
+	// This Mac's key and setting, whichever engine the terminal belongs to: the
+	// grammar check runs in this window, not on the box.
+	async function judgeGrammar(
+		draft: string,
+		issues: GrammarJudgeIssue[],
+	): Promise<boolean[] | null> {
+		if (!readSettings().settings.client.filterGrammarWithJev) return null;
+		const apiKey = openRouterApiKey();
+		if (!apiKey) return null;
+		const verdicts = await askJevAboutGrammar({ apiKey, draft, issues });
+		return verdicts?.map((v) => v.keep) ?? null;
+	}
+
 	/** A DNS-label alias from a free-text box name (also the Tailscale hostname). */
 	function sanitizeName(raw: string): string {
 		const s = raw
@@ -878,6 +895,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		secretsStatus,
 		saveSecrets,
 		providerOptions,
+		judgeGrammar,
 	};
 }
 
@@ -908,4 +926,7 @@ export function registerHostIpc(host: Host): void {
 		(_e, patch: { hetznerToken?: string; tailscaleAuthKey?: string }) => host.saveSecrets(patch),
 	);
 	ipcMain.handle(HOST_CH.providerOptions, (_e, token?: string) => host.providerOptions(token));
+	ipcMain.handle(HOST_CH.judgeGrammar, (_e, draft: string, issues: GrammarJudgeIssue[]) =>
+		host.judgeGrammar(draft, issues),
+	);
 }

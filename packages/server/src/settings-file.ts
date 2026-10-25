@@ -30,6 +30,7 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 	client: {
 		autoDownloadUpdates: false,
 		syncEngineSettingsToBoxes: true,
+		filterGrammarWithJev: true,
 	},
 	engine: {
 		defaultAgentId: "claude",
