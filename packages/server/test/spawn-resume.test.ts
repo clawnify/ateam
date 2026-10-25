@@ -126,6 +126,14 @@ describe("spawnAgentInTask on resume", () => {
 		const task = repo.getTask(db, taskId);
 		expect(task).toMatchObject({ column: "running", agentStatus: "running", lastEventAt: T0 });
 	});
+
+	it("a resumed session sits idle, so it doesn't hold its box awake; a prompted one runs", async () => {
+		// The box's sleep control reads session rows (Engine.isWorking): a resume
+		// filed as running kept the box up for as long as the idle pane lived.
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", resume: true });
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", prompt: "fix the bug" });
+		expect(repo.listOpenSessions(db).map((s) => s.status)).toEqual(["idle", "running"]);
+	});
 });
 
 // OpenCode files its conversations by project, and every git worktree of a repo

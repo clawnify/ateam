@@ -113,6 +113,8 @@ export const repo = {
 			pid?: number;
 			/** The harness's own conversation id, when we know it. */
 			agentSessionId?: string | null;
+			/** "running" for a launch that starts work; omitted, the row starts idle. */
+			status?: (typeof agentSessions.$inferInsert)["status"];
 		},
 	) {
 		return db.insert(agentSessions).values(s).returning().get();
