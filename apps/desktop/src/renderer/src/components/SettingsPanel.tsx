@@ -225,6 +225,20 @@ const ROWS: Row[] = [
 			"When an agent finishes a turn, Jev, a small decision model on OpenRouter, reads its last message and moves the card to Needs you if the agent is waiting on you. Without a key, a finished turn always goes to Review. The agent's last message and your last reply are sent to OpenRouter.",
 		control: (_s, { credentials, saveKey }) => <KeyField status={credentials} onSave={saveKey} />,
 	},
+	{
+		id: "client.filterGrammarWithJev",
+		section: "ai",
+		title: "Filter grammar suggestions",
+		description:
+			"With an OpenRouter key, Jev keeps only the grammar suggestions that fix real mistakes and hides slang, names and jargon. Your draft prompt is sent to OpenRouter as you type. Without a key, every suggestion shows.",
+		control: (s, { patch }) => (
+			<Switch
+				checked={s.client.filterGrammarWithJev}
+				label="Filter grammar suggestions"
+				onChange={(v) => patch({ client: { filterGrammarWithJev: v } })}
+			/>
+		),
+	},
 ];
 
 /**

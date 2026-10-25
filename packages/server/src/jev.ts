@@ -134,11 +134,43 @@ export interface ClassifyTurnInput {
 export async function classifyTurn(input: ClassifyTurnInput): Promise<TurnVerdict | null> {
 	const finalMessage = input.finalMessage.trim();
 	if (!input.apiKey || !finalMessage) return null;
+	const legs = await askJev({
+		apiKey: input.apiKey,
+		model: JEV_MODEL,
+		state: {
+			users_most_recent_message:
+				input.userMessage?.trim().slice(0, MAX_PROMPT) || "(no recent user message)",
+			agents_final_message: finalMessage.slice(-MAX_MESSAGE),
+		},
+		questions: QUESTIONS,
+		timeoutMs: TIMEOUT_MS,
+		signal: input.signal,
+	});
+	return legs ? decideStep(legs) : null;
+}
 
+export interface AskJevInput<Q extends Record<string, unknown>> {
+	apiKey: string;
+	model: string;
+	state: Record<string, string>;
+	/** Yes/no ("noul") questions, keyed by the id each answer comes back under. */
+	questions: Q;
+	timeoutMs: number;
+	signal?: AbortSignal;
+}
+
+/**
+ * One request to Jev: each yes/no question's probability, keyed by question
+ * id. Null on any failure (network, timeout, a status that is not 200, an
+ * answer missing), so every caller keeps its own keyless path.
+ */
+export async function askJev<Q extends Record<string, unknown>>(
+	input: AskJevInput<Q>,
+): Promise<Record<keyof Q, number> | null> {
 	const ac = new AbortController();
 	const onAbort = () => ac.abort();
 	input.signal?.addEventListener("abort", onAbort, { once: true });
-	const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
+	const timer = setTimeout(() => ac.abort(), input.timeoutMs);
 	try {
 		const res = await fetch(DECISIONS_URL, {
 			method: "POST",
@@ -150,27 +182,19 @@ export async function classifyTurn(input: ClassifyTurnInput): Promise<TurnVerdic
 				"HTTP-Referer": "https://github.com/clawnify/ateam",
 				"X-Title": "Ateam",
 			},
-			body: JSON.stringify({
-				model: JEV_MODEL,
-				state: {
-					users_most_recent_message:
-						input.userMessage?.trim().slice(0, MAX_PROMPT) || "(no recent user message)",
-					agents_final_message: finalMessage.slice(-MAX_MESSAGE),
-				},
-				questions: QUESTIONS,
-			}),
+			body: JSON.stringify({ model: input.model, state: input.state, questions: input.questions }),
 		});
 		if (!res.ok) return null;
 		const body = (await res.json()) as { answers?: Record<string, { noul?: unknown }> };
-		const legs = {} as JevLegs;
-		for (const id of Object.keys(QUESTIONS) as (keyof typeof QUESTIONS)[]) {
+		const answers = {} as Record<keyof Q, number>;
+		for (const id of Object.keys(input.questions) as (keyof Q & string)[]) {
 			const p = body.answers?.[id]?.noul;
 			// Answers are keyed by question id; a missing one is an incomplete
 			// verdict, never read as 0.
 			if (typeof p !== "number") return null;
-			legs[id] = p;
+			answers[id] = p;
 		}
-		return decideStep(legs);
+		return answers;
 	} catch {
 		return null;
 	} finally {
