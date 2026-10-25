@@ -101,6 +101,16 @@ function mapEventToStatus(eventType: string): AgentStatus {
 	return "running";
 }
 
+/**
+ * A session's status after `eventType`. A Start is the process coming up (a
+ * `--resume`, or compaction mid-turn), not work, so the session keeps what it
+ * was. isWorking() reads this: a resume written as "running" held its box awake
+ * for as long as the idle pane lived, because only a Stop clears it.
+ */
+export function sessionStatusAfter(eventType: string, current: AgentStatus): AgentStatus {
+	return eventType === "Start" ? current : mapEventToStatus(eventType);
+}
+
 function mapEventToColumn(eventType: string): KanbanColumn {
 	if (eventType === "PermissionRequest") return "needs_attention";
 	if (eventType === "Stop") return "review";
@@ -360,7 +370,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			if (taskId) sendTaskUpdated(taskId);
 			return;
 		}
-		const status = mapEventToStatus(e.eventType);
+		const status = sessionStatusAfter(e.eventType, session.status);
 		repo.updateSession(db, session.id, {
 			status,
 			lastEventAt: Date.now(),

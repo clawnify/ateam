@@ -221,12 +221,17 @@ async function launchAgent(
 	// there would be a lie the restore then acts on.
 	const mintsId = Boolean(agent.sessionIdFlag) && !input.resume && !input.agentMode;
 	const agentSessionId = resumeSessionId ?? (mintsId ? terminalId : null);
+	const isResume = Boolean(input.resume || input.resumeSessionId);
 	repo.createSession(services.db, {
 		taskId: task.id,
 		agentId: agent.id,
 		terminalId,
 		agentSessionId,
 		cwd: task.worktreePath,
+		// A launch with something to do is work from the moment it spawns, which is
+		// what lets its box stay awake for it (isWorking). A resume, or a pane with
+		// nothing to do, sits idle at the prompt until someone types.
+		status: !isResume && (input.prompt?.trim() || input.files?.length) ? "running" : "idle",
 	});
 	// The tab this one is picking up is no longer waiting to be restored.
 	if (resumeSessionId) {
@@ -311,7 +316,6 @@ async function launchAgent(
 	// "running" here would file every task you merely looked at as in-flight,
 	// and the stall rule would later demote it as silent work. Leave the card
 	// where it was; only a launch that carries a prompt is work starting.
-	const isResume = Boolean(input.resume || input.resumeSessionId);
 	repo.updateTask(services.db, task.id, {
 		...(isResume ? {} : { column: "running", agentStatus: "running" }),
 		agentId: agent.id,
