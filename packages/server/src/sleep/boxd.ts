@@ -5,6 +5,12 @@
 //            only connections opened TO the box count. boxd hibernates it once
 //            nobody is connected and working on it.
 //
+// Both also turn off boxd's other idle timer, auto-suspend. It's off by default,
+// but a box with it on is suspended even while held (measured: standby 70s after
+// the last connection, hibernate timer off), so an agent working with nobody
+// attached would be frozen mid-turn; and once released it would suspend rather
+// than hibernate, where waking for a loop was never measured.
+//
 // It must be boxd's timer that does it, never `boxd machine hibernate`: a box
 // hibernated on command is not woken for its scheduled jobs, while one boxd put
 // to sleep itself is, shortly before the job is due. So the loop wake is a boxd
@@ -83,15 +89,18 @@ export async function boxdSleepDriver(opts: {
 	}
 	const setTimeoutS = (s: number) =>
 		run("boxd", ["machine", "config", "set", "auto-hibernate.timeout", String(s)]);
+	const suspendOff = () => run("boxd", ["machine", "config", "set", "auto-suspend.timeout", "0"]);
 	return {
 		where: `boxd machine ${name}`,
 		canWakeForLoops: canWake,
 		hold: async () => {
+			await suspendOff();
 			await setTimeoutS(0);
 		},
 		release: async () => {
 			// Set first, so boxd never sees a short timeout while outbound traffic counts.
 			await run("boxd", ["machine", "config", "set", "idle.ignore-outbound", "on"]);
+			await suspendOff();
 			await setTimeoutS(RELEASE_S);
 		},
 		// shortcut: a job armed for a loop that was since deleted or paused stays
