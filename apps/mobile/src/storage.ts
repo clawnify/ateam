@@ -1,10 +1,13 @@
-// Persist the last connection so the host/port survive app restarts and
-// reinstalls — otherwise every launch (and every rebuild) starts blank and you
+// Persist the boxes the phone has connected to, so they survive app restarts and
+// reinstalls. Otherwise every launch (and every rebuild) starts blank and you
 // retype the box's Tailscale IP. AsyncStorage is RN's simple key-value store.
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
+import { parseBoxes, type SavedBox } from "./boxes";
 
+// The one connection kept before the Boxes list existed: read once, to migrate it.
 const KEY = "ateam.connection";
+const BOXES_KEY = "ateam.boxes";
 const PROJECT_KEY = "ateam.selectedProject";
 const PREVIEW_PORT_KEY = "ateam.previewPort";
 
@@ -16,20 +19,25 @@ export interface SavedConnection {
 	provider?: { id: string; box: Record<string, string> };
 }
 
-export async function loadConnection(): Promise<SavedConnection | null> {
+/** Every box the phone has connected to, newest first (src/boxes.ts). Before the
+ *  list existed only the last connection was kept, and that becomes its first box. */
+export async function loadBoxes(): Promise<SavedBox[]> {
 	try {
-		const raw = await AsyncStorage.getItem(KEY);
-		return raw ? (JSON.parse(raw) as SavedConnection) : null;
+		const [list, last] = await Promise.all([
+			AsyncStorage.getItem(BOXES_KEY),
+			AsyncStorage.getItem(KEY),
+		]);
+		return parseBoxes(list, last);
 	} catch {
-		return null;
+		return [];
 	}
 }
 
-export async function saveConnection(conn: SavedConnection): Promise<void> {
+export async function saveBoxes(boxes: SavedBox[]): Promise<void> {
 	try {
-		await AsyncStorage.setItem(KEY, JSON.stringify(conn));
+		await AsyncStorage.setItem(BOXES_KEY, JSON.stringify(boxes));
 	} catch {
-		/* best-effort — a failed persist just means a blank field next launch */
+		/* best-effort: a failed persist just shows the list as it was next launch */
 	}
 }
 

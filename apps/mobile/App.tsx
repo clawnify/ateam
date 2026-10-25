@@ -36,6 +36,8 @@ import {
 	View,
 } from "react-native";
 import { AgentIcon } from "./src/AgentIcon";
+import { BoxesScreen } from "./src/BoxesScreen";
+import { boxKey, removeBox, type SavedBox, touchBox } from "./src/boxes";
 import { Composer, type ComposerSubmit } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
 import { type Connection, connect } from "./src/connection";
@@ -45,14 +47,15 @@ import { LoopForm, LoopsScreen } from "./src/LoopsScreen";
 import { MissionScreen } from "./src/MissionScreen";
 import { NativeTerminalScreen } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
+import { ProviderIcon } from "./src/ProviderIcon";
 import {
-	loadConnection,
+	loadBoxes,
 	loadConsent,
 	loadDismissedSkew,
 	loadPreviewPort,
 	loadProviderAccount,
 	loadSelectedProject,
-	saveConnection,
+	saveBoxes,
 	saveConsent,
 	saveDismissedSkew,
 	savePreviewPort,
@@ -226,6 +229,13 @@ function Field({
 	);
 }
 
+/** How a connect was asked for. `wake`: the user wants this box now (Connect, a
+ *  card, opening or returning to the app), so a sleeping one is woken first; never
+ *  from the drop-reconnect loop. `navigate`: land on Home once connected, which only
+ *  a connect the user asked for does, so a reattach leaves them where they are.
+ *  `replaces`: the saved box the form was editing, so a changed address replaces it. */
+type ConnectOpts = { wake?: boolean; navigate?: boolean; replaces?: string | null };
+
 /** A provider's account inputs (its key), from the Keychain. */
 function loadAccount(def: ProviderDefinition): Promise<InputValues> {
 	return loadProviderAccount(
@@ -246,6 +256,8 @@ function ConnectionScreen({
 	setPort,
 	onConnect,
 	onBack,
+	onBackToList,
+	editing,
 	onDisconnect,
 	onDemo,
 	connecting,
@@ -279,6 +291,10 @@ function ConnectionScreen({
 	waking: string | null;
 	onConnect: () => void;
 	onBack: () => void;
+	/** Back to the Boxes list, when there is one (src/BoxesScreen.tsx). */
+	onBackToList: (() => void) | null;
+	/** Editing a saved box rather than adding one. */
+	editing: boolean;
 	onDisconnect: () => void;
 	onDemo: () => void;
 	connecting: boolean;
@@ -302,14 +318,21 @@ function ConnectionScreen({
 		<View style={styles.root}>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
 			<View style={styles.navBar}>
-				{connected ? (
+				{onBackToList ? (
+					<Pressable onPress={onBackToList} hitSlop={8}>
+						<Text style={styles.backText}>‹ Boxes</Text>
+					</Pressable>
+				) : connected ? (
 					<Pressable onPress={onBack} hitSlop={8}>
 						<Text style={styles.backText}>‹ Board</Text>
 					</Pressable>
 				) : (
 					<LogoMark />
 				)}
-				<Text style={styles.navTitle}>{connected ? "Connection" : "New connection"}</Text>
+				{/* The desktop's words for the same thing (EnvironmentPicker.tsx). */}
+				<Text style={styles.navTitle} numberOfLines={1}>
+					{editing ? "Edit box" : "Add a Tailscale box"}
+				</Text>
 				<View style={styles.spacer} />
 				<Pressable
 					style={[styles.connectBtn, connecting && styles.connectBtnBusy]}
@@ -320,7 +343,7 @@ function ConnectionScreen({
 					{connecting ? (
 						<ActivityIndicator color="#15151a" size="small" />
 					) : (
-						<Text style={styles.connectBtnText}>{connected ? "Reconnect" : "Connect"}</Text>
+						<Text style={styles.connectBtnText}>Connect</Text>
 					)}
 				</Pressable>
 			</View>
@@ -370,6 +393,7 @@ function ConnectionScreen({
 									}}
 									accessibilityRole="button"
 								>
+									<ProviderIcon providerId={p?.id} size={30} />
 									<View style={styles.pickerText}>
 										<Text style={styles.pickerTitle}>{p?.label ?? "None"}</Text>
 										<Text style={styles.pickerHint}>
@@ -436,7 +460,7 @@ function ConnectionScreen({
 					) : null}
 					{!connected ? (
 						<Pressable style={styles.demoBtn} onPress={onDemo} hitSlop={6}>
-							<Text style={styles.demoText}>Try the demo — no box needed</Text>
+							<Text style={styles.demoText}>Try the demo, no box needed</Text>
 						</Pressable>
 					) : null}
 
@@ -446,7 +470,8 @@ function ConnectionScreen({
 						</View>
 					) : null}
 
-					{connected ? (
+					{/* With a Boxes list, Disconnect lives there; this is for a phone with none (the demo). */}
+					{connected && !onBackToList ? (
 						<Pressable style={styles.disconnectBtn} onPress={onDisconnect} hitSlop={6}>
 							<Text style={styles.disconnectText}>Disconnect</Text>
 						</Pressable>
@@ -747,8 +772,23 @@ function Shell({
 export default function App() {
 	useColorScheme(); // reserved: theme-aware later
 	const [view, setView] = useState<"connect" | "board">("connect");
-	// Which of Home / Board / Mission Control / Loops is showing. Every connect
-	// lands on Home, the sidebar-as-a-list.
+	// Read by the reattach loop, which waits while the connection screen is open: the
+	// user is choosing a box there, and an attempt that landed would pull them out.
+	const viewRef = useRef(view);
+	viewRef.current = view;
+	// The connection screen shows the Boxes list (src/BoxesScreen.tsx), or the form
+	// for adding or editing one. With no saved boxes it is always the form.
+	const [connectScreen, setConnectScreen] = useState<"list" | "form">("list");
+	const [boxes, setBoxes] = useState<SavedBox[]>([]);
+	const boxesRef = useRef<SavedBox[]>([]);
+	// The saved box the form is editing, by its key.
+	const [editingKey, setEditingKey] = useState<string | null>(null);
+	// The box a connect is reaching right now, and the one the last connect failed on.
+	const [attemptKey, setAttemptKey] = useState<string | null>(null);
+	const [failedKey, setFailedKey] = useState<string | null>(null);
+	const [swipeOpenKey, setSwipeOpenKey] = useState<string | null>(null);
+	// Which of Home / Board / Mission Control / Loops is showing. Every connect the
+	// user asks for lands on Home, the sidebar-as-a-list.
 	const [tab, setTab] = useState<Tab>("home");
 	const [loops, setLoops] = useState<LoopDTO[]>([]);
 	// The loop form modal: null closed, `editing` null for a new loop.
@@ -816,26 +856,37 @@ export default function App() {
 	// so refresh() prefers it over project #1). Updated on every explicit pick.
 	const preferredProjectId = useRef<string | null>(null);
 
-	const refresh = useCallback(async () => {
+	// Resolves with the box's projects, so a connect can tell a box that has none.
+	const refresh = useCallback(async (): Promise<ProjectDTO[]> => {
 		const api = conn.current?.api;
-		if (!api) return;
+		if (!api) return [];
+		// A refresh that outlives its box (another box connected while it ran) must not
+		// write that box's projects, tasks or loops over the new one's.
+		const stale = () => conn.current?.api !== api;
 		setLoading(true);
 		try {
 			const projs: ProjectDTO[] = await api.projects.list();
+			if (stale()) return projs;
 			setProjects(projs);
 			setSelectedProjectId((cur) => {
-				if (cur) return cur; // keep the live selection across refreshes/reconnects
+				// Keep the live selection across refreshes and reconnects, but not onto
+				// another box, where that project doesn't exist.
+				if (cur && projs.some((p) => p.id === cur)) return cur;
 				const pref = preferredProjectId.current;
 				if (pref && projs.some((p) => p.id === pref)) return pref; // restore last pick
 				return projs[0]?.id ?? null; // fallback: first project (or none)
 			});
 			const perProject = await Promise.all(projs.map((p) => api.tasks.list(p.id)));
 			const all = perProject.flat().sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0));
+			if (stale()) return projs;
 			setTasks(all);
 			// A box that predates loops rejects the call; the sections just stay empty.
-			setLoops(await api.loops.list().catch(() => []));
+			const boxLoops = await api.loops.list().catch(() => []);
+			if (!stale()) setLoops(boxLoops);
+			return projs;
 		} finally {
-			setLoading(false);
+			// The newer box's refresh owns the spinner once this one is stale.
+			if (!stale()) setLoading(false);
 		}
 	}, []);
 
@@ -862,28 +913,35 @@ export default function App() {
 		};
 	}, [view, connGen]);
 
-	// The one connect path — used by the Connect button, the launch auto-connect, and
-	// the auto-reattach below. Returns whether it connected, so reconnect() can decide
-	// to retry. On success it records the `target` (so drops reattach) and bumps
-	// `connGen` (so the board + any open terminal rebind to the fresh api).
+	// The one connect path: the Connect button, a Boxes card, the launch auto-connect,
+	// and the auto-reattach below. Returns whether it connected, so reconnect() can
+	// decide to retry. On success it records the `target` (so drops reattach), puts the
+	// box at the top of the Boxes list, and bumps `connGen` (so the board + any open
+	// terminal rebind to the fresh api).
 	// Consent state. A ref (not state) because connectTo reads it synchronously and must
 	// not be re-created when it flips, which would retrigger the effects that depend on it.
 	const consented = useRef(false);
-	const pendingConnect = useRef<{ host: string; port: string } | null>(null);
+	const pendingConnect = useRef<{ host: string; port: string; opts: ConnectOpts } | null>(null);
 	const [consentOpen, setConsentOpen] = useState(false);
 
+	// The Boxes list as it is now, persisted. Through a ref as well as state, so a
+	// connect that lands mid-render still edits the latest list.
+	const commitBoxes = useCallback((next: SavedBox[]) => {
+		boxesRef.current = next;
+		setBoxes(next);
+		void saveBoxes(next);
+	}, []);
+
 	const connectTo = useCallback(
-		// `wake`: the user just asked for this box (Connect, opening or returning to
-		// the app), so a hibernated boxd box is woken first. Never from the drop
-		// reconnect loop: a box that went to sleep on its own stays asleep until
-		// someone actually wants it.
-		async (h: string, p: string, wake = false): Promise<boolean> => {
+		// A box that went to sleep on its own stays asleep until someone actually
+		// wants it, so only `opts.wake` (see ConnectOpts) wakes it first.
+		async (h: string, p: string, opts: ConnectOpts = {}): Promise<boolean> => {
 			const port = p || "8787";
 			// Nothing leaves the phone until the disclosure has been accepted. Guarding
 			// HERE rather than on the Connect button covers every route in: the button,
 			// the launch reattach, and the drop-reconnect loop.
 			if (!consented.current) {
-				pendingConnect.current = { host: h, port };
+				pendingConnect.current = { host: h, port, opts };
 				setConsentOpen(true);
 				return false;
 			}
@@ -891,14 +949,22 @@ export default function App() {
 				clearTimeout(retryTimer.current);
 				retryTimer.current = null;
 			}
+			const key = boxKey({ host: h, port });
 			setConnecting(true);
+			setAttemptKey(key);
+			setFailedKey(null);
 			setError(null);
 			const wakeFor = wakeTarget.current;
 			const def = providerById(wakeFor.id);
 			let wakeError: string | null = null;
 			try {
 				const account = def ? (accounts.current[def.id] ?? {}) : {};
-				if (wake && def && filled(def, "box", wakeFor.box) && filled(def, "account", account)) {
+				if (
+					opts.wake &&
+					def &&
+					filled(def, "box", wakeFor.box) &&
+					filled(def, "account", account)
+				) {
 					const sig = `${def.id}\n${JSON.stringify(account)}`;
 					if (waker.current?.sig !== sig) {
 						const made = wakeAdapter(def, account);
@@ -934,11 +1000,16 @@ export default function App() {
 				conn.current = c;
 				target.current = { host: h, port };
 				backoff.current = 0;
-				await saveConnection({
-					host: h,
-					port,
-					...(def ? { provider: { id: def.id, box: wakeFor.box } } : {}),
-				});
+				commitBoxes(
+					touchBox(
+						boxesRef.current,
+						{ host: h, port, ...(def ? { provider: { id: def.id, box: wakeFor.box } } : {}) },
+						Date.now(),
+						opts.replaces,
+					),
+				);
+				// Per box, and boxes now switch with a tap: read before the banner can show.
+				setDismissedSkew(await loadDismissedSkew(h));
 				setConnected(true);
 				const nextSkew = c.skewed ? c.info.protocolVersion : null;
 				setSkew(nextSkew);
@@ -953,9 +1024,15 @@ export default function App() {
 				setUpdatingBox(false);
 				setConnGen((g) => g + 1);
 				void c.api.agents.list().then(setAgents);
-				setView("board");
-				setTab("home");
-				await refresh();
+				if (opts.navigate) {
+					setView("board");
+					setTab("home");
+					setEditingKey(null);
+				}
+				const projs = await refresh();
+				// A box with no project has nothing to show, so a connect the user asked for
+				// opens Add a project. A reattach doesn't: it would pop up over their screen.
+				if (opts.navigate && projs.length === 0) setBrowserOpen(true);
 				return true;
 			} catch (err) {
 				conn.current = null;
@@ -964,12 +1041,14 @@ export default function App() {
 				setError(
 					wakeError ? `${msg}. Waking it through ${def?.label} failed too: ${wakeError}` : msg,
 				);
+				setFailedKey(key);
 				return false;
 			} finally {
 				setConnecting(false);
+				setAttemptKey(null);
 			}
 		},
-		[refresh],
+		[refresh, commitBoxes],
 	);
 
 	// Ask the box to replace itself with the current release. The reply lands before
@@ -997,7 +1076,9 @@ export default function App() {
 	const reconnect = useCallback(
 		async (wake = false) => {
 			const t = target.current;
-			if (!t || attempting.current) return;
+			// Waits while the connection screen is open, retry timer included: leaving it
+			// (leaveConnect) picks the box back up.
+			if (!t || attempting.current || viewRef.current === "connect") return;
 			if (retryTimer.current) {
 				clearTimeout(retryTimer.current);
 				retryTimer.current = null;
@@ -1005,7 +1086,7 @@ export default function App() {
 			attempting.current = true;
 			let ok = false;
 			try {
-				ok = await connectTo(t.host, t.port, wake);
+				ok = await connectTo(t.host, t.port, { wake });
 			} finally {
 				attempting.current = false;
 			}
@@ -1050,6 +1131,70 @@ export default function App() {
 		},
 		[],
 	);
+
+	// Back from the connection screen to the board. A connection that dropped while
+	// the screen was open was left alone there, so pick it up now.
+	const leaveConnect = useCallback(() => {
+		viewRef.current = "board"; // before reconnect() reads it, not at the next render
+		setView("board");
+		setSwipeOpenKey(null);
+		if (target.current && !conn.current) {
+			backoff.current = 0;
+			void reconnect();
+		}
+	}, [reconnect]);
+
+	// Fill the form with a saved box, provider and all, or empty it for a new one. The
+	// wake ref too: a connect right after this runs before the next render would set it.
+	const fillForm = useCallback(async (box: SavedBox | null) => {
+		setHost(box?.host ?? "");
+		setPort(box?.port ?? "8787");
+		setError(null);
+		const def = providerById(box?.provider?.id);
+		if (!def || !box?.provider) {
+			wakeTarget.current = { id: null, box: {} };
+			setProviderId(null);
+			setBoxValues({});
+			setAccountSaved({});
+			return;
+		}
+		const account = accounts.current[def.id] ?? (await loadAccount(def));
+		accounts.current[def.id] = account;
+		wakeTarget.current = { id: def.id, box: box.provider.box };
+		setProviderId(def.id);
+		setBoxValues(box.provider.box);
+		setAccountSaved(savedFlags(def, account));
+	}, []);
+
+	// A card's tap: the box in use goes back to the board; any other connects, the
+	// same as filling the form and tapping Connect.
+	const openBox = useCallback(
+		async (box: SavedBox) => {
+			if (connected && target.current && boxKey(target.current) === boxKey(box)) {
+				leaveConnect();
+				return;
+			}
+			await fillForm(box);
+			setEditingKey(null);
+			void connectTo(box.host, box.port, { wake: true, navigate: true });
+		},
+		[connected, connectTo, fillForm, leaveConnect],
+	);
+
+	const editBox = useCallback(
+		async (box: SavedBox) => {
+			await fillForm(box);
+			setEditingKey(boxKey(box));
+			setConnectScreen("form");
+		},
+		[fillForm],
+	);
+
+	const addBox = useCallback(() => {
+		void fillForm(null);
+		setEditingKey(null);
+		setConnectScreen("form");
+	}, [fillForm]);
 
 	const onPickProvider = useCallback(async (id: string | null) => {
 		const def = providerById(id);
@@ -1113,8 +1258,8 @@ export default function App() {
 			setError("Enter the box's Tailscale IP or hostname.");
 			return;
 		}
-		void connectTo(host.trim(), port.trim(), true);
-	}, [host, port, connectTo]);
+		void connectTo(host.trim(), port.trim(), { wake: true, navigate: true, replaces: editingKey });
+	}, [host, port, connectTo, editingKey]);
 
 	// Enter demo mode: a fully offline Connection (canned board + terminal). No box, no
 	// reattach, no saved connection — for App Review (guideline 2.1) and first-look onboarding.
@@ -1143,7 +1288,7 @@ export default function App() {
 		void saveConsent();
 		const pending = pendingConnect.current;
 		pendingConnect.current = null;
-		if (pending) void connectTo(pending.host, pending.port, true);
+		if (pending) void connectTo(pending.host, pending.port, pending.opts);
 	}, [connectTo]);
 
 	// Declining is not a dead end: the demo is offline, so it needs no consent at all.
@@ -1179,32 +1324,24 @@ export default function App() {
 		void (async () => {
 			// Load the remembered project BEFORE connecting, so the first refresh() restores
 			// it instead of racing to project #1. Preview port is a plain UI default.
-			const [saved, savedProject, savedPreviewPort, agreed] = await Promise.all([
-				loadConnection(),
+			const [savedBoxes, savedProject, savedPreviewPort, agreed] = await Promise.all([
+				loadBoxes(),
 				loadSelectedProject(),
 				loadPreviewPort(),
 				loadConsent(),
 			]);
-			const savedDef = providerById(saved?.provider?.id);
-			if (savedDef && saved?.provider) {
-				const account = await loadAccount(savedDef);
-				accounts.current[savedDef.id] = account;
-				// The ref too: the reattach below runs before the next render would set it.
-				wakeTarget.current = { id: savedDef.id, box: saved.provider.box };
-				setProviderId(savedDef.id);
-				setBoxValues(saved.provider.box);
-				setAccountSaved(savedFlags(savedDef, account));
-			}
-			if (saved?.host) setDismissedSkew(await loadDismissedSkew(saved.host));
+			boxesRef.current = savedBoxes;
+			setBoxes(savedBoxes);
+			// The box used last is the one to reopen on.
+			const last = savedBoxes[0] ?? null;
+			if (last) await fillForm(last);
 			// Read in the same batch as the connection, so the auto-reattach below can't
 			// race ahead of it and show the disclosure to someone who already accepted.
 			consented.current = agreed;
 			preferredProjectId.current = savedProject;
 			if (savedPreviewPort) setPreviewPort(savedPreviewPort);
-			if (!saved?.host) return;
-			setHost(saved.host);
-			setPort(saved.port);
-			void connectTo(saved.host, saved.port, true);
+			if (!last) return;
+			void connectTo(last.host, last.port, { wake: true, navigate: true });
 		})();
 	}, []);
 
@@ -1249,7 +1386,24 @@ export default function App() {
 		setSelectedProjectId(null);
 		setLoops([]);
 		setView("connect");
+		setConnectScreen("list");
 	}, []);
+
+	// Removing the box in use disconnects from it, as the desktop falls back to Local:
+	// left connected, the next reattach would quietly put it back on the list.
+	const onRemoveBox = useCallback(
+		(box: SavedBox) => {
+			const key = boxKey(box);
+			commitBoxes(removeBox(boxesRef.current, key));
+			setSwipeOpenKey(null);
+			if (failedKey === key) {
+				setFailedKey(null);
+				setError(null);
+			}
+			if (target.current && boxKey(target.current) === key) onDisconnect();
+		},
+		[commitBoxes, failedKey, onDisconnect],
+	);
 
 	// Composer submit: create a task in the selected project, launch the agent,
 	// and open its terminal (which attaches to the just-spawned session).
@@ -1306,6 +1460,36 @@ export default function App() {
 	}
 
 	if (view === "connect") {
+		if (connectScreen === "list" && boxes.length > 0) {
+			return (
+				<BoxesScreen
+					leading={
+						connected ? (
+							<Pressable onPress={leaveConnect} hitSlop={8}>
+								<Text style={styles.backText}>‹ Board</Text>
+							</Pressable>
+						) : (
+							<LogoMark />
+						)
+					}
+					boxes={boxes}
+					liveKey={connected && target.current ? boxKey(target.current) : null}
+					attemptKey={attemptKey}
+					failedKey={failedKey}
+					busy={connecting}
+					error={error}
+					connected={connected}
+					openKey={swipeOpenKey}
+					onSwipeOpen={setSwipeOpenKey}
+					onConnect={(box) => void openBox(box)}
+					onEdit={(box) => void editBox(box)}
+					onRemove={onRemoveBox}
+					onAdd={addBox}
+					onDisconnect={onDisconnect}
+					onDemo={startDemo}
+				/>
+			);
+		}
 		return (
 			<ConnectionScreen
 				host={host}
@@ -1313,7 +1497,17 @@ export default function App() {
 				setHost={setHost}
 				setPort={setPort}
 				onConnect={onConnect}
-				onBack={() => setView("board")}
+				onBack={leaveConnect}
+				onBackToList={
+					boxes.length > 0
+						? () => {
+								setEditingKey(null);
+								setError(null);
+								setConnectScreen("list");
+							}
+						: null
+				}
+				editing={editingKey !== null}
 				onDisconnect={onDisconnect}
 				onDemo={startDemo}
 				connecting={connecting}
@@ -1342,7 +1536,10 @@ export default function App() {
 				tasks={tasks}
 				loading={loading}
 				creating={creating}
-				onOpenConnection={() => setView("connect")}
+				onOpenConnection={() => {
+					setView("connect");
+					setConnectScreen("list");
+				}}
 				onOpenTask={setOpenTask}
 				onCreate={onCreate}
 				onAddProject={() => setBrowserOpen(true)}

@@ -1,5 +1,7 @@
 # Sprites
 
+<a href="https://sprites.dev"><img src="../../assets/providers/sprites.svg" alt="Sprites" width="48" /></a>
+
 [Sprites](https://sprites.dev) are persistent Linux microVMs on [Fly.io](https://fly.io):
 hardware-isolated, 8 vCPUs, a 100 GB disk that survives every sleep, and billed by
 actual CPU and memory use while running. A Sprite pauses on its own a few seconds
