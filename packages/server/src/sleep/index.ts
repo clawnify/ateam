@@ -5,6 +5,7 @@
 // (./control.ts) stays the same. See docs/providers/README.md.
 import { boxdSleepDriver } from "./boxd";
 import type { SleepDriver } from "./control";
+import { spritesSleepDriver } from "./sprites";
 
 export {
 	type SleepControl,
@@ -14,6 +15,7 @@ export {
 
 const DRIVERS: ((opts: { log: (line: string) => void }) => Promise<SleepDriver | null>)[] = [
 	boxdSleepDriver,
+	spritesSleepDriver,
 ];
 
 /** The sleep driver for the box this engine runs on, or null when its provider has none. */

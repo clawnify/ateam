@@ -12,6 +12,13 @@ import {
 	sleepMode,
 	startSleepControl,
 } from "../src/sleep/control";
+import {
+	HOLD_EXPIRE,
+	HOLD_RENEW_MS,
+	HOLD_TASK,
+	spritesSleepDriver,
+	type TaskCall,
+} from "../src/sleep/sprites";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -232,6 +239,115 @@ describe("boxdSleepDriver", () => {
 			},
 		});
 		expect(driver).toBeNull();
+	});
+});
+
+describe("spritesSleepDriver", () => {
+	const PUT = `PUT ${HOLD_TASK} ${JSON.stringify({ expire: HOLD_EXPIRE })}`;
+
+	/** A Sprite whose API socket answers `status(method)`, with the renewal timer in hand. */
+	function sprite(status: (method: string) => number = (m) => (m === "PUT" ? 200 : 204)) {
+		const calls: string[] = [];
+		let renew: (() => void) | null = null;
+		let renewEvery: number | null = null;
+		const call: TaskCall = async (method, task, body) => {
+			calls.push(`${method} ${task}${body ? ` ${body}` : ""}`);
+			return status(method);
+		};
+		const driver = () =>
+			spritesSleepDriver({
+				log: () => {},
+				isSprite: () => true,
+				call,
+				every: (fn, ms) => {
+					renew = fn;
+					renewEvery = ms;
+					return () => {
+						renew = null;
+					};
+				},
+			});
+		return {
+			calls,
+			driver,
+			renew: () => renew?.(),
+			renewing: () => renew !== null,
+			renewEvery: () => renewEvery,
+		};
+	}
+
+	it("answers nothing off a Sprite, so another provider's driver can", async () => {
+		expect(await spritesSleepDriver({ log: () => {}, isSprite: () => false })).toBeNull();
+	});
+
+	it("holds with a task it keeps renewing, and releases by deleting it", async () => {
+		const s = sprite();
+		const d = await s.driver();
+		if (!d) throw new Error("expected the Sprites driver");
+		expect(d.canWakeForLoops).toBe(false);
+		await d.hold();
+		expect(s.renewEvery()).toBe(HOLD_RENEW_MS);
+		s.renew();
+		s.renew();
+		await d.release();
+		expect(s.calls).toEqual([PUT, PUT, PUT, `DELETE ${HOLD_TASK}`]);
+		expect(s.renewing()).toBe(false);
+	});
+
+	it("a refused hold throws and starts no renewals, so the next tick tries again", async () => {
+		const s = sprite(() => 400);
+		const d = await s.driver();
+		if (!d) throw new Error("expected the Sprites driver");
+		await expect(d.hold()).rejects.toThrow("HTTP 400");
+		expect(s.renewing()).toBe(false);
+	});
+
+	it("releasing a hold that already lapsed is fine", async () => {
+		const s = sprite(() => 404);
+		const d = await s.driver();
+		if (!d) throw new Error("expected the Sprites driver");
+		await d.release();
+		expect(s.calls).toEqual([`DELETE ${HOLD_TASK}`]);
+	});
+
+	it("under sleep control: holds at start, deletes the hold after the idle hour", async () => {
+		const s = sprite();
+		const d = await s.driver();
+		if (!d) throw new Error("expected the Sprites driver");
+		let t = 0;
+		const control = await startSleepControl(d, {
+			working: () => false,
+			nextLoopAt: () => null,
+			idleMinutes: () => 60,
+			log: () => {},
+			now: () => t,
+		});
+		for (let m = 0; m < 61; m++) {
+			t += IDLE_CHECK_MS;
+			await control.tick();
+		}
+		expect(s.calls).toEqual([PUT, `DELETE ${HOLD_TASK}`]);
+		control.stop();
+	});
+
+	it("can't wake for a loop, so a Sprite with one stays held", async () => {
+		const s = sprite();
+		const d = await s.driver();
+		if (!d) throw new Error("expected the Sprites driver");
+		let t = 0;
+		const control = await startSleepControl(d, {
+			working: () => false,
+			nextLoopAt: () => 5 * HOUR,
+			idleMinutes: () => 60,
+			log: () => {},
+			now: () => t,
+		});
+		for (let m = 0; m < 120; m++) {
+			t += IDLE_CHECK_MS;
+			await control.tick();
+		}
+		expect(s.calls).toEqual([PUT]);
+		control.stop();
 	});
 });
 
