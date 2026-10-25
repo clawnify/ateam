@@ -31,6 +31,7 @@ import { readSettings } from "./settings-file";
 import { detectSleepDriver, type SleepControl, startSleepControl } from "./sleep";
 import { socketServerTransport } from "./transport/socket";
 import { wsServerTransport } from "./transport/ws";
+import { resolveWsAddr, WS_ADDR_FILE } from "./ws-addr";
 import { startWsListener } from "./ws-listener";
 
 const SOCK = process.env.ATEAM_RPC_SOCK ?? join(homedir(), ".ateam", "rpc.sock");
@@ -166,7 +167,8 @@ async function maybeStartIdleSleep(engine: Engine): Promise<void> {
  * Opt-in WebSocket listener, for network clients that can't run `ateam attach`
  * over SSH — the phone over Tailscale (React Native has no child `ssh`, but ships
  * a WebSocket). OFF by default: the box stays listener-free and the desktop's
- * SSH-only path is unchanged unless ATEAM_WS_ADDR is set.
+ * SSH-only path is unchanged unless ATEAM_WS_ADDR, or the installer's
+ * <data dir>/ws-addr (src/ws-addr.ts), names an address.
  *
  * This socket carries NO auth of its own — auth is the network's job (a Tailscale
  * ACL / a private interface), exactly as the unix socket trusts filesystem perms.
@@ -175,15 +177,16 @@ async function maybeStartIdleSleep(engine: Engine): Promise<void> {
  * Tailscale IP) only. Same guard the reverted TCP listener used.
  */
 function maybeStartWsListener(engine: Engine, dispatcher: Dispatcher): void {
-	const addr = process.env.ATEAM_WS_ADDR;
+	const addr = resolveWsAddr(process.env, DATA_DIR);
 	if (!addr) return;
 	const lastColon = addr.lastIndexOf(":");
 	const host = lastColon > 0 ? addr.slice(0, lastColon) : "";
 	const port = Number(addr.slice(lastColon + 1));
 	if (!host || host === "0.0.0.0" || host === "::" || !Number.isInteger(port) || port <= 0) {
 		console.error(
-			"[ateam] refusing WS listen: set ATEAM_WS_ADDR to <host>:<port> where host is an " +
-				"explicit private address (e.g. the Tailscale IP) — never a wildcard (0.0.0.0/::)",
+			`[ateam] refusing WS listen on "${addr}": ATEAM_WS_ADDR (or ${join(DATA_DIR, WS_ADDR_FILE)}) ` +
+				"must be <host>:<port> where host is an explicit private address (e.g. the Tailscale IP), " +
+				"never a wildcard (0.0.0.0/::)",
 		);
 		process.exit(1);
 	}

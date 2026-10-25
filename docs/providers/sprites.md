@@ -65,21 +65,16 @@ Commits made there are credited to "Sprite" unless you replace it.
 Every command here runs on the box with `sprite exec -s mybox -- bash -lc '…'`, or
 in a `sprite console -s mybox`.
 
-1. The engine, from the usual installer:
+1. The engine, from the usual installer. `--service` also creates the Sprite service
+   that keeps the engine running and starts it when the box boots:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash -s -- --service
    ```
 
    The readiness report ends with `[--] tailscale`; that's expected here.
 
-2. Run the engine as a Sprite service, so it starts again after the box is stopped:
-
-   ```bash
-   sprite-env services create ateam --cmd bash --args "-lc,exec ateam daemon"
-   ```
-
-3. An SSH server, also as a service. `/run` is emptied on every boot, so the command
+2. An SSH server, as a service too. `/run` is emptied on every boot, so the command
    recreates sshd's directory each time:
 
    ```bash
@@ -88,7 +83,7 @@ in a `sprite console -s mybox`.
      --args "bash,-c,mkdir -p /run/sshd && exec /usr/sbin/sshd -D -e"
    ```
 
-4. A key without a passphrase (Ateam connects with `BatchMode=yes`, so it can't
+3. A key without a passphrase (Ateam connects with `BatchMode=yes`, so it can't
    prompt for one). On your Mac:
 
    ```bash
@@ -96,7 +91,7 @@ in a `sprite console -s mybox`.
    sprite exec -s mybox -- bash -c "mkdir -p ~/.ssh && echo '$(cat ~/.ssh/id_ed25519_sprites.pub)' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
    ```
 
-5. An alias in `~/.ssh/config`, going through the Sprites proxy:
+4. An alias in `~/.ssh/config`, going through the Sprites proxy:
 
    ```sshconfig
    Host mybox.sprite
@@ -110,6 +105,21 @@ in a `sprite console -s mybox`.
    `ssh mybox.sprite` should now land you in the box.
 
 Then log into an agent once (`ssh -t mybox.sprite claude`) as on any other box.
+
+### The engine's service
+
+**Don't stop, restart or delete the `ateam` service while agents run.** Measured on
+a Sprite: sprite-env kills every process a service started, `setsid` ones included,
+when it stops, restarts or deletes the service, and when it restarts it after its
+process exits (at once after exit 0, with backoff otherwise). The PTY daemon holding
+every agent session is one of those processes.
+
+So the service the installer creates is a keeper loop rather than the engine itself:
+when the engine stops, for an upgrade or a crash, the loop starts it again from the
+installed version a second later, and the service never restarts. Upgrades from the
+desktop or the phone use it the same way. A service made before the keeper existed
+(`exec ateam daemon`) is moved to it the next time the installer runs with no agent
+running; while agents run, the installer leaves it alone and says so.
 
 ## Connect
 
@@ -136,13 +146,12 @@ sprite-env services create tailscaled --cmd sudo \
 sudo tailscale up --hostname=mybox    # approve the printed URL
 ```
 
-Then give the engine its phone port on the Sprite's tailnet IP (`tailscale ip -4`),
-by recreating its service:
+Then give the engine its phone port on the Sprite's tailnet IP (`tailscale ip -4`)
+by re-running the installer with it. The address is kept in `~/.ateam/ws-addr`,
+which the engine reads however it was started, and later upgrades keep it:
 
 ```bash
-sprite-env services delete ateam
-sprite-env services create ateam --cmd bash --args "-lc,exec ateam daemon" \
-  --env ATEAM_WS_ADDR=<tailnet-ip>:8787
+curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | ATEAM_WS_ADDR=<tailnet-ip>:8787 bash -s -- --service
 ```
 
 The engine keeps retrying its phone port until Tailscale has the address, so it
