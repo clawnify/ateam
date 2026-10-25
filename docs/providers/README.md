@@ -61,6 +61,26 @@ for adapter code across that group.
 Before adding one, check that sleeping saves anything there: Hetzner and
 DigitalOcean bill a powered-off server.
 
+## GitHub credentials
+
+Ateam clones and pushes with git and opens PRs with `gh`, and agents on the box work
+with whatever access that gives them. So a box should get the narrowest credential
+that does the job. What an agent on the box can do with each one (measured on boxd
+and Sprites, 2026-10-25):
+
+| Credential | What an agent on the box gets |
+| --- | --- |
+| A fine-grained token, via `gh auth login --with-token` | A token it can read from `~/.config/gh/hosts.yml`, but one that reaches only the repos and permissions you picked, and expires |
+| `gh auth login` in a browser | A token that never expires and reaches every repo your account can, in each org that allows the GitHub CLI, with `workflow` and `gist` too |
+| [boxd's integration](boxd.md#github-credentials) | A token any process can fetch, that never expires and reaches your own repos and your collaborations |
+| [Sprites' connector](sprites.md#github-credentials) | Use of a token it never holds, through Sprites' gateway. API only: it can't clone or push |
+
+The default on any box is the first: a [fine-grained
+token](sprites.md#github-credentials) limited to the org and repos the box works on,
+with Contents, Pull requests and Issues set to read and write, and Workflows left
+off, since an agent that can edit `.github/workflows` can reach the repo's Actions
+secrets.
+
 ## Adding a provider
 
 Open a PR with two files — `docs/providers/<id>.md` using the template below, and

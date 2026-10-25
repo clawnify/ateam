@@ -65,6 +65,29 @@ from the engine: boxd's image wires it in as a `gh` shell function in login shel
 each call), and the engine runs `gh` as a program, not through a shell. So the
 engine's `gh repo clone` fails there and the plain `git clone` does the work.
 
+**What the integration hands out** (measured 2026-10-25). Any process on the box gets
+the integration's token with one `git credential fill`, and boxd's helper keeps a
+copy in `/run/boxd/github-token` for 5 minutes. It's a classic OAuth token (`gho_`)
+with `repo` and `user:email`, and GitHub reports no expiry for it. On the account we
+measured it reached the account's own repos (61, private ones included) and two it
+collaborates on, and none in an org whose policy keeps boxd's app out. So "no token
+is stored inside the VM" holds for the disk and for snapshots, not for a running
+agent, which can fetch the token and use it from anywhere until the integration is
+disconnected.
+
+For a box agents run on unattended, a [fine-grained token](sprites.md#github-credentials)
+reaches less and expires. It only narrows access once the integration is gone,
+because until then the box keeps handing the broader token to any process:
+
+```bash
+boxd manage integrations disconnect git     # listed as "Git" in `boxd manage integrations list`
+pbpaste | ssh mybox.boxd 'gh auth login --with-token'
+ssh mybox.boxd 'gh auth setup-git'
+```
+
+With the integration disconnected there's nothing of boxd's left for `gh auth
+setup-git` to replace, so the warning above no longer applies.
+
 ## Install the engine
 
 ```bash

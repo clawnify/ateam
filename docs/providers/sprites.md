@@ -38,14 +38,51 @@ processes are Sprite *services* (`sprite-env services`), not systemd units.
 
 ## GitHub credentials
 
-Nothing is wired up: no credential helper, and `gh` isn't logged in. Run
-`gh auth login` on the box.
+Nothing is wired up: no credential helper, and `gh` isn't logged in. Give the box a
+**fine-grained token** limited to what it works on, rather than `gh auth login`.
+Agents run here, and `gh auth login` hands them a token that never expires and
+reaches every repo your account can, in plain text in `~/.config/gh/hosts.yml` (a
+Sprite has no keyring) and in every checkpoint taken after it.
+
+1. Create the token. This link pre-fills a 90-day expiry and the three permissions
+   Ateam uses; put your org in `target_name` (or drop it for personal repos), then
+   pick the repositories:
+
+   ```
+   https://github.com/settings/personal-access-tokens/new?name=ateam%20box&target_name=<your-org>&expires_in=90&contents=write&pull_requests=write&issues=write&metadata=read
+   ```
+
+   | Permission | What Ateam does with it |
+   | --- | --- |
+   | Contents: read and write | clone, push, merge a PR |
+   | Pull requests: read and write | `gh pr view`, `gh pr create`, `gh pr merge` |
+   | Issues: read and write | list a project's issues, file one |
+
+   Leave Workflows off: an agent that can edit `.github/workflows` can reach the
+   repo's Actions secrets. Fine-grained tokens can't call the Checks API, which Ateam
+   doesn't use. An org owner's own token is approved at once; anyone else's waits for
+   an owner to approve it.
+
+2. Copy it, hand it to `gh` on the box straight from the clipboard, and let git use it:
+
+   ```bash
+   pbpaste | sprite exec -s mybox --stdin -- bash -lc 'gh auth login --with-token'
+   sprite exec -s mybox -- bash -lc 'gh auth setup-git'
+   ```
+
+Measured on a Sprite (2026-10-25): the engine's repo query listed only the org's
+repos, plus public ones (every fine-grained token reads those); a private org repo
+read fine; a push dry run to an org repo passed; and no private repo outside the org
+was visible.
 
 Sprites' GitHub [Connector](https://docs.fly.io/sprites/concepts/connectors.md)
 doesn't replace that. It keeps the token out of the box by proxying GitHub's REST
 API through `https://api.sprites.dev/v1/gateway/github/<connection-id>/…`, and that
-part works, private org repos included. But it carries no git: `git ls-remote`
-against the gateway answers `repository not found`, and it gives `gh` no token.
+part works, private org repos included. But it carries no git. The gateway forwards
+to GitHub's API host, so a git path answers with the API's own 404
+(`"documentation_url": "https://docs.github.com/rest"`) and `git ls-remote` against
+it says `repository not found`; no OAuth scope changes that. It gives `gh` no token
+either.
 Ateam clones and pushes with git and opens PRs with `gh`, so the box still needs its
 own login. Without one, **Add a project from GitHub** opens with no repos: Ateam
 lists them with `gh api user/repos`, which answers `please run: gh auth login`, even
