@@ -31,10 +31,13 @@ const BASE_OPTIONS = {
  * the signal fires, so a stalled network costs the caller's budget, not five
  * minutes. Callers that MUST complete (the merge queue) pass nothing and keep
  * the inactivity semantics.
+ *
+ * `env` adds variables on top of those, for a caller that points git at
+ * somewhere other than the worktree's own index or object store.
  */
 export function gitFor(
 	worktreePath: string,
-	options?: { abort?: AbortSignal },
+	options?: { abort?: AbortSignal; env?: Record<string, string> },
 ): SimpleGit {
 	return simpleGit(worktreePath, {
 		...BASE_OPTIONS,
@@ -43,6 +46,7 @@ export function gitFor(
 		...process.env,
 		GIT_OPTIONAL_LOCKS: "0",
 		GIT_TERMINAL_PROMPT: "0",
+		...options?.env,
 	});
 }
 

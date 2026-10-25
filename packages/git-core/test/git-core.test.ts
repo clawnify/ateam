@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -25,6 +25,10 @@ import {
 	updateLocalMain,
 } from "../src/index";
 import { advanceOrigin, commitFile, makeTempRepoPair, type TempRepo } from "./helpers/temp-repo";
+
+// Real clones and pushes: a test that moves origin several times outlives
+// bun's 5s default.
+setDefaultTimeout(20_000);
 
 let repo: TempRepo;
 
@@ -766,6 +770,57 @@ describe("diff after a squash merge", () => {
 
 		const d = await diff({ worktreePath: task.worktreePath, baseBranch: "main" });
 		expect(d.files).toMatchObject([{ path: "n.txt", additions: 6, deletions: 0 }]);
+	});
+});
+
+describe("diff with uncommitted work that already landed", () => {
+	it("drops what base already has, keeps what it doesn't", async () => {
+		// The shape that left +1706 on a clawnify card: an agent sets WIP aside
+		// as a commit, the same work merges from other branches, and
+		// `reset HEAD~1` leaves all of it uncommitted on the old base.
+		await advanceOrigin(repo, { file: "doc.md", content: lines(1, 20) });
+		await simpleGit(repo.work).pull("origin", "main");
+		const task = await createTask({ repoPath: repo.work, name: "wip" });
+		const w = (file: string, content: string) => Bun.write(join(task.worktreePath, file), content);
+		await w("doc.md", `MINE\n${lines(2, 20)}`);
+		await w("added.txt", "same\n");
+		await w("view.txt", "v1\n");
+		await w("20261024_defaults.sql", "select 1;\n");
+		await w("mine.txt", "only here\n");
+
+		// base: the same line edit, then an unrelated one in the same file; the
+		// same new file; an older version of a file base has since changed; and
+		// the migration under a new name.
+		await advanceOrigin(repo, { file: "doc.md", content: `MINE\n${lines(2, 20)}` });
+		await advanceOrigin(repo, { file: "doc.md", content: `MINE\n${lines(2, 19)}END\n` });
+		await advanceOrigin(repo, { file: "added.txt", content: "same\n" });
+		await advanceOrigin(repo, { file: "view.txt", content: "v1\n" });
+		await advanceOrigin(repo, { file: "view.txt", content: "v2\n" });
+		await advanceOrigin(repo, { file: "20261025_defaults.sql", content: "select 1;\n" });
+		await simpleGit(task.worktreePath).fetch("origin", "main");
+
+		const status = await porcelainStatus(task.worktreePath);
+		const objects = await simpleGit(task.worktreePath).raw(["count-objects"]);
+		const d = await diff({ worktreePath: task.worktreePath, baseBranch: "main" });
+		expect(d.files.map((f) => f.path)).toEqual(["20261024_defaults.sql", "mine.txt"]);
+		expect(
+			await fileDiff({ worktreePath: task.worktreePath, file: "doc.md", baseBranch: "main" }),
+		).toBe("");
+
+		// The snapshot left no trace: same status, no objects in the repo.
+		expect(await porcelainStatus(task.worktreePath)).toBe(status);
+		expect(await simpleGit(task.worktreePath).raw(["count-objects"])).toBe(objects);
+	});
+
+	it("leaves an untracked file over the snapshot cap counted", async () => {
+		const big = "x".repeat(1024 * 1024 + 1);
+		const task = await createTask({ repoPath: repo.work, name: "big" });
+		await Bun.write(join(task.worktreePath, "big.bin"), big);
+		await advanceOrigin(repo, { file: "big.bin", content: big });
+		await simpleGit(task.worktreePath).fetch("origin", "main");
+
+		const d = await diff({ worktreePath: task.worktreePath, baseBranch: "main" });
+		expect(d.files.map((f) => f.path)).toEqual(["big.bin"]);
 	});
 });
 
