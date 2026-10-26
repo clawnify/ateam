@@ -54,6 +54,7 @@ function servicesWith(
 		},
 		hooksDir: scratch,
 		notifyScriptPath: join(scratch, "notify.sh"),
+		peerSecret: "test-secret",
 		hookPort: 0,
 		followUps: new FollowUps(),
 		pendingSeeds: new Map(),

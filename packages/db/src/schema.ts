@@ -296,6 +296,36 @@ export const boardChanges = sqliteTable(
 );
 
 /**
+ * Messages one task's agent sends another's (the `send_message` board tool).
+ * The row is the inbox: it exists before the recipient's agent can take it,
+ * because that agent may be mid-turn, idle at its prompt, or not running at all
+ * (see peer-messages.ts for how each case is reached). `deliveredAt` null means
+ * still pending; `deliveredVia` says which door it went through, and `error`
+ * why it could not.
+ */
+export const peerMessages = sqliteTable(
+	"peer_messages",
+	{
+		id: pk(),
+		/** Null for a sender that is not a task's agent (reserved: the user, a box). */
+		fromTaskId: text("from_task_id").references(() => tasks.id, { onDelete: "set null" }),
+		fromTerminalId: text("from_terminal_id"),
+		toTaskId: text("to_task_id")
+			.notNull()
+			.references(() => tasks.id, { onDelete: "cascade" }),
+		body: text("body").notNull(),
+		/** Turns in the back-and-forth this message continues; capped against loops. */
+		hop: integer("hop").notNull().default(1),
+		createdAt: epochMs("created_at"),
+		deliveredAt: integer("delivered_at"),
+		/** "listener" (a live agent's inbox hook took it) or "launch" (it rode in as the prompt). */
+		deliveredVia: text("delivered_via"),
+		error: text("error"),
+	},
+	(t) => [index("peer_messages_to_idx").on(t.toTaskId, t.deliveredAt)],
+);
+
+/**
  * Remote hosts the client can drive an engine on, keyed by `host_alias` — the
  * connection's identity, whose meaning depends on `transport`:
  *
@@ -343,5 +373,7 @@ export type Loop = typeof loops.$inferSelect;
 export type NewLoop = typeof loops.$inferInsert;
 export type BoardChange = typeof boardChanges.$inferSelect;
 export type NewBoardChange = typeof boardChanges.$inferInsert;
+export type PeerMessage = typeof peerMessages.$inferSelect;
+export type NewPeerMessage = typeof peerMessages.$inferInsert;
 export type Host = typeof hosts.$inferSelect;
 export type NewHost = typeof hosts.$inferInsert;

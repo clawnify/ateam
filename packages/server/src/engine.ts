@@ -18,13 +18,14 @@ import type {
 	PtyExitEvent,
 	TaskDTO,
 } from "@ateam/protocol";
-import { ensureGhShim, ensureNotifyScript } from "./agent-setup";
+import { ensureGhShim, ensureNotifyScript, ensurePeerSecret, verifyPeerToken } from "./agent-setup";
 import { FollowUps } from "./follow-ups";
 import { type HookEvent, HookServer, type MergeRequestEvent } from "./hooks/hook-server";
 import { ensureLoginEnv } from "./login-env";
 import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
+import { PeerMessenger } from "./peer-messages";
 import { applyAgentQuit, columnAfterExit } from "./pty/agent-quit";
 import { PtyClient } from "./pty/pty-client";
 import { reapableSessions } from "./pty/reap";
@@ -210,6 +211,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	const hookPort = await hooks.start(repo.getSettings(db).hookPort ?? undefined);
 	const notifyScriptPath = await ensureNotifyScript(dataDir);
 	await ensureGhShim(dataDir);
+	const peerSecret = await ensurePeerSecret(dataDir);
 	const hooksDir = join(dataDir, "hooks");
 	repo.updateSettings(db, { hookPort });
 
@@ -251,6 +253,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		get: () => buildBoardView(db),
 		setStatus: async (req) => applySetStatus(db, req, sendTaskUpdated),
 		setWaiting: async (req) => applySetWaiting(db, req, waits, sendTaskUpdated),
+		listPeers: async (callerTerminalId) => peers.listPeers(callerTerminalId),
+		sendMessage: async (req) => peers.send(req),
 	});
 
 	// A finished turn with a follow-up armed continues instead of stopping. The
@@ -271,7 +275,61 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		pendingSeeds,
 		worktreeGuard: new WorktreeGuard(),
 		waits,
+		peerSecret,
 	};
+
+	// Agent-to-agent messages (peer-messages.ts). Its two engine-side moves are
+	// the reaper's kill and the restore path's resume, with the message as the
+	// prompt; everything about WHEN lives in the messenger.
+	const waitForExit = (terminalId: string, ms: number): Promise<void> =>
+		new Promise((resolve) => {
+			const onExit = (e: { terminalId: string }) => {
+				if (e.terminalId === terminalId) done();
+			};
+			const timer = setTimeout(() => done(), ms);
+			function done() {
+				clearTimeout(timer);
+				pty.off("exit", onExit);
+				resolve();
+			}
+			pty.on("exit", onExit);
+		});
+	const peers = new PeerMessenger({
+		db,
+		isLive: (terminalId) => pty.has(terminalId),
+		lastInputAt: (terminalId) => pty.lastInputAt(terminalId),
+		stopSession: async (session) => {
+			// Exactly a reap (see reapIdleSessions): stamped first, so the exit
+			// handler files it as reclaimed rather than as news.
+			repo.demoteReapedSessions(db, session.taskId);
+			repo.updateSession(db, session.id, { exitReason: "reaped" });
+			const exited = waitForExit(session.terminalId, 10_000);
+			pty.kill(session.terminalId);
+			await exited;
+		},
+		launch: async (task, prompt) => {
+			// The conversation the task last had, resumed by id when known; a task
+			// that never had an agent gets a fresh one on the default.
+			const last = repo.listSessionsByTask(db, task.id).find((s) => s.agentId !== "shell");
+			const agentId =
+				last?.agentId ?? task.agentId ?? readSettings().settings.engine.defaultAgentId;
+			await spawnAgentInTask(services, sendTaskUpdated, {
+				taskId: task.id,
+				agentId,
+				prompt,
+				...(last
+					? last.agentSessionId
+						? { resumeSessionId: last.agentSessionId }
+						: { resume: true }
+					: {}),
+			});
+		},
+		log: opts.log ?? ((line) => console.log(line)),
+	});
+	hooks.setPeerInbox({
+		verify: (terminalId, token) => verifyPeerToken(peerSecret, terminalId, token),
+		wait: (terminalId) => peers.wait(terminalId),
+	});
 
 	// Record an agent's exit: close the session and file its card. Shared by the
 	// live exit event and the reconcile below so an exit we watched and an exit
@@ -317,6 +375,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		followUps.discard(e.terminalId);
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
+		// A message still waiting for this task now goes in by launch.
+		queueMicrotask(() => peers.kick(session.taskId));
 		// `closed` is stamped by the kill handler before the PTY goes; anything
 		// else reaching here ended on its own. Either way the tab is not coming
 		// back on its own, so neither is offered as restorable.
@@ -380,6 +440,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			followUps.discard(e.terminalId);
 			const taskId = applyAgentQuit(db, pty, session);
 			if (taskId) sendTaskUpdated(taskId);
+			peers.kick(session.taskId);
 			return;
 		}
 		const status = sessionStatusAfter(e.eventType, session.status);
@@ -439,6 +500,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			// Every Stop, message or not: it also retires any verdict still in
 			// flight for the previous turn.
 			if (e.eventType === "Stop") void turns.turnEnded(task.id, e.lastAssistantMessage);
+			// A turn ending is when a message held for a busy agent can go in.
+			if (e.eventType === "Stop") peers.kick(task.id);
 		}
 	});
 
@@ -527,6 +590,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			loopRunner.start();
 			reapTimer ??= setInterval(reapIdleSessions, REAP_SWEEP_MS);
 			worktreeSweep.start();
+			peers.start();
 		},
 		isWorking() {
 			if (pendingSeeds.size > 0 || mergeQueue.busy()) return true;
@@ -546,6 +610,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				reapTimer = null;
 			}
 			waits.stop();
+			peers.stop();
 		},
 		stopHooks() {
 			hooks.stop();

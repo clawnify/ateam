@@ -34,11 +34,22 @@ export interface BoardHandlers {
 		until: number;
 		callerTerminalId?: string;
 	}): Promise<{ ok: boolean; reason: string }>;
+	/** Every task outside merged, for a sender to pick from (peer-messages.ts). */
+	listPeers(callerTerminalId?: string): Promise<unknown>;
+	/** Queue a message to another task's agent and try to deliver it. */
+	sendMessage(req: {
+		fromTerminalId: string;
+		to: string;
+		body: string;
+	}): Promise<{ ok: boolean; reason: string }>;
 }
 
 /** Per-request context the HTTP layer derives (e.g. the caller's terminal id). */
 export interface McpContext {
 	callerTerminalId?: string;
+	/** The caller presented the token Ateam gave that terminal. The id header
+	 *  alone is a claim; the peer tools act only on a verified one. */
+	callerVerified?: boolean;
 }
 
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
@@ -98,6 +109,29 @@ const TOOLS = [
 				},
 			},
 			required: ["reason", "until"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "list_peers",
+		description:
+			"List the user's other tasks you can message with send_message: each task's id, name, project, branch, which agent works in it (Claude Code, Codex, OpenCode), and its state (working, needs_you, idle, or not_running). Your own task is marked you: true.",
+		inputSchema: { type: "object", properties: {}, additionalProperties: false },
+	},
+	{
+		name: "send_message",
+		description:
+			"Send a message to the agent working on another of the user's tasks, whichever agent it is and even if it is not running: Ateam delivers it now if that agent is listening, when its current turn ends if it is busy, or starts it with your message if it is stopped. Use it when your work affects theirs, to hand off work, or to ask them something only their task knows. They answer with send_message too, which reaches you the same way, so do not poll or wait in a loop. Keep it self-contained: they cannot see your conversation.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				to: {
+					type: "string",
+					description: "The recipient task's id from list_peers (or its exact name or branch).",
+				},
+				message: { type: "string", description: "What to tell them, at most 8000 characters." },
+			},
+			required: ["to", "message"],
 			additionalProperties: false,
 		},
 	},
@@ -202,6 +236,26 @@ async function callTool(
 				until,
 				callerTerminalId: ctx.callerTerminalId,
 			});
+			return ok(id, textContent(res.reason, !res.ok));
+		}
+		if (name === "list_peers" || name === "send_message") {
+			if (!ctx.callerTerminalId || !ctx.callerVerified) {
+				return ok(
+					id,
+					textContent(
+						"messaging is only open to an agent Ateam launched in a task (this session has no valid Ateam terminal token; relaunch it from Ateam)",
+						true,
+					),
+				);
+			}
+			if (name === "list_peers") {
+				const peers = await board.listPeers(ctx.callerTerminalId);
+				return ok(id, textContent(JSON.stringify(peers, null, 2)));
+			}
+			const to = String(args.to ?? "");
+			const body = String(args.message ?? "");
+			if (!to || !body) return ok(id, textContent("to and message are required", true));
+			const res = await board.sendMessage({ fromTerminalId: ctx.callerTerminalId, to, body });
 			return ok(id, textContent(res.reason, !res.ok));
 		}
 		return err(id, -32602, `unknown tool: ${name}`);

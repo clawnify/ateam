@@ -16,9 +16,11 @@ import { createTask as gitCreateTask, seedWorktree } from "@ateam/git-core";
 import {
 	BOARD_MCP_TOOLS,
 	buildAgentEnv,
+	codexBoardMcpArgs,
 	ensureBoardMcpConfig,
 	ensureClaudeHooks,
 	ensureCodexHooks,
+	peerToken,
 } from "./agent-setup";
 import { latestCodexThreadInDir } from "./codex-threads";
 import { refreshLoginPath } from "./login-env";
@@ -229,6 +231,9 @@ async function launchAgent(
 	const mintsId = Boolean(agent.sessionIdFlag) && !input.resume && !input.agentMode;
 	const agentSessionId = resumeSessionId ?? (mintsId ? terminalId : null);
 	const isResume = Boolean(input.resume || input.resumeSessionId);
+	// A resume normally carries no prompt; one woken by a peer message does
+	// (peer-messages.ts), and that is work starting like any fresh launch.
+	const hasWork = Boolean(input.prompt?.trim() || input.files?.length);
 	repo.createSession(services.db, {
 		taskId: task.id,
 		agentId: agent.id,
@@ -238,7 +243,7 @@ async function launchAgent(
 		// A launch with something to do is work from the moment it spawns, which is
 		// what lets its box stay awake for it (isWorking). A resume, or a pane with
 		// nothing to do, sits idle at the prompt until someone types.
-		status: !isResume && (input.prompt?.trim() || input.files?.length) ? "running" : "idle",
+		status: hasWork ? "running" : "idle",
 	});
 	// The tab this one is picking up is no longer waiting to be restored.
 	if (resumeSessionId) {
@@ -255,7 +260,7 @@ async function launchAgent(
 	// null description and the search-by-description path could never match. Only
 	// the FIRST launch writes it — later prompts are follow-ups in a conversation,
 	// not what the task is about — and a resume carries no prompt at all.
-	if (input.prompt?.trim() && !task.description) {
+	if (input.prompt?.trim() && !task.description && !isResume) {
 		repo.updateTask(services.db, task.id, { description: input.prompt.trim() });
 	}
 
@@ -274,11 +279,13 @@ async function launchAgent(
 		notifyTaskUpdated(task.id);
 	}
 
+	const token = peerToken(services.peerSecret, terminalId);
 	const env = buildAgentEnv({
 		terminalId,
 		agentId: agent.id,
 		hookPort: services.hookPort,
 		hooksDir: services.hooksDir,
+		token,
 	});
 	// Run the agent in a login shell, then drop to an interactive shell so
 	// the pane stays usable after the agent exits. YOLO appends the bypass
@@ -305,7 +312,11 @@ async function launchAgent(
 		// payload on turn completion — our script maps it to Stop. Injected
 		// per-launch via -c so the user's ~/.codex/config.toml is untouched.
 		const codexNotify = join(services.hooksDir, "codex-notify.sh");
-		agentCmd = agentCmd.replace(/^codex/, `codex -c 'notify=["sh","${codexNotify}"]'`);
+		// The board MCP server rides the same way (codexBoardMcpArgs).
+		agentCmd = agentCmd.replace(
+			/^codex/,
+			`codex -c 'notify=["sh","${codexNotify}"]' ${codexBoardMcpArgs(services.hookPort)}`,
+		);
 	} else if (agent.id === "claude" && !input.agentMode) {
 		// The board tools (get_board / set_status / set_waiting), served by the
 		// hook server and keyed to this terminal so the session can only touch
@@ -317,6 +328,7 @@ async function launchAgent(
 			hooksDir: services.hooksDir,
 			hookPort: services.hookPort,
 			terminalId,
+			token,
 		});
 		const sq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
 		agentCmd = `${agentCmd} --mcp-config ${sq(mcpConfig)} --allowedTools ${sq(BOARD_MCP_TOOLS.join(","))}`;
@@ -347,7 +359,7 @@ async function launchAgent(
 	// and the stall rule would later demote it as silent work. Leave the card
 	// where it was; only a launch that carries a prompt is work starting.
 	repo.updateTask(services.db, task.id, {
-		...(isResume ? {} : { column: "running", agentStatus: "running" }),
+		...(isResume && !hasWork ? {} : { column: "running", agentStatus: "running" }),
 		agentId: agent.id,
 	});
 	notifyTaskUpdated(task.id);
