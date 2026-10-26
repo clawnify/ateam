@@ -46,7 +46,7 @@ import { demoConnection } from "./src/demo";
 import { HomeScreen } from "./src/HomeScreen";
 import { LoopForm, LoopsScreen } from "./src/LoopsScreen";
 import { MissionScreen } from "./src/MissionScreen";
-import { NativeTerminalScreen } from "./src/NativeTerminalScreen";
+import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
 import { ProviderIcon } from "./src/ProviderIcon";
 import {
@@ -581,6 +581,7 @@ function Shell({
 	onExpandTask,
 	boxTerminalOpen,
 	onBoxTerminal,
+	reconnecting,
 	onDismissSkew,
 	connGen,
 }: {
@@ -623,6 +624,8 @@ function Shell({
 	/** Whether the box terminal (outside every project) fills the view under the navbar. */
 	boxTerminalOpen: boolean;
 	onBoxTerminal: (open: boolean) => void;
+	/** The box dropped and is being reattached: an open terminal waits in place. */
+	reconnecting: boolean;
 	/** Hide the version banner for this box version (it returns when the version changes). */
 	onDismissSkew: () => void;
 	/** Keys the terminal so an auto-reattach remounts it onto the fresh api. */
@@ -707,13 +710,27 @@ function Shell({
 				</View>
 			)}
 
-			{openTask ? (
+			{/* Through a drop an open terminal keeps its place, and reattaches (a new
+			    connGen remounts it) once the box answers again. */}
+			{openTask && reconnecting ? (
+				<ReconnectingTerminal
+					lead={<AgentIcon agentId={openTask.agentId} size={12} />}
+					title={(tasks.find((t) => t.id === openTask.id) ?? openTask).name}
+					onBack={onCloseTask}
+				/>
+			) : openTask ? (
 				<Term
 					key={`${connGen}:${openTask.id}`}
 					api={api}
 					task={tasks.find((t) => t.id === openTask.id) ?? openTask}
 					onClose={onCloseTask}
 					autoFocus={openTaskFocus}
+				/>
+			) : boxTerminalOpen && reconnecting ? (
+				<ReconnectingTerminal
+					lead={<Feather name="terminal" size={12} color={C.ink} />}
+					title="Box terminal"
+					onBack={() => onBoxTerminal(false)}
 				/>
 			) : boxTerminalOpen ? (
 				<BoxTerminalScreen
@@ -818,8 +835,9 @@ export default function App() {
 	const [attemptKey, setAttemptKey] = useState<string | null>(null);
 	const [failedKey, setFailedKey] = useState<string | null>(null);
 	const [swipeOpenKey, setSwipeOpenKey] = useState<string | null>(null);
-	// Which of Home / Board / Mission Control / Loops is showing. Every connect the
-	// user asks for lands on Home, the sidebar-as-a-list.
+	// Which of Home / Board / Mission Control / Loops is showing. A connect the user
+	// asks for to a different box lands on Home, the sidebar-as-a-list; the same box
+	// again keeps the tab.
 	const [tab, setTab] = useState<Tab>("home");
 	const [loops, setLoops] = useState<LoopDTO[]>([]);
 	// The loop form modal: null closed, `editing` null for a new loop.
@@ -969,6 +987,8 @@ export default function App() {
 		// wants it, so only `opts.wake` (see ConnectOpts) wakes it first.
 		async (h: string, p: string, opts: ConnectOpts = {}): Promise<boolean> => {
 			const port = p || "8787";
+			// The box this connect leaves, if any: the same one again is a reconnect.
+			const prev = target.current;
 			// Nothing leaves the phone until the disclosure has been accepted. Guarding
 			// HERE rather than on the Connect button covers every route in: the button,
 			// the launch reattach, and the drop-reconnect loop.
@@ -1045,10 +1065,13 @@ export default function App() {
 				setConnected(true);
 				const nextSkew = c.skewed ? c.info.protocolVersion : null;
 				setSkew(nextSkew);
+				// Only the reconnect that ends an update can say the box is already on the
+				// latest release. Any other connect, to this box or another, drops the claim:
+				// it hides Update box, and a release may have come out since.
 				if (updateFrom.current !== null) {
 					setBoxAtLatest(nextSkew !== null && nextSkew === updateFrom.current);
 					updateFrom.current = null;
-				} else if (nextSkew === null) {
+				} else {
 					setBoxAtLatest(false);
 				}
 				// Whatever we came back as, we are no longer mid-update. A reconnect is
@@ -1061,11 +1084,15 @@ export default function App() {
 				});
 				if (opts.navigate) {
 					setView("board");
-					setTab("home");
 					setEditingKey(null);
-					// Terminals belong to the box being left.
-					setOpenTask(null);
-					setBoxTerminalOpen(false);
+					// A different box starts on Home, and the terminals of the one left
+					// close. The same box again (a reconnect from the Boxes list) returns
+					// you to where you were.
+					if (prev?.host !== h || prev?.port !== port) {
+						setTab("home");
+						setOpenTask(null);
+						setBoxTerminalOpen(false);
+					}
 				}
 				const projs = await refresh();
 				// A box with no project has nothing to show, so a connect the user asked for
@@ -1303,6 +1330,8 @@ export default function App() {
 	// reattach, no saved connection — for App Review (guideline 2.1) and first-look onboarding.
 	const startDemo = useCallback(async () => {
 		target.current = null; // demo never reattaches
+		setOpenTask(null);
+		setBoxTerminalOpen(false);
 		if (retryTimer.current) {
 			clearTimeout(retryTimer.current);
 			retryTimer.current = null;
@@ -1414,6 +1443,8 @@ export default function App() {
 
 	const onDisconnect = useCallback(() => {
 		target.current = null; // intent: stay disconnected — no auto-reattach
+		setOpenTask(null);
+		setBoxTerminalOpen(false);
 		if (retryTimer.current) {
 			clearTimeout(retryTimer.current);
 			retryTimer.current = null;
@@ -1601,7 +1632,7 @@ export default function App() {
 				onNewLoop={() => setLoopForm({ editing: null })}
 				onEditLoop={(l) => setLoopForm({ editing: l })}
 				onLoopsChanged={(next) => setLoops(Array.isArray(next) ? next : loops)}
-				openTask={conn.current ? openTask : null}
+				openTask={openTask}
 				openTaskFocus={openTaskFocus}
 				onCloseTask={() => {
 					setOpenTask(null);
@@ -1611,7 +1642,8 @@ export default function App() {
 					setOpenTaskFocus(true);
 					setOpenTask(t);
 				}}
-				boxTerminalOpen={conn.current ? boxTerminalOpen : false}
+				boxTerminalOpen={boxTerminalOpen}
+				reconnecting={!connected && target.current !== null}
 				onBoxTerminal={setBoxTerminalOpen}
 				onDismissSkew={() => {
 					if (skew === null) return;
