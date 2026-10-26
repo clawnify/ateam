@@ -1497,42 +1497,16 @@ export function App() {
 							Board
 						</div>
 						<div
-							className={`tab ${view === "mission" ? "active" : ""}`}
-							onClick={() => goToView("mission")}
-						>
-							Mission Control
-						</div>
-						<div
 							className={`tab ${view === "loops" ? "active" : ""}`}
 							onClick={() => goToView("loops")}
 						>
 							Loops
 						</div>
 					</div>
-					{/* Left of the centered search, beside the tab it belongs to: the
-					    right side is already full of layout buttons. */}
-					{mcGridShown && (
-						<div className="mclayout mcmodes" role="group" aria-label="Show">
-							{(
-								[
-									["tasks", "Tasks"],
-									["loops", "Loops"],
-								] as const
-							).map(([mode, label]) => (
-								<button
-									key={mode}
-									type="button"
-									className={`navbtn mcmode ${mcMode === mode ? "active" : ""}`}
-									aria-pressed={mcMode === mode}
-									onClick={() => setMcMode(mode)}
-								>
-									{label}
-								</button>
-							))}
-						</div>
-					)}
-					{/* Centered task search — absolutely centered in the topbar so the
-					    tabs on the left and action buttons on the right don't shift it. */}
+					{/* Centered task search: the topbar is a 1fr | search | 1fr grid, so
+					    the tabs on the left and action buttons on the right don't shift
+					    it while both fit, and it shrinks rather than covering them when
+					    they don't. */}
 					<TaskSearch
 						query={taskQuery}
 						onQuery={setTaskQuery}
@@ -1541,9 +1515,34 @@ export function App() {
 						onOpenTask={openTask}
 						onOpenSession={openSessionHit}
 					/>
-					<div className="spacer" />
-					{mcGridShown && (
-						<div className="mclayout" role="group" aria-label="Layout">
+					<div className="topbar-right">
+						{/* Mission Control's other option, only while its grid is up: what
+						    the tiles show. */}
+						{mcGridShown && (
+							<div className="mclayout mcmodes" role="group" aria-label="Show">
+								{(
+									[
+										["tasks", "Tasks"],
+										["loops", "Loops"],
+									] as const
+								).map(([mode, label]) => (
+									<button
+										key={mode}
+										type="button"
+										className={`navbtn mcmode ${mcMode === mode ? "active" : ""}`}
+										aria-pressed={mcMode === mode}
+										onClick={() => setMcMode(mode)}
+									>
+										{label}
+									</button>
+								))}
+							</div>
+						)}
+						{/* Always shown, and the way into Mission Control (it has no tab):
+						    picking a layout opens the grid in it. Lit like a tab: only on
+						    Mission Control (a task focused over it included), so from the
+						    Board none of them reads as current. */}
+						<div className="mclayout" role="group" aria-label="Mission Control layout">
 							{(
 								[
 									["grid", LayoutGrid, "Grid"],
@@ -1556,11 +1555,14 @@ export function App() {
 								<button
 									key={mode}
 									type="button"
-									className={`navbtn icon ${mcLayout === mode ? "active" : ""}`}
-									title={`${label} layout`}
-									aria-label={`${label} layout`}
-									aria-pressed={mcLayout === mode}
-									onClick={() => setMcLayout(mode)}
+									className={`navbtn icon ${view === "mission" && mcLayout === mode ? "active" : ""}`}
+									title={`Mission Control: ${label} layout`}
+									aria-label={`Mission Control: ${label} layout`}
+									aria-pressed={view === "mission" && mcLayout === mode}
+									onClick={() => {
+										setMcLayout(mode);
+										goToView("mission");
+									}}
 								>
 									<Icon size={14} strokeWidth={1.75} />
 								</button>
@@ -1584,25 +1586,25 @@ export function App() {
 								)}
 							</button>
 						</div>
-					)}
-					<button
-						type="button"
-						className="navbtn"
-						onClick={cleanup}
-						disabled={!activeProjectId || cleanupBlockedBy !== null}
-						title={
-							cleanupBlockedBy !== null
-								? `This project lives on a box running an older Ateam (protocol v${cleanupBlockedBy}). Cleanup needs v${FEATURE_MIN_VERSION.cleanup} or newer: update the box to use it here.`
-								: undefined
-						}
-					>
-						<Brush size={14} strokeWidth={1.75} />
-						Clean up
-					</button>
-					<button type="button" className="navbtn" onClick={newTask} disabled={!activeProjectId}>
-						<Plus size={14} strokeWidth={1.75} />
-						New task
-					</button>
+						<button
+							type="button"
+							className="navbtn"
+							onClick={cleanup}
+							disabled={!activeProjectId || cleanupBlockedBy !== null}
+							title={
+								cleanupBlockedBy !== null
+									? `This project lives on a box running an older Ateam (protocol v${cleanupBlockedBy}). Cleanup needs v${FEATURE_MIN_VERSION.cleanup} or newer: update the box to use it here.`
+									: undefined
+							}
+						>
+							<Brush size={14} strokeWidth={1.75} />
+							Clean up
+						</button>
+						<button type="button" className="navbtn" onClick={newTask} disabled={!activeProjectId}>
+							<Plus size={14} strokeWidth={1.75} />
+							New task
+						</button>
+					</div>
 				</div>
 
 				<div className="content">
