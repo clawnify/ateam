@@ -530,12 +530,15 @@ input {
 	position: relative;
 	/* Above .panel (z-index 5) and the sidebar resizer (20), below overlays and
 	   dialogs. The bar itself never overlapped anything, but the session-search
-	   results hang out of it: .task-search is transformed, which makes it a
-	   stacking context, so the dropdown's own z-index orders it only INSIDE the
-	   search box. What decides whether it is visible is this layer. */
+	   results hang out of it, and what decides whether they are visible is this
+	   layer. */
 	z-index: 25;
 	height: 44px;
-	display: flex;
+	/* Tabs | search | actions. The equal side columns keep the search centered
+	   while both sides fit; when they don't, the search column gives way
+	   instead of sliding under the buttons. */
+	display: grid;
+	grid-template-columns: 1fr minmax(0, min(340px, 32vw)) 1fr;
 	align-items: center;
 	gap: 10px;
 	padding: 0 14px;
@@ -546,16 +549,14 @@ input {
 	-webkit-app-region: no-drag;
 }
 
-/* Centered task search. Absolutely centered so it stays put regardless of the
-   width of the tabs (left) or action buttons (right). */
+/* Centered task search: fills the topbar's middle column. Positioned so the
+   results hang off the box. */
 .task-search {
-	position: absolute;
-	left: 50%;
-	transform: translateX(-50%);
+	position: relative;
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	width: min(340px, 32vw);
+	min-width: 0;
 	padding: 0 8px;
 	height: 28px;
 	border: 1px solid var(--border);
@@ -598,8 +599,7 @@ input {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
-/* Results hang below the box, which is itself absolutely centered in the
-   topbar — so this is positioned against the box, not the bar. */
+/* Results hang below the box — positioned against the box, not the bar. */
 .ts-results {
 	position: absolute;
 	top: calc(100% + 6px);
@@ -714,6 +714,18 @@ input {
 }
 .spacer {
 	flex: 1;
+}
+.topbar-right {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 10px;
+}
+/* The grid sizes this column to its min-content, where "New task" would
+   wrap to two lines: keep every button at its natural width instead. */
+.topbar-right > * {
+	flex-shrink: 0;
+	white-space: nowrap;
 }
 
 .content {
@@ -1519,9 +1531,6 @@ input {
 	color: var(--text);
 }
 /* text variant: the Tasks / Loops switch */
-.mcmodes {
-	margin-left: 8px;
-}
 .navbtn.mcmode {
 	height: 26px;
 	padding: 0 9px;
