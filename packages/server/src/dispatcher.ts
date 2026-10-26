@@ -869,6 +869,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 	return {
 		methods: [...Object.keys(handlers), ...Object.keys(contextual)],
 		async handle(method: string, args: unknown[], ctx?: CallContext): Promise<unknown> {
+			// The engine listens before its PTY daemon has attached, and the daemon's
+			// hello lands a few ms later. A call answered in between reads every live
+			// terminal as gone: a second box shell, an agent resumed while it still runs.
+			await engine.ptyReady();
 			const c = (contextual as Record<string, (ctx: CallContext, ...a: unknown[]) => unknown>)[
 				method
 			];

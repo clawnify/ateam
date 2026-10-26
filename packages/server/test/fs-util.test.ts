@@ -20,6 +20,7 @@ function makeEngine(userDataDir: string): Engine {
 		on: () => () => {},
 		sendTaskUpdated: () => {},
 		sendLoopsUpdated: () => {},
+		ptyReady: () => Promise.resolve(),
 	} as unknown as Engine;
 }
 

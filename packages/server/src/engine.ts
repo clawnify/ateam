@@ -76,6 +76,9 @@ export interface Engine {
 	readonly worktreeSweep: WorktreeSweep;
 	/** Connect to (or launch) the detached PTY daemon and learn live sessions. */
 	connectPty(): Promise<void>;
+	/** Settles once connectPty() has finished, attached or not. The dispatcher waits
+	 *  on it, so no call reads the empty live set from before the daemon's hello. */
+	ptyReady(): Promise<void>;
 	/** Start the user's scheduled loops (rebuilt from their persisted rows). */
 	startLoops(): void;
 	/**
@@ -198,6 +201,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		opts.sockPath ?? join(homedir(), ".ateam", "pty-daemon.sock"),
 		execPath,
 	);
+	let markPtyReady!: () => void;
+	const ptyReady = new Promise<void>((r) => {
+		markPtyReady = r;
+	});
 	const hooks = new HookServer();
 	const hookPort = await hooks.start(repo.getSettings(db).hookPort ?? undefined);
 	const notifyScriptPath = await ensureNotifyScript(dataDir);
@@ -494,8 +501,14 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			emitter.emit("loopsUpdated", loopRunner.describe());
 		},
 		async connectPty() {
-			await pty.connect();
+			try {
+				await pty.connect();
+			} finally {
+				// A daemon that can't be reached leaves calls to answer without one.
+				markPtyReady();
+			}
 		},
+		ptyReady: () => ptyReady,
 		startLoops() {
 			loopRunner.start();
 			reapTimer ??= setInterval(reapIdleSessions, REAP_SWEEP_MS);

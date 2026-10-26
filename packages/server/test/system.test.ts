@@ -27,6 +27,7 @@ function makeEngine(db: AteamDb): Engine {
 		},
 		sendTaskUpdated: () => {},
 		sendLoopsUpdated: () => {},
+		ptyReady: () => Promise.resolve(),
 	} as unknown as Engine;
 }
 

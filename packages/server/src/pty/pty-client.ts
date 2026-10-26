@@ -8,6 +8,9 @@ import { withMouseEncoding } from "./snapshot-modes";
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
 const unb64 = (s: string) => Buffer.from(s, "base64").toString("utf8");
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** How long connect() waits for a reachable daemon's hello. A local daemon answers
+ *  in milliseconds; this only bounds one that never does. */
+const HELLO_TIMEOUT_MS = 3_000;
 
 export interface SpawnOptions {
 	terminalId: string;
@@ -41,29 +44,48 @@ export class PtyClient extends EventEmitter {
 	private daemonStale = false;
 	private restartPending = false;
 	private ownBuild: string | null = null;
+	// The current connection's hello: until it lands, `live` is empty.
+	private helloSeen: Promise<void> = Promise.resolve();
+	private onHello: (() => void) | null = null;
 
 	constructor(
 		private readonly daemonPath: string,
 		private readonly sockPath: string,
 		private readonly electronExec: string,
+		private readonly helloTimeoutMs = HELLO_TIMEOUT_MS,
 	) {
 		super();
 	}
 
 	async connect(): Promise<void> {
-		if (await this.tryConnect()) return;
-		this.spawnDaemon();
-		for (let i = 0; i < 50; i++) {
-			await delay(80);
-			if (await this.tryConnect()) return;
+		if (!(await this.tryConnect())) {
+			this.spawnDaemon();
+			let reached = false;
+			for (let i = 0; i < 50 && !reached; i++) {
+				await delay(80);
+				reached = await this.tryConnect();
+			}
+			if (!reached) throw new Error("PTY daemon did not become reachable");
 		}
-		throw new Error("PTY daemon did not become reachable");
+		// Connected is not attached: until the daemon's hello lists the terminals it
+		// still holds, has() answers false for every one of them.
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		await Promise.race([
+			this.helloSeen,
+			new Promise<void>((r) => {
+				timer = setTimeout(r, this.helloTimeoutMs);
+			}),
+		]);
+		clearTimeout(timer);
 	}
 
 	private tryConnect(): Promise<boolean> {
 		return new Promise((resolve) => {
 			const s = connect(this.sockPath);
 			s.once("connect", () => {
+				this.helloSeen = new Promise((r) => {
+					this.onHello = r;
+				});
 				this.attach(s);
 				resolve(true);
 			});
@@ -141,6 +163,8 @@ export class PtyClient extends EventEmitter {
 				this.live = new Set(terminals.map((t) => t.terminalId));
 				this.emit("attached", terminals);
 				this.checkBuild(m.build as string | undefined, terminals.length);
+				this.onHello?.();
+				this.onHello = null;
 				break;
 			}
 			case "data":
