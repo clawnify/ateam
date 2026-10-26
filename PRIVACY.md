@@ -1,6 +1,6 @@
 # Privacy Policy — Ateam & Ateam Go
 
-**Effective date: October 25, 2026**
+**Effective date: October 26, 2026**
 
 Ateam (the desktop app) and Ateam Go (the iOS companion app) are local-first
 tools published by Clawnify. This policy describes what data the apps handle,
@@ -26,7 +26,11 @@ Ateam Go stores a small amount of data locally on your phone, and only there:
 - your last-selected project,
 - your preview-port preference, and
 - your API key for each provider you have the app wake a machine through, which
-  is kept in the iOS Keychain.
+  is kept in the iOS Keychain, and
+- reminders for tasks you parked until a date: the task's name, what it waits on and when it comes
+  due, handed to iOS as local notifications that the phone itself delivers. No
+  push service is involved, and the app asks for notification permission the
+  first time there is one to schedule.
 
 This exists solely so the app reopens where you left off and you can switch
 machines without retyping them. Apart from the provider key and machine name,
