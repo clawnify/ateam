@@ -184,7 +184,8 @@ for JSON-RPC, laggier for PTY output).
 
 The engine manages a boxd box's sleep itself: once no agent has
 worked for `engine.idleSleepMinutes` (Settings → General, default 60, 0 never),
-it lets boxd hibernate the box, and it wakes the box for the next loop tick. The
+it lets boxd hibernate the box, and it wakes the box for the next loop tick or
+task reminder (a wait coming due). The
 box keeps every process and session; it bills disk only while asleep, against
 about €61 a month for a 2 vCPU box left running (boxd pricing, Oct 2026).
 
@@ -226,13 +227,14 @@ instead:
   Ignoring outbound is what lets a box with `tailscaled`, a worktree sweep and git
   fetches go quiet at all; only a connection opened to the box keeps it up.
 - Before releasing, the engine registers a one-minute `run` job for the next loop
-  tick (`~/.ateam/boxd/loop-wake.run.ts`), which boxd wakes the box for. A box
+  tick or wait, whichever is sooner (`~/.ateam/boxd/loop-wake.run.ts`), which boxd
+  wakes the box for. A box
   whose image has no `run` (one created 2026-08-04 had none; one created
   2026-10-21 did) stays held while it has a live loop, because a loop that
   silently never runs is worse than a box that stays up.
 
 What wakes a sleeping box: connecting from the desktop (picking it, or starting a
-task there), `boxd machine wake <vm>`, or a loop tick. The desktop leaves a box it
+task there), `boxd machine wake <vm>`, a loop tick, or a wait coming due. The desktop leaves a box it
 finds hibernated at launch asleep, labelled "asleep, wakes when you use it",
 instead of waking every box each time the app starts (it asks `boxd machine list`,
 which wakes nothing).

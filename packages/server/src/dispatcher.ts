@@ -36,12 +36,12 @@ import {
 	updateFromBase,
 } from "@ateam/git-core";
 import {
-	CH,
 	type BoxUpdateStarted,
+	CH,
 	type CleanupCandidate,
-	type CreateLoopInput,
 	type CreateGithubIssueInput,
 	type CreateIssueTaskInput,
+	type CreateLoopInput,
 	type CredentialsPatch,
 	type CredentialsResult,
 	type DirEntryDTO,
@@ -49,23 +49,25 @@ import {
 	type MergeStrategy,
 	PROTOCOL_VERSION,
 	type RegisterProjectOptions,
-	type UpdateLoopInput,
 	type SettingsPatch,
 	type SettingsResult,
+	type TaskWait,
+	type UpdateLoopInput,
 } from "@ateam/protocol";
-import { createEditorHost, installCodeServer } from "./editor";
-import { refreshLoginPath } from "./login-env";
 import { credentialStatus, credentialsPath, updateCredentials } from "./credentials-file";
-import { readSettings, settingsPath, updateSettings } from "./settings-file";
+import { createEditorHost, installCodeServer } from "./editor";
 import type { Engine } from "./engine";
 import { GithubIssues } from "./github-issues";
 import { createIssueTask } from "./issue-tasks";
+import { refreshLoginPath } from "./login-env";
 import { nextCronRun } from "./loops/runner";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { createSizeArbiter } from "./pty/size-arbiter";
 import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
 import { searchSessions } from "./session-search";
 import { createTaskInProject, type SpawnAgentInput, shell, spawnAgentInTask } from "./sessions";
+import { readSettings, settingsPath, updateSettings } from "./settings-file";
+import { applySetWaiting, clearWaiting } from "./waits";
 
 /**
  * The schedule fields of a loops:create/update, when given: an interval of at
@@ -402,6 +404,24 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			const row = repo.updateTask(db, id, { isUnread: false });
 			engine.sendTaskUpdated(id);
 			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
+		},
+		// The user parks a task from the sidebar (or clears the wait). The agent's
+		// path is the MCP tool; both land in applySetWaiting.
+		[CH.tasksSetWaiting]: async (id: string, wait: TaskWait) => {
+			const task = repo.getTask(db, id);
+			if (!task) throw new Error(`Task not found: ${id}`);
+			if (wait == null) {
+				if (clearWaiting(db, task)) engine.sendTaskUpdated(id);
+			} else {
+				const res = applySetWaiting(
+					db,
+					{ taskId: id, reason: wait.reason, until: wait.until },
+					engine.services.waits,
+					engine.sendTaskUpdated,
+				);
+				if (!res.ok) throw new Error(res.reason);
+			}
+			return toTaskDTO(repo.getTask(db, id)!);
 		},
 		[CH.tasksSetColumn]: async (id: string, column: KanbanColumn) => {
 			const row = repo.updateTask(db, id, { column });

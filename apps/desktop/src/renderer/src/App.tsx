@@ -1,8 +1,8 @@
 import type {
 	AgentDTO,
-	GithubIssueDTO,
 	ConnectionDTO,
 	DiffResultDTO,
+	GithubIssueDTO,
 	KanbanColumn,
 	LoopDTO,
 	ProjectDTO,
@@ -37,6 +37,7 @@ import {
 	Globe,
 	Grid3x2,
 	History,
+	Hourglass,
 	LayoutGrid,
 	LayoutPanelLeft,
 	Lock,
@@ -60,8 +61,8 @@ import {
 import { motion, Reorder } from "motion/react";
 import {
 	type CSSProperties,
-	type ReactNode,
 	type MouseEvent as ReactMouseEvent,
+	type ReactNode,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -71,21 +72,20 @@ import {
 import { SessionGlyphs, SessionIcon } from "./components/AgentIcon";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { FileDiffView } from "./components/FileDiffView";
+import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
 import { IconButton } from "./components/IconButton";
 import { LoopForm, LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
+import { PanelRightFilled } from "./components/PanelRightFilled";
 import { PromptComposer } from "./components/PromptComposer";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
 import { usePrompt } from "./components/usePrompt";
-import { PanelRightFilled } from "./components/PanelRightFilled";
-import { SettingsPanel } from "./components/SettingsPanel";
 import { VscodeLogo } from "./components/VscodeLogo";
-import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
-import { useGithubIssues } from "./useGithubIssues";
 import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
-import { byWhatsNext, relativeAge } from "./triage-order";
+import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
 import {
 	type Alias,
 	aliasLabel,
@@ -93,6 +93,7 @@ import {
 	type UnifiedProject,
 	unifyProjects,
 } from "./unify";
+import { useGithubIssues } from "./useGithubIssues";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
 	{ key: "todo", label: "Backlog" },
@@ -890,6 +891,10 @@ export function App() {
 	const goToViewRef = useRef(goToView);
 	goToViewRef.current = goToView;
 	useEffect(() => window.ateam.events.onOpenSettings?.(() => goToViewRef.current("settings")), []);
+	// A wait's notification was clicked (main/wait-notify.ts): open that task.
+	const openTaskRef = useRef(openTask);
+	openTaskRef.current = openTask;
+	useEffect(() => window.ateam.events.onOpenTask?.((t) => openTaskRef.current(t)), []);
 
 	const addProject = () =>
 		run(async () => {
@@ -938,6 +943,27 @@ export function App() {
 	// Delete a task (and its worktree) straight from the sidebar. Confirm first,
 	// then reuse the same remove + force-fallback flow as the task panel menu.
 	// The onTaskRemoved event listener drops the row and clears the selection.
+	// Park a task on an outside party from the sidebar, or end the wait. The
+	// agent's own path is the `set_waiting` board tool; both meet in the engine.
+	const toggleWaiting = (t: TaskDTO) =>
+		run(async () => {
+			if (t.waitingUntil != null) {
+				const ok = await confirm("Stop waiting?", `"${t.name}" goes back to its normal place.`);
+				if (!ok) return;
+				await window.ateam.tasks.setWaiting(t.id, null);
+				return;
+			}
+			const reason = await ask("Waiting for what?");
+			if (!reason) return;
+			const daysText = await ask("Check back in how many days?", "5");
+			if (daysText == null) return;
+			const days = Number(daysText);
+			if (!Number.isFinite(days) || days <= 0) throw new Error("Enter a number of days.");
+			await window.ateam.tasks.setWaiting(t.id, {
+				reason,
+				until: Date.now() + days * 86_400_000,
+			});
+		});
 	const deleteTask = (t: TaskDTO) =>
 		run(async () => {
 			const ok = await confirm(
@@ -1369,6 +1395,7 @@ export function App() {
 														selected={t.id === sidebarSelectedId}
 														onClick={() => toggleTask(t)}
 														onDelete={() => deleteTask(t)}
+														onWait={() => toggleWaiting(t)}
 													/>
 												</Reorder.Item>
 											))}
@@ -1383,6 +1410,7 @@ export function App() {
 													selected={t.id === sidebarSelectedId}
 													onClick={() => toggleTask(t)}
 													onDelete={() => deleteTask(t)}
+													onWait={() => toggleWaiting(t)}
 												/>
 											</motion.div>
 										))
@@ -1868,11 +1896,13 @@ function TaskRow({
 	selected,
 	onClick,
 	onDelete,
+	onWait,
 }: {
 	task: TaskDTO;
 	selected: boolean;
 	onClick: () => void;
 	onDelete: () => void;
+	onWait: () => void;
 }) {
 	const Icon = taskIcon(t.name);
 	const tags = tagsFor(t);
@@ -1921,13 +1951,24 @@ function TaskRow({
 				) : (
 					<TriageGlyph triage={t.triage} />
 				)}
-				<IconButton
-					icon={Trash2}
-					label="Delete task"
-					variant="danger"
-					size={14}
-					onClick={onDelete}
-				/>
+				{/* Two hover actions share the dot's cell; on a parked task the
+				    hourglass reads lit, so the hover also says "this one is waiting". */}
+				<span className="trail-actions">
+					<IconButton
+						icon={Hourglass}
+						label={t.waitingUntil != null ? "Stop waiting" : "Wait on someone…"}
+						active={t.waitingUntil != null}
+						size={14}
+						onClick={onWait}
+					/>
+					<IconButton
+						icon={Trash2}
+						label="Delete task"
+						variant="danger"
+						size={14}
+						onClick={onDelete}
+					/>
+				</span>
 			</span>
 		</div>
 	);
@@ -2093,8 +2134,13 @@ function Board({
 									</div>
 									{/* Why this card is where it is — the triage verdict that until now
 								    was computed on every refresh and shown only to the MCP tool. */}
-									<div className="triage" title={t.triage.reason}>
-										{t.triage.reason}
+									{/* Parked on an outside party: the wait IS why the card is where it
+								    is, so it takes the triage line over until it ends. */}
+									<div
+										className={`triage wait-${waitState(t, Date.now())}`}
+										title={waitingLabel(t, Date.now()) ?? t.triage.reason}
+									>
+										{waitingLabel(t, Date.now()) ?? t.triage.reason}
 									</div>
 									<div className="meta">
 										{t.gitStatus && (

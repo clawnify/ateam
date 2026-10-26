@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CH } from "@ateam/protocol";
+import { CH, type TaskDTO } from "@ateam/protocol";
 import { createEngine, type Engine, readSettings } from "@ateam/server";
 import { app, BrowserWindow, dialog, Menu } from "electron";
 import { autoUpdater } from "electron-updater";
@@ -8,6 +8,7 @@ import { APP_NAME } from "./app-name";
 import { createHost, registerHostIpc } from "./host";
 import { registerIpc } from "./ipc";
 import { showStartupFailure } from "./startup-failure";
+import { createWaitNotifier } from "./wait-notify";
 
 // Every live window and the project it's pinned to: null = the main
 // multi-project dashboard, a projectId = a detached single-project window.
@@ -293,6 +294,22 @@ function createWindow(projectId?: string): BrowserWindow {
 	return win;
 }
 
+// A clicked notification: bring the dashboard forward (or open one) and show
+// the task there. The dashboard spans every project, so it can show any task.
+function openTaskInMainWindow(task: TaskDTO): void {
+	let win = [...windowProject].find(([w, pid]) => pid === null && !w.isDestroyed())?.[0];
+	if (!win) {
+		win = createWindow();
+		win.webContents.once("did-finish-load", () => win?.webContents.send(CH.evtOpenTask, task));
+	} else {
+		win.webContents.send(CH.evtOpenTask, task);
+	}
+	if (win.isMinimized()) win.restore();
+	win.show();
+	win.focus();
+	app.focus({ steal: true });
+}
+
 // Detach a project into its own window, or focus the one already showing it.
 function openProjectWindow(projectId: string): void {
 	for (const [w, pid] of windowProject) {
@@ -337,7 +354,16 @@ app
 		// SSH) on connect and re-points the IPC bridge + event forwarding at it. Binding
 		// the engine's events to every window is the host's job now (see createHost);
 		// window management (detaching a project) is desktop-native, passed to registerIpc.
-		const host = createHost({ localEngine: engine, broadcast });
+		// Every engine's events pass through here on their way to the windows, so
+		// this is where a due wait becomes a macOS notification (wait-notify.ts).
+		const notifyWait = createWaitNotifier(openTaskInMainWindow);
+		const host = createHost({
+			localEngine: engine,
+			broadcast: (channel, ...args) => {
+				if (channel === CH.evtTaskUpdated) notifyWait(args[0] as TaskDTO);
+				broadcast(channel, ...args);
+			},
+		});
 		registerIpc(host.router, { openProjectWindow, editorUrl: host.editorUrl });
 		registerHostIpc(host);
 

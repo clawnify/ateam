@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { TaskDTO, TriageBucket } from "@ateam/protocol";
-import { byWhatsNext, nextRank, relativeAge } from "./triage-order";
+import { byWhatsNext, nextRank, relativeAge, waitingLabel, waitState } from "./triage-order";
 
 const NOW = 1_700_000_000_000;
 
@@ -27,6 +27,9 @@ function task(
 		gitStatus: null,
 		lastEventAt: NOW,
 		isUnread: false,
+		tags: null,
+		waitingReason: null,
+		waitingUntil: null,
 		triage: { bucket, done: false, reason: "test" },
 		...over,
 	};
@@ -96,4 +99,34 @@ test("relativeAge is compact and handles a missing timestamp", () => {
 	expect(relativeAge(NOW - 5 * 60_000, NOW)).toBe("5m");
 	expect(relativeAge(NOW - 3 * 3_600_000, NOW)).toBe("3h");
 	expect(relativeAge(NOW - 6 * 86_400_000, NOW)).toBe("6d");
+});
+
+test("a live wait sinks below active work but stays above finished work", () => {
+	const parked = task(
+		"parked",
+		{ waitingReason: "Twilio", waitingUntil: NOW + 86_400_000 },
+		"unmerged_no_pr",
+	);
+	const active = task("active", {}, "active");
+	const done = task("done", {}, "merged_done");
+	expect(nextRank(parked, NOW)).toBeGreaterThan(nextRank(active, NOW));
+	expect(nextRank(parked, NOW)).toBeLessThan(nextRank(done, NOW));
+});
+
+test("a wait that has come due is blocked on you, ahead of an open PR", () => {
+	const due = task("due", { waitingReason: "Twilio", waitingUntil: NOW - 1 }, "unmerged_no_pr");
+	const pr = task("pr", {}, "open_pr");
+	expect(nextRank(due, NOW)).toBe(0);
+	expect(nextRank(due, NOW)).toBeLessThan(nextRank(pr, NOW));
+});
+
+test("waitState and the card's line follow the date", () => {
+	const soon = { waitingReason: "Twilio", waitingUntil: NOW + 4 * 86_400_000 };
+	expect(waitState(soon, NOW)).toBe("live");
+	expect(waitingLabel(soon, NOW)).toBe("waiting for Twilio · 4d");
+	const late = { waitingReason: "Twilio", waitingUntil: NOW - 2 * 86_400_000 };
+	expect(waitState(late, NOW)).toBe("due");
+	expect(waitingLabel(late, NOW)).toBe("check on Twilio · due 2d ago");
+	expect(waitState({ waitingUntil: null }, NOW)).toBe("none");
+	expect(waitingLabel({ waitingReason: null, waitingUntil: null }, NOW)).toBeNull();
 });

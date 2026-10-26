@@ -234,7 +234,10 @@ Two limits are Fly's:
 
 - **No scheduler.** A paused Sprite can't wake itself, so the engine keeps a Sprite
   with a loop on held (awake, and billed for what it uses) rather than let the loop
-  miss its tick.
+  miss its tick. A task waiting on a date does not hold it: a wait can be days
+  away. A paused Sprite files the card when it next wakes, so the board and the
+  Mac's notification come late, while Ateam Go still rings on time if it saw the
+  wait before the Sprite paused.
 - **Restarts that lose recent writes.** Sprites on the `sbd` storage driver (check
   `echo $SPRITE_STORAGE_DRIVER`) can restart on their own a minute or two after
   waking, losing about the last minute of disk writes

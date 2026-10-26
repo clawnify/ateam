@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AteamDb } from "@ateam/db";
@@ -28,18 +28,21 @@ let db: AteamDb;
 let services: Services;
 let taskId: string;
 let spawned: { command: string; cwd: string } | null;
+let launches: { args: string[] }[];
 const T0 = 1_700_000_000_000;
 
 beforeEach(() => {
 	db = createTestDb();
 	spawned = null;
 	const scratch = mkdtempSync(join(tmpdir(), "ateam-spawn-"));
+	launches = [];
 	services = {
 		db,
 		pty: {
 			// `args` is `["-l", "-c", "<agent cmd>; exec <shell> -l"]`.
 			spawn: (o: { args: string[]; cwd: string }) => {
 				spawned = { command: o.args[2] ?? "", cwd: o.cwd };
+				launches.push(o);
 				return "pty";
 			},
 			has: () => false,
@@ -131,7 +134,11 @@ describe("spawnAgentInTask on resume", () => {
 		// The box's sleep control reads session rows (Engine.isWorking): a resume
 		// filed as running kept the box up for as long as the idle pane lived.
 		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", resume: true });
-		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", prompt: "fix the bug" });
+		await spawnAgentInTask(services, () => {}, {
+			taskId,
+			agentId: "claude",
+			prompt: "fix the bug",
+		});
 		expect(repo.listOpenSessions(db).map((s) => s.status)).toEqual(["idle", "running"]);
 	});
 });
@@ -190,5 +197,51 @@ describe("resuming an agent whose --continue reaches beyond the worktree", () =>
 		services.latestSession = async () => ({ ok: false, id: null });
 		await spawnAgentInTask(services, () => {}, { taskId, agentId: "codex", resume: true });
 		expect(spawned?.command).toMatch(/^codex .* resume --last;/);
+	});
+});
+
+describe("spawnAgentInTask and a task parked on an outside party", () => {
+	const WAIT = { waitingReason: "Twilio approval", waitingUntil: T0 + 5 * 86_400_000 };
+
+	it("a resume keeps the wait — opening a stopped task is looking, not acting", async () => {
+		repo.updateTask(db, taskId, WAIT);
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", resume: true });
+		expect(repo.getTask(db, taskId)).toMatchObject(WAIT);
+	});
+
+	it("a fresh launch keeps a pending wait: it is about the outside party, not the user", async () => {
+		repo.updateTask(db, taskId, WAIT);
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", prompt: "carry on" });
+		expect(repo.getTask(db, taskId)).toMatchObject(WAIT);
+	});
+
+	it("a fresh launch ends a wait that already resurfaced, and says so", async () => {
+		repo.updateTask(db, taskId, { ...WAIT, waitingFiredAt: T0 });
+		const updated: string[] = [];
+		await spawnAgentInTask(services, (id) => updated.push(id), {
+			taskId,
+			agentId: "claude",
+			prompt: "carry on",
+		});
+		expect(repo.getTask(db, taskId)).toMatchObject({
+			waitingReason: null,
+			waitingUntil: null,
+			waitingFiredAt: null,
+		});
+		expect(updated).toContain(taskId);
+	});
+
+	it("a claude launch carries the board MCP, after the prompt so nothing is swallowed", async () => {
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", prompt: "hi there" });
+		const command = launches[0]?.args.at(-1) ?? "";
+		const mcp = command.indexOf("--mcp-config");
+		expect(mcp).toBeGreaterThan(command.indexOf("'hi there'"));
+		expect(command).toContain(
+			"--allowedTools 'mcp__ateam_board__get_board,mcp__ateam_board__set_status,mcp__ateam_board__set_waiting'",
+		);
+		// The config file names this terminal, which is how set_waiting knows whose card it is.
+		const file = /--mcp-config '([^']+)'/.exec(command)?.[1] ?? "";
+		const cfg = JSON.parse(readFileSync(file, "utf8"));
+		expect(cfg.mcpServers.ateam_board.headers["x-ateam-terminal-id"]).toHaveLength(36);
 	});
 });

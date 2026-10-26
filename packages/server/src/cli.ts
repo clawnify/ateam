@@ -140,7 +140,8 @@ function serveClient(
 
 /**
  * On a provider that can put this box to sleep (see sleep/index.ts), let it sleep
- * once no agent has worked for `idleSleepMinutes`, and wake it for loop ticks.
+ * once no agent has worked for `idleSleepMinutes`, and wake it for loop ticks
+ * and pending waits.
  * Anywhere else no driver answers and this does nothing.
  */
 async function maybeStartIdleSleep(engine: Engine): Promise<void> {
@@ -151,12 +152,21 @@ async function maybeStartIdleSleep(engine: Engine): Promise<void> {
 	sleepControl = await startSleepControl(driver, {
 		working: () => engine.isWorking(),
 		nextLoopAt: () => {
-			if (readSettings().settings.engine.loopsPaused) return null;
-			const live = engine.services.loopRunner.describe().filter((l) => l.enabled);
-			if (live.length === 0) return null;
-			// A live loop with no slot yet is about to be scheduled: treat it as due now.
-			if (live.some((l) => l.nextRunAt == null)) return Date.now();
-			return Math.min(...live.map((l) => l.nextRunAt as number));
+			// A pending wait wakes the box too, and pausing loops does not hold it:
+			// it is a reminder the user asked for, not a scheduled job. Only where the
+			// provider can wake us, though: a wait days out must not hold a box awake
+			// for days, and the clients notify on the date by themselves anyway.
+			const nextWait = driver.canWakeForLoops ? engine.services.waits.nextDueAt() : null;
+			const nextLoop = (): number | null => {
+				if (readSettings().settings.engine.loopsPaused) return null;
+				const live = engine.services.loopRunner.describe().filter((l) => l.enabled);
+				if (live.length === 0) return null;
+				// A live loop with no slot yet is about to be scheduled: treat it as due now.
+				if (live.some((l) => l.nextRunAt == null)) return Date.now();
+				return Math.min(...live.map((l) => l.nextRunAt as number));
+			};
+			const due = [nextLoop(), nextWait].filter((t): t is number => t != null);
+			return due.length > 0 ? Math.min(...due) : null;
 		},
 		idleMinutes: () => readSettings().settings.engine.idleSleepMinutes,
 		log,

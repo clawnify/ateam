@@ -296,7 +296,11 @@ export async function ensureBoardMcpConfig(opts: {
 }
 
 /** The board tools, named for `claude --allowedTools`. */
-export const BOARD_MCP_TOOLS = ["mcp__ateam_board__get_board", "mcp__ateam_board__set_status"];
+export const BOARD_MCP_TOOLS = [
+	"mcp__ateam_board__get_board",
+	"mcp__ateam_board__set_status",
+	"mcp__ateam_board__set_waiting",
+];
 
 /** Build the PTY environment for an agent session, injecting hook correlation. */
 export function buildAgentEnv(opts: {

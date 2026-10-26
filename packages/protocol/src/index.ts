@@ -78,7 +78,11 @@
 // v15: pty:boxShell, the box's own shell outside every project (one per box,
 // reopened). A new method, so no gate: a v14 engine answers "Unknown method" and
 // the phone points at Update box instead.
-export const PROTOCOL_VERSION = 15;
+// v16: waits. tasks:setWaiting parks a task on an outside party until a date,
+// and TaskDTO gained `waitingReason`, `waitingUntil` and `waitingFiredAt`, all
+// nullable, so an older engine reads as "nothing is waiting". The new method
+// rejects on an older engine, which is loud, so it needs no gate.
+export const PROTOCOL_VERSION = 16;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -282,6 +286,17 @@ export interface TaskDTO {
 	/** Model-assigned topic tags; null when none were generated (the client
 	 *  falls back to deriving them from the task's text). */
 	tags: string[] | null;
+	/**
+	 * Parked on an outside party. Both null when not waiting. While `waitingUntil`
+	 * is in the future the card sinks; once it passes, the engine files the card
+	 * in Needs You and it outranks everything until someone acts. Nullable on
+	 * purpose: an older engine simply omits them (see tolerate.ts).
+	 */
+	waitingReason: string | null;
+	waitingUntil: number | null;
+	/** When the wait resurfaced the card; null while pending. A client notifies
+	 *  once per (task, waitingFiredAt). */
+	waitingFiredAt: number | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
 }
@@ -294,6 +309,8 @@ export interface InstallAgentDTO {
 	/** The one-time OAuth the user runs themselves, when the agent has one. */
 	loginCommand?: string;
 }
+/** What a task waits for and until when; null clears the wait. */
+export type TaskWait = { reason: string; until: number } | null;
 
 export interface AgentDTO {
 	id: string;
@@ -767,6 +784,7 @@ export const CH = {
 	tasksRemove: "tasks:remove",
 	tasksSetColumn: "tasks:setColumn",
 	tasksMarkRead: "tasks:markRead",
+	tasksSetWaiting: "tasks:setWaiting",
 	tasksCleanup: "tasks:cleanup",
 	tasksCleanupPreview: "tasks:cleanupPreview",
 	tasksCleanupCandidates: "tasks:cleanupCandidates",
@@ -817,6 +835,7 @@ export const CH = {
 	evtPtyData: "evt:pty:data",
 	evtPtyExit: "evt:pty:exit",
 	evtOpenSettings: "evt:settings:open",
+	evtOpenTask: "evt:task:open",
 	evtTaskUpdated: "evt:task:updated",
 	evtTaskRemoved: "evt:task:removed",
 	evtLoopsUpdated: "evt:loops:updated",
@@ -938,6 +957,8 @@ export interface AteamApi {
 		setColumn(id: string, column: KanbanColumn): Promise<TaskDTO>;
 		/** Clear the unread flag once the user has actually looked at the task. */
 		markRead(id: string): Promise<TaskDTO>;
+		/** Park the task on an outside party until a date, or clear it (null). */
+		setWaiting(id: string, wait: TaskWait): Promise<TaskDTO>;
 		/** Preview which tasks a cleanup would remove vs keep (and why). */
 		cleanupPreview(projectId: string): Promise<CleanupReport>;
 		/** Worktrees advised for cleanup (idle/finished), with their terminals. */
@@ -1053,6 +1074,11 @@ export interface AteamApi {
 		 * Optional: a client without an app menu (the phone) never receives it.
 		 */
 		onOpenSettings?(cb: () => void): () => void;
+		/**
+		 * A notification for this task was clicked (a wait came due): open it.
+		 * Optional: only the desktop posts OS notifications from its main process.
+		 */
+		onOpenTask?(cb: (task: TaskDTO) => void): () => void;
 	};
 	window: {
 		/**

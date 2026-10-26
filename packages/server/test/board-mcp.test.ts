@@ -1,14 +1,18 @@
 import { describe, expect, it } from "bun:test";
-import { type BoardHandlers, dispatchMcp } from "../src/hooks/board-mcp";
+import { type BoardHandlers, dispatchMcp, parseUntil } from "../src/hooks/board-mcp";
 
 // A fake board that records what it was called with.
 function fakeBoard() {
-	const calls: { setStatus: unknown[] } = { setStatus: [] };
+	const calls: { setStatus: unknown[]; setWaiting: unknown[] } = { setStatus: [], setWaiting: [] };
 	const board: BoardHandlers = {
 		get: async () => ({ tasks: [{ taskId: "t1" }] }),
 		setStatus: async (req) => {
 			calls.setStatus.push(req);
 			return { ok: true, reason: `moved ${req.taskId}` };
+		},
+		setWaiting: async (req) => {
+			calls.setWaiting.push(req);
+			return { ok: true, reason: `parked ${req.taskId}` };
 		},
 	};
 	return { board, calls };
@@ -39,14 +43,14 @@ describe("dispatchMcp", () => {
 		expect(r.kind).toBe("accepted");
 	});
 
-	it("tools/list returns get_board and set_status", async () => {
+	it("tools/list returns get_board, set_status and set_waiting", async () => {
 		const { board } = fakeBoard();
 		const r = await dispatchMcp(rpc("tools/list"), board);
 		if (r.kind === "json") {
 			const names = (r.body as { result: { tools: { name: string }[] } }).result.tools.map(
 				(t) => t.name,
 			);
-			expect(names).toEqual(["get_board", "set_status"]);
+			expect(names).toEqual(["get_board", "set_status", "set_waiting"]);
 		}
 	});
 
@@ -112,5 +116,56 @@ describe("dispatchMcp", () => {
 		if (r.kind === "json") {
 			expect((r.body as { error: { code: number } }).error.code).toBe(-32602);
 		}
+	});
+});
+
+describe("set_waiting", () => {
+	it("parses the ISO date and hands the caller's terminal to the board, taskId optional", async () => {
+		const { board, calls } = fakeBoard();
+		const r = await dispatchMcp(
+			rpc("tools/call", {
+				name: "set_waiting",
+				arguments: { reason: "Twilio approval", until: "2030-01-02T09:00:00Z" },
+			}),
+			board,
+			{ callerTerminalId: "term-1" },
+		);
+		expect(r.kind).toBe("json");
+		expect(calls.setWaiting).toEqual([
+			{
+				taskId: undefined,
+				reason: "Twilio approval",
+				until: Date.parse("2030-01-02T09:00:00Z"),
+				callerTerminalId: "term-1",
+			},
+		]);
+	});
+
+	it("refuses a date it cannot read without touching the board", async () => {
+		const { board, calls } = fakeBoard();
+		const r = await dispatchMcp(
+			rpc("tools/call", {
+				name: "set_waiting",
+				arguments: { taskId: "t1", reason: "x", until: "next tuesday" },
+			}),
+			board,
+		);
+		if (r.kind !== "json") throw new Error("expected json");
+		expect((r.body as { result: { isError: boolean } }).result.isError).toBe(true);
+		expect(calls.setWaiting).toEqual([]);
+	});
+});
+
+describe("parseUntil", () => {
+	it("reads a bare date as 09:00 local, not UTC midnight", () => {
+		const ms = parseUntil("2030-03-04");
+		expect(ms).not.toBeNull();
+		const d = new Date(ms as number);
+		expect([d.getFullYear(), d.getMonth(), d.getDate(), d.getHours()]).toEqual([2030, 2, 4, 9]);
+	});
+	it("passes a full timestamp through and rejects junk", () => {
+		expect(parseUntil("2030-03-04T10:30:00Z")).toBe(Date.parse("2030-03-04T10:30:00Z"));
+		expect(parseUntil("soon")).toBeNull();
+		expect(parseUntil("")).toBeNull();
 	});
 });

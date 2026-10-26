@@ -7,6 +7,7 @@ import type { LoopRunner } from "./loops/runner";
 import type { MergeQueue } from "./merge-queue";
 import type { PtyClient } from "./pty/pty-client";
 import { triageTask } from "./task-triage";
+import type { WaitTimers } from "./waits";
 import type { WorktreeGuard } from "./worktree-guard";
 
 export interface Services {
@@ -52,6 +53,8 @@ export interface Services {
 	pendingSeeds: Map<string, Promise<void>>;
 	/** Keeps launches and seeding out of a worktree while it is deleted. */
 	worktreeGuard: WorktreeGuard;
+	/** Resurface timers for tasks parked on an outside party. */
+	waits: WaitTimers;
 }
 
 export function toProjectDTO(p: Project): ProjectDTO {
@@ -109,6 +112,9 @@ export function toTaskDTO(t: Task, preparing = false, agentIds: string[] = []): 
 		isUnread: Boolean(t.isUnread),
 		preparing,
 		tags: t.tags ?? null,
+		waitingReason: t.waitingReason ?? null,
+		waitingUntil: t.waitingUntil ?? null,
+		waitingFiredAt: t.waitingFiredAt ?? null,
 		triage: triageTask(t),
 	};
 }

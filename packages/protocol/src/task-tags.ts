@@ -69,9 +69,13 @@ export function tagsFor(task: {
 	name: string;
 	description?: string | null;
 	tags?: string[] | null;
+	waitingUntil?: number | null;
 }): string[] {
-	if (task.tags?.length) return task.tags.slice(0, MAX_TAGS);
-	return taskTags(task.name, task.description);
+	const topic = task.tags?.length ? task.tags : taskTags(task.name, task.description);
+	// A parked task wears `waiting` first: it is the one tag that says what to
+	// do with the card right now, and it makes `#waiting` list every parked task.
+	const all = task.waitingUntil != null ? ["waiting", ...topic] : topic;
+	return all.slice(0, MAX_TAGS);
 }
 
 /**
@@ -80,7 +84,12 @@ export function tagsFor(task: {
  */
 export function matchesTagQuery(
 	term: string,
-	task: { name: string; description?: string | null; tags?: string[] | null },
+	task: {
+		name: string;
+		description?: string | null;
+		tags?: string[] | null;
+		waitingUntil?: number | null;
+	},
 ): boolean {
 	const wanted = term.replace(/^#/, "").toLowerCase();
 	if (!wanted) return true;
