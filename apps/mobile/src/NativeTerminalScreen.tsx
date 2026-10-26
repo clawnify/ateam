@@ -100,17 +100,26 @@ export function ReconnectingTerminal({
 	lead,
 	title,
 	onBack,
+	waking,
+	wakeError,
 }: {
 	lead: ReactNode;
 	title: string;
 	onBack: () => void;
+	/** The provider the box is being woken through right now, if any. */
+	waking: string | null;
+	/** Why the last wake failed, until a wake or a connect succeeds. */
+	wakeError: string | null;
 }) {
 	return (
 		<View style={styles.root}>
 			<StripBar lead={lead} title={title} expanded onToggle={onBack} />
 			<View style={styles.center}>
 				<ActivityIndicator color={C.ink} />
-				<Text style={styles.hint}>Reconnecting to the box…</Text>
+				<Text style={styles.hint}>
+					{waking ? `Waking the box through ${waking}…` : "Reconnecting to the box…"}
+				</Text>
+				{wakeError && !waking ? <Text style={styles.err}>{wakeError}</Text> : null}
 			</View>
 		</View>
 	);
