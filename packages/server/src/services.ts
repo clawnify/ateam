@@ -108,7 +108,11 @@ export function toTaskDTO(t: Task, preparing = false, agentIds: string[] = []): 
 		prUrl: t.prUrl ?? null,
 		prState: t.prState ?? null,
 		gitStatus: t.gitStatus ?? null,
-		lastEventAt: t.lastEventAt ?? t.updatedAt ?? null,
+		// A task no hook ever reached falls back to its creation, never to
+		// `updatedAt`: background writes (the git-status sweep, PR polling,
+		// tagging) bump that, and would float a dormant task to the top of the
+		// "Recently updated" sort.
+		lastEventAt: t.lastEventAt ?? t.createdAt ?? null,
 		isUnread: Boolean(t.isUnread),
 		preparing,
 		tags: t.tags ?? null,
