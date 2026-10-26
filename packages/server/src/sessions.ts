@@ -13,10 +13,17 @@ import {
 } from "@ateam/agents";
 import { repo, type Task } from "@ateam/db";
 import { createTask as gitCreateTask, seedWorktree } from "@ateam/git-core";
-import { buildAgentEnv, ensureClaudeHooks, ensureCodexHooks } from "./agent-setup";
+import {
+	BOARD_MCP_TOOLS,
+	buildAgentEnv,
+	ensureBoardMcpConfig,
+	ensureClaudeHooks,
+	ensureCodexHooks,
+} from "./agent-setup";
 import { latestCodexThreadInDir } from "./codex-threads";
 import { refreshLoginPath } from "./login-env";
 import type { Services } from "./services";
+import { clearWaiting, isFiredWait } from "./waits";
 
 export const shell = process.env.SHELL || "/bin/zsh";
 
@@ -258,6 +265,15 @@ async function launchAgent(
 		await ensureCodexHooks(task.worktreePath, services.notifyScriptPath);
 	}
 
+	// A fresh launch on a task whose wait already resurfaced means someone is
+	// acting on it again, so that wait is over. A pending wait survives, and so
+	// does any wait across a resume: opening a stopped task auto-resumes it, and
+	// looking is not acting. See waits.ts.
+	const freshLaunch = !input.resume && !input.resumeSessionId && !input.agentMode;
+	if (freshLaunch && isFiredWait(task) && clearWaiting(services.db, task)) {
+		notifyTaskUpdated(task.id);
+	}
+
 	const env = buildAgentEnv({
 		terminalId,
 		agentId: agent.id,
@@ -290,6 +306,20 @@ async function launchAgent(
 		// per-launch via -c so the user's ~/.codex/config.toml is untouched.
 		const codexNotify = join(services.hooksDir, "codex-notify.sh");
 		agentCmd = agentCmd.replace(/^codex/, `codex -c 'notify=["sh","${codexNotify}"]'`);
+	} else if (agent.id === "claude" && !input.agentMode) {
+		// The board tools (get_board / set_status / set_waiting), served by the
+		// hook server and keyed to this terminal so the session can only touch
+		// its own card. Pre-allowed: they are guarded server-side, so a
+		// permission prompt would only add noise. Both flags are variadic
+		// (`<configs...>`, `<tools...>`) and would swallow a positional prompt
+		// that followed them, so they go AFTER everything agentCommand built.
+		const mcpConfig = await ensureBoardMcpConfig({
+			hooksDir: services.hooksDir,
+			hookPort: services.hookPort,
+			terminalId,
+		});
+		const sq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+		agentCmd = `${agentCmd} --mcp-config ${sq(mcpConfig)} --allowedTools ${sq(BOARD_MCP_TOOLS.join(","))}`;
 	}
 	// The pane outlives the agent (the `exec` keeps it usable as a shell), so the
 	// agent's own exit is otherwise invisible: no PTY exit fires, and the session

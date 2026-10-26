@@ -105,6 +105,18 @@ export const tasks = sqliteTable(
 		 * whose tagging call failed.
 		 */
 		tags: text("tags", { mode: "json" }).$type<string[]>(),
+		/**
+		 * Parked on an outside party (a review, an approval, an email). Both set
+		 * together and cleared together: `waitingUntil` is when to chase it, and
+		 * the card resurfaces in Needs You then; `waitingReason` is what it waits
+		 * for, shown on the card. Cleared by the user replying or a fresh launch —
+		 * see waits.ts in the server package.
+		 */
+		waitingReason: text("waiting_reason"),
+		waitingUntil: integer("waiting_until"),
+		/** When the wait resurfaced the card; null while it is still pending. Boot
+		 *  re-arms only pending waits, and clients notify once per value. */
+		waitingFiredAt: integer("waiting_fired_at"),
 		lastEventAt: integer("last_event_at"),
 		isUnread: integer("is_unread", { mode: "boolean" }).default(false),
 		createdBy: text("created_by")

@@ -10,8 +10,6 @@
 // them from its own OS (or, later, from server-fs RPC helpers).
 import type {
 	AgentDTO,
-	GithubIssueDTO,
-	GithubIssuesDTO,
 	AteamApi,
 	AttachDelivery,
 	BoxUpdateStarted,
@@ -21,6 +19,8 @@ import type {
 	CredentialsResult,
 	DiffResultDTO,
 	DirListingDTO,
+	GithubIssueDTO,
+	GithubIssuesDTO,
 	GitStatusSnapshot,
 	InstallAgentDTO,
 	KanbanColumn,
@@ -119,6 +119,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			remove: (input) => call<void>(CH.tasksRemove, [input]),
 			setColumn: (id, column: KanbanColumn) => call<TaskDTO>(CH.tasksSetColumn, [id, column]),
 			markRead: (id) => call<TaskDTO>(CH.tasksMarkRead, [id]),
+			setWaiting: (id, wait) => call<TaskDTO>(CH.tasksSetWaiting, [id, wait]),
 			cleanupPreview: (projectId) => call<CleanupReport>(CH.tasksCleanupPreview, [projectId]),
 			cleanupCandidates: (projectId) =>
 				call<CleanupCandidate[]>(CH.tasksCleanupCandidates, [projectId]),

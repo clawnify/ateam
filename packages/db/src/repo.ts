@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import {
 	agentEvents,
 	agentSessions,
@@ -71,6 +71,17 @@ export const repo = {
 			.from(tasks)
 			.where(eq(tasks.projectId, projectId))
 			.orderBy(desc(tasks.createdAt))
+			.all();
+	},
+
+	/** Every task whose wait has not resurfaced yet, across projects: the engine
+	 *  re-arms their timers from this at boot, and a sleeping box wakes for the
+	 *  earliest. A fired wait stays on its row for the card but is not pending. */
+	listPendingWaits(db: AteamDb) {
+		return db
+			.select()
+			.from(tasks)
+			.where(and(isNotNull(tasks.waitingUntil), isNull(tasks.waitingFiredAt)))
 			.all();
 	},
 

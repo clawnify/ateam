@@ -389,6 +389,11 @@ input {
 .task-trail .tstatus {
 	margin-right: 8px;
 }
+/* The two actions sit side by side inside the dot's cell. */
+.task-trail .trail-actions {
+	display: flex;
+	gap: 2px;
+}
 .task-trail .iconbtn {
 	opacity: 0;
 	pointer-events: none;
@@ -849,6 +854,12 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* A wait that has come due is the reason to open the card: plain text (the
+   house accent is white, never purple), full strength. */
+.card .triage.wait-due {
+	color: var(--text);
+	opacity: 1;
+}
 /* Age + agent icon, right-aligned as one group so the icon never lands on top
    of the age label. */
 .card .meta .meta-end {
@@ -880,7 +891,7 @@ input {
 	display: none;
 	flex: none;
 	gap: 3px;
-	margin-right: 20px;
+	margin-right: 48px;
 	/* Zero cross-size, so chips take horizontal room (squeezing the name, which
 	   already ellipsizes) but contribute nothing to the row's height: the chip
 	   is 17.5px against a 15px name line box, so in normal flow revealing it on

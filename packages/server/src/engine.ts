@@ -33,6 +33,7 @@ import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
 import { readSettings } from "./settings-file";
 import { createTurnClassifier } from "./turn-classifier";
+import { applySetWaiting, CLEAR_WAIT, isFiredWait, WaitTimers } from "./waits";
 import { WorktreeGuard } from "./worktree-guard";
 import { createWorktreeSweep, type WorktreeSweep } from "./worktree-sweep";
 
@@ -214,6 +215,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 
 	const mergeQueue = new MergeQueue({ db, onTaskUpdated: sendTaskUpdated });
 	const followUps = new FollowUps();
+	// Tasks parked on an outside party resurface on their date — see waits.ts.
+	const waits = new WaitTimers({ db, onExpired: sendTaskUpdated });
 	// Loops are user-created only; nothing is registered here. A loop tick
 	// starts an agent session through the same task-create + spawn path the
 	// composer uses. (`services` is declared just below and also holds this
@@ -247,6 +250,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	hooks.setBoardHandlers({
 		get: () => buildBoardView(db),
 		setStatus: async (req) => applySetStatus(db, req, sendTaskUpdated),
+		setWaiting: async (req) => applySetWaiting(db, req, waits, sendTaskUpdated),
 	});
 
 	// A finished turn with a follow-up armed continues instead of stopping. The
@@ -266,6 +270,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		followUps,
 		pendingSeeds,
 		worktreeGuard: new WorktreeGuard(),
+		waits,
 	};
 
 	// Record an agent's exit: close the session and file its card. Shared by the
@@ -414,6 +419,11 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			// Only a Stop is ever suppressed, so only a Stop pays for the lookup:
 			// `Working` fires on every tool use and must not hit the loops table.
 			const ownedByLoop = e.eventType === "Stop" && repo.loopForTask(db, task.id) !== undefined;
+			// The user typing into a task whose wait already resurfaced is the one
+			// hook event that ends it: they came back to it. A wait still pending is
+			// left alone, since chatting in the task says nothing about the outside
+			// party it waits on. See waits.ts.
+			const cameBack = e.eventType === "UserReply" && isFiredWait(task);
 			repo.updateTask(db, task.id, {
 				agentStatus: status,
 				column,
@@ -422,6 +432,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				// task isn't "unread"; Stop/PermissionRequest are news for them,
 				// unless the Stop is just a loop's tick ending on schedule.
 				isUnread: mapEventToUnread(e.eventType, ownedByLoop),
+				...(cameBack ? CLEAR_WAIT : {}),
 			});
 			sendTaskUpdated(task.id);
 			if (e.eventType === "UserReply" && e.prompt) turns.userReplied(task.id, e.prompt);
@@ -486,6 +497,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		});
 	});
 
+	// Timers for waits that were armed before this process started.
+	waits.start();
+
 	return {
 		services,
 		on(event, listener) {
@@ -531,6 +545,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				clearInterval(reapTimer);
 				reapTimer = null;
 			}
+			waits.stop();
 		},
 		stopHooks() {
 			hooks.stop();

@@ -66,6 +66,8 @@ import {
 import { type Tab, TabStrip } from "./src/TabStrip";
 import { TerminalScreen } from "./src/TerminalScreen";
 import { sortTasks } from "./src/task-order";
+import { onReminderTap, syncReminders } from "./src/wait-notifications";
+import type { ReminderData } from "./src/wait-reminders";
 import {
 	filled,
 	type InputValues,
@@ -930,6 +932,8 @@ export default function App() {
 			const all = perProject.flat().sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0));
 			if (stale()) return projs;
 			setTasks(all);
+			// The whole list, so reminders for waits cleared while away go too.
+			if (target.current) syncReminders(target.current, all, true);
 			// A box that predates loops rejects the call; the sections just stay empty.
 			const boxLoops = await api.loops.list().catch(() => []);
 			if (!stale()) setLoops(boxLoops);
@@ -948,6 +952,7 @@ export default function App() {
 		const api = conn.current?.api;
 		if (!api || view !== "board") return;
 		const off = api.events.onTaskUpdated((t) => {
+			if (target.current) syncReminders(target.current, [t], false);
 			setTasks((prev) => {
 				const i = prev.findIndex((x) => x.id === t.id);
 				if (i === -1) return [t, ...prev];
@@ -1386,12 +1391,15 @@ export default function App() {
 		void Linking.openURL(`http://${h}:${p}`);
 	}, [previewPort]);
 
+	// Settles once the launch connect below has: a reminder tap that launched the
+	// app waits for it rather than racing it to a box.
+	const booted = useRef<Promise<void>>(Promise.resolve());
 	// On launch: prefill the last box and auto-reconnect to it, so reopening the app
 	// lands straight on the live board (no retyping/tapping). On failure it falls back
 	// to the connection screen with the error, fields prefilled.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on mount
 	useEffect(() => {
-		void (async () => {
+		booted.current = (async () => {
 			// Load the remembered project BEFORE connecting, so the first refresh() restores
 			// it instead of racing to project #1. Preview port is a plain UI default.
 			const [savedBoxes, savedProject, savedPreviewPort, agreed] = await Promise.all([
@@ -1411,9 +1419,35 @@ export default function App() {
 			preferredProjectId.current = savedProject;
 			if (savedPreviewPort) setPreviewPort(savedPreviewPort);
 			if (!last) return;
-			void connectTo(last.host, last.port, { wake: true, navigate: true });
+			await connectTo(last.host, last.port, { wake: true, navigate: true });
 		})();
 	}, []);
+
+	// A tapped wait reminder opens its task, on its box: connecting to that box
+	// first when the phone is on another one, or on none.
+	const openReminder = useCallback(
+		async (r: ReminderData) => {
+			await booted.current;
+			const here = conn.current && target.current && boxKey(target.current) === boxKey(r);
+			if (!here) {
+				const saved = boxesRef.current.find((b) => boxKey(b) === boxKey(r));
+				if (saved) await fillForm(saved);
+				if (!(await connectTo(r.host, r.port, { wake: true, navigate: true }))) return;
+			}
+			const api = conn.current?.api;
+			if (!api) return;
+			const projs = await api.projects.list();
+			const all = (await Promise.all(projs.map((p) => api.tasks.list(p.id)))).flat();
+			const t = all.find((x) => x.id === r.taskId);
+			if (!t) return; // removed since: the board it landed on is the best there is
+			viewRef.current = "board";
+			setView("board");
+			setOpenTaskFocus(false);
+			setOpenTask(t);
+		},
+		[connectTo, fillForm],
+	);
+	useEffect(() => onReminderTap((r) => void openReminder(r)), [openReminder]);
 
 	// Deep links, mainly for driving the app to a screen for App Store screenshots
 	// (xcrun simctl openurl ateamgo://demo[/task/<id>|/preview]). `ateamgo://demo`

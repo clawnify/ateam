@@ -80,3 +80,10 @@ test("model tags are capped like keyword ones", () => {
 	const t = { name: "whatever", tags: ["a", "b", "c", "d", "e"] };
 	expect(tagsFor(t).length).toBe(MAX_TAGS);
 });
+
+test("a parked task wears `waiting` first and answers the #waiting filter", () => {
+	const t = { name: "fix the auth api", tags: ["bug", "auth", "api"], waitingUntil: 1 };
+	expect(tagsFor(t)).toEqual(["waiting", "bug", "auth"]);
+	expect(matchesTagQuery("#wait", t)).toBe(true);
+	expect(matchesTagQuery("#wait", { ...t, waitingUntil: null })).toBe(false);
+});

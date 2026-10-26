@@ -10,6 +10,7 @@
 		"newArchEnabled": false,
 		"plugins": [
 			"./plugins/withFmtConstevalFix",
+			"./plugins/withoutPushEntitlement",
 			[
 				"expo-image-picker",
 				{

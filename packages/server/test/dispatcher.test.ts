@@ -37,6 +37,7 @@ function makeEngine(db: AteamDb, agentPresence: BinaryPresence = "present") {
 			followUps: { arm() {}, discard() {} },
 			pendingSeeds: new Map(),
 			worktreeGuard: new WorktreeGuard(),
+			waits: { arm() {} },
 			hooks: {},
 			mergeQueue: {},
 			loopRunner: { describe: () => [] },
@@ -227,12 +228,10 @@ describe("createDispatcher", () => {
 			const resumes: Promise<unknown>[] = [];
 			(services.pty as { kill: () => void }).kill = () => {
 				resumes.push(
-					d
-						.handle(CH.ptySpawnAgent, [{ taskId: task.id, agentId: "claude", resume: true }])
-						.then(
-							() => "launched",
-							(e: Error) => e.message,
-						),
+					d.handle(CH.ptySpawnAgent, [{ taskId: task.id, agentId: "claude", resume: true }]).then(
+						() => "launched",
+						(e: Error) => e.message,
+					),
 				);
 			};
 			const launchesBefore = spawned.length;
@@ -278,6 +277,40 @@ describe("createDispatcher", () => {
 		} finally {
 			await tmp.cleanup();
 		}
+	});
+
+	// The sidebar's park/unpark. The agent's path (the MCP tool) shares
+	// applySetWaiting; this covers the RPC shape and the null-clears contract.
+	it("tasks:setWaiting parks a task and null clears it, broadcasting both", async () => {
+		const db = createTestDb();
+		const { engine, taskUpdated } = makeEngine(db);
+		const d = createDispatcher(engine);
+		const project = repo.upsertProject(db, { repoPath: "/r/w", name: "W", defaultBranch: "main" });
+		const task = repo.createTask(db, {
+			projectId: project!.id,
+			name: "wait on twilio",
+			slug: "wait-on-twilio",
+			branch: "wait-on-twilio",
+			baseBranch: "main",
+			worktreePath: "/r/w/.ateam/worktrees/wait-on-twilio",
+		});
+		const until = Date.now() + 5 * 86_400_000;
+		const parked = (await d.handle(CH.tasksSetWaiting, [
+			task.id,
+			{ reason: "Twilio approval", until },
+		])) as { waitingReason: string | null; waitingUntil: number | null };
+		expect(parked).toMatchObject({ waitingReason: "Twilio approval", waitingUntil: until });
+		expect(taskUpdated).toEqual([task.id]);
+
+		await expect(d.handle(CH.tasksSetWaiting, [task.id, { reason: "", until }])).rejects.toThrow(
+			/waiting for/,
+		);
+
+		const cleared = (await d.handle(CH.tasksSetWaiting, [task.id, null])) as {
+			waitingUntil: number | null;
+		};
+		expect(cleared.waitingUntil).toBeNull();
+		expect(taskUpdated).toEqual([task.id, task.id]);
 	});
 
 	// --- tabs a restart took away ---------------------------------------------

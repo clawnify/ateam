@@ -35,6 +35,7 @@ const api: AteamApi = {
 		remove: (input) => ipcRenderer.invoke(CH.tasksRemove, input),
 		setColumn: (id, column: KanbanColumn) => ipcRenderer.invoke(CH.tasksSetColumn, id, column),
 		markRead: (id) => ipcRenderer.invoke(CH.tasksMarkRead, id),
+		setWaiting: (id, wait) => ipcRenderer.invoke(CH.tasksSetWaiting, id, wait),
 		cleanupPreview: (projectId) => ipcRenderer.invoke(CH.tasksCleanupPreview, projectId),
 		cleanup: (projectId) => ipcRenderer.invoke(CH.tasksCleanup, projectId),
 		cleanupCandidates: (projectId) => ipcRenderer.invoke(CH.tasksCleanupCandidates, projectId),
@@ -127,6 +128,11 @@ const api: AteamApi = {
 			const handler = () => cb();
 			ipcRenderer.on(CH.evtOpenSettings, handler);
 			return () => ipcRenderer.off(CH.evtOpenSettings, handler);
+		},
+		onOpenTask: (cb: (task: TaskDTO) => void) => {
+			const handler = (_: unknown, task: TaskDTO) => cb(task);
+			ipcRenderer.on(CH.evtOpenTask, handler);
+			return () => ipcRenderer.off(CH.evtOpenTask, handler);
 		},
 		onTaskRemoved: (cb: (taskId: string) => void) => {
 			const handler = (_: unknown, taskId: string) => cb(taskId);

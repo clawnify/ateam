@@ -26,6 +26,14 @@ export interface BoardHandlers {
 		/** The calling session's terminal id (a self-move), when known. */
 		callerTerminalId?: string;
 	}): Promise<{ ok: boolean; reason: string }>;
+	setWaiting(req: {
+		/** Omitted by a session: it parks its own task. */
+		taskId?: string;
+		reason: string;
+		/** Epoch ms — parsed from the tool's ISO string before it gets here. */
+		until: number;
+		callerTerminalId?: string;
+	}): Promise<{ ok: boolean; reason: string }>;
 }
 
 /** Per-request context the HTTP layer derives (e.g. the caller's terminal id). */
@@ -36,8 +44,10 @@ export interface McpContext {
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const SERVER_INFO = { name: "ateam_board", version: "0.1.0" };
 
-/** The two tools. `to` is constrained to the assignable columns to steer the
- *  model; the guardrail (validateSetStatus) still enforces it server-side. */
+/** The board tools. `to` is constrained to the assignable columns to steer the
+ *  model; the guardrails (validateSetStatus, validateWait) still enforce
+ *  server-side. `set_waiting`'s description is the only instruction a session
+ *  ever gets about waits — there is no system prompt — so it says WHEN to call. */
 const TOOLS = [
 	{
 		name: "get_board",
@@ -61,6 +71,33 @@ const TOOLS = [
 				reason: { type: "string", description: "Why this move — recorded in the audit trail." },
 			},
 			required: ["taskId", "to"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "set_waiting",
+		description:
+			'Park the task you are working in until a date, and have the user reminded then. Call it the moment you tell the user that work is blocked until someone else acts (a review, an approval, an email) or that a next step has to wait for something to happen first ("after tonight\'s 20:00 UTC run, check its results"), so it cannot be forgotten: the card sinks on the board until the date, then resurfaces in Needs You and the user gets a notification on their Mac and phone. Calling it again replaces the date. Leave taskId out: a session can only park its own task, and this is it.',
+		inputSchema: {
+			type: "object",
+			properties: {
+				taskId: {
+					type: "string",
+					description:
+						"Only for a caller that is not a task's session. Omit it: yours is inferred.",
+				},
+				reason: {
+					type: "string",
+					description:
+						"What it is waiting for, short — shown on the card (e.g. 'Twilio voice approval').",
+				},
+				until: {
+					type: "string",
+					description:
+						"When to remind, ISO 8601. Give a time with its offset when the moment matters (e.g. '2026-10-26T21:00:00Z'); a bare date ('2026-09-09') means 09:00 the user's time. Use the outer bound the other party gave, plus a margin for a job to finish.",
+				},
+			},
+			required: ["reason", "until"],
 			additionalProperties: false,
 		},
 	},
@@ -148,8 +185,45 @@ async function callTool(
 			});
 			return ok(id, textContent(res.reason, !res.ok));
 		}
+		if (name === "set_waiting") {
+			const taskId = args.taskId != null ? String(args.taskId) : undefined;
+			const reason = String(args.reason ?? "");
+			const untilText = String(args.until ?? "");
+			if (!reason || !untilText) {
+				return ok(id, textContent("reason and until are required", true));
+			}
+			const until = parseUntil(untilText);
+			if (until == null) {
+				return ok(id, textContent(`until is not an ISO 8601 date: ${untilText}`, true));
+			}
+			const res = await board.setWaiting({
+				taskId,
+				reason,
+				until,
+				callerTerminalId: ctx.callerTerminalId,
+			});
+			return ok(id, textContent(res.reason, !res.ok));
+		}
 		return err(id, -32602, `unknown tool: ${name}`);
 	} catch (e) {
 		return ok(id, textContent(`tool failed: ${e instanceof Error ? e.message : String(e)}`, true));
 	}
+}
+
+/**
+ * ISO 8601 → epoch ms, or null. A bare date ("2026-09-09") is read as 09:00
+ * LOCAL time rather than UTC midnight: "check back on the 9th" means that
+ * morning, not the small hours of the night before in every timezone west of
+ * Greenwich.
+ */
+export function parseUntil(text: string): number | null {
+	const t = text.trim();
+	const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+	if (dateOnly) {
+		const [, y, m, d] = dateOnly;
+		const ms = new Date(Number(y), Number(m) - 1, Number(d), 9, 0, 0, 0).getTime();
+		return Number.isFinite(ms) ? ms : null;
+	}
+	const ms = Date.parse(t);
+	return Number.isFinite(ms) ? ms : null;
 }
