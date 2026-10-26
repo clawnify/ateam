@@ -9,6 +9,7 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
 import { peerToken } from "../src/agent-setup";
 import { FollowUps } from "../src/follow-ups";
+import { BOARD_INSTRUCTIONS } from "../src/hooks/board-mcp";
 import type { Services } from "../src/services";
 import { spawnAgentInTask } from "../src/sessions";
 import { WorktreeGuard } from "../src/worktree-guard";
@@ -268,6 +269,10 @@ describe("peer messaging on the launch line", () => {
 		expect(command).toContain(`-c 'mcp_servers.ateam_board.url="http://127.0.0.1:0/mcp"'`);
 		expect(command).toContain('"x-ateam-terminal-token"="ATEAM_TERMINAL_TOKEN"');
 		expect(command).not.toContain(envOf().ATEAM_TERMINAL_TOKEN ?? "<none>");
+		// Codex ignores MCP server instructions; it gets them as developer_instructions,
+		// which must survive the shell and TOML quoting unescaped.
+		expect(command).toContain(`-c 'developer_instructions="${BOARD_INSTRUCTIONS}"'`);
+		expect(BOARD_INSTRUCTIONS).not.toMatch(/['"\\]/);
 	});
 
 	it("opencode gets the MCP server and the inbox plugin through its config env", async () => {

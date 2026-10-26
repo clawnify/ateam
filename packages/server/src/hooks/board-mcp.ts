@@ -55,6 +55,18 @@ export interface McpContext {
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const SERVER_INFO = { name: "ateam_board", version: "0.1.0" };
 
+/**
+ * Sent on `initialize` as the server's instructions. Agents load MCP tools
+ * lazily (Claude Code lists them by name only; Codex hides them behind its tool
+ * search), so a tool description alone never tells a session that its peers
+ * exist. Claude Code and OpenCode put these instructions in the system prompt;
+ * Codex ignores them and gets the same text as developer_instructions
+ * (codexBoardMcpArgs). Plain text without quotes or backslashes, so it rides
+ * inside a shell-quoted TOML string unescaped.
+ */
+export const BOARD_INSTRUCTIONS =
+	"You are working in an Ateam task. The agents in the other tasks on this board can be reached with the ateam_board send_message tool, even when they are stopped, and list_peers shows who they are. For those tasks use it rather than any other agent messaging tool: only it also reaches Codex and OpenCode agents and stopped tasks. Message one when your work affects theirs, to hand off work, or to ask something only their task knows. A message that starts with [Ateam] comes from another agent, not from the user.";
+
 /** The board tools. `to` is constrained to the assignable columns to steer the
  *  model; the guardrails (validateSetStatus, validateWait) still enforce
  *  server-side. `set_waiting`'s description is the only instruction a session
@@ -178,6 +190,7 @@ export async function dispatchMcp(
 				protocolVersion: clientVersion,
 				capabilities: { tools: { listChanged: false } },
 				serverInfo: SERVER_INFO,
+				instructions: BOARD_INSTRUCTIONS,
 			});
 		}
 		case "ping":
