@@ -22,7 +22,7 @@ import {
 	SwiftTermView,
 } from "../modules/expo-swiftterm/src/ExpoSwifttermView";
 import { KeyBar, keyStyles } from "./KeyBar";
-import { TerminalStrip } from "./TerminalStrip";
+import { StripBar, TerminalStrip } from "./TerminalStrip";
 import { useKeyboardVisible } from "./useKeyboardVisible";
 import { usePty, useTaskOpen } from "./useTaskPty";
 
@@ -91,6 +91,28 @@ export function NativeTerminalScreen({
 				/>
 			}
 		/>
+	);
+}
+
+/** In a terminal's place while its box reconnects, under the same bar so you can see
+ *  where you are. The terminal comes back once the box answers again. */
+export function ReconnectingTerminal({
+	lead,
+	title,
+	onBack,
+}: {
+	lead: ReactNode;
+	title: string;
+	onBack: () => void;
+}) {
+	return (
+		<View style={styles.root}>
+			<StripBar lead={lead} title={title} expanded onToggle={onBack} />
+			<View style={styles.center}>
+				<ActivityIndicator color={C.ink} />
+				<Text style={styles.hint}>Reconnecting to the box…</Text>
+			</View>
+		</View>
 	);
 }
 
