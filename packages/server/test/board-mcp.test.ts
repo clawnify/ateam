@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { type BoardHandlers, dispatchMcp, parseUntil } from "../src/hooks/board-mcp";
+import {
+	BOARD_INSTRUCTIONS,
+	type BoardHandlers,
+	dispatchMcp,
+	parseUntil,
+} from "../src/hooks/board-mcp";
 
 // A fake board that records what it was called with.
 function fakeBoard() {
@@ -43,6 +48,8 @@ describe("dispatchMcp", () => {
 			const body = r.body as { result: { protocolVersion: string; capabilities: unknown } };
 			expect(body.result.protocolVersion).toBe("2025-06-18");
 			expect(body.result.capabilities).toHaveProperty("tools");
+			// Agents list MCP tools by name only, so this is how a session learns it has peers.
+			expect(body.result).toHaveProperty("instructions", BOARD_INSTRUCTIONS);
 		}
 	});
 

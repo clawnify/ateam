@@ -2,6 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { BOARD_INSTRUCTIONS } from "../hooks/board-mcp";
 
 /**
  * Per-PTY status hooks. We keep this NON-INVASIVE: instead of editing the
@@ -488,11 +489,15 @@ export const BOARD_MCP_TOOLS = [
  * Codex's `-c` overrides for the same MCP server: per launch, so the user's
  * ~/.codex/config.toml is untouched. The headers are read from the PTY env
  * (`env_http_headers`), so the token never lands on the command line or in a
- * file. Verified with `codex mcp get` on 0.162.1.
+ * file. Verified with `codex mcp get` on 0.162.1. Codex ignores an MCP
+ * server's instructions, so they go in as developer_instructions.
+ * shortcut: this replaces a developer_instructions the user set in their own
+ * config.toml; merge with it if anyone sets one.
  */
 export function codexBoardMcpArgs(hookPort: number): string {
 	return [
 		`-c 'mcp_servers.ateam_board.url="http://127.0.0.1:${hookPort}/mcp"'`,
+		`-c 'developer_instructions="${BOARD_INSTRUCTIONS}"'`,
 		`-c 'mcp_servers.ateam_board.env_http_headers={"x-ateam-terminal-id"="ATEAM_TERMINAL_ID","x-ateam-terminal-token"="ATEAM_TERMINAL_TOKEN"}'`,
 		// Pre-approved like Claude's --allowedTools: guarded server-side, so an
 		// approval prompt would only stall the agent a message just woke.
