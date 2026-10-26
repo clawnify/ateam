@@ -40,6 +40,7 @@ function makeEngine(db: AteamDb): Engine {
 			if (task) ee.emit("taskUpdated", { id: task.id, column: task.column });
 		},
 		sendLoopsUpdated: () => ee.emit("loopsUpdated", []),
+		ptyReady: () => Promise.resolve(),
 	} as unknown as Engine;
 }
 

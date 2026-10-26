@@ -27,6 +27,7 @@ function makeEngine(db: AteamDb): Engine {
 			ee.on(event, cb);
 			return () => ee.off(event, cb);
 		},
+		ptyReady: () => Promise.resolve(),
 		sendTaskUpdated: (id: string) => {
 			const task = repo.getTask(db, id);
 			if (task) ee.emit("taskUpdated", { id: task.id, column: task.column });

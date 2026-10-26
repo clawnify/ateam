@@ -55,6 +55,7 @@ function makeEngine(db: AteamDb, agentPresence: BinaryPresence = "present") {
 			refreshPath: async () => false,
 		},
 		on: () => () => {},
+		ptyReady: () => Promise.resolve(),
 		sendTaskUpdated: (id: string) => taskUpdated.push(id),
 		sendTaskRemoved: () => {},
 		sendLoopsUpdated: () => {},
@@ -694,6 +695,7 @@ describe("pty sizing across clients", () => {
 				refreshPath: async () => false,
 			},
 			on: () => () => {},
+			ptyReady: () => Promise.resolve(),
 			sendTaskUpdated: () => {},
 			sendLoopsUpdated: () => {},
 		} as unknown as Engine;
@@ -866,5 +868,45 @@ describe("pty:boxShell", () => {
 		} finally {
 			await box.cleanup();
 		}
+	});
+});
+
+describe("a call made before the PTY daemon has attached", () => {
+	// The engine listens first, and the daemon's hello lands a few ms later. A call
+	// answered in between read every live terminal as gone: the phone then resumed
+	// an agent that was still running, or opened a second box shell.
+	it("waits for the attach, then sees the daemon's live terminals", async () => {
+		const db = createTestDb();
+		const { engine } = makeEngine(db);
+		const live = new Set<string>();
+		let attach!: () => void;
+		const attached = new Promise<void>((r) => {
+			attach = r;
+		});
+		const e = engine as unknown as {
+			ptyReady: () => Promise<void>;
+			services: { pty: { has: (t: string) => boolean } };
+		};
+		e.ptyReady = () => attached;
+		e.services.pty.has = (t) => live.has(t);
+		const dir = "/tmp/ateam-attach-test";
+		const project = repo.upsertProject(db, { repoPath: dir, name: "R", defaultBranch: "main" });
+		const task = repo.createTask(db, {
+			projectId: project!.id,
+			name: "busy",
+			slug: "busy",
+			branch: "busy",
+			baseBranch: "main",
+			worktreePath: dir,
+		});
+		repo.createSession(db, { taskId: task.id, agentId: "claude", terminalId: "still-running", cwd: dir });
+
+		const listing = createDispatcher(engine).handle(CH.ptyListForTask, [task.id]) as Promise<
+			{ terminalId: string }[]
+		>;
+		// The daemon's hello: the agent was alive all along.
+		live.add("still-running");
+		attach();
+		expect((await listing).map((s) => s.terminalId)).toEqual(["still-running"]);
 	});
 });
