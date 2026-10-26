@@ -239,6 +239,10 @@ function Field({
  *  `replaces`: the saved box the form was editing, so a changed address replaces it. */
 type ConnectOpts = { wake?: boolean; navigate?: boolean; replaces?: string | null };
 
+// How old the last wake can get before a reconnect retry wakes the box again. Under
+// the shortest hold a provider's wake gives (Sprites: 2 min, src/sprites.ts).
+const REWAKE_MS = 60_000;
+
 /** A provider's account inputs (its key), from the Keychain. */
 function loadAccount(def: ProviderDefinition): Promise<InputValues> {
 	return loadProviderAccount(
@@ -584,6 +588,8 @@ function Shell({
 	boxTerminalOpen,
 	onBoxTerminal,
 	reconnecting,
+	waking,
+	wakeError,
 	onDismissSkew,
 	connGen,
 }: {
@@ -628,6 +634,10 @@ function Shell({
 	onBoxTerminal: (open: boolean) => void;
 	/** The box dropped and is being reattached: an open terminal waits in place. */
 	reconnecting: boolean;
+	/** The provider a reattach is waking the box through right now, if any. */
+	waking: string | null;
+	/** Why the last wake failed, until a wake or a connect succeeds. */
+	wakeError: string | null;
 	/** Hide the version banner for this box version (it returns when the version changes). */
 	onDismissSkew: () => void;
 	/** Keys the terminal so an auto-reattach remounts it onto the fresh api. */
@@ -719,6 +729,8 @@ function Shell({
 					lead={<AgentIcon agentId={openTask.agentId} size={12} />}
 					title={(tasks.find((t) => t.id === openTask.id) ?? openTask).name}
 					onBack={onCloseTask}
+					waking={waking}
+					wakeError={wakeError}
 				/>
 			) : openTask ? (
 				<Term
@@ -733,6 +745,8 @@ function Shell({
 					lead={<Feather name="terminal" size={12} color={C.ink} />}
 					title="Box terminal"
 					onBack={() => onBoxTerminal(false)}
+					waking={waking}
+					wakeError={wakeError}
 				/>
 			) : boxTerminalOpen ? (
 				<BoxTerminalScreen
@@ -854,6 +868,13 @@ export default function App() {
 	const [boxValues, setBoxValues] = useState<InputValues>({});
 	const [accountSaved, setAccountSaved] = useState<Record<string, boolean>>({});
 	const [waking, setWaking] = useState<string | null>(null);
+	// Why the last wake failed, for the reconnecting view: the connect screen's
+	// `error` is cleared at every attempt, so it would only flash between retries.
+	const [wakeFailure, setWakeFailure] = useState<string | null>(null);
+	// When the phone last asked a provider to wake the box. A wake only holds the box
+	// up for a while (a Sprite pauses again 2 min after the phone's wake), so the
+	// reconnect loop wakes again once this is older than REWAKE_MS.
+	const lastWakeAt = useRef(0);
 	const wakeTarget = useRef<{ id: string | null; box: InputValues }>({ id: null, box: {} });
 	wakeTarget.current = { id: providerId, box: boxValues };
 	const accounts = useRef<Record<string, InputValues>>({});
@@ -1030,12 +1051,15 @@ export default function App() {
 					const adapter = waker.current?.adapter;
 					if (adapter) {
 						setWaking(def.label);
+						lastWakeAt.current = Date.now();
 						try {
 							await adapter.ensureAwake(wakeFor.box);
+							setWakeFailure(null);
 						} catch (err) {
 							// Still try the box: it may be up, and a key problem must not
 							// cost a connection that would have worked.
 							wakeError = err instanceof Error ? err.message : String(err);
+							setWakeFailure(`Waking it through ${def.label} failed: ${wakeError}`);
 						} finally {
 							setWaking(null);
 						}
@@ -1057,6 +1081,7 @@ export default function App() {
 				conn.current = c;
 				target.current = { host: h, port };
 				backoff.current = 0;
+				setWakeFailure(null);
 				commitBoxes(
 					touchBox(
 						boxesRef.current,
@@ -1143,9 +1168,15 @@ export default function App() {
 
 	// Reattach to the intended box: try once, and on failure schedule a capped
 	// exponential backoff retry (1s → 15s) so a still-down box keeps getting picked up.
+	// The first try after a drop skips the wake (a network flip shouldn't wait on the
+	// provider), but a retry wakes whenever the last wake is stale: a box that went to
+	// sleep would otherwise never answer, and one woken earlier may have paused again.
+	// The retries stop while the app is in the background, so this can't keep a box up
+	// on its own.
 	const reconnect = useCallback(
 		async (wake = false) => {
 			const t = target.current;
+			const stale = Date.now() - lastWakeAt.current >= REWAKE_MS;
 			// Waits while the connection screen is open, retry timer included: leaving it
 			// (leaveConnect) picks the box back up.
 			if (!t || attempting.current || viewRef.current === "connect") return;
@@ -1156,7 +1187,7 @@ export default function App() {
 			attempting.current = true;
 			let ok = false;
 			try {
-				ok = await connectTo(t.host, t.port, { wake });
+				ok = await connectTo(t.host, t.port, { wake: wake || (backoff.current > 0 && stale) });
 			} finally {
 				attempting.current = false;
 			}
@@ -1678,6 +1709,8 @@ export default function App() {
 				}}
 				boxTerminalOpen={boxTerminalOpen}
 				reconnecting={!connected && target.current !== null}
+				waking={waking}
+				wakeError={wakeFailure}
 				onBoxTerminal={setBoxTerminalOpen}
 				onDismissSkew={() => {
 					if (skew === null) return;
