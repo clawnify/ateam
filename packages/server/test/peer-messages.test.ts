@@ -1,0 +1,348 @@
+import { Database } from "bun:sqlite";
+import { beforeEach, describe, expect, it } from "bun:test";
+import type { AgentSession, AteamDb, Task } from "@ateam/db";
+import { bootstrap, repo } from "@ateam/db";
+import { drizzle } from "drizzle-orm/bun-sqlite";
+import * as schema from "../../db/src/schema";
+import {
+	type DeliveryFacts,
+	formatForRecipient,
+	INPUT_QUIET_MS,
+	LISTENER_GRACE_MS,
+	MAX_HOPS,
+	MAX_PER_SENDER,
+	nextHop,
+	PeerMessenger,
+	planDelivery,
+} from "../src/peer-messages";
+
+const NOW = 1_000_000_000;
+
+function facts(over: Partial<DeliveryFacts> = {}): DeliveryFacts {
+	return {
+		live: { agentId: "codex", status: "idle", hasListener: false },
+		lastInputAt: null,
+		lastEventAt: NOW - 5 * 60_000,
+		oldestPendingAt: NOW - 10 * 60_000,
+		now: NOW,
+		...over,
+	};
+}
+
+describe("planDelivery", () => {
+	it("launches when no agent is running", () => {
+		expect(planDelivery(facts({ live: null }))).toBe("launch");
+	});
+
+	it("hands to a listener whatever the agent is doing", () => {
+		for (const status of ["idle", "running", "awaiting_input"]) {
+			expect(planDelivery(facts({ live: { agentId: "claude", status, hasListener: true } }))).toBe(
+				"listener",
+			);
+		}
+	});
+
+	// Restarting throws the turn (or the pending question) away.
+	it("waits for a busy agent without a listener", () => {
+		expect(
+			planDelivery(facts({ live: { agentId: "codex", status: "running", hasListener: false } })),
+		).toBe("wait");
+		expect(
+			planDelivery(
+				facts({ live: { agentId: "codex", status: "awaiting_input", hasListener: false } }),
+			),
+		).toBe("wait");
+	});
+
+	it("restarts an idle agent without a listener", () => {
+		expect(planDelivery(facts())).toBe("restart");
+	});
+
+	it("never restarts under someone typing", () => {
+		expect(planDelivery(facts({ lastInputAt: NOW - INPUT_QUIET_MS + 1 }))).toBe("wait");
+	});
+
+	// Codex reports no turn START without its trusted hooks, so after a prompt is
+	// typed its status still reads idle while it works.
+	it("treats input since the last event as a turn in flight", () => {
+		expect(
+			planDelivery(facts({ lastEventAt: NOW - 10 * 60_000, lastInputAt: NOW - 5 * 60_000 })),
+		).toBe("wait");
+		expect(
+			planDelivery(facts({ lastEventAt: NOW - 2 * 60_000, lastInputAt: NOW - 5 * 60_000 })),
+		).toBe("restart");
+	});
+
+	it("gives a harness that listens time to register before restarting it", () => {
+		const claude = { agentId: "claude", status: "idle", hasListener: false };
+		expect(
+			planDelivery(facts({ live: claude, oldestPendingAt: NOW - LISTENER_GRACE_MS + 1 })),
+		).toBe("wait");
+		expect(planDelivery(facts({ live: claude, oldestPendingAt: NOW - LISTENER_GRACE_MS }))).toBe(
+			"restart",
+		);
+	});
+});
+
+describe("nextHop", () => {
+	it("starts a conversation at 1 and answers one more than the message it replies to", () => {
+		expect(nextHop([], "b")).toBe(1);
+		expect(
+			nextHop(
+				[
+					{ fromTaskId: "b", hop: 3 },
+					{ fromTaskId: "a", hop: 2 },
+				],
+				"b",
+			),
+		).toBe(4);
+		expect(nextHop([{ fromTaskId: "a", hop: 2 }], "b")).toBe(1);
+	});
+});
+
+describe("formatForRecipient", () => {
+	it("names the sender, says it is not the user, and how to reply", () => {
+		const text = formatForRecipient([
+			{ body: "API returns 401 now", from: { taskId: "t-1", name: "fix auth", agent: "Codex" } },
+		]);
+		expect(text).toContain('task "fix auth" (task id t-1)');
+		expect(text).toContain("not from the user");
+		expect(text).toContain('send_message tool with to="t-1"');
+		expect(text.endsWith("API returns 401 now")).toBe(true);
+	});
+});
+
+// ---- the messenger against a real (in-memory) db ---------------------------
+
+function createTestDb(): AteamDb {
+	const sqlite = new Database(":memory:");
+	sqlite.exec("PRAGMA foreign_keys = ON;");
+	bootstrap(sqlite);
+	return drizzle(sqlite, { schema }) as unknown as AteamDb;
+}
+
+let db: AteamDb;
+let live: Set<string>;
+let now: number;
+let launched: { taskId: string; prompt: string }[];
+let stopped: string[];
+let messenger: PeerMessenger;
+let projectId: string;
+
+function addTask(name: string, agentId: string | null = null): Task {
+	return repo.createTask(db, {
+		projectId,
+		name,
+		slug: name,
+		branch: `feat/${name}`,
+		baseBranch: "main",
+		worktreePath: `/tmp/${name}`,
+		agentId,
+	});
+}
+
+function addSession(
+	task: Task,
+	agentId: string,
+	terminalId: string,
+	status = "idle",
+): AgentSession {
+	repo.createSession(db, { taskId: task.id, agentId, terminalId, cwd: task.worktreePath });
+	const row = repo.getSessionByTerminal(db, terminalId) as AgentSession;
+	repo.updateSession(db, row.id, { status: status as "idle", lastEventAt: now - 5 * 60_000 });
+	live.add(terminalId);
+	return repo.getSessionByTerminal(db, terminalId) as AgentSession;
+}
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+beforeEach(() => {
+	db = createTestDb();
+	live = new Set();
+	now = NOW;
+	launched = [];
+	stopped = [];
+	const project = repo.upsertProject(db, { repoPath: "/tmp/repo", name: "Repo" });
+	if (!project) throw new Error("seed");
+	projectId = project.id;
+	messenger = new PeerMessenger({
+		db,
+		isLive: (t) => live.has(t),
+		lastInputAt: () => null,
+		stopSession: async (s) => {
+			stopped.push(s.terminalId);
+			live.delete(s.terminalId);
+		},
+		launch: async (task, prompt) => {
+			launched.push({ taskId: task.id, prompt });
+		},
+		log: () => {},
+		now: () => now,
+	});
+});
+
+describe("PeerMessenger.send", () => {
+	it("refuses a sender that is not a task's agent, an empty body and itself", () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		expect(messenger.send({ fromTerminalId: "nope", to: a.id, body: "hi" }).ok).toBe(false);
+		expect(messenger.send({ fromTerminalId: "ta", to: a.id, body: "hi" }).reason).toBe(
+			"that task is yours",
+		);
+		const b = addTask("b");
+		expect(messenger.send({ fromTerminalId: "ta", to: b.id, body: "   " }).ok).toBe(false);
+	});
+
+	it("finds the recipient by id, name or branch, and says when a name is ambiguous", () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("fix-auth");
+		expect(messenger.send({ fromTerminalId: "ta", to: "FIX-AUTH", body: "x" }).ok).toBe(true);
+		expect(messenger.send({ fromTerminalId: "ta", to: "feat/fix-auth", body: "x" }).ok).toBe(true);
+		expect(messenger.send({ fromTerminalId: "ta", to: "nobody", body: "x" }).reason).toContain(
+			"list_peers",
+		);
+		expect(repo.listPendingPeerMessages(db, b.id).length + launched.length).toBeGreaterThan(0);
+	});
+
+	it("launches a task whose agent is not running, with the message as the prompt", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "codex");
+		const r = messenger.send({ fromTerminalId: "ta", to: b.id, body: "please rebase" });
+		expect(r.reason).toContain("starting it");
+		await flush();
+		expect(launched).toHaveLength(1);
+		expect(launched[0]?.taskId).toBe(b.id);
+		expect(launched[0]?.prompt).toContain("please rebase");
+		expect(launched[0]?.prompt).toContain(`to="${a.id}"`);
+		expect(repo.listPendingPeerMessages(db, b.id)).toHaveLength(0);
+	});
+
+	it("caps a back-and-forth between two tasks", () => {
+		const a = addTask("a");
+		const b = addTask("b");
+		addSession(a, "claude", "ta");
+		addSession(b, "claude", "tb", "running");
+		for (let i = 1; i <= MAX_HOPS; i++) {
+			const from = i % 2 ? "ta" : "tb";
+			const to = i % 2 ? b.id : a.id;
+			expect(messenger.send({ fromTerminalId: from, to, body: `turn ${i}` }).ok).toBe(true);
+			now += 1000;
+		}
+		const over = messenger.send({ fromTerminalId: "ta", to: b.id, body: "one more" });
+		expect(over.ok).toBe(false);
+		expect(over.reason).toContain("tell the user");
+	});
+
+	it("caps how much one task sends", () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const targets = Array.from({ length: MAX_PER_SENDER + 1 }, (_, i) => {
+			const t = addTask(`t${i}`);
+			addSession(t, "claude", `t${i}`, "running");
+			return t;
+		});
+		for (const t of targets.slice(0, MAX_PER_SENDER)) {
+			expect(messenger.send({ fromTerminalId: "ta", to: t.id, body: "x" }).ok).toBe(true);
+		}
+		const last = targets[MAX_PER_SENDER] as Task;
+		expect(messenger.send({ fromTerminalId: "ta", to: last.id, body: "x" }).reason).toContain(
+			"rate limit",
+		);
+	});
+});
+
+describe("PeerMessenger listeners", () => {
+	it("hands a pending batch to a listener as soon as it asks", async () => {
+		const a = addTask("a");
+		const b = addTask("b");
+		addSession(a, "claude", "ta");
+		addSession(b, "claude", "tb", "running");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "one" });
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "two" });
+		const { result } = messenger.wait("tb");
+		const out = await result;
+		expect(out.kind).toBe("message");
+		if (out.kind === "message") {
+			expect(out.text).toContain("one");
+			expect(out.text).toContain("two");
+		}
+		expect(repo.listPendingPeerMessages(db, b.id)).toHaveLength(0);
+	});
+
+	it("wakes a listener already waiting when a message arrives", async () => {
+		const a = addTask("a");
+		const b = addTask("b");
+		addSession(a, "claude", "ta");
+		addSession(b, "opencode", "tb");
+		const { result } = messenger.wait("tb");
+		const r = messenger.send({ fromTerminalId: "ta", to: b.id, body: "ping" });
+		expect(r.reason).toContain("delivered to its agent now");
+		expect((await result).kind).toBe("message");
+		expect(launched).toHaveLength(0);
+		expect(stopped).toHaveLength(0);
+	});
+
+	it("keeps only the newest listener per terminal", async () => {
+		const b = addTask("b");
+		addSession(b, "claude", "tb");
+		const first = messenger.wait("tb");
+		messenger.wait("tb");
+		expect((await first.result).kind).toBe("superseded");
+	});
+
+	it("tells a listener on a dead terminal it is gone", async () => {
+		const b = addTask("b");
+		addSession(b, "claude", "tb");
+		live.delete("tb");
+		expect((await messenger.wait("tb").result).kind).toBe("gone");
+	});
+
+	it("restarts an idle Codex with the message, keeping its conversation", async () => {
+		const a = addTask("a");
+		const b = addTask("b", "codex");
+		addSession(a, "claude", "ta");
+		addSession(b, "codex", "tb", "idle");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "your branch conflicts with mine" });
+		await flush();
+		await flush();
+		expect(stopped).toEqual(["tb"]);
+		expect(launched[0]?.prompt).toContain("your branch conflicts with mine");
+	});
+
+	it("holds a message for a Codex mid-turn until its turn ends", async () => {
+		const a = addTask("a");
+		const b = addTask("b", "codex");
+		addSession(a, "claude", "ta");
+		const s = addSession(b, "codex", "tb", "running");
+		expect(messenger.send({ fromTerminalId: "ta", to: b.id, body: "x" }).reason).toContain(
+			"queued",
+		);
+		await flush();
+		expect(stopped).toHaveLength(0);
+		repo.updateSession(db, s.id, { status: "idle", lastEventAt: now });
+		messenger.kick(b.id);
+		await flush();
+		await flush();
+		expect(stopped).toEqual(["tb"]);
+		expect(launched).toHaveLength(1);
+	});
+});
+
+describe("PeerMessenger.listPeers", () => {
+	it("lists tasks outside merged with their state, marking the caller", () => {
+		const a = addTask("a", "claude");
+		const b = addTask("b", "codex");
+		const c = addTask("c");
+		repo.updateTask(db, c.id, { column: "merged" });
+		addSession(a, "claude", "ta", "running");
+		const peers = messenger.listPeers("ta");
+		expect(peers.map((p) => p.name).sort()).toEqual(["a", "b"]);
+		expect(peers.find((p) => p.taskId === a.id)).toMatchObject({ state: "working", you: true });
+		expect(peers.find((p) => p.taskId === b.id)).toMatchObject({
+			state: "not_running",
+			agent: "codex",
+		});
+	});
+});

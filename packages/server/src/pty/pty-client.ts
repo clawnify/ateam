@@ -33,6 +33,7 @@ export interface SpawnOptions {
 export class PtyClient extends EventEmitter {
 	private sock: Socket | null = null;
 	private live = new Set<string>();
+	private inputAt = new Map<string, number>();
 	private buf = "";
 	private reqId = 0;
 	private pending = new Map<number, (v: Record<string, unknown>) => void>();
@@ -272,7 +273,16 @@ export class PtyClient extends EventEmitter {
 	}
 
 	write(terminalId: string, data: string): void {
+		// Every write is a viewer's keystrokes (the engine never types into a
+		// pane). Escape-only writes are the terminal reporting focus or arrow
+		// keys, not someone composing a prompt.
+		if (!data.startsWith("\x1b")) this.inputAt.set(terminalId, Date.now());
 		this.send({ t: "write", terminalId, data: b64(data) });
+	}
+
+	/** When a viewer last typed into this terminal, this run (peer-messages.ts). */
+	lastInputAt(terminalId: string): number | null {
+		return this.inputAt.get(terminalId) ?? null;
 	}
 
 	resize(terminalId: string, cols: number, rows: number): void {
@@ -281,6 +291,7 @@ export class PtyClient extends EventEmitter {
 
 	kill(terminalId: string): void {
 		this.live.delete(terminalId);
+		this.inputAt.delete(terminalId);
 		this.send({ t: "kill", terminalId });
 	}
 

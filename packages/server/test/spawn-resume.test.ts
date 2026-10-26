@@ -7,6 +7,7 @@ import type { AteamDb } from "@ateam/db";
 import { bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
+import { peerToken } from "../src/agent-setup";
 import { FollowUps } from "../src/follow-ups";
 import type { Services } from "../src/services";
 import { spawnAgentInTask } from "../src/sessions";
@@ -49,6 +50,7 @@ beforeEach(() => {
 		},
 		hooksDir: scratch,
 		notifyScriptPath: join(scratch, "notify.sh"),
+		peerSecret: "test-secret",
 		hookPort: 0,
 		followUps: new FollowUps(),
 		pendingSeeds: new Map(),
@@ -237,11 +239,57 @@ describe("spawnAgentInTask and a task parked on an outside party", () => {
 		const mcp = command.indexOf("--mcp-config");
 		expect(mcp).toBeGreaterThan(command.indexOf("'hi there'"));
 		expect(command).toContain(
-			"--allowedTools 'mcp__ateam_board__get_board,mcp__ateam_board__set_status,mcp__ateam_board__set_waiting'",
+			"--allowedTools 'mcp__ateam_board__get_board,mcp__ateam_board__set_status,mcp__ateam_board__set_waiting,mcp__ateam_board__list_peers,mcp__ateam_board__send_message'",
 		);
 		// The config file names this terminal, which is how set_waiting knows whose card it is.
 		const file = /--mcp-config '([^']+)'/.exec(command)?.[1] ?? "";
 		const cfg = JSON.parse(readFileSync(file, "utf8"));
-		expect(cfg.mcpServers.ateam_board.headers["x-ateam-terminal-id"]).toHaveLength(36);
+		const terminalId = cfg.mcpServers.ateam_board.headers["x-ateam-terminal-id"];
+		expect(terminalId).toHaveLength(36);
+		// ...and proves it with the terminal's own token, the one in its env.
+		expect(cfg.mcpServers.ateam_board.headers["x-ateam-terminal-token"]).toBe(
+			peerToken("test-secret", terminalId),
+		);
+	});
+});
+
+describe("peer messaging on the launch line", () => {
+	const envOf = () => (launches[0] as unknown as { env: NodeJS.ProcessEnv }).env;
+
+	it("every agent's env carries its terminal token", async () => {
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "codex" });
+		const env = envOf();
+		expect(env.ATEAM_TERMINAL_TOKEN).toBe(peerToken("test-secret", env.ATEAM_TERMINAL_ID ?? ""));
+	});
+
+	it("codex gets the board MCP per launch, its headers read from the env", async () => {
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "codex", prompt: "go" });
+		const command = launches[0]?.args.at(-1) ?? "";
+		expect(command).toContain(`-c 'mcp_servers.ateam_board.url="http://127.0.0.1:0/mcp"'`);
+		expect(command).toContain('"x-ateam-terminal-token"="ATEAM_TERMINAL_TOKEN"');
+		expect(command).not.toContain(envOf().ATEAM_TERMINAL_TOKEN ?? "<none>");
+	});
+
+	it("opencode gets the MCP server and the inbox plugin through its config env", async () => {
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "opencode" });
+		const cfg = JSON.parse(envOf().OPENCODE_CONFIG_CONTENT ?? "{}");
+		expect(cfg.mcp.ateam_board.type).toBe("remote");
+		expect(cfg.plugin.at(-1)).toContain("opencode-inbox.js");
+	});
+
+	// A peer message wakes a stopped task by resuming it WITH the message.
+	it("a resume that carries a prompt is work starting, not a look", async () => {
+		await spawnAgentInTask(services, () => {}, {
+			taskId,
+			agentId: "claude",
+			resumeSessionId: "conv-1",
+			prompt: "[Ateam] Message from ...",
+		});
+		expect(repo.getTask(db, taskId)).toMatchObject({ column: "running", agentStatus: "running" });
+		expect(launches[0]?.args.at(-1)).toContain(
+			"claude --resume 'conv-1' '[Ateam] Message from ...'",
+		);
+		// The task's description stays what the user started it with.
+		expect(repo.getTask(db, taskId)?.description ?? null).toBeNull();
 	});
 });

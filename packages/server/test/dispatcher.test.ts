@@ -44,6 +44,7 @@ function makeEngine(db: AteamDb, agentPresence: BinaryPresence = "present") {
 			userDataDir: "/tmp",
 			hooksDir: "/tmp/hooks",
 			notifyScriptPath: "/tmp/notify.sh",
+			peerSecret: "test-secret",
 			hookPort: 0,
 			// A launch refuses when the agent's CLI is missing (sessions.ts). Stub
 			// it: these tests are about what the dispatcher does with a tab, not

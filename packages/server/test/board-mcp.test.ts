@@ -3,7 +3,11 @@ import { type BoardHandlers, dispatchMcp, parseUntil } from "../src/hooks/board-
 
 // A fake board that records what it was called with.
 function fakeBoard() {
-	const calls: { setStatus: unknown[]; setWaiting: unknown[] } = { setStatus: [], setWaiting: [] };
+	const calls: { setStatus: unknown[]; setWaiting: unknown[]; sendMessage: unknown[] } = {
+		setStatus: [],
+		setWaiting: [],
+		sendMessage: [],
+	};
 	const board: BoardHandlers = {
 		get: async () => ({ tasks: [{ taskId: "t1" }] }),
 		setStatus: async (req) => {
@@ -13,6 +17,11 @@ function fakeBoard() {
 		setWaiting: async (req) => {
 			calls.setWaiting.push(req);
 			return { ok: true, reason: `parked ${req.taskId}` };
+		},
+		listPeers: async () => [{ taskId: "t2", name: "other" }],
+		sendMessage: async (req) => {
+			calls.sendMessage.push(req);
+			return { ok: true, reason: `sent to ${req.to}` };
 		},
 	};
 	return { board, calls };
@@ -43,14 +52,20 @@ describe("dispatchMcp", () => {
 		expect(r.kind).toBe("accepted");
 	});
 
-	it("tools/list returns get_board, set_status and set_waiting", async () => {
+	it("tools/list returns the board tools and the peer tools", async () => {
 		const { board } = fakeBoard();
 		const r = await dispatchMcp(rpc("tools/list"), board);
 		if (r.kind === "json") {
 			const names = (r.body as { result: { tools: { name: string }[] } }).result.tools.map(
 				(t) => t.name,
 			);
-			expect(names).toEqual(["get_board", "set_status", "set_waiting"]);
+			expect(names).toEqual([
+				"get_board",
+				"set_status",
+				"set_waiting",
+				"list_peers",
+				"send_message",
+			]);
 		}
 	});
 
@@ -167,5 +182,42 @@ describe("parseUntil", () => {
 		expect(parseUntil("2030-03-04T10:30:00Z")).toBe(Date.parse("2030-03-04T10:30:00Z"));
 		expect(parseUntil("soon")).toBeNull();
 		expect(parseUntil("")).toBeNull();
+	});
+});
+
+describe("peer tools", () => {
+	const call = (name: string, args: unknown = {}) => rpc("tools/call", { name, arguments: args });
+	const text = (r: Awaited<ReturnType<typeof dispatchMcp>>) =>
+		r.kind === "json"
+			? (r.body as { result: { content: { text: string }[]; isError: boolean } }).result
+			: undefined;
+
+	// The terminal-id header alone is a claim any local process can make.
+	it("refuse a caller without a verified Ateam token", async () => {
+		const { board, calls } = fakeBoard();
+		for (const ctx of [
+			{},
+			{ callerTerminalId: "term-1" },
+			{ callerTerminalId: "term-1", callerVerified: false },
+		]) {
+			const r = text(
+				await dispatchMcp(call("send_message", { to: "t2", message: "hi" }), board, ctx),
+			);
+			expect(r?.isError).toBe(true);
+			expect(text(await dispatchMcp(call("list_peers"), board, ctx))?.isError).toBe(true);
+		}
+		expect(calls.sendMessage).toHaveLength(0);
+	});
+
+	it("send_message passes the verified caller as the sender", async () => {
+		const { board, calls } = fakeBoard();
+		const ctx = { callerTerminalId: "term-1", callerVerified: true };
+		const r = text(
+			await dispatchMcp(call("send_message", { to: "t2", message: "hi" }), board, ctx),
+		);
+		expect(r?.isError).toBe(false);
+		expect(calls.sendMessage).toEqual([{ fromTerminalId: "term-1", to: "t2", body: "hi" }]);
+		const peers = text(await dispatchMcp(call("list_peers"), board, ctx));
+		expect(peers?.content[0]?.text).toContain('"t2"');
 	});
 });

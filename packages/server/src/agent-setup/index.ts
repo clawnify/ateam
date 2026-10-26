@@ -1,5 +1,7 @@
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 /**
  * Per-PTY status hooks. We keep this NON-INVASIVE: instead of editing the
@@ -137,6 +139,125 @@ echo "gh: command not found (and Ateam shim could not locate the real gh)" >&2
 exit 127
 `;
 
+/**
+ * Claude Code's peer-message listener (see peer-messages.ts). Registered for
+ * SessionStart and Stop with `asyncRewake`: it runs in the background, waits on
+ * Ateam's inbox for this terminal, and when a message arrives prints it to
+ * stderr and exits 2, which wakes the session even while it sits idle at its
+ * prompt (verified on Claude Code 2.1.310). Every Stop arms a fresh one; the
+ * inbox keeps only the newest per terminal and answers the older one 409.
+ *
+ * 204 means the wait window passed with nothing: ask again. Any other answer
+ * (409 replaced, 410 terminal gone, 401/404) ends this listener quietly. An
+ * unreachable app (restarting) is retried for about half an hour.
+ */
+const INBOX_SCRIPT = `#!/bin/sh
+# Ateam peer inbox for Claude Code. Runs as an asyncRewake hook.
+PORT="\${ATEAM_HOOK_PORT:-}"
+TID="\${ATEAM_TERMINAL_ID:-}"
+TOKEN="\${ATEAM_TERMINAL_TOKEN:-}"
+[ -t 0 ] || cat >/dev/null
+[ -z "$PORT" ] && exit 0
+[ -z "$TID" ] && exit 0
+[ -z "$TOKEN" ] && exit 0
+MISSES=0
+while :; do
+	OUT=$(curl -s -m 300 -w '\\n%{http_code}' -H "x-ateam-terminal-token: $TOKEN" "http://127.0.0.1:\${PORT}/inbox/wait?terminalId=\${TID}")
+	RC=$?
+	if [ "$RC" -ne 0 ]; then
+		MISSES=$((MISSES + 1))
+		[ "$MISSES" -gt 60 ] && exit 0
+		sleep 30
+		continue
+	fi
+	MISSES=0
+	CODE=$(printf '%s\\n' "$OUT" | tail -n 1)
+	case "$CODE" in
+		200)
+			printf '%s\\n' "$OUT" | sed '$d' >&2
+			exit 2
+			;;
+		204) ;;
+		*) exit 0 ;;
+	esac
+done
+`;
+
+/**
+ * OpenCode's peer-message listener: a plugin, loaded per launch through
+ * OPENCODE_CONFIG_CONTENT so the user's own config is untouched. It long-polls
+ * the same inbox and hands each batch to the session as a prompt through
+ * OpenCode's own server (`client.session.promptAsync`), which starts a turn on
+ * an idle session (verified on OpenCode 1.18.34). A batch that arrives mid-turn
+ * waits for that session's next idle.
+ */
+const OPENCODE_INBOX_PLUGIN = `// Ateam peer inbox for OpenCode. Written by Ateam; edits are overwritten.
+export const AteamInbox = async ({ client }) => {
+	const port = process.env.ATEAM_HOOK_PORT;
+	const terminalId = process.env.ATEAM_TERMINAL_ID;
+	const token = process.env.ATEAM_TERMINAL_TOKEN;
+	if (!port || !terminalId || !token) return {};
+
+	// Subagent sessions report too; only the conversation the TUI shows counts.
+	const children = new Set();
+	let sessionID = null;
+	let busy = false;
+	const held = [];
+
+	const flush = async () => {
+		if (busy || !sessionID || held.length === 0) return;
+		const text = held.splice(0).join("\\n\\n---\\n\\n");
+		busy = true;
+		const res = await client.session
+			.promptAsync({ path: { id: sessionID }, body: { parts: [{ type: "text", text }] } })
+			.catch((e) => ({ error: e }));
+		if (res?.error) {
+			busy = false;
+			held.unshift(text);
+		}
+	};
+
+	(async () => {
+		let misses = 0;
+		for (;;) {
+			let res;
+			try {
+				res = await fetch(\`http://127.0.0.1:\${port}/inbox/wait?terminalId=\${encodeURIComponent(terminalId)}\`, {
+					headers: { "x-ateam-terminal-token": token },
+				});
+			} catch {
+				if (++misses > 60) return;
+				await new Promise((r) => setTimeout(r, 30000));
+				continue;
+			}
+			misses = 0;
+			if (res.status === 204) continue;
+			if (res.status !== 200) return;
+			held.push(await res.text());
+			await flush();
+		}
+	})();
+
+	return {
+		event: async ({ event }) => {
+			const p = event.properties ?? {};
+			if (event.type === "session.created" || event.type === "session.updated") {
+				if (p.info?.parentID) children.add(p.info.id);
+				else if (p.info) sessionID = p.info.id;
+				return;
+			}
+			if (p.sessionID && children.has(p.sessionID)) return;
+			if (event.type === "session.status") busy = p.status?.type !== "idle";
+			if (event.type === "session.idle") busy = false;
+			if (!busy) {
+				sessionID = p.sessionID ?? sessionID;
+				await flush();
+			}
+		},
+	};
+};
+`;
+
 /** Write the notify scripts into Ateam's userData dir; returns notify.sh's path. */
 export async function ensureNotifyScript(userDataDir: string): Promise<string> {
 	const hooksDir = join(userDataDir, "hooks");
@@ -147,7 +268,48 @@ export async function ensureNotifyScript(userDataDir: string): Promise<string> {
 	const codexPath = join(hooksDir, "codex-notify.sh");
 	await writeFile(codexPath, CODEX_NOTIFY_SCRIPT, "utf8");
 	await chmod(codexPath, 0o755);
+	const inboxPath = join(hooksDir, "inbox.sh");
+	await writeFile(inboxPath, INBOX_SCRIPT, "utf8");
+	await chmod(inboxPath, 0o755);
+	await writeFile(join(hooksDir, "opencode-inbox.js"), OPENCODE_INBOX_PLUGIN, "utf8");
 	return scriptPath;
+}
+
+/**
+ * The engine's secret for per-terminal tokens, created once and kept beside the
+ * hooks (mode 0600). It must outlive the engine process: agents keep running
+ * across app restarts and keep presenting the token they were launched with.
+ */
+export async function ensurePeerSecret(userDataDir: string): Promise<string> {
+	const hooksDir = join(userDataDir, "hooks");
+	await mkdir(hooksDir, { recursive: true });
+	const file = join(hooksDir, "peer-secret");
+	try {
+		const existing = (await readFile(file, "utf8")).trim();
+		if (existing.length >= 32) return existing;
+	} catch {
+		/* first run */
+	}
+	const secret = randomBytes(32).toString("hex");
+	await writeFile(file, `${secret}\n`, { encoding: "utf8", mode: 0o600 });
+	return secret;
+}
+
+/**
+ * The token a terminal's agent presents to the hook server for the peer tools
+ * and its inbox. Derived, not stored: HMAC of the terminal id under the engine
+ * secret. The terminal-id header alone is a claim any local process can make;
+ * this is what keeps one from reading another task's messages or sending in its
+ * name (and, on a shared box, keeps other Unix users out).
+ */
+export function peerToken(secret: string, terminalId: string): string {
+	return createHmac("sha256", secret).update(terminalId).digest("hex");
+}
+
+export function verifyPeerToken(secret: string, terminalId: string, token: string): boolean {
+	const want = Buffer.from(peerToken(secret, terminalId));
+	const got = Buffer.from(token);
+	return want.length === got.length && timingSafeEqual(want, got);
 }
 
 /** Write the `gh` merge-queue shim into Ateam's hooks dir (first on agent PATH). */
@@ -161,7 +323,7 @@ export async function ensureGhShim(userDataDir: string): Promise<void> {
 
 interface ClaudeHookEntry {
 	matcher?: string;
-	hooks: { type: "command"; command: string }[];
+	hooks: { type: "command"; command: string; asyncRewake?: boolean }[];
 }
 interface ClaudeSettings {
 	hooks?: Record<string, ClaudeHookEntry[]>;
@@ -214,6 +376,17 @@ export async function ensureClaudeHooks(
 		const already = entries.some((e) => e.hooks.some((h) => h.command.includes("notify.sh")));
 		if (!already) {
 			entries.push({ hooks: [{ type: "command", command }] });
+			settings.hooks[claudeEvent] = entries;
+		}
+	}
+
+	// The peer inbox listener (INBOX_SCRIPT): armed when the session starts and
+	// again after every turn, in the background, so a message can wake it.
+	const inbox = `sh ${JSON.stringify(join(dirname(notifyScriptPath), "inbox.sh"))}`;
+	for (const claudeEvent of ["SessionStart", "Stop"]) {
+		const entries = settings.hooks[claudeEvent] ?? [];
+		if (!entries.some((e) => e.hooks.some((h) => h.command.includes("inbox.sh")))) {
+			entries.push({ hooks: [{ type: "command", command: inbox, asyncRewake: true }] });
 			settings.hooks[claudeEvent] = entries;
 		}
 	}
@@ -278,6 +451,8 @@ export async function ensureBoardMcpConfig(opts: {
 	hooksDir: string;
 	hookPort: number;
 	terminalId: string;
+	/** The terminal's peer token (see peerToken); omitted for the organizer. */
+	token?: string;
 }): Promise<string> {
 	const dir = join(opts.hooksDir, "mcp");
 	await mkdir(dir, { recursive: true });
@@ -287,11 +462,16 @@ export async function ensureBoardMcpConfig(opts: {
 			ateam_board: {
 				type: "http",
 				url: `http://127.0.0.1:${opts.hookPort}/mcp`,
-				headers: { "x-ateam-terminal-id": opts.terminalId },
+				headers: {
+					"x-ateam-terminal-id": opts.terminalId,
+					...(opts.token ? { "x-ateam-terminal-token": opts.token } : {}),
+				},
 			},
 		},
 	};
-	await writeFile(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+	// 0600: the file carries the terminal's token.
+	await writeFile(file, `${JSON.stringify(config, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+	await chmod(file, 0o600);
 	return file;
 }
 
@@ -300,7 +480,62 @@ export const BOARD_MCP_TOOLS = [
 	"mcp__ateam_board__get_board",
 	"mcp__ateam_board__set_status",
 	"mcp__ateam_board__set_waiting",
+	"mcp__ateam_board__list_peers",
+	"mcp__ateam_board__send_message",
 ];
+
+/**
+ * Codex's `-c` overrides for the same MCP server: per launch, so the user's
+ * ~/.codex/config.toml is untouched. The headers are read from the PTY env
+ * (`env_http_headers`), so the token never lands on the command line or in a
+ * file. Verified with `codex mcp get` on 0.162.1.
+ */
+export function codexBoardMcpArgs(hookPort: number): string {
+	return [
+		`-c 'mcp_servers.ateam_board.url="http://127.0.0.1:${hookPort}/mcp"'`,
+		`-c 'mcp_servers.ateam_board.env_http_headers={"x-ateam-terminal-id"="ATEAM_TERMINAL_ID","x-ateam-terminal-token"="ATEAM_TERMINAL_TOKEN"}'`,
+		// Pre-approved like Claude's --allowedTools: guarded server-side, so an
+		// approval prompt would only stall the agent a message just woke.
+		...BOARD_MCP_TOOLS.map(
+			(t) =>
+				`-c 'mcp_servers.ateam_board.tools.${t.replace("mcp__ateam_board__", "")}.approval_mode="approve"'`,
+		),
+	].join(" ");
+}
+
+/**
+ * OpenCode's per-launch config (OPENCODE_CONFIG_CONTENT): the board MCP server
+ * and the inbox plugin, merged over whatever the user already passes there.
+ * `{env:…}` is OpenCode's own substitution, so the token stays in the env.
+ */
+export function opencodeConfigContent(opts: {
+	hookPort: number;
+	hooksDir: string;
+	existing?: string;
+}): string {
+	let base: { plugin?: unknown; mcp?: Record<string, unknown>; [k: string]: unknown } = {};
+	try {
+		if (opts.existing) base = JSON.parse(opts.existing);
+	} catch {
+		/* not JSON: OpenCode would reject it too; ours replaces it */
+	}
+	const plugins = Array.isArray(base.plugin) ? base.plugin : [];
+	return JSON.stringify({
+		...base,
+		plugin: [...plugins, pathToFileURL(join(opts.hooksDir, "opencode-inbox.js")).href],
+		mcp: {
+			...(base.mcp ?? {}),
+			ateam_board: {
+				type: "remote",
+				url: `http://127.0.0.1:${opts.hookPort}/mcp`,
+				headers: {
+					"x-ateam-terminal-id": "{env:ATEAM_TERMINAL_ID}",
+					"x-ateam-terminal-token": "{env:ATEAM_TERMINAL_TOKEN}",
+				},
+			},
+		},
+	});
+}
 
 /** Build the PTY environment for an agent session, injecting hook correlation. */
 export function buildAgentEnv(opts: {
@@ -308,12 +543,24 @@ export function buildAgentEnv(opts: {
 	agentId: string;
 	hookPort: number;
 	hooksDir: string;
+	/** The terminal's peer token (see peerToken). */
+	token?: string;
 }): NodeJS.ProcessEnv {
 	return {
 		...process.env,
 		ATEAM_TERMINAL_ID: opts.terminalId,
 		ATEAM_AGENT_ID: opts.agentId,
 		ATEAM_HOOK_PORT: String(opts.hookPort),
+		...(opts.token ? { ATEAM_TERMINAL_TOKEN: opts.token } : {}),
+		...(opts.agentId === "opencode"
+			? {
+					OPENCODE_CONFIG_CONTENT: opencodeConfigContent({
+						hookPort: opts.hookPort,
+						hooksDir: opts.hooksDir,
+						existing: process.env.OPENCODE_CONFIG_CONTENT,
+					}),
+				}
+			: {}),
 		// The gh shim reads this to strip itself from PATH and find the real gh.
 		ATEAM_HOOKS_DIR: opts.hooksDir,
 		PATH: `${opts.hooksDir}:${process.env.PATH ?? ""}`,
