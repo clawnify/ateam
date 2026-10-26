@@ -18,6 +18,8 @@ export interface Services {
 	hooksDir: string;
 	notifyScriptPath: string;
 	hookPort: number;
+	/** Signs each terminal's peer token (agent-setup `peerToken`). */
+	peerSecret: string;
 	mergeQueue: MergeQueue;
 	loopRunner: LoopRunner;
 	/** One-shot follow-up turns, armed at launch and consumed at turn end. */

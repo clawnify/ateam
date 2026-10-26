@@ -67,6 +67,23 @@ export type MergeHandler = (e: MergeRequestEvent) => Promise<MergeEnqueueDTO | n
  */
 export type FollowUpResolver = (terminalId: string, eventType: string) => string | undefined;
 
+/**
+ * The peer inbox behind `/inbox/wait` (see peer-messages.ts): token checks and
+ * the long-poll a listener holds open.
+ */
+export interface PeerInboxHandlers {
+	verify(terminalId: string, token: string): boolean;
+	wait(terminalId: string): {
+		result: Promise<
+			| { kind: "message"; text: string }
+			| { kind: "timeout" }
+			| { kind: "superseded" }
+			| { kind: "gone" }
+		>;
+		cancel: () => void;
+	};
+}
+
 /** Only localhost origins may reach the MCP endpoint (DNS-rebinding guard). */
 const LOCAL_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
 
@@ -82,7 +99,13 @@ export class HookServer extends EventEmitter {
 	private board?: BoardHandlers;
 	private followUp?: FollowUpResolver;
 	private merge?: MergeHandler;
+	private inbox?: PeerInboxHandlers;
 	port = 0;
+
+	/** Wire the peer inbox (token checks + `/inbox/wait`). */
+	setPeerInbox(handlers: PeerInboxHandlers): void {
+		this.inbox = handlers;
+	}
 
 	/** Wire the Board Organizer's request/response tool handlers. */
 	setBoardHandlers(handlers: BoardHandlers): void {
@@ -127,6 +150,10 @@ export class HookServer extends EventEmitter {
 					const board = this.board;
 					const callerTerminalId =
 						(req.headers["x-ateam-terminal-id"] as string | undefined) || undefined;
+					const token = (req.headers["x-ateam-terminal-token"] as string | undefined) ?? "";
+					const callerVerified = Boolean(
+						callerTerminalId && token && this.inbox?.verify(callerTerminalId, token),
+					);
 					let body = "";
 					req.on("data", (c) => {
 						body += c;
@@ -143,7 +170,10 @@ export class HookServer extends EventEmitter {
 								error: { code: -32700, message: "parse error" },
 							});
 						}
-						dispatchMcp(msg as Parameters<typeof dispatchMcp>[0], board, { callerTerminalId })
+						dispatchMcp(msg as Parameters<typeof dispatchMcp>[0], board, {
+							callerTerminalId,
+							callerVerified,
+						})
 							.then((reply) => {
 								if (reply.kind === "accepted") {
 									res.writeHead(202);
@@ -159,6 +189,34 @@ export class HookServer extends EventEmitter {
 									error: { code: -32603, message: String(e) },
 								}),
 							);
+					});
+					return;
+				}
+
+				// A peer-message listener (Claude's inbox.sh, OpenCode's plugin)
+				// waiting for this terminal's messages. 200 + text: deliver it.
+				// 204: the window passed, ask again. 409: a newer listener took
+				// over. 410: the terminal is gone. 401: wrong token.
+				if (req.method === "GET" && url.pathname === "/inbox/wait") {
+					const terminalId = url.searchParams.get("terminalId") ?? "";
+					const token = (req.headers["x-ateam-terminal-token"] as string | undefined) ?? "";
+					if (!this.inbox) return json(503, { error: "inbox not ready" });
+					if (!terminalId || !token || !this.inbox.verify(terminalId, token)) {
+						res.writeHead(401);
+						res.end();
+						return;
+					}
+					const { result, cancel } = this.inbox.wait(terminalId);
+					res.on("close", cancel);
+					result.then((o) => {
+						if (res.writableEnded || res.destroyed) return;
+						if (o.kind === "message") {
+							res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+							res.end(o.text);
+						} else {
+							res.writeHead(o.kind === "timeout" ? 204 : o.kind === "superseded" ? 409 : 410);
+							res.end();
+						}
 					});
 					return;
 				}
@@ -188,10 +246,7 @@ export class HookServer extends EventEmitter {
 				}
 				// GET from every hook; POST, with the hook's own JSON input as the
 				// body, from the two that carry text (see notify.sh).
-				if (
-					(req.method === "GET" || req.method === "POST") &&
-					url.pathname === "/hook/complete"
-				) {
+				if ((req.method === "GET" || req.method === "POST") && url.pathname === "/hook/complete") {
 					const complete = (body: string) => {
 						const terminalId = url.searchParams.get("terminalId") ?? "";
 						const eventType = url.searchParams.get("eventType") ?? "";

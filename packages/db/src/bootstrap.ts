@@ -136,6 +136,20 @@ export function bootstrap(db: SqliteExecutor): void {
 		);
 		CREATE INDEX IF NOT EXISTS board_changes_task_idx ON board_changes (task_id);
 
+		CREATE TABLE IF NOT EXISTS peer_messages (
+			id TEXT PRIMARY KEY,
+			from_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+			from_terminal_id TEXT,
+			to_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+			body TEXT NOT NULL,
+			hop INTEGER NOT NULL DEFAULT 1,
+			created_at INTEGER,
+			delivered_at INTEGER,
+			delivered_via TEXT,
+			error TEXT
+		);
+		CREATE INDEX IF NOT EXISTS peer_messages_to_idx ON peer_messages (to_task_id, delivered_at);
+
 			CREATE TABLE IF NOT EXISTS hosts (
 				host_alias TEXT PRIMARY KEY,
 				transport TEXT NOT NULL DEFAULT 'ssh',

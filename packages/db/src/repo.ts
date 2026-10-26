@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 import {
 	agentEvents,
 	agentSessions,
@@ -10,8 +10,11 @@ import {
 	loops,
 	type NewBoardChange,
 	type NewLoop,
+	type NewPeerMessage,
 	type NewProject,
 	type NewTask,
+	type PeerMessage,
+	peerMessages,
 	projects,
 	type Settings,
 	settings,
@@ -310,6 +313,64 @@ export const repo = {
 			.orderBy(desc(boardChanges.createdAt))
 			.all();
 		return opts.limit ? rows.slice(0, opts.limit) : rows;
+	},
+
+	// ---- peer messages (agent-to-agent inbox) ----
+	insertPeerMessage(db: AteamDb, m: NewPeerMessage): PeerMessage {
+		return db.insert(peerMessages).values(m).returning().get();
+	},
+
+	/** A task's undelivered messages, oldest first: the order they were sent. */
+	listPendingPeerMessages(db: AteamDb, toTaskId: string): PeerMessage[] {
+		return db
+			.select()
+			.from(peerMessages)
+			.where(and(eq(peerMessages.toTaskId, toTaskId), isNull(peerMessages.deliveredAt)))
+			.orderBy(asc(peerMessages.createdAt))
+			.all();
+	},
+
+	/** Every task with something still waiting for it. */
+	listTasksWithPendingPeerMessages(db: AteamDb): string[] {
+		return db
+			.selectDistinct({ toTaskId: peerMessages.toTaskId })
+			.from(peerMessages)
+			.where(isNull(peerMessages.deliveredAt))
+			.all()
+			.map((r) => r.toTaskId);
+	},
+
+	markPeerMessagesDelivered(db: AteamDb, ids: string[], via: string, at = Date.now()): void {
+		if (ids.length === 0) return;
+		db.update(peerMessages)
+			.set({ deliveredAt: at, deliveredVia: via })
+			.where(inArray(peerMessages.id, ids))
+			.run();
+	},
+
+	/** Messages between two tasks (either direction) since `since`, newest first. */
+	listPeerMessagesBetween(db: AteamDb, a: string, b: string, since: number): PeerMessage[] {
+		return db
+			.select()
+			.from(peerMessages)
+			.where(
+				and(
+					inArray(peerMessages.fromTaskId, [a, b]),
+					inArray(peerMessages.toTaskId, [a, b]),
+					gte(peerMessages.createdAt, since),
+				),
+			)
+			.orderBy(desc(peerMessages.createdAt))
+			.all();
+	},
+
+	/** How many messages a task has sent since `since` (the sender rate cap). */
+	countPeerMessagesFrom(db: AteamDb, fromTaskId: string, since: number): number {
+		return db
+			.select({ id: peerMessages.id })
+			.from(peerMessages)
+			.where(and(eq(peerMessages.fromTaskId, fromTaskId), gte(peerMessages.createdAt, since)))
+			.all().length;
 	},
 
 	// ---- hosts (remote connections; client-only) ----
