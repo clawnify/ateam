@@ -640,10 +640,9 @@ export function App() {
 	useEffect(() => {
 		if (loopDialog?.editId && !editingLoop) setLoopDialog(null);
 	}, [loopDialog, editingLoop]);
-	// Sidebar LOOPS rows: the active (enabled) loops first, paused ones after,
-	// so what is actually running is always at the top of the list. The Loops
-	// tab keeps the engine's order so a loop doesn't jump when toggled there.
-	const sidebarLoops = useMemo(
+	// Sidebar LOOPS rows and the Loops tab: the active (enabled) loops first,
+	// paused ones after, so what is actually running is always at the top.
+	const sortedLoops = useMemo(
 		() => [...activeLoops].sort((a, b) => Number(b.enabled) - Number(a.enabled)),
 		[activeLoops],
 	);
@@ -721,8 +720,8 @@ export function App() {
 	}, [activeProjectId]);
 	// Loops mode follows the sidebar's LOOPS list the way Tasks mode follows TASKS.
 	const loopOrderIds = useMemo(
-		() => sidebarLoops.flatMap((l) => (l.taskId ? [l.taskId] : [])),
-		[sidebarLoops],
+		() => sortedLoops.flatMap((l) => (l.taskId ? [l.taskId] : [])),
+		[sortedLoops],
 	);
 	const missionTasks = useMemo(
 		() =>
@@ -1420,10 +1419,10 @@ export function App() {
 							</div>
 							{!loopsCollapsed && (
 								<div className="side-list">
-									{sidebarLoops.length === 0 ? (
+									{sortedLoops.length === 0 ? (
 										<div className="tree-empty">No loops</div>
 									) : (
-										sidebarLoops.map((l) => {
+										sortedLoops.map((l) => {
 											const task = l.taskId
 												? (activeTasks.find((t) => t.id === l.taskId) ?? null)
 												: null;
@@ -1735,7 +1734,7 @@ export function App() {
 						<SettingsPanel agents={agents} />
 					) : (
 						<LoopsPanel
-							loops={activeLoops}
+							loops={sortedLoops}
 							members={activeMembers}
 							envProtocol={envProtocol}
 							onChanged={refreshLoops}

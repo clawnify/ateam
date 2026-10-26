@@ -90,6 +90,9 @@ export function LoopsScreen({
 			},
 		]);
 
+	// Active (enabled) loops first, paused ones after, as on the desktop.
+	const sorted = [...loops].sort((a, b) => Number(b.enabled) - Number(a.enabled));
+
 	return (
 		<ScrollView style={styles.root} contentContainerStyle={styles.content}>
 			<View style={styles.column}>
@@ -103,7 +106,7 @@ export function LoopsScreen({
 				{loops.length === 0 && (
 					<Text style={styles.empty}>No loops on this project. Create one.</Text>
 				)}
-				{loops.map((l) => {
+				{sorted.map((l) => {
 					const task = l.taskId ? (tasks.find((t) => t.id === l.taskId) ?? null) : null;
 					return (
 						<View key={l.id} style={[styles.card, !l.enabled && styles.cardOff]}>
