@@ -1045,10 +1045,13 @@ export default function App() {
 				setConnected(true);
 				const nextSkew = c.skewed ? c.info.protocolVersion : null;
 				setSkew(nextSkew);
+				// Only the reconnect that ends an update can say the box is already on the
+				// latest release. Any other connect, to this box or another, drops the claim:
+				// it hides Update box, and a release may have come out since.
 				if (updateFrom.current !== null) {
 					setBoxAtLatest(nextSkew !== null && nextSkew === updateFrom.current);
 					updateFrom.current = null;
-				} else if (nextSkew === null) {
+				} else {
 					setBoxAtLatest(false);
 				}
 				// Whatever we came back as, we are no longer mid-update. A reconnect is
