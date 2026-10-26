@@ -170,7 +170,10 @@ on the phone's connection screen set **Provider** to **Sprites** and enter the
 Sprite's name and a Sprites API token: create one at
 [sprites.dev/account](https://sprites.dev/account) and paste the whole `my-org/…`
 string. Before connecting, the phone asks Sprites to wake the Sprite and hold it
-for two minutes; once the phone attaches, the engine holds it as for any client. A
+for two minutes; once the phone attaches, the engine holds it as for any client.
+It wakes on Connect, on opening the app, and on coming back to it. While a dropped
+connection retries, it wakes again whenever the last wake is over a minute old, so
+a Sprite that paused again before the phone got through is not left asleep. A
 Sprites token works on every Sprite in its organization, so give the phone one for
 an organization that holds only your Ateam boxes.
 
