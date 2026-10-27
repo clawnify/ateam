@@ -41,6 +41,7 @@ export function PromptComposer({
 	defaultAgentId,
 	initialName = "",
 	initialPrompt = "",
+	initialFiles = [],
 	environments = [],
 	envAgents,
 	onAdd,
@@ -59,6 +60,8 @@ export function PromptComposer({
 	defaultAgentId?: string;
 	initialName?: string;
 	initialPrompt?: string;
+	/** Paths to start attached, e.g. files dropped on a project in the sidebar. */
+	initialFiles?: string[];
 	/** Where the task can run: this Mac + each ~/.ssh/config box. `alias` null = Local.
 	 *  A box is disabled when the repo can't run there (no GitHub identity to clone).
 	 *  Unused by the session variant, which has no environment to choose. */
@@ -91,7 +94,7 @@ export function PromptComposer({
 		defaultAgentId ?? agents.find((a) => a.available)?.id ?? "claude",
 	);
 	const [yolo, setYolo] = useState(false);
-	const [files, setFiles] = useState<string[]>([]);
+	const [files, setFiles] = useState<string[]>(initialFiles);
 	const [dragging, setDragging] = useState(false);
 	// Remember the last-picked environment across tasks (and app restarts) so it isn't
 	// re-selected every time; fall back to the first runnable one (Local, unless the repo
