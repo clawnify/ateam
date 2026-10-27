@@ -2320,6 +2320,11 @@ function TaskPanel({
 	const [editorSrc, setEditorSrc] = useState<string | null>(null);
 	const [editorOpen, setEditorOpen] = useState(false);
 	const [editorBusy, setEditorBusy] = useState<string | null>(null);
+	// The browser on the task's box (its Chrome in noVNC). Kept mounted once
+	// loaded, like the editor, so hiding it doesn't drop the VNC session.
+	const [browserSrc, setBrowserSrc] = useState<string | null>(null);
+	const [browserOpen, setBrowserOpen] = useState(false);
+	const [browserBusy, setBrowserBusy] = useState<string | null>(null);
 	// Dock the agent terminal as a right sidebar while the editor or the changes
 	// view owns the main area — the agent keeps working in view instead of
 	// vanishing behind it. Default on; the left-sidebar variant was left out.
@@ -2358,6 +2363,9 @@ function TaskPanel({
 		setEditorOpen(false);
 		setEditorSrc(null);
 		setEditorBusy(null);
+		setBrowserOpen(false);
+		setBrowserSrc(null);
+		setBrowserBusy(null);
 	}, [task.id]);
 
 	const refreshSessions = useCallback(async () => {
@@ -2442,6 +2450,7 @@ function TaskPanel({
 	 */
 	const resumeLast = useCallback(() => {
 		setEditorOpen(false);
+		setBrowserOpen(false);
 		const newest = [...restorable].reverse().find((s) => s.agentId !== "shell");
 		if (newest) void restoreTab(newest);
 		else void launch(false, true);
@@ -2553,6 +2562,7 @@ function TaskPanel({
 	const showTerminal = (tid: string | null) => {
 		setTerminal(tid);
 		setEditorOpen(false);
+		setBrowserOpen(false);
 		setChangesOpen(false);
 	};
 
@@ -2564,6 +2574,7 @@ function TaskPanel({
 		refreshDiff();
 		setChangesOpen(true);
 		setEditorOpen(false);
+		setBrowserOpen(false);
 		if (!viewFile && diff?.files[0]) setViewFile(diff.files[0].path);
 	};
 
@@ -2571,7 +2582,7 @@ function TaskPanel({
 
 	// Whether a view covers the terminal, and whether the terminal instead docks
 	// beside it (both open at once). Only when the toggle wants it.
-	const mainViewOpen = editorOpen || changesOpen;
+	const mainViewOpen = editorOpen || browserOpen || changesOpen;
 	const termDocked = termSide && mainViewOpen;
 
 	// Closing a tab kills its PTY — tabs are exactly the live sessions, so there
@@ -2649,6 +2660,7 @@ function TaskPanel({
 										return;
 									}
 									setEditorOpen(false);
+									setBrowserOpen(false);
 									setChangesOpen(false);
 									void restoreTab(session);
 								}}
@@ -2706,6 +2718,7 @@ function TaskPanel({
 							// for every task after it). Setting an identical src is a
 							// React no-op, so a plain re-open doesn't reload the iframe.
 							setEditorOpen(true);
+							setBrowserOpen(false);
 							setChangesOpen(false);
 							setEditorBusy("Opening the editor…");
 							try {
@@ -2780,21 +2793,52 @@ function TaskPanel({
 				    `?.` call swallows a missing binding and the button just does
 				    nothing when clicked — which is exactly how it looks when a dev
 				    session hot-reloads this file while the preload stays behind. */}
-				{window.ateam.utils.openBrowser && (
+				{/* A task on a box drives the box's own Chrome, so there the button
+				    opens that browser in a panel instead of raising this Mac's. */}
+				{alias !== null ? (
 					<IconButton
 						icon={Globe}
-						label={
-							alias === null
-								? "Open Chrome (the browser your agents drive)"
-								: "Open Chrome — a task on a box needs its own browser"
-						}
-						onClick={() =>
-							run(async () => {
-								const res = await window.ateam.utils.openBrowser?.(alias);
-								if (res && !res.ok) throw new Error(res.reason);
-							})
-						}
+						active={browserOpen}
+						label={browserOpen ? "Back to terminal" : `Open the browser on "${alias}"`}
+						onClick={() => {
+							if (browserOpen) {
+								setBrowserOpen(false);
+								return;
+							}
+							void run(async () => {
+								setBrowserOpen(true);
+								setEditorOpen(false);
+								setChangesOpen(false);
+								// A loaded view stays connected (noVNC reconnects on its own),
+								// so only the first open asks the box.
+								if (browserSrc) return;
+								setBrowserBusy("Opening the browser…");
+								try {
+									setBrowserSrc((await window.ateam.browser.view(task.id)).url);
+								} catch (e) {
+									setBrowserOpen(false);
+									if (/Unknown method/.test(String(e)))
+										throw new Error(`Update Ateam on "${alias}" to open its browser here.`);
+									throw e;
+								} finally {
+									setBrowserBusy(null);
+								}
+							});
+						}}
 					/>
+				) : (
+					window.ateam.utils.openBrowser && (
+						<IconButton
+							icon={Globe}
+							label="Open Chrome (the browser your agents drive)"
+							onClick={() =>
+								run(async () => {
+									const res = await window.ateam.utils.openBrowser?.(alias);
+									if (res && !res.ok) throw new Error(res.reason);
+								})
+							}
+						/>
+					)
 				)}
 				<IconButton icon={GitCommitVertical} label="Commit all changes" onClick={commit} />
 				<IconButton
@@ -2935,6 +2979,19 @@ function TaskPanel({
 						) : (
 							<div className="muted" style={{ display: "grid", placeItems: "center", flex: 1 }}>
 								{editorBusy}
+							</div>
+						)}
+					</div>
+				)}
+
+				{(browserSrc || browserBusy) && (
+					<div className="editor-wrap" style={{ display: browserOpen ? "flex" : "none" }}>
+						{/* The box's Chrome, on its virtual desktop, in noVNC. */}
+						{browserSrc ? (
+							<iframe className="editor-frame" src={browserSrc} title="Browser" />
+						) : (
+							<div className="muted" style={{ display: "grid", placeItems: "center", flex: 1 }}>
+								{browserBusy}
 							</div>
 						)}
 					</div>

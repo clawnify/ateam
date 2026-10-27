@@ -66,6 +66,9 @@ const api: AteamApi = {
 		open: (taskId) => ipcRenderer.invoke(CH.editorOpenUrl, taskId),
 		install: (taskId) => ipcRenderer.invoke(CH.editorInstall, taskId),
 	},
+	browser: {
+		view: (taskId) => ipcRenderer.invoke(CH.browserViewUrl, taskId),
+	},
 	search: {
 		sessions: (input) => ipcRenderer.invoke(CH.searchSessions, input),
 	},

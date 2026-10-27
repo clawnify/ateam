@@ -13,7 +13,8 @@
 #     the browser to agents as an MCP server on 127.0.0.1:9377. Registered with
 #     Claude Code for this user when `claude` is on the box.
 #   - noVNC, so you can watch the desktop and take over (a login, a 2FA prompt, a
-#     CAPTCHA) from any browser on your tailnet
+#     CAPTCHA): in the desktop app's Browser panel, or from any browser on your
+#     tailnet
 #
 # Run it AS THE USER that owns the agents, the same one install.sh ran as. Unlike
 # install.sh it needs sudo once (apt packages and Chrome's policy directory). It
@@ -21,11 +22,12 @@
 # so it never closes a browser an agent is using.
 #
 # Env knobs:
-#   ATEAM_BROWSER_VIEW_ADDR  <ip>:<port> noVNC listens on. Default: the box's
-#                     tailnet IP (from ~/.ateam/ws-addr, as the editor does) on
-#                     port 6080, or 127.0.0.1:6080 with no tailnet, reached over an
-#                     ssh forward. The VNC password is the second lock, not the first:
-#                     never bind this to a public address.
+#   ATEAM_BROWSER_VIEW_ADDR  <ip>:<port> noVNC ALSO listens on, beside
+#                     127.0.0.1:6080 (which the desktop app's ssh forward reaches).
+#                     Default: the box's tailnet IP (from ~/.ateam/ws-addr, else
+#                     `tailscale ip`, when an interface owns it) on port 6080, or
+#                     nothing with no tailnet. The VNC password is the second lock,
+#                     not the first: never set this to a public address.
 #   TASKWINDOW_VERSION       the TaskWindow release to pin (default below)
 set -euo pipefail
 
@@ -45,6 +47,7 @@ TW_PREFIX="$BROWSER_DIR/taskwindow"
 TW_ENTRY="$TW_PREFIX/node_modules/taskwindow/src/index.js"
 BIN_DIR="$HOME/.local/bin"
 CHROME_LAUNCHER="$BIN_DIR/ateam-chrome"
+XVFB_LAUNCHER="$BIN_DIR/ateam-xvfb"
 SERVICES="ateam-xvfb ateam-openbox ateam-chrome ateam-x11vnc ateam-novnc ateam-taskwindow"
 
 SPRITE_ENV="$(command -v sprite-env 2>/dev/null || true)"
@@ -71,8 +74,11 @@ command -v apt-get >/dev/null || die "this installer needs a Debian/Ubuntu box (
 sudo -n true 2>/dev/null || die "this needs passwordless sudo once, for apt and Chrome's policy directory"
 command -v curl >/dev/null || die "curl is required"
 
-# The node agents already use; TaskWindow only needs >= 18.
-NODE="$(bash -lc 'command -v node' 2>/dev/null || true)"
+# The node the engine runs on, which install.sh pinned in its launcher and whose
+# npm it already used; TaskWindow only needs >= 18. The login PATH's node can be
+# a distro build without npm (a Sprite's /usr/bin/node), so it is only the fallback.
+NODE="$(sed -n 's/^exec \([^ ]*\) .*/\1/p' "$BIN_DIR/ateam" 2>/dev/null | head -1)"
+[ -x "$NODE" ] || NODE="$(bash -lc 'command -v node' 2>/dev/null || true)"
 [ -n "$NODE" ] || die "no node on the login PATH: run install.sh first"
 NODE="$(readlink -f "$NODE")"
 NPM="$(dirname "$NODE")/npm"
@@ -108,6 +114,11 @@ step "[2/6] configure Chrome, the desktop and the VNC password"
 sudo mkdir -p /etc/opt/chrome/policies/managed
 printf '{"ExtensionInstallForcelist":["%s;https://clients2.google.com/service/update2/crx"]}\n' \
 	"$TASKWINDOW_EXTENSION_ID" | sudo tee /etc/opt/chrome/policies/managed/taskwindow.json >/dev/null
+# --no-sandbox (see the launcher below) is deliberate here, so its "unsupported
+# command-line flag" bar would only take room on every screen you watch. Read at
+# Chrome's start, so a Chrome already running keeps the bar until it restarts.
+echo '{"CommandLineFlagSecurityWarningsEnabled":false}' |
+	sudo tee /etc/opt/chrome/policies/managed/ateam.json >/dev/null
 
 # Focus follows the mouse, so a click through noVNC always reaches Chrome.
 mkdir -p "$HOME/.config/openbox"
@@ -143,6 +154,22 @@ exec /usr/bin/google-chrome --no-sandbox --disable-gpu --remote-debugging-port=$
 EOF
 chmod +x "$CHROME_LAUNCHER"
 
+# Xvfb refuses a display whose lock file outlived its server, and a Sprite keeps
+# /tmp across a restart, so one stale lock left every restart failing. The lock is
+# cleared only when the pid in it isn't a running Xvfb.
+D="${DISPLAY_NUM#:}"
+cat >"$XVFB_LAUNCHER" <<EOF
+#!/bin/bash
+# Written by Ateam's install-browser.sh: the virtual display Chrome runs on.
+L=/tmp/.X$D-lock
+pid="\$(tr -d ' ' 2>/dev/null <"\$L")"
+if [ -n "\$pid" ] && [ "\$(cat /proc/\$pid/comm 2>/dev/null)" != Xvfb ]; then
+	rm -f "\$L" /tmp/.X11-unix/X$D
+fi
+exec /usr/bin/Xvfb $DISPLAY_NUM -screen 0 1280x720x24 -nolisten tcp
+EOF
+chmod +x "$XVFB_LAUNCHER"
+
 # ---------------------------------------------------------- taskwindow -----
 
 step "[3/6] install TaskWindow $TASKWINDOW_VERSION"
@@ -159,22 +186,32 @@ touch "$HOME/.taskwindow/no-update-check"
 
 # ------------------------------------------------------------ services -----
 
-# noVNC binds where the engine serves clients: the tailnet when there is one.
+# noVNC always listens on loopback: the desktop app's ssh forward is opened before
+# it can ask the box anything, so 127.0.0.1 is the one address it can name. A box
+# on a tailnet gets a second listener there, for clients that dial it directly.
+LOOPBACK_VIEW_ADDR="127.0.0.1:6080"
 VIEW_ADDR="${ATEAM_BROWSER_VIEW_ADDR:-}"
 if [ -z "$VIEW_ADDR" ]; then
 	HOST=""
 	if [ -s "$DATA_DIR/ws-addr" ]; then HOST="$(head -1 "$DATA_DIR/ws-addr" | sed 's/:[0-9]*$//')"; fi
 	if [ -z "$HOST" ]; then HOST="$(tailscale ip -4 2>/dev/null | head -1 || true)"; fi
-	VIEW_ADDR="${HOST:-127.0.0.1}:6080"
+	# Tailscale in userspace mode (boxd) owns no interface, and a bind to its IP
+	# would fail on every restart.
+	if [ -n "$HOST" ] && ! ip -4 -o addr show 2>/dev/null | grep -qF " $HOST/"; then HOST=""; fi
+	if [ -n "$HOST" ] && [ "$HOST" != 127.0.0.1 ]; then VIEW_ADDR="$HOST:6080"; fi
 fi
+if [ -n "$VIEW_ADDR" ]; then SERVICES="$SERVICES ateam-novnc-tailnet"; fi
 
 # name|needs|env|cmd|args — args comma-separated, as sprite-env takes them.
 service_specs() {
-	echo "ateam-xvfb|||/usr/bin/Xvfb|$DISPLAY_NUM,-screen,0,1280x720x24,-nolisten,tcp"
+	echo "ateam-xvfb|||$XVFB_LAUNCHER|"
 	echo "ateam-openbox|ateam-xvfb|DISPLAY=$DISPLAY_NUM|/usr/bin/openbox|"
 	echo "ateam-chrome|ateam-xvfb,ateam-openbox|DISPLAY=$DISPLAY_NUM|$CHROME_LAUNCHER|"
 	echo "ateam-x11vnc|ateam-xvfb|DISPLAY=$DISPLAY_NUM|/usr/bin/x11vnc|-display,$DISPLAY_NUM,-localhost,-forever,-shared,-quiet,-rfbauth,$VNC_AUTH_FILE"
-	echo "ateam-novnc|ateam-x11vnc||/usr/bin/websockify|--web,/usr/share/novnc,$VIEW_ADDR,127.0.0.1:5900"
+	echo "ateam-novnc|ateam-x11vnc||/usr/bin/websockify|--web,/usr/share/novnc,$LOOPBACK_VIEW_ADDR,127.0.0.1:5900"
+	if [ -n "$VIEW_ADDR" ]; then
+		echo "ateam-novnc-tailnet|ateam-x11vnc||/usr/bin/websockify|--web,/usr/share/novnc,$VIEW_ADDR,127.0.0.1:5900"
+	fi
 	echo "ateam-taskwindow||HOME=$HOME,TASKWINDOW_PORT=$TASKWINDOW_PORT|$NODE|$TW_ENTRY"
 }
 
@@ -207,14 +244,49 @@ if [ "$SVC_MGR" = systemd ]; then
 	done < <(service_specs)
 	sudo systemctl daemon-reload
 	# `enable --now` starts what isn't running and leaves a running unit be, so a
-	# re-run never closes the browser under an agent. A new TaskWindow is the one
-	# thing worth a restart.
+	# re-run never closes the browser under an agent. A new TaskWindow is worth a
+	# restart, and so is noVNC: it holds no state (a viewer reconnects), and a
+	# running one would keep listening where an older run put it.
 	# shellcheck disable=SC2086
 	sudo systemctl enable --now $(printf '%s.service ' $SERVICES) >/dev/null 2>&1
+	sudo systemctl restart ateam-novnc.service
+	if [ -n "$VIEW_ADDR" ]; then sudo systemctl restart ateam-novnc-tailnet.service; fi
 	if [ -n "${TW_UPGRADED:-}" ]; then sudo systemctl restart ateam-taskwindow.service; fi
 else
-	# On a Sprite, deleting or restarting a service kills what it started, so an
-	# existing service is left exactly as it is.
+	# On a Sprite, deleting or restarting a service kills what it started, so a
+	# service already running this run's command is left exactly as it is. One
+	# whose command differs is recreated: only a newer script changes a command, so
+	# a mismatch is an install that predates a fix, and it may be crash-looping on
+	# the old one (a looping service reads "running" between restarts, so its
+	# status can't say). noVNC is recreated every run: it holds no state.
+	#
+	# A replaced service takes everything that needs it along (replacing
+	# ateam-xvfb restarts Chrome, once per upgrade), and they go dependents first:
+	# the specs are in dependency order, so they are marked forwards and deleted
+	# backwards.
+	stale=()
+	while IFS='|' read -r name needs _ cmd args; do
+		have="$("$SPRITE_ENV" services get "$name" 2>/dev/null | "$NODE" -e '
+			let s = "";
+			process.stdin.on("data", (d) => (s += d)).on("end", () => {
+				try {
+					const j = JSON.parse(s);
+					console.log([j.cmd, ...(j.args || [])].join(","));
+				} catch {}
+			});' || true)"
+		[ -n "$have" ] || continue
+		replace=""
+		case "$name" in ateam-novnc*) replace=1 ;; esac
+		if [ "$have" != "$cmd${args:+,$args}" ]; then replace=1; fi
+		for n in ${needs//,/ }; do
+			case " ${stale[*]} " in *" $n "*) replace=1 ;; esac
+		done
+		if [ -n "$replace" ]; then stale+=("$name"); fi
+	done < <(service_specs)
+	for ((i = ${#stale[@]} - 1; i >= 0; i--)); do
+		"$SPRITE_ENV" services delete "${stale[i]}" >/dev/null || die "couldn't replace ${stale[i]} (the error is above)"
+		info "${stale[i]}: replaced"
+	done
 	while IFS='|' read -r name needs env cmd args; do
 		if "$SPRITE_ENV" services get "$name" >/dev/null 2>&1; then
 			info "$name: already a service, left running"
@@ -272,9 +344,10 @@ fi
 
 cat <<EOF
 
-Browser ready. Watch and take over at:
+Browser ready. Watch and take over from the desktop app (the globe button on a
+task on this box opens its Browser panel), or in any browser at:
 
-    http://$VIEW_ADDR/vnc.html?autoconnect=1&resize=scale
+    http://${VIEW_ADDR:-<ssh -L 6080:127.0.0.1:6080 this box, then> localhost:6080}/vnc.html#autoconnect=true&resize=scale
 
 VNC password: $VNC_PASS_FILE. Log into a site there once and every agent on
 this box shares the session. Agents reach Chrome through the taskwindow MCP

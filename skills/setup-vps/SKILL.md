@@ -139,11 +139,12 @@ is the common half-finished state.
 
 If their agents need to browse (logins, web apps, testing a site), offer
 `packages/server/scripts/install-browser.sh`, run as the same user on an x86_64 box.
-It gives the box its own Chrome with TaskWindow's MCP tools and a noVNC view at
-`http://<tailnet-ip>:6080/vnc.html`. Done means its last steps report
-"extension connected" and the MCP server registered. Have the user open the noVNC
-link and log into the sites the agents will need; the profile is shared, so once is
-enough. See "Optional: a browser for the box's agents" in `docs/online-ateam.md`.
+It gives the box its own Chrome with TaskWindow's MCP tools and a noVNC view, which
+the desktop app opens from the globe button on any task on the box (also at
+`http://<tailnet-ip>:6080/vnc.html`). Done means its last steps report
+"extension connected" and the MCP server registered. Have the user open the
+Browser panel and log into the sites the agents will need; the profile is shared,
+so once is enough. See "Optional: a browser for the box's agents" in `docs/online-ateam.md`.
 
 ## Common failures
 

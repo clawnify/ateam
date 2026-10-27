@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	CODE_SERVER_VERSION,
-	editorBindHost,
 	findCodeServer,
 	INSTALL_CMD,
 	preseedUserSettings,
@@ -24,15 +23,6 @@ describe("editor: findCodeServer", () => {
 		// this asserts, via a PATH that can't contain the binary.
 		const found = findCodeServer({ PATH: empty });
 		if (found !== null) expect(found.startsWith(empty)).toBe(false);
-	});
-});
-
-describe("editor: bind interface mirrors the daemon's exposure", () => {
-	test("loopback without ATEAM_WS_ADDR", () => {
-		expect(editorBindHost({})).toBe("127.0.0.1");
-	});
-	test("tailnet host when the daemon serves one", () => {
-		expect(editorBindHost({ ATEAM_WS_ADDR: "100.72.63.61:8787" })).toBe("100.72.63.61");
 	});
 });
 

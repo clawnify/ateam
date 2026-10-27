@@ -11,6 +11,7 @@ import {
 	type EditorEndpointDTO,
 	type EditorOpenResult,
 } from "@ateam/protocol";
+import { ensureRelay, relayHost } from "./box-relay";
 
 /** Where the standalone install puts the binary (plus the usual system dirs). */
 const BIN_CANDIDATES = [
@@ -61,19 +62,6 @@ export function findCodeServer(env: NodeJS.ProcessEnv = process.env): string | n
 }
 
 /**
- * The interface the editor binds. Mirrors how the daemon itself is exposed: with
- * ATEAM_WS_ADDR set the box serves clients over the tailnet, so the editor binds
- * the same address (same trust boundary); otherwise loopback only, reached over
- * the client's ssh forward.
- */
-export function editorBindHost(env: NodeJS.ProcessEnv = process.env): string {
-	const ws = env.ATEAM_WS_ADDR;
-	if (!ws) return "127.0.0.1";
-	const host = ws.replace(/:\d+$/, "");
-	return host.length > 0 ? host : "127.0.0.1";
-}
-
-/**
  * Seed code-server's user settings ONCE, before its first run: Ateam-dark theme
  * and workspace trust off (every task is a new worktree — a per-folder trust
  * prompt would fire on each one). Never touches an existing settings file: after
@@ -104,16 +92,20 @@ export interface EditorHost {
 	ensure(): Promise<EditorOpenResult>;
 }
 
-export function createEditorHost(env: NodeJS.ProcessEnv = process.env): EditorHost {
+export function createEditorHost(
+	dataDir: string,
+	env: NodeJS.ProcessEnv = process.env,
+	log: (line: string) => void = console.error,
+): EditorHost {
 	const port = Number(env.ATEAM_EDITOR_PORT) || DEFAULT_EDITOR_PORT;
 	let child: ChildProcess | null = null;
 	let starting: Promise<EditorOpenResult> | null = null;
 
-	async function waitReady(host: string): Promise<void> {
+	async function waitReady(): Promise<void> {
 		// code-server exposes /healthz without auth; poll until it answers.
 		for (let i = 0; i < 60; i++) {
 			try {
-				const res = await fetch(`http://${host}:${port}/healthz`, {
+				const res = await fetch(`http://127.0.0.1:${port}/healthz`, {
 					signal: AbortSignal.timeout(1000),
 				});
 				if (res.ok) return;
@@ -126,11 +118,10 @@ export function createEditorHost(env: NodeJS.ProcessEnv = process.env): EditorHo
 	}
 
 	function start(bin: string): Promise<EditorEndpointDTO> {
-		const host = editorBindHost(env);
 		preseedUserSettings();
 		const proc = spawn(
 			bin,
-			["--bind-addr", `${host}:${port}`, "--auth", "none", "--disable-telemetry"],
+			["--bind-addr", `127.0.0.1:${port}`, "--auth", "none", "--disable-telemetry"],
 			{ stdio: "ignore" },
 		);
 		child = proc;
@@ -140,22 +131,30 @@ export function createEditorHost(env: NodeJS.ProcessEnv = process.env): EditorHo
 		// Tie the editor to the engine's life — an orphaned code-server would keep
 		// the port and make the next engine's spawn fail silently.
 		process.on("exit", () => proc.kill());
-		return waitReady(host).then(() => ({ port }));
+		return waitReady().then(() => ({ port }));
+	}
+
+	function launch(): Promise<EditorOpenResult> {
+		// Alive child answering = reuse; a died child (crash, external kill)
+		// falls through to a fresh start.
+		if (child && child.exitCode === null) return Promise.resolve({ port });
+		const bin = findCodeServer(env);
+		if (!bin) return Promise.resolve({ needsInstall: true });
+		if (!starting) {
+			starting = start(bin).finally(() => {
+				starting = null;
+			});
+		}
+		return starting;
 	}
 
 	return {
-		ensure() {
-			// Alive child answering = reuse; a died child (crash, external kill)
-			// falls through to a fresh start.
-			if (child && child.exitCode === null) return Promise.resolve({ port });
-			const bin = findCodeServer(env);
-			if (!bin) return Promise.resolve({ needsInstall: true });
-			if (!starting) {
-				starting = start(bin).finally(() => {
-					starting = null;
-				});
-			}
-			return starting;
+		async ensure() {
+			const res = await launch();
+			// Loopback only (see box-relay.ts); a tailnet box relays it as well.
+			const host = relayHost(env, dataDir);
+			if (host && !("needsInstall" in res)) await ensureRelay(host, port, log);
+			return res;
 		},
 	};
 }

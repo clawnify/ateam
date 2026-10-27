@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { getAgent } from "@ateam/agents";
 import {
 	beginStep,
+	type BrowserViewDTO,
 	CH,
 	type ClientTransport,
 	type ConnectStep,
@@ -89,7 +90,7 @@ import {
 	waitForTailscale,
 	writeSshConfigEntry,
 } from "./box-setup";
-import { editorForwardFlags, editorLocalPort } from "./editor-tunnel";
+import { boxForwardFlags, browserLocalPort, editorLocalPort } from "./box-tunnel";
 import { withTimeout } from "./timeout";
 
 // The one pre-quoted remote command (ssh space-joins remote args, so `bash -lc`
@@ -167,6 +168,9 @@ export interface Host {
 	 *  client loads for it (localhost, ssh forward, or tailnet endpoint) — or
 	 *  report that the engine still needs code-server installed. */
 	editorUrl(taskId: string): Promise<{ url: string } | { needsInstall: true }>;
+	/** Resolve the URL THIS client loads for a box task's browser (noVNC, signed
+	 *  in), over the ssh forward or the tailnet endpoint. */
+	browserUrl(taskId: string): Promise<{ url: string }>;
 	/** Connect the box if needed, then clone+register a repo ON it (from its remote URL). */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;
 	/** Install the ateam engine on a reachable SSH box (idempotent), streaming the
@@ -424,9 +428,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 				`Unknown connection "${alias}" — add it to ~/.ssh/config, or give a Tailscale endpoint like 100.x.y.z:8787.`,
 			);
 		}
-		// The editor forward rides the RPC child (idle forwards cost nothing), so
-		// the tunnel needs no lifecycle of its own — it dies with the connection.
-		return sshClientTransport(alias, [REMOTE_ATTACH], { sshFlags: editorForwardFlags(alias) });
+		// The editor and browser forwards ride the RPC child (idle forwards cost
+		// nothing), so they need no lifecycle of their own — they die with it.
+		return sshClientTransport(alias, [REMOTE_ATTACH], { sshFlags: boxForwardFlags(alias) });
 	}
 
 	/**
@@ -1031,8 +1035,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		for (const [a, b] of backends) if (b === backend) alias = a;
 		if (!alias) throw new Error("This task's box is no longer connected.");
 		const ws = endpointUrl(alias);
-		// A ws box is reached over the tailnet — the editor binds that same interface
-		// (editorBindHost), so the alias's own host is the editor's host.
+		// A ws box is reached over the tailnet, where the engine relays its loopback
+		// editor (box-relay.ts), so the alias's own host is the editor's host.
 		if (ws) return { url: `http://${new URL(ws).hostname}:${ep.port}` };
 		// ssh: the forward was opened at connect time against the DEFAULT port; a box
 		// overriding ATEAM_EDITOR_PORT would answer somewhere the tunnel doesn't reach.
@@ -1041,6 +1045,32 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 				`"${alias}" runs its editor on port ${ep.port}, but the ssh forward targets ${DEFAULT_EDITOR_PORT}. Unset ATEAM_EDITOR_PORT on the box.`,
 			);
 		return { url: `http://127.0.0.1:${editorLocalPort(alias)}` };
+	}
+
+	async function browserUrl(taskId: string): Promise<{ url: string }> {
+		const backend = agg.ownerOf.get(taskId);
+		if (!backend || backend.kind === "local")
+			throw new Error(
+				"This task runs on this Mac, so its browser is your own Chrome: use the Chrome button.",
+			);
+		const view = (await agg.handleFor(taskId, CH.browserView, [taskId])) as BrowserViewDTO;
+		let alias: string | null = null;
+		for (const [a, b] of backends) if (b === backend) alias = a;
+		if (!alias) throw new Error("This task's box is no longer connected.");
+		const ws = endpointUrl(alias);
+		const base = ws
+			? `http://${new URL(ws).hostname}:${view.port}`
+			: `http://127.0.0.1:${browserLocalPort(alias)}`;
+		// noVNC reads its settings from the fragment as well as the query
+		// (app/webutil.js getConfigVar), and the fragment never reaches the server,
+		// so the password stays out of websockify's request log.
+		const opts = new URLSearchParams({
+			autoconnect: "true",
+			resize: "scale",
+			reconnect: "true",
+			password: view.password,
+		});
+		return { url: `${base}/vnc.html#${opts}` };
 	}
 
 	return {
@@ -1055,6 +1085,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		failures,
 		canUpdateBoxes,
 		editorUrl,
+		browserUrl,
 		provision,
 		install,
 		createBox,
