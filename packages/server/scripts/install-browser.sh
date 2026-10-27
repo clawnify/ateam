@@ -114,6 +114,11 @@ step "[2/6] configure Chrome, the desktop and the VNC password"
 sudo mkdir -p /etc/opt/chrome/policies/managed
 printf '{"ExtensionInstallForcelist":["%s;https://clients2.google.com/service/update2/crx"]}\n' \
 	"$TASKWINDOW_EXTENSION_ID" | sudo tee /etc/opt/chrome/policies/managed/taskwindow.json >/dev/null
+# --no-sandbox (see the launcher below) is deliberate here, so its "unsupported
+# command-line flag" bar would only take room on every screen you watch. Read at
+# Chrome's start, so a Chrome already running keeps the bar until it restarts.
+echo '{"CommandLineFlagSecurityWarningsEnabled":false}' |
+	sudo tee /etc/opt/chrome/policies/managed/ateam.json >/dev/null
 
 # Focus follows the mouse, so a click through noVNC always reaches Chrome.
 mkdir -p "$HOME/.config/openbox"
