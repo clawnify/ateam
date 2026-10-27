@@ -130,6 +130,9 @@ function storedMcLayout(key: string): McLayout | null {
 // (that drop belongs to the terminal, which types the path).
 const MC_TILE_MIME = "application/x-ateam-tile";
 
+// Whether a drag carries files from Finder (not a tile, not dragged text).
+const draggingFiles = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
+
 // Status order: what needs the user's eyes first.
 const STATUS_RANK: Record<KanbanColumn, number> = {
 	review: 0,
@@ -186,6 +189,10 @@ export function App() {
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 	const [selectedIssue, setSelectedIssue] = useState<GithubIssueDTO | null>(null);
 	const [composerIssue, setComposerIssue] = useState<GithubIssueDTO | null>(null);
+	// Files dropped on a project in the sidebar, attached to the composer it opens.
+	const [composerFiles, setComposerFiles] = useState<string[]>([]);
+	// The project card a file is being dragged over, so its row can light up.
+	const [dropCardKey, setDropCardKey] = useState<string | null>(null);
 	const [newIssueOpen, setNewIssueOpen] = useState(false);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [view, setView] = useState<"board" | "mission" | "loops" | "settings">("board");
@@ -920,9 +927,41 @@ export function App() {
 
 	const newTask = () => {
 		setComposerIssue(null);
+		setComposerFiles([]);
 		setSelectedIssue(null);
 		if (activeProjectId) setComposerOpen(true);
 	};
+
+	// Drop files from Finder on a project (row or rail tile) to start a task in it
+	// with them attached: switch to the project and open the composer, so the
+	// user still writes the prompt and picks the agent before anything launches.
+	const projectDropProps = (cardKey: string, projectId: string) => ({
+		onDragOver: (e: React.DragEvent) => {
+			if (!draggingFiles(e)) return;
+			e.preventDefault();
+			e.dataTransfer.dropEffect = "copy";
+			setDropCardKey(cardKey);
+		},
+		onDragLeave: (e: React.DragEvent) => {
+			// Moving onto the row's own dot or name is not leaving it.
+			if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+			setDropCardKey((cur) => (cur === cardKey ? null : cur));
+		},
+		onDrop: (e: React.DragEvent) => {
+			if (!draggingFiles(e)) return;
+			e.preventDefault();
+			setDropCardKey(null);
+			const paths = Array.from(e.dataTransfer.files)
+				.map((f) => window.ateam.utils.pathForFile(f))
+				.filter(Boolean);
+			if (!paths.length) return;
+			selectProject(projectId);
+			setComposerIssue(null);
+			setSelectedIssue(null);
+			setComposerFiles(paths);
+			setComposerOpen(true);
+		},
+	});
 
 	const removeProject = (member: EngineMember) =>
 		run(async () => {
@@ -1004,6 +1043,7 @@ export function App() {
 			const sourceIssue = composerIssue;
 			setComposerOpen(false);
 			setComposerIssue(null);
+			setComposerFiles([]);
 			if (sourceIssue) {
 				const existing = activeTasks.find(
 					(task) => task.issueUrl?.toLowerCase() === sourceIssue.url.toLowerCase(),
@@ -1146,10 +1186,11 @@ export function App() {
 								<button
 									type="button"
 									key={card.key}
-									className={`rail-tile ${active ? "active" : ""}`}
+									className={`rail-tile ${active ? "active" : ""} ${dropCardKey === card.key ? "file-drop" : ""}`}
 									title={
 										boundProjectId ? card.name : `${card.name} — double-click to open in new window`
 									}
+									{...projectDropProps(card.key, primary.projectId)}
 									onClick={() => selectProject(primary.projectId)}
 									onDoubleClick={
 										boundProjectId
@@ -1250,7 +1291,8 @@ export function App() {
 												<div key={card.key} className="proj-row">
 													<button
 														type="button"
-														className={`proj ${active ? "active" : ""}`}
+														className={`proj ${active ? "active" : ""} ${dropCardKey === card.key ? "file-drop" : ""}`}
+														{...projectDropProps(card.key, primary.projectId)}
 														onClick={() => selectProject(primary.projectId)}
 														onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
 													>
@@ -1804,6 +1846,7 @@ export function App() {
 							? `${composerIssue.title}\n\n${composerIssue.url}\n\n${composerIssue.body}`
 							: undefined
 					}
+					initialFiles={composerFiles}
 					environments={composerEnvs}
 					envAgents={envAgents}
 					onAdd={addTailscaleBox}
@@ -1813,6 +1856,7 @@ export function App() {
 					onClose={() => {
 						setComposerOpen(false);
 						setComposerIssue(null);
+						setComposerFiles([]);
 					}}
 					onCreate={composeTask}
 				/>

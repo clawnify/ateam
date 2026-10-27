@@ -283,6 +283,13 @@ input {
 	background: var(--bg-elev-2);
 	border-left: 2px solid #fff;
 }
+/* A file from Finder held over a project: dropping it starts a task there. */
+.proj.file-drop,
+.rail-tile.file-drop {
+	background: var(--bg-elev-2);
+	outline: 1px dashed var(--text);
+	outline-offset: -2px;
+}
 .proj .dot {
 	width: 7px;
 	height: 7px;
