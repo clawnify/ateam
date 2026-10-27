@@ -253,9 +253,14 @@ else
 	# whose command differs is recreated: only a newer script changes a command, so
 	# a mismatch is an install that predates a fix, and it may be crash-looping on
 	# the old one (a looping service reads "running" between restarts, so its
-	# status can't say). Replacing ateam-xvfb that way restarts Chrome with it,
-	# once per upgrade. noVNC is recreated every run: it holds no state.
-	while IFS='|' read -r name needs env cmd args; do
+	# status can't say). noVNC is recreated every run: it holds no state.
+	#
+	# A replaced service takes everything that needs it along (replacing
+	# ateam-xvfb restarts Chrome, once per upgrade), and they go dependents first:
+	# the specs are in dependency order, so they are marked forwards and deleted
+	# backwards.
+	stale=()
+	while IFS='|' read -r name needs _ cmd args; do
 		have="$("$SPRITE_ENV" services get "$name" 2>/dev/null | "$NODE" -e '
 			let s = "";
 			process.stdin.on("data", (d) => (s += d)).on("end", () => {
@@ -264,12 +269,20 @@ else
 					console.log([j.cmd, ...(j.args || [])].join(","));
 				} catch {}
 			});' || true)"
-		want="$cmd${args:+,$args}"
-		case "$name" in ateam-novnc*) have="stale" ;; esac
-		if [ -n "$have" ] && [ "$have" != "$want" ]; then
-			"$SPRITE_ENV" services delete "$name" >/dev/null 2>&1 || true
-			info "$name: replaced (its command predates this script)"
-		fi
+		[ -n "$have" ] || continue
+		replace=""
+		case "$name" in ateam-novnc*) replace=1 ;; esac
+		if [ "$have" != "$cmd${args:+,$args}" ]; then replace=1; fi
+		for n in ${needs//,/ }; do
+			case " ${stale[*]} " in *" $n "*) replace=1 ;; esac
+		done
+		if [ -n "$replace" ]; then stale+=("$name"); fi
+	done < <(service_specs)
+	for ((i = ${#stale[@]} - 1; i >= 0; i--)); do
+		"$SPRITE_ENV" services delete "${stale[i]}" >/dev/null || die "couldn't replace ${stale[i]} (the error is above)"
+		info "${stale[i]}: replaced"
+	done
+	while IFS='|' read -r name needs env cmd args; do
 		if "$SPRITE_ENV" services get "$name" >/dev/null 2>&1; then
 			info "$name: already a service, left running"
 			continue
