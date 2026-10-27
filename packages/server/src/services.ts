@@ -121,6 +121,7 @@ export function toTaskDTO(t: Task, preparing = false, agentIds: string[] = []): 
 		waitingReason: t.waitingReason ?? null,
 		waitingUntil: t.waitingUntil ?? null,
 		waitingFiredAt: t.waitingFiredAt ?? null,
+		browserUsedAt: t.browserUsedAt ?? null,
 		triage: triageTask(t),
 	};
 }

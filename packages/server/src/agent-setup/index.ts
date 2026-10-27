@@ -381,6 +381,23 @@ export async function ensureClaudeHooks(
 		}
 	}
 
+	// A call to the box browser's tools (TaskWindow, registered as `taskwindow` by
+	// install-browser.sh) is how the engine learns this task uses the browser
+	// (Task.browserUsedAt). Its own entry, so the PreToolUse check above, which
+	// sees any notify.sh, can't count it as already there.
+	const pre = settings.hooks.PreToolUse ?? [];
+	if (
+		!pre.some((e) =>
+			e.hooks.some((h) => h.command.includes("notify.sh") && h.command.includes("BrowserUse")),
+		)
+	) {
+		pre.push({
+			matcher: "mcp__taskwindow__.*",
+			hooks: [{ type: "command", command: cmd("BrowserUse") }],
+		});
+		settings.hooks.PreToolUse = pre;
+	}
+
 	// The peer inbox listener (INBOX_SCRIPT): armed when the session starts and
 	// again after every turn, in the background, so a message can wake it.
 	const inbox = `sh ${JSON.stringify(join(dirname(notifyScriptPath), "inbox.sh"))}`;

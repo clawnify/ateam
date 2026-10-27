@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	ensureBoardMcpConfig,
@@ -137,6 +137,38 @@ describe("per-launch agent config", () => {
 			expect(inbox).toHaveLength(1);
 			expect(inbox[0].asyncRewake).toBe(true);
 		}
+	});
+
+	test("Claude reports browser tool calls as BrowserUse, once, beside Working", async () => {
+		const wt = join(dir, "wt");
+		await ensureClaudeHooks(wt, notifyPath);
+		await ensureClaudeHooks(wt, notifyPath);
+		const s = JSON.parse(await readFile(join(wt, ".claude", "settings.local.json"), "utf8"));
+		const pre = s.hooks.PreToolUse as { matcher?: string; hooks: { command: string }[] }[];
+		const browser = pre.filter((e) => e.hooks.some((h) => h.command.endsWith(" BrowserUse")));
+		expect(browser).toEqual([{ matcher: "mcp__taskwindow__.*", hooks: [expect.anything()] }]);
+		// Every tool call still reports Working, browser calls included.
+		expect(
+			pre.filter((e) => !e.matcher && e.hooks.some((h) => h.command.endsWith(" Working"))),
+		).toHaveLength(1);
+	});
+
+	test("a worktree set up before the browser hook gains it", async () => {
+		const wt = join(dir, "wt-old");
+		const file = join(wt, ".claude", "settings.local.json");
+		await mkdir(dirname(file), { recursive: true });
+		const old = {
+			hooks: {
+				PreToolUse: [{ hooks: [{ type: "command", command: `sh "${notifyPath}" Working` }] }],
+			},
+		};
+		await writeFile(file, JSON.stringify(old));
+		await ensureClaudeHooks(wt, notifyPath);
+		const s = JSON.parse(await readFile(file, "utf8"));
+		expect(s.hooks.PreToolUse.map((e: { matcher?: string }) => e.matcher ?? null)).toEqual([
+			null,
+			"mcp__taskwindow__.*",
+		]);
 	});
 
 	test("OpenCode's config adds the plugin and server over the user's own", () => {

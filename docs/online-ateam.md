@@ -254,7 +254,9 @@ x86_64 box (Google Chrome has no Linux Arm build). It installs:
   tools as the TaskWindow extension on a laptop.
 - noVNC on port 6080, so you can watch the desktop and take over for a login, a
   2FA prompt or a CAPTCHA. In the desktop app, the globe button on a task on this
-  box opens it in a Browser panel, already signed in. From any other browser, use
+  box opens it in a Browser panel, already signed in. In the iOS app, a task whose
+  agent has used the browser shows it as a miniature over its terminal: tap it to
+  bring it above the terminal, and minimize it to put it back. From any other browser, use
   `http://<tailnet-ip>:6080/vnc.html` (on a box with a tailnet interface) with the
   password in `~/.ateam/browser/vnc-password`.
 

@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { getAgent } from "@ateam/agents";
 import {
 	type BrowserViewDTO,
+	browserViewUrl,
 	CH,
 	type ClientTransport,
 	type CredentialsPatch,
@@ -893,16 +894,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		const base = ws
 			? `http://${new URL(ws).hostname}:${view.port}`
 			: `http://127.0.0.1:${browserLocalPort(alias)}`;
-		// noVNC reads its settings from the fragment as well as the query
-		// (app/webutil.js getConfigVar), and the fragment never reaches the server,
-		// so the password stays out of websockify's request log.
-		const opts = new URLSearchParams({
-			autoconnect: "true",
-			resize: "scale",
-			reconnect: "true",
-			password: view.password,
-		});
-		return { url: `${base}/vnc.html#${opts}` };
+		return { url: browserViewUrl(base, view.password) };
 	}
 
 	return {

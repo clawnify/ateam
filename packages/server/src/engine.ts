@@ -19,6 +19,7 @@ import type {
 	TaskDTO,
 } from "@ateam/protocol";
 import { ensureGhShim, ensureNotifyScript, ensurePeerSecret, verifyPeerToken } from "./agent-setup";
+import { stampBrowserUse } from "./browser";
 import { FollowUps } from "./follow-ups";
 import { type HookEvent, HookServer, type MergeRequestEvent } from "./hooks/hook-server";
 import { ensureLoginEnv } from "./login-env";
@@ -428,6 +429,12 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	hooks.on("hook", (e: HookEvent) => {
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
+		// The agent called a browser tool. Its Working fires alongside and drives
+		// the status, so this only stamps the task.
+		if (e.eventType === "BrowserUse") {
+			if (stampBrowserUse(db, session.taskId)) sendTaskUpdated(session.taskId);
+			return;
+		}
 		if (e.eventType === "AgentExit") {
 			repo.recordEvent(db, {
 				sessionId: session.id,

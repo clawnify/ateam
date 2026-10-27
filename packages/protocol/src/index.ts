@@ -85,7 +85,8 @@
 // v17: browser:view, the box's browser (noVNC) for the Browser panel. A new
 // method, so no gate: a v16 engine answers "Unknown method" and the panel says to
 // update the box. Same version, the editor binds loopback and the engine relays
-// it onto the tailnet; nothing on the wire changed for it.
+// it onto the tailnet; nothing on the wire changed for it. TaskDTO gained
+// `browserUsedAt`, nullable, so an older engine reads as "never used".
 export const PROTOCOL_VERSION = 17;
 
 /**
@@ -301,6 +302,10 @@ export interface TaskDTO {
 	/** When the wait resurfaced the card; null while pending. A client notifies
 	 *  once per (task, waitingFiredAt). */
 	waitingFiredAt: number | null;
+	/** When the task's agent first drove the box's browser; null while it never
+	 *  has, and on an engine older than v17. Clients show the browser beside the
+	 *  task's terminal only once it is set. */
+	browserUsedAt: number | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
 }
@@ -1190,6 +1195,8 @@ export interface AteamApi {
 	};
 }
 
+// The URL every client loads for a box's browser view (noVNC).
+export { browserViewUrl } from "./browser-view";
 export type { NativeClientApi } from "./client-api";
 // Client-side binding of the AteamApi surface over an RpcClient.
 export { buildAteamApi, requestBoxUpdate, serverHandshake } from "./client-api";

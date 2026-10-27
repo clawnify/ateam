@@ -117,6 +117,9 @@ export const tasks = sqliteTable(
 		/** When the wait resurfaced the card; null while it is still pending. Boot
 		 *  re-arms only pending waits, and clients notify once per value. */
 		waitingFiredAt: integer("waiting_fired_at"),
+		/** When the task's agent first drove the box's browser (a TaskWindow tool
+		 *  call, see the BrowserUse hook); null while it never has. */
+		browserUsedAt: integer("browser_used_at"),
 		lastEventAt: integer("last_event_at"),
 		isUnread: integer("is_unread", { mode: "boolean" }).default(false),
 		createdBy: text("created_by")
