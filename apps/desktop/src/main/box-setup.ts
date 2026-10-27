@@ -15,10 +15,12 @@ import { safeStorage } from "electron";
 export interface ProviderSecrets {
 	hetznerToken?: string;
 	tailscaleAuthKey?: string;
+	/** Wake providers' account inputs (their API key), by provider id. */
+	wakeAccounts?: Record<string, Record<string, string>>;
 }
 
 /**
- * A tiny encrypted key/value for the two provisioning secrets. Uses the OS keychain
+ * A tiny encrypted key/value for the provider secrets. Uses the OS keychain
  * via Electron safeStorage; if the platform has no encryption backend, secrets are
  * held in memory for the session only — never written to disk in plaintext.
  */

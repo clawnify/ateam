@@ -1,4 +1,4 @@
-import type { AgentDTO } from "@ateam/protocol";
+import type { AgentDTO, BoxWake } from "@ateam/protocol";
 import { ArrowUp, Paperclip, X, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { HostStatus } from "../../../shared/host";
@@ -69,8 +69,8 @@ export function PromptComposer({
 	/** Agent ids each connected engine actually has, keyed by alias ("local" for this
 	 *  Mac). Lets the agent picker offer only what the chosen environment can run. */
 	envAgents: Record<string, string[]>;
-	/** Connect a Tailscale endpoint typed into the picker. */
-	onAdd?: (endpoint: string) => Promise<void>;
+	/** Connect a Tailscale endpoint typed into the picker, with the provider that wakes it. */
+	onAdd?: (endpoint: string, wake: BoxWake | null) => Promise<void>;
 	/** Set up a fresh box over SSH (install engine + connect) from the picker. */
 	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<HostStatus>;
 	/** Remove a box from the picker's list (disconnecting it first if connected). */

@@ -1979,6 +1979,26 @@ input {
 .conn-pop {
 	padding: 6px;
 }
+/* In an add step the header is the way back to where it was opened from. */
+.conn-back {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 0;
+	border: none;
+	background: none;
+	color: inherit;
+	font: inherit;
+	letter-spacing: inherit;
+	text-transform: inherit;
+	cursor: pointer;
+}
+.conn-back:hover:not(:disabled) {
+	color: var(--text);
+}
+.conn-back:disabled {
+	cursor: default;
+}
 .conn-head {
 	display: flex;
 	align-items: center;
@@ -2150,6 +2170,65 @@ input {
 /* A skewed box still works, so it warns rather than alarms. */
 .conn-sub-warn {
 	color: var(--amber, #fbbf24);
+}
+/* Sentences in the Tailscale form (a provider's note, a whole error) wrap instead
+   of truncating: they are read, not scanned. */
+.conn-note,
+.conn-wrap {
+	white-space: normal;
+	line-height: 1.4;
+}
+.conn-link {
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--text);
+	font: inherit;
+	text-decoration: underline;
+	cursor: pointer;
+}
+
+/* The steps of waking and reaching a box (ConnectSteps): done ones dim, the one
+   running bright, a failed one red. */
+.conn-steps {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+.conn-step {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 11px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+.conn-step svg {
+	flex: none;
+}
+.conn-step.active {
+	color: var(--text);
+}
+.conn-step.failed {
+	color: var(--red);
+}
+/* Under a toast, the steps sit in a tray along its bottom edge, a layer below it. */
+.toast .conn-steps {
+	margin: 8px -16px -10px;
+	padding: 8px 16px 10px;
+	background: rgba(0, 0, 0, 0.25);
+	border-top: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 0 0 9px 9px;
+}
+.toast .conn-step,
+.toast .conn-step.active {
+	color: inherit;
+}
+.toast .conn-step.done {
+	opacity: 0.7;
 }
 .conn-spin {
 	animation: spin 0.7s linear infinite;

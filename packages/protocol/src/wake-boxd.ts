@@ -1,9 +1,10 @@
-// The phone's way to wake a hibernated boxd box before connecting to it.
+// How a client (Ateam Go, or the desktop for a box added by its Tailscale address)
+// wakes a hibernated boxd box before connecting to it.
 //
-// The phone reaches a box over Tailscale, straight to the VM, and that path
+// Such a client reaches a box over Tailscale, straight to the VM, and that path
 // never wakes it: only a connection through boxd's own proxy, or boxd's API,
 // does (measured; see docs/providers/boxd.md "Sleep and wake"). So with the
-// user's boxd API key the phone asks the API: what state is this machine in,
+// user's boxd API key the client asks the API: what state is this machine in,
 // and if it's asleep, wake it.
 //
 // Two RPCs, each carrying one string, so this speaks grpc-web by hand instead
@@ -13,7 +14,7 @@
 // plain strings end to end. Wire details are from the SDK's own source
 // (@boxd-sh/sdk 0.2.18, _transportWeb.js and auth.js) and boxd's proto.
 //
-// Pure TS, no React Native imports, so it runs under bun test.
+// Pure TS on global fetch, so it runs on the phone, in the desktop and under bun test.
 
 const API = "https://boxd.sh:9443/boxd.api.v1.BoxdApi";
 const EXCHANGE = "https://app.boxd.sh/api/v1/auth/token";
@@ -265,7 +266,7 @@ export function createBoxdClient(
 const ASLEEP = new Set(["hibernated", "standby", "hibernating", "suspended"]);
 
 /**
- * Make sure `machine` is up before the phone connects. Returns what it found:
+ * Make sure `machine` is up before the client connects. Returns what it found:
  * "running" means nothing was done. Waits for the wake to land so the connect
  * that follows doesn't race a box still coming up.
  */

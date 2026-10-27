@@ -12,7 +12,7 @@ import {
 	ensureAwake,
 	parseUnaryReply,
 	readStringField,
-} from "./boxd";
+} from "./wake-boxd";
 
 function frame(flag: number, payload: Uint8Array): Uint8Array {
 	const out = new Uint8Array(5 + payload.length);

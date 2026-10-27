@@ -1,9 +1,15 @@
-// What a connection attempt is doing, step by step, for the tray under the box's
-// card (BoxesScreen) and the reconnecting view. A woken box can take minutes to
-// answer, so the phone keeps trying (App.tsx connectTo) and says where it is
+// What a connection attempt is doing, step by step: the tray under the box's card
+// on the phone, and under the composer on the desktop. A woken box can take
+// minutes to answer, so both keep trying (WOKEN_CONNECT_MS) and say where they are
 // rather than spinning silently.
 //
-// Pure TS, no React Native imports, so it runs under bun test.
+// Pure TS, so it runs on the phone, in the desktop and under bun test.
+
+// A provider reports a box awake before its network and Ateam are up, so after a
+// wake a client keeps trying the box for this long, WOKEN_RETRY_GAP_MS apart.
+// Inside the Sprites hold (WAKE_HOLD_EXPIRE, 5 min) with room for the wake call.
+export const WOKEN_CONNECT_MS = 3 * 60_000;
+export const WOKEN_RETRY_GAP_MS = 3_000;
 
 export type StepStatus = "done" | "active" | "failed";
 
