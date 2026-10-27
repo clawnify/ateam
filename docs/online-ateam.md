@@ -252,9 +252,11 @@ x86_64 box (Google Chrome has no Linux Arm build). It installs:
   extension force-installed by policy and paired with its daemon automatically,
   registered as the `taskwindow` MCP server for Claude Code. These are the same
   tools as the TaskWindow extension on a laptop.
-- noVNC on the box's tailnet address, port 6080, so you can watch the desktop and
-  take over for a login, a 2FA prompt or a CAPTCHA. The password is in
-  `~/.ateam/browser/vnc-password`.
+- noVNC on port 6080, so you can watch the desktop and take over for a login, a
+  2FA prompt or a CAPTCHA. In the desktop app, the globe button on a task on this
+  box opens it in a Browser panel, already signed in. From any other browser, use
+  `http://<tailnet-ip>:6080/vnc.html` (on a box with a tailnet interface) with the
+  password in `~/.ateam/browser/vnc-password`.
 
 Everything runs as a service (systemd, or Sprite services on a Sprite), so it
 survives reboots and keeps working with no laptop connected. Re-running the script
