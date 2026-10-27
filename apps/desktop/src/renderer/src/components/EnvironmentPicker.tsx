@@ -508,8 +508,8 @@ export function EnvironmentPicker({
 									>
 										<option value="">Always on (no provider)</option>
 										{WAKE_PROVIDERS.map((p) => (
-											<option key={p.id} value={p.id}>
-												{p.label}: {p.wake?.hint}
+											<option key={p.id} value={p.id} title={p.wake?.hint}>
+												{p.label}
 											</option>
 										))}
 									</select>
@@ -518,7 +518,7 @@ export function EnvironmentPicker({
 											<input
 												key={i.key}
 												className="conn-add-input"
-												placeholder={i.placeholder}
+												placeholder={`${i.label}: ${i.placeholder}`}
 												aria-label={`${provider.label} ${i.label}`}
 												value={boxValues[i.key] ?? ""}
 												disabled={busy}
