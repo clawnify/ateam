@@ -7,7 +7,9 @@
 // Nothing here checks a box in the background. A probe is a connection into the
 // box, and connections are what keep a sleeping provider box awake, so a card only
 // says what the phone already knows: which box is connected, which one it's
-// reaching right now, and why the last attempt failed.
+// reaching right now, and why the last attempt failed. While a box is being
+// reached, a tray under its card lists the steps (src/connect-steps.ts): a woken
+// box can take minutes to answer, and a bare spinner for that long reads as stuck.
 import Feather from "@expo/vector-icons/Feather";
 import { type ReactNode, useEffect, useRef } from "react";
 import {
@@ -22,6 +24,7 @@ import {
 	View,
 } from "react-native";
 import { boxKey, boxSubtitle, boxTitle, type SavedBox } from "./boxes";
+import type { ConnectStep } from "./connect-steps";
 import { ProviderIcon } from "./ProviderIcon";
 import { C, CONTENT_MAX } from "./theme";
 
@@ -34,6 +37,8 @@ export function BoxesScreen({
 	liveKey,
 	attemptKey,
 	failedKey,
+	progress,
+	onCancel,
 	busy,
 	error,
 	connected,
@@ -53,8 +58,12 @@ export function BoxesScreen({
 	liveKey: string | null;
 	/** The box a connection attempt is reaching right now. */
 	attemptKey: string | null;
-	/** The box the last attempt failed on; its card shows `error` in place of its address. */
+	/** The box the last attempt failed on; its card shows `error`. */
 	failedKey: string | null;
+	/** The steps of the current or last attempt, and the box they belong to. */
+	progress: { key: string; steps: ConnectStep[] } | null;
+	/** Stop waiting for a woken box. */
+	onCancel: () => void;
 	/** An attempt is in flight: cards wait for it rather than start a second one. */
 	busy: boolean;
 	error: string | null;
@@ -104,6 +113,8 @@ export function BoxesScreen({
 								live={key === liveKey}
 								reaching={key === attemptKey}
 								failure={failed ? error : null}
+								steps={progress?.key === key ? progress.steps : []}
+								onCancel={onCancel}
 								disabled={busy}
 								open={key === openKey}
 								onOpenChange={(open) => onSwipeOpen(open ? key : null)}
@@ -152,6 +163,8 @@ function BoxCard({
 	live,
 	reaching,
 	failure,
+	steps,
+	onCancel,
 	disabled,
 	open,
 	onOpenChange,
@@ -164,6 +177,9 @@ function BoxCard({
 	reaching: boolean;
 	/** Why the last attempt to reach this box failed, or null. */
 	failure: string | null;
+	/** What reaching this box went through; empty when it isn't being reached. */
+	steps: ConnectStep[];
+	onCancel: () => void;
 	disabled: boolean;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -220,6 +236,9 @@ function BoxCard({
 
 	const title = boxTitle(box);
 	const subtitle = boxSubtitle(box);
+	// The tray shows the steps while reaching, and keeps them after a failure so the
+	// failed one is visible; then the error belongs there, not in place of the address.
+	const tray = steps.length > 0 && (reaching || failure !== null);
 	const state = live
 		? "connected"
 		: reaching
@@ -229,84 +248,145 @@ function BoxCard({
 				: null;
 
 	return (
-		<View style={styles.swipe}>
-			{/* Behind the card, uncovered by the swipe. Hidden from VoiceOver while
+		<View>
+			<View style={styles.swipe}>
+				{/* Behind the card, uncovered by the swipe. Hidden from VoiceOver while
 			    covered: the card offers the same two as actions. */}
-			<View
-				style={styles.actions}
-				accessibilityElementsHidden={!open}
-				importantForAccessibility={open ? "auto" : "no-hide-descendants"}
-			>
-				<Pressable
-					style={[styles.action, styles.editAction]}
-					onPress={() => {
-						onOpenChange(false);
-						onEdit();
-					}}
-					accessibilityRole="button"
-					accessibilityLabel={`Edit ${title}`}
+				<View
+					style={styles.actions}
+					accessibilityElementsHidden={!open}
+					importantForAccessibility={open ? "auto" : "no-hide-descendants"}
 				>
-					<Feather name="edit-2" size={16} color={C.ink} />
-					<Text style={styles.editText}>Edit</Text>
-				</Pressable>
-				<Pressable
-					style={[styles.action, styles.removeAction]}
-					onPress={() => {
-						onOpenChange(false);
-						onRemove();
-					}}
-					accessibilityRole="button"
-					accessibilityLabel={`Remove ${title} from this list`}
-				>
-					<Feather name="x" size={16} color={REMOVE_INK} />
-					<Text style={styles.removeText}>Remove</Text>
-				</Pressable>
-			</View>
+					<Pressable
+						style={[styles.action, styles.editAction]}
+						onPress={() => {
+							onOpenChange(false);
+							onEdit();
+						}}
+						accessibilityRole="button"
+						accessibilityLabel={`Edit ${title}`}
+					>
+						<Feather name="edit-2" size={16} color={C.ink} />
+						<Text style={styles.editText}>Edit</Text>
+					</Pressable>
+					<Pressable
+						style={[styles.action, styles.removeAction]}
+						onPress={() => {
+							onOpenChange(false);
+							onRemove();
+						}}
+						accessibilityRole="button"
+						accessibilityLabel={`Remove ${title} from this list`}
+					>
+						<Feather name="x" size={16} color={REMOVE_INK} />
+						<Text style={styles.removeText}>Remove</Text>
+					</Pressable>
+				</View>
 
-			<Animated.View style={{ transform: [{ translateX: x }] }} {...pan.panHandlers}>
-				<Pressable
-					style={styles.card}
-					// An open card's tap closes it; only a closed card connects.
-					onPress={() => (open ? onOpenChange(false) : onPress())}
-					disabled={disabled && !open}
-					accessibilityRole="button"
-					accessibilityLabel={`${title}, ${subtitle}${state ? `, ${state}` : ""}`}
-					accessibilityHint={live ? "Returns to the board" : "Connects to this box"}
-					accessibilityActions={[
-						{ name: "activate" },
-						{ name: "edit", label: "Edit" },
-						{ name: "remove", label: "Remove from this list" },
-					]}
-					onAccessibilityAction={(e) => {
-						if (e.nativeEvent.actionName === "edit") onEdit();
-						else if (e.nativeEvent.actionName === "remove") onRemove();
-						else if (!disabled) onPress();
-					}}
-				>
-					<ProviderIcon providerId={box.provider?.id} />
-					<View style={styles.cardText}>
-						<Text style={styles.cardTitle} numberOfLines={1}>
-							{title}
-						</Text>
-						<Text style={[styles.cardSub, failure ? styles.cardSubError : null]} numberOfLines={2}>
-							{failure ?? subtitle}
-						</Text>
+				<Animated.View style={{ transform: [{ translateX: x }] }} {...pan.panHandlers}>
+					<Pressable
+						style={styles.card}
+						// An open card's tap closes it; only a closed card connects.
+						onPress={() => (open ? onOpenChange(false) : onPress())}
+						disabled={disabled && !open}
+						accessibilityRole="button"
+						accessibilityLabel={`${title}, ${subtitle}${state ? `, ${state}` : ""}`}
+						accessibilityHint={live ? "Returns to the board" : "Connects to this box"}
+						accessibilityActions={[
+							{ name: "activate" },
+							{ name: "edit", label: "Edit" },
+							{ name: "remove", label: "Remove from this list" },
+						]}
+						onAccessibilityAction={(e) => {
+							if (e.nativeEvent.actionName === "edit") onEdit();
+							else if (e.nativeEvent.actionName === "remove") onRemove();
+							else if (!disabled) onPress();
+						}}
+					>
+						<ProviderIcon providerId={box.provider?.id} />
+						<View style={styles.cardText}>
+							<Text style={styles.cardTitle} numberOfLines={1}>
+								{title}
+							</Text>
+							<Text
+								style={[styles.cardSub, failure && !tray ? styles.cardSubError : null]}
+								numberOfLines={2}
+							>
+								{failure && !tray ? failure : subtitle}
+							</Text>
+						</View>
+						{live ? (
+							<Feather name="check" size={17} color={C.ink} />
+						) : reaching ? (
+							<ActivityIndicator color={C.muted} size="small" />
+						) : failure ? (
+							<Feather name="alert-circle" size={20} color={C.red} />
+						) : null}
+					</Pressable>
+				</Animated.View>
+			</View>
+			{tray ? (
+				<StepTray steps={steps} failure={failure} onCancel={reaching ? onCancel : null} />
+			) : null}
+		</View>
+	);
+}
+
+/** A semicard tucked under the box's card: the steps of reaching it, one per line. */
+function StepTray({
+	steps,
+	failure,
+	onCancel,
+}: {
+	steps: ConnectStep[];
+	failure: string | null;
+	/** Offered while the attempt runs; null once it has ended. */
+	onCancel: (() => void) | null;
+}) {
+	return (
+		<View style={styles.tray} accessibilityLiveRegion="polite">
+			{steps.map((s, i) => (
+				<View key={`${i}:${s.status}`} style={styles.stepRow}>
+					<View style={styles.stepIcon}>
+						{s.status === "active" ? (
+							<ActivityIndicator color={C.muted} size="small" style={styles.stepSpinner} />
+						) : s.status === "done" ? (
+							<Feather name="check" size={13} color={C.muted} />
+						) : (
+							<Feather name="x" size={13} color={C.red} />
+						)}
 					</View>
-					{live ? (
-						<Feather name="check" size={17} color={C.ink} />
-					) : reaching ? (
-						<ActivityIndicator color={C.muted} size="small" />
-					) : failure ? (
-						<Feather name="alert-circle" size={20} color={C.red} />
-					) : null}
+					<Text
+						style={[
+							styles.stepText,
+							s.status === "active" ? styles.stepActive : null,
+							s.status === "failed" ? styles.stepFailed : null,
+						]}
+					>
+						{s.label}
+					</Text>
+				</View>
+			))}
+			{failure ? <Text style={styles.trayError}>{failure}</Text> : null}
+			{onCancel ? (
+				<Pressable
+					style={styles.cancelBtn}
+					onPress={onCancel}
+					hitSlop={8}
+					accessibilityRole="button"
+					accessibilityLabel="Stop waiting for this box"
+				>
+					<Text style={styles.cancelText}>Cancel</Text>
 				</Pressable>
-			</Animated.View>
+			) : null}
 		</View>
 	);
 }
 
 /** Dark text on the red action: white on this red falls short of legible contrast. */
 const REMOVE_INK = "#15151a";
+/** The tray sits a layer below the card: between the page and the card. */
+const TRAY_BG = "#101013";
 
 const styles = StyleSheet.create({
 	root: { flex: 1, backgroundColor: C.bg, paddingTop: 60 },
@@ -334,7 +414,8 @@ const styles = StyleSheet.create({
 	content: { padding: 16, paddingTop: 20, paddingBottom: 40 },
 	column: { width: "100%", maxWidth: CONTENT_MAX, alignSelf: "center", gap: 10 },
 
-	swipe: { borderRadius: 12, overflow: "hidden", backgroundColor: C.surface },
+	// Above the tray, which tucks under its bottom edge.
+	swipe: { borderRadius: 12, overflow: "hidden", backgroundColor: C.surface, zIndex: 1 },
 	actions: {
 		position: "absolute",
 		top: 0,
@@ -363,6 +444,30 @@ const styles = StyleSheet.create({
 	cardTitle: { color: C.ink, fontSize: 15, fontWeight: "600" },
 	cardSub: { color: C.faint, fontSize: 12, fontVariant: ["tabular-nums"] },
 	cardSubError: { color: C.red },
+
+	tray: {
+		marginTop: -12,
+		marginHorizontal: 6,
+		paddingTop: 20,
+		paddingBottom: 10,
+		paddingHorizontal: 12,
+		gap: 6,
+		backgroundColor: TRAY_BG,
+		borderWidth: 1,
+		borderTopWidth: 0,
+		borderColor: C.line,
+		borderBottomLeftRadius: 12,
+		borderBottomRightRadius: 12,
+	},
+	stepRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+	stepIcon: { width: 16, height: 16, alignItems: "center", justifyContent: "center" },
+	stepSpinner: { transform: [{ scale: 0.7 }] },
+	stepText: { flex: 1, color: C.faint, fontSize: 12, fontVariant: ["tabular-nums"] },
+	stepActive: { color: C.ink },
+	stepFailed: { color: C.red },
+	trayError: { color: C.red, fontSize: 12, lineHeight: 17, paddingLeft: 24 },
+	cancelBtn: { alignSelf: "flex-end", paddingVertical: 2 },
+	cancelText: { color: C.muted, fontSize: 12, fontWeight: "700" },
 
 	hint: { color: C.faint, fontSize: 12, marginTop: 4, paddingHorizontal: 2 },
 	errorBox: {
