@@ -74,8 +74,11 @@ command -v apt-get >/dev/null || die "this installer needs a Debian/Ubuntu box (
 sudo -n true 2>/dev/null || die "this needs passwordless sudo once, for apt and Chrome's policy directory"
 command -v curl >/dev/null || die "curl is required"
 
-# The node agents already use; TaskWindow only needs >= 18.
-NODE="$(bash -lc 'command -v node' 2>/dev/null || true)"
+# The node the engine runs on, which install.sh pinned in its launcher and whose
+# npm it already used; TaskWindow only needs >= 18. The login PATH's node can be
+# a distro build without npm (a Sprite's /usr/bin/node), so it is only the fallback.
+NODE="$(sed -n 's/^exec \([^ ]*\) .*/\1/p' "$BIN_DIR/ateam" 2>/dev/null | head -1)"
+[ -x "$NODE" ] || NODE="$(bash -lc 'command -v node' 2>/dev/null || true)"
 [ -n "$NODE" ] || die "no node on the login PATH: run install.sh first"
 NODE="$(readlink -f "$NODE")"
 NPM="$(dirname "$NODE")/npm"
