@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 
@@ -77,7 +78,7 @@ export default defineConfig({
 		resolve: {
 			alias: { "@": resolve(__dirname, "src/renderer/src") },
 		},
-		plugins: [react()],
+		plugins: [react(), tailwindcss()],
 		// harper.js finds its wasm with `new URL("harper_wasm_bg.wasm", import.meta.url)`.
 		// Dev pre-bundling moves the module into .vite/deps, where that file isn't.
 		optimizeDeps: { exclude: ["harper.js"] },

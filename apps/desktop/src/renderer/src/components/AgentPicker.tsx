@@ -1,7 +1,9 @@
-import { Check, Download } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type { AgentDTO } from "@ateam/protocol";
+import { Download } from "lucide-react";
+import { useState } from "react";
+import { PickerHeading, PickerRow, pickerTrigger } from "./picker";
+import { Button } from "./ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 // The composer's coding-agent control — the pill + popover the environment picker
 // uses, so a *missing* agent on the selected environment can be installed right here
@@ -9,8 +11,6 @@ import type { AgentDTO } from "@ateam/protocol";
 // own engine to run the agent's official installer on itself, which is why the button
 // works for this Mac and for a box alike; the one-time OAuth login is a follow-up the
 // user runs in a terminal there.
-
-const POP_W = 260;
 
 export function AgentPicker({
 	agents,
@@ -29,34 +29,14 @@ export function AgentPicker({
 	/** Install the agent on the selected environment; resolves with the login step. */
 	onInstallAgent?: (alias: string | null, agentId: string) => Promise<{ loginCommand?: string }>;
 }) {
-	const [pos, setPos] = useState<{ bottom: number; left: number } | null>(null);
+	const [open, setOpen] = useState(false);
 	const [installing, setInstalling] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [loginFor, setLoginFor] = useState<{ agentId: string; command?: string } | null>(null);
-	const btnRef = useRef<HTMLButtonElement>(null);
-	const popRef = useRef<HTMLDivElement>(null);
 
 	const current = agents.find((a) => a.id === value);
 	const label = current?.label ?? value;
 
-	const close = () => setPos(null);
-	const open = () => {
-		const r = btnRef.current?.getBoundingClientRect();
-		if (!r) return;
-		const left = Math.max(8, Math.min(r.left, window.innerWidth - POP_W - 8));
-		setPos({ bottom: window.innerHeight - r.top + 6, left });
-	};
-
-	useEffect(() => {
-		if (!pos) return;
-		const onDoc = (e: MouseEvent) => {
-			const t = e.target as Node;
-			if (btnRef.current?.contains(t) || popRef.current?.contains(t)) return;
-			close();
-		};
-		document.addEventListener("mousedown", onDoc);
-		return () => document.removeEventListener("mousedown", onDoc);
-	}, [pos]);
 	const install = async (agentId: string) => {
 		if (!onInstallAgent || installing) return;
 		setInstalling(agentId);
@@ -75,87 +55,70 @@ export function AgentPicker({
 	};
 
 	return (
-		<>
-			<button
-				type="button"
-				ref={btnRef}
-				className="navbtn conn-btn"
-				title="Coding agent"
-				onClick={() => (pos ? close() : open())}
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger asChild>
+				<Button variant="ghost" size="sm" className={pickerTrigger} title="Coding agent">
+					<span>{label}</span>
+					{!isAvailable(value) ? (
+						<span className="rounded-[5px] bg-secondary px-[5px] py-px text-[10px] text-muted-foreground">
+							not installed
+						</span>
+					) : null}
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent
+				side="top"
+				align="start"
+				collisionPadding={8}
+				className="max-h-[min(70vh,460px)] w-[260px] overflow-y-auto p-1.5"
 			>
-				<span>{label}</span>
-				{!isAvailable(value) ? <span className="agent-missing">not installed</span> : null}
-			</button>
-			{pos &&
-				createPortal(
-					<div
-						ref={popRef}
-						className="menu-pop conn-pop"
-						style={{
-							position: "fixed",
-							top: "auto",
-							right: "auto",
-							bottom: pos.bottom,
-							left: pos.left,
-							width: POP_W,
-							maxHeight: "min(70vh, 460px)",
-							overflowY: "auto",
-							zIndex: 2000,
-						}}
-					>
-						<div className="conn-head">
-							<span>Coding agent</span>
-						</div>
-						{agents.map((a) => {
-							const avail = isAvailable(a.id);
-							const canInstall = !avail && !!onInstallAgent;
-							return (
-								<div key={a.id} className="agent-item">
-									<div className="agent-row">
-										<button
-											type="button"
-											className={`conn-row ${a.id === value ? "active" : ""}`}
-											disabled={!avail}
-											onClick={() => {
-												if (!avail) return;
-												onChange(a.id);
-												close();
-											}}
-										>
-											<span className="conn-txt">
-												<span className="conn-title">{a.label}</span>
-												{!avail ? (
-													<span className="conn-sub">
-														{alias === null
-															? "not installed on this Mac"
-															: "not installed on this box"}
-													</span>
-												) : null}
-											</span>
-											{a.id === value && avail ? <Check size={15} strokeWidth={2.25} /> : null}
-										</button>
-										{canInstall ? (
-											<button
-												type="button"
-												className="agent-install-btn"
-												disabled={installing !== null}
-												onClick={() => void install(a.id)}
-											>
-												<Download size={13} strokeWidth={1.75} />
-												{installing === a.id ? "Installing…" : "Install"}
-											</button>
-										) : null}
-									</div>
-									{loginFor?.agentId === a.id ? (
-										<div className="agent-login">Installed ✓ — it signs in on first use.</div>
-									) : null}
+				<PickerHeading>Coding agent</PickerHeading>
+				{agents.map((a) => {
+					const avail = isAvailable(a.id);
+					const canInstall = !avail && !!onInstallAgent;
+					return (
+						<div key={a.id} className="flex flex-col">
+							<div className="flex items-center gap-1.5 pr-2">
+								<PickerRow
+									className="flex-1"
+									title={a.label}
+									sub={
+										avail
+											? undefined
+											: alias === null
+												? "not installed on this Mac"
+												: "not installed on this box"
+									}
+									selected={a.id === value && avail}
+									disabled={!avail}
+									onClick={() => {
+										onChange(a.id);
+										setOpen(false);
+									}}
+								/>
+								{canInstall ? (
+									<Button
+										variant="secondary"
+										size="xs"
+										className="border hover:border-foreground hover:bg-secondary"
+										disabled={installing !== null}
+										onClick={() => void install(a.id)}
+									>
+										<Download strokeWidth={1.75} />
+										{installing === a.id ? "Installing…" : "Install"}
+									</Button>
+								) : null}
+							</div>
+							{loginFor?.agentId === a.id ? (
+								<div className="px-2.5 pb-2 pl-[34px] text-xs text-muted-foreground">
+									Installed ✓ — it signs in on first use.
 								</div>
-							);
-						})}
-						{error ? <div className="agent-error">{error}</div> : null}
-					</div>,
-					document.body,
-				)}
-		</>
+							) : null}
+						</div>
+					);
+				})}
+				{error ? <div className="px-2.5 pt-1 pb-2 text-xs text-destructive">{error}</div> : null}
+			</PopoverContent>
+		</Popover>
 	);
 }
