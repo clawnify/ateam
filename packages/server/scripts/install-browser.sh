@@ -249,15 +249,26 @@ if [ "$SVC_MGR" = systemd ]; then
 	if [ -n "${TW_UPGRADED:-}" ]; then sudo systemctl restart ateam-taskwindow.service; fi
 else
 	# On a Sprite, deleting or restarting a service kills what it started, so a
-	# running service is left exactly as it is. Two exceptions are recreated from
-	# their spec: noVNC, which holds no state and whose listen address may have
-	# moved, and any service that isn't running, which has nothing left to kill
-	# and may be failing on the spec an older run gave it.
+	# service already running this run's command is left exactly as it is. One
+	# whose command differs is recreated: only a newer script changes a command, so
+	# a mismatch is an install that predates a fix, and it may be crash-looping on
+	# the old one (a looping service reads "running" between restarts, so its
+	# status can't say). Replacing ateam-xvfb that way restarts Chrome with it,
+	# once per upgrade. noVNC is recreated every run: it holds no state.
 	while IFS='|' read -r name needs env cmd args; do
-		state="$("$SPRITE_ENV" services get "$name" 2>/dev/null || true)"
-		case "$name" in ateam-novnc*) state="stale" ;; esac
-		if [ -n "$state" ] && ! printf '%s' "$state" | grep -qF '"status":"running"'; then
+		have="$("$SPRITE_ENV" services get "$name" 2>/dev/null | "$NODE" -e '
+			let s = "";
+			process.stdin.on("data", (d) => (s += d)).on("end", () => {
+				try {
+					const j = JSON.parse(s);
+					console.log([j.cmd, ...(j.args || [])].join(","));
+				} catch {}
+			});' || true)"
+		want="$cmd${args:+,$args}"
+		case "$name" in ateam-novnc*) have="stale" ;; esac
+		if [ -n "$have" ] && [ "$have" != "$want" ]; then
 			"$SPRITE_ENV" services delete "$name" >/dev/null 2>&1 || true
+			info "$name: replaced (its command predates this script)"
 		fi
 		if "$SPRITE_ENV" services get "$name" >/dev/null 2>&1; then
 			info "$name: already a service, left running"
