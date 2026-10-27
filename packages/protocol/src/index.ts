@@ -82,7 +82,11 @@
 // and TaskDTO gained `waitingReason`, `waitingUntil` and `waitingFiredAt`, all
 // nullable, so an older engine reads as "nothing is waiting". The new method
 // rejects on an older engine, which is loud, so it needs no gate.
-export const PROTOCOL_VERSION = 16;
+// v17: browser:view, the box's browser (noVNC) for the Browser panel. A new
+// method, so no gate: a v16 engine answers "Unknown method" and the panel says to
+// update the box. Same version, the editor binds loopback and the engine relays
+// it onto the tailnet; nothing on the wire changed for it.
+export const PROTOCOL_VERSION = 17;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -821,6 +825,8 @@ export const CH = {
 	editorOpen: "editor:open",
 	editorOpenUrl: "editor:openUrl",
 	editorInstall: "editor:install",
+	browserView: "browser:view",
+	browserViewUrl: "browser:viewUrl",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
 	ptyBoxShell: "pty:boxShell",
@@ -901,6 +907,13 @@ export type OpenBrowserResult = { ok: true } | { ok: false; reason: string };
 export const DEFAULT_EDITOR_PORT = 8390;
 
 /**
+ * Where a box's browser view (noVNC, from scripts/install-browser.sh) answers, on
+ * the box's loopback. Shared for the same reason as DEFAULT_EDITOR_PORT: the
+ * desktop's ssh forward to it is opened before the box is asked.
+ */
+export const DEFAULT_BROWSER_VIEW_PORT = 6080;
+
+/**
  * What a launch into a task that is mid-delete throws. Shared because the
  * desktop drops it silently: the delete kills the task's agent, the open panel
  * auto-resumes it, and the engine refuses — expected, not something to show.
@@ -919,6 +932,12 @@ export interface EditorEndpointDTO {
  * instead of parsing an exception.
  */
 export type EditorOpenResult = EditorEndpointDTO | { needsInstall: true };
+
+/** Where a box's browser view answers, on ITS machine, and the VNC password. */
+export interface BrowserViewDTO {
+	port: number;
+	password: string;
+}
 
 // ---- the API surface exposed on window.ateam ----
 export interface AteamApi {
@@ -1013,6 +1032,15 @@ export interface AteamApi {
 		 * Resolves when installed; a following open() starts it.
 		 */
 		install(taskId: string): Promise<void>;
+	};
+	browser: {
+		/**
+		 * Resolve the URL of the browser on this task's box: its Chrome's desktop in
+		 * noVNC, connected and signed in, for THIS client to load. Rejects with the
+		 * reason for a task on this Mac (its browser is your own Chrome) and for a
+		 * box with no browser installed.
+		 */
+		view(taskId: string): Promise<{ url: string }>;
 	};
 	fs: {
 		/**
@@ -1155,8 +1183,8 @@ export interface AteamApi {
 		 * never faces a login wall. Client-native for the same reason
 		 * `openInEditor` is: a browser is a desktop app, not something the engine
 		 * can launch, and unlike the editor there is no Remote-SSH equivalent —
-		 * a task on a box needs a browser ON the box (docs/browser-box.md), so
-		 * that case reports a reason instead of silently raising this Mac's.
+		 * a task on a box needs a browser ON the box (`browser.view`), so that
+		 * case reports a reason instead of silently raising this Mac's.
 		 */
 		openBrowser?(alias: string | null): Promise<OpenBrowserResult>;
 	};

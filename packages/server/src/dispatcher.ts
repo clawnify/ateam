@@ -54,6 +54,7 @@ import {
 	type TaskWait,
 	type UpdateLoopInput,
 } from "@ateam/protocol";
+import { openBrowserView } from "./browser";
 import { credentialStatus, credentialsPath, updateCredentials } from "./credentials-file";
 import { createEditorHost, installCodeServer } from "./editor";
 import type { Engine } from "./engine";
@@ -157,7 +158,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 	const refreshPath =
 		services.refreshPath ?? ((opts?: { force?: boolean }) => refreshLoginPath({ db, ...opts }));
 	// Lazy: no code-server process exists until the first editor:open.
-	const editorHost = createEditorHost();
+	const editorHost = createEditorHost(services.userDataDir);
 	const githubIssues = new GithubIssues();
 
 	// ---- cleanup: merged + idle + clean is a RECOMMENDATION, not a filter ----
@@ -669,6 +670,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.editorInstall]: async (taskId: string) => {
 			requireTask(services, taskId);
 			await installCodeServer();
+		},
+		// The box's browser view (noVNC). Nothing to start: install-browser.sh runs
+		// it as services. taskId only routes the call to the task's engine.
+		[CH.browserView]: async (taskId: string) => {
+			requireTask(services, taskId);
+			return openBrowserView(services.userDataDir);
 		},
 
 		// ---- fs / util: server-side, remote-native (browse + attach on the

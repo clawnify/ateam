@@ -364,7 +364,11 @@ app
 				broadcast(channel, ...args);
 			},
 		});
-		registerIpc(host.router, { openProjectWindow, editorUrl: host.editorUrl });
+		registerIpc(host.router, {
+			openProjectWindow,
+			editorUrl: host.editorUrl,
+			browserUrl: host.browserUrl,
+		});
 		registerHostIpc(host);
 
 		if (SMOKE) {

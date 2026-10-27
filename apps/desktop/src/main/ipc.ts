@@ -96,6 +96,8 @@ export interface NativeHandlers {
 	/** Resolve the in-app editor URL for a task (starts it on the owning engine).
 	 *  Client-native because reaching the port is transport knowledge (host.ts). */
 	editorUrl: (taskId: string) => Promise<{ url: string } | { needsInstall: true }>;
+	/** Resolve a task's box browser URL, for the same reason as editorUrl. */
+	browserUrl: (taskId: string) => Promise<{ url: string }>;
 }
 
 /**
@@ -147,6 +149,7 @@ export function registerIpc(router: Router, native: NativeHandlers): void {
 	// Detach a project into its own OS window. Not an engine method — it drives
 	// BrowserWindows, which only the desktop host has.
 	ipcMain.handle(CH.editorOpenUrl, (_e, taskId: string) => native.editorUrl(taskId));
+	ipcMain.handle(CH.browserViewUrl, (_e, taskId: string) => native.browserUrl(taskId));
 
 	ipcMain.handle(CH.windowOpenProject, async (_e, projectId: string) => {
 		native.openProjectWindow(projectId);
@@ -241,15 +244,15 @@ export function registerIpc(router: Router, native: NativeHandlers): void {
 	// Bring up the browser the agents drive. Client-native like the editor above,
 	// but with no Remote-SSH equivalent: VS Code can attach to a box over ssh,
 	// Chrome cannot, and raising THIS Mac's browser for a task whose work happens
-	// on a box would show the wrong machine's pages. That case says so instead —
-	// a box gets its own headed Chrome (docs/browser-box.md), which isn't built yet.
+	// on a box would show the wrong machine's pages. That case says so instead: a
+	// box has its own Chrome (install-browser.sh), shown in the Browser panel.
 	ipcMain.handle(
 		CH.utilOpenBrowser,
 		async (_e, alias: string | null): Promise<OpenBrowserResult> => {
 			if (alias !== null) {
 				return {
 					ok: false,
-					reason: `"${alias}" runs this task on a box, and a box needs its own browser — this Mac's Chrome would show the wrong machine's pages. Not built yet (docs/browser-box.md).`,
+					reason: `"${alias}" runs this task on a box, and a box needs its own browser — this Mac's Chrome would show the wrong machine's pages. Open the box's own browser in the Browser panel.`,
 				};
 			}
 			const app = findChrome();
