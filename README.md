@@ -219,7 +219,8 @@ composer (pick the agent and type the first instruction in one step) reused for
 extra sessions inside an existing task, many terminals per task as tabs (agent
 sessions or plain shells, side by side), agent spawning in PTYs (Claude Code,
 OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection,
-Mission Control grid (one tile per task, its sessions as read-only tabs),
+Mission Control grid (one tile per task, its sessions as read-only tabs; tiles
+keep their own order, drag to swap them across pages, Sync to take the sidebar's),
 collapsible sidebar rail, image drag-drop & paste into
 agent terminals, session search (the topbar box answers in a popover listing
 matching tasks and the past sessions that discussed them, with an AI row that
