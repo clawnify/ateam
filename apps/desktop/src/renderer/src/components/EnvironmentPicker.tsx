@@ -347,7 +347,7 @@ export function EnvironmentPicker({
 						{addMode === "" &&
 							environments.map((env) => (
 								<div
-									key={env.label}
+									key={env.alias ?? "local"}
 									className={`conn-row-wrap ${env.alias === value ? "active" : ""}`}
 								>
 									<button
@@ -401,7 +401,7 @@ export function EnvironmentPicker({
 											) : env.transport === "ws" ? (
 												<span className="conn-sub">
 													{env.wake
-														? `Tailscale, wakes through ${providerById(env.wake.id)?.label ?? env.wake.id}`
+														? `${env.alias} · ${providerById(env.wake.id)?.label ?? env.wake.id}`
 														: "Tailscale"}
 												</span>
 											) : null}
