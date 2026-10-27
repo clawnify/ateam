@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import "./index.css";
+import "./globals.css";
 
 // Global drop guard. The terminal handles drops on its own element (typing the
 // dropped file's path to the PTY), but a file dropped ANYWHERE else in the

@@ -46,7 +46,7 @@ provider, and adding one is a file per seam:
 | --- | --- | --- |
 | The engine lets its box sleep, and wakes it for loop ticks | `packages/server/src/sleep/` | a `SleepDriver` (hold, release, arm a wake) beside `boxd.ts`, and a line in `index.ts` |
 | The desktop leaves a sleeping box asleep at launch | `packages/server/src/connections.ts` | a `SleepCheck`: which ssh aliases are its machines, and which are asleep |
-| The phone wakes a box before connecting | `packages/protocol/src/providers.ts` and `apps/mobile/src/wake.ts` | a definition declaring the inputs a wake needs (an account key, a machine name), and an adapter that wakes with them |
+| The phone, and the desktop for a box added by its Tailscale address, wake a box before connecting | `packages/protocol/src/providers.ts` and `packages/protocol/src/wake.ts` | a definition declaring the inputs a wake needs (an account key, a machine name), and an adapter that wakes with them |
 
 When to sleep is the engine's call for every provider (`sleep/control.ts`): only
 it can tell an agent mid-turn from one waiting on you. The phone's definition is

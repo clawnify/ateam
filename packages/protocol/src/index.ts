@@ -728,6 +728,15 @@ export interface ConnectionDTO {
 	 * wakes it. Set only by the desktop, and only until that connect.
 	 */
 	asleep?: boolean;
+	/** A `ws` box a provider puts to sleep: the provider that wakes it before a
+	 *  connect, and the machine's inputs there (see providers.ts). */
+	wake?: BoxWake | null;
+}
+
+/** Which provider wakes a box, and the box's own inputs for it (its machine name). */
+export interface BoxWake {
+	id: string;
+	box: Record<string, string>;
 }
 
 /**
@@ -1193,6 +1202,18 @@ export interface AteamApi {
 export type { NativeClientApi } from "./client-api";
 // Client-side binding of the AteamApi surface over an RpcClient.
 export { buildAteamApi, requestBoxUpdate, serverHandshake } from "./client-api";
+// WebSocket ClientTransport over the platform-global WebSocket (browser / RN / Bun).
+export {
+	activeLabel,
+	beginStep,
+	type ConnectStep,
+	failActive,
+	relabelActive,
+	type StepStatus,
+	WOKEN_CONNECT_MS,
+	WOKEN_RETRY_GAP_MS,
+	waitingLabel,
+} from "./connect-steps";
 // Box providers as data: what a client asks the user for to wake a sleeping box.
 export {
 	PROVIDERS,
@@ -1214,6 +1235,14 @@ export {
 } from "./task-tags";
 // Reading an engine older than this client (the version gate is advisory now).
 export { NO_TRIAGE, tolerantRpc } from "./tolerate";
+export {
+	filled,
+	type InputValues,
+	inputsAt,
+	WAKE_PROVIDERS,
+	type WakeAdapter,
+	wakeAdapter,
+	wakeMachineName,
+} from "./wake";
 export type { WsClient } from "./ws";
-// WebSocket ClientTransport over the platform-global WebSocket (browser / RN / Bun).
 export { wsClientTransport } from "./ws";

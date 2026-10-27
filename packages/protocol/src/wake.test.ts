@@ -1,7 +1,7 @@
 // The phone's provider registry: what it offers, and what it asks for.
 import { describe, expect, test } from "bun:test";
-import { PROVIDERS, providerById } from "@ateam/protocol";
-import { filled, inputsAt, WAKE_PROVIDERS, wakeAdapter } from "./wake";
+import { PROVIDERS, providerById } from "./providers";
+import { filled, inputsAt, WAKE_PROVIDERS, wakeAdapter, wakeMachineName } from "./wake";
 
 describe("wake providers", () => {
 	test("every provider defined with wake has an adapter", () => {
@@ -39,5 +39,18 @@ describe("wake providers", () => {
 		const boxd = providerById("boxd");
 		if (!boxd) throw new Error("boxd is defined");
 		expect(wakeAdapter(boxd, { apiKey: "bxd_k" })).not.toBeNull();
+	});
+});
+
+describe("wakeMachineName", () => {
+	test("a box a provider wakes goes by its machine name there", () => {
+		expect(wakeMachineName({ id: "boxd", box: { machine: "ateam-probe" } })).toBe("ateam-probe");
+		expect(wakeMachineName({ id: "sprites", box: { machine: " ateam-box " } })).toBe("ateam-box");
+	});
+	test("no provider, an unknown one, or a blank name leaves the address to do", () => {
+		expect(wakeMachineName(null)).toBeNull();
+		expect(wakeMachineName(undefined)).toBeNull();
+		expect(wakeMachineName({ id: "nope", box: { machine: "x" } })).toBeNull();
+		expect(wakeMachineName({ id: "boxd", box: { machine: "  " } })).toBeNull();
 	});
 });

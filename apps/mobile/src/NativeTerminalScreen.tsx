@@ -106,7 +106,7 @@ export function ReconnectingTerminal({
 	lead: ReactNode;
 	title: string;
 	onBack: () => void;
-	/** What the reattach is doing right now (src/connect-steps.ts), if anything. */
+	/** What the reattach is doing right now (connect-steps in @ateam/protocol), if anything. */
 	status: string | null;
 	/** Why the last wake failed, until a wake or a connect succeeds. */
 	wakeError: string | null;

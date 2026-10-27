@@ -1,6 +1,6 @@
 // Box providers Ateam can do more with than SSH into, as DATA: what a client asks
 // the user for, and how it labels it. What happens with those values is code, one
-// adapter per provider (the phone's are in apps/mobile/src/wake.ts), because no two
+// adapter per provider (wake.ts, shared by the phone and the desktop), because no two
 // providers wake a box the same way: boxd exchanges a key for a token and speaks
 // gRPC-web, Hetzner and Fly take one REST call, AWS signs every request. The same
 // split DevPod and Omnara landed on. See docs/providers/README.md.
@@ -43,9 +43,9 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
 			],
 			hint: "Wakes a hibernated machine before connecting",
 			note:
-				"Before connecting, the phone asks boxd to wake this machine if it's asleep. The key " +
-				"stays in this phone's Keychain and goes only to boxd. A boxd key works on every " +
-				"machine in its org, so give the phone one for an org that holds only your Ateam boxes.",
+				"Before connecting, Ateam asks boxd to wake this machine if it's asleep. The key " +
+				"stays encrypted on this device and goes only to boxd. A boxd key works on every " +
+				"machine in its org, so use one for an org that holds only your Ateam boxes.",
 		},
 	},
 	{
@@ -59,10 +59,10 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
 			],
 			hint: "Wakes a paused Sprite before connecting",
 			note:
-				"Before connecting, the phone asks Sprites to wake this Sprite and keep it up for two " +
-				"minutes while it connects. The token stays in this phone's Keychain and goes only to " +
-				"Sprites. A Sprites token works on every Sprite in its organization, so give the phone " +
-				"one for an organization that holds only your Ateam boxes.",
+				"Before connecting, Ateam asks Sprites to wake this Sprite and keep it up for five " +
+				"minutes while it connects. The token stays encrypted on this device and goes only to " +
+				"Sprites. A Sprites token works on every Sprite in its organization, so use one for " +
+				"an organization that holds only your Ateam boxes.",
 		},
 	},
 ];

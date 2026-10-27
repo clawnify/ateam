@@ -3,7 +3,7 @@
 // window.ateam (the engine surface itself), mirroring how @ateam/server keeps
 // connection management off AteamApi. Imports only @ateam/protocol (dependency-
 // free), so both the node (main/preload) and web (renderer) tsconfigs resolve it.
-import type { ConnectionDTO, ProjectDTO, SystemInfo } from "@ateam/protocol";
+import type { BoxWake, ConnectionDTO, ConnectStep, ProjectDTO, SystemInfo } from "@ateam/protocol";
 
 /** One grammar issue as the judge needs it (mirrors @ateam/server's GrammarJudgeIssue). */
 export interface GrammarJudgeIssue {
@@ -44,6 +44,10 @@ export const HOST_CH = {
 	saveSecrets: "host:saveSecrets",
 	/** The provider's live catalog (regions + sizes) for the given/saved token. */
 	providerOptions: "host:providerOptions",
+	/** Which wake providers have a key saved on this Mac (see AteamHost.wakeStatus). */
+	wakeStatus: "host:wakeStatus",
+	/** Check and save, or clear, one wake provider's key (encrypted). */
+	saveWakeAccount: "host:saveWakeAccount",
 	/** Which of the grammar check's issues to show (see AteamHost.judgeGrammar). */
 	judgeGrammar: "host:judgeGrammar",
 	evtConnectionsChanged: "evt:host:connections",
@@ -51,6 +55,8 @@ export const HOST_CH = {
 	evtInstallLog: "evt:host:install-log",
 	/** Staged progress while creating a box (host:createBox). */
 	evtCreateProgress: "evt:host:create-progress",
+	/** The steps of waking and reaching a box (see ConnectProgressEvent). */
+	evtConnectProgress: "evt:host:connect-progress",
 } as const;
 
 /** One chunk of installer output, tagged with the destination it came from. */
@@ -98,6 +104,26 @@ export interface CreateProgressEvent {
 	stage: string;
 }
 
+/** The steps of waking and reaching a box a provider puts to sleep. Empty `steps`
+ *  means the attempt is over and succeeded; a failed one keeps its failed step. */
+export interface ConnectProgressEvent {
+	alias: string;
+	steps: ConnectStep[];
+}
+
+/** Provider id → whether its key is saved on this Mac (never the key itself). */
+export type WakeStatus = Record<string, boolean>;
+
+/** How a connect treats a box's provider. */
+export interface ConnectOptions {
+	/** Wake the box through its provider first. Only a user's action asks for this:
+	 *  waking costs money, so opening the app never does. */
+	wake?: boolean;
+	/** Set (or with null, clear) which provider wakes this `host:port` box. Saved
+	 *  once the box answers, like the box itself. */
+	binding?: BoxWake | null;
+}
+
 /** Whether each provisioning secret is already saved (never the value itself). */
 export interface SecretsStatus {
 	hetznerToken: boolean;
@@ -129,7 +155,7 @@ export interface HostStatus {
 export interface AteamHost {
 	list(): Promise<ConnectionDTO[]>;
 	/** Add an engine (idempotent if already held). `null` is a no-op — local is permanent. */
-	connect(alias: string | null): Promise<HostStatus>;
+	connect(alias: string | null, opts?: ConnectOptions): Promise<HostStatus>;
 	/** Drop a connected box (never local). */
 	disconnect(alias: string): Promise<void>;
 	/** Remove a box from the connections list (disconnecting it first if held).
@@ -181,6 +207,11 @@ export interface AteamHost {
 	saveSecrets(patch: { hetznerToken?: string; tailscaleAuthKey?: string }): Promise<SecretsStatus>;
 	/** The provider's real regions + sizes for the given token (or the saved one). */
 	providerOptions(token?: string): Promise<ProviderOptions>;
+	/** Which wake providers have a key saved on this Mac. */
+	wakeStatus(): Promise<WakeStatus>;
+	/** Check `values` with the provider and save them (encrypted), or clear them
+	 *  with null. Rejects with the provider's answer when the key doesn't work. */
+	saveWakeAccount(providerId: string, values: Record<string, string> | null): Promise<WakeStatus>;
 	/**
 	 * Per issue, whether to show it, decided by Jev with this Mac's OpenRouter
 	 * key (never sent to the renderer). Null when it won't or couldn't decide:
@@ -194,4 +225,6 @@ export interface AteamHost {
 	onInstallLog(cb: (e: InstallLogEvent) => void): () => void;
 	/** Subscribe to box-creation stage narration; returns an unsubscribe. */
 	onCreateProgress(cb: (e: CreateProgressEvent) => void): () => void;
+	/** Subscribe to the steps of waking and reaching a box; returns an unsubscribe. */
+	onConnectProgress(cb: (e: ConnectProgressEvent) => void): () => void;
 }

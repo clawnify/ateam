@@ -1,0 +1,85 @@
+/* The renderer's stylesheet entry: Tailwind and shadcn/ui (components/ui) on top of
+   the hand-written index.css, which predates both.
+
+   Cascade layers keep the two from fighting. index.css sits in `app`. On its own it
+   would be unlayered, and an unlayered rule beats every layered one whatever its
+   specificity, so its global `button { background; border; padding }` would win over
+   every Tailwind class on a shadcn button. `slot` then clears what those global rules
+   set on shadcn's own elements (they all carry data-slot), and `utilities` comes last
+   so a component's classes always decide its look.
+
+   Tailwind's preflight reset is left out on purpose: index.css was written against
+   browser defaults, and resetting them would restyle the whole app. */
+@layer theme, base, app, slot, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "tw-animate-css";
+@import "./index.css" layer(app);
+
+/* The app is dark only and its tokens below are the dark values, so shadcn's
+   `dark:` adjustments (written for a light default) are never wanted. */
+@custom-variant dark (&:is(.dark *));
+
+/* shadcn's colour names, mapped onto index.css's palette rather than redefined, so
+   there is one set of colours. `inline` keeps them out of :root, where shadcn's
+   `--accent` (a hover surface) would collide with ours (the violet, which nothing
+   new should use). Focus rings and the primary action are white. */
+@theme inline {
+	--color-background: var(--bg);
+	--color-foreground: var(--text);
+	--color-card: var(--bg-elev);
+	--color-card-foreground: var(--text);
+	--color-popover: var(--bg-elev);
+	--color-popover-foreground: var(--text);
+	--color-primary: #ffffff;
+	--color-primary-foreground: #15151a;
+	--color-secondary: var(--bg-elev-2);
+	--color-secondary-foreground: var(--text);
+	--color-muted: var(--bg-elev-2);
+	--color-muted-foreground: var(--text-dim);
+	--color-accent: var(--bg-elev-2);
+	--color-accent-foreground: var(--text);
+	--color-destructive: var(--red);
+	--color-warning: var(--amber);
+	--color-success: var(--green);
+	--color-border: var(--border);
+	--color-input: var(--border);
+	--color-ring: var(--text);
+
+	/* The app's corner radii (rows 7px, menu items 6px, popovers 8px). */
+	--radius-sm: 6px;
+	--radius-md: 7px;
+	--radius-lg: 8px;
+
+	/* The app's type sizes: 13px body text, 11px secondary lines. */
+	--text-sm: 13px;
+	--text-sm--line-height: 1.4;
+	--text-xs: 11px;
+	--text-xs--line-height: 1.35;
+
+	--shadow-md: 0 8px 24px rgb(0 0 0 / 0.5);
+}
+
+/* Floating content (shadcn's popover and dropdown content in components/ui) is
+   z-1000: above dialogs (.overlay, 100), toasts (200) and tooltips (300), where the
+   hand-built menus sat. */
+
+/* What preflight would have given shadcn's elements, and what index.css's global
+   element rules set on them (fill, border, padding, radius, width, dimming). */
+@layer slot {
+	[data-slot] {
+		border: 0 solid var(--border);
+	}
+	:where(button, input, select, textarea)[data-slot] {
+		margin: 0;
+		padding: 0;
+		font: inherit;
+		color: inherit;
+		background: transparent;
+		border-radius: 0;
+		width: auto;
+		opacity: 1;
+		transition: none;
+	}
+}

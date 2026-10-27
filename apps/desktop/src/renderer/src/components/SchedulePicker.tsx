@@ -1,8 +1,15 @@
-import { Check } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { pickerTrigger } from "./picker";
+import { Button } from "./ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuLabel,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 
-// A loop's schedule control: the composer's pill + popover, like AgentPicker. It
+// A loop's schedule control: the composer's pill + dropdown, like AgentPicker. It
 // only picks WHICH kind of schedule. The loop form renders the one input a kind
 // needs beside it (a time for "Every day at", minutes for "Custom").
 
@@ -22,8 +29,6 @@ export type ScheduleKind =
 	/** A calendar the UI didn't write (not "daily at"): shown, and kept as is. */
 	| { kind: "other"; label: string };
 
-const POP_W = 220;
-
 function labelOf(v: ScheduleKind): string {
 	if (v.kind === "preset") {
 		return SCHEDULE_PRESETS.find((p) => p.minutes === v.minutes)?.label ?? "Custom";
@@ -33,8 +38,8 @@ function labelOf(v: ScheduleKind): string {
 	return v.label;
 }
 
-const same = (a: ScheduleKind, b: ScheduleKind) =>
-	a.kind === b.kind && (a.kind !== "preset" || (b.kind === "preset" && a.minutes === b.minutes));
+/** A kind as the radio group's value: one string per choice the menu offers. */
+const keyOf = (v: ScheduleKind) => (v.kind === "preset" ? `preset:${v.minutes}` : v.kind);
 
 export function SchedulePicker({
 	value,
@@ -46,29 +51,6 @@ export function SchedulePicker({
 	/** Set when the environment's engine is too old for "Every day at". */
 	dailyBlockedReason: string | null;
 }) {
-	const [pos, setPos] = useState<{ bottom: number; left: number } | null>(null);
-	const btnRef = useRef<HTMLButtonElement>(null);
-	const popRef = useRef<HTMLDivElement>(null);
-
-	const close = () => setPos(null);
-	const open = () => {
-		const r = btnRef.current?.getBoundingClientRect();
-		if (!r) return;
-		const left = Math.max(8, Math.min(r.left, window.innerWidth - POP_W - 8));
-		setPos({ bottom: window.innerHeight - r.top + 6, left });
-	};
-
-	useEffect(() => {
-		if (!pos) return;
-		const onDoc = (e: MouseEvent) => {
-			const t = e.target as Node;
-			if (btnRef.current?.contains(t) || popRef.current?.contains(t)) return;
-			setPos(null);
-		};
-		document.addEventListener("mousedown", onDoc);
-		return () => document.removeEventListener("mousedown", onDoc);
-	}, [pos]);
-
 	const options: { v: ScheduleKind; label: string; disabled?: string | null }[] = [
 		...SCHEDULE_PRESETS.map((p) => ({
 			v: { kind: "preset", minutes: p.minutes } as ScheduleKind,
@@ -79,61 +61,45 @@ export function SchedulePicker({
 	];
 
 	return (
-		<>
-			<button
-				type="button"
-				ref={btnRef}
-				className="navbtn conn-btn"
-				title="How often each run fires"
-				aria-haspopup="menu"
-				aria-expanded={pos !== null}
-				onClick={() => (pos ? close() : open())}
-			>
-				<span>{labelOf(value)}</span>
-			</button>
-			{pos &&
-				createPortal(
-					<div
-						ref={popRef}
-						role="menu"
-						className="menu-pop conn-pop"
-						style={{
-							position: "fixed",
-							top: "auto",
-							right: "auto",
-							bottom: pos.bottom,
-							left: pos.left,
-							width: POP_W,
-							zIndex: 2000,
-						}}
-					>
-						<div className="conn-head">
-							<span>Schedule</span>
-						</div>
-						{options.map((o) => (
-							<button
-								type="button"
-								role="menuitemradio"
-								aria-checked={same(o.v, value)}
-								key={o.label}
-								className={`conn-row ${same(o.v, value) ? "active" : ""}`}
-								disabled={!!o.disabled}
-								title={o.disabled ?? undefined}
-								onClick={() => {
-									onChange(o.v);
-									close();
-								}}
-							>
-								<span className="conn-txt">
-									<span className="conn-title">{o.label}</span>
-									{o.disabled ? <span className="conn-sub">{o.disabled}</span> : null}
-								</span>
-								{same(o.v, value) ? <Check size={15} strokeWidth={2.25} /> : null}
-							</button>
-						))}
-					</div>,
-					document.body,
-				)}
-		</>
+		<DropdownMenu modal={false}>
+			<DropdownMenuTrigger asChild>
+				<Button
+					variant="ghost"
+					size="sm"
+					className={pickerTrigger}
+					title="How often each run fires"
+				>
+					<span>{labelOf(value)}</span>
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent side="top" align="start" collisionPadding={8} className="w-[220px]">
+				<DropdownMenuLabel className="text-[11px] font-normal tracking-[0.4px] text-muted-foreground uppercase">
+					Schedule
+				</DropdownMenuLabel>
+				<DropdownMenuRadioGroup
+					value={keyOf(value)}
+					onValueChange={(k) => {
+						const picked = options.find((o) => keyOf(o.v) === k);
+						if (picked) onChange(picked.v);
+					}}
+				>
+					{options.map((o) => (
+						<DropdownMenuRadioItem
+							key={o.label}
+							value={keyOf(o.v)}
+							disabled={!!o.disabled}
+							title={o.disabled ?? undefined}
+						>
+							<span className="flex min-w-0 flex-col gap-px">
+								<span className="truncate">{o.label}</span>
+								{o.disabled ? (
+									<span className="truncate text-xs text-muted-foreground">{o.disabled}</span>
+								) : null}
+							</span>
+						</DropdownMenuRadioItem>
+					))}
+				</DropdownMenuRadioGroup>
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }

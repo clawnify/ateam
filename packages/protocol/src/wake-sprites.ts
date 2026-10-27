@@ -1,26 +1,28 @@
-// The phone's way to wake a paused Sprite (Fly.io Sprites) before connecting.
+// How a client (Ateam Go, or the desktop for a box added by its Tailscale address)
+// wakes a paused Sprite (Fly.io Sprites) before connecting.
 //
 // A paused Sprite doesn't answer over Tailscale, and once woken it pauses again
 // within seconds unless something holds it: sooner than Tailscale finds it again
 // (about 6s, measured). So the wake is one call to Sprites' exec API running a
 // short task hold inside the Sprite. Running the command wakes it, the hold keeps
-// it up while the phone connects, and the engine's own hold takes over once the
-// phone attaches. The status Sprites reports lags (it said "cold" for a Sprite
+// it up while the client connects, and the engine's own hold takes over once the
+// client attaches. The status Sprites reports lags (it said "cold" for a Sprite
 // that was running this very command), so the hold answering is the proof the
 // Sprite is up, not a status poll. See docs/providers/sprites.md.
 //
-// Pure TS, no React Native imports, so it runs under bun test.
+// Pure TS on global fetch, so it runs on the phone, in the desktop and under bun test.
 
 const API = "https://api.sprites.dev/v1";
 // A wake from paused plus the command took about 4s, measured, but a cold Sprite
 // has been slower than that; a timeout here only costs the user a failed wake.
 const CALL_TIMEOUT_MS = 60_000;
 
-/** The phone's hold, named apart from the engine's so neither cancels the other. */
-export const PHONE_HOLD = "ateam-phone-wake";
-/** Long enough to connect, through the phone's whole wait for a woken box
- *  (WOKEN_CONNECT_MS, App.tsx); the engine holds from the moment the phone attaches. */
-export const PHONE_HOLD_EXPIRE = "5m";
+/** The waking client's hold, named apart from the engine's so neither cancels the
+ *  other. The name dates from when only the phone woke a Sprite. */
+export const WAKE_HOLD = "ateam-phone-wake";
+/** Long enough to connect, through a client's whole wait for a woken box
+ *  (WOKEN_CONNECT_MS); the engine holds from the moment the client attaches. */
+export const WAKE_HOLD_EXPIRE = "5m";
 
 /** An HTTP status from Sprites, or null when there was none. */
 export class SpritesError extends Error {
@@ -35,12 +37,12 @@ export class SpritesError extends Error {
 
 /** What the exec runs: the hold, on the Sprite's own API socket, printing that socket's HTTP status. */
 export function holdCommand(): string[] {
-	const body = JSON.stringify({ expire: PHONE_HOLD_EXPIRE });
+	const body = JSON.stringify({ expire: WAKE_HOLD_EXPIRE });
 	return [
 		"bash",
 		"-c",
 		`curl -s -o /dev/null -w '%{http_code}' -X PUT --unix-socket /.sprite/api.sock ` +
-			`http://sprite/v1/tasks/${PHONE_HOLD} -H 'Content-Type: application/json' -d '${body}'`,
+			`http://sprite/v1/tasks/${WAKE_HOLD} -H 'Content-Type: application/json' -d '${body}'`,
 	];
 }
 
@@ -64,7 +66,7 @@ function withTimeout<T>(p: Promise<T>, what: string): Promise<T> {
 }
 
 export interface SpritesClient {
-	/** Wake `sprite` if it's paused, and hold it up for PHONE_HOLD_EXPIRE. */
+	/** Wake `sprite` if it's paused, and hold it up for WAKE_HOLD_EXPIRE. */
 	wake(sprite: string): Promise<void>;
 	/** One signed-in call and nothing else: a rejected token throws. */
 	check(): Promise<void>;

@@ -1,12 +1,14 @@
-// Waking a sleeping box before the phone connects, for any provider that declares
-// it (packages/protocol/src/providers.ts). The definition says what to ask the user
+// Waking a sleeping box before a client connects to it over the tailnet (Ateam Go,
+// and the desktop for a box added by its Tailscale address), for any provider that
+// declares it (providers.ts). The definition says what to ask the user
 // for; the adapter here says what to do with it. A provider defined with `wake` but
 // with no adapter in this file is not offered: data alone can't wake anything.
 //
-// Pure TS, no React Native imports, so it runs under bun test.
-import { PROVIDERS, type ProviderDefinition, type ProviderInput } from "@ateam/protocol";
-import { createBoxdClient, ensureAwake } from "./boxd";
-import { createSpritesClient } from "./sprites";
+// Pure TS on global fetch: it runs in React Native, in Electron's main process
+// (Node 20) and under bun test alike.
+import { PROVIDERS, type ProviderDefinition, type ProviderInput } from "./providers";
+import { createBoxdClient, ensureAwake } from "./wake-boxd";
+import { createSpritesClient } from "./wake-sprites";
 
 /** Input values by `ProviderInput.key`. */
 export type InputValues = Record<string, string>;
@@ -40,7 +42,7 @@ const ADAPTERS: Partial<Record<string, (account: InputValues) => WakeAdapter>> =
 	},
 };
 
-/** The providers the phone can actually wake: defined with `wake` AND backed by an adapter. */
+/** The providers a client can actually wake: defined with `wake` AND backed by an adapter. */
 export const WAKE_PROVIDERS: readonly ProviderDefinition[] = PROVIDERS.filter(
 	(p) => p.wake && ADAPTERS[p.id],
 );
@@ -58,7 +60,18 @@ export function filled(
 	return inputsAt(def, scope).every((i) => (values[i.key] ?? "").trim() !== "");
 }
 
-/** An adapter for `def` signed in with `account`, or null when the phone can't wake it. */
+/** What people call a box a provider wakes: its machine name there (the first of the
+ *  provider's box inputs), or null when it has none and the address has to do. */
+export function wakeMachineName(
+	wake: { id: string; box: Record<string, string> } | null | undefined,
+): string | null {
+	const def = PROVIDERS.find((p) => p.id === wake?.id);
+	const nameInput = def ? inputsAt(def, "box")[0] : undefined;
+	const name = nameInput ? (wake?.box[nameInput.key] ?? "").trim() : "";
+	return name || null;
+}
+
+/** An adapter for `def` signed in with `account`, or null when no client can wake it. */
 export function wakeAdapter(def: ProviderDefinition, account: InputValues): WakeAdapter | null {
 	const make = ADAPTERS[def.id];
 	return make && def.wake ? make(account) : null;
