@@ -45,6 +45,7 @@ export function bootstrap(db: SqliteExecutor): void {
 			waiting_reason TEXT,
 			waiting_until INTEGER,
 			waiting_fired_at INTEGER,
+			browser_used_at INTEGER,
 			created_by TEXT NOT NULL DEFAULT 'ateam',
 			created_at INTEGER,
 			updated_at INTEGER
@@ -174,6 +175,7 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE tasks ADD COLUMN waiting_reason TEXT",
 		"ALTER TABLE tasks ADD COLUMN waiting_until INTEGER",
 		"ALTER TABLE tasks ADD COLUMN waiting_fired_at INTEGER",
+		"ALTER TABLE tasks ADD COLUMN browser_used_at INTEGER",
 		"ALTER TABLE loops ADD COLUMN kind TEXT NOT NULL DEFAULT 'builtin'",
 		"ALTER TABLE loops ADD COLUMN template_id TEXT",
 		"ALTER TABLE loops ADD COLUMN name TEXT",

@@ -21,6 +21,7 @@ import {
 	type SwiftTermHandle,
 	SwiftTermView,
 } from "../modules/expo-swiftterm/src/ExpoSwifttermView";
+import { BoxBrowser } from "./BoxBrowser";
 import { KeyBar, keyStyles } from "./KeyBar";
 import { StripBar, TerminalStrip } from "./TerminalStrip";
 import { useKeyboardVisible } from "./useKeyboardVisible";
@@ -81,6 +82,8 @@ export function NativeTerminalScreen({
 			open={open}
 			onClose={onClose}
 			autoFocus={autoFocus}
+			// The browser belongs to the box, so only a task that drove it gets it.
+			browserTaskId={task.browserUsedAt != null ? task.id : undefined}
 			strip={
 				<TerminalStrip
 					task={task}
@@ -131,6 +134,7 @@ export function NativeTerminal({
 	strip,
 	onClose,
 	autoFocus = false,
+	browserTaskId,
 }: {
 	api: AteamApi;
 	/** Find or start the PTY to show (see usePty). */
@@ -140,8 +144,11 @@ export function NativeTerminal({
 	onClose: () => void;
 	/** Bring the keyboard up as soon as the terminal is ready. */
 	autoFocus?: boolean;
+	/** Show this task's box browser over the terminal (BoxBrowser), when it has one. */
+	browserTaskId?: string;
 }) {
 	const termRef = useRef<SwiftTermHandle>(null);
+	const [browserOpen, setBrowserOpen] = useState(false);
 	const [attaching, setAttaching] = useState(false);
 	const keyboardUp = useKeyboardVisible();
 
@@ -225,6 +232,14 @@ export function NativeTerminal({
 		// Rendered under the shell's navbar (which already avoids the keyboard).
 		<View style={styles.root}>
 			{strip}
+			{browserTaskId && (
+				<BoxBrowser
+					api={api}
+					taskId={browserTaskId}
+					expanded={browserOpen}
+					onExpanded={setBrowserOpen}
+				/>
+			)}
 			{terminalId ? (
 				<>
 					<SwiftTermView
