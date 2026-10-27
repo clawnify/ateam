@@ -1420,6 +1420,8 @@ export function App() {
 									<Menu
 										icon={ArrowUpDown}
 										label="Order tasks"
+										// The section header's icon buttons are 24px (.section-head .iconbtn).
+										className="size-6"
 										items={[
 											{
 												label: "What's next",

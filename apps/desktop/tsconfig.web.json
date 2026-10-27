@@ -4,7 +4,9 @@
 		"types": [],
 		"lib": ["ES2023", "DOM", "DOM.Iterable"],
 		"jsx": "react-jsx",
-		"noEmit": true
+		"noEmit": true,
+		// shadcn components import through "@/" (the alias electron.vite.config.ts sets).
+		"paths": { "@/*": ["./src/renderer/src/*"] }
 	},
 	"include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx", "src/shared/**/*.ts"],
 	"exclude": ["src/**/*.test.ts"]

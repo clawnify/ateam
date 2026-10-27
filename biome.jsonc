@@ -7,5 +7,7 @@
     "enabled": true,
     "rules": { "recommended": true }
   },
-  "javascript": { "formatter": { "quoteStyle": "double" } }
+  "javascript": { "formatter": { "quoteStyle": "double" } },
+  // Tailwind's at-rules (@theme, @custom-variant, ...) in the desktop's CSS entry.
+  "css": { "parser": { "tailwindDirectives": true } }
 }

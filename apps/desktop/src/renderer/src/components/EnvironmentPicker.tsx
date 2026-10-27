@@ -9,7 +9,6 @@ import {
 } from "@ateam/protocol";
 import {
 	ArrowUpCircle,
-	Check,
 	ChevronLeft,
 	Cloud,
 	Laptop,
@@ -21,10 +20,16 @@ import {
 } from "lucide-react";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { cn } from "@/lib/utils";
 import type { HostStatus, WakeStatus } from "../../../shared/host";
 import { BoxReadinessChecklist } from "./BoxReadinessChecklist";
 import { ConnectSteps } from "./ConnectSteps";
 import { CreateBoxDialog } from "./CreateBoxDialog";
+import { PickerHeading, PickerRow, pickerTrigger } from "./picker";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { NativeSelect, NativeSelectOption } from "./ui/native-select";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 // The task's "Run on" control — the pill + popover style the global connection
 // switcher used, moved into the New Task dialog. `null` alias = this Mac; a box alias
@@ -42,8 +47,6 @@ import { CreateBoxDialog } from "./CreateBoxDialog";
 // tailnet never wakes a sleeping box, the provider's API does. The key is checked
 // with the provider and kept encrypted in the main process; this form never reads
 // one back. Adding a listed box again, or its moon button, changes its provider.
-
-const POP_W = 260;
 
 export type EnvOption = {
 	alias: string | null;
@@ -110,7 +113,7 @@ export function EnvironmentPicker({
 	const [steps, setSteps] = useState<ConnectStep[]>([]);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [pos, setPos] = useState<{ bottom: number; left: number } | null>(null);
+	const [open, setOpen] = useState(false);
 	const [dest, setDest] = useState("");
 	const [installing, setInstalling] = useState(false);
 	const [log, setLog] = useState("");
@@ -119,37 +122,15 @@ export function EnvironmentPicker({
 	const [installedAlias, setInstalledAlias] = useState<string | null>(null);
 	const [installedAgents, setInstalledAgents] = useState<string[]>([]);
 	const [creating, setCreating] = useState(false);
-	const btnRef = useRef<HTMLButtonElement>(null);
-	const popRef = useRef<HTMLDivElement>(null);
 	const logRef = useRef<HTMLPreElement>(null);
 
 	const isRemote = value !== null;
 	const label = environments.find((e) => e.alias === value)?.label ?? "Local";
 
 	const close = () => {
-		setPos(null);
+		setOpen(false);
 		setAddMode("");
 	};
-	const open = () => {
-		const r = btnRef.current?.getBoundingClientRect();
-		if (!r) return;
-		const left = Math.max(8, Math.min(r.left, window.innerWidth - POP_W - 8));
-		// Anchor the popover's BOTTOM just above the button and let it grow UPWARD, so
-		// its edge sits next to the toggle no matter how many environments there are
-		// (estimating the height and offsetting from the top drifts as the list grows).
-		setPos({ bottom: window.innerHeight - r.top + 6, left });
-	};
-
-	useEffect(() => {
-		if (!pos) return;
-		const onDoc = (e: MouseEvent) => {
-			const t = e.target as Node;
-			if (btnRef.current?.contains(t) || popRef.current?.contains(t)) return;
-			close();
-		};
-		document.addEventListener("mousedown", onDoc);
-		return () => document.removeEventListener("mousedown", onDoc);
-	}, [pos]);
 
 	const pick = (env: EnvOption) => {
 		if (env.disabled) return;
@@ -208,10 +189,10 @@ export function EnvironmentPicker({
 		setAddMode("tailscale");
 	};
 
-	// Enter connects from any of the Tailscale form's fields; Escape backs out.
+	// Enter connects from any of the Tailscale form's fields. (Escape backs out of any
+	// step, through the popover's onEscapeKeyDown.)
 	const formKeys = (e: KeyboardEvent) => {
 		if (e.key === "Enter") void submit();
-		if (e.key === "Escape" && !busy) back();
 	};
 
 	const submit = async () => {
@@ -294,134 +275,138 @@ export function EnvironmentPicker({
 
 	return (
 		<>
-			<button
-				type="button"
-				ref={btnRef}
-				className="navbtn conn-btn"
-				title="Run on — which machine runs this task"
-				onClick={() => (pos ? close() : open())}
+			<Popover
+				open={open}
+				onOpenChange={(next) => {
+					if (next) setOpen(true);
+					else close();
+				}}
 			>
-				{isRemote ? (
-					<Server size={14} strokeWidth={1.75} />
-				) : (
-					<Laptop size={14} strokeWidth={1.75} />
-				)}
-				<span>{label}</span>
-				<span className={`conn-dot ${isRemote ? "on" : ""}`} />
-			</button>
-			{pos &&
-				createPortal(
-					<div
-						ref={popRef}
-						className="menu-pop conn-pop"
-						style={{
-							position: "fixed",
-							// Cancel .menu-pop's `top: calc(100% + 4px)` / `right: 0` — we anchor
-							// by the bottom-left instead, and a leftover `top` would push it off-screen.
-							top: "auto",
-							right: "auto",
-							bottom: pos.bottom,
-							left: pos.left,
-							width: POP_W,
-							maxHeight: "min(70vh, 420px)",
-							overflowY: "auto",
-							zIndex: 2000,
-						}}
+				<PopoverTrigger asChild>
+					<Button
+						variant="ghost"
+						size="sm"
+						className={pickerTrigger}
+						title="Run on — which machine runs this task"
 					>
-						<div className="conn-head">
-							{addMode === "" ? (
-								<span>Run on</span>
-							) : (
-								<button
-									type="button"
-									className="conn-back"
-									onClick={back}
-									disabled={busy || installing}
-									aria-label={`Back from ${stepTitle}`}
-								>
-									<ChevronLeft size={13} strokeWidth={2} />
-									<span>{stepTitle}</span>
-								</button>
+						{isRemote ? (
+							<Server className="size-3.5" strokeWidth={1.75} />
+						) : (
+							<Laptop className="size-3.5" strokeWidth={1.75} />
+						)}
+						<span>{label}</span>
+						<span
+							className={cn(
+								"size-1.5 flex-none rounded-full bg-muted-foreground",
+								isRemote && "bg-success shadow-[0_0_6px_rgba(74,222,128,0.7)]",
 							)}
-						</div>
-						{addMode === "" &&
-							environments.map((env) => (
+						/>
+					</Button>
+				</PopoverTrigger>
+				{/* Opens upward from the composer and grows up as the list grows, so its
+				    edge stays next to the toggle however many environments there are. */}
+				<PopoverContent
+					side="top"
+					align="start"
+					collisionPadding={8}
+					className="max-h-[min(70vh,420px)] w-[260px] overflow-y-auto p-1.5"
+					// Escape backs out one add step at a time, and closes from the list.
+					onEscapeKeyDown={(e) => {
+						if (addMode === "") return;
+						e.preventDefault();
+						if (!busy && !installing) back();
+					}}
+				>
+					<PickerHeading>
+						{addMode === "" ? (
+							<span>Run on</span>
+						) : (
+							<Button
+								variant="ghost"
+								className="h-auto gap-1 p-0 text-[11px] tracking-[0.4px] uppercase hover:bg-transparent"
+								onClick={back}
+								disabled={busy || installing}
+								aria-label={`Back from ${stepTitle}`}
+							>
+								<ChevronLeft className="size-[13px]" strokeWidth={2} />
+								<span>{stepTitle}</span>
+							</Button>
+						)}
+					</PickerHeading>
+					{addMode === "" &&
+						environments.map((env) => {
+							const active = env.alias === value;
+							const skewTitle =
+								env.skew === undefined
+									? undefined
+									: env.skew > PROTOCOL_VERSION
+										? `This box runs a newer Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). Update Ateam on this Mac to catch up with it.`
+										: `This box runs an older Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). It still works, but anything added since v${env.skew} will misbehave here. ${
+												env.updatable
+													? "Use the update button on this row to bring it up to this app's version."
+													: env.transport === "ws"
+														? "It's reachable only over its Tailscale endpoint, so this app can't run the installer on it. Update it over SSH."
+														: "This dev build can't update it: the installer serves releases, and this protocol isn't in one yet. Use packages/server/scripts/install-remote.sh."
+											}`;
+							return (
+								// A picker row + its side buttons (can't nest buttons). The wrap owns
+								// the hover/active background so the highlight spans both.
 								<div
 									key={env.alias ?? "local"}
-									className={`conn-row-wrap ${env.alias === value ? "active" : ""}`}
+									className={cn(
+										"group flex items-center rounded-md hover:bg-accent",
+										active && "bg-accent",
+									)}
 								>
-									<button
-										type="button"
-										className={`conn-row ${env.alias === value ? "active" : ""}`}
+									<PickerRow
+										className="flex-1 bg-transparent hover:bg-transparent"
 										disabled={env.disabled}
 										onClick={() => pick(env)}
-									>
-										<span className="conn-ico">
-											{env.alias === null ? (
-												<Laptop size={15} strokeWidth={1.75} />
-											) : (
-												<Server size={15} strokeWidth={1.75} />
-											)}
-										</span>
-										<span className="conn-txt">
-											<span className="conn-title">{env.label}</span>
-											{env.error ? (
-												<span className="conn-sub conn-sub-err" title={env.error}>
-													{env.error}
-												</span>
-											) : env.skew !== undefined ? (
-												<span
-													className="conn-sub conn-sub-warn"
-													title={
-														env.skew > PROTOCOL_VERSION
-															? `This box runs a newer Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). Update Ateam on this Mac to catch up with it.`
-															: `This box runs an older Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). It still works, but anything added since v${env.skew} will misbehave here. ${
-																	env.updatable
-																		? "Use the update button on this row to bring it up to this app's version."
-																		: env.transport === "ws"
-																			? "It's reachable only over its Tailscale endpoint, so this app can't run the installer on it. Update it over SSH."
-																			: "This dev build can't update it: the installer serves releases, and this protocol isn't in one yet. Use packages/server/scripts/install-remote.sh."
-																}`
-													}
-												>
-													{/* Framed as an UPDATE, the same thing the desktop does to itself,
-												    rather than as an installer to re-run: that is the user's mental
-												    model and it is the one the button next to it acts on. Short
-												    enough to survive the 260px row, with the detail in the title. */}
-													{env.skew < PROTOCOL_VERSION
-														? `update available (v${env.skew})`
-														: `update this app (box is v${env.skew})`}
-												</span>
-											) : env.disabled && env.alias !== null ? (
-												<span className="conn-sub">repo needs a git remote to run here</span>
-											) : env.asleep ? (
-												<span className="conn-sub">asleep, wakes when you use it</span>
-											) : env.needsSetup ? (
-												<span className="conn-sub">not set up — click to install the engine</span>
-											) : env.transport === "ws" ? (
-												<span className="conn-sub">
-													{env.wake
-														? `${env.alias} · ${providerById(env.wake.id)?.label ?? env.wake.id}`
-														: "Tailscale"}
-												</span>
-											) : null}
-										</span>
-										{env.alias === value ? <Check size={15} strokeWidth={2.25} /> : null}
-									</button>
+										selected={active}
+										icon={env.alias === null ? <Laptop /> : <Server />}
+										title={env.label}
+										tone={env.error ? "error" : env.skew !== undefined ? "warn" : undefined}
+										subTitle={env.error ?? skewTitle}
+										sub={
+											env.error ??
+											(env.skew !== undefined
+												? // Framed as an UPDATE, the same thing the desktop does to itself,
+													// rather than as an installer to re-run: that is the user's mental
+													// model and it is the one the button next to it acts on. Short
+													// enough to survive the 260px row, with the detail in the title.
+													env.skew < PROTOCOL_VERSION
+													? `update available (v${env.skew})`
+													: `update this app (box is v${env.skew})`
+												: env.disabled && env.alias !== null
+													? "repo needs a git remote to run here"
+													: env.asleep
+														? "asleep, wakes when you use it"
+														: env.needsSetup
+															? "not set up — click to install the engine"
+															: env.transport === "ws"
+																? env.wake
+																	? `${env.alias} · ${providerById(env.wake.id)?.label ?? env.wake.id}`
+																	: "Tailscale"
+																: undefined)
+										}
+									/>
 									{/* A row that only STATES the box is behind leaves the user nowhere to
-								    go: the fix lives in a terminal, which is exactly the gesture this
-								    whole path exists to remove. The install form below already knows how
-								    to run the installer over SSH and stream its log, so an update is that
-								    same flow with the destination filled in. Kept off the row itself so a
-								    skewed box stays selectable, which is the point of holding it. */}
+									    go: the fix lives in a terminal, which is exactly the gesture this
+									    whole path exists to remove. The install form below already knows how
+									    to run the installer over SSH and stream its log, so an update is that
+									    same flow with the destination filled in. Kept off the row itself so a
+									    skewed box stays selectable, which is the point of holding it. Not
+									    hover-only like the buttons after it: this is the answer to "how do I
+									    update it", so it stays visible. Amber ties it to the label. */}
 									{env.skew !== undefined &&
 										env.skew < PROTOCOL_VERSION &&
 										env.alias &&
 										env.updatable &&
 										onInstall && (
-											<button
-												type="button"
-												className="conn-update"
+											<Button
+												variant="ghost"
+												size="icon-xs"
+												className="size-5 rounded-[5px] text-warning hover:bg-warning/15 hover:text-warning"
 												title={`Update ${env.label} to this app's version over SSH`}
 												aria-label={`Update ${env.label}`}
 												onClick={() => {
@@ -431,24 +416,26 @@ export function EnvironmentPicker({
 													setInstallError(null);
 												}}
 											>
-												<ArrowUpCircle size={13} strokeWidth={2} />
-											</button>
+												<ArrowUpCircle className="size-[13px]" strokeWidth={2} />
+											</Button>
 										)}
 									{env.transport === "ws" && onAdd && (
-										<button
-											type="button"
-											className="conn-forget"
+										<Button
+											variant="ghost"
+											size="icon-xs"
+											className={rowSideButton}
 											title={`Which provider wakes ${env.label}`}
 											aria-label={`Which provider wakes ${env.label}`}
 											onClick={() => openTailscale(env)}
 										>
-											<Moon size={13} strokeWidth={2} />
-										</button>
+											<Moon className="size-[13px]" strokeWidth={2} />
+										</Button>
 									)}
 									{env.alias !== null && onForget && (
-										<button
-											type="button"
-											className="conn-forget"
+										<Button
+											variant="ghost"
+											size="icon-xs"
+											className={rowSideButton}
 											title={`Remove ${env.label} from this list`}
 											aria-label={`Remove ${env.label} from this list`}
 											onClick={() => {
@@ -460,204 +447,186 @@ export function EnvironmentPicker({
 												void onForget(alias);
 											}}
 										>
-											<X size={13} strokeWidth={2} />
-										</button>
+											<X className="size-[13px]" strokeWidth={2} />
+										</Button>
 									)}
 								</div>
-							))}
-						{(onAdd || onInstall) &&
-							(addMode === "" ? (
-								<button type="button" className="conn-row" onClick={() => setAddMode("menu")}>
-									<span className="conn-ico">
-										<Plus size={15} strokeWidth={1.75} />
-									</span>
-									<span className="conn-txt">
-										<span className="conn-title">Add a remote connection</span>
-									</span>
-								</button>
-							) : addMode === "menu" ? (
-								<>
-									{onInstall && (
-										<button
-											type="button"
-											className="conn-row"
-											onClick={() => {
-												setCreating(true);
-												close();
-											}}
-										>
-											<span className="conn-ico">
-												<Cloud size={15} strokeWidth={1.75} />
-											</span>
-											<span className="conn-txt">
-												<span className="conn-title">Create a new box</span>
-												<span className="conn-sub">Spin up a VPS on Hetzner</span>
-											</span>
-										</button>
-									)}
-									{onInstall && (
-										<button
-											type="button"
-											className="conn-row"
-											onClick={() => {
-												setBackTo("menu");
-												setAddMode("ssh");
-												setInstallError(null);
-											}}
-										>
-											<span className="conn-ico">
-												<Server size={15} strokeWidth={1.75} />
-											</span>
-											<span className="conn-txt">
-												<span className="conn-title">Set up a box over SSH</span>
-												<span className="conn-sub">Install the engine on a box you have</span>
-											</span>
-										</button>
-									)}
-									{onAdd && (
-										<button type="button" className="conn-row" onClick={() => openTailscale()}>
-											<span className="conn-ico">
-												<Network size={15} strokeWidth={1.75} />
-											</span>
-											<span className="conn-txt">
-												<span className="conn-title">Add a Tailscale box</span>
-												<span className="conn-sub">Connect one already on your tailnet</span>
-											</span>
-										</button>
-									)}
-								</>
-							) : addMode === "tailscale" ? (
-								<div className="conn-add">
-									<input
-										// biome-ignore lint/a11y/noAutofocus: the row was just clicked to reveal this
-										autoFocus
-										className="conn-add-input"
-										placeholder="100.x.y.z:8787"
-										aria-label="Tailscale address and port"
-										value={endpoint}
-										disabled={busy}
-										onKeyDown={formKeys}
-										onChange={(e) => setEndpoint(e.target.value)}
-									/>
-									<select
-										className="conn-add-input"
-										aria-label="Provider that puts this box to sleep"
-										value={providerId}
-										disabled={busy}
-										onKeyDown={formKeys}
-										onChange={(e) => {
-											setProviderId(e.target.value);
-											setError(null);
+							);
+						})}
+					{(onAdd || onInstall) &&
+						(addMode === "" ? (
+							<PickerRow
+								icon={<Plus />}
+								title="Add a remote connection"
+								onClick={() => setAddMode("menu")}
+							/>
+						) : addMode === "menu" ? (
+							<>
+								{onInstall && (
+									<PickerRow
+										icon={<Cloud />}
+										title="Create a new box"
+										sub="Spin up a VPS on Hetzner"
+										onClick={() => {
+											setCreating(true);
+											close();
 										}}
+									/>
+								)}
+								{onInstall && (
+									<PickerRow
+										icon={<Server />}
+										title="Set up a box over SSH"
+										sub="Install the engine on a box you have"
+										onClick={() => {
+											setBackTo("menu");
+											setAddMode("ssh");
+											setInstallError(null);
+										}}
+									/>
+								)}
+								{onAdd && (
+									<PickerRow
+										icon={<Network />}
+										title="Add a Tailscale box"
+										sub="Connect one already on your tailnet"
+										onClick={() => openTailscale()}
+									/>
+								)}
+							</>
+						) : addMode === "tailscale" ? (
+							<div className={addForm}>
+								<Input
+									autoFocus
+									className={formInput}
+									placeholder="100.x.y.z:8787"
+									aria-label="Tailscale address and port"
+									value={endpoint}
+									disabled={busy}
+									onKeyDown={formKeys}
+									onChange={(e) => setEndpoint(e.target.value)}
+								/>
+								<NativeSelect
+									wrapperClassName="w-full"
+									className={cn(formInput, "pr-8")}
+									aria-label="Provider that puts this box to sleep"
+									value={providerId}
+									disabled={busy}
+									onKeyDown={formKeys}
+									onChange={(e) => {
+										setProviderId(e.target.value);
+										setError(null);
+									}}
+								>
+									<NativeSelectOption value="">Always on (no provider)</NativeSelectOption>
+									{WAKE_PROVIDERS.map((p) => (
+										<NativeSelectOption key={p.id} value={p.id} title={p.wake?.hint}>
+											{p.label}
+										</NativeSelectOption>
+									))}
+								</NativeSelect>
+								{provider &&
+									inputsAt(provider, "box").map((i) => (
+										<Input
+											key={i.key}
+											className={formInput}
+											placeholder={`${i.label}: ${i.placeholder}`}
+											aria-label={`${provider.label} ${i.label}`}
+											value={boxValues[i.key] ?? ""}
+											disabled={busy}
+											onKeyDown={formKeys}
+											onChange={(e) => setBoxValues((v) => ({ ...v, [i.key]: e.target.value }))}
+										/>
+									))}
+								{provider && keySaved && !replaceKey ? (
+									<span className={formNote}>
+										{provider.label} key saved on this Mac.{" "}
+										<Button
+											variant="link"
+											className="h-auto p-0 text-xs text-foreground underline"
+											onClick={() => setReplaceKey(true)}
+										>
+											Replace
+										</Button>
+									</span>
+								) : (
+									provider &&
+									inputsAt(provider, "account").map((i) => (
+										<Input
+											key={i.key}
+											className={formInput}
+											type={i.secret ? "password" : "text"}
+											autoComplete="off"
+											placeholder={`${i.label}: ${i.placeholder}`}
+											aria-label={`${provider.label} ${i.label}`}
+											value={accountValues[i.key] ?? ""}
+											disabled={busy}
+											onKeyDown={formKeys}
+											onChange={(e) => setAccountValues((v) => ({ ...v, [i.key]: e.target.value }))}
+										/>
+									))
+								)}
+								{/* Sentences here (a provider's note, a whole error) wrap instead of
+								    truncating: they are read, not scanned. */}
+								{provider && !busy && !error ? (
+									<span className={formNote}>{provider.wake?.note}</span>
+								) : null}
+								{busy && steps.length > 0 ? <ConnectSteps steps={steps} /> : null}
+								<span className={cn(formNote, error && "text-destructive")}>
+									{error ??
+										(busy && steps.length === 0 ? "Connecting…" : busy ? "" : "Enter to connect")}
+								</span>
+							</div>
+						) : addMode === "ready" ? (
+							installedAlias && (
+								<BoxReadinessChecklist
+									alias={installedAlias}
+									agents={installedAgents}
+									title="Box set up — finish these in the box’s terminal:"
+									onDone={close}
+								/>
+							)
+						) : (
+							<div className={addForm}>
+								<Input
+									autoFocus
+									className={formInput}
+									placeholder="ssh alias or user@host"
+									aria-label="SSH destination to set up"
+									value={dest}
+									disabled={installing}
+									onChange={(e) => setDest(e.target.value)}
+									onKeyDown={(e) => {
+										if (e.key === "Enter") void submitInstall();
+									}}
+								/>
+								{log && (
+									<pre
+										ref={logRef}
+										className="m-0 max-h-40 overflow-auto rounded-md bg-background p-2 font-mono text-[10px] whitespace-pre-wrap text-muted-foreground"
 									>
-										<option value="">Always on (no provider)</option>
-										{WAKE_PROVIDERS.map((p) => (
-											<option key={p.id} value={p.id} title={p.wake?.hint}>
-												{p.label}
-											</option>
-										))}
-									</select>
-									{provider &&
-										inputsAt(provider, "box").map((i) => (
-											<input
-												key={i.key}
-												className="conn-add-input"
-												placeholder={`${i.label}: ${i.placeholder}`}
-												aria-label={`${provider.label} ${i.label}`}
-												value={boxValues[i.key] ?? ""}
-												disabled={busy}
-												onKeyDown={formKeys}
-												onChange={(e) => setBoxValues((v) => ({ ...v, [i.key]: e.target.value }))}
-											/>
-										))}
-									{provider && keySaved && !replaceKey ? (
-										<span className="conn-sub">
-											{provider.label} key saved on this Mac.{" "}
-											<button
-												type="button"
-												className="conn-link"
-												onClick={() => setReplaceKey(true)}
-											>
-												Replace
-											</button>
-										</span>
-									) : (
-										provider &&
-										inputsAt(provider, "account").map((i) => (
-											<input
-												key={i.key}
-												className="conn-add-input"
-												type={i.secret ? "password" : "text"}
-												autoComplete="off"
-												placeholder={`${i.label}: ${i.placeholder}`}
-												aria-label={`${provider.label} ${i.label}`}
-												value={accountValues[i.key] ?? ""}
-												disabled={busy}
-												onKeyDown={formKeys}
-												onChange={(e) =>
-													setAccountValues((v) => ({ ...v, [i.key]: e.target.value }))
-												}
-											/>
-										))
-									)}
-									{provider && !busy && !error ? (
-										<span className="conn-sub conn-note">{provider.wake?.note}</span>
-									) : null}
-									{busy && steps.length > 0 ? <ConnectSteps steps={steps} /> : null}
-									<span className={`conn-sub ${error ? "conn-sub-err conn-wrap" : ""}`}>
-										{error ??
-											(busy && steps.length === 0 ? "Connecting…" : busy ? "" : "Enter to connect")}
-									</span>
-								</div>
-							) : addMode === "ready" ? (
-								installedAlias && (
-									<BoxReadinessChecklist
-										alias={installedAlias}
-										agents={installedAgents}
-										title="Box set up — finish these in the box’s terminal:"
-										onDone={close}
-									/>
-								)
-							) : (
-								<div className="conn-add">
-									<input
-										// biome-ignore lint/a11y/noAutofocus: the row was just clicked to reveal this
-										autoFocus
-										className="conn-add-input"
-										placeholder="ssh alias or user@host"
-										aria-label="SSH destination to set up"
-										value={dest}
-										disabled={installing}
-										onChange={(e) => setDest(e.target.value)}
-										onKeyDown={(e) => {
-											if (e.key === "Enter") void submitInstall();
-											if (e.key === "Escape" && !installing) back();
-										}}
-									/>
-									{log && (
-										<pre ref={logRef} className="conn-install-log">
-											{log}
-										</pre>
-									)}
-									<span className="conn-sub">
-										{installing
-											? "Setting up the box…"
-											: (installError ?? "Installs the engine over SSH, then connects")}
-									</span>
-									{!installing && (
-										<button
-											type="button"
-											className="conn-install-go"
-											onClick={() => void submitInstall()}
-										>
-											Set up
-										</button>
-									)}
-								</div>
-							))}
-					</div>,
-					document.body,
-				)}
+										{log}
+									</pre>
+								)}
+								<span className={cn(formNote, installError && "text-destructive")}>
+									{installing
+										? "Setting up the box…"
+										: (installError ?? "Installs the engine over SSH, then connects")}
+								</span>
+								{!installing && (
+									<Button
+										variant="secondary"
+										size="sm"
+										className="self-start border text-foreground"
+										onClick={() => void submitInstall()}
+									>
+										Set up
+									</Button>
+								)}
+							</div>
+						))}
+				</PopoverContent>
+			</Popover>
 			{creating &&
 				createPortal(
 					<CreateBoxDialog
@@ -673,3 +642,11 @@ export function EnvironmentPicker({
 		</>
 	);
 }
+
+/** A row's hover-revealed side button (its provider, removing it). */
+const rowSideButton =
+	"mr-1.5 size-5 rounded-[5px] opacity-0 group-hover:opacity-100 hover:bg-white/8 hover:text-foreground focus-visible:opacity-100";
+/** An add step's form, and its fields and sentences. */
+const addForm = "flex flex-col gap-[3px] px-2.5 pt-1.5 pb-2";
+const formInput = "h-auto bg-secondary px-2 py-1.5";
+const formNote = "text-xs leading-[1.4] whitespace-normal text-muted-foreground";
