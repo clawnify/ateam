@@ -234,6 +234,32 @@ ssh my-ateam-box "bash -lc 'ateam'"
 > the next release first). Off, each box keeps its own, edited by selecting it.
 > The **client** half (updates, this toggle) is per machine and never syncs.
 
+### Optional: a browser for the box's agents
+
+Browser MCP tools usually drive the Chrome on your laptop, and that only works
+when the agent runs on the laptop too. A box gets a Chrome of its own instead:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install-browser.sh | bash
+```
+
+Run it as the same user as `install.sh`. It needs passwordless sudo once, and an
+x86_64 box (Google Chrome has no Linux Arm build). It installs:
+
+- Chrome on a virtual desktop (Xvfb + Openbox), headed, with one profile every
+  agent shares. Log into a site once and every agent is logged in.
+- [TaskWindow](https://github.com/clawnify/TaskWindow) in that Chrome, its
+  extension force-installed by policy and paired with its daemon automatically,
+  registered as the `taskwindow` MCP server for Claude Code. These are the same
+  tools as the TaskWindow extension on a laptop.
+- noVNC on the box's tailnet address, port 6080, so you can watch the desktop and
+  take over for a login, a 2FA prompt or a CAPTCHA. The password is in
+  `~/.ateam/browser/vnc-password`.
+
+Everything runs as a service (systemd, or Sprite services on a Sprite), so it
+survives reboots and keeps working with no laptop connected. Re-running the script
+is safe: it never restarts a Chrome an agent may be using.
+
 ## 5. Same box, from the iOS app
 
 The phone can't run `ssh`, so it speaks to the **same daemon** over a WebSocket
