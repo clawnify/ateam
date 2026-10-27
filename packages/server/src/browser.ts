@@ -5,6 +5,7 @@
 // to start, only to find.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { type AteamDb, repo } from "@ateam/db";
 import { type BrowserViewDTO, DEFAULT_BROWSER_VIEW_PORT } from "@ateam/protocol";
 
 export const INSTALL_BROWSER_CMD =
@@ -36,4 +37,16 @@ export async function openBrowserView(dataDir: string): Promise<BrowserViewDTO> 
 		);
 	}
 	return { port, password };
+}
+
+/**
+ * The task's agent called a browser tool (the BrowserUse hook): stamp the task,
+ * which is what puts the browser beside its terminal in a client. Only the first
+ * call writes, since browser tools are chatty. Returns whether it changed.
+ */
+export function stampBrowserUse(db: AteamDb, taskId: string, now = Date.now()): boolean {
+	const task = repo.getTask(db, taskId);
+	if (!task || task.browserUsedAt != null) return false;
+	repo.updateTask(db, taskId, { browserUsedAt: now });
+	return true;
 }

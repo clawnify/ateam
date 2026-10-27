@@ -5,6 +5,8 @@
 // here unchanged. This is the whole client: everything else is the shared contract.
 import {
 	type AteamApi,
+	type BrowserViewDTO,
+	browserViewUrl,
 	buildAteamApi,
 	CH,
 	createRpcClient,
@@ -120,8 +122,18 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 		void serverHandshake(rpc).catch(() => {});
 	}, 15_000);
 
+	// The box's browser view answers on the box's tailnet address, the same host
+	// this socket dialed, so the engine's port is all it takes to reach it.
+	const native: NativeClientApi = {
+		...mobileNative,
+		browserView: async (taskId) => {
+			const view = (await rpc.call(CH.browserView, [taskId])) as BrowserViewDTO;
+			return { url: browserViewUrl(`http://${boxHost(url)}:${view.port}`, view.password) };
+		},
+	};
+
 	return {
-		api: buildAteamApi(tolerantRpc(rpc, info.protocolVersion), mobileNative),
+		api: buildAteamApi(tolerantRpc(rpc, info.protocolVersion), native),
 		info,
 		skewed,
 		update: () => requestBoxUpdate(rpc),
@@ -141,6 +153,12 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 			client.close();
 		},
 	};
+}
+
+/** The host of a `ws://host:port` URL, brackets kept for IPv6. Not `new URL`:
+ *  React Native's doesn't implement `hostname`. */
+export function boxHost(wsUrl: string): string {
+	return wsUrl.replace(/^wss?:\/\//, "").match(/^(\[[^\]]+\]|[^/:]+)/)?.[1] ?? "";
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {

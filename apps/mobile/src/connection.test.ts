@@ -11,7 +11,7 @@
 // back on.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { PROTOCOL_VERSION } from "@ateam/protocol";
-import { connect } from "./connection";
+import { boxHost, connect } from "./connection";
 
 /** A box that answers the handshake with whatever version the test asks for. */
 function fakeBox(protocolVersion: number) {
@@ -27,7 +27,9 @@ function fakeBox(protocolVersion: number) {
 						? { protocolVersion, agents: ["claude"] }
 						: frame.method === "system:update"
 							? { started: true, logPath: "/home/ateam/.ateam/update.log" }
-							: null;
+							: frame.method === "browser:view"
+								? { port: 6080, password: "pw123456" }
+								: null;
 				ws.send(JSON.stringify({ t: "res", id: frame.id, ok: true, result }));
 			},
 		},
@@ -77,5 +79,24 @@ describe("connect", () => {
 		} finally {
 			c.close();
 		}
+	});
+});
+
+describe("browser view", () => {
+	test("resolves against the host this socket dialed, with the engine's port", async () => {
+		const c = await connect(`ws://127.0.0.1:${level.port}`);
+		try {
+			const { url } = await c.api.browser.view("task-1");
+			expect(url.startsWith("http://127.0.0.1:6080/vnc.html#")).toBe(true);
+			expect(url).toContain("password=pw123456");
+		} finally {
+			c.close();
+		}
+	});
+
+	test("boxHost reads IPv4, names and bracketed IPv6", () => {
+		expect(boxHost("ws://100.94.46.10:8787")).toBe("100.94.46.10");
+		expect(boxHost("ws://box.tail.ts.net:8787/x")).toBe("box.tail.ts.net");
+		expect(boxHost("ws://[fd7a::1]:8787")).toBe("[fd7a::1]");
 	});
 });

@@ -24,7 +24,12 @@
 			"buildNumber": "19",
 			"infoPlist": {
 				"ITSAppUsesNonExemptEncryption": false,
-				"NSLocalNetworkUsageDescription": "Ateam connects to a coding-agent server you run on your own machine or local network."
+				"NSLocalNetworkUsageDescription": "Ateam connects to a coding-agent server you run on your own machine or local network.",
+				"NSAppTransportSecurity": {
+					"NSAllowsArbitraryLoads": false,
+					"NSAllowsLocalNetworking": true,
+					"NSAllowsArbitraryLoadsInWebContent": true
+				}
 			}
 		},
 		"android": {
