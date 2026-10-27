@@ -7,7 +7,18 @@ import {
 	providerById,
 	WAKE_PROVIDERS,
 } from "@ateam/protocol";
-import { ArrowUpCircle, Check, Cloud, Laptop, Moon, Network, Plus, Server, X } from "lucide-react";
+import {
+	ArrowUpCircle,
+	Check,
+	ChevronLeft,
+	Cloud,
+	Laptop,
+	Moon,
+	Network,
+	Plus,
+	Server,
+	X,
+} from "lucide-react";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { HostStatus, WakeStatus } from "../../../shared/host";
@@ -21,8 +32,9 @@ import { CreateBoxDialog } from "./CreateBoxDialog";
 // options (no git remote to clone from) show why they can't be picked.
 //
 // Ways to add a box (create one on Hetzner, set one up over SSH, or connect a Tailscale
-// endpoint) live behind one "Add a remote connection" row so the list stays short — it
-// expands to the methods on click. SSH boxes otherwise arrive on their own (whatever is
+// endpoint) live behind one "Add a remote connection" row so the list stays short. Each
+// step of adding one REPLACES the list rather than stacking under it, with a back arrow
+// in the header: someone adding a box is looking at that, not at the other boxes. SSH boxes otherwise arrive on their own (whatever is
 // in ~/.ssh/config); a Tailscale box has no such registry, so it's typed in once here.
 //
 // A Tailscale box a provider puts to sleep (boxd, Sprites) names that provider, its
@@ -83,6 +95,9 @@ export function EnvironmentPicker({
 	// method's inline form → "ready" (the readiness checklist after an SSH set-up).
 	// "Create a new box" opens a modal instead (too big for here).
 	const [addMode, setAddMode] = useState<"" | "menu" | "ssh" | "tailscale" | "ready">("");
+	// Where the back arrow returns to: the list for a form opened from a box's row (its
+	// moon or update button), the methods for one picked from the menu.
+	const [backTo, setBackTo] = useState<"" | "menu">("");
 	const [endpoint, setEndpoint] = useState("");
 	// The Tailscale form's provider ("" for none), the box's inputs, and the
 	// provider's key, asked for only while none is saved (or it is being replaced).
@@ -145,6 +160,7 @@ export function EnvironmentPicker({
 		// install.sh is idempotent and ends by connecting, so that path still works.
 		if (env.needsSetup && env.alias && env.transport !== "ws" && onInstall) {
 			setDest(env.alias);
+			setBackTo("");
 			setAddMode("ssh");
 			setInstallError(null);
 			return;
@@ -165,8 +181,23 @@ export function EnvironmentPicker({
 		});
 	}, [addMode, endpoint]);
 
+	const back = () => {
+		setAddMode(addMode === "menu" || addMode === "ready" ? "" : backTo);
+		setError(null);
+		setInstallError(null);
+	};
+	const stepTitle =
+		addMode === "menu"
+			? "Add a remote connection"
+			: addMode === "tailscale"
+				? "Tailscale box"
+				: addMode === "ssh"
+					? "Set up over SSH"
+					: "Box set up";
+
 	/** Open the Tailscale form, empty or for a listed box whose provider to change. */
 	const openTailscale = (env?: EnvOption) => {
+		setBackTo(env ? "" : "menu");
 		setEndpoint(env?.alias ?? "");
 		setProviderId(env?.wake?.id ?? "");
 		setBoxValues(env?.wake?.box ?? {});
@@ -180,10 +211,7 @@ export function EnvironmentPicker({
 	// Enter connects from any of the Tailscale form's fields; Escape backs out.
 	const formKeys = (e: KeyboardEvent) => {
 		if (e.key === "Enter") void submit();
-		if (e.key === "Escape") {
-			setAddMode("menu");
-			setError(null);
-		}
+		if (e.key === "Escape" && !busy) back();
 	};
 
 	const submit = async () => {
@@ -301,127 +329,142 @@ export function EnvironmentPicker({
 						}}
 					>
 						<div className="conn-head">
-							<span>Run on</span>
-						</div>
-						{environments.map((env) => (
-							<div
-								key={env.label}
-								className={`conn-row-wrap ${env.alias === value ? "active" : ""}`}
-							>
+							{addMode === "" ? (
+								<span>Run on</span>
+							) : (
 								<button
 									type="button"
-									className={`conn-row ${env.alias === value ? "active" : ""}`}
-									disabled={env.disabled}
-									onClick={() => pick(env)}
+									className="conn-back"
+									onClick={back}
+									disabled={busy || installing}
+									aria-label={`Back from ${stepTitle}`}
 								>
-									<span className="conn-ico">
-										{env.alias === null ? (
-											<Laptop size={15} strokeWidth={1.75} />
-										) : (
-											<Server size={15} strokeWidth={1.75} />
-										)}
-									</span>
-									<span className="conn-txt">
-										<span className="conn-title">{env.label}</span>
-										{env.error ? (
-											<span className="conn-sub conn-sub-err" title={env.error}>
-												{env.error}
-											</span>
-										) : env.skew !== undefined ? (
-											<span
-												className="conn-sub conn-sub-warn"
-												title={
-													env.skew > PROTOCOL_VERSION
-														? `This box runs a newer Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). Update Ateam on this Mac to catch up with it.`
-														: `This box runs an older Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). It still works, but anything added since v${env.skew} will misbehave here. ${
-																env.updatable
-																	? "Use the update button on this row to bring it up to this app's version."
-																	: env.transport === "ws"
-																		? "It's reachable only over its Tailscale endpoint, so this app can't run the installer on it. Update it over SSH."
-																		: "This dev build can't update it: the installer serves releases, and this protocol isn't in one yet. Use packages/server/scripts/install-remote.sh."
-															}`
-												}
-											>
-												{/* Framed as an UPDATE, the same thing the desktop does to itself,
+									<ChevronLeft size={13} strokeWidth={2} />
+									<span>{stepTitle}</span>
+								</button>
+							)}
+						</div>
+						{addMode === "" &&
+							environments.map((env) => (
+								<div
+									key={env.label}
+									className={`conn-row-wrap ${env.alias === value ? "active" : ""}`}
+								>
+									<button
+										type="button"
+										className={`conn-row ${env.alias === value ? "active" : ""}`}
+										disabled={env.disabled}
+										onClick={() => pick(env)}
+									>
+										<span className="conn-ico">
+											{env.alias === null ? (
+												<Laptop size={15} strokeWidth={1.75} />
+											) : (
+												<Server size={15} strokeWidth={1.75} />
+											)}
+										</span>
+										<span className="conn-txt">
+											<span className="conn-title">{env.label}</span>
+											{env.error ? (
+												<span className="conn-sub conn-sub-err" title={env.error}>
+													{env.error}
+												</span>
+											) : env.skew !== undefined ? (
+												<span
+													className="conn-sub conn-sub-warn"
+													title={
+														env.skew > PROTOCOL_VERSION
+															? `This box runs a newer Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). Update Ateam on this Mac to catch up with it.`
+															: `This box runs an older Ateam (protocol v${env.skew}; this app speaks v${PROTOCOL_VERSION}). It still works, but anything added since v${env.skew} will misbehave here. ${
+																	env.updatable
+																		? "Use the update button on this row to bring it up to this app's version."
+																		: env.transport === "ws"
+																			? "It's reachable only over its Tailscale endpoint, so this app can't run the installer on it. Update it over SSH."
+																			: "This dev build can't update it: the installer serves releases, and this protocol isn't in one yet. Use packages/server/scripts/install-remote.sh."
+																}`
+													}
+												>
+													{/* Framed as an UPDATE, the same thing the desktop does to itself,
 												    rather than as an installer to re-run: that is the user's mental
 												    model and it is the one the button next to it acts on. Short
 												    enough to survive the 260px row, with the detail in the title. */}
-												{env.skew < PROTOCOL_VERSION
-													? `update available (v${env.skew})`
-													: `update this app (box is v${env.skew})`}
-											</span>
-										) : env.disabled && env.alias !== null ? (
-											<span className="conn-sub">repo needs a git remote to run here</span>
-										) : env.asleep ? (
-											<span className="conn-sub">asleep, wakes when you use it</span>
-										) : env.needsSetup ? (
-											<span className="conn-sub">not set up — click to install the engine</span>
-										) : env.transport === "ws" ? (
-											<span className="conn-sub">
-												{env.wake
-													? `Tailscale, wakes through ${providerById(env.wake.id)?.label ?? env.wake.id}`
-													: "Tailscale"}
-											</span>
-										) : null}
-									</span>
-									{env.alias === value ? <Check size={15} strokeWidth={2.25} /> : null}
-								</button>
-								{/* A row that only STATES the box is behind leaves the user nowhere to
+													{env.skew < PROTOCOL_VERSION
+														? `update available (v${env.skew})`
+														: `update this app (box is v${env.skew})`}
+												</span>
+											) : env.disabled && env.alias !== null ? (
+												<span className="conn-sub">repo needs a git remote to run here</span>
+											) : env.asleep ? (
+												<span className="conn-sub">asleep, wakes when you use it</span>
+											) : env.needsSetup ? (
+												<span className="conn-sub">not set up — click to install the engine</span>
+											) : env.transport === "ws" ? (
+												<span className="conn-sub">
+													{env.wake
+														? `Tailscale, wakes through ${providerById(env.wake.id)?.label ?? env.wake.id}`
+														: "Tailscale"}
+												</span>
+											) : null}
+										</span>
+										{env.alias === value ? <Check size={15} strokeWidth={2.25} /> : null}
+									</button>
+									{/* A row that only STATES the box is behind leaves the user nowhere to
 								    go: the fix lives in a terminal, which is exactly the gesture this
 								    whole path exists to remove. The install form below already knows how
 								    to run the installer over SSH and stream its log, so an update is that
 								    same flow with the destination filled in. Kept off the row itself so a
 								    skewed box stays selectable, which is the point of holding it. */}
-								{env.skew !== undefined &&
-									env.skew < PROTOCOL_VERSION &&
-									env.alias &&
-									env.updatable &&
-									onInstall && (
+									{env.skew !== undefined &&
+										env.skew < PROTOCOL_VERSION &&
+										env.alias &&
+										env.updatable &&
+										onInstall && (
+											<button
+												type="button"
+												className="conn-update"
+												title={`Update ${env.label} to this app's version over SSH`}
+												aria-label={`Update ${env.label}`}
+												onClick={() => {
+													setDest(env.alias as string);
+													setBackTo("");
+													setAddMode("ssh");
+													setInstallError(null);
+												}}
+											>
+												<ArrowUpCircle size={13} strokeWidth={2} />
+											</button>
+										)}
+									{env.transport === "ws" && onAdd && (
 										<button
 											type="button"
-											className="conn-update"
-											title={`Update ${env.label} to this app's version over SSH`}
-											aria-label={`Update ${env.label}`}
-											onClick={() => {
-												setDest(env.alias as string);
-												setAddMode("ssh");
-												setInstallError(null);
-											}}
+											className="conn-forget"
+											title={`Which provider wakes ${env.label}`}
+											aria-label={`Which provider wakes ${env.label}`}
+											onClick={() => openTailscale(env)}
 										>
-											<ArrowUpCircle size={13} strokeWidth={2} />
+											<Moon size={13} strokeWidth={2} />
 										</button>
 									)}
-								{env.transport === "ws" && onAdd && (
-									<button
-										type="button"
-										className="conn-forget"
-										title={`Which provider wakes ${env.label}`}
-										aria-label={`Which provider wakes ${env.label}`}
-										onClick={() => openTailscale(env)}
-									>
-										<Moon size={13} strokeWidth={2} />
-									</button>
-								)}
-								{env.alias !== null && onForget && (
-									<button
-										type="button"
-										className="conn-forget"
-										title={`Remove ${env.label} from this list`}
-										aria-label={`Remove ${env.label} from this list`}
-										onClick={() => {
-											const alias = env.alias;
-											if (!alias) return;
-											// Removing the selected box falls back to Local; setting the
-											// box up again is the way to bring it back.
-											if (alias === value) onChange(null);
-											void onForget(alias);
-										}}
-									>
-										<X size={13} strokeWidth={2} />
-									</button>
-								)}
-							</div>
-						))}
+									{env.alias !== null && onForget && (
+										<button
+											type="button"
+											className="conn-forget"
+											title={`Remove ${env.label} from this list`}
+											aria-label={`Remove ${env.label} from this list`}
+											onClick={() => {
+												const alias = env.alias;
+												if (!alias) return;
+												// Removing the selected box falls back to Local; setting the
+												// box up again is the way to bring it back.
+												if (alias === value) onChange(null);
+												void onForget(alias);
+											}}
+										>
+											<X size={13} strokeWidth={2} />
+										</button>
+									)}
+								</div>
+							))}
 						{(onAdd || onInstall) &&
 							(addMode === "" ? (
 								<button type="button" className="conn-row" onClick={() => setAddMode("menu")}>
@@ -457,6 +500,7 @@ export function EnvironmentPicker({
 											type="button"
 											className="conn-row"
 											onClick={() => {
+												setBackTo("menu");
 												setAddMode("ssh");
 												setInstallError(null);
 											}}
@@ -587,10 +631,7 @@ export function EnvironmentPicker({
 										onChange={(e) => setDest(e.target.value)}
 										onKeyDown={(e) => {
 											if (e.key === "Enter") void submitInstall();
-											if (e.key === "Escape" && !installing) {
-												setAddMode("menu");
-												setInstallError(null);
-											}
+											if (e.key === "Escape" && !installing) back();
 										}}
 									/>
 									{log && (

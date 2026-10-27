@@ -1979,6 +1979,26 @@ input {
 .conn-pop {
 	padding: 6px;
 }
+/* In an add step the header is the way back to where it was opened from. */
+.conn-back {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 0;
+	border: none;
+	background: none;
+	color: inherit;
+	font: inherit;
+	letter-spacing: inherit;
+	text-transform: inherit;
+	cursor: pointer;
+}
+.conn-back:hover:not(:disabled) {
+	color: var(--text);
+}
+.conn-back:disabled {
+	cursor: default;
+}
 .conn-head {
 	display: flex;
 	align-items: center;
