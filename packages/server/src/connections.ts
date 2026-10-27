@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type AteamDb, type Host, repo } from "@ateam/db";
-import type { ConnectionDTO, HostTransport } from "@ateam/protocol";
+import type { BoxWake, ConnectionDTO, HostTransport } from "@ateam/protocol";
 
 // ConnectionDTO is a client↔renderer boundary DTO — its home is @ateam/protocol;
 // re-exported here so `listConnections`' callers keep importing it from the server.
@@ -37,6 +37,8 @@ export interface ConnectionRecord {
 	transport?: HostTransport;
 	serverVersion?: string | null;
 	agentsAvailable?: string[] | null;
+	/** null clears it: the box no longer has a provider to wake it. */
+	wake?: BoxWake | null;
 }
 
 const DEFAULT_SSH_CONFIG = join(homedir(), ".ssh", "config");
@@ -323,6 +325,7 @@ export function listConnections(db: AteamDb, configPath?: string): ConnectionDTO
 			lastSeen: rec.lastSeen,
 			inSshConfig: false,
 			known: true,
+			wake: rec.wake ?? null,
 		});
 	}
 	// Recently-reached first; never-connected (null lastSeen) after, ties by alias.
@@ -348,7 +351,13 @@ export function recordConnection(db: AteamDb, rec: ConnectionRecord): Host {
 	if (rec.transport !== undefined) patch.transport = rec.transport;
 	if (rec.serverVersion !== undefined) patch.serverVersion = rec.serverVersion;
 	if (rec.agentsAvailable !== undefined) patch.agentsAvailable = rec.agentsAvailable;
+	if (rec.wake !== undefined) patch.wake = rec.wake;
 	return repo.upsertHost(db, patch);
+}
+
+/** The provider that wakes this box before a connect, or null when nothing does. */
+export function boxWakeOf(db: AteamDb, alias: string): BoxWake | null {
+	return repo.getHost(db, alias)?.wake ?? null;
 }
 
 /**

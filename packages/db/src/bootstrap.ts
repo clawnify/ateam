@@ -157,6 +157,7 @@ export function bootstrap(db: SqliteExecutor): void {
 				agents_available TEXT,
 				last_seen INTEGER,
 				hidden INTEGER NOT NULL DEFAULT 0,
+				wake TEXT,
 				created_at INTEGER
 			);
 			CREATE INDEX IF NOT EXISTS hosts_last_seen_idx ON hosts (last_seen);
@@ -186,6 +187,8 @@ export function bootstrap(db: SqliteExecutor): void {
 		// kind of connection that existed — so the default backfills correctly.
 		"ALTER TABLE hosts ADD COLUMN transport TEXT NOT NULL DEFAULT 'ssh'",
 		"ALTER TABLE hosts ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
+		// Null for every box that predates it: none had a provider to wake it.
+		"ALTER TABLE hosts ADD COLUMN wake TEXT",
 		// Both null for every session that predates them, which reads correctly:
 		// no known conversation to resume, and no claim about how it ended — so
 		// history is never mistaken for tabs that were open at shutdown.

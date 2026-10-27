@@ -16,7 +16,24 @@ import type {
 	ProviderDefinition,
 	TaskDTO,
 } from "@ateam/protocol";
-import { PROTOCOL_VERSION, providerById } from "@ateam/protocol";
+import {
+	activeLabel,
+	beginStep,
+	type ConnectStep,
+	failActive,
+	filled,
+	type InputValues,
+	inputsAt,
+	PROTOCOL_VERSION,
+	providerById,
+	relabelActive,
+	WAKE_PROVIDERS,
+	type WakeAdapter,
+	WOKEN_CONNECT_MS,
+	WOKEN_RETRY_GAP_MS,
+	waitingLabel,
+	wakeAdapter,
+} from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -41,14 +58,6 @@ import { BoxTerminalScreen } from "./src/BoxTerminalScreen";
 import { boxKey, removeBox, type SavedBox, touchBox } from "./src/boxes";
 import { Composer, type ComposerSubmit } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
-import {
-	activeLabel,
-	beginStep,
-	type ConnectStep,
-	failActive,
-	relabelActive,
-	waitingLabel,
-} from "./src/connect-steps";
 import { type Connection, connect } from "./src/connection";
 import { demoConnection } from "./src/demo";
 import { HomeScreen } from "./src/HomeScreen";
@@ -76,14 +85,6 @@ import { TerminalScreen } from "./src/TerminalScreen";
 import { sortTasks } from "./src/task-order";
 import { onReminderTap, syncReminders } from "./src/wait-notifications";
 import type { ReminderData } from "./src/wait-reminders";
-import {
-	filled,
-	type InputValues,
-	inputsAt,
-	WAKE_PROVIDERS,
-	type WakeAdapter,
-	wakeAdapter,
-} from "./src/wake";
 
 // SPIKE flag: evaluate the native SwiftTerm terminal (native scroll/select/copy)
 // vs the xterm-in-webview one. Flip back to false to fall back to the webview.
@@ -248,14 +249,8 @@ function Field({
 type ConnectOpts = { wake?: boolean; navigate?: boolean; replaces?: string | null };
 
 // How old the last wake can get before a reconnect retry wakes the box again. Under
-// the shortest hold a provider's wake gives (Sprites: 5 min, src/sprites.ts).
+// the shortest hold a provider's wake gives (Sprites: 5 min, packages/protocol/src/wake-sprites.ts).
 const REWAKE_MS = 60_000;
-
-// A provider reports a box awake before its network and Ateam are up, so after a
-// wake the phone keeps trying the box for this long, RETRY_GAP_MS apart. Inside the
-// Sprites hold (5 min) with room for the wake call itself.
-const WOKEN_CONNECT_MS = 3 * 60_000;
-const RETRY_GAP_MS = 3_000;
 
 /** A provider's account inputs (its key), from the Keychain. */
 function loadAccount(def: ProviderDefinition): Promise<InputValues> {
@@ -648,7 +643,7 @@ function Shell({
 	onBoxTerminal: (open: boolean) => void;
 	/** The box dropped and is being reattached: an open terminal waits in place. */
 	reconnecting: boolean;
-	/** What a reattach is doing right now (src/connect-steps.ts), if anything. */
+	/** What a reattach is doing right now (connect-steps in @ateam/protocol), if anything. */
 	reconnectStatus: string | null;
 	/** Why the last wake failed, until a wake or a connect succeeds. */
 	wakeError: string | null;
@@ -874,7 +869,7 @@ export default function App() {
 	const [loopForm, setLoopForm] = useState<{ editing: LoopDTO | null } | null>(null);
 	const [host, setHost] = useState("");
 	const [port, setPort] = useState("8787");
-	// Waking a sleeping box through its provider before connecting (src/wake.ts).
+	// Waking a sleeping box through its provider before connecting (packages/protocol/src/wake.ts).
 	// The provider and this box's inputs ride on the saved connection; the
 	// provider's account inputs (its key) live in the Keychain and are only ever
 	// held here, in a ref, never in render state.
@@ -1125,7 +1120,7 @@ export default function App() {
 							relabel();
 							tick = setInterval(relabel, 1_000);
 						}
-						await new Promise((r) => setTimeout(r, RETRY_GAP_MS));
+						await new Promise((r) => setTimeout(r, WOKEN_RETRY_GAP_MS));
 						if (cancelWait.current) throw new Error("Cancelled");
 					}
 				}

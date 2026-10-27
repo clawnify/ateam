@@ -724,6 +724,15 @@ export interface ConnectionDTO {
 	 * wakes it. Set only by the desktop, and only until that connect.
 	 */
 	asleep?: boolean;
+	/** A `ws` box a provider puts to sleep: the provider that wakes it before a
+	 *  connect, and the machine's inputs there (see providers.ts). */
+	wake?: BoxWake | null;
+}
+
+/** Which provider wakes a box, and the box's own inputs for it (its machine name). */
+export interface BoxWake {
+	id: string;
+	box: Record<string, string>;
 }
 
 /**
@@ -1188,4 +1197,23 @@ export {
 export { NO_TRIAGE, tolerantRpc } from "./tolerate";
 export type { WsClient } from "./ws";
 // WebSocket ClientTransport over the platform-global WebSocket (browser / RN / Bun).
+export {
+	activeLabel,
+	beginStep,
+	type ConnectStep,
+	failActive,
+	relabelActive,
+	type StepStatus,
+	waitingLabel,
+	WOKEN_CONNECT_MS,
+	WOKEN_RETRY_GAP_MS,
+} from "./connect-steps";
 export { wsClientTransport } from "./ws";
+export {
+	filled,
+	type InputValues,
+	inputsAt,
+	WAKE_PROVIDERS,
+	type WakeAdapter,
+	wakeAdapter,
+} from "./wake";

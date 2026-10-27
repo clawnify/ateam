@@ -8,8 +8,10 @@
 // box, and connections are what keep a sleeping provider box awake, so a card only
 // says what the phone already knows: which box is connected, which one it's
 // reaching right now, and why the last attempt failed. While a box is being
-// reached, a tray under its card lists the steps (src/connect-steps.ts): a woken
+// reached, a tray under its card lists the steps (@ateam/protocol connect-steps): a woken
 // box can take minutes to answer, and a bare spinner for that long reads as stuck.
+
+import type { ConnectStep } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { type ReactNode, useEffect, useRef } from "react";
 import {
@@ -24,7 +26,6 @@ import {
 	View,
 } from "react-native";
 import { boxKey, boxSubtitle, boxTitle, type SavedBox } from "./boxes";
-import type { ConnectStep } from "./connect-steps";
 import { ProviderIcon } from "./ProviderIcon";
 import { C, CONTENT_MAX } from "./theme";
 

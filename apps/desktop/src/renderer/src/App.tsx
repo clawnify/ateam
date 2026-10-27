@@ -1,6 +1,8 @@
 import type {
 	AgentDTO,
+	BoxWake,
 	ConnectionDTO,
+	ConnectStep,
 	DiffResultDTO,
 	GithubIssueDTO,
 	KanbanColumn,
@@ -70,6 +72,7 @@ import {
 } from "react";
 import { SessionGlyphs, SessionIcon } from "./components/AgentIcon";
 import { CleanupDialog } from "./components/CleanupDialog";
+import { ConnectSteps } from "./components/ConnectSteps";
 import { FileDiffView } from "./components/FileDiffView";
 import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
 import { IconButton } from "./components/IconButton";
@@ -434,6 +437,19 @@ export function App() {
 		return window.ateamHost.onConnectionsChanged(load);
 	}, []);
 
+	// The steps of waking and reaching each box a provider puts to sleep, while a
+	// connect the user asked for runs (empty once it is over).
+	const [connectSteps, setConnectSteps] = useState<Record<string, ConnectStep[]>>({});
+	useEffect(
+		() =>
+			window.ateamHost.onConnectProgress(({ alias, steps }) =>
+				setConnectSteps((cur) => ({ ...cur, [alias]: steps })),
+			),
+		[],
+	);
+	// The box a task is being set up on, so the toast can show its steps.
+	const [provisioning, setProvisioning] = useState<string | null>(null);
+
 	// Load every project's tasks so non-selected projects can surface their
 	// attention state (pulsing dot); evtTaskUpdated keeps them fresh after.
 	useEffect(() => {
@@ -516,8 +532,11 @@ export function App() {
 	// Connecting is what registers a Tailscale box: it resolves the endpoint, gates
 	// the protocol version, and only saves it on success — so a typo or an
 	// unreachable box leaves nothing behind to clean up.
-	const addTailscaleBox = useCallback(async (endpoint: string) => {
-		await window.ateamHost.connect(endpoint);
+	// Adding is the user's action, so a box a provider puts to sleep is woken for it;
+	// `wake` (null for none) is saved along with the box once it answers. Adding a
+	// box that is already listed is how its provider is changed.
+	const addTailscaleBox = useCallback(async (endpoint: string, wake: BoxWake | null) => {
+		await window.ateamHost.connect(endpoint, { wake: true, binding: wake });
 	}, []);
 	// Remove a box from the "Run on" list. The main process disconnects it if held
 	// and forgets the saved record (an ssh_config alias is flagged hidden — the
@@ -581,6 +600,7 @@ export function App() {
 				// never reached is one the engine has probably never been installed on.
 				needsSetup: !c.known,
 				asleep: c.asleep,
+				wake: c.wake ?? null,
 				// Set only for a connect the app made on its own, where there was no
 				// caller to show the error to — an upgrade that failed reads as an
 				// ordinary offline box without it.
@@ -1090,11 +1110,13 @@ export function App() {
 						return;
 					}
 					setInfo(`Setting up ${card.name} on ${input.alias}…`);
+					setProvisioning(input.alias);
 					let proj: ProjectDTO;
 					try {
 						proj = await window.ateamHost.provision(input.alias, { cloneUrl: activeRepoRemote });
 					} finally {
 						setInfo(null);
+						setProvisioning(null);
 					}
 					// Re-list so the aggregate learns proj.id → this box; then create routes there.
 					await loadProjects();
@@ -1892,6 +1914,10 @@ export function App() {
 			{info && (
 				<div className="toast info" onClick={() => setInfo(null)}>
 					{info}
+					{/* Waking a box can take minutes: say which step it is on. */}
+					{provisioning && connectSteps[provisioning]?.length ? (
+						<ConnectSteps steps={connectSteps[provisioning]} />
+					) : null}
 				</div>
 			)}
 		</div>

@@ -11,6 +11,7 @@ import {
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
 	type AteamHost,
+	type ConnectProgressEvent,
 	type CreateProgressEvent,
 	HOST_CH,
 	type HostStatus,
@@ -158,7 +159,7 @@ contextBridge.exposeInMainWorld("ateam", api);
 // window.ateam (the engine itself). See apps/desktop/src/shared/host.ts.
 const host: AteamHost = {
 	list: () => ipcRenderer.invoke(HOST_CH.list),
-	connect: (alias) => ipcRenderer.invoke(HOST_CH.connect, alias),
+	connect: (alias, opts) => ipcRenderer.invoke(HOST_CH.connect, alias, opts),
 	disconnect: (alias) => ipcRenderer.invoke(HOST_CH.disconnect, alias),
 	forget: (alias) => ipcRenderer.invoke(HOST_CH.forget, alias),
 	connected: () => ipcRenderer.invoke(HOST_CH.connected),
@@ -173,6 +174,9 @@ const host: AteamHost = {
 	secretsStatus: () => ipcRenderer.invoke(HOST_CH.secretsStatus),
 	saveSecrets: (patch) => ipcRenderer.invoke(HOST_CH.saveSecrets, patch),
 	providerOptions: (token) => ipcRenderer.invoke(HOST_CH.providerOptions, token),
+	wakeStatus: () => ipcRenderer.invoke(HOST_CH.wakeStatus),
+	saveWakeAccount: (providerId, values) =>
+		ipcRenderer.invoke(HOST_CH.saveWakeAccount, providerId, values),
 	judgeGrammar: (draft, issues) => ipcRenderer.invoke(HOST_CH.judgeGrammar, draft, issues),
 	onConnectionsChanged: (cb: (connected: HostStatus[]) => void) => {
 		const handler = (_: unknown, connected: HostStatus[]) => cb(connected);
@@ -188,6 +192,11 @@ const host: AteamHost = {
 		const handler = (_: unknown, e: CreateProgressEvent) => cb(e);
 		ipcRenderer.on(HOST_CH.evtCreateProgress, handler);
 		return () => ipcRenderer.off(HOST_CH.evtCreateProgress, handler);
+	},
+	onConnectProgress: (cb: (e: ConnectProgressEvent) => void) => {
+		const handler = (_: unknown, e: ConnectProgressEvent) => cb(e);
+		ipcRenderer.on(HOST_CH.evtConnectProgress, handler);
+		return () => ipcRenderer.off(HOST_CH.evtConnectProgress, handler);
 	},
 };
 

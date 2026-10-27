@@ -1,6 +1,6 @@
 // The phone's Sprites wake: what it asks Sprites for, and how it reads the answers.
 import { describe, expect, test } from "bun:test";
-import { createSpritesClient, holdCommand, PHONE_HOLD, PHONE_HOLD_EXPIRE, SpritesError } from "./sprites";
+import { createSpritesClient, holdCommand, WAKE_HOLD, WAKE_HOLD_EXPIRE, SpritesError } from "./wake-sprites";
 
 /** A fake Sprites API that records each request and answers with `reply`. */
 function fakeSprites(reply: (url: URL) => Response) {
@@ -19,8 +19,8 @@ describe("holdCommand", () => {
 		const [shell, flag, script] = holdCommand();
 		expect([shell, flag]).toEqual(["bash", "-c"]);
 		expect(script).toContain("--unix-socket /.sprite/api.sock");
-		expect(script).toContain(`/v1/tasks/${PHONE_HOLD}`);
-		expect(script).toContain(JSON.stringify({ expire: PHONE_HOLD_EXPIRE }));
+		expect(script).toContain(`/v1/tasks/${WAKE_HOLD}`);
+		expect(script).toContain(JSON.stringify({ expire: WAKE_HOLD_EXPIRE }));
 	});
 });
 
@@ -30,7 +30,9 @@ describe("createSpritesClient", () => {
 		await createSpritesClient("my-org/1/2/secret", { fetch: fake.doFetch }).wake("ateam-box");
 		const [req] = fake.seen;
 		expect(req?.method).toBe("POST");
-		expect(req?.url.origin + req?.url.pathname).toBe("https://api.sprites.dev/v1/sprites/ateam-box/exec");
+		expect(`${req?.url.origin}${req?.url.pathname}`).toBe(
+			"https://api.sprites.dev/v1/sprites/ateam-box/exec",
+		);
 		expect(req?.url.searchParams.getAll("cmd")).toEqual(holdCommand());
 		expect(req?.auth).toBe("Bearer my-org/1/2/secret");
 	});

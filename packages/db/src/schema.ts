@@ -354,6 +354,10 @@ export const hosts = sqliteTable(
 		 *  deleted (the config would resurface it), so it's flagged instead; a later
 		 *  successful connection clears the flag. */
 		hidden: integer("hidden").notNull().default(0),
+		/** For a "ws" box a provider can put to sleep: which provider wakes it, and the
+		 *  machine's own inputs (its name there). The provider's key is not here: it is
+		 *  a secret, kept in the app's encrypted store. Null for every other box. */
+		wake: text("wake", { mode: "json" }).$type<{ id: string; box: Record<string, string> }>(),
 		createdAt: epochMs("created_at"),
 	},
 	(t) => [index("hosts_last_seen_idx").on(t.lastSeen)],
