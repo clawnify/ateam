@@ -1,6 +1,6 @@
 // The phone's provider registry: what it offers, and what it asks for.
 import { describe, expect, test } from "bun:test";
-import { PROVIDERS, providerById } from "@ateam/protocol";
+import { PROVIDERS, providerById } from "./providers";
 import { filled, inputsAt, WAKE_PROVIDERS, wakeAdapter } from "./wake";
 
 describe("wake providers", () => {

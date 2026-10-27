@@ -2,9 +2,8 @@
 // One entry per address, kept until the user deletes it. Persisted by src/storage.ts.
 //
 // Pure TS, no React Native imports, so it runs under bun test.
-import { providerById } from "@ateam/protocol";
+import { inputsAt, providerById } from "@ateam/protocol";
 import type { SavedConnection } from "./storage";
-import { inputsAt } from "./wake";
 
 export interface SavedBox extends SavedConnection {
 	/** When the phone last connected to it, in ms. */

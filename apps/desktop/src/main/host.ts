@@ -10,8 +10,10 @@
 import { join } from "node:path";
 import { getAgent } from "@ateam/agents";
 import {
+	beginStep,
 	CH,
 	type ClientTransport,
+	type ConnectStep,
 	type CredentialsPatch,
 	type CredentialsResult,
 	createRpcClient,
@@ -19,16 +21,26 @@ import {
 	type EditorEndpointDTO,
 	type EditorOpenResult,
 	type EngineSettings,
+	failActive,
+	filled,
 	PROTOCOL_VERSION,
 	type ProjectDTO,
+	providerById,
 	type RpcClient,
+	relabelActive,
 	type SettingsResult,
 	type SystemInfo,
 	tolerantRpc,
+	type WakeAdapter,
+	WOKEN_CONNECT_MS,
+	WOKEN_RETRY_GAP_MS,
+	waitingLabel,
+	wakeAdapter,
 	wsClientTransport,
 } from "@ateam/protocol";
 import {
 	judgeGrammar as askJevAboutGrammar,
+	boxWakeOf,
 	buildCloudInit,
 	type ConnectionDTO,
 	type Engine,
@@ -49,6 +61,8 @@ import { app, ipcMain } from "electron";
 import WebSocket from "ws";
 import {
 	type BoxReadiness,
+	type ConnectOptions,
+	type ConnectProgressEvent,
 	type CreateBoxSpec,
 	type CreateProgressEvent,
 	type GrammarJudgeIssue,
@@ -58,6 +72,7 @@ import {
 	type InstallLogEvent,
 	type ProviderOptions,
 	type SecretsStatus,
+	type WakeStatus,
 } from "../shared/host";
 import { type Aggregate, createAggregate } from "./aggregate";
 import {
@@ -137,7 +152,7 @@ export interface Host {
 	/** The stable indirection the IPC bridge registers against once. */
 	readonly router: Router;
 	list(): Promise<ConnectionDTO[]>;
-	connect(alias: string | null): Promise<HostStatus>;
+	connect(alias: string | null, healed?: boolean, opts?: ConnectOptions): Promise<HostStatus>;
 	disconnect(alias: string): void;
 	/** Remove a box from the connections list (disconnecting it first if held). */
 	forget(alias: string): void;
@@ -169,6 +184,10 @@ export interface Host {
 	saveSecrets(patch: { hetznerToken?: string; tailscaleAuthKey?: string }): SecretsStatus;
 	/** The provider's real regions + sizes for the given token (or the saved one). */
 	providerOptions(token?: string): Promise<ProviderOptions>;
+	/** Which wake providers have a key saved on this Mac. */
+	wakeStatus(): WakeStatus;
+	/** Check a wake provider's key and save it (encrypted), or clear it with null. */
+	saveWakeAccount(providerId: string, values: Record<string, string> | null): Promise<WakeStatus>;
 	/** Which grammar issues to show, by Jev with this Mac's key; null = show them all. */
 	judgeGrammar(draft: string, issues: GrammarJudgeIssue[]): Promise<boolean[] | null>;
 }
@@ -195,6 +214,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// Boxes the startup sweep found asleep and left alone (see below).
 	// Cleared by the connect that wakes one.
 	const asleep = new Set<string>();
+	// One wake adapter per provider and key, so boxd's session (an hour) is reused.
+	const wakers = new Map<string, WakeAdapter>();
 	// Per-alias event unsubscribers, so disconnecting one box stops only its stream.
 	const unbinders = new Map<string | null, () => void>();
 	// Per-alias health probes (ws only) — cleared on disconnect so a dropped box
@@ -420,23 +441,27 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	 * the client's version deciding the server's, installed on connect. It fires only
 	 * on a box that is BEHIND and reachable over SSH, never on the routine path.
 	 */
-	async function connect(alias: string | null, healed = false): Promise<HostStatus> {
-		// local is permanent; connecting to it (or to an already-held box) is a no-op.
+	async function connect(
+		alias: string | null,
+		healed = false,
+		opts: ConnectOptions = {},
+	): Promise<HostStatus> {
+		// local is permanent; connecting to it (or to an already-held box) is a no-op,
+		// apart from saving which provider wakes it, which needs no new connection.
 		if (alias === null) return statusOf(local, null);
 		const existing = backends.get(alias);
-		if (existing) return statusOf(existing, alias);
+		if (existing) {
+			if (opts.binding !== undefined) {
+				recordConnection(db, { hostAlias: alias, wake: opts.binding });
+				broadcastConnections();
+			}
+			return statusOf(existing, alias);
+		}
 
 		// Resolve once: the same answer decides which wire to open AND what we save.
 		const wire = resolveTransport(db, alias);
-		const client = openTransport(alias, wire);
-		const rpc: RpcClient = createRpcClient(client.transport);
-		let info: SystemInfo;
-		try {
-			info = await withTimeout(rpc.call(CH.systemHello) as Promise<SystemInfo>, CONNECT_TIMEOUT_MS);
-		} catch (err) {
-			client.close();
-			throw err;
-		}
+		const reached = await reach(alias, wire, opts);
+		const { client, rpc, info } = reached;
 		if (info.protocolVersion !== PROTOCOL_VERSION) {
 			// Upgrade it if we can, but a mismatch is no longer a refusal. Refusing was
 			// safe and total: a box one release old became unusable rather than partly
@@ -474,6 +499,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			transport: wire ?? "ssh",
 			serverVersion: String(info.protocolVersion),
 			agentsAvailable: info.agents,
+			...(opts.binding !== undefined ? { wake: opts.binding } : {}),
 		});
 		// The remote's method set matches the local dispatcher's (same contract). An
 		// engine BEHIND this app is read through tolerantRpc, which fills in what its
@@ -508,6 +534,106 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		if (wire === "ws") probes.set(alias, startHealthProbe(alias, rpc));
 		broadcastConnections();
 		return { mode: "remote", alias, info };
+	}
+
+	/**
+	 * Open the wire and complete the handshake. For a `host:port` box a provider puts
+	 * to sleep, and only when the user's action asked (`opts.wake`), wake it through
+	 * the provider first: the tailnet path to a sleeping box never wakes it. A
+	 * provider reports the box up before its network and engine are, so a box this
+	 * woke gets WOKEN_CONNECT_MS of tries; any other box gets the one. The steps go
+	 * to the renderer (evtConnectProgress), the same ones the phone shows.
+	 */
+	async function reach(
+		alias: string,
+		wire: HostTransport | null,
+		opts: ConnectOptions,
+	): Promise<{
+		client: { transport: ClientTransport; close(): void };
+		rpc: RpcClient;
+		info: SystemInfo;
+	}> {
+		const binding = opts.binding !== undefined ? opts.binding : boxWakeOf(db, alias);
+		const narrate = wire === "ws" && opts.wake === true && binding != null;
+		let steps: ConnectStep[] = [];
+		const step = (f: (s: ConnectStep[]) => ConnectStep[]) => {
+			steps = f(steps);
+			broadcast(HOST_CH.evtConnectProgress, { alias, steps } satisfies ConnectProgressEvent);
+		};
+		let woke = false;
+		let wakeError: string | null = null;
+		const def = binding ? providerById(binding.id) : undefined;
+		if (narrate && binding && def) {
+			const account = secrets().load().wakeAccounts?.[def.id] ?? {};
+			step((s) => beginStep(s, `Waking the box through ${def.label}`));
+			const adapter =
+				filled(def, "box", binding.box) && filled(def, "account", account)
+					? waker(def.id, account)
+					: null;
+			if (!adapter) {
+				wakeError = `no ${def.label} key saved on this Mac`;
+				step(failActive);
+			} else {
+				try {
+					// "running": it was up already, so there is nothing to wait for.
+					woke = (await adapter.ensureAwake(binding.box)) !== "running";
+				} catch (err) {
+					// Still try the box: it may be up, and a key problem must not cost a
+					// connection that would have worked.
+					wakeError = err instanceof Error ? err.message : String(err);
+					step(failActive);
+				}
+			}
+			step((s) => beginStep(s, "Reaching Ateam on the box"));
+		}
+		const started = Date.now();
+		const deadline = started + (woke ? WOKEN_CONNECT_MS : 0);
+		let tick: ReturnType<typeof setInterval> | null = null;
+		try {
+			for (;;) {
+				const client = openTransport(alias, wire);
+				const rpc: RpcClient = createRpcClient(client.transport);
+				try {
+					const info = await withTimeout(
+						rpc.call(CH.systemHello) as Promise<SystemInfo>,
+						CONNECT_TIMEOUT_MS,
+					);
+					if (narrate) step(() => []);
+					return { client, rpc, info };
+				} catch (err) {
+					client.close();
+					if (Date.now() >= deadline) throw err;
+				}
+				if (!tick && narrate) {
+					const relabel = () => step((s) => relabelActive(s, waitingLabel(Date.now() - started)));
+					relabel();
+					tick = setInterval(relabel, 1_000);
+				}
+				await new Promise((r) => setTimeout(r, WOKEN_RETRY_GAP_MS));
+			}
+		} catch (err) {
+			if (narrate) step(failActive);
+			const msg = err instanceof Error ? err.message : String(err);
+			throw wakeError && def
+				? new Error(`${msg}. Waking it through ${def.label} failed too: ${wakeError}`)
+				: err;
+		} finally {
+			if (tick) clearInterval(tick);
+		}
+	}
+
+	function waker(providerId: string, account: Record<string, string>): WakeAdapter | null {
+		const def = providerById(providerId);
+		if (!def) return null;
+		const sig = `${providerId}\n${JSON.stringify(account)}`;
+		let made = wakers.get(sig);
+		if (!made) {
+			const fresh = wakeAdapter(def, account);
+			if (!fresh) return null;
+			made = fresh;
+			wakers.set(sig, made);
+		}
+		return made;
 	}
 
 	/**
@@ -641,6 +767,39 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	function saveSecrets(patch: { hetznerToken?: string; tailscaleAuthKey?: string }): SecretsStatus {
 		secrets().save(patch);
 		return secretsStatus();
+	}
+
+	function wakeStatus(): WakeStatus {
+		const accounts = secrets().load().wakeAccounts ?? {};
+		return Object.fromEntries(
+			Object.entries(accounts).map(([id, v]) => [
+				id,
+				Object.values(v).some((x) => x.trim() !== ""),
+			]),
+		);
+	}
+
+	async function saveWakeAccount(
+		providerId: string,
+		values: Record<string, string> | null,
+	): Promise<WakeStatus> {
+		const def = providerById(providerId);
+		if (!def?.wake)
+			throw new Error(`"${providerId}" is not a provider Ateam can wake a box through`);
+		const all = { ...(secrets().load().wakeAccounts ?? {}) };
+		if (values === null) {
+			delete all[providerId];
+		} else {
+			const adapter = wakeAdapter(def, values);
+			if (!adapter) throw new Error(`Ateam can't wake a box through ${def.label} yet`);
+			// One signed-in call, so a key that doesn't work is reported now rather
+			// than as a failed wake the next time a task starts there.
+			await adapter.check();
+			all[providerId] = values;
+		}
+		secrets().save({ wakeAccounts: all });
+		wakers.clear();
+		return wakeStatus();
 	}
 
 	function providerOptions(token?: string): Promise<ProviderOptions> {
@@ -793,7 +952,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	async function provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO> {
 		// Provisioning targets a SPECIFIC engine — the aggregate routes by learned id,
 		// but there's no id on the box yet, so call that backend's clone directly.
-		await connect(alias); // idempotent if already held
+		// Starting a task there is the user's action that may wake it.
+		await connect(alias, false, { wake: true }); // idempotent if already held
 		const backend = backends.get(alias);
 		if (!backend) throw new Error(`Not connected to "${alias}"`);
 		return backend.handle(CH.projectsClone, [input]) as Promise<ProjectDTO>;
@@ -838,6 +998,14 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	});
 	function reconnectAtLaunch(alias: string): void {
 		void connect(alias).catch((err: unknown) => {
+			// A host:port box a provider puts to sleep can't be asked whether it sleeps
+			// without waking it, so it was tried instead. Not answering is what a
+			// sleeping one does: show it asleep (it wakes when used), not as broken.
+			if (boxWakeOf(db, alias)) {
+				asleep.add(alias);
+				broadcastConnections();
+				return;
+			}
 			// Unreachable, asleep, or an upgrade that didn't take. connect() already closed
 			// its own transport, and the connections list still renders the box from the
 			// offline cache, so leaving it disconnected is the honest outcome. The REASON,
@@ -895,6 +1063,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		secretsStatus,
 		saveSecrets,
 		providerOptions,
+		wakeStatus,
+		saveWakeAccount,
 		judgeGrammar,
 	};
 }
@@ -902,7 +1072,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 /** Register the connection-control IPC channels against a host. Call once. */
 export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.list, () => host.list());
-	ipcMain.handle(HOST_CH.connect, (_e, alias: string | null) => host.connect(alias));
+	ipcMain.handle(HOST_CH.connect, (_e, alias: string | null, opts?: ConnectOptions) =>
+		host.connect(alias, false, opts),
+	);
 	ipcMain.handle(HOST_CH.disconnect, (_e, alias: string) => host.disconnect(alias));
 	ipcMain.handle(HOST_CH.forget, (_e, alias: string) => host.forget(alias));
 	ipcMain.handle(HOST_CH.connected, () => host.connected());
@@ -926,6 +1098,12 @@ export function registerHostIpc(host: Host): void {
 		(_e, patch: { hetznerToken?: string; tailscaleAuthKey?: string }) => host.saveSecrets(patch),
 	);
 	ipcMain.handle(HOST_CH.providerOptions, (_e, token?: string) => host.providerOptions(token));
+	ipcMain.handle(HOST_CH.wakeStatus, () => host.wakeStatus());
+	ipcMain.handle(
+		HOST_CH.saveWakeAccount,
+		(_e, providerId: string, values: Record<string, string> | null) =>
+			host.saveWakeAccount(providerId, values),
+	);
 	ipcMain.handle(HOST_CH.judgeGrammar, (_e, draft: string, issues: GrammarJudgeIssue[]) =>
 		host.judgeGrammar(draft, issues),
 	);
