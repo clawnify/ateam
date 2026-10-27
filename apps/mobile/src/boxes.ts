@@ -2,7 +2,7 @@
 // One entry per address, kept until the user deletes it. Persisted by src/storage.ts.
 //
 // Pure TS, no React Native imports, so it runs under bun test.
-import { inputsAt, providerById } from "@ateam/protocol";
+import { providerById, wakeMachineName } from "@ateam/protocol";
 import type { SavedConnection } from "./storage";
 
 export interface SavedBox extends SavedConnection {
@@ -37,10 +37,7 @@ export function removeBox(list: SavedBox[], key: string): SavedBox[] {
 
 /** What a card is called: the box's name at its provider, else its host. */
 export function boxTitle(b: SavedConnection): string {
-	const def = providerById(b.provider?.id);
-	const nameInput = def ? inputsAt(def, "box")[0] : undefined;
-	const name = nameInput ? (b.provider?.box[nameInput.key] ?? "").trim() : "";
-	return name || b.host;
+	return wakeMachineName(b.provider) || b.host;
 }
 
 /** The line under the title: the address the title doesn't already show, then the provider. */

@@ -1174,6 +1174,18 @@ export interface AteamApi {
 export type { NativeClientApi } from "./client-api";
 // Client-side binding of the AteamApi surface over an RpcClient.
 export { buildAteamApi, requestBoxUpdate, serverHandshake } from "./client-api";
+// WebSocket ClientTransport over the platform-global WebSocket (browser / RN / Bun).
+export {
+	activeLabel,
+	beginStep,
+	type ConnectStep,
+	failActive,
+	relabelActive,
+	type StepStatus,
+	WOKEN_CONNECT_MS,
+	WOKEN_RETRY_GAP_MS,
+	waitingLabel,
+} from "./connect-steps";
 // Box providers as data: what a client asks the user for to wake a sleeping box.
 export {
 	PROVIDERS,
@@ -1195,20 +1207,6 @@ export {
 } from "./task-tags";
 // Reading an engine older than this client (the version gate is advisory now).
 export { NO_TRIAGE, tolerantRpc } from "./tolerate";
-export type { WsClient } from "./ws";
-// WebSocket ClientTransport over the platform-global WebSocket (browser / RN / Bun).
-export {
-	activeLabel,
-	beginStep,
-	type ConnectStep,
-	failActive,
-	relabelActive,
-	type StepStatus,
-	waitingLabel,
-	WOKEN_CONNECT_MS,
-	WOKEN_RETRY_GAP_MS,
-} from "./connect-steps";
-export { wsClientTransport } from "./ws";
 export {
 	filled,
 	type InputValues,
@@ -1216,4 +1214,7 @@ export {
 	WAKE_PROVIDERS,
 	type WakeAdapter,
 	wakeAdapter,
+	wakeMachineName,
 } from "./wake";
+export type { WsClient } from "./ws";
+export { wsClientTransport } from "./ws";

@@ -60,6 +60,17 @@ export function filled(
 	return inputsAt(def, scope).every((i) => (values[i.key] ?? "").trim() !== "");
 }
 
+/** What people call a box a provider wakes: its machine name there (the first of the
+ *  provider's box inputs), or null when it has none and the address has to do. */
+export function wakeMachineName(
+	wake: { id: string; box: Record<string, string> } | null | undefined,
+): string | null {
+	const def = PROVIDERS.find((p) => p.id === wake?.id);
+	const nameInput = def ? inputsAt(def, "box")[0] : undefined;
+	const name = nameInput ? (wake?.box[nameInput.key] ?? "").trim() : "";
+	return name || null;
+}
+
 /** An adapter for `def` signed in with `account`, or null when no client can wake it. */
 export function wakeAdapter(def: ProviderDefinition, account: InputValues): WakeAdapter | null {
 	const make = ADAPTERS[def.id];

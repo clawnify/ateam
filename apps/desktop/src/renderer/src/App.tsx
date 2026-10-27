@@ -19,6 +19,7 @@ import {
 	FEATURE_MIN_VERSION,
 	PROTOCOL_VERSION,
 	TASK_REMOVING_ERROR,
+	wakeMachineName,
 } from "@ateam/protocol";
 import {
 	ArrowDownToLine,
@@ -593,7 +594,9 @@ export function App() {
 			{ alias: null as Alias, label: "Local", disabled: !hasLocalMember },
 			...connections.map((c) => ({
 				alias: c.alias,
-				label: c.alias,
+				// A box a provider wakes goes by its machine name there, as on the phone;
+				// its address moves to the row's subtitle.
+				label: wakeMachineName(c.wake) ?? c.alias,
 				disabled: !memberAliases.has(c.alias) && !canRemote,
 				transport: c.transport,
 				// `known` is only set by a successful connect, so a config alias we've
@@ -1109,7 +1112,9 @@ export function App() {
 						setError("This repo has no git remote to clone onto a box.");
 						return;
 					}
-					setInfo(`Setting up ${card.name} on ${input.alias}…`);
+					setInfo(
+						`Setting up ${card.name} on ${composerEnvs.find((e) => e.alias === input.alias)?.label ?? input.alias}…`,
+					);
 					setProvisioning(input.alias);
 					let proj: ProjectDTO;
 					try {
