@@ -19,7 +19,7 @@ const API = "https://boxd.sh:9443/boxd.api.v1.BoxdApi";
 const EXCHANGE = "https://app.boxd.sh/api/v1/auth/token";
 /** Re-exchange the key this long before the session token expires (the SDK's skew). */
 const REFRESH_SKEW_S = 300;
-const CALL_TIMEOUT_MS = 15_000;
+const CALL_TIMEOUT_MS = 30_000;
 
 /** A gRPC status from boxd, or null for a transport failure. */
 export class BoxdError extends Error {
@@ -276,7 +276,9 @@ export async function ensureAwake(
 ): Promise<string> {
 	const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 	const pollMs = opts.pollMs ?? 1_000;
-	const maxWaitMs = opts.maxWaitMs ?? 20_000;
+	// boxd reports "running" before the box answers on the tailnet; App.tsx then
+	// keeps trying the box itself, so this only waits out boxd's own state change.
+	const maxWaitMs = opts.maxWaitMs ?? 90_000;
 	const before = await client.status(machine);
 	if (before === "running") return before;
 	if (before === "stopped") {

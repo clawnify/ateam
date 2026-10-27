@@ -41,6 +41,14 @@ import { BoxTerminalScreen } from "./src/BoxTerminalScreen";
 import { boxKey, removeBox, type SavedBox, touchBox } from "./src/boxes";
 import { Composer, type ComposerSubmit } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
+import {
+	activeLabel,
+	beginStep,
+	type ConnectStep,
+	failActive,
+	relabelActive,
+	waitingLabel,
+} from "./src/connect-steps";
 import { type Connection, connect } from "./src/connection";
 import { demoConnection } from "./src/demo";
 import { HomeScreen } from "./src/HomeScreen";
@@ -240,8 +248,14 @@ function Field({
 type ConnectOpts = { wake?: boolean; navigate?: boolean; replaces?: string | null };
 
 // How old the last wake can get before a reconnect retry wakes the box again. Under
-// the shortest hold a provider's wake gives (Sprites: 2 min, src/sprites.ts).
+// the shortest hold a provider's wake gives (Sprites: 5 min, src/sprites.ts).
 const REWAKE_MS = 60_000;
+
+// A provider reports a box awake before its network and Ateam are up, so after a
+// wake the phone keeps trying the box for this long, RETRY_GAP_MS apart. Inside the
+// Sprites hold (5 min) with room for the wake call itself.
+const WOKEN_CONNECT_MS = 3 * 60_000;
+const RETRY_GAP_MS = 3_000;
 
 /** A provider's account inputs (its key), from the Keychain. */
 function loadAccount(def: ProviderDefinition): Promise<InputValues> {
@@ -588,7 +602,7 @@ function Shell({
 	boxTerminalOpen,
 	onBoxTerminal,
 	reconnecting,
-	waking,
+	reconnectStatus,
 	wakeError,
 	onDismissSkew,
 	connGen,
@@ -634,8 +648,8 @@ function Shell({
 	onBoxTerminal: (open: boolean) => void;
 	/** The box dropped and is being reattached: an open terminal waits in place. */
 	reconnecting: boolean;
-	/** The provider a reattach is waking the box through right now, if any. */
-	waking: string | null;
+	/** What a reattach is doing right now (src/connect-steps.ts), if anything. */
+	reconnectStatus: string | null;
 	/** Why the last wake failed, until a wake or a connect succeeds. */
 	wakeError: string | null;
 	/** Hide the version banner for this box version (it returns when the version changes). */
@@ -729,7 +743,7 @@ function Shell({
 					lead={<AgentIcon agentId={openTask.agentId} size={12} />}
 					title={(tasks.find((t) => t.id === openTask.id) ?? openTask).name}
 					onBack={onCloseTask}
-					waking={waking}
+					status={reconnectStatus}
 					wakeError={wakeError}
 				/>
 			) : openTask ? (
@@ -745,7 +759,7 @@ function Shell({
 					lead={<Feather name="terminal" size={12} color={C.ink} />}
 					title="Box terminal"
 					onBack={() => onBoxTerminal(false)}
-					waking={waking}
+					status={reconnectStatus}
 					wakeError={wakeError}
 				/>
 			) : boxTerminalOpen ? (
@@ -868,6 +882,11 @@ export default function App() {
 	const [boxValues, setBoxValues] = useState<InputValues>({});
 	const [accountSaved, setAccountSaved] = useState<Record<string, boolean>>({});
 	const [waking, setWaking] = useState<string | null>(null);
+	// What the current or last attempt went through, for the tray under that box's
+	// card and the reconnecting view. Kept after a failure, so the failed step shows.
+	const [progress, setProgress] = useState<{ key: string; steps: ConnectStep[] } | null>(null);
+	// Set by Cancel on the tray: the wait for a woken box stops at its next try.
+	const cancelWait = useRef(false);
 	// Why the last wake failed, for the reconnecting view: the connect screen's
 	// `error` is cleared at every attempt, so it would only flash between retries.
 	const [wakeFailure, setWakeFailure] = useState<string | null>(null);
@@ -1032,9 +1051,15 @@ export default function App() {
 			setAttemptKey(key);
 			setFailedKey(null);
 			setError(null);
+			setProgress({ key, steps: [] });
+			const step = (f: (steps: ConnectStep[]) => ConnectStep[]) =>
+				setProgress((cur) => (cur && cur.key === key ? { key, steps: f(cur.steps) } : cur));
+			cancelWait.current = false;
+			let tick: ReturnType<typeof setInterval> | null = null;
 			const wakeFor = wakeTarget.current;
 			const def = providerById(wakeFor.id);
 			let wakeError: string | null = null;
+			let woke = false;
 			try {
 				const account = def ? (accounts.current[def.id] ?? {}) : {};
 				if (
@@ -1051,33 +1076,60 @@ export default function App() {
 					const adapter = waker.current?.adapter;
 					if (adapter) {
 						setWaking(def.label);
+						step((s) => beginStep(s, `Waking the box through ${def.label}`));
 						lastWakeAt.current = Date.now();
 						try {
-							await adapter.ensureAwake(wakeFor.box);
+							// "running": it was up already, so there is nothing to wait for.
+							woke = (await adapter.ensureAwake(wakeFor.box)) !== "running";
 							setWakeFailure(null);
 						} catch (err) {
 							// Still try the box: it may be up, and a key problem must not
 							// cost a connection that would have worked.
 							wakeError = err instanceof Error ? err.message : String(err);
 							setWakeFailure(`Waking it through ${def.label} failed: ${wakeError}`);
+							step(failActive);
 						} finally {
 							setWaking(null);
 						}
 					}
 				}
-				conn.current?.close();
-				const c = await connect(`ws://${h}:${port}`, {
-					onClose: () => {
-						// This connection dropped on its own (network flip, box restart, NAT
-						// reap). If it's still the live one and we still want the box, reattach.
-						if (conn.current !== c || !target.current) return;
-						c.close(); // stop its keepalive; socket is already gone
-						conn.current = null;
-						setConnected(false);
-						backoff.current = 0;
-						reconnectRef.current();
-					},
-				});
+				step((s) => beginStep(s, "Reaching Ateam on the box"));
+				// A woken box refuses or ignores the socket until its network and engine
+				// are up, which on a Sprite can take minutes after the wake returns. So it
+				// gets tries until WOKEN_CONNECT_MS; a box nobody woke gets the one.
+				const started = Date.now();
+				const deadline = started + (woke ? WOKEN_CONNECT_MS : 0);
+				let c: Connection;
+				for (;;) {
+					conn.current?.close();
+					try {
+						c = await connect(`ws://${h}:${port}`, {
+							onClose: () => {
+								// This connection dropped on its own (network flip, box restart, NAT
+								// reap). If it's still the live one and we still want the box, reattach.
+								if (conn.current !== c || !target.current) return;
+								c.close(); // stop its keepalive; socket is already gone
+								conn.current = null;
+								setConnected(false);
+								backoff.current = 0;
+								reconnectRef.current();
+							},
+						});
+						break;
+					} catch (err) {
+						if (cancelWait.current) throw new Error("Cancelled");
+						if (Date.now() >= deadline) throw err;
+						if (!tick) {
+							const relabel = () =>
+								step((s) => relabelActive(s, waitingLabel(Date.now() - started)));
+							relabel();
+							tick = setInterval(relabel, 1_000);
+						}
+						await new Promise((r) => setTimeout(r, RETRY_GAP_MS));
+						if (cancelWait.current) throw new Error("Cancelled");
+					}
+				}
+				if (tick) clearInterval(tick);
 				conn.current = c;
 				target.current = { host: h, port };
 				backoff.current = 0;
@@ -1124,12 +1176,15 @@ export default function App() {
 						setBoxTerminalOpen(false);
 					}
 				}
+				step((s) => beginStep(s, "Loading projects"));
 				const projs = await refresh();
+				setProgress((cur) => (cur?.key === key ? null : cur));
 				// A box with no project has nothing to show, so a connect the user asked for
 				// opens Add a project. A reattach doesn't: it would pop up over their screen.
 				if (opts.navigate && projs.length === 0) setBrowserOpen(true);
 				return true;
 			} catch (err) {
+				step(failActive);
 				conn.current = null;
 				setConnected(false);
 				const msg = err instanceof Error ? err.message : String(err);
@@ -1139,6 +1194,7 @@ export default function App() {
 				setFailedKey(key);
 				return false;
 			} finally {
+				if (tick) clearInterval(tick);
 				setConnecting(false);
 				setAttemptKey(null);
 			}
@@ -1618,6 +1674,10 @@ export default function App() {
 					liveKey={connected && target.current ? boxKey(target.current) : null}
 					attemptKey={attemptKey}
 					failedKey={failedKey}
+					progress={progress}
+					onCancel={() => {
+						cancelWait.current = true;
+					}}
 					busy={connecting}
 					error={error}
 					connected={connected}
@@ -1709,7 +1769,7 @@ export default function App() {
 				}}
 				boxTerminalOpen={boxTerminalOpen}
 				reconnecting={!connected && target.current !== null}
-				waking={waking}
+				reconnectStatus={progress ? activeLabel(progress.steps) : null}
 				wakeError={wakeFailure}
 				onBoxTerminal={setBoxTerminalOpen}
 				onDismissSkew={() => {

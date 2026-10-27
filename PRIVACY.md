@@ -1,6 +1,6 @@
 # Privacy Policy — Ateam & Ateam Go
 
-**Effective date: October 26, 2026**
+**Effective date: October 27, 2026**
 
 Ateam (the desktop app) and Ateam Go (the iOS companion app) are local-first
 tools published by Clawnify. This policy describes what data the apps handle,
@@ -61,7 +61,7 @@ that provider on the connection screen and enter your API key for it. Ateam Go
 then contacts that provider's API before connecting, to wake the machine if it
 is asleep, and once when you save the key, to check that it works. It sends only
 your API key and the machine's name (for Sprites, also a fixed command that keeps
-the machine awake for two minutes while the app connects), under your own account
+the machine awake for five minutes while the app connects), under your own account
 and that provider's terms and privacy policy. The providers it can contact, and
 the addresses it uses:
 

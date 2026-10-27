@@ -170,7 +170,9 @@ on the phone's connection screen set **Provider** to **Sprites** and enter the
 Sprite's name and a Sprites API token: create one at
 [sprites.dev/account](https://sprites.dev/account) and paste the whole `my-org/…`
 string. Before connecting, the phone asks Sprites to wake the Sprite and hold it
-for two minutes; once the phone attaches, the engine holds it as for any client.
+for five minutes, then keeps trying the Sprite for up to three: a Sprite reported
+awake can take a while longer to answer. Once the phone attaches, the engine holds
+it as for any client.
 It wakes on Connect, on opening the app, and on coming back to it. While a dropped
 connection retries, it wakes again whenever the last wake is over a minute old, so
 a Sprite that paused again before the phone got through is not left asleep. A

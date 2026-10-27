@@ -12,13 +12,15 @@
 // Pure TS, no React Native imports, so it runs under bun test.
 
 const API = "https://api.sprites.dev/v1";
-// A wake from paused plus the command took about 4s, measured.
-const CALL_TIMEOUT_MS = 30_000;
+// A wake from paused plus the command took about 4s, measured, but a cold Sprite
+// has been slower than that; a timeout here only costs the user a failed wake.
+const CALL_TIMEOUT_MS = 60_000;
 
 /** The phone's hold, named apart from the engine's so neither cancels the other. */
 export const PHONE_HOLD = "ateam-phone-wake";
-/** Long enough to connect; the engine holds from the moment the phone attaches. */
-export const PHONE_HOLD_EXPIRE = "2m";
+/** Long enough to connect, through the phone's whole wait for a woken box
+ *  (WOKEN_CONNECT_MS, App.tsx); the engine holds from the moment the phone attaches. */
+export const PHONE_HOLD_EXPIRE = "5m";
 
 /** An HTTP status from Sprites, or null when there was none. */
 export class SpritesError extends Error {
