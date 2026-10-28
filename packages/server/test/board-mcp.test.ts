@@ -8,10 +8,16 @@ import {
 
 // A fake board that records what it was called with.
 function fakeBoard() {
-	const calls: { setStatus: unknown[]; setWaiting: unknown[]; sendMessage: unknown[] } = {
+	const calls: {
+		setStatus: unknown[];
+		setWaiting: unknown[];
+		sendMessage: unknown[];
+		askUser: unknown[];
+	} = {
 		setStatus: [],
 		setWaiting: [],
 		sendMessage: [],
+		askUser: [],
 	};
 	const board: BoardHandlers = {
 		get: async () => ({ tasks: [{ taskId: "t1" }] }),
@@ -27,6 +33,10 @@ function fakeBoard() {
 		sendMessage: async (req) => {
 			calls.sendMessage.push(req);
 			return { ok: true, reason: `sent to ${req.to}` };
+		},
+		askUser: async (req) => {
+			calls.askUser.push(req);
+			return { ok: true, reason: "asked" };
 		},
 	};
 	return { board, calls };
@@ -72,6 +82,7 @@ describe("dispatchMcp", () => {
 				"set_waiting",
 				"list_peers",
 				"send_message",
+				"ask_user",
 			]);
 		}
 	});
@@ -226,5 +237,38 @@ describe("peer tools", () => {
 		expect(calls.sendMessage).toEqual([{ fromTerminalId: "term-1", to: "t2", body: "hi" }]);
 		const peers = text(await dispatchMcp(call("list_peers"), board, ctx));
 		expect(peers?.content[0]?.text).toContain('"t2"');
+	});
+});
+
+describe("ask_user", () => {
+	const ask = (args: unknown) => rpc("tools/call", { name: "ask_user", arguments: args });
+
+	it("files the question for the verified caller's task", async () => {
+		const { board, calls } = fakeBoard();
+		const r = await dispatchMcp(
+			ask({ question: "Deploy to prod?", options: ["Deploy", "Wait"], allowText: false }),
+			board,
+			{ callerTerminalId: "term-1", callerVerified: true },
+		);
+		expect(r.kind === "json" && (r.body as { result: { isError: boolean } }).result.isError).toBe(
+			false,
+		);
+		expect(calls.askUser).toEqual([
+			{
+				callerTerminalId: "term-1",
+				text: "Deploy to prod?",
+				options: ["Deploy", "Wait"],
+				allowText: false,
+			},
+		]);
+	});
+
+	it("is refused to a caller without a valid terminal token", async () => {
+		const { board, calls } = fakeBoard();
+		const r = await dispatchMcp(ask({ question: "x" }), board, { callerTerminalId: "term-1" });
+		expect(r.kind === "json" && (r.body as { result: { isError: boolean } }).result.isError).toBe(
+			true,
+		);
+		expect(calls.askUser).toHaveLength(0);
 	});
 });

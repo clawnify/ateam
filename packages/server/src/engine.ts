@@ -33,6 +33,7 @@ import { reapableSessions } from "./pty/reap";
 import { makeStrandReconciler } from "./pty/reconcile";
 import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
+import { answerQuestion, applyAskUser, CLEAR_QUESTION, columnWithQuestion } from "./questions";
 import { readSettings } from "./settings-file";
 import { createTurnClassifier } from "./turn-classifier";
 import { applySetWaiting, CLEAR_WAIT, isFiredWait, WaitTimers } from "./waits";
@@ -76,6 +77,8 @@ export interface Engine {
 	sendLoopsUpdated(): void;
 	/** Queue a message from the Lead chat to a task's agent (peer-messages.ts). */
 	messageFromLead(req: { to: string; body: string }): { ok: boolean; reason: string };
+	/** Answer (or with null dismiss) the question a task's agent asked (questions.ts). */
+	answerQuestion(req: { taskId: string; questionId: string; answer: string | null }): void;
 	/** Keeps every task's git + PR facts fresh, not just the open one. The
 	 *  `CH.gitStatus` handler shares its throttle (see worktree-sweep.ts). */
 	readonly worktreeSweep: WorktreeSweep;
@@ -258,6 +261,12 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		setWaiting: async (req) => applySetWaiting(db, req, waits, sendTaskUpdated),
 		listPeers: async (callerTerminalId) => peers.listPeers(callerTerminalId),
 		sendMessage: async (req) => peers.send(req),
+		askUser: async (req) => {
+			const session = repo.getSessionByTerminal(db, req.callerTerminalId);
+			if (!session)
+				return { ok: false, reason: "only an agent working in a task can ask the user" };
+			return applyAskUser(db, { taskId: session.taskId, ...req }, sendTaskUpdated);
+		},
 	});
 
 	// A finished turn with a follow-up armed continues instead of stopping. The
@@ -475,7 +484,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		if (e.eventType === "Start") return;
 		const task = repo.getTask(db, session.taskId);
 		if (task) {
-			const column = mapEventToColumn(e.eventType);
+			const column = columnWithQuestion(task, mapEventToColumn(e.eventType));
 			// Subagents fire PreToolUse too, so a Working event must never mask a
 			// pending question — only an explicit user reply (UserReply), Stop, or
 			// a fresh Start may move a task out of needs_attention.
@@ -503,6 +512,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				// unless the Stop is just a loop's tick ending on schedule.
 				isUnread: mapEventToUnread(e.eventType, ownedByLoop),
 				...(cameBack ? CLEAR_WAIT : {}),
+				// The user typed into the task: that is their answer to its question.
+				...(e.eventType === "UserReply" && task.question ? CLEAR_QUESTION : {}),
 				// What the Lead chat reads back (tasks:lastReply).
 				...(e.eventType === "Stop" && e.lastAssistantMessage
 					? { lastReply: e.lastAssistantMessage, lastReplyAt: Date.now() }
@@ -590,7 +601,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		sendLoopsUpdated() {
 			emitter.emit("loopsUpdated", loopRunner.describe());
 		},
-		messageFromLead: (req) => peers.sendFromLead(req),
+		messageFromLead: (req) => peers.sendFrom("lead", req),
+		answerQuestion: (req) =>
+			answerQuestion(db, (sender, r) => peers.sendFrom(sender, r), req, sendTaskUpdated),
 		async connectPty() {
 			try {
 				await pty.connect();

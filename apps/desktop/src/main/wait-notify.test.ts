@@ -3,7 +3,7 @@ import type { TaskDTO } from "@ateam/protocol";
 
 // The pure half needs no Electron; stub the import so the module loads under bun.
 mock.module("electron", () => ({ Notification: class {} }));
-const { FRESH_MS, waitNotice } = await import("./wait-notify");
+const { FRESH_MS, questionNotice, waitNotice } = await import("./wait-notify");
 
 const NOW = 1_700_000_000_000;
 
@@ -51,5 +51,28 @@ describe("waitNotice", () => {
 	// ago still carries the stamp on every later update: that is the card's job.
 	it("does not replay an old firing", () => {
 		expect(waitNotice(task({ waitingFiredAt: NOW - FRESH_MS - 1 }), new Set(), NOW)).toBeNull();
+	});
+});
+
+describe("questionNotice", () => {
+	const q = {
+		id: "q1",
+		text: "Deploy to prod?",
+		options: [],
+		allowText: true,
+		askedAt: NOW - 1000,
+	};
+
+	it("announces a fresh question once, with the question as the body", () => {
+		const t = task({ waitingFiredAt: null, question: q });
+		const n = questionNotice(t, new Set(), NOW);
+		expect(n).toEqual({ key: "t1:q:q1", title: "permission rollout", body: "Deploy to prod?" });
+		expect(questionNotice(t, new Set([n?.key as string]), NOW)).toBeNull();
+	});
+
+	it("stays quiet for no question and for an old one", () => {
+		expect(questionNotice(task({ question: null }), new Set(), NOW)).toBeNull();
+		const old = task({ question: { ...q, askedAt: NOW - FRESH_MS - 1 } });
+		expect(questionNotice(old, new Set(), NOW)).toBeNull();
 	});
 });

@@ -9,6 +9,7 @@ import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { LeadEvent, LeadItem, LeadSnapshot } from "../../../shared/lead";
 import { AgentIcon } from "./AgentIcon";
+import { QuestionCard } from "./QuestionCard";
 
 type ToolItem = Extract<LeadItem, { kind: "tool" }>;
 type Block = { kind: "item"; item: LeadItem } | { kind: "tools"; id: string; tools: ToolItem[] };
@@ -213,6 +214,15 @@ export function LeadChat({
 	});
 
 	const blocks = useMemo(() => toBlocks(snap.items), [snap.items]);
+	// Every agent waiting on the user, newest first: they live on the tasks, not
+	// in this conversation, so they stay put above the composer while it scrolls.
+	const asking = useMemo(
+		() =>
+			tasks
+				.filter((t) => t.question)
+				.sort((a, b) => (b.question?.askedAt ?? 0) - (a.question?.askedAt ?? 0)),
+		[tasks],
+	);
 	const lastBlock = blocks[blocks.length - 1];
 	const toolRunning =
 		lastBlock?.kind === "tools" && lastBlock.tools.some((t) => t.result === undefined);
@@ -303,6 +313,15 @@ export function LeadChat({
 					)}
 				</div>
 			</div>
+
+			{asking.length > 0 && (
+				<div className="lead-asking">
+					<div className="lead-asking-title">Waiting on you</div>
+					{asking.map((t) => (
+						<QuestionCard key={t.id} task={t} onOpenTask={onOpenTask} />
+					))}
+				</div>
+			)}
 
 			<div className="lead-composer">
 				<textarea

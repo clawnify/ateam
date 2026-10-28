@@ -48,6 +48,7 @@ export function bootstrap(db: SqliteExecutor): void {
 			browser_used_at INTEGER,
 			last_reply TEXT,
 			last_reply_at INTEGER,
+			question TEXT,
 			created_by TEXT NOT NULL DEFAULT 'ateam',
 			created_at INTEGER,
 			updated_at INTEGER
@@ -180,6 +181,7 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE tasks ADD COLUMN browser_used_at INTEGER",
 		"ALTER TABLE tasks ADD COLUMN last_reply TEXT",
 		"ALTER TABLE tasks ADD COLUMN last_reply_at INTEGER",
+		"ALTER TABLE tasks ADD COLUMN question TEXT",
 		"ALTER TABLE loops ADD COLUMN kind TEXT NOT NULL DEFAULT 'builtin'",
 		"ALTER TABLE loops ADD COLUMN template_id TEXT",
 		"ALTER TABLE loops ADD COLUMN name TEXT",

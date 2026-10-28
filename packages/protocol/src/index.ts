@@ -90,8 +90,25 @@
 // v18: the Lead chat. tasks:lastReply reads a task's last finished turn and
 // peers:sendFromLead messages its agent on the user's behalf. New methods, so
 // no gate: a v17 engine answers "Unknown method" and the Lead tells the user
-// that box needs an update.
+// that box needs an update. Same version, agents can ask the user a question
+// (the ask_user board tool): TaskDTO gained `question`, optional, so an older
+// engine reads as "nothing asked", and tasks:answerQuestion answers it.
 export const PROTOCOL_VERSION = 18;
+
+/**
+ * A decision an agent is waiting on (ask_user). Answered from any client with
+ * tasks:answerQuestion; the answer reaches the agent as a message from the user.
+ */
+export interface TaskQuestionDTO {
+	/** An answer names the question it answers, so it can't land on a newer one. */
+	id: string;
+	text: string;
+	/** The answers to offer as buttons, at most four; may be empty. */
+	options: string[];
+	/** Whether a typed answer is accepted (always, when there are no options). */
+	allowText: boolean;
+	askedAt: number;
+}
 
 /** A task's last finished turn, as the Lead chat reads it (tasks:lastReply). */
 export interface TaskLastReplyDTO {
@@ -327,6 +344,10 @@ export interface TaskDTO {
 	 *  has, and on an engine older than v17. Clients show the browser beside the
 	 *  task's terminal only once it is set. */
 	browserUsedAt: number | null;
+	/** What the task's agent asked the user (the ask_user board tool) and is
+	 *  waiting on; null when nothing is pending. Absent on an engine older than
+	 *  v18, which reads the same. */
+	question?: TaskQuestionDTO | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
 }
@@ -828,6 +849,7 @@ export const CH = {
 	tasksCleanupPreview: "tasks:cleanupPreview",
 	tasksCleanupCandidates: "tasks:cleanupCandidates",
 	tasksLastReply: "tasks:lastReply",
+	tasksAnswerQuestion: "tasks:answerQuestion",
 	peersSendFromLead: "peers:sendFromLead",
 	gitCommit: "git:commit",
 	gitPush: "git:push",
@@ -1015,6 +1037,13 @@ export interface AteamApi {
 		markRead(id: string): Promise<TaskDTO>;
 		/** Park the task on an outside party until a date, or clear it (null). */
 		setWaiting(id: string, wait: TaskWait): Promise<TaskDTO>;
+		/** Answer the question the task's agent asked (ask_user), or dismiss it
+		 *  with null. `questionId` must be the pending one; a stale answer throws. */
+		answerQuestion(input: {
+			taskId: string;
+			questionId: string;
+			answer: string | null;
+		}): Promise<TaskDTO>;
 		/** Preview which tasks a cleanup would remove vs keep (and why). */
 		cleanupPreview(projectId: string): Promise<CleanupReport>;
 		/** Worktrees advised for cleanup (idle/finished), with their terminals. */

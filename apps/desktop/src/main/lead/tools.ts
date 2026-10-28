@@ -9,6 +9,7 @@ import {
 	type SettingsResult,
 	type TaskDTO,
 	type TaskLastReplyDTO,
+	type TaskQuestionDTO,
 } from "@ateam/protocol";
 import type { McpToolResult, McpToolServer } from "@ateam/server";
 
@@ -90,11 +91,28 @@ const TOOLS = [
 			additionalProperties: false,
 		},
 	},
+	{
+		name: "answer_question",
+		description:
+			"Pass the user's answer on to a task whose agent asked them a question (get_board shows it as `question`). Only with an answer the user gave you in this chat: never decide for them, and never answer an approval on your own judgment.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				task: { type: "string", description: "The task's id from get_board (or its exact name)." },
+				answer: {
+					type: "string",
+					description: "The user's answer, in their words or as the option they chose.",
+				},
+			},
+			required: ["task", "answer"],
+			additionalProperties: false,
+		},
+	},
 ] as const;
 
 /** Sent on initialize; Claude Code puts it in the system prompt. */
 export const LEAD_INSTRUCTIONS =
-	"These tools drive the user's Ateam board: every task is a coding agent working in its own git worktree, on this Mac or on a box. Use get_board first, create_task to start work, send_message to steer a task's agent, and read_task to see what a task last said.";
+	"These tools drive the user's Ateam board: every task is a coding agent working in its own git worktree, on this Mac or on a box. Use get_board first, create_task to start work, send_message to steer a task's agent, and read_task to see what a task last said. A task with a question is waiting on the user: tell them, and pass their answer on with answer_question.";
 
 /** Where an agent is, in the words the Lead uses (same scale as list_peers). */
 function agentState(t: TaskDTO): string {
@@ -113,6 +131,14 @@ function agentState(t: TaskDTO): string {
 }
 
 const machineLabel = (alias: string | null) => alias ?? "this Mac";
+
+/** A pending question as the Lead reads it (no ids: it answers by task). */
+const questionView = (q: TaskQuestionDTO) => ({
+	text: q.text,
+	...(q.options.length ? { options: q.options } : {}),
+	...(q.options.length && !q.allowText ? { onlyTheseOptions: true } : {}),
+	askedAt: new Date(q.askedAt).toISOString(),
+});
 
 /** An older engine answers a v18 method this way; say what to do about it. */
 function explain(e: unknown, what: string): string {
@@ -182,6 +208,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 								agent: t.agentId,
 								state: agentState(t),
 								...(t.waitingReason ? { waitingFor: t.waitingReason } : {}),
+								...(t.question ? { question: questionView(t.question) } : {}),
 								...(t.description ? { asked: t.description.slice(0, 280) } : {}),
 							})),
 					}),
@@ -249,6 +276,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 			agent: task.agentId,
 			state: agentState(task),
 			...(task.waitingReason ? { waitingFor: task.waitingReason } : {}),
+			...(task.question ? { question: questionView(task.question) } : {}),
 			asked: task.description,
 			lastReply: reply
 				? { at: new Date(reply.at).toISOString(), text: reply.text }
@@ -256,6 +284,20 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 					"none yet: its agent has not finished a turn since Ateam started keeping replies"),
 		};
 		return { text: JSON.stringify(view, null, 2) };
+	}
+
+	async function answer(args: Record<string, unknown>): Promise<McpToolResult> {
+		const task = await findTask(String(args.task ?? ""));
+		if (typeof task === "string") return { text: task, isError: true };
+		if (!task.question) return { text: `"${task.name}" has no question waiting.`, isError: true };
+		try {
+			await call(CH.tasksAnswerQuestion, [
+				{ taskId: task.id, questionId: task.question.id, answer: String(args.answer ?? "") },
+			]);
+			return { text: `Passed the answer to "${task.name}"; its agent continues with it.` };
+		} catch (e) {
+			return { text: explain(e, "Answering that question"), isError: true };
+		}
 	}
 
 	return {
@@ -272,6 +314,8 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 					return sendMessage(args);
 				case "read_task":
 					return readTask(args);
+				case "answer_question":
+					return answer(args);
 				default:
 					return null;
 			}

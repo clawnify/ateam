@@ -38,6 +38,7 @@ const api: AteamApi = {
 		setColumn: (id, column: KanbanColumn) => ipcRenderer.invoke(CH.tasksSetColumn, id, column),
 		markRead: (id) => ipcRenderer.invoke(CH.tasksMarkRead, id),
 		setWaiting: (id, wait) => ipcRenderer.invoke(CH.tasksSetWaiting, id, wait),
+		answerQuestion: (input) => ipcRenderer.invoke(CH.tasksAnswerQuestion, input),
 		cleanupPreview: (projectId) => ipcRenderer.invoke(CH.tasksCleanupPreview, projectId),
 		cleanup: (projectId) => ipcRenderer.invoke(CH.tasksCleanup, projectId),
 		cleanupCandidates: (projectId) => ipcRenderer.invoke(CH.tasksCleanupCandidates, projectId),

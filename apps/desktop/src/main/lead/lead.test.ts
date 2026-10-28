@@ -107,6 +107,25 @@ describe("lead tools", () => {
 		expect(view.asked).toBe("Fix the redirect loop");
 	});
 
+	it("shows a pending question and passes the user's answer to it", async () => {
+		const question = {
+			id: "q1",
+			text: "Deploy?",
+			options: ["Deploy", "Wait"],
+			allowText: false,
+			askedAt: 0,
+		};
+		const asked = TASKS.map((t) => (t.id === "t1" ? { ...t, question } : t));
+		const r = fakeRouter({ [CH.tasksList]: () => asked, [CH.tasksAnswerQuestion]: () => ({}) });
+		const tools = createLeadTools({ handle: r.handle, machineOf: () => null });
+		const view = JSON.parse((await tools.call("get_board", {}))?.text ?? "");
+		expect(view[0].tasks[0].question).toMatchObject({ text: "Deploy?", onlyTheseOptions: true });
+		const res = await tools.call("answer_question", { task: "fix login", answer: "Wait" });
+		expect(res?.isError).toBeFalsy();
+		const sent = r.calls.find((c) => c.method === CH.tasksAnswerQuestion);
+		expect(sent?.args[0]).toEqual({ taskId: "t1", questionId: "q1", answer: "Wait" });
+	});
+
 	it("answers null for a tool it does not have", async () => {
 		const tools = createLeadTools({ handle: fakeRouter().handle, machineOf: () => null });
 		expect(await tools.call("nope", {})).toBeNull();
@@ -166,22 +185,37 @@ describe("LeadSession", () => {
 		expect(p.args).toContain("--session-id");
 		expect(p.args).not.toContain("--safe-mode");
 		await tick();
-		expect(p.written[0]).toMatchObject({ type: "user", message: { content: "what's on the board?" } });
+		expect(p.written[0]).toMatchObject({
+			type: "user",
+			message: { content: "what's on the board?" },
+		});
 		expect(session.snapshot().busy).toBe(true);
 
 		p.say(
 			init(),
 			{ type: "stream_event", event: { type: "message_start" } },
-			{ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Let me " } } },
+			{
+				type: "stream_event",
+				event: { type: "content_block_delta", delta: { type: "text_delta", text: "Let me " } },
+			},
 		);
 		await tick();
 		expect(session.snapshot().draft).toBe("Let me ");
 		p.say(
 			{
 				type: "assistant",
-				message: { content: [{ type: "tool_use", id: "tu1", name: "mcp__ateam_lead__get_board", input: {} }] },
+				message: {
+					content: [{ type: "tool_use", id: "tu1", name: "mcp__ateam_lead__get_board", input: {} }],
+				},
 			},
-			{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu1", content: [{ type: "text", text: "[]" }] }] } },
+			{
+				type: "user",
+				message: {
+					content: [
+						{ type: "tool_result", tool_use_id: "tu1", content: [{ type: "text", text: "[]" }] },
+					],
+				},
+			},
 			{ type: "assistant", message: { content: [{ type: "text", text: "The board is empty." }] } },
 			{ type: "result", subtype: "success" },
 		);
@@ -209,7 +243,10 @@ describe("LeadSession", () => {
 		await tick();
 		session.interrupt();
 		await tick();
-		expect(p.written.at(-1)).toMatchObject({ type: "control_request", request: { subtype: "interrupt" } });
+		expect(p.written.at(-1)).toMatchObject({
+			type: "control_request",
+			request: { subtype: "interrupt" },
+		});
 		p.say({ type: "result", subtype: "error_during_execution" });
 		await tick();
 		const last = session.snapshot().items.at(-1);

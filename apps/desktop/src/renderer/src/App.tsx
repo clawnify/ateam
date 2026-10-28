@@ -78,6 +78,7 @@ import { FileDiffView } from "./components/FileDiffView";
 import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
 import { IconButton } from "./components/IconButton";
 import { LeadChat } from "./components/LeadChat";
+import { QuestionCard } from "./components/QuestionCard";
 import { LoopForm, LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
 import { PanelRightFilled } from "./components/PanelRightFilled";
@@ -2940,6 +2941,12 @@ function TaskPanel({
 					<span className="del">-{deletions}</span>
 				</button>
 			</div>
+
+			{task.question && (
+				<div className="panel-question">
+					<QuestionCard task={task} />
+				</div>
+			)}
 
 			<div className={`panel-body${termDocked ? " docked-term" : ""}`}>
 				{/* Keep the terminal mounted (xterm state survives) while the

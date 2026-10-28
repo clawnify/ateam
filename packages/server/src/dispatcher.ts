@@ -418,6 +418,19 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 		[CH.peersSendFromLead]: async (req: { taskId: string; body: string }) =>
 			engine.messageFromLead({ to: req.taskId, body: req.body }),
+		// Any client answering the question a task's agent asked (questions.ts).
+		[CH.tasksAnswerQuestion]: async (req: {
+			taskId: string;
+			questionId: string;
+			answer: string | null;
+		}) => {
+			engine.answerQuestion(req);
+			return toTaskDTO(
+				repo.getTask(db, req.taskId)!,
+				false,
+				liveAgentIds(db, services.pty, req.taskId),
+			);
+		},
 		// The user parks a task from the sidebar (or clears the wait). The agent's
 		// path is the MCP tool; both land in applySetWaiting.
 		[CH.tasksSetWaiting]: async (id: string, wait: TaskWait) => {

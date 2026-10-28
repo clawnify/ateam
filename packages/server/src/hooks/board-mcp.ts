@@ -42,6 +42,13 @@ export interface BoardHandlers {
 		to: string;
 		body: string;
 	}): Promise<{ ok: boolean; reason: string }>;
+	/** File a question for the user on the caller's task (questions.ts). */
+	askUser(req: {
+		callerTerminalId: string;
+		text: string;
+		options?: string[];
+		allowText?: boolean;
+	}): Promise<{ ok: boolean; reason: string }>;
 }
 
 /** Per-request context the HTTP layer derives (e.g. the caller's terminal id). */
@@ -65,7 +72,7 @@ const SERVER_INFO = { name: "ateam_board", version: "0.1.0" };
  * inside a shell-quoted TOML string unescaped.
  */
 export const BOARD_INSTRUCTIONS =
-	"You are working in an Ateam task. The agents in the other tasks on this board can be reached with the ateam_board send_message tool, even when they are stopped, and list_peers shows who they are. For those tasks use it rather than any other agent messaging tool: only it also reaches Codex and OpenCode agents and stopped tasks. Message one when your work affects theirs, to hand off work, or to ask something only their task knows. A message that starts with [Ateam] comes from another agent, not from the user.";
+	"You are working in an Ateam task. The agents in the other tasks on this board can be reached with the ateam_board send_message tool, even when they are stopped, and list_peers shows who they are. For those tasks use it rather than any other agent messaging tool: only it also reaches Codex and OpenCode agents and stopped tasks. Message one when your work affects theirs, to hand off work, or to ask something only their task knows. A message that starts with [Ateam] comes from another agent, not from the user, unless it says it comes from the user. When you need a decision or an approval from the user before you can go on, ask it with the ateam_board ask_user tool rather than only in your reply: the user may not be watching this terminal, and ask_user reaches them on the board and their phone with your options as buttons.";
 
 /** The board tools. `to` is constrained to the assignable columns to steer the
  *  model; the guardrails (validateSetStatus, validateWait) still enforce
@@ -144,6 +151,35 @@ const TOOLS = [
 				message: { type: "string", description: "What to tell them, at most 8000 characters." },
 			},
 			required: ["to", "message"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "ask_user",
+		description:
+			"Ask the user a question you cannot go on without, or for their approval before something hard to undo (deleting data, force-pushing, deploying, spending money, changing permissions). The user sees it as a card on the board, in the Lead chat and on their phone, with your options as buttons, so they can answer without opening this terminal. Calling it again replaces the pending question. After calling it, end your turn and do not repeat the question in your reply: the answer arrives as a message starting with [Ateam] that says it comes from the user.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				question: {
+					type: "string",
+					description:
+						"The question, self-contained: the user may read it on their phone without your conversation. At most 1000 characters.",
+				},
+				options: {
+					type: "array",
+					items: { type: "string" },
+					maxItems: 4,
+					description:
+						"Up to 4 short answers to offer as buttons (e.g. ['Approve', 'Deny']). Leave out for an open question.",
+				},
+				allowText: {
+					type: "boolean",
+					description:
+						"Whether the user may type an answer of their own besides the options. Default true.",
+				},
+			},
+			required: ["question"],
 			additionalProperties: false,
 		},
 	},
@@ -287,16 +323,25 @@ async function callBoardTool(
 		});
 		return { text: res.reason, isError: !res.ok };
 	}
-	if (name === "list_peers" || name === "send_message") {
+	if (name === "list_peers" || name === "send_message" || name === "ask_user") {
 		if (!ctx.callerTerminalId || !ctx.callerVerified) {
 			return {
-				text: "messaging is only open to an agent Ateam launched in a task (this session has no valid Ateam terminal token; relaunch it from Ateam)",
+				text: "messaging and ask_user are only open to an agent Ateam launched in a task (this session has no valid Ateam terminal token; relaunch it from Ateam)",
 				isError: true,
 			};
 		}
 		if (name === "list_peers") {
 			const peers = await board.listPeers(ctx.callerTerminalId);
 			return { text: JSON.stringify(peers, null, 2) };
+		}
+		if (name === "ask_user") {
+			const res = await board.askUser({
+				callerTerminalId: ctx.callerTerminalId,
+				text: String(args.question ?? ""),
+				options: Array.isArray(args.options) ? args.options.map(String) : undefined,
+				allowText: typeof args.allowText === "boolean" ? args.allowText : undefined,
+			});
+			return { text: res.reason, isError: !res.ok };
 		}
 		const to = String(args.to ?? "");
 		const body = String(args.message ?? "");

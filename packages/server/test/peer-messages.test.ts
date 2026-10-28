@@ -358,10 +358,10 @@ describe("PeerMessenger.listPeers", () => {
 	});
 });
 
-describe("PeerMessenger.sendFromLead", () => {
+describe("PeerMessenger.sendFrom lead", () => {
 	it("starts a stopped task with the message, framed as from the Lead", async () => {
 		const b = addTask("b", "codex");
-		const r = messenger.sendFromLead({ to: "b", body: "please rebase" });
+		const r = messenger.sendFrom("lead", { to: "b", body: "please rebase" });
 		expect(r.ok).toBe(true);
 		expect(r.reason).toContain("starting it");
 		await flush();
@@ -373,17 +373,17 @@ describe("PeerMessenger.sendFromLead", () => {
 
 	it("refuses an empty body and an unknown task", () => {
 		addTask("b");
-		expect(messenger.sendFromLead({ to: "b", body: "  " }).ok).toBe(false);
-		expect(messenger.sendFromLead({ to: "nobody", body: "x" }).ok).toBe(false);
+		expect(messenger.sendFrom("lead", { to: "b", body: "  " }).ok).toBe(false);
+		expect(messenger.sendFrom("lead", { to: "nobody", body: "x" }).ok).toBe(false);
 	});
 
 	it("caps how much the Lead sends", () => {
 		const b = addTask("b");
 		addSession(b, "claude", "tb", "running");
 		for (let i = 0; i < MAX_FROM_LEAD; i++) {
-			expect(messenger.sendFromLead({ to: b.id, body: `m${i}` }).ok).toBe(true);
+			expect(messenger.sendFrom("lead", { to: b.id, body: `m${i}` }).ok).toBe(true);
 		}
-		const over = messenger.sendFromLead({ to: b.id, body: "one more" });
+		const over = messenger.sendFrom("lead", { to: b.id, body: "one more" });
 		expect(over.ok).toBe(false);
 		expect(over.reason).toContain("rate limit");
 	});
