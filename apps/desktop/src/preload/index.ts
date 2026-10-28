@@ -17,6 +17,7 @@ import {
 	type HostStatus,
 	type InstallLogEvent,
 } from "../shared/host";
+import { type AteamLead, LEAD_CH, type LeadEvent } from "../shared/lead";
 
 const api: AteamApi = {
 	projects: {
@@ -204,3 +205,16 @@ const host: AteamHost = {
 };
 
 contextBridge.exposeInMainWorld("ateamHost", host);
+
+const lead: AteamLead = {
+	snapshot: () => ipcRenderer.invoke(LEAD_CH.snapshot),
+	send: (text) => ipcRenderer.invoke(LEAD_CH.send, text),
+	interrupt: () => ipcRenderer.invoke(LEAD_CH.interrupt),
+	reset: () => ipcRenderer.invoke(LEAD_CH.reset),
+	onEvent: (cb: (e: LeadEvent) => void) => {
+		const handler = (_: unknown, e: LeadEvent) => cb(e);
+		ipcRenderer.on(LEAD_CH.evtEvent, handler);
+		return () => ipcRenderer.off(LEAD_CH.evtEvent, handler);
+	},
+};
+contextBridge.exposeInMainWorld("ateamLead", lead);

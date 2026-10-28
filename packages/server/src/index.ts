@@ -23,6 +23,8 @@ export type { Engine, EngineOptions } from "./engine";
 export { createEngine } from "./engine";
 export type { GrammarJudgeIssue, GrammarVerdict } from "./grammar-jev";
 export { judgeGrammar } from "./grammar-jev";
+export type { JsonRpcMessage, McpReply, McpToolResult, McpToolServer } from "./hooks/board-mcp";
+export { dispatchMcpTools } from "./hooks/board-mcp";
 export type { BoxProvider, CreatedServer, CreateServerInput, ProviderOptions } from "./provision";
 export {
 	buildCloudInit,

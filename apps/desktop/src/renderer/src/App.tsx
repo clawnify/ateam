@@ -77,6 +77,7 @@ import { ConnectSteps } from "./components/ConnectSteps";
 import { FileDiffView } from "./components/FileDiffView";
 import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
 import { IconButton } from "./components/IconButton";
+import { LeadChat } from "./components/LeadChat";
 import { LoopForm, LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
 import { PanelRightFilled } from "./components/PanelRightFilled";
@@ -156,8 +157,11 @@ const MIN_SIDEBAR_W = 240;
 
 // Where collapsing a focused task takes you — it's whatever view the task was
 // opened over, so the tooltip has to name that view, not the board.
-const FOCUS_COLLAPSE_LABEL: Record<"board" | "mission" | "loops" | "settings", string> = {
+type View = "board" | "mission" | "loops" | "settings" | "lead";
+
+const FOCUS_COLLAPSE_LABEL: Record<View, string> = {
 	board: "Show beside the board",
+	lead: "Back to the Lead",
 	mission: "Back to Mission Control",
 	loops: "Back to Loops",
 	settings: "Back to Settings",
@@ -201,7 +205,7 @@ export function App() {
 	const [dropCardKey, setDropCardKey] = useState<string | null>(null);
 	const [newIssueOpen, setNewIssueOpen] = useState(false);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
-	const [view, setView] = useState<"board" | "mission" | "loops" | "settings">("board");
+	const [view, setView] = useState<View>("board");
 	// Layout is per project: one project may run twice the terminals of another.
 	// Read during render, not synced in an effect, so switching projects never
 	// paints a frame of the previous project's layout (which would also flick
@@ -630,6 +634,9 @@ export function App() {
 		canUpdateBoxes,
 	]);
 
+	// Every loaded task, for the Lead chat to name and open the ones it touches.
+	const allTasks = useMemo(() => Object.values(tasksByProject).flat(), [tasksByProject]);
+
 	// The active card's board unions tasks from every engine that has the repo.
 	const activeTasks = activeCard
 		? activeMembers.flatMap((m) => tasksByProject[m.projectId] ?? [])
@@ -826,7 +833,7 @@ export function App() {
 			{
 				taskId: string | null;
 				mode: "side" | "full";
-				view: "board" | "mission" | "loops" | "settings";
+				view: View;
 			}
 		>
 	>({});
@@ -924,7 +931,7 @@ export function App() {
 	};
 	// Tabs mean "show me this view". The focused task covers the view it belongs
 	// to, so switching tabs — including clicking the lit one — closes it.
-	const goToView = (v: "board" | "mission" | "loops" | "settings") => {
+	const goToView = (v: View) => {
 		if (panelMode === "full") setSelectedTaskId(null);
 		setView(v);
 	};
@@ -1585,6 +1592,12 @@ export function App() {
 						>
 							Loops
 						</div>
+						<div
+							className={`tab ${view === "lead" ? "active" : ""}`}
+							onClick={() => goToView("lead")}
+						>
+							Lead
+						</div>
 					</div>
 					{/* Centered task search: the topbar is a 1fr | search | 1fr grid, so
 					    the tabs on the left and action buttons on the right don't shift
@@ -1837,6 +1850,8 @@ export function App() {
 						/>
 					) : view === "settings" ? (
 						<SettingsPanel agents={agents} />
+					) : view === "lead" ? (
+						<LeadChat tasks={allTasks} onOpenTask={openTask} />
 					) : (
 						<LoopsPanel
 							loops={sortedLoops}

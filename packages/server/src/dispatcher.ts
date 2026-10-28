@@ -51,6 +51,7 @@ import {
 	type RegisterProjectOptions,
 	type SettingsPatch,
 	type SettingsResult,
+	type TaskLastReplyDTO,
 	type TaskWait,
 	type UpdateLoopInput,
 } from "@ateam/protocol";
@@ -406,6 +407,17 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			engine.sendTaskUpdated(id);
 			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
 		},
+		// The Lead chat (desktop main) reads what a task last said, and messages
+		// its agent on the user's behalf. Not on window.ateam: only main calls them.
+		[CH.tasksLastReply]: async (id: string): Promise<TaskLastReplyDTO | null> => {
+			const task = repo.getTask(db, id);
+			if (!task) throw new Error(`Task not found: ${id}`);
+			return task.lastReply && task.lastReplyAt
+				? { text: task.lastReply, at: task.lastReplyAt }
+				: null;
+		},
+		[CH.peersSendFromLead]: async (req: { taskId: string; body: string }) =>
+			engine.messageFromLead({ to: req.taskId, body: req.body }),
 		// The user parks a task from the sidebar (or clears the wait). The agent's
 		// path is the MCP tool; both land in applySetWaiting.
 		[CH.tasksSetWaiting]: async (id: string, wait: TaskWait) => {

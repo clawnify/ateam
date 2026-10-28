@@ -74,6 +74,8 @@ export interface Engine {
 	sendTaskRemoved(taskId: string): void;
 	/** Emit the current loop list. */
 	sendLoopsUpdated(): void;
+	/** Queue a message from the Lead chat to a task's agent (peer-messages.ts). */
+	messageFromLead(req: { to: string; body: string }): { ok: boolean; reason: string };
 	/** Keeps every task's git + PR facts fresh, not just the open one. The
 	 *  `CH.gitStatus` handler shares its throttle (see worktree-sweep.ts). */
 	readonly worktreeSweep: WorktreeSweep;
@@ -501,6 +503,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				// unless the Stop is just a loop's tick ending on schedule.
 				isUnread: mapEventToUnread(e.eventType, ownedByLoop),
 				...(cameBack ? CLEAR_WAIT : {}),
+				// What the Lead chat reads back (tasks:lastReply).
+				...(e.eventType === "Stop" && e.lastAssistantMessage
+					? { lastReply: e.lastAssistantMessage, lastReplyAt: Date.now() }
+					: {}),
 			});
 			sendTaskUpdated(task.id);
 			if (e.eventType === "UserReply" && e.prompt) turns.userReplied(task.id, e.prompt);
@@ -584,6 +590,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		sendLoopsUpdated() {
 			emitter.emit("loopsUpdated", loopRunner.describe());
 		},
+		messageFromLead: (req) => peers.sendFromLead(req),
 		async connectPty() {
 			try {
 				await pty.connect();

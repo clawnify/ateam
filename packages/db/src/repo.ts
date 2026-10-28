@@ -365,6 +365,17 @@ export const repo = {
 	},
 
 	/** How many messages a task has sent since `since` (the sender rate cap). */
+	/** Messages one non-task sender (the Lead) sent since `since`, by its terminal id. */
+	countPeerMessagesFromTerminal(db: AteamDb, fromTerminalId: string, since: number): number {
+		return db
+			.select({ id: peerMessages.id })
+			.from(peerMessages)
+			.where(
+				and(eq(peerMessages.fromTerminalId, fromTerminalId), gte(peerMessages.createdAt, since)),
+			)
+			.all().length;
+	},
+
 	countPeerMessagesFrom(db: AteamDb, fromTaskId: string, since: number): number {
 		return db
 			.select({ id: peerMessages.id })

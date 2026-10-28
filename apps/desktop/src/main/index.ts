@@ -7,6 +7,7 @@ import { autoUpdater } from "electron-updater";
 import { APP_NAME } from "./app-name";
 import { createHost, registerHostIpc } from "./host";
 import { registerIpc } from "./ipc";
+import { startLead } from "./lead";
 import { showStartupFailure } from "./startup-failure";
 import { createWaitNotifier } from "./wait-notify";
 
@@ -378,6 +379,20 @@ app
 			engine.stopHooks();
 			app.exit(0);
 			return;
+		}
+
+		// The Lead chat's agent starts on the first message, not here; this only
+		// opens its tool endpoint and IPC. A failure costs the Lead, not the app.
+		try {
+			const lead = await startLead({
+				router: host.router,
+				machineOf: (id) => host.origins()[id] ?? null,
+				dir: join(app.getPath("userData"), "lead"),
+				broadcast,
+			});
+			app.on("will-quit", () => lead.dispose());
+		} catch (err) {
+			console.error("[ateam] Lead chat failed to start:", err);
 		}
 
 		// Connect to (or launch) the PTY daemon and learn which sessions are still

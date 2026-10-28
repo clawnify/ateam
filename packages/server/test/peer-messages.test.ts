@@ -9,6 +9,7 @@ import {
 	formatForRecipient,
 	INPUT_QUIET_MS,
 	LISTENER_GRACE_MS,
+	MAX_FROM_LEAD,
 	MAX_HOPS,
 	MAX_PER_SENDER,
 	nextHop,
@@ -109,6 +110,16 @@ describe("formatForRecipient", () => {
 		expect(text).toContain("not from the user");
 		expect(text).toContain('send_message tool with to="t-1"');
 		expect(text.endsWith("API returns 401 now")).toBe(true);
+	});
+});
+
+describe("formatForRecipient from the Lead", () => {
+	it("says it relays the user and to answer in the reply, not with send_message", () => {
+		const text = formatForRecipient([{ body: "rebase on main", from: "lead" }]);
+		expect(text).toContain("Message from the Lead");
+		expect(text).toContain("relays the user's instructions");
+		expect(text).toContain("answer in your reply rather than with send_message");
+		expect(text.endsWith("rebase on main")).toBe(true);
 	});
 });
 
@@ -344,5 +355,36 @@ describe("PeerMessenger.listPeers", () => {
 			state: "not_running",
 			agent: "codex",
 		});
+	});
+});
+
+describe("PeerMessenger.sendFromLead", () => {
+	it("starts a stopped task with the message, framed as from the Lead", async () => {
+		const b = addTask("b", "codex");
+		const r = messenger.sendFromLead({ to: "b", body: "please rebase" });
+		expect(r.ok).toBe(true);
+		expect(r.reason).toContain("starting it");
+		await flush();
+		expect(launched).toHaveLength(1);
+		expect(launched[0]?.taskId).toBe(b.id);
+		expect(launched[0]?.prompt).toContain("Message from the Lead");
+		expect(launched[0]?.prompt).toContain("please rebase");
+	});
+
+	it("refuses an empty body and an unknown task", () => {
+		addTask("b");
+		expect(messenger.sendFromLead({ to: "b", body: "  " }).ok).toBe(false);
+		expect(messenger.sendFromLead({ to: "nobody", body: "x" }).ok).toBe(false);
+	});
+
+	it("caps how much the Lead sends", () => {
+		const b = addTask("b");
+		addSession(b, "claude", "tb", "running");
+		for (let i = 0; i < MAX_FROM_LEAD; i++) {
+			expect(messenger.sendFromLead({ to: b.id, body: `m${i}` }).ok).toBe(true);
+		}
+		const over = messenger.sendFromLead({ to: b.id, body: "one more" });
+		expect(over.ok).toBe(false);
+		expect(over.reason).toContain("rate limit");
 	});
 });

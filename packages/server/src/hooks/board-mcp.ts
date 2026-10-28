@@ -152,11 +152,31 @@ const TOOLS = [
 /** What the HTTP layer should send back. `accepted` → 202 no body (notifications). */
 export type McpReply = { kind: "accepted" } | { kind: "json"; body: unknown };
 
-interface JsonRpcMessage {
+export interface JsonRpcMessage {
 	jsonrpc?: string;
 	id?: string | number | null;
 	method?: string;
 	params?: Record<string, unknown>;
+}
+
+/** One tool call's answer, as text for the model. */
+export interface McpToolResult {
+	text: string;
+	isError?: boolean;
+}
+
+/**
+ * A tools-only MCP server: what the JSON-RPC envelope in `dispatchMcpTools`
+ * serves. The board tools here and the desktop's Lead chat tools are both one
+ * of these, so the protocol handling exists once.
+ */
+export interface McpToolServer {
+	info: { name: string; version: string };
+	instructions: string;
+	tools: readonly unknown[];
+	/** Run one tool; null when there is no tool by that name. A throw becomes an
+	 *  error result the model can read, not a protocol error. */
+	call(name: string, args: Record<string, unknown>): Promise<McpToolResult | null>;
 }
 
 const ok = (id: JsonRpcMessage["id"], result: unknown): McpReply => ({
@@ -172,11 +192,10 @@ const textContent = (text: string, isError = false) => ({
 	isError,
 });
 
-/** Dispatch one parsed JSON-RPC message against the board handlers. */
-export async function dispatchMcp(
+/** Dispatch one parsed JSON-RPC message against a tools-only MCP server. */
+export async function dispatchMcpTools(
 	msg: JsonRpcMessage,
-	board: BoardHandlers,
-	ctx: McpContext = {},
+	server: McpToolServer,
 ): Promise<McpReply> {
 	const { method, id } = msg;
 
@@ -189,92 +208,103 @@ export async function dispatchMcp(
 			return ok(id, {
 				protocolVersion: clientVersion,
 				capabilities: { tools: { listChanged: false } },
-				serverInfo: SERVER_INFO,
-				instructions: BOARD_INSTRUCTIONS,
+				serverInfo: server.info,
+				instructions: server.instructions,
 			});
 		}
 		case "ping":
 			return ok(id, {});
 		case "tools/list":
-			return ok(id, { tools: TOOLS });
-		case "tools/call":
-			return callTool(msg, board, ctx);
+			return ok(id, { tools: server.tools });
+		case "tools/call": {
+			const name = msg.params?.name as string | undefined;
+			const args = (msg.params?.arguments as Record<string, unknown>) ?? {};
+			let res: McpToolResult | null;
+			try {
+				res = await server.call(name ?? "", args);
+			} catch (e) {
+				res = { text: `tool failed: ${e instanceof Error ? e.message : String(e)}`, isError: true };
+			}
+			if (!res) return err(id, -32602, `unknown tool: ${name}`);
+			return ok(id, textContent(res.text, res.isError));
+		}
 		default:
 			return err(id, -32601, `method not found: ${method}`);
 	}
 }
 
-async function callTool(
+/** Dispatch one parsed JSON-RPC message against the board handlers. */
+export function dispatchMcp(
 	msg: JsonRpcMessage,
 	board: BoardHandlers,
-	ctx: McpContext,
+	ctx: McpContext = {},
 ): Promise<McpReply> {
-	const { id } = msg;
-	const name = msg.params?.name as string | undefined;
-	const args = (msg.params?.arguments as Record<string, unknown>) ?? {};
-	try {
-		if (name === "get_board") {
-			const view = await board.get();
-			return ok(id, textContent(JSON.stringify(view, null, 2)));
-		}
-		if (name === "set_status") {
-			const taskId = String(args.taskId ?? "");
-			const to = String(args.to ?? "");
-			const reason = args.reason != null ? String(args.reason) : undefined;
-			if (!taskId || !to) {
-				return ok(id, textContent("taskId and to are required", true));
-			}
-			const res = await board.setStatus({
-				taskId,
-				to,
-				reason,
-				callerTerminalId: ctx.callerTerminalId,
-			});
-			return ok(id, textContent(res.reason, !res.ok));
-		}
-		if (name === "set_waiting") {
-			const taskId = args.taskId != null ? String(args.taskId) : undefined;
-			const reason = String(args.reason ?? "");
-			const untilText = String(args.until ?? "");
-			if (!reason || !untilText) {
-				return ok(id, textContent("reason and until are required", true));
-			}
-			const until = parseUntil(untilText);
-			if (until == null) {
-				return ok(id, textContent(`until is not an ISO 8601 date: ${untilText}`, true));
-			}
-			const res = await board.setWaiting({
-				taskId,
-				reason,
-				until,
-				callerTerminalId: ctx.callerTerminalId,
-			});
-			return ok(id, textContent(res.reason, !res.ok));
-		}
-		if (name === "list_peers" || name === "send_message") {
-			if (!ctx.callerTerminalId || !ctx.callerVerified) {
-				return ok(
-					id,
-					textContent(
-						"messaging is only open to an agent Ateam launched in a task (this session has no valid Ateam terminal token; relaunch it from Ateam)",
-						true,
-					),
-				);
-			}
-			if (name === "list_peers") {
-				const peers = await board.listPeers(ctx.callerTerminalId);
-				return ok(id, textContent(JSON.stringify(peers, null, 2)));
-			}
-			const to = String(args.to ?? "");
-			const body = String(args.message ?? "");
-			if (!to || !body) return ok(id, textContent("to and message are required", true));
-			const res = await board.sendMessage({ fromTerminalId: ctx.callerTerminalId, to, body });
-			return ok(id, textContent(res.reason, !res.ok));
-		}
-		return err(id, -32602, `unknown tool: ${name}`);
-	} catch (e) {
-		return ok(id, textContent(`tool failed: ${e instanceof Error ? e.message : String(e)}`, true));
+	return dispatchMcpTools(msg, {
+		info: SERVER_INFO,
+		instructions: BOARD_INSTRUCTIONS,
+		tools: TOOLS,
+		call: (name, args) => callBoardTool(name, args, board, ctx),
+	});
+}
+
+async function callBoardTool(
+	name: string,
+	args: Record<string, unknown>,
+	board: BoardHandlers,
+	ctx: McpContext,
+): Promise<McpToolResult | null> {
+	if (name === "get_board") {
+		const view = await board.get();
+		return { text: JSON.stringify(view, null, 2) };
 	}
+	if (name === "set_status") {
+		const taskId = String(args.taskId ?? "");
+		const to = String(args.to ?? "");
+		const reason = args.reason != null ? String(args.reason) : undefined;
+		if (!taskId || !to) return { text: "taskId and to are required", isError: true };
+		const res = await board.setStatus({
+			taskId,
+			to,
+			reason,
+			callerTerminalId: ctx.callerTerminalId,
+		});
+		return { text: res.reason, isError: !res.ok };
+	}
+	if (name === "set_waiting") {
+		const taskId = args.taskId != null ? String(args.taskId) : undefined;
+		const reason = String(args.reason ?? "");
+		const untilText = String(args.until ?? "");
+		if (!reason || !untilText) return { text: "reason and until are required", isError: true };
+		const until = parseUntil(untilText);
+		if (until == null) {
+			return { text: `until is not an ISO 8601 date: ${untilText}`, isError: true };
+		}
+		const res = await board.setWaiting({
+			taskId,
+			reason,
+			until,
+			callerTerminalId: ctx.callerTerminalId,
+		});
+		return { text: res.reason, isError: !res.ok };
+	}
+	if (name === "list_peers" || name === "send_message") {
+		if (!ctx.callerTerminalId || !ctx.callerVerified) {
+			return {
+				text: "messaging is only open to an agent Ateam launched in a task (this session has no valid Ateam terminal token; relaunch it from Ateam)",
+				isError: true,
+			};
+		}
+		if (name === "list_peers") {
+			const peers = await board.listPeers(ctx.callerTerminalId);
+			return { text: JSON.stringify(peers, null, 2) };
+		}
+		const to = String(args.to ?? "");
+		const body = String(args.message ?? "");
+		if (!to || !body) return { text: "to and message are required", isError: true };
+		const res = await board.sendMessage({ fromTerminalId: ctx.callerTerminalId, to, body });
+		return { text: res.reason, isError: !res.ok };
+	}
+	return null;
 }
 
 /**

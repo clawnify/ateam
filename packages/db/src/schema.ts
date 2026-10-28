@@ -120,6 +120,11 @@ export const tasks = sqliteTable(
 		/** When the task's agent first drove the box's browser (a TaskWindow tool
 		 *  call, see the BrowserUse hook); null while it never has. */
 		browserUsedAt: integer("browser_used_at"),
+		/** The agent's last finished turn, from its Stop hook, so the Lead chat
+		 *  can read what a task said without opening its terminal. Capped at
+		 *  LAST_REPLY_MAX in the engine; null until a turn has ended. */
+		lastReply: text("last_reply"),
+		lastReplyAt: integer("last_reply_at"),
 		lastEventAt: integer("last_event_at"),
 		isUnread: integer("is_unread", { mode: "boolean" }).default(false),
 		createdBy: text("created_by")

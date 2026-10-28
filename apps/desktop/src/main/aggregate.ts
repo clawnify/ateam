@@ -41,6 +41,8 @@ const ENTITY = new Set<string>([
 	CH.tasksCleanup,
 	CH.tasksCleanupPreview,
 	CH.tasksCleanupCandidates,
+	CH.tasksLastReply, // taskId — the Lead chat reads it from the task's engine
+	CH.peersSendFromLead, // {taskId} — delivered by the engine that owns the task
 	CH.projectsRemove,
 	CH.projectsRemoteUrl, // projectId — a box's project has a box's remote
 	CH.gitCommit,

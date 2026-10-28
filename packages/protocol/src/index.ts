@@ -87,7 +87,17 @@
 // update the box. Same version, the editor binds loopback and the engine relays
 // it onto the tailnet; nothing on the wire changed for it. TaskDTO gained
 // `browserUsedAt`, nullable, so an older engine reads as "never used".
-export const PROTOCOL_VERSION = 17;
+// v18: the Lead chat. tasks:lastReply reads a task's last finished turn and
+// peers:sendFromLead messages its agent on the user's behalf. New methods, so
+// no gate: a v17 engine answers "Unknown method" and the Lead tells the user
+// that box needs an update.
+export const PROTOCOL_VERSION = 18;
+
+/** A task's last finished turn, as the Lead chat reads it (tasks:lastReply). */
+export interface TaskLastReplyDTO {
+	text: string;
+	at: number;
+}
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -817,6 +827,8 @@ export const CH = {
 	tasksCleanup: "tasks:cleanup",
 	tasksCleanupPreview: "tasks:cleanupPreview",
 	tasksCleanupCandidates: "tasks:cleanupCandidates",
+	tasksLastReply: "tasks:lastReply",
+	peersSendFromLead: "peers:sendFromLead",
 	gitCommit: "git:commit",
 	gitPush: "git:push",
 	gitUpdate: "git:update",
