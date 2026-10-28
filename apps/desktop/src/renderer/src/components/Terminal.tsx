@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { checkGrammar } from "../grammar/check";
 import { DraftTracker, retype } from "../grammar/draft";
 import type { GrammarIssue } from "../grammar/filter";
+import { osc52Text } from "../terminal-clipboard";
 import { terminalScroll } from "../terminal-scroll";
 import { GrammarFixes } from "./GrammarFixes";
 import { Menu } from "./Menu";
@@ -71,7 +72,7 @@ export function TerminalView({
 			theme: { background: "#000000", foreground: "#e6e6ea" },
 			scrollback: 5000,
 			// A TUI that captures the mouse (OpenCode turns on modes 1000-1006 at
-			// startup; Claude Code never does) gets every drag as mouse reports, so
+			// startup; so does Claude Code's fullscreen renderer) gets every drag as mouse reports, so
 			// xterm's own text selection is off. On macOS xterm offers no way around
 			// that unless this flag is set: Option+drag then selects text while the
 			// app keeps the mouse otherwise. Same convention as VS Code and iTerm2.
@@ -100,6 +101,15 @@ export function TerminalView({
 		term.focus();
 		const focusTerm = () => term.focus();
 		el.addEventListener("mousedown", focusTerm);
+
+		// OSC 52: copies made by the program itself (see osc52Text). Without this,
+		// selecting text in Claude Code on a box "copies" into the void. Writes
+		// only; a clipboard read request is swallowed unanswered.
+		term.parser.registerOscHandler(52, (data) => {
+			const text = osc52Text(data);
+			if (text !== null) navigator.clipboard.writeText(text).catch(() => {});
+			return true;
+		});
 
 		// Type dropped files' backslash-escaped paths straight to the PTY, exactly
 		// like a real terminal (iTerm/Terminal.app) does on a file drop.
