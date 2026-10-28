@@ -109,6 +109,16 @@
 .dialog.new-issue .drow {
 	margin-top: 0;
 }
+.new-issue-attach {
+	margin-right: auto;
+}
+.file-chip .fc-thumb {
+	width: 18px;
+	height: 18px;
+	margin-left: -4px;
+	object-fit: cover;
+	border-radius: 3px;
+}
 .issue-link {
 	color: var(--text-dim);
 	white-space: nowrap;

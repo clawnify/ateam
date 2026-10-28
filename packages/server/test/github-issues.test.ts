@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { GithubIssueDTO } from "@ateam/protocol";
 import {
 	createGithubIssue,
@@ -128,5 +130,114 @@ describe("GitHub issues", () => {
 		await expect(createGithubIssue("acme/..", { title: "x", body: "" })).rejects.toThrow(
 			"Invalid GitHub repository",
 		);
+	});
+	it("attaches images through gh issue create, staged in a temp cwd that is removed after", async () => {
+		const calls: { args: string[]; cwd?: string; files: Record<string, string> }[] = [];
+		const png = Buffer.from("png-bytes");
+		const run = async (_file: string, args: string[], opts: { cwd?: string }) => {
+			const files: Record<string, string> = {};
+			if (opts.cwd)
+				for (const f of [".body.md", "image.png", "image-2.png"])
+					files[f] = readFileSync(join(opts.cwd, f), "utf8");
+			calls.push({ args, cwd: opts.cwd, files });
+			if (args[0] === "issue") return { stdout: "https://github.com/acme/repo/issues/7\n" };
+			return {
+				stdout: JSON.stringify({ ...raw(7), body: "![a](https://github.com/user-attachments/x)" }),
+			};
+		};
+		const made = await createGithubIssue(
+			"Acme/Repo",
+			{
+				title: " Crash ",
+				body: "See ![a](./image.png)",
+				images: [
+					{ name: "image.png", base64: png.toString("base64") },
+					{ name: "image-2.png", base64: png.toString("base64") },
+				],
+			},
+			run,
+		);
+		expect(calls[0]?.args).toEqual([
+			"issue",
+			"create",
+			"--repo",
+			"github.com/acme/repo",
+			"--title",
+			"Crash",
+			"--body-file",
+			".body.md",
+			"--attach",
+			"./image.png",
+			"--attach",
+			"./image-2.png",
+		]);
+		expect(calls[0]?.files).toEqual({
+			".body.md": "See ![a](./image.png)",
+			"image.png": "png-bytes",
+			"image-2.png": "png-bytes",
+		});
+		expect(calls[1]?.args).toEqual(["api", "--hostname", "github.com", "repos/acme/repo/issues/7"]);
+		expect(made.number).toBe(7);
+		expect(made.body).toContain("user-attachments");
+		expect(existsSync(calls[0]?.cwd ?? "")).toBe(false);
+	});
+	it("reports an issue that was filed even when some uploads failed", async () => {
+		const run = async (_file: string, args: string[]) => {
+			if (args[0] === "issue")
+				throw Object.assign(new Error("exit 1"), {
+					stdout: "https://github.com/acme/repo/issues/9\n",
+					stderr: "could not upload ./b.png",
+				});
+			throw new Error("offline");
+		};
+		const made = await createGithubIssue(
+			"acme/repo",
+			{ title: "T", body: "", images: [{ name: "b.png", base64: "eA==" }] },
+			run,
+		);
+		expect(made).toMatchObject({ number: 9, url: "https://github.com/acme/repo/issues/9" });
+	});
+	it("rejects image names gh could not match or upload, before calling gh", async () => {
+		let calls = 0;
+		const run = async () => {
+			calls++;
+			return { stdout: "" };
+		};
+		for (const name of ["../x.png", ".hidden.png", "a/b.png", "x.exe", "x"]) {
+			await expect(
+				createGithubIssue(
+					"acme/repo",
+					{ title: "T", body: "", images: [{ name, base64: "eA==" }] },
+					run,
+				),
+			).rejects.toThrow("Invalid image name");
+		}
+		await expect(
+			createGithubIssue(
+				"acme/repo",
+				{
+					title: "T",
+					body: "",
+					images: [
+						{ name: "a.png", base64: "eA==" },
+						{ name: "A.png", base64: "eA==" },
+					],
+				},
+				run,
+			),
+		).rejects.toThrow("Invalid image name");
+		expect(calls).toBe(0);
+	});
+	it("asks for a newer gh when it does not know --attach", async () => {
+		const run = async () => {
+			throw Object.assign(new Error("exit 1"), { stdout: "", stderr: "unknown flag: --attach" });
+		};
+		await expect(
+			createGithubIssue(
+				"acme/repo",
+				{ title: "T", body: "", images: [{ name: "a.png", base64: "eA==" }] },
+				run,
+			),
+		).rejects.toThrow("Update GitHub CLI (gh) to 2.99");
 	});
 });

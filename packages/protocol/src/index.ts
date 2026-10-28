@@ -239,6 +239,17 @@ export interface GithubIssuesDTO {
 export interface CreateGithubIssueInput {
 	title: string;
 	body: string;
+	/** Images uploaded to GitHub's attachment store with the issue. The body refers
+	 * to one as `![alt](./<name>)`, which is rewritten to its asset URL; one it never
+	 * mentions is appended. Optional: issues route to the desktop's own local engine,
+	 * so no older engine can receive this and silently drop it. */
+	images?: GithubIssueImage[];
+}
+
+export interface GithubIssueImage {
+	/** File name the body refers to, e.g. "image-2.png". */
+	name: string;
+	base64: string;
 }
 
 export interface CreateIssueTaskInput {
