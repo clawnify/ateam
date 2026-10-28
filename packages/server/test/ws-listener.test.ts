@@ -42,6 +42,22 @@ describe("the phone's WS listener", () => {
 		listener.close();
 	});
 
+	it("closing while a bind is still in flight leaves nothing uncaught", async () => {
+		// Bun reports a failed bind asynchronously. The close lands first, and the
+		// late error must still have a listener, or it fails whatever runs next.
+		const logs: string[] = [];
+		const listener = startWsListener({
+			host: "192.0.2.1",
+			port: await freePort(),
+			retryMs: [10],
+			onConnection: () => {},
+			log: (l) => logs.push(l),
+		});
+		listener.close();
+		await new Promise((r) => setTimeout(r, 100));
+		expect(logs).toEqual([]);
+	});
+
 	it("comes up once the port frees, and serves", async () => {
 		// Something else holds the port, so the first attempts fail with it in use.
 		const blocker = createServer();
