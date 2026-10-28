@@ -11,6 +11,7 @@ import Feather from "@expo/vector-icons/Feather";
 import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { WebView } from "react-native-webview";
+import { loadBrowserView } from "./load-browser-view";
 import { C } from "./theme";
 
 export function BoxBrowser({
@@ -27,25 +28,8 @@ export function BoxBrowser({
 }) {
 	const [url, setUrl] = useState<string | null>(null);
 
-	useEffect(() => {
-		let live = true;
-		let retry: ReturnType<typeof setTimeout> | undefined;
-		// A box with no browser, or an engine older than v17, rejects: stay hidden.
-		// A first open has missed once for no lasting reason, so one retry.
-		const load = (attempt: number) =>
-			api.browser.view(taskId).then(
-				(r) => live && setUrl(r.url),
-				(err) => {
-					console.warn(`[BoxBrowser] browser.view failed (attempt ${attempt}):`, err);
-					if (live && attempt === 1) retry = setTimeout(() => load(2), 2000);
-				},
-			);
-		load(1);
-		return () => {
-			live = false;
-			clearTimeout(retry);
-		};
-	}, [api, taskId]);
+	// Hidden until the box answers, however long that takes (load-browser-view.ts).
+	useEffect(() => loadBrowserView(api, taskId, setUrl), [api, taskId]);
 
 	if (!url) return null;
 	return (
