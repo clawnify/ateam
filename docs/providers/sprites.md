@@ -256,8 +256,8 @@ Two limits are Fly's:
   running. `sprite sessions list` shows them; `sprite sessions kill <id>` closes one.
 - **The status Sprites reports lags** (`sprite info`, `sprite list`, the API). It said
   `cold` for a Sprite running a command. Ateam reads it only to skip connecting to a
-  sleeping Sprite at launch, where a wrong `cold` costs nothing: the Sprite wakes the
-  moment you use it.
+  sleeping Sprite over SSH, at launch and when the desktop retries a dropped one,
+  where a wrong `cold` costs little: the next retry, or using the Sprite, connects it.
 - **`sprite proxy --ssh` refuses keys.** The built-in SSH emulation answered
   `Permission denied (publickey)` for every key we tried, including the one sshd
   accepted. Use a real sshd and `-W :22` as above.

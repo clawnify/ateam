@@ -361,6 +361,10 @@ export const hosts = sqliteTable(
 		 *  machine's own inputs (its name there). The provider's key is not here: it is
 		 *  a secret, kept in the app's encrypted store. Null for every other box. */
 		wake: text("wake", { mode: "json" }).$type<{ id: string; box: Record<string, string> }>(),
+		/** The box's board as last seen (projects, their tasks, loops), so its cards
+		 *  stay on the board while it sleeps or can't be reached. Opaque here: the
+		 *  desktop writes and reads it (main/offline.ts). Null until first held. */
+		snapshot: text("snapshot", { mode: "json" }).$type<unknown>(),
 		createdAt: epochMs("created_at"),
 	},
 	(t) => [index("hosts_last_seen_idx").on(t.lastSeen)],

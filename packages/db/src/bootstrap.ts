@@ -159,6 +159,7 @@ export function bootstrap(db: SqliteExecutor): void {
 				last_seen INTEGER,
 				hidden INTEGER NOT NULL DEFAULT 0,
 				wake TEXT,
+				snapshot TEXT,
 				created_at INTEGER
 			);
 			CREATE INDEX IF NOT EXISTS hosts_last_seen_idx ON hosts (last_seen);
@@ -191,6 +192,8 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE hosts ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
 		// Null for every box that predates it: none had a provider to wake it.
 		"ALTER TABLE hosts ADD COLUMN wake TEXT",
+		// Null for every box that predates it: no board seen yet to keep.
+		"ALTER TABLE hosts ADD COLUMN snapshot TEXT",
 		// Both null for every session that predates them, which reads correctly:
 		// no known conversation to resume, and no claim about how it ended — so
 		// history is never mistaken for tabs that were open at shutdown.

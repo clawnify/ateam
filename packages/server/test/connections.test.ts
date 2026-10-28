@@ -6,6 +6,7 @@ import { repo } from "@ateam/db";
 import { createTestDb } from "../../db/test/helpers/test-db";
 import {
 	boxdMachineOf,
+	boxSnapshotOf,
 	endpointUrl,
 	forgetConnection,
 	listConnections,
@@ -13,6 +14,7 @@ import {
 	readSshHosts,
 	recordConnection,
 	resolveTransport,
+	saveBoxSnapshot,
 	type SleepCheck,
 	sleepingAliases,
 	spriteMachineOf,
@@ -203,6 +205,33 @@ describe("forgetConnection", () => {
 
 		recordConnection(db, { hostAlias: "devbox" });
 		expect(listConnections(db, cfg).map((c) => c.alias)).toEqual(["devbox"]);
+	});
+});
+
+describe("box snapshots", () => {
+	const snap = { at: 1, projects: [{ id: "p" }], tasks: { p: [{ id: "t" }] }, loops: [] };
+
+	it("keeps a box's board without touching what the connections list shows", () => {
+		const db = createTestDb();
+		const cfg = writeConfig("");
+		recordConnection(db, { hostAlias: "100.72.63.61:8787", transport: "ws", serverVersion: "17" });
+		const before = listConnections(db, cfg);
+		expect(boxSnapshotOf(db, "100.72.63.61:8787")).toBeNull();
+
+		saveBoxSnapshot(db, "100.72.63.61:8787", snap);
+		expect(boxSnapshotOf(db, "100.72.63.61:8787")).toEqual(snap);
+		expect(listConnections(db, cfg)).toEqual(before);
+	});
+
+	it("forgetting a box drops its board, whether deleted or hidden", () => {
+		const db = createTestDb();
+		const cfg = writeConfig("Host devbox\n  HostName 10.0.0.1\n");
+		for (const alias of ["devbox", "100.72.63.61:8787"]) {
+			recordConnection(db, { hostAlias: alias });
+			saveBoxSnapshot(db, alias, snap);
+			forgetConnection(db, alias, cfg);
+			expect(boxSnapshotOf(db, alias)).toBeNull();
+		}
 	});
 });
 
