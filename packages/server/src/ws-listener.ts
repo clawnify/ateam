@@ -10,6 +10,7 @@
 //
 // Instead it retries for as long as the engine runs. That also covers what exiting
 // into a systemd restart used to: at boot the Tailscale address may not exist yet.
+import { createServer, type Server, STATUS_CODES } from "node:http";
 import { type WebSocket, WebSocketServer } from "ws";
 
 /** Waits between attempts; the last one repeats for the life of the engine. */
@@ -25,18 +26,33 @@ export function startWsListener(opts: {
 	const retryMs = opts.retryMs ?? WS_RETRY_MS;
 	let failures = 0;
 	let closed = false;
-	let current: WebSocketServer | null = null;
+	let current: Server | null = null;
 	let timer: ReturnType<typeof setTimeout> | null = null;
+	// The HTTP server is ours, not ws's: a WebSocketServer that owns its server
+	// strips the server's error listener on close(), and Bun reports a failed bind
+	// asynchronously, so closing during an attempt left that error uncaught.
+	const wss = new WebSocketServer({ noServer: true });
+	wss.on("connection", opts.onConnection);
 
 	const listen = (): void => {
-		const wss = new WebSocketServer({ host: opts.host, port: opts.port });
-		current = wss;
-		wss.on("connection", opts.onConnection);
-		wss.on("listening", () => {
+		// Plain HTTP gets the 426 ws's own server answered with.
+		const server = createServer((_req, res) => {
+			const body = STATUS_CODES[426] ?? "";
+			res.writeHead(426, { "Content-Length": body.length, "Content-Type": "text/plain" });
+			res.end(body);
+		});
+		current = server;
+		server.on("upgrade", (req, sock, head) => {
+			wss.handleUpgrade(req, sock, head, (ws) => wss.emit("connection", ws, req));
+		});
+		server.on("listening", () => {
+			// A bind that lands after close() must not leave a server behind.
+			if (closed) return void server.close();
 			failures = 0;
 			opts.log(`[ateam] daemon also listening on ws://${opts.host}:${opts.port}`);
 		});
-		wss.on("error", (err: Error) => {
+		server.on("error", (err: Error) => {
+			if (closed) return;
 			// Once per outage, not per attempt: a box that can never bind would
 			// otherwise write a line every 30s forever.
 			if (failures === 0) {
@@ -44,14 +60,14 @@ export function startWsListener(opts: {
 					`[ateam] WS listener error: ${err.message}; retrying in the background (the desktop's SSH path is unaffected)`,
 				);
 			}
-			wss.close();
-			if (closed) return;
+			server.close();
 			const delay = retryMs[Math.min(failures, retryMs.length - 1)] ?? 30_000;
 			failures++;
 			timer = setTimeout(listen, delay);
 			// A pending retry must never be what keeps the process alive.
 			timer.unref?.();
 		});
+		server.listen(opts.port, opts.host);
 	};
 	listen();
 
@@ -60,6 +76,7 @@ export function startWsListener(opts: {
 			closed = true;
 			if (timer) clearTimeout(timer);
 			current?.close();
+			wss.close();
 		},
 	};
 }
