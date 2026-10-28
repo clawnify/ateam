@@ -1,6 +1,6 @@
 import type { GithubIssueDTO } from "@ateam/protocol";
-import { CircleDot, ExternalLink, Play, X } from "lucide-react";
-import { useState } from "react";
+import { CircleDot, ExternalLink, ImagePlus, Play, X } from "lucide-react";
+import { useRef, useState } from "react";
 import { IconButton } from "./IconButton";
 import "./github-issues.css";
 
@@ -86,6 +86,51 @@ export function GithubIssuePanel({
 	);
 }
 
+/** What gh uploads (internal/attachments/userasset.go): images up to 10 MB. */
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
+const MIME_EXT: Record<string, string> = {
+	"image/png": "png",
+	"image/jpeg": "jpg",
+	"image/gif": "gif",
+	"image/webp": "webp",
+	"image/svg+xml": "svg",
+};
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+interface IssueImage {
+	/** The name the body refers to as `./<name>`, unique in this issue. */
+	name: string;
+	file: File;
+	/** data: URL, read after adding (the renderer's CSP allows no blob: images). */
+	preview?: string;
+}
+
+/** A name the engine accepts and gh can match: "Screenshot 2026-10-28 at 10.00.png"
+ * becomes "Screenshot-2026-10-28-at-10-00.png", numbered when taken ("image-2.png"). */
+function imageName(file: File, taken: Set<string>): string | null {
+	const ext = IMAGE_EXT.exec(file.name)?.[1]?.toLowerCase() ?? MIME_EXT[file.type];
+	if (!ext) return null;
+	const base =
+		file.name
+			.replace(IMAGE_EXT, "")
+			.replace(/[^\w-]+/g, "-")
+			.replace(/^-+|-+$/g, "")
+			.slice(0, 60) || "image";
+	let name = `${base}.${ext}`;
+	for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${base}-${n}.${ext}`;
+	taken.add(name.toLowerCase());
+	return name;
+}
+
+function readDataUrl(file: File): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => resolve(String(reader.result));
+		reader.onerror = () => reject(reader.error);
+		reader.readAsDataURL(file);
+	});
+}
+
 export function NewIssueDialog({
 	repository,
 	onClose,
@@ -97,14 +142,69 @@ export function NewIssueDialog({
 }) {
 	const [title, setTitle] = useState("");
 	const [body, setBody] = useState("");
+	const [images, setImages] = useState<IssueImage[]>([]);
+	const [dragging, setDragging] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const bodyRef = useRef<HTMLTextAreaElement>(null);
+	const pickerRef = useRef<HTMLInputElement>(null);
+
+	// Like github.com: each image lands as a reference at the caret, which gh
+	// rewrites to the uploaded asset. One whose reference is deleted is appended.
+	const addImages = (files: File[]) => {
+		if (busy || files.length === 0) return;
+		const taken = new Set(images.map((i) => i.name.toLowerCase()));
+		const added: IssueImage[] = [];
+		let rejected: string | null = null;
+		for (const file of files) {
+			const name = imageName(file, taken);
+			if (!name) rejected = "Only PNG, JPEG, GIF, WebP and SVG images can be attached.";
+			else if (file.size > MAX_IMAGE_BYTES) rejected = `${file.name} is over GitHub's 10 MB limit.`;
+			else added.push({ name, file });
+		}
+		setError(rejected);
+		if (added.length === 0) return;
+		setImages((cur) => [...cur, ...added]);
+		for (const image of added)
+			void readDataUrl(image.file).then((preview) =>
+				setImages((cur) => cur.map((i) => (i === image ? { ...i, preview } : i))),
+			);
+		const el = bodyRef.current;
+		const at = el && document.activeElement === el ? el.selectionStart : body.length;
+		const before = body.slice(0, at);
+		const after = body.slice(el && document.activeElement === el ? el.selectionEnd : at);
+		const refs = added.map((i) => `![${i.name.replace(/\.\w+$/, "")}](./${i.name})`).join("\n");
+		const lead = before && !before.endsWith("\n") ? "\n" : "";
+		const trail = after && !after.startsWith("\n") ? "\n" : "";
+		setBody(`${before}${lead}${refs}${trail}${after}`);
+	};
+	const removeImage = (image: IssueImage) => {
+		setImages((cur) => cur.filter((i) => i.name !== image.name));
+		const ref = new RegExp(
+			`!\\[[^\\]]*\\]\\(\\./${image.name.replace(/[.-]/g, "\\$&")}\\)\\n?`,
+			"g",
+		);
+		setBody((cur) => cur.replace(ref, ""));
+	};
+
 	const submit = async () => {
 		if (!title.trim() || busy) return;
 		setBusy(true);
 		setError(null);
 		try {
-			onCreated(await window.ateam.projects.createIssue(repository, { title, body }));
+			const attached = await Promise.all(
+				images.map(async (i) => ({
+					name: i.name,
+					base64: (i.preview ?? (await readDataUrl(i.file))).replace(/^data:[^,]*,/, ""),
+				})),
+			);
+			onCreated(
+				await window.ateam.projects.createIssue(repository, {
+					title,
+					body,
+					...(attached.length ? { images: attached } : {}),
+				}),
+			);
 		} catch (e) {
 			const message = e instanceof Error ? e.message : String(e);
 			setError(
@@ -118,7 +218,7 @@ export function NewIssueDialog({
 	return (
 		<div className="overlay" onMouseDown={() => !busy && onClose()}>
 			<form
-				className="dialog composer new-issue"
+				className={`dialog composer new-issue ${dragging ? "dropping" : ""}`}
 				aria-label={`New issue in ${repository}`}
 				onMouseDown={(e) => e.stopPropagation()}
 				onKeyDown={(e) => {
@@ -127,6 +227,16 @@ export function NewIssueDialog({
 						e.preventDefault();
 						void submit();
 					}
+				}}
+				onDragOver={(e) => {
+					e.preventDefault();
+					if (!busy) setDragging(true);
+				}}
+				onDragLeave={() => setDragging(false)}
+				onDrop={(e) => {
+					e.preventDefault();
+					setDragging(false);
+					addImages(Array.from(e.dataTransfer.files));
 				}}
 				onSubmit={(e) => {
 					e.preventDefault();
@@ -147,24 +257,71 @@ export function NewIssueDialog({
 					onChange={(e) => setTitle(e.target.value)}
 				/>
 				<textarea
+					ref={bodyRef}
 					className="comp-prompt"
-					placeholder="Description (Markdown)"
+					placeholder="Description (Markdown). Paste or drop images here."
 					aria-label="Issue description"
 					value={body}
 					disabled={busy}
 					onChange={(e) => setBody(e.target.value)}
+					onPaste={(e) => {
+						const files = Array.from(e.clipboardData.files);
+						if (files.length === 0) return;
+						e.preventDefault();
+						addImages(files);
+					}}
 				/>
+				{images.length > 0 && (
+					<div className="comp-files">
+						{images.map((image) => (
+							<span key={image.name} className="file-chip" title={image.file.name}>
+								{image.preview && <img className="fc-thumb" src={image.preview} alt="" />}
+								<span className="fc-name">{image.name}</span>
+								<button
+									type="button"
+									className="fc-x"
+									aria-label={`Remove ${image.name}`}
+									disabled={busy}
+									onClick={() => removeImage(image)}
+								>
+									<X size={12} strokeWidth={2.25} />
+								</button>
+							</span>
+						))}
+					</div>
+				)}
 				{error && (
 					<div className="new-issue-error" role="alert">
 						{error}
 					</div>
 				)}
 				<div className="drow">
+					<button
+						type="button"
+						className="iconbtn new-issue-attach"
+						title="Attach images"
+						aria-label="Attach images"
+						disabled={busy}
+						onClick={() => pickerRef.current?.click()}
+					>
+						<ImagePlus size={16} strokeWidth={1.75} />
+					</button>
+					<input
+						ref={pickerRef}
+						type="file"
+						accept=".png,.jpg,.jpeg,.gif,.webp,.svg"
+						multiple
+						hidden
+						onChange={(e) => {
+							addImages(Array.from(e.target.files ?? []));
+							e.target.value = "";
+						}}
+					/>
 					<button type="button" onClick={onClose} disabled={busy}>
 						Cancel
 					</button>
 					<button type="submit" className="primary" disabled={!title.trim() || busy}>
-						{busy ? "Creating…" : "Create issue"}
+						{busy ? (images.length ? "Uploading…" : "Creating…") : "Create issue"}
 					</button>
 				</div>
 			</form>
