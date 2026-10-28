@@ -247,7 +247,10 @@ Run it as the same user as `install.sh`. It needs passwordless sudo once, and an
 x86_64 box (Google Chrome has no Linux Arm build). It installs:
 
 - Chrome on a virtual desktop (Xvfb + Openbox), headed, with one profile every
-  agent shares. Log into a site once and every agent is logged in.
+  agent shares. Log into a site once and every agent is logged in. Chrome starts
+  with no window: the first agent to use the browser opens the one window and
+  every agent works in it, so watching it shows what they do. Until then the
+  desktop is empty; to log in before any agent has, ask one to open the site.
 - [TaskWindow](https://github.com/clawnify/TaskWindow) in that Chrome, its
   extension force-installed by policy and paired with its daemon automatically,
   registered as the `taskwindow` MCP server for Claude Code. These are the same
@@ -262,7 +265,9 @@ x86_64 box (Google Chrome has no Linux Arm build). It installs:
 
 Everything runs as a service (systemd, or Sprite services on a Sprite), so it
 survives reboots and keeps working with no laptop connected. Re-running the script
-is safe: it never restarts a Chrome an agent may be using.
+is safe: it never restarts a Chrome an agent may be using. A Chrome an older
+version started keeps its blank startup window, with the agents' window behind
+it, until it restarts; the script prints the command.
 
 ## 5. Same box, from the iOS app
 
