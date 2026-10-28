@@ -8,6 +8,7 @@
 
 export type { ConnectionDTO, ConnectionRecord, HostTransport, SshHost } from "./connections";
 export {
+	boxSnapshotOf,
 	boxWakeOf,
 	endpointUrl,
 	forgetConnection,
@@ -15,6 +16,7 @@ export {
 	readSshHosts,
 	recordConnection,
 	resolveTransport,
+	saveBoxSnapshot,
 	sleepingAliases,
 } from "./connections";
 export type { CallContext, Dispatcher } from "./dispatcher";

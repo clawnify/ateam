@@ -2499,6 +2499,19 @@ input {
 .tasknode.loop-paused {
 	opacity: 0.5;
 }
+/* A task on a box that isn't held: what the box showed last, not a live state,
+   so it reads dimmed and nothing on it pulses as if an agent were working. */
+.tasknode.offline,
+.card.offline {
+	opacity: 0.5;
+}
+.tasknode.offline .tstatus,
+.card.offline .ring {
+	animation: none;
+}
+.panel .empty .navbtn {
+	margin-top: 10px;
+}
 .conn-install-log {
 	margin: 4px 0 2px;
 	max-height: 140px;

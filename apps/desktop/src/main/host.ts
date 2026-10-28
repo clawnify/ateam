@@ -42,6 +42,7 @@ import {
 } from "@ateam/protocol";
 import {
 	judgeGrammar as askJevAboutGrammar,
+	boxSnapshotOf,
 	boxWakeOf,
 	buildCloudInit,
 	type ConnectionDTO,
@@ -55,6 +56,7 @@ import {
 	readSettings,
 	recordConnection,
 	resolveTransport,
+	saveBoxSnapshot,
 	sleepingAliases,
 	sshClientTransport,
 	sshExec,
@@ -92,6 +94,7 @@ import {
 	writeSshConfigEntry,
 } from "./box-setup";
 import { boxForwardFlags, browserLocalPort, editorLocalPort } from "./box-tunnel";
+import { asSnapshot, offlineBackend, reconnectDelay, takeSnapshot } from "./offline";
 import { withTimeout } from "./timeout";
 
 // The one pre-quoted remote command (ssh space-joins remote args, so `bash -lc`
@@ -139,6 +142,11 @@ const CONNECT_TIMEOUT_MS = 20_000;
 // SSH needs none of this — a dead ssh child exits and closes the pipe for real.
 const WS_PING_INTERVAL_MS = 15_000;
 const WS_PING_TIMEOUT_MS = 10_000;
+// A held box's board is re-read this long after its first change, so a burst of
+// updates costs one read and what is kept for its sleep is at most this stale.
+const SNAPSHOT_DELAY_MS = 10_000;
+// The events that change what a box's board shows.
+const BOARD_EVENTS: BackendEvent[] = ["taskUpdated", "taskRemoved", "loopsUpdated"];
 
 /** The push-events forwarded from every held backend to every window. */
 const FORWARDED: { event: BackendEvent; channel: string }[] = [
@@ -233,6 +241,16 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// install, and an RPC never times out — so one stale box hung the whole list, and
 	// with it `connect()`'s already-held path and anything awaiting it.
 	const infos = new Map<string | null, SystemInfo>();
+	// alias → the stand-in serving a box's last-seen board while it isn't held
+	// (offline.ts). In the aggregate's list in place of the engine, never both.
+	const offline = new Map<string, Backend>();
+	// Boxes the user disconnected: left alone, not reconnected.
+	const parked = new Set<string>();
+	// alias → the pending reconnect, and how many have failed in a row.
+	const reconnects = new Map<string, ReturnType<typeof setTimeout>>();
+	const attempts = new Map<string, number>();
+	// alias → the pending re-read of its board.
+	const snapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	// One aggregate over a LIVE backend array: connecting pushes onto it (so the
 	// learned id→engine registry survives), disconnecting rebuilds a fresh one (so a
@@ -467,6 +485,14 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		const wire = resolveTransport(db, alias);
 		const reached = await reach(alias, wire, opts);
 		const { client, rpc, info } = reached;
+		// Another connect to this box got there first while this one was on the
+		// wire (a reconnect and a click, say). Holding both would hold the box twice
+		// and leave one connection nobody can drop, so this one stands down.
+		const raced = backends.get(alias);
+		if (raced) {
+			client.close();
+			return statusOf(raced, alias);
+		}
 		if (info.protocolVersion !== PROTOCOL_VERSION) {
 			// Upgrade it if we can, but a mismatch is no longer a refusal. Refusing was
 			// safe and total: a box one release old became unusable rather than partly
@@ -499,6 +525,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 
 		connectFailures.delete(alias);
 		asleep.delete(alias);
+		parked.delete(alias);
+		cancelReconnect(alias);
+		attempts.delete(alias);
 		recordConnection(db, {
 			hostAlias: alias,
 			transport: wire ?? "ssh",
@@ -517,8 +546,24 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		);
 		infos.set(alias, info); // cached before the backend is reachable — statusOf's invariant
 		backends.set(alias, backend);
-		backendList.push(backend); // the live aggregate now fans out to it too
-		unbinders.set(alias, bindEvents(backend));
+		// The live aggregate now fans out to it too. If its board was being served
+		// offline, the engine takes that place, and the ids already on screen with it.
+		const stand = offline.get(alias);
+		const at = stand ? backendList.indexOf(stand) : -1;
+		if (stand && at >= 0) {
+			offline.delete(alias);
+			backendList.splice(at, 1, backend);
+			agg.rehome(stand, backend);
+		} else {
+			backendList.push(backend);
+		}
+		const offEvents = bindEvents(backend);
+		const offBoard = BOARD_EVENTS.map((e) => backend.on(e, () => scheduleSnapshot(alias)));
+		unbinders.set(alias, () => {
+			offEvents();
+			for (const off of offBoard) off();
+		});
+		scheduleSnapshot(alias, 0);
 		// A fresh box inherits this Mac's engine settings the moment it is held.
 		// Deliberately not awaited: the connect is done, and a slow push must not
 		// hold the board back.
@@ -534,7 +579,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// on purpose: the ws probe below only catches a HALF-open socket, while a real
 		// close is all SSH ever gives us (the relay's ssh child exits).
 		client.transport.onClose?.(() => {
-			if (backends.get(alias) === backend) disconnect(alias);
+			if (backends.get(alias) === backend) lose(alias);
 		});
 		if (wire === "ws") probes.set(alias, startHealthProbe(alias, rpc));
 		broadcastConnections();
@@ -652,7 +697,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	function startHealthProbe(alias: string, rpc: RpcClient): ReturnType<typeof setInterval> {
 		const timer = setInterval(() => {
 			void withTimeout(rpc.call(CH.systemHello), WS_PING_TIMEOUT_MS).catch(() => {
-				if (backends.has(alias)) disconnect(alias);
+				if (backends.has(alias)) lose(alias);
 			});
 		}, WS_PING_INTERVAL_MS);
 		// Never hold the app open just to ping a box.
@@ -660,7 +705,21 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return timer;
 	}
 
+	/** The user let go of a box: drop it and leave it be until they connect again. */
 	function disconnect(alias: string): void {
+		parked.add(alias);
+		cancelReconnect(alias);
+		release(alias);
+	}
+
+	/** A box left on its own (its wire closed, or it stopped answering): try it again. */
+	function lose(alias: string): void {
+		release(alias);
+		attempts.delete(alias);
+		scheduleReconnect(alias);
+	}
+
+	function release(alias: string): void {
 		const backend = backends.get(alias);
 		if (!backend) return; // unknown alias / already gone (null never routes here — it's not a key)
 		const probe = probes.get(alias);
@@ -668,21 +727,129 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			clearInterval(probe);
 			probes.delete(alias);
 		}
+		const pending = snapshotTimers.get(alias);
+		if (pending) {
+			clearTimeout(pending);
+			snapshotTimers.delete(alias);
+		}
 		unbinders.get(alias)?.();
 		unbinders.delete(alias);
 		backend.dispose();
 		backends.delete(alias);
 		infos.delete(alias);
 		const i = backendList.indexOf(backend);
-		if (i >= 0) backendList.splice(i, 1);
-		// Rebuild so the learned registry drops the gone engine's ids (no stale routing).
-		agg = createAggregate(backendList, local);
+		const stand = standIn(alias);
+		if (stand && i >= 0) {
+			// Its cards stay where they are: the last-seen board takes the engine's
+			// place, and the ids on screen route to it (and are refused) from now on.
+			backendList.splice(i, 1, stand);
+			agg.rehome(backend, stand);
+		} else {
+			if (i >= 0) backendList.splice(i, 1);
+			// Rebuild so the learned registry drops the gone engine's ids (no stale routing).
+			agg = createAggregate(backendList, local);
+		}
 		broadcastConnections();
 	}
 
+	/** The offline stand-in for a box with a kept board, registered; null without one. */
+	function standIn(alias: string): Backend | null {
+		const existing = offline.get(alias);
+		if (existing) return existing;
+		const snap = asSnapshot(boxSnapshotOf(db, alias));
+		if (!snap) return null;
+		const stand = offlineBackend(snap, alias);
+		offline.set(alias, stand);
+		return stand;
+	}
+
+	/** Take a box's offline board off the board (it was removed). */
+	function dropOffline(alias: string): void {
+		const stand = offline.get(alias);
+		if (!stand) return;
+		offline.delete(alias);
+		const i = backendList.indexOf(stand);
+		if (i >= 0) backendList.splice(i, 1);
+		agg = createAggregate(backendList, local);
+	}
+
+	/**
+	 * Re-read a held box's board soon and keep it, for when it sleeps. Not reset by
+	 * later events, so a box that never stops changing is still read every
+	 * SNAPSHOT_DELAY_MS rather than never.
+	 */
+	function scheduleSnapshot(alias: string, delay = SNAPSHOT_DELAY_MS): void {
+		if (snapshotTimers.has(alias)) return;
+		const timer = setTimeout(() => {
+			snapshotTimers.delete(alias);
+			const backend = backends.get(alias);
+			if (!backend) return;
+			void withTimeout(takeSnapshot(backend), CONNECT_TIMEOUT_MS).then(
+				(snap) => {
+					// Only while still held by this same connection: a read that outlived
+					// its box must not overwrite the board it left with.
+					if (backends.get(alias) === backend) saveBoxSnapshot(db, alias, snap);
+				},
+				() => {}, // mid-drop or slow: the last board kept is still the best one
+			);
+		}, delay);
+		timer.unref?.();
+		snapshotTimers.set(alias, timer);
+	}
+
+	function cancelReconnect(alias: string): void {
+		const timer = reconnects.get(alias);
+		if (timer) clearTimeout(timer);
+		reconnects.delete(alias);
+	}
+
+	function scheduleReconnect(alias: string): void {
+		if (reconnects.has(alias) || parked.has(alias)) return;
+		const timer = setTimeout(
+			() => {
+				reconnects.delete(alias);
+				void reconnect(alias);
+			},
+			reconnectDelay(attempts.get(alias) ?? 0),
+		);
+		timer.unref?.();
+		reconnects.set(alias, timer);
+	}
+
+	/**
+	 * One try at a box the app should hold but doesn't, never waking it: dialling a
+	 * sleeping box over the tailnet leaves it asleep (docs/providers/sprites.md), but
+	 * an SSH connect wakes one, so an SSH box is dialled only once its provider says
+	 * it's up. Without a wake the box's cards stay on the board, served offline,
+	 * and this keeps trying until it answers or the user lets it go.
+	 */
+	async function reconnect(alias: string): Promise<void> {
+		if (backends.has(alias) || parked.has(alias)) return;
+		if (!listConnections(db).some((c) => c.alias === alias && c.known)) return; // removed
+		attempts.set(alias, (attempts.get(alias) ?? 0) + 1);
+		if (resolveTransport(db, alias) !== "ws" && (await sleepingAliases([alias])).has(alias)) {
+			if (!asleep.has(alias)) {
+				asleep.add(alias);
+				broadcastConnections();
+			}
+			scheduleReconnect(alias);
+			return;
+		}
+		try {
+			await connect(alias);
+		} catch (err) {
+			noteFailure(alias, err);
+			scheduleReconnect(alias);
+		}
+	}
+
 	function forget(alias: string): void {
-		disconnect(alias); // no-op if not held; drops the live engine if it is
-		forgetConnection(db, alias);
+		parked.delete(alias);
+		cancelReconnect(alias);
+		attempts.delete(alias);
+		release(alias); // no-op if not held; drops the live engine if it is
+		forgetConnection(db, alias); // clears its kept board too
+		dropOffline(alias);
 		connectFailures.delete(alias);
 		// disconnect only broadcasts when the box was held — a never-connected row
 		// changes the list too, so always tell the renderer to re-read it.
@@ -704,6 +871,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// Invert the aggregate's learned id→Backend registry into id→alias for the renderer.
 		const byBackend = new Map<Backend, string | null>();
 		for (const [alias, b] of backends) byBackend.set(b, alias);
+		for (const [alias, b] of offline) byBackend.set(b, alias);
 		const out: Record<string, string | null> = {};
 		for (const [id, b] of agg.ownerOf) out[id] = byBackend.get(b) ?? null;
 		return out;
@@ -980,49 +1148,58 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// Rehydrate the board on launch. A box's tasks exist for the aggregate only while
 	// its engine is HELD, and a cold start holds none — which is why creating one
 	// remote task made all the others appear: that connect is what put the box back
-	// into the union. The `hosts` registry already remembers every box we've reached
-	// (`known`), so reconnect those. Detached and in parallel: the board must never
-	// wait on a box that's asleep, and each connect broadcasts its own arrival, which
-	// the renderer reconciles additively — so tasks fill in as engines answer.
+	// into the union. So every box we've reached before (`known`) is put back on the
+	// board at once from its kept board (offline.ts), then reconnected. Detached and
+	// in parallel: the board must never wait on a box that's asleep, and each connect
+	// broadcasts its own arrival, which swaps the live engine in under the same cards.
 	//
 	// Except a box that is asleep: an SSH connect wakes it, so reconnecting at
 	// launch would wake every sleeping box, each for a whole idle window, just
-	// because the app started. Those stay asleep until used. Each provider's own
-	// CLI answers for its boxes without waking any (sleepingAliases); a provider
-	// that can't answer leaves its boxes to be reconnected as before.
+	// because the app started. Those stay asleep until used, their cards shown from
+	// the kept board, and are tried again later the same careful way (reconnect()).
+	// Each provider's own CLI answers for its boxes without waking any
+	// (sleepingAliases); a provider that can't answer leaves its boxes to be
+	// reconnected as before.
 	const known = listConnections(db).filter((c) => c.known);
+	for (const c of known) {
+		const stand = standIn(c.alias);
+		if (stand) backendList.push(stand); // the aggregate reads this same array
+	}
 	void sleepingAliases(known.map((c) => c.alias)).then((sleeping) => {
 		for (const c of known) {
 			if (sleeping.has(c.alias)) {
 				asleep.add(c.alias);
+				scheduleReconnect(c.alias);
 				continue;
 			}
-			reconnectAtLaunch(c.alias);
+			void connect(c.alias).catch((err: unknown) => {
+				noteFailure(c.alias, err);
+				scheduleReconnect(c.alias);
+			});
 		}
 		if (asleep.size > 0) broadcastConnections();
 	});
-	function reconnectAtLaunch(alias: string): void {
-		void connect(alias).catch((err: unknown) => {
-			// A host:port box a provider puts to sleep can't be asked whether it sleeps
-			// without waking it, so it was tried instead. Not answering is what a
-			// sleeping one does: show it asleep (it wakes when used), not as broken.
-			if (boxWakeOf(db, alias)) {
-				asleep.add(alias);
-				broadcastConnections();
-				return;
-			}
-			// Unreachable, asleep, or an upgrade that didn't take. connect() already closed
-			// its own transport, and the connections list still renders the box from the
-			// offline cache, so leaving it disconnected is the honest outcome. The REASON,
-			// though, is only known here: this is the one connect nobody awaits, so record
-			// it instead of dropping it. Without that, a failed upgrade looks exactly like
-			// a sleeping box, and the message explaining it dies in this catch.
-			// A box that is merely BEHIND is not an error any more: connect() upgrades it
-			// over SSH and comes back held, which is the only path that reaches an SSH box
-			// without waiting for a user gesture.
-			connectFailures.set(alias, err instanceof Error ? err.message : String(err));
+	/** Why a connect nobody awaits failed, kept for the connections list to show. */
+	function noteFailure(alias: string, err: unknown): void {
+		// A host:port box a provider puts to sleep can't be asked whether it sleeps
+		// without waking it, so it was tried instead. Not answering is what a
+		// sleeping one does: show it asleep (it wakes when used), not as broken.
+		if (boxWakeOf(db, alias)) {
+			asleep.add(alias);
 			broadcastConnections();
-		});
+			return;
+		}
+		// Unreachable, asleep, or an upgrade that didn't take. connect() already closed
+		// its own transport, and the connections list still renders the box from the
+		// offline cache, so leaving it disconnected is the honest outcome. The REASON,
+		// though, is only known here: this is the one connect nobody awaits, so record
+		// it instead of dropping it. Without that, a failed upgrade looks exactly like
+		// a sleeping box, and the message explaining it dies in this catch.
+		// A box that is merely BEHIND is not an error any more: connect() upgrades it
+		// over SSH and comes back held, which is the only path that reaches an SSH box
+		// without waiting for a user gesture.
+		connectFailures.set(alias, err instanceof Error ? err.message : String(err));
+		broadcastConnections();
 	}
 
 	async function editorUrl(taskId: string): Promise<{ url: string } | { needsInstall: true }> {

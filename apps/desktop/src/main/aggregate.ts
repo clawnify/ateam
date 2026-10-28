@@ -139,6 +139,10 @@ export interface Aggregate {
 	ownerKindOf(ownerId: string): "local" | "remote";
 	/** The learned id→backend map (which environment owns each entity). Read-only use. */
 	readonly ownerOf: ReadonlyMap<string, Backend>;
+	/** Point every id `from` owns at `to`: the same box, now served another way
+	 *  (its offline board giving way to the live engine, or the reverse). The
+	 *  caller swaps the backend in the list; this keeps routing what's on screen. */
+	rehome(from: Backend, to: Backend): void;
 }
 
 /**
@@ -198,5 +202,8 @@ export function createAggregate(
 		handleFor,
 		ownerKindOf: (ownerId) => (reg.get(ownerId) ?? fallback).kind,
 		ownerOf: reg,
+		rehome(from, to) {
+			for (const [id, b] of reg) if (b === from) reg.set(id, to);
+		},
 	};
 }
