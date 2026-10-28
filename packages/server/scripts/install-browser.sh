@@ -7,7 +7,8 @@
 #   - a virtual desktop: Xvfb on :99 plus Openbox, so Chrome runs headed (real
 #     rendering, real logins) on a machine with no screen
 #   - Google Chrome on that desktop, one profile shared by every agent, so a site
-#     you log into once stays logged in for all of them
+#     you log into once stays logged in for all of them. It starts with no window:
+#     the first agent to use it opens the one window, and every agent works there
 #   - TaskWindow (github.com/clawnify/TaskWindow): its extension is force-installed
 #     by Chrome policy and pairs with its daemon by itself, and the daemon exposes
 #     the browser to agents as an MCP server on 127.0.0.1:9377. Registered with
@@ -142,6 +143,14 @@ chmod 600 "$VNC_AUTH_FILE"
 # containers (a Sprite) and Ubuntu's AppArmor defaults withhold. The marked-clean
 # exit and the cleared Singleton locks let Chrome come back after a kill without
 # a "restore pages?" bubble or a "profile in use" refusal.
+#
+# --no-startup-window: the desktop's one window is TaskWindow's. It keeps agent
+# tabs out of any window it didn't open (on a laptop, those are yours): it opens
+# one of its own and hands focus back, so a startup window stayed on top of the
+# view with the agents working unseen behind it. With no window, the first agent
+# opens it and every later one joins it. With remote debugging on, Chrome stays up
+# with no window at all.
+OLD_LAUNCHER="$(cat "$CHROME_LAUNCHER" 2>/dev/null || true)"
 cat >"$CHROME_LAUNCHER" <<EOF
 #!/bin/bash
 # Written by Ateam's install-browser.sh: the box's one Chrome, with CDP on loopback.
@@ -150,9 +159,12 @@ sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/' "\$P/Default/Preferences"
 rm -f "\$P"/Singleton*
 exec /usr/bin/google-chrome --no-sandbox --disable-gpu --remote-debugging-port=$CDP_PORT \\
 	--user-data-dir="\$P" --no-first-run --disable-session-crashed-bubble --lang=en-US \\
-	--start-maximized --window-size=1280,720 about:blank
+	--start-maximized --window-size=1280,720 --no-startup-window
 EOF
 chmod +x "$CHROME_LAUNCHER"
+# A running Chrome keeps the flags it started with, and step 4 leaves it running.
+CHROME_STALE=""
+if [ -n "$OLD_LAUNCHER" ] && [ "$OLD_LAUNCHER" != "$(cat "$CHROME_LAUNCHER")" ]; then CHROME_STALE=1; fi
 
 # Xvfb refuses a display whose lock file outlived its server, and a Sprite keeps
 # /tmp across a restart, so one stale lock left every restart failing. The lock is
@@ -301,6 +313,14 @@ else
 	done < <(service_specs)
 	if [ -n "${TW_UPGRADED:-}" ]; then "$SPRITE_ENV" services restart ateam-taskwindow >/dev/null; fi
 fi
+if [ -n "$CHROME_STALE" ]; then
+	if [ "$SVC_MGR" = systemd ]; then
+		RESTART="sudo systemctl restart ateam-chrome"
+	else
+		RESTART="$SPRITE_ENV services restart ateam-chrome"
+	fi
+	info "Chrome keeps its old launch flags until it restarts. When no agent is using it: $RESTART"
+fi
 
 # -------------------------------------------------------------- verify -----
 
@@ -349,7 +369,9 @@ task on this box opens its Browser panel), or in any browser at:
 
     http://${VIEW_ADDR:-<ssh -L 6080:127.0.0.1:6080 this box, then> localhost:6080}/vnc.html#autoconnect=true&resize=scale
 
-VNC password: $VNC_PASS_FILE. Log into a site there once and every agent on
-this box shares the session. Agents reach Chrome through the taskwindow MCP
-tools; CDP is also on 127.0.0.1:$CDP_PORT for anything that speaks it.
+VNC password: $VNC_PASS_FILE. Chrome's window opens with the first agent
+that uses it (until then the desktop is empty, so ask one to open the site). Log
+into a site there once and every agent on this box shares the session. Agents
+reach Chrome through the taskwindow MCP tools; CDP is also on 127.0.0.1:$CDP_PORT
+for anything that speaks it.
 EOF
