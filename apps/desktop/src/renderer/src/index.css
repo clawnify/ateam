@@ -2992,7 +2992,7 @@ input {
 	max-width: 776px;
 	margin: 0 auto;
 	/* The last message keeps clear of the composer and what waits above it. */
-	padding: 24px 20px 40px;
+	padding: 24px 20px 64px;
 	display: flex;
 	flex-direction: column;
 	gap: 20px;
@@ -3519,7 +3519,7 @@ input {
 	max-height: 40vh;
 	overflow-y: auto;
 	margin: 0 auto;
-	padding: 12px 20px 16px;
+	padding: 16px 20px 20px;
 }
 .lead-asking-title {
 	font-size: 11px;
