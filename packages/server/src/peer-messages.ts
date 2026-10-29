@@ -502,7 +502,9 @@ export class PeerMessenger {
 		const want = to.toLowerCase();
 		const matches = repo
 			.listProjects(db)
-			.flatMap((p) => repo.listTasks(db, p.id))
+			// Archived too: a task named outright is still reachable, and the
+			// delivery's activity brings it back.
+			.flatMap((p) => repo.listTasks(db, p.id, { includeArchived: true }))
 			.filter((t) => t.name.toLowerCase() === want || t.branch.toLowerCase() === want);
 		if (matches.length === 1 && matches[0]) return matches[0];
 		if (matches.length > 1)

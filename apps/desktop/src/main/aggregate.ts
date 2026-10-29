@@ -41,6 +41,8 @@ const ENTITY = new Set<string>([
 	CH.tasksCleanup,
 	CH.tasksCleanupPreview,
 	CH.tasksCleanupCandidates,
+	CH.tasksListArchived, // projectId
+	CH.tasksSetArchived, // task id
 	CH.tasksLastReply, // taskId — the Lead chat reads it from the task's engine
 	CH.tasksGet, // taskId — the Lead looks a task up where it lives
 	CH.tasksMessage, // {taskId} — the user's reply goes to the task's engine
@@ -144,6 +146,10 @@ export interface Aggregate {
 	ownerKindOf(ownerId: string): "local" | "remote";
 	/** The learned id→backend map (which environment owns each entity). Read-only use. */
 	readonly ownerOf: ReadonlyMap<string, Backend>;
+	/** Point every id `from` owns at `to`: the same box, now served another way
+	 *  (its offline board giving way to the live engine, or the reverse). The
+	 *  caller swaps the backend in the list; this keeps routing what's on screen. */
+	rehome(from: Backend, to: Backend): void;
 }
 
 /**
@@ -203,5 +209,8 @@ export function createAggregate(
 		handleFor,
 		ownerKindOf: (ownerId) => (reg.get(ownerId) ?? fallback).kind,
 		ownerOf: reg,
+		rehome(from, to) {
+			for (const [id, b] of reg) if (b === from) reg.set(id, to);
+		},
 	};
 }

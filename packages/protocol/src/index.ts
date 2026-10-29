@@ -87,13 +87,18 @@
 // update the box. Same version, the editor binds loopback and the engine relays
 // it onto the tailnet; nothing on the wire changed for it. TaskDTO gained
 // `browserUsedAt`, nullable, so an older engine reads as "never used".
-// v18: the Lead chat. tasks:lastReply reads a task's last finished turn and
+// v18: archiving. tasks:list leaves archived tasks out, tasks:listArchived and
+// tasks:setArchived are new methods (an older engine rejects them, which fails
+// the Archived view alone), and TaskDTO gained `archivedAt`, nullable. Settings
+// gained `engine.archiveAfterDays`; a v17 engine stores it and archives nothing,
+// which hides nothing, so it needs no gate.
+// v19: the Lead chat. tasks:lastReply reads a task's last finished turn and
 // peers:sendFromLead messages its agent on the user's behalf. New methods, so
-// no gate: a v17 engine answers "Unknown method" and the Lead tells the user
+// no gate: a v18 engine answers "Unknown method" and the Lead tells the user
 // that box needs an update. Same version, agents can ask the user a question
 // (the ask_user board tool): TaskDTO gained `question`, optional, so an older
 // engine reads as "nothing asked", and tasks:answerQuestion answers it.
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -370,12 +375,15 @@ export interface TaskDTO {
 	 *  has, and on an engine older than v17. Clients show the browser beside the
 	 *  task's terminal only once it is set. */
 	browserUsedAt: number | null;
+	/** When the task was archived; null while it is on the board, and on an
+	 *  engine older than v18. tasks:list never returns an archived task. */
+	archivedAt: number | null;
 	/** What the task's agent asked the user (the ask_user board tool) and is
 	 *  waiting on; null when nothing is pending. Absent on an engine older than
-	 *  v18, which reads the same. */
+	 *  v19, which reads the same. */
 	question?: TaskQuestionDTO | null;
 	/** When the agent last finished a turn with a reply (read it with
-	 *  tasks:lastReply); null until one has. Absent on an engine older than v18. */
+	 *  tasks:lastReply); null until one has. Absent on an engine older than v19. */
 	lastReplyAt?: number | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
@@ -484,6 +492,12 @@ export interface EngineSettings {
 	 * box keeps its sessions, and the next connection wakes it.
 	 */
 	idleSleepMinutes: number;
+	/**
+	 * Archive a task that is still open once nothing has happened in it for this
+	 * many days; 0 never does. Archived tasks leave every task list but keep their
+	 * worktree, and any activity in one brings it back. See server/archive.ts.
+	 */
+	archiveAfterDays: number;
 }
 export interface ClientSettings {
 	/** Fetch an update in the background instead of asking first. */
@@ -877,6 +891,8 @@ export const CH = {
 	tasksCleanup: "tasks:cleanup",
 	tasksCleanupPreview: "tasks:cleanupPreview",
 	tasksCleanupCandidates: "tasks:cleanupCandidates",
+	tasksListArchived: "tasks:listArchived",
+	tasksSetArchived: "tasks:setArchived",
 	tasksLastReply: "tasks:lastReply",
 	tasksGet: "tasks:get",
 	tasksMessage: "tasks:message",
@@ -1084,6 +1100,10 @@ export interface AteamApi {
 		cleanupCandidates(projectId: string): Promise<CleanupCandidate[]>;
 		/** Remove merged + idle worktrees. Never deletes unmerged/active/dirty. */
 		cleanup(projectId: string): Promise<CleanupReport>;
+		/** The project's archived tasks, most recently archived first. */
+		listArchived(projectId: string): Promise<TaskDTO[]>;
+		/** Archive a task (off every list, worktree kept) or bring it back. */
+		setArchived(id: string, archived: boolean): Promise<TaskDTO>;
 	};
 	git: {
 		commit(taskId: string, message: string): Promise<{ sha: string }>;

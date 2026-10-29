@@ -195,7 +195,8 @@ export function createDispatcher(engine: Engine): Dispatcher {
 	// A task is removable by the unattended sweep ONLY when `cleanupVerdict`
 	// recommends it — never deleting unmerged work or a task an agent still uses.
 	async function classifyForCleanup(projectId: string) {
-		const allTasks = repo.listTasks(db, projectId);
+		// Archived tasks too: idle worktrees are exactly what cleanup reclaims.
+		const allTasks = repo.listTasks(db, projectId, { includeArchived: true });
 		const removable: typeof allTasks = [];
 		const kept: { task: (typeof allTasks)[number]; reason: string }[] = [];
 		for (const task of allTasks) {
@@ -466,6 +467,20 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
 		},
 
+		[CH.tasksListArchived]: async (projectId: string) =>
+			repo.listArchivedTasks(db, projectId).map((t) => toTaskDTO(t)),
+		// By hand, either way. Archiving sends a removal and unarchiving an update
+		// (see sendTaskUpdated), so every board follows.
+		[CH.tasksSetArchived]: async (id: string, archived: boolean) => {
+			const row = repo.updateTask(
+				db,
+				requireTask(services, id).id,
+				archived ? { archivedAt: Date.now() } : { archivedAt: null, restoredAt: Date.now() },
+			);
+			engine.sendTaskUpdated(id);
+			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
+		},
+
 		// Candidates for the interactive cleanup dialog: EVERY task in the project,
 		// each with the sweep's verdict as advice (`recommended`) and the whole
 		// task DTO, so the dialog can lay out the factors the user decides on —
@@ -474,7 +489,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		// to read before deciding, and "Keep & continue" lands back in it.
 		[CH.tasksCleanupCandidates]: async (projectId: string): Promise<CleanupCandidate[]> => {
 			const out: CleanupCandidate[] = [];
-			for (const task of repo.listTasks(db, projectId)) {
+			for (const task of repo.listTasks(db, projectId, { includeArchived: true })) {
 				const v = await cleanupVerdict(task);
 				const live = repo
 					.listSessionsByTask(db, task.id)

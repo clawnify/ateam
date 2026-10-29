@@ -360,6 +360,16 @@ export function boxWakeOf(db: AteamDb, alias: string): BoxWake | null {
 	return repo.getHost(db, alias)?.wake ?? null;
 }
 
+/** The box's board as last seen (opaque here; the desktop gives it its shape). */
+export function boxSnapshotOf(db: AteamDb, alias: string): unknown {
+	return repo.getHost(db, alias)?.snapshot ?? null;
+}
+
+/** Keep the box's board as just seen, for when it sleeps or can't be reached. */
+export function saveBoxSnapshot(db: AteamDb, alias: string, snapshot: unknown): void {
+	repo.upsertHost(db, { hostAlias: alias, snapshot });
+}
+
 /**
  * Remove a connection from the list. A row that exists only in our db (a ws
  * endpoint, or a user@host set up directly) is deleted outright; an alias still
@@ -370,7 +380,8 @@ export function boxWakeOf(db: AteamDb, alias: string): BoxWake | null {
  */
 export function forgetConnection(db: AteamDb, alias: string, configPath?: string): void {
 	if (readSshHosts(configPath).some((h) => h.alias === alias)) {
-		repo.upsertHost(db, { hostAlias: alias, hidden: 1 });
+		// Its board goes with it: a removed box must not linger as cards.
+		repo.upsertHost(db, { hostAlias: alias, hidden: 1, snapshot: null });
 	} else {
 		repo.deleteHost(db, alias);
 	}

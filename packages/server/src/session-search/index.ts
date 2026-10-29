@@ -80,7 +80,8 @@ export async function searchSessions(
 	const query = input.query.trim();
 	if (!query) return [];
 
-	const tasks = repo.listTasks(db, input.projectId);
+	// Archived too: search is how an archived task is found again.
+	const tasks = repo.listTasks(db, input.projectId, { includeArchived: true });
 	if (tasks.length === 0) return [];
 	const byWorktree = new Map(tasks.map((t) => [t.worktreePath, t]));
 

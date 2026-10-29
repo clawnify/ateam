@@ -228,7 +228,10 @@ finds a session from a description of the work, reading Claude Code / Codex /
 OpenCode transcripts),
 worktree cleanup (every worktree listed with the facts you decide on — age, PR
 state, ahead/dirty counts — and the merged-clean-idle ones flagged as
-recommended), and signed/notarized builds
+recommended), idle-task archiving (an open task untouched for 30 days, set in
+Settings, leaves the board, the phone and the agents' board tools but keeps its
+worktree; any activity in it, or Unarchive in Clean up, brings it back), and
+signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
 Electron main process is boot-verified with native modules.
 

@@ -39,6 +39,7 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 		deleteRemoteBranchOnMerge: false,
 		loopsPaused: false,
 		idleSleepMinutes: 60,
+		archiveAfterDays: 30,
 	},
 };
 

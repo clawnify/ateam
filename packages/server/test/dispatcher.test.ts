@@ -574,6 +574,46 @@ describe("createDispatcher", () => {
 		expect(repo.getTask(db, task.id)?.column).toBe("review");
 	});
 
+	it("leaves archived tasks out of the list, lists them apart, and brings one back", async () => {
+		const db = createTestDb();
+		const { engine, taskUpdated } = makeEngine(db);
+		const d = createDispatcher(engine);
+		const project = repo.upsertProject(db, { repoPath: "/r/a", name: "A", defaultBranch: "main" });
+		const make = (name: string) =>
+			repo.createTask(db, {
+				projectId: project!.id,
+				name,
+				slug: name,
+				branch: name,
+				baseBranch: "main",
+				worktreePath: `/r/a/.ateam/worktrees/${name}`,
+			});
+		const kept = make("kept");
+		const shelved = make("shelved");
+
+		const archived = (await d.handle(CH.tasksSetArchived, [shelved.id, true])) as {
+			archivedAt: number | null;
+		};
+		expect(archived.archivedAt).not.toBeNull();
+		// The engine turns this into a removal for an archived task (sendTaskUpdated).
+		expect(taskUpdated).toContain(shelved.id);
+
+		const listed = (await d.handle(CH.tasksList, [project!.id])) as Array<{ id: string }>;
+		expect(listed.map((t) => t.id)).toEqual([kept.id]);
+		const shelf = (await d.handle(CH.tasksListArchived, [project!.id])) as Array<{ id: string }>;
+		expect(shelf.map((t) => t.id)).toEqual([shelved.id]);
+		// Cleanup still weighs it: idle worktrees are what it reclaims.
+		const candidates = (await d.handle(CH.tasksCleanupCandidates, [project!.id])) as Array<{
+			task: { id: string };
+		}>;
+		expect(candidates.map((c) => c.task.id).sort()).toEqual([kept.id, shelved.id].sort());
+
+		await d.handle(CH.tasksSetArchived, [shelved.id, false]);
+		const after = (await d.handle(CH.tasksList, [project!.id])) as Array<{ id: string }>;
+		expect(after.map((t) => t.id).sort()).toEqual([kept.id, shelved.id].sort());
+		expect(await d.handle(CH.tasksListArchived, [project!.id])).toEqual([]);
+	});
+
 	it("registers no project rows for an empty db", async () => {
 		const { engine } = makeEngine(createTestDb());
 		const d = createDispatcher(engine);
@@ -841,6 +881,15 @@ it("creates one linked worktree for concurrent issue starts and finds it after r
 		])) as Result;
 		expect(again.created).toBe(false);
 		expect(again.task.id).toBe(results[0]!.task.id);
+		// Starting an archived issue's task again brings it back to the board,
+		// rather than handing over a task no board shows.
+		repo.updateTask(db, again.task.id, { archivedAt: Date.now() });
+		const back = (await dispatcher.handle(CH.tasksCreateFromIssue, [input])) as Result & {
+			task: { archivedAt: number | null };
+		};
+		expect(back.created).toBe(false);
+		expect(back.task.archivedAt).toBeNull();
+		expect(repo.listTasks(db, project.id)).toHaveLength(1);
 		await expect(
 			dispatcher.handle(CH.tasksCreateFromIssue, [{ ...input, issueNumber: -1 }]),
 		).rejects.toThrow("Invalid GitHub issue number");

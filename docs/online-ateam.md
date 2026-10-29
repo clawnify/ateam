@@ -209,7 +209,8 @@ ssh my-ateam-box "bash -lc 'ateam'"
 6. **Next launch it's already there.** Every box you've connected before is
    reconnected in the background when Ateam starts, so a project's remote tasks are
    on the board without picking anything first. A box that's asleep or unreachable
-   just shows as disconnected — the rest of the board never waits for it.
+   keeps its tasks on the board as they were last seen, dimmed and marked asleep or
+   offline. Opening one wakes the box. The rest of the board never waits for it.
 
 > **Editing files by hand on the box.** A task's toolbar has an **Edit files**
 > button that opens VS Code *running on the box*, scoped to that task's worktree,
@@ -460,8 +461,11 @@ The connection menu surfaces the real error inline. Common ones:
   reclaims its process and leaves the tab on the strip, and bringing it back
   resumes the same conversation. Agents mid-turn or holding a question are never
   reclaimed.
-- **A box that drops mid-session shows as disconnected too.** Sleep the Mac, flip
-  networks, or let the box go away and Ateam drops that box rather than leaving a dead
-  link on the board — the rest of the board keeps working, and reconnecting from the
-  same menu re-attaches to whatever kept running. SSH connections are held open with
-  keepalives so an unreachable box is noticed in ~45s instead of never.
+- **A box that drops mid-session reconnects by itself.** Sleep the Mac, flip
+  networks, or let the box go to sleep and Ateam drops the live link rather than
+  leaving a dead one, but keeps the box's tasks on the board as last seen. It tries
+  the box again after 5s, then less often, up to every 2 minutes, without ever waking
+  a sleeping box: a Tailscale dial leaves it asleep, and an SSH box is dialled only
+  once its provider says it's up. Reconnecting re-attaches to whatever kept running.
+  SSH connections are held open with keepalives so an unreachable box is noticed in
+  ~45s instead of never.

@@ -143,6 +143,17 @@ export const tasks = sqliteTable(
 		/** When the task's agent first drove the box's browser (a TaskWindow tool
 		 *  call, see the BrowserUse hook); null while it never has. */
 		browserUsedAt: integer("browser_used_at"),
+		/**
+		 * Off the board: hidden from every task list (the board, the phone, the
+		 * agents' get_board and list_peers) but kept whole, worktree and branch
+		 * included. Set by the idle sweep (archive.ts) or by hand, cleared by any
+		 * agent activity or an Unarchive. Null while the task is on the board.
+		 */
+		archivedAt: integer("archived_at"),
+		/** When the task was last brought back by hand (Unarchive, starting its
+		 *  issue again). The sweep counts idleness from here too, or a task idle
+		 *  for months would be archived again within the hour. */
+		restoredAt: integer("restored_at"),
 		/** The agent's last finished turn, from its Stop hook, so the Lead chat
 		 *  can read what a task said without opening its terminal. Capped at
 		 *  LAST_REPLY_MAX in the engine; null until a turn has ended. */
@@ -392,6 +403,10 @@ export const hosts = sqliteTable(
 		 *  machine's own inputs (its name there). The provider's key is not here: it is
 		 *  a secret, kept in the app's encrypted store. Null for every other box. */
 		wake: text("wake", { mode: "json" }).$type<{ id: string; box: Record<string, string> }>(),
+		/** The box's board as last seen (projects, their tasks, loops), so its cards
+		 *  stay on the board while it sleeps or can't be reached. Opaque here: the
+		 *  desktop writes and reads it (main/offline.ts). Null until first held. */
+		snapshot: text("snapshot", { mode: "json" }).$type<unknown>(),
 		createdAt: epochMs("created_at"),
 	},
 	(t) => [index("hosts_last_seen_idx").on(t.lastSeen)],

@@ -19,6 +19,7 @@ import type {
 	TaskDTO,
 } from "@ateam/protocol";
 import { ensureGhShim, ensureNotifyScript, ensurePeerSecret, verifyPeerToken } from "./agent-setup";
+import { ARCHIVE_SWEEP_MS, archiveIdleTasks } from "./archive";
 import { stampBrowserUse } from "./browser";
 import { FollowUps } from "./follow-ups";
 import { type HookEvent, HookServer, type MergeRequestEvent } from "./hooks/hook-server";
@@ -204,6 +205,13 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 
 	const sendTaskUpdated = (taskId: string): void => {
 		const task = repo.getTask(db, taskId);
+		// An archived task is off every board. Clients add a task they have not
+		// seen on an update, so a background write to one (a git-status refresh)
+		// would put the card back; a removal keeps it off, old clients included.
+		if (task?.archivedAt != null) {
+			emitter.emit("taskRemoved", taskId);
+			return;
+		}
 		if (task) {
 			emitter.emit(
 				"taskUpdated",
@@ -504,6 +512,13 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		if (e.eventType === "Start") return;
 		const task = repo.getTask(db, session.taskId);
 		if (task) {
+			// Activity brings an archived task back, whatever the event: the early
+			// returns below skip the write for a Working that changes nothing, and
+			// leave lastEventAt old, so restoredAt is what holds off the sweep.
+			if (task.archivedAt != null) {
+				repo.updateTask(db, task.id, { archivedAt: null, restoredAt: Date.now() });
+				sendTaskUpdated(task.id);
+			}
 			const column = columnWithQuestion(task, mapEventToColumn(e.eventType));
 			// Subagents fire PreToolUse too, so a Working event must never mask a
 			// pending question — only an explicit user reply (UserReply), Stop, or
@@ -555,13 +570,29 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	// the restorable strip instead of retiring it to history.
 	// Refresh git + PR facts for tasks nobody is looking at, so a list row can
 	// say something true about a worktree whose panel was never opened.
+	const taskIsLive = (taskId: string): boolean =>
+		repo.listSessionsByTask(db, taskId).some((s) => pty.has(s.terminalId));
 	const worktreeSweep = createWorktreeSweep({
 		db,
 		onTaskUpdated: (taskId) => sendTaskUpdated(taskId),
-		isLive: (taskId) => repo.listSessionsByTask(db, taskId).some((s) => pty.has(s.terminalId)),
+		isLive: taskIsLive,
 	});
 
 	let reapTimer: ReturnType<typeof setInterval> | null = null;
+	let archiveTimer: ReturnType<typeof setInterval> | null = null;
+	// Take open tasks idle past `engine.archiveAfterDays` off every board (see
+	// archive.ts). Read per pass, so a settings edit applies at the next one.
+	const archiveIdle = (): void => {
+		const ids = archiveIdleTasks(
+			{ db, isLive: taskIsLive },
+			readSettings().settings.engine.archiveAfterDays,
+		);
+		for (const id of ids) emitter.emit("taskRemoved", id);
+		if (ids.length > 0) {
+			const log = opts.log ?? ((line: string) => console.log(line));
+			log(`[ateam] archived ${ids.length} idle task(s)`);
+		}
+	};
 	const reapIdleSessions = (): void => {
 		const due = reapableSessions(repo.listOpenSessions(db), Date.now(), REAP_IDLE_MS);
 		let count = 0;
@@ -646,6 +677,11 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		startLoops() {
 			loopRunner.start();
 			reapTimer ??= setInterval(reapIdleSessions, REAP_SWEEP_MS);
+			// Liveness needs the daemon: before it answers, every terminal reads as gone.
+			if (!archiveTimer) {
+				archiveTimer = setInterval(archiveIdle, ARCHIVE_SWEEP_MS);
+				void ptyReady.then(archiveIdle);
+			}
 			worktreeSweep.start();
 			peers.start();
 		},
@@ -665,6 +701,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			if (reapTimer) {
 				clearInterval(reapTimer);
 				reapTimer = null;
+			}
+			if (archiveTimer) {
+				clearInterval(archiveTimer);
+				archiveTimer = null;
 			}
 			waits.stop();
 			peers.stop();

@@ -192,6 +192,12 @@ export function App() {
 	// agents), keyed by alias ("local" for this Mac). Drives per-environment agent
 	// availability in the composer — you can only pick an agent the box really has.
 	const [envAgents, setEnvAgents] = useState<Record<string, string[]>>({});
+	// The boxes whose engine is held right now; null until first read, which counts
+	// as none: a box task's panel must not mount (and resume its agent into a
+	// refusal) before the app knows its box is there. A box whose projects are on
+	// the board but isn't in here is served from its last-seen board
+	// (main/offline.ts): its cards show, its engine can't be reached.
+	const [heldAliases, setHeldAliases] = useState<Set<string> | null>(null);
 	// The active repo's `origin` remote URL (null = local-only). A task can go remote
 	// only if there's a remote to clone the project from onto the box.
 	const [activeRepoRemote, setActiveRepoRemote] = useState<string | null>(null);
@@ -311,6 +317,10 @@ export function App() {
 	);
 	const [customOrder, setCustomOrder] = useState<string[]>([]);
 	const [cleanupOpen, setCleanupOpen] = useState(false);
+	const [archivedCount, setArchivedCount] = useState(0);
+	// Bumped whenever a card leaves a board, which is also what an archive looks
+	// like from here, so the archived count on Clean up follows the sweep.
+	const [archivedTick, setArchivedTick] = useState(0);
 	const [composerOpen, setComposerOpen] = useState(false);
 	// Free-text task filter driven by the centered search bar in the topbar.
 	// Filters the sidebar list and the board by task name; the selected task
@@ -387,6 +397,7 @@ export function App() {
 		// Removal (delete/cleanup) from any window — drop the card everywhere and
 		// clear the selection if it was pointing at the now-gone task.
 		const offRemoved = window.ateam.events.onTaskRemoved((taskId) => {
+			setArchivedTick((n) => n + 1);
 			setTasksByProject((prev) => {
 				const next: Record<string, TaskDTO[]> = {};
 				for (const [pid, list] of Object.entries(prev)) {
@@ -437,6 +448,7 @@ export function App() {
 				}
 				setEnvAgents(map);
 				setEnvProtocol(wire);
+				setHeldAliases(new Set(list.flatMap((s) => (s.alias ? [s.alias] : []))));
 			});
 		};
 		load();
@@ -513,6 +525,41 @@ export function App() {
 	// Which engine a task runs on = the engine that owns its project (tasks never
 	// migrate between engines, so origin is intrinsic to the projectId).
 	const originOf = useCallback((projectId: string): Alias => origins[projectId] ?? null, [origins]);
+	// The box a task is on when that box isn't held (its card is from the box's
+	// last-seen board), else null.
+	const offlineAliasOf = useCallback(
+		(task: TaskDTO): string | null => {
+			const alias = originOf(task.projectId);
+			return alias && !heldAliases?.has(alias) ? alias : null;
+		},
+		[originOf, heldAliases],
+	);
+	// The box being woken because a task on it was opened. A ref guards against a
+	// second wake while one runs; the state drives the panel.
+	const [wakingAlias, setWakingAlias] = useState<string | null>(null);
+	const wakingRef = useRef<string | null>(null);
+	// Opening a task on a box that isn't held is the user asking for that box, the
+	// same intent as starting a task on it, so it is woken the same way. Only an
+	// open does this: a selection restored on launch must never wake a box.
+	const wakeBox = useCallback(async (alias: string) => {
+		if (wakingRef.current === alias) return;
+		wakingRef.current = alias;
+		setWakingAlias(alias);
+		try {
+			await window.ateamHost.connect(alias, { wake: true });
+		} catch (e) {
+			setError(
+				`Couldn't reach ${aliasLabel(alias)}: ${e instanceof Error ? e.message : String(e)}`,
+			);
+		} finally {
+			wakingRef.current = null;
+			setWakingAlias(null);
+		}
+	}, []);
+	const wakeIfOffline = (task: TaskDTO | undefined) => {
+		const alias = task ? offlineAliasOf(task) : null;
+		if (alias) void wakeBox(alias);
+	};
 
 	// "Run on" options for a new task: this Mac (if the repo is here) + every
 	// ~/.ssh/config box. A box clones the project from its git remote, so boxes are
@@ -644,6 +691,23 @@ export function App() {
 		: activeProjectId
 			? (tasksByProject[activeProjectId] ?? [])
 			: [];
+	// Archived tasks of the project Clean up opens on, which is where they are
+	// shown and brought back.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: archivedTick is the trigger, not a value the body reads: it re-counts after a card leaves the board.
+	useEffect(() => {
+		if (!activeProjectId) return setArchivedCount(0);
+		let stale = false;
+		// An engine older than v18 has no archive: it rejects, and counts as none.
+		void window.ateam.tasks
+			.listArchived(activeProjectId)
+			.catch(() => [])
+			.then((list) => {
+				if (!stale) setArchivedCount(list.length);
+			});
+		return () => {
+			stale = true;
+		};
+	}, [activeProjectId, archivedTick]);
 	const linkedIssues = new Set(
 		activeTasks.flatMap((task) => (task.issueUrl ? [task.issueUrl.toLowerCase()] : [])),
 	);
@@ -655,6 +719,9 @@ export function App() {
 			? (backlogIssues.find((issue) => issue.url === selectedIssue.url) ?? null)
 			: null;
 	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
+	// Its box isn't held, so it has no terminal or worktree to show: the panel says
+	// so and wakes it instead of mounting a TaskPanel whose every call is refused.
+	const selectedOffline = selectedTask ? offlineAliasOf(selectedTask) : null;
 	// Mission Control's grid is on screen (not covered by a full-width task).
 	// There the sidebar lights the highlighted tile's task instead of the
 	// selection, since a click there highlights rather than opens.
@@ -873,11 +940,13 @@ export function App() {
 		setSelectedTaskId(t.id);
 		markRead(t.id);
 		setPanelMode("full");
+		wakeIfOffline(t);
 	};
 	const selectFromBoard = (id: string) => {
 		setSelectedTaskId(id);
 		markRead(id);
 		setPanelMode("side");
+		wakeIfOffline(activeTasks.find((t) => t.id === id));
 	};
 	// Expanding a Mission Control tile opens that exact terminal full-width.
 	// `view` stays "mission", so collapsing or closing the panel lands back on
@@ -1113,6 +1182,18 @@ export function App() {
 				const existing = card.members.find((m) => m.alias === input.alias);
 				if (existing) {
 					projectId = existing.projectId;
+					// Its project is on the board from the box's last-seen board: wake
+					// it, and the engine takes over the same ids (host.ts connect).
+					if (!heldAliases?.has(input.alias)) {
+						setInfo(`Waking ${aliasLabel(input.alias)}…`);
+						setProvisioning(input.alias);
+						try {
+							await window.ateamHost.connect(input.alias, { wake: true });
+						} finally {
+							setInfo(null);
+							setProvisioning(null);
+						}
+					}
 				} else {
 					// First task on this box for this repo: it isn't here yet, so clone +
 					// register it from the repo's remote, then route the create to it.
@@ -1483,6 +1564,7 @@ export function App() {
 												<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
 													<TaskRow
 														task={t}
+														offline={offlineAliasOf(t) !== null}
 														selected={t.id === sidebarSelectedId}
 														onClick={() => toggleTask(t)}
 														onDelete={() => deleteTask(t)}
@@ -1498,6 +1580,7 @@ export function App() {
 											<motion.div key={t.id} layout transition={springy}>
 												<TaskRow
 													task={t}
+													offline={offlineAliasOf(t) !== null}
 													selected={t.id === sidebarSelectedId}
 													onClick={() => toggleTask(t)}
 													onDelete={() => deleteTask(t)}
@@ -1688,6 +1771,7 @@ export function App() {
 						>
 							<Brush size={14} strokeWidth={1.75} />
 							Clean up
+							{archivedCount > 0 && <span className="muted">{archivedCount} archived</span>}
 						</button>
 						<button type="button" className="navbtn" onClick={newTask} disabled={!activeProjectId}>
 							<Plus size={14} strokeWidth={1.75} />
@@ -1701,7 +1785,18 @@ export function App() {
 					    from, rather than being a fourth view of its own. The view keeps
 					    its tab lit, and collapsing or closing lands back on it — so
 					    there is one panel here, not one per view. */}
-					{selectedTask && panelMode === "full" ? (
+					{selectedTask && panelMode === "full" && selectedOffline ? (
+						<OfflineTaskPanel
+							task={selectedTask}
+							label={aliasLabel(selectedOffline)}
+							asleep={connections.some((c) => c.alias === selectedOffline && c.asleep)}
+							waking={wakingAlias === selectedOffline}
+							steps={connectSteps[selectedOffline]}
+							mode={panelMode}
+							onWake={() => void wakeBox(selectedOffline)}
+							onClose={() => setSelectedTaskId(null)}
+						/>
+					) : selectedTask && panelMode === "full" ? (
 						<TaskPanel
 							task={selectedTask}
 							agents={agents}
@@ -1790,8 +1885,11 @@ export function App() {
 								// tagging it would be noise. `null` = no badge.
 								originLabel={(t) => {
 									const a = originOf(t.projectId);
-									return a ? aliasLabel(a) : null;
+									if (!a) return null;
+									if (!offlineAliasOf(t)) return aliasLabel(a);
+									return `${aliasLabel(a)} · ${connections.find((c) => c.alias === a)?.asleep ? "asleep" : "offline"}`;
 								}}
+								isOffline={(t) => offlineAliasOf(t) !== null}
 							/>
 							{visibleIssue && (
 								<GithubIssuePanel
@@ -1803,7 +1901,18 @@ export function App() {
 									}}
 								/>
 							)}
-							{selectedTask && (
+							{selectedTask && selectedOffline ? (
+								<OfflineTaskPanel
+									task={selectedTask}
+									label={aliasLabel(selectedOffline)}
+									asleep={connections.some((c) => c.alias === selectedOffline && c.asleep)}
+									waking={wakingAlias === selectedOffline}
+									steps={connectSteps[selectedOffline]}
+									mode={panelMode}
+									onWake={() => void wakeBox(selectedOffline)}
+									onClose={() => setSelectedTaskId(null)}
+								/>
+							) : selectedTask ? (
 								<TaskPanel
 									task={selectedTask}
 									agents={agents}
@@ -1822,7 +1931,7 @@ export function App() {
 										setSelectedTaskId((cur) => (taskId == null || cur === taskId ? null : cur))
 									}
 								/>
-							)}
+							) : null}
 						</>
 					) : view === "mission" ? (
 						<MissionControl
@@ -1871,7 +1980,10 @@ export function App() {
 					projectId={activeProjectId}
 					confirm={confirm}
 					reload={() => activeProjectId && loadTasks(activeProjectId)}
-					onClose={() => setCleanupOpen(false)}
+					onClose={() => {
+						setCleanupOpen(false);
+						setArchivedTick((n) => n + 1);
+					}}
 				/>
 			)}
 			{newIssueOpen && issueRepository && (
@@ -1990,14 +2102,72 @@ function TriageGlyph({ triage }: { triage: TaskTriage }) {
 	);
 }
 
+/**
+ * The panel for a task whose box isn't held. Everything a TaskPanel shows lives
+ * on the box (terminals, worktree, diff), so this stands in until the box answers:
+ * waking it when the task was opened, or offering to when it wasn't (a selection
+ * restored on launch must not wake a box by itself).
+ */
+function OfflineTaskPanel({
+	task,
+	label,
+	asleep,
+	waking,
+	steps,
+	mode,
+	onWake,
+	onClose,
+}: {
+	task: TaskDTO;
+	label: string;
+	asleep: boolean;
+	waking: boolean;
+	steps: ConnectStep[] | undefined;
+	mode: "side" | "full";
+	onWake: () => void;
+	onClose: () => void;
+}) {
+	return (
+		<section className={`panel ${mode === "full" ? "full" : ""}`}>
+			<div className="head">
+				<div style={{ display: "flex", justifyContent: "space-between" }}>
+					<span className="title">{task.name}</span>
+					<IconButton icon={X} label="Close" onClick={onClose} />
+				</div>
+				<div className="branch muted">
+					{task.branch} ← {task.baseBranch}
+				</div>
+			</div>
+			<div className="empty">
+				{waking ? (
+					<>
+						Waking {label}…{steps?.length ? <ConnectSteps steps={steps} /> : null}
+					</>
+				) : (
+					<>
+						{label} is {asleep ? "asleep" : "out of reach"}, so this task is as it was last seen.
+						<br />
+						<button type="button" className="navbtn" onClick={onWake}>
+							Wake {label}
+						</button>
+					</>
+				)}
+			</div>
+		</section>
+	);
+}
+
 function TaskRow({
 	task: t,
+	offline,
 	selected,
 	onClick,
 	onDelete,
 	onWait,
 }: {
 	task: TaskDTO;
+	/** Its box isn't held: the row is its last-seen state, not a live one. */
+	offline: boolean;
 	selected: boolean;
 	onClick: () => void;
 	onDelete: () => void;
@@ -2011,7 +2181,12 @@ function TaskRow({
 	// delete button share the trailing slot and swap in place on hover.
 	return (
 		<div className="tasknode-row">
-			<button type="button" className={`tasknode ${selected ? "selected" : ""}`} onClick={onClick}>
+			<button
+				type="button"
+				className={`tasknode ${selected ? "selected" : ""} ${offline ? "offline" : ""}`}
+				title={offline ? "Its box is asleep or out of reach. Open it to wake the box." : undefined}
+				onClick={onClick}
+			>
 				{glyphs.length > 0 ? (
 					<span className="ticon glyphs">
 						<SessionGlyphs ids={glyphs} size={14} />
@@ -2116,6 +2291,7 @@ function Board({
 	onSelect,
 	onDeselect,
 	originLabel,
+	isOffline,
 }: {
 	tasks: TaskDTO[];
 	issues: GithubIssueDTO[];
@@ -2128,6 +2304,8 @@ function Board({
 	onDeselect: () => void;
 	/** Engine badge for a task (e.g. a box alias), or null to show none (Local). */
 	originLabel: (t: TaskDTO) => string | null;
+	/** Its box isn't held: the card is its last-seen state, not a live one. */
+	isOffline: (t: TaskDTO) => boolean;
 }) {
 	// The side panel is sticky over the right edge of the board (the board keeps
 	// its full width rather than reflowing), so a selected card in a right-hand
@@ -2193,7 +2371,7 @@ function Board({
 									// carrying the card to another column, or cards above it coming
 									// and going. Re-check from the card's final resting box.
 									onLayoutAnimationComplete={isSelected ? revealSelected : undefined}
-									className={`card ${isSelected ? "selected" : ""}`}
+									className={`card ${isSelected ? "selected" : ""} ${isOffline(t) ? "offline" : ""}`}
 									onClick={(e) => {
 										e.stopPropagation();
 										onSelect(t.id);

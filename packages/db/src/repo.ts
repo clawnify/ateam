@@ -68,12 +68,31 @@ export const repo = {
 		return db.insert(tasks).values(t).returning().get();
 	},
 
-	listTasks(db: AteamDb, projectId: string) {
+	/**
+	 * The project's tasks on the board. Archived ones are left out unless asked
+	 * for, so a new listing (a board, an agent tool) hides them without having to
+	 * know they exist; only the callers that must see the whole project opt in.
+	 */
+	listTasks(db: AteamDb, projectId: string, opts: { includeArchived?: boolean } = {}) {
 		return db
 			.select()
 			.from(tasks)
-			.where(eq(tasks.projectId, projectId))
+			.where(
+				opts.includeArchived
+					? eq(tasks.projectId, projectId)
+					: and(eq(tasks.projectId, projectId), isNull(tasks.archivedAt)),
+			)
 			.orderBy(desc(tasks.createdAt))
+			.all();
+	},
+
+	/** The project's archived tasks, most recently archived first. */
+	listArchivedTasks(db: AteamDb, projectId: string) {
+		return db
+			.select()
+			.from(tasks)
+			.where(and(eq(tasks.projectId, projectId), isNotNull(tasks.archivedAt)))
+			.orderBy(desc(tasks.archivedAt))
 			.all();
 	},
 
