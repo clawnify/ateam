@@ -2991,7 +2991,8 @@ input {
 .lead-thread {
 	max-width: 776px;
 	margin: 0 auto;
-	padding: 24px 20px 32px;
+	/* The last message keeps clear of the composer and what waits above it. */
+	padding: 24px 20px 64px;
 	display: flex;
 	flex-direction: column;
 	gap: 20px;
@@ -3518,7 +3519,7 @@ input {
 	max-height: 40vh;
 	overflow-y: auto;
 	margin: 0 auto;
-	padding: 0 20px 10px;
+	padding: 16px 20px 20px;
 }
 .lead-asking-title {
 	font-size: 11px;
@@ -3528,6 +3529,11 @@ input {
 }
 .panel-question {
 	padding: 8px 10px 0;
+}
+/* What the user decided on the Lead's own permission prompt, kept in the thread. */
+.lead-permission-outcome {
+	font-size: 12px;
+	color: var(--text-dim);
 }
 .panel-page {
 	padding: 8px 10px 0;

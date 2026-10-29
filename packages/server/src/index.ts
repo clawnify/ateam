@@ -27,6 +27,8 @@ export type { GrammarJudgeIssue, GrammarVerdict } from "./grammar-jev";
 export { judgeGrammar } from "./grammar-jev";
 export type { JsonRpcMessage, McpReply, McpToolResult, McpToolServer } from "./hooks/board-mcp";
 export { dispatchMcpTools } from "./hooks/board-mcp";
+// The Lead chat asks before its own agent uses a tool, in the same words.
+export { describeAsk, ruleText } from "./permissions";
 export type { BoxProvider, CreatedServer, CreateServerInput, ProviderOptions } from "./provision";
 export {
 	buildCloudInit,

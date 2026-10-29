@@ -79,7 +79,7 @@ export function describeAsk(toolName: string, input: Record<string, unknown>): s
 }
 
 /** "Bash(npm run lint)" for an addRules suggestion, so "Always allow" says what it allows. */
-function ruleText(suggestions: unknown[]): string | null {
+export function ruleText(suggestions: unknown[]): string | null {
 	for (const s of suggestions) {
 		const o = (s ?? {}) as { type?: string; rules?: { toolName?: string; ruleContent?: string }[] };
 		const r = o.type === "addRules" ? o.rules?.[0] : undefined;

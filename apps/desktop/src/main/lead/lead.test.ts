@@ -266,6 +266,115 @@ describe("LeadSession", () => {
 		expect(args[args.indexOf("--resume") + 1]).toBe("sess-1");
 	});
 
+	it("runs as the user's own Claude Code, asking the chat about permissions", () => {
+		const { session, procs } = makeSession();
+		session.send("hi");
+		const args = (procs[0] as FakeClaude).args;
+		expect(args).not.toContain("--setting-sources");
+		expect(args).not.toContain("--strict-mcp-config");
+		expect(args).not.toContain("--tools");
+		expect(args[args.indexOf("--permission-prompt-tool") + 1]).toBe("stdio");
+		expect(args[args.indexOf("--allowedTools") + 1]).toBe("mcp__ateam_lead__get_board");
+	});
+
+	it("turns a permission prompt into a card and answers it the way Claude reads it", async () => {
+		const { session, procs, dir } = makeSession();
+		session.send("write the file");
+		const p = procs[0] as FakeClaude;
+		const ask = (id: string, command: string) => ({
+			type: "control_request",
+			request_id: id,
+			request: {
+				subtype: "can_use_tool",
+				tool_name: "Bash",
+				input: { command },
+				permission_suggestions: [
+					{ type: "addRules", rules: [{ toolName: "Bash", ruleContent: "echo hi *" }] },
+				],
+			},
+		});
+		p.say(init(), ask("r1", "echo hi > a.txt"), ask("r2", "echo hi > b.txt"), ask("r3", "rm c"));
+		await tick();
+		expect(session.snapshot().items.find((i) => i.id === "r1")).toMatchObject({
+			kind: "permission",
+			canAlways: true,
+			always: "Bash(echo hi *)",
+		});
+		expect(JSON.stringify(session.snapshot().items)).toContain("Run a command?");
+
+		session.answerPermission("r1", "allow");
+		session.answerPermission("r2", "always");
+		session.answerPermission("r3", "deny");
+		await tick();
+		const responses = p.written.filter((w) => w.type === "control_response");
+		expect(responses).toEqual([
+			{
+				type: "control_response",
+				response: {
+					subtype: "success",
+					request_id: "r1",
+					response: { behavior: "allow", updatedInput: { command: "echo hi > a.txt" } },
+				},
+			},
+			{
+				type: "control_response",
+				response: {
+					subtype: "success",
+					request_id: "r2",
+					response: {
+						behavior: "allow",
+						updatedInput: { command: "echo hi > b.txt" },
+						updatedPermissions: [
+							{ type: "addRules", rules: [{ toolName: "Bash", ruleContent: "echo hi *" }] },
+						],
+					},
+				},
+			},
+			{
+				type: "control_response",
+				response: {
+					subtype: "success",
+					request_id: "r3",
+					response: { behavior: "deny", message: "The user said no from the Lead chat." },
+				},
+			},
+		]);
+		expect(session.snapshot().items.find((i) => i.id === "r2")).toMatchObject({ answer: "always" });
+		expect(() => session.answerPermission("r1", "allow")).toThrow("no longer waiting");
+
+		// A prompt still waiting when the app closes is not left waiting after it.
+		p.say(ask("r4", "echo late"));
+		await tick();
+		const again = makeSession(dir);
+		expect(again.session.snapshot().items.find((i) => i.id === "r4")).toMatchObject({
+			answer: "cancelled",
+		});
+	});
+
+	it("takes a prompt down when Stop withdraws it, and refuses what it can't answer", async () => {
+		const { session, procs } = makeSession();
+		session.send("go");
+		const p = procs[0] as FakeClaude;
+		p.say(init(), {
+			type: "control_request",
+			request_id: "r1",
+			request: { subtype: "can_use_tool", tool_name: "Write", input: { file_path: "/x" } },
+		});
+		await tick();
+		expect(session.snapshot().items.at(-1)).toMatchObject({ kind: "permission", canAlways: false });
+		p.say(
+			{ type: "control_cancel_request", request_id: "r1" },
+			{ type: "control_request", request_id: "h1", request: { subtype: "hook_callback" } },
+		);
+		await tick();
+		expect(session.snapshot().items.at(-1)).toMatchObject({ id: "r1", answer: "cancelled" });
+		expect(() => session.answerPermission("r1", "allow")).toThrow("no longer waiting");
+		expect(p.written.at(-1)).toMatchObject({
+			type: "control_response",
+			response: { subtype: "error", request_id: "h1" },
+		});
+	});
+
 	it("interrupts a turn without ending the process", async () => {
 		const { session, procs } = makeSession();
 		session.send("long job");
