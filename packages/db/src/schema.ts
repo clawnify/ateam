@@ -60,6 +60,15 @@ export interface TaskQuestion {
 	choices?: QuestionChoice[];
 	select?: "one" | "many";
 	kind?: "permission";
+	pageId?: string;
+}
+
+/** The task's page, without its HTML (that lives in task_pages); mirrors
+ *  @ateam/protocol's TaskPageDTO. */
+export interface TaskPage {
+	id: string;
+	title: string;
+	at: number;
 }
 
 export interface QuestionChoice {
@@ -161,6 +170,9 @@ export const tasks = sqliteTable(
 		/** What the agent asked the user (ask_user) and waits on; null when
 		 *  nothing is pending. One at a time: a new ask replaces it. */
 		question: text("question", { mode: "json" }).$type<TaskQuestion>(),
+		/** The page the agent made for the user (show_page); its HTML is in
+		 *  task_pages, so listing the board never reads it. */
+		page: text("page", { mode: "json" }).$type<TaskPage>(),
 		lastReplyAt: integer("last_reply_at"),
 		lastEventAt: integer("last_event_at"),
 		isUnread: integer("is_unread", { mode: "boolean" }).default(false),
@@ -369,6 +381,14 @@ export const peerMessages = sqliteTable(
 	},
 	(t) => [index("peer_messages_to_idx").on(t.toTaskId, t.deliveredAt)],
 );
+
+/** The HTML of each task's page (tasks.page holds the rest), one per task. */
+export const taskPages = sqliteTable("task_pages", {
+	taskId: text("task_id")
+		.primaryKey()
+		.references(() => tasks.id, { onDelete: "cascade" }),
+	html: text("html").notNull(),
+});
 
 /**
  * Remote hosts the client can drive an engine on, keyed by `host_alias` — the

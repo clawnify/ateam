@@ -538,6 +538,7 @@ export const BOARD_MCP_TOOLS = [
 	"mcp__ateam_board__list_peers",
 	"mcp__ateam_board__send_message",
 	"mcp__ateam_board__ask_user",
+	"mcp__ateam_board__show_page",
 ];
 
 /**
