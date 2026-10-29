@@ -16,6 +16,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { type AteamDb, type QuestionChoice, repo, type Task, type TaskQuestion } from "@ateam/db";
+import { savePage, titleFrom, validatePage } from "./pages";
 import type { OutsideSender, SendResult } from "./peer-messages";
 
 /** Room for a mermaid diagram (rendered by every client) beside the question. */
@@ -41,6 +42,8 @@ export interface AskRequest {
 	options?: unknown[];
 	allowText?: boolean;
 	select?: unknown;
+	/** HTML laying the decision out (pages.ts); its buttons can answer. */
+	page?: unknown;
 }
 
 export type AskVerdict =
@@ -136,8 +139,19 @@ export function applyAskUser(
 	if (!task) return { ok: false, reason: `no task ${req.taskId}` };
 	const verdict = validateAsk(req);
 	if (!verdict.ok) return verdict;
+	let pageId: string | undefined;
+	if (req.page != null) {
+		const page = validatePage({ html: req.page }, titleFrom(verdict.question.text));
+		if (!page.ok) return page;
+		pageId = savePage(db, task.id, page.title, page.html, now).id;
+	}
 	repo.updateTask(db, task.id, {
-		question: { id: randomUUID(), askedAt: now, ...verdict.question },
+		question: {
+			id: randomUUID(),
+			askedAt: now,
+			...verdict.question,
+			...(pageId ? { pageId } : {}),
+		},
 		column: "needs_attention",
 		isUnread: true,
 	});

@@ -78,11 +78,12 @@ import { FileDiffView } from "./components/FileDiffView";
 import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
 import { IconButton } from "./components/IconButton";
 import { LeadChat } from "./components/LeadChat";
-import { QuestionCard } from "./components/QuestionCard";
 import { LoopForm, LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
+import { PageFrame } from "./components/PageFrame";
 import { PanelRightFilled } from "./components/PanelRightFilled";
 import { PromptComposer } from "./components/PromptComposer";
+import { QuestionCard } from "./components/QuestionCard";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
@@ -3123,6 +3124,11 @@ function TaskPanel({
 			{task.question && (
 				<div className="panel-question">
 					<QuestionCard task={task} />
+				</div>
+			)}
+			{task.page && task.question?.pageId !== task.page.id && (
+				<div className="panel-page">
+					<PageFrame taskId={task.id} pageId={task.page.id} title={task.page.title} collapsed />
 				</div>
 			)}
 

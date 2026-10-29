@@ -11,6 +11,7 @@ import { CircleHelp, X } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { AgentIcon } from "./AgentIcon";
 import { Markdown } from "./Markdown";
+import { PageFrame } from "./PageFrame";
 
 /** An IPC rejection carries Electron's prefix before the engine's own words. */
 const cleanError = (e: unknown) =>
@@ -200,6 +201,14 @@ export function QuestionCard({
 			<div className="md question-text">
 				<Markdown text={q.text} />
 			</div>
+			{q.pageId && task.page?.id === q.pageId && (
+				<PageFrame
+					taskId={task.id}
+					pageId={q.pageId}
+					title={task.page.title}
+					onAnswer={(v) => !sending && void answer(v)}
+				/>
+			)}
 			{q.select === "many" && q.choices ? (
 				<Checklist choices={q.choices} disabled={sending} onSend={(t) => void answer(t)} />
 			) : q.choices ? (

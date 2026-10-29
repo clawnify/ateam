@@ -125,6 +125,7 @@ export function toTaskDTO(t: Task, preparing = false, agentIds: string[] = []): 
 		archivedAt: t.archivedAt ?? null,
 		question: t.question ?? null,
 		lastReplyAt: t.lastReplyAt ?? null,
+		page: t.page ?? null,
 		triage: triageTask(t),
 	};
 }

@@ -8,6 +8,7 @@ import { APP_NAME } from "./app-name";
 import { createHost, registerHostIpc } from "./host";
 import { registerIpc } from "./ipc";
 import { type Lead, startLead } from "./lead";
+import { guardPageFrames, registerPageScheme, servePages } from "./pages";
 import { showStartupFailure } from "./startup-failure";
 import { createWaitNotifier } from "./wait-notify";
 
@@ -29,6 +30,9 @@ function broadcast(channel: string, ...args: unknown[]): void {
 }
 
 const SMOKE = process.env.ATEAM_SMOKE === "1";
+
+// Agents' pages get a scheme of their own; it must be declared before ready.
+registerPageScheme();
 
 // Triggers a manual update check (with "you're up to date" feedback). Wired by
 // setupAutoUpdate() once auto-update is active; null in dev / unpackaged builds.
@@ -277,6 +281,7 @@ function createWindow(projectId?: string): BrowserWindow {
 		},
 	});
 	windowProject.set(win, projectId ?? null);
+	guardPageFrames(win.webContents);
 
 	// Pin the project by stamping the renderer URL; the preload reads it back via
 	// window.boundProjectId(). A hash keeps loadFile working (no querystring file).
@@ -376,6 +381,7 @@ app
 			browserUrl: host.browserUrl,
 		});
 		registerHostIpc(host);
+		servePages(host.router);
 
 		if (SMOKE) {
 			// Headless boot check: prove the engine inits (db, hook server, notify

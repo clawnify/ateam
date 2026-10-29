@@ -18,6 +18,8 @@ import {
 	projects,
 	type Settings,
 	settings,
+	type TaskPage,
+	taskPages,
 	tasks,
 } from "./schema";
 import type { AteamDb } from "./types";
@@ -133,6 +135,22 @@ export const repo = {
 
 	deleteTask(db: AteamDb, id: string) {
 		db.delete(tasks).where(eq(tasks.id, id)).run();
+	},
+
+	/** Replace the task's page: its HTML and the summary on the task, together. */
+	setTaskPage(db: AteamDb, taskId: string, page: TaskPage, html: string) {
+		db.transaction((tx) => {
+			tx.insert(taskPages)
+				.values({ taskId, html })
+				.onConflictDoUpdate({ target: taskPages.taskId, set: { html } })
+				.run();
+			tx.update(tasks).set({ page, updatedAt: Date.now() }).where(eq(tasks.id, taskId)).run();
+		});
+		return repo.getTask(db, taskId);
+	},
+
+	getTaskPageHtml(db: AteamDb, taskId: string): string | undefined {
+		return db.select().from(taskPages).where(eq(taskPages.taskId, taskId)).get()?.html;
 	},
 
 	// ---- agent sessions & events ----

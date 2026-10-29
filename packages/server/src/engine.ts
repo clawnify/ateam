@@ -35,6 +35,7 @@ import { makeStrandReconciler } from "./pty/reconcile";
 import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
 import { PermissionBridge } from "./permissions";
+import { applyShowPage } from "./pages";
 import { answerQuestion, applyAskUser, CLEAR_QUESTION, columnWithQuestion } from "./questions";
 import { readSettings } from "./settings-file";
 import { createTurnClassifier } from "./turn-classifier";
@@ -284,6 +285,11 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			if (!session)
 				return { ok: false, reason: "only an agent working in a task can ask the user" };
 			return applyAskUser(db, { taskId: session.taskId, ...req }, sendTaskUpdated);
+		},
+		showPage: async (req) => {
+			const session = repo.getSessionByTerminal(db, req.callerTerminalId);
+			if (!session) return { ok: false, reason: "only an agent working in a task can show a page" };
+			return applyShowPage(db, { taskId: session.taskId, ...req }, sendTaskUpdated);
 		},
 	});
 

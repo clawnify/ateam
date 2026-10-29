@@ -13,11 +13,13 @@ function fakeBoard() {
 		setWaiting: unknown[];
 		sendMessage: unknown[];
 		askUser: unknown[];
+		showPage: unknown[];
 	} = {
 		setStatus: [],
 		setWaiting: [],
 		sendMessage: [],
 		askUser: [],
+		showPage: [],
 	};
 	const board: BoardHandlers = {
 		get: async () => ({ tasks: [{ taskId: "t1" }] }),
@@ -37,6 +39,10 @@ function fakeBoard() {
 		askUser: async (req) => {
 			calls.askUser.push(req);
 			return { ok: true, reason: "asked" };
+		},
+		showPage: async (req) => {
+			calls.showPage.push(req);
+			return { ok: true, reason: "shown" };
 		},
 	};
 	return { board, calls };
@@ -83,6 +89,7 @@ describe("dispatchMcp", () => {
 				"list_peers",
 				"send_message",
 				"ask_user",
+				"show_page",
 			]);
 		}
 	});
@@ -270,5 +277,25 @@ describe("ask_user", () => {
 			true,
 		);
 		expect(calls.askUser).toHaveLength(0);
+	});
+});
+
+describe("show_page", () => {
+	const show = (args: unknown) => rpc("tools/call", { name: "show_page", arguments: args });
+
+	it("shows the page on the verified caller's task, and only theirs", async () => {
+		const { board, calls } = fakeBoard();
+		await dispatchMcp(show({ title: "Tests", html: "<h1>3</h1>" }), board, {
+			callerTerminalId: "term-1",
+			callerVerified: true,
+		});
+		expect(calls.showPage).toEqual([
+			{ callerTerminalId: "term-1", title: "Tests", html: "<h1>3</h1>" },
+		]);
+		const r = await dispatchMcp(show({ html: "<p>x</p>" }), board, { callerTerminalId: "term-1" });
+		expect(r.kind === "json" && (r.body as { result: { isError: boolean } }).result.isError).toBe(
+			true,
+		);
+		expect(calls.showPage).toHaveLength(1);
 	});
 });
