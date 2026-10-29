@@ -2991,7 +2991,8 @@ input {
 .lead-thread {
 	max-width: 776px;
 	margin: 0 auto;
-	padding: 24px 20px 32px;
+	/* The last message keeps clear of the composer and what waits above it. */
+	padding: 24px 20px 40px;
 	display: flex;
 	flex-direction: column;
 	gap: 20px;
@@ -3518,7 +3519,7 @@ input {
 	max-height: 40vh;
 	overflow-y: auto;
 	margin: 0 auto;
-	padding: 0 20px 10px;
+	padding: 12px 20px 16px;
 }
 .lead-asking-title {
 	font-size: 11px;
