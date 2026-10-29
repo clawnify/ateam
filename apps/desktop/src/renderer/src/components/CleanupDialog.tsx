@@ -1,5 +1,5 @@
 import type { CleanupCandidate } from "@ateam/protocol";
-import { GitPullRequest, MessageSquare, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, GitPullRequest, MessageSquare, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { relativeAge } from "../triage-order";
 import { IconButton } from "./IconButton";
@@ -18,7 +18,14 @@ import { TerminalView } from "./Terminal";
  * whether its PR landed, whether the dirt left behind matters. Every deciding
  * factor is on the row, and "Recommended" narrows the list to the sweep's own
  * picks when you just want the safe ones gone.
+ *
+ * Archived tasks are here too, under their own filter: archiving is the other
+ * answer to a stale task (off the board, worktree kept), so both live in one
+ * place. A task on the board can be archived from here, and an archived one
+ * brought back.
  */
+
+type Filter = "all" | "recommended" | "archived";
 
 /** Sweep's picks first, then stalest first — the longest-ignored surfaces. */
 function byCleanupOrder(a: CleanupCandidate, b: CleanupCandidate): number {
@@ -48,17 +55,20 @@ function Factors({ item, now }: { item: CleanupCandidate; now: number }) {
 				</span>
 			)}
 			{item.terminalId && <span>live session</span>}
+			{t.archivedAt != null && <span>archived</span>}
 		</span>
 	);
 }
 
 export function CleanupDialog({
 	projectId,
+	initialFilter = "all",
 	confirm,
 	reload,
 	onClose,
 }: {
 	projectId: string;
+	initialFilter?: Filter;
 	confirm: (title: string, body?: string) => Promise<boolean>;
 	reload: () => void;
 	onClose: () => void;
@@ -66,7 +76,7 @@ export function CleanupDialog({
 	const [items, setItems] = useState<CleanupCandidate[]>([]);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
-	const [onlyRecommended, setOnlyRecommended] = useState(false);
+	const [filter, setFilter] = useState<Filter>(initialFilter);
 	// One clock for every age label, so the rows can't disagree with each other.
 	const now = useMemo(() => Date.now(), []);
 
@@ -79,8 +89,27 @@ export function CleanupDialog({
 		});
 	}, [projectId]);
 
-	const shown = onlyRecommended ? items.filter((i) => i.recommended) : items;
+	const shown = items.filter((i) =>
+		filter === "recommended"
+			? i.recommended
+			: filter === "archived"
+				? i.task.archivedAt != null
+				: true,
+	);
 	const recommendedCount = items.filter((i) => i.recommended).length;
+	const archivedCount = items.filter((i) => i.task.archivedAt != null).length;
+
+	// Archive or bring back in place: the row stays, so the decision can go on.
+	const setArchived = async (item: CleanupCandidate, archived: boolean) => {
+		let task: CleanupCandidate["task"];
+		try {
+			task = await window.ateam.tasks.setArchived(item.task.id, archived);
+		} catch (e) {
+			console.error("[cleanup] archive failed", e);
+			return;
+		}
+		setItems((prev) => prev.map((i) => (i.task.id === task.id ? { ...i, task } : i)));
+	};
 
 	const dismiss = (id: string) => {
 		setItems((prev) => {
@@ -140,23 +169,32 @@ export function CleanupDialog({
 					<strong>Clean up worktrees</strong>
 					<span className="muted" style={{ marginLeft: 8 }}>
 						{items.length} worktree{items.length === 1 ? "" : "s"} · {recommendedCount} recommended
+						{archivedCount > 0 && ` · ${archivedCount} archived`}
 					</span>
 					<span style={{ flex: 1 }} />
 					<div className="cleanup-filter">
 						<button
 							type="button"
-							className={onlyRecommended ? "" : "on"}
-							onClick={() => setOnlyRecommended(false)}
+							className={filter === "all" ? "on" : ""}
+							onClick={() => setFilter("all")}
 						>
 							All
 						</button>
 						<button
 							type="button"
-							className={onlyRecommended ? "on" : ""}
-							onClick={() => setOnlyRecommended(true)}
+							className={filter === "recommended" ? "on" : ""}
+							onClick={() => setFilter("recommended")}
 							title="Only the ones the sweep would remove: merged, clean, no live session"
 						>
 							Recommended
+						</button>
+						<button
+							type="button"
+							className={filter === "archived" ? "on" : ""}
+							onClick={() => setFilter("archived")}
+							title="Taken off the board after a stretch with no activity, or by hand. Nothing in them was deleted."
+						>
+							Archived
 						</button>
 					</div>
 					<IconButton icon={X} label="Close" onClick={onClose} />
@@ -168,7 +206,11 @@ export function CleanupDialog({
 							<div className="tree-empty">Scanning…</div>
 						) : shown.length === 0 ? (
 							<div className="tree-empty">
-								{onlyRecommended ? "Nothing recommended" : "Nothing to clean"}
+								{filter === "recommended"
+									? "Nothing recommended"
+									: filter === "archived"
+										? "Nothing archived"
+										: "Nothing to clean"}
 							</div>
 						) : (
 							shown.map((it) => (
@@ -199,6 +241,9 @@ export function CleanupDialog({
 										<div className="title">
 											{selected.task.name}
 											{selected.recommended && <span className="rec-tag">recommended</span>}
+											{selected.task.archivedAt != null && (
+												<span className="rec-tag archived">archived</span>
+											)}
 										</div>
 										<div className="branch muted">
 											{selected.task.branch} · {selected.reason}
@@ -206,15 +251,38 @@ export function CleanupDialog({
 										<div className="branch muted">{selected.task.triage.reason}</div>
 									</div>
 									<div style={{ display: "flex", gap: 6, flex: "none" }}>
-										<button
-											type="button"
-											className="navbtn"
-											onClick={() => dismiss(selected.task.id)}
-											title="Keep this worktree and jump back into its terminal"
-										>
-											<MessageSquare size={14} strokeWidth={1.75} />
-											Keep &amp; continue
-										</button>
+										{selected.task.archivedAt != null ? (
+											<button
+												type="button"
+												className="navbtn"
+												onClick={() => void setArchived(selected, false)}
+												title="Put it back on the board"
+											>
+												<ArchiveRestore size={14} strokeWidth={1.75} />
+												Unarchive
+											</button>
+										) : (
+											<>
+												<button
+													type="button"
+													className="navbtn"
+													onClick={() => void setArchived(selected, true)}
+													title="Take it off the board, keeping the worktree and its conversation"
+												>
+													<Archive size={14} strokeWidth={1.75} />
+													Archive
+												</button>
+												<button
+													type="button"
+													className="navbtn"
+													onClick={() => dismiss(selected.task.id)}
+													title="Keep this worktree and jump back into its terminal"
+												>
+													<MessageSquare size={14} strokeWidth={1.75} />
+													Keep &amp; continue
+												</button>
+											</>
+										)}
 										<button
 											type="button"
 											className="navbtn danger"

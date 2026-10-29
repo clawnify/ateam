@@ -120,6 +120,17 @@ export const tasks = sqliteTable(
 		/** When the task's agent first drove the box's browser (a TaskWindow tool
 		 *  call, see the BrowserUse hook); null while it never has. */
 		browserUsedAt: integer("browser_used_at"),
+		/**
+		 * Off the board: hidden from every task list (the board, the phone, the
+		 * agents' get_board and list_peers) but kept whole, worktree and branch
+		 * included. Set by the idle sweep (archive.ts) or by hand, cleared by any
+		 * agent activity or an Unarchive. Null while the task is on the board.
+		 */
+		archivedAt: integer("archived_at"),
+		/** When the task was last brought back by hand (Unarchive, starting its
+		 *  issue again). The sweep counts idleness from here too, or a task idle
+		 *  for months would be archived again within the hour. */
+		restoredAt: integer("restored_at"),
 		lastEventAt: integer("last_event_at"),
 		isUnread: integer("is_unread", { mode: "boolean" }).default(false),
 		createdBy: text("created_by")

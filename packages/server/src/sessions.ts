@@ -386,7 +386,7 @@ async function tagTaskInBackground(
 	// Seed the vocabulary with what this project already uses, so the model
 	// reuses an existing label instead of coining a near-synonym.
 	const known = new Set<string>();
-	for (const t of repo.listTasks(services.db, task.projectId)) {
+	for (const t of repo.listTasks(services.db, task.projectId, { includeArchived: true })) {
 		for (const tag of t.tags ?? []) known.add(tag);
 	}
 	const tags = await generateTaskTags(task.description, { knownTags: [...known] });

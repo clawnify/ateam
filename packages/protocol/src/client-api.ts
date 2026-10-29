@@ -126,6 +126,8 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			cleanupCandidates: (projectId) =>
 				call<CleanupCandidate[]>(CH.tasksCleanupCandidates, [projectId]),
 			cleanup: (projectId) => call<CleanupReport>(CH.tasksCleanup, [projectId]),
+			listArchived: (projectId) => call<TaskDTO[]>(CH.tasksListArchived, [projectId]),
+			setArchived: (id, archived) => call<TaskDTO>(CH.tasksSetArchived, [id, archived]),
 		},
 		git: {
 			commit: (taskId, message) => call<{ sha: string }>(CH.gitCommit, [taskId, message]),

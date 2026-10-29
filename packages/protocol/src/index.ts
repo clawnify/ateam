@@ -87,7 +87,12 @@
 // update the box. Same version, the editor binds loopback and the engine relays
 // it onto the tailnet; nothing on the wire changed for it. TaskDTO gained
 // `browserUsedAt`, nullable, so an older engine reads as "never used".
-export const PROTOCOL_VERSION = 17;
+// v18: archiving. tasks:list leaves archived tasks out, tasks:listArchived and
+// tasks:setArchived are new methods (an older engine rejects them, which fails
+// the Archived view alone), and TaskDTO gained `archivedAt`, nullable. Settings
+// gained `engine.archiveAfterDays`; a v17 engine stores it and archives nothing,
+// which hides nothing, so it needs no gate.
+export const PROTOCOL_VERSION = 18;
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -317,6 +322,9 @@ export interface TaskDTO {
 	 *  has, and on an engine older than v17. Clients show the browser beside the
 	 *  task's terminal only once it is set. */
 	browserUsedAt: number | null;
+	/** When the task was archived; null while it is on the board, and on an
+	 *  engine older than v18. tasks:list never returns an archived task. */
+	archivedAt: number | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
 }
@@ -424,6 +432,12 @@ export interface EngineSettings {
 	 * box keeps its sessions, and the next connection wakes it.
 	 */
 	idleSleepMinutes: number;
+	/**
+	 * Archive a task that is still open once nothing has happened in it for this
+	 * many days; 0 never does. Archived tasks leave every task list but keep their
+	 * worktree, and any activity in one brings it back. See server/archive.ts.
+	 */
+	archiveAfterDays: number;
 }
 export interface ClientSettings {
 	/** Fetch an update in the background instead of asking first. */
@@ -817,6 +831,8 @@ export const CH = {
 	tasksCleanup: "tasks:cleanup",
 	tasksCleanupPreview: "tasks:cleanupPreview",
 	tasksCleanupCandidates: "tasks:cleanupCandidates",
+	tasksListArchived: "tasks:listArchived",
+	tasksSetArchived: "tasks:setArchived",
 	gitCommit: "git:commit",
 	gitPush: "git:push",
 	gitUpdate: "git:update",
@@ -1009,6 +1025,10 @@ export interface AteamApi {
 		cleanupCandidates(projectId: string): Promise<CleanupCandidate[]>;
 		/** Remove merged + idle worktrees. Never deletes unmerged/active/dirty. */
 		cleanup(projectId: string): Promise<CleanupReport>;
+		/** The project's archived tasks, most recently archived first. */
+		listArchived(projectId: string): Promise<TaskDTO[]>;
+		/** Archive a task (off every list, worktree kept) or bring it back. */
+		setArchived(id: string, archived: boolean): Promise<TaskDTO>;
 	};
 	git: {
 		commit(taskId: string, message: string): Promise<{ sha: string }>;

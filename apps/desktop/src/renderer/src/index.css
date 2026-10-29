@@ -2191,6 +2191,10 @@ input {
 	padding: 1px 5px;
 	vertical-align: middle;
 }
+.cleanup-detail-head .rec-tag.archived {
+	color: var(--text-dim);
+	border-color: var(--border);
+}
 .cleanup-item .sub {
 	font-size: 11px;
 	color: var(--text-dim);
