@@ -185,6 +185,29 @@ done
 `;
 
 /**
+ * Claude Code's PermissionRequest hook: hands the prompt to the engine and
+ * waits for a decision from an Ateam client (permissions.ts). Claude shows its
+ * own dialog meanwhile and takes whichever answer comes first, so this can
+ * wait without taking the terminal away. Prints the decision JSON on 200;
+ * prints nothing otherwise, which leaves the prompt to the terminal.
+ */
+const PERMISSION_SCRIPT = `#!/bin/sh
+# Ateam permission bridge for Claude Code (PermissionRequest hook).
+PORT="\${ATEAM_HOOK_PORT:-}"
+TID="\${ATEAM_TERMINAL_ID:-}"
+TOKEN="\${ATEAM_TERMINAL_TOKEN:-}"
+PAYLOAD=""
+[ -t 0 ] || PAYLOAD=$(cat)
+[ -z "$PORT" ] && exit 0
+[ -z "$TID" ] && exit 0
+[ -z "$TOKEN" ] && exit 0
+OUT=$(printf '%s' "$PAYLOAD" | curl -s -m 590 -w '\\n%{http_code}' -H "x-ateam-terminal-token: $TOKEN" --data-binary @- "http://127.0.0.1:\${PORT}/hook/permission?terminalId=\${TID}" 2>/dev/null) || exit 0
+CODE=$(printf '%s\\n' "$OUT" | tail -n 1)
+[ "$CODE" = "200" ] && printf '%s\\n' "$OUT" | sed '$d'
+exit 0
+`;
+
+/**
  * OpenCode's peer-message listener: a plugin, loaded per launch through
  * OPENCODE_CONFIG_CONTENT so the user's own config is untouched. It long-polls
  * the same inbox and hands each batch to the session as a prompt through
@@ -272,6 +295,9 @@ export async function ensureNotifyScript(userDataDir: string): Promise<string> {
 	const inboxPath = join(hooksDir, "inbox.sh");
 	await writeFile(inboxPath, INBOX_SCRIPT, "utf8");
 	await chmod(inboxPath, 0o755);
+	const permissionPath = join(hooksDir, "permission.sh");
+	await writeFile(permissionPath, PERMISSION_SCRIPT, "utf8");
+	await chmod(permissionPath, 0o755);
 	await writeFile(join(hooksDir, "opencode-inbox.js"), OPENCODE_INBOX_PLUGIN, "utf8");
 	return scriptPath;
 }
@@ -324,7 +350,7 @@ export async function ensureGhShim(userDataDir: string): Promise<void> {
 
 interface ClaudeHookEntry {
 	matcher?: string;
-	hooks: { type: "command"; command: string; asyncRewake?: boolean }[];
+	hooks: { type: "command"; command: string; asyncRewake?: boolean; timeout?: number }[];
 }
 interface ClaudeSettings {
 	hooks?: Record<string, ClaudeHookEntry[]>;
@@ -396,6 +422,17 @@ export async function ensureClaudeHooks(
 			hooks: [{ type: "command", command: cmd("BrowserUse") }],
 		});
 		settings.hooks.PreToolUse = pre;
+	}
+
+	// Permission prompts answerable from Ateam (PERMISSION_SCRIPT). Its own entry
+	// beside notify.sh's, which keeps reporting the status; the two run together.
+	// 600s is Claude's default for a command hook, spelled out because the
+	// script's whole job is to wait.
+	const asks = settings.hooks.PermissionRequest ?? [];
+	if (!asks.some((e) => e.hooks.some((h) => h.command.includes("permission.sh")))) {
+		const permission = `sh ${JSON.stringify(join(dirname(notifyScriptPath), "permission.sh"))}`;
+		asks.push({ hooks: [{ type: "command", command: permission, timeout: 600 }] });
+		settings.hooks.PermissionRequest = asks;
 	}
 
 	// The peer inbox listener (INBOX_SCRIPT): armed when the session starts and

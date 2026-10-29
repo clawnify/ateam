@@ -184,6 +184,7 @@ export function QuestionCard({
 				) : (
 					<span className="question-who">The agent is asking you</span>
 				)}
+				{q.kind === "permission" && <span className="question-kind">permission</span>}
 				<span className="question-when">{ago(q.askedAt)}</span>
 				<button
 					type="button"

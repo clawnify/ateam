@@ -3569,3 +3569,11 @@ input {
 	font-size: 12px;
 	padding: 2px 8px;
 }
+/* A tool permission Claude Code asks for, as opposed to the agent's own question. */
+.question-kind {
+	padding: 0 6px;
+	font-size: 10px;
+	color: var(--amber);
+	border: 1px solid currentColor;
+	border-radius: 4px;
+}

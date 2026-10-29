@@ -115,6 +115,11 @@ export interface TaskQuestionDTO {
 	/** "many": a checklist, answered with the labels the user left ticked.
 	 *  Absent means "one". */
 	select?: "one" | "many";
+	/** "permission": not something the agent asked with ask_user but Claude Code
+	 *  asking to use a tool (permissions.ts). Answered the same way, with its
+	 *  options; it can also be answered in the task's terminal, which wins if
+	 *  that comes first. */
+	kind?: "permission";
 }
 
 /** One option of a question, as a card (select one) or a checklist row (many). */

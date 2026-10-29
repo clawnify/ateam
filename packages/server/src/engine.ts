@@ -33,6 +33,7 @@ import { reapableSessions } from "./pty/reap";
 import { makeStrandReconciler } from "./pty/reconcile";
 import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
+import { PermissionBridge } from "./permissions";
 import { answerQuestion, applyAskUser, CLEAR_QUESTION, columnWithQuestion } from "./questions";
 import { readSettings } from "./settings-file";
 import { createTurnClassifier } from "./turn-classifier";
@@ -315,6 +316,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			}
 			pty.on("exit", onExit);
 		});
+	// Claude's permission prompts, answerable from any client (permissions.ts).
+	const permissions = new PermissionBridge({ db, notify: (id) => sendTaskUpdated(id) });
+	hooks.setPermissionHandler((req) => permissions.ask(req));
+
 	const peers = new PeerMessenger({
 		db,
 		isLive: (terminalId) => pty.has(terminalId),
@@ -388,6 +393,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	pty.on("data", (e) => emitter.emit("ptyData", e));
 	pty.on("exit", (e) => {
 		emitter.emit("ptyExit", e);
+		permissions.settle(e.terminalId);
 		// Record the exit in the DB so a session is never left looking "running"
 		// after its process is gone — the gap that previously stranded cards in
 		// the running column. Code that needs liveness must ask the PTY daemon
@@ -449,6 +455,11 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	hooks.on("hook", (e: HookEvent) => {
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
+		// The agent moving on means a prompt held for an Ateam client was answered
+		// in its terminal (or abandoned): take that card down. Its own
+		// PermissionRequest notification is not moving on.
+		if (e.eventType !== "PermissionRequest" && e.eventType !== "BrowserUse")
+			permissions.settle(e.terminalId, e.eventType);
 		// The agent called a browser tool. Its Working fires alongside and drives
 		// the status, so this only stamps the task.
 		if (e.eventType === "BrowserUse") {
@@ -611,8 +622,18 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			emitter.emit("loopsUpdated", loopRunner.describe());
 		},
 		messageFrom: (sender, req) => peers.sendFrom(sender, req),
-		answerQuestion: (req) =>
-			answerQuestion(db, (sender, r) => peers.sendFrom(sender, r), req, sendTaskUpdated),
+		answerQuestion: (req) => {
+			// A permission prompt is answered by resolving the hook that holds it,
+			// not by a message: the agent is mid-turn, waiting on exactly this.
+			if (permissions.holds(req.questionId)) {
+				const answer = Array.isArray(req.answer) ? (req.answer[0] ?? null) : req.answer;
+				return permissions.answer(req.questionId, answer);
+			}
+			const q = repo.getTask(db, req.taskId)?.question;
+			if (q?.kind === "permission")
+				throw new Error("That prompt is no longer waiting. Answer it in the task's terminal.");
+			return answerQuestion(db, (sender, r) => peers.sendFrom(sender, r), req, sendTaskUpdated);
+		},
 		async connectPty() {
 			try {
 				await pty.connect();
@@ -647,6 +668,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			}
 			waits.stop();
 			peers.stop();
+			permissions.stop();
 		},
 		stopHooks() {
 			hooks.stop();
