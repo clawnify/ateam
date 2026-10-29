@@ -2919,6 +2919,35 @@ input {
 	min-width: 0;
 	display: flex;
 	flex-direction: column;
+	/* The sidebar's surface, so the chat reads as part of the app's chrome. */
+	background: var(--bg-elev);
+}
+/* On that surface, everything that sat on --bg-elev steps up one shade, or it
+   would vanish into the background. Scoped to the Lead: the task panel's
+   question card keeps its own colours. */
+.lead .lead-user,
+.lead .lead-agent,
+.lead .question,
+.lead .lead-chip,
+.lead .lead-tool-io,
+.lead .md pre,
+.lead .lead-composer textarea {
+	background: var(--bg-elev-2);
+}
+.lead .md code {
+	background: #26262e;
+}
+.lead .md pre code {
+	background: none;
+}
+/* Pele draws some text in its background colour: match what the diagram sits on. */
+.lead .diagram .pele {
+	--pele-bg: var(--bg-elev);
+	--pele-surface: var(--bg-elev-2);
+}
+.lead .question .diagram .pele {
+	--pele-bg: var(--bg-elev-2);
+	--pele-surface: #26262e;
 }
 .lead-head {
 	display: flex;
