@@ -22,6 +22,8 @@ interface Followed {
 	/** The newest reply already shown (or skipped as older than the follow). */
 	lastReplyAt: number;
 	agentStatus: string | null;
+	/** The page already shown (or there when followed); absent in older files. */
+	pageId?: string | null;
 }
 
 export interface FollowerOptions {
@@ -58,6 +60,7 @@ export class Follower {
 			ref: refOf(task),
 			lastReplyAt: Math.max(prev?.lastReplyAt ?? 0, task.lastReplyAt ?? 0),
 			agentStatus: task.agentStatus,
+			pageId: task.page?.id ?? null,
 		});
 		while (this.followed.size > MAX_FOLLOWED) {
 			const oldest = this.followed.keys().next().value;
@@ -88,6 +91,21 @@ export class Follower {
 				task: f.ref,
 			});
 		f.agentStatus = task.agentStatus;
+		// A new page: drawn in the thread, unless it belongs to a question, whose
+		// card (below the thread) draws it.
+		if (task.page && task.page.id !== (f.pageId ?? null)) {
+			f.pageId = task.page.id;
+			this.save();
+			if (task.question?.pageId !== task.page.id)
+				this.o.record({
+					kind: "page",
+					id: randomUUID(),
+					task: f.ref,
+					pageId: task.page.id,
+					title: task.page.title,
+					at: task.page.at,
+				});
+		}
 		const at = task.lastReplyAt ?? 0;
 		if (at <= f.lastReplyAt) return;
 		// Claimed before the read, so a second update for the same turn can't show it twice.

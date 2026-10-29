@@ -240,7 +240,7 @@ describe("spawnAgentInTask and a task parked on an outside party", () => {
 		const mcp = command.indexOf("--mcp-config");
 		expect(mcp).toBeGreaterThan(command.indexOf("'hi there'"));
 		expect(command).toContain(
-			"--allowedTools 'mcp__ateam_board__get_board,mcp__ateam_board__set_status,mcp__ateam_board__set_waiting,mcp__ateam_board__list_peers,mcp__ateam_board__send_message,mcp__ateam_board__ask_user'",
+			"--allowedTools 'mcp__ateam_board__get_board,mcp__ateam_board__set_status,mcp__ateam_board__set_waiting,mcp__ateam_board__list_peers,mcp__ateam_board__send_message,mcp__ateam_board__ask_user,mcp__ateam_board__show_page'",
 		);
 		// The config file names this terminal, which is how set_waiting knows whose card it is.
 		const file = /--mcp-config '([^']+)'/.exec(command)?.[1] ?? "";

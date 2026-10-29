@@ -16,6 +16,7 @@ import {
 import type { LeadEvent, LeadItem, LeadSnapshot, LeadTaskRef } from "../../../shared/lead";
 import { AgentIcon } from "./AgentIcon";
 import { Markdown } from "./Markdown";
+import { PageFrame } from "./PageFrame";
 import { QuestionCard } from "./QuestionCard";
 
 type ToolItem = Extract<LeadItem, { kind: "tool" }>;
@@ -354,6 +355,7 @@ export function LeadChat({
 	const [snap, setSnap] = useState<LeadSnapshot>(EMPTY);
 	const [text, setText] = useState("");
 	const scroller = useRef<HTMLDivElement>(null);
+	const thread = useRef<HTMLDivElement>(null);
 	const input = useRef<HTMLTextAreaElement>(null);
 	// Follow the conversation only while the user is at the bottom of it.
 	const pinned = useRef(true);
@@ -373,6 +375,18 @@ export function LeadChat({
 		const el = scroller.current;
 		if (el && pinned.current) el.scrollTop = el.scrollHeight;
 	});
+	// Content that sizes itself after it renders (a page's frame, a diagram)
+	// grows the thread without a render here: keep the bottom in view.
+	useEffect(() => {
+		const el = scroller.current;
+		const content = thread.current;
+		if (!el || !content) return;
+		const ro = new ResizeObserver(() => {
+			if (pinned.current) el.scrollTop = el.scrollHeight;
+		});
+		ro.observe(content);
+		return () => ro.disconnect();
+	}, []);
 
 	const blocks = useMemo(() => toBlocks(snap.items), [snap.items]);
 	// Every agent waiting on the user, newest first: they live on the tasks, not
@@ -435,7 +449,7 @@ export function LeadChat({
 					pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 				}}
 			>
-				<div className="lead-thread">
+				<div className="lead-thread" ref={thread}>
 					{blocks.length === 0 && !snap.busy && (
 						<div className="lead-empty">
 							<p>
@@ -461,6 +475,18 @@ export function LeadChat({
 							</div>
 						) : b.item.kind === "agent" ? (
 							<AgentReply key={b.item.id} item={b.item} tasks={tasks} onOpenTask={onOpenTask} />
+						) : b.item.kind === "page" ? (
+							<div key={b.item.id} className="lead-agent">
+								<div className="lead-agent-head">
+									<TaskChip task={b.item.task} tasks={tasks} onOpenTask={onOpenTask} />
+									<span className="lead-agent-said">made a page</span>
+								</div>
+								<PageFrame
+									taskId={b.item.task.taskId}
+									pageId={b.item.pageId}
+									title={b.item.title}
+								/>
+							</div>
 						) : b.item.kind === "assistant" ? (
 							<div key={b.item.id} className="md">
 								<Markdown text={b.item.text} />

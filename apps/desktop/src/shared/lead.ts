@@ -34,6 +34,9 @@ export type LeadItem =
 	/** A followed task's agent finished a turn: its reply, shown to the user only
 	 *  (never fed to the Lead's model, so following costs nothing). */
 	| { kind: "agent"; id: string; task: LeadTaskRef; text: string; at: number }
+	/** A followed task's agent showed the user a page (show_page): drawn in the
+	 *  thread from the task, so a page replaced since says so. */
+	| { kind: "page"; id: string; task: LeadTaskRef; pageId: string; title: string; at: number }
 	| { kind: "assistant"; id: string; text: string; at: number }
 	| {
 			kind: "tool";

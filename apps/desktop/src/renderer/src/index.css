@@ -3529,6 +3529,71 @@ input {
 .panel-question {
 	padding: 8px 10px 0;
 }
+.panel-page {
+	padding: 8px 10px 0;
+}
+
+/* ---- an agent's page (PageFrame): its own HTML in a sandboxed frame ---- */
+.page {
+	display: flex;
+	flex-direction: column;
+	border-radius: 8px;
+	background: var(--bg);
+	box-shadow: inset 0 0 0 1px var(--border);
+	overflow: hidden;
+}
+.page-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 28px;
+	padding: 0 4px 0 10px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.page:not(.collapsed) > .page-head {
+	border-bottom: 1px solid var(--border);
+}
+.page-icon {
+	flex: none;
+}
+.page-title {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text);
+}
+.page-frame {
+	display: block;
+	width: 100%;
+	border: 0;
+	background: transparent;
+	color-scheme: dark;
+}
+.page-frame:focus {
+	outline: none;
+}
+.page-expanded {
+	display: flex;
+	flex-direction: column;
+	width: min(1200px, calc(100vw - 64px));
+	height: calc(100vh - 64px);
+	border-radius: 12px;
+	background: var(--bg);
+	box-shadow:
+		inset 0 0 0 1px var(--border),
+		0 12px 40px rgba(0, 0, 0, 0.5);
+	overflow: hidden;
+}
+.page-expanded > .page-head {
+	border-bottom: 1px solid var(--border);
+}
+.page-expanded > .page-frame {
+	flex: 1;
+	min-height: 0;
+}
 
 /* ---- a followed task talking back in the Lead chat ---- */
 /* A task talking back: same language as the user's bubble, a hairline instead of a border. */

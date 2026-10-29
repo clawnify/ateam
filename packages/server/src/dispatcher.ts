@@ -52,6 +52,7 @@ import {
 	type SettingsPatch,
 	type SettingsResult,
 	type TaskLastReplyDTO,
+	type TaskPageContentDTO,
 	type TaskWait,
 	type UpdateLoopInput,
 } from "@ateam/protocol";
@@ -416,6 +417,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			return task.lastReply && task.lastReplyAt
 				? { text: task.lastReply, at: task.lastReplyAt }
 				: null;
+		},
+		[CH.tasksPage]: async (id: string): Promise<TaskPageContentDTO | null> => {
+			const task = repo.getTask(db, id);
+			if (!task) throw new Error(`Task not found: ${id}`);
+			const html = task.page ? repo.getTaskPageHtml(db, id) : undefined;
+			return task.page && html != null ? { ...task.page, html } : null;
 		},
 		[CH.tasksGet]: async (id: string) => {
 			const task = repo.getTask(db, id);

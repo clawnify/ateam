@@ -98,7 +98,10 @@
 // that box needs an update. Same version, agents can ask the user a question
 // (the ask_user board tool): TaskDTO gained `question`, optional, so an older
 // engine reads as "nothing asked", and tasks:answerQuestion answers it.
-export const PROTOCOL_VERSION = 19;
+// v20: agent pages (the show_page board tool, and ask_user's `page`). TaskDTO
+// gained `page` and TaskQuestionDTO `pageId`, both optional, so an older engine
+// reads as "no page"; tasks:page is a new method.
+export const PROTOCOL_VERSION = 20;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -125,6 +128,26 @@ export interface TaskQuestionDTO {
 	 *  options; it can also be answered in the task's terminal, which wins if
 	 *  that comes first. */
 	kind?: "permission";
+	/** The task's page (TaskDTO.page) drawn with this question: the agent laid
+	 *  the decision out in HTML, and the page's own buttons can answer. Only
+	 *  while TaskDTO.page still has this id; a newer page replaces it. */
+	pageId?: string;
+}
+
+/**
+ * An HTML page an agent made for the user (show_page, or ask_user's `page`):
+ * a dashboard, a comparison, a report. One per task; a new one replaces it.
+ * The HTML itself is read with tasks:page, so the board's task list stays small.
+ */
+export interface TaskPageDTO {
+	id: string;
+	title: string;
+	at: number;
+}
+
+/** tasks:page: the task's page with its HTML, as the agent wrote it. */
+export interface TaskPageContentDTO extends TaskPageDTO {
+	html: string;
 }
 
 /** One option of a question, as a card (select one) or a checklist row (many). */
@@ -385,6 +408,9 @@ export interface TaskDTO {
 	/** When the agent last finished a turn with a reply (read it with
 	 *  tasks:lastReply); null until one has. Absent on an engine older than v19. */
 	lastReplyAt?: number | null;
+	/** The page the task's agent made for the user (show_page); null when none.
+	 *  Absent on an engine older than v20. */
+	page?: TaskPageDTO | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
 }
@@ -897,6 +923,7 @@ export const CH = {
 	tasksGet: "tasks:get",
 	tasksMessage: "tasks:message",
 	tasksAnswerQuestion: "tasks:answerQuestion",
+	tasksPage: "tasks:page",
 	peersSendFromLead: "peers:sendFromLead",
 	gitCommit: "git:commit",
 	gitPush: "git:push",

@@ -51,6 +51,7 @@ export function bootstrap(db: SqliteExecutor): void {
 			last_reply TEXT,
 			last_reply_at INTEGER,
 			question TEXT,
+			page TEXT,
 			created_by TEXT NOT NULL DEFAULT 'ateam',
 			created_at INTEGER,
 			updated_at INTEGER
@@ -156,6 +157,11 @@ export function bootstrap(db: SqliteExecutor): void {
 		);
 		CREATE INDEX IF NOT EXISTS peer_messages_to_idx ON peer_messages (to_task_id, delivered_at);
 
+		CREATE TABLE IF NOT EXISTS task_pages (
+			task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+			html TEXT NOT NULL
+		);
+
 			CREATE TABLE IF NOT EXISTS hosts (
 				host_alias TEXT PRIMARY KEY,
 				transport TEXT NOT NULL DEFAULT 'ssh',
@@ -187,6 +193,7 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE tasks ADD COLUMN last_reply TEXT",
 		"ALTER TABLE tasks ADD COLUMN last_reply_at INTEGER",
 		"ALTER TABLE tasks ADD COLUMN question TEXT",
+		"ALTER TABLE tasks ADD COLUMN page TEXT",
 		"ALTER TABLE loops ADD COLUMN kind TEXT NOT NULL DEFAULT 'builtin'",
 		"ALTER TABLE loops ADD COLUMN template_id TEXT",
 		"ALTER TABLE loops ADD COLUMN name TEXT",

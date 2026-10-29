@@ -50,6 +50,14 @@ export interface BoardHandlers {
 		options?: unknown[];
 		allowText?: boolean;
 		select?: unknown;
+		/** HTML laying the decision out, as the model sent it (pages.ts). */
+		page?: unknown;
+	}): Promise<{ ok: boolean; reason: string }>;
+	/** Show the user an HTML page on the caller's task (pages.ts). */
+	showPage(req: {
+		callerTerminalId: string;
+		title?: unknown;
+		html?: unknown;
 	}): Promise<{ ok: boolean; reason: string }>;
 }
 
@@ -74,7 +82,7 @@ const SERVER_INFO = { name: "ateam_board", version: "0.1.0" };
  * inside a shell-quoted TOML string unescaped.
  */
 export const BOARD_INSTRUCTIONS =
-	"You are working in an Ateam task. The agents in the other tasks on this board can be reached with the ateam_board send_message tool, even when they are stopped, and list_peers shows who they are. For those tasks use it rather than any other agent messaging tool: only it also reaches Codex and OpenCode agents and stopped tasks. Message one when your work affects theirs, to hand off work, or to ask something only their task knows. A message that starts with [Ateam] comes from another agent, not from the user, unless it says it comes from the user. When you need a decision or an approval from the user before you can go on, ask it with the ateam_board ask_user tool rather than only in your reply: the user may not be watching this terminal, and ask_user reaches them on the board and their phone with your options as buttons.";
+	"You are working in an Ateam task. The agents in the other tasks on this board can be reached with the ateam_board send_message tool, even when they are stopped, and list_peers shows who they are. For those tasks use it rather than any other agent messaging tool: only it also reaches Codex and OpenCode agents and stopped tasks. Message one when your work affects theirs, to hand off work, or to ask something only their task knows. A message that starts with [Ateam] comes from another agent, not from the user, unless it says it comes from the user. When you need a decision or an approval from the user before you can go on, ask it with the ateam_board ask_user tool rather than only in your reply: the user may not be watching this terminal, and ask_user reaches them on the board and their phone with your options as buttons. To show the user something easier to see than to read (a dashboard, a comparison, a report with charts), make it an HTML page with the ateam_board show_page tool.";
 
 /** The board tools. `to` is constrained to the assignable columns to steer the
  *  model; the guardrails (validateSetStatus, validateWait) still enforce
@@ -213,8 +221,31 @@ const TOOLS = [
 					description:
 						"select one: whether the user may type an answer of their own besides the options. Default true.",
 				},
+				page: {
+					type: "string",
+					description:
+						'Optional: an HTML page laying the decision out, shown above the options on the desktop (side-by-side comparisons, charts, before/after). Its buttons can answer: call ateam.answer("<option label>") from a click handler (a list of labels for select many; any text when allowText). Same rules as show_page\'s html. Keep the question text self-contained too: the phone shows only the text.',
+				},
 			},
 			required: ["question"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "show_page",
+		description:
+			"Show the user an HTML page you made: a dashboard, a comparison, a report with charts, a diagram, anything easier to see than to read. It appears on this task's panel in Ateam and in the Lead chat. One page per task: calling it again replaces the last one. It is for showing, not asking: to get a decision, use ask_user (which can carry a page too). After calling it, say in a line what the page shows; do not paste the HTML into your reply.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				title: { type: "string", description: "A short name for the page, at most 80 characters." },
+				html: {
+					type: "string",
+					description:
+						"A complete HTML document or fragment, at most 200 KB, with its data inlined. Scripts run and may load libraries from https CDNs (Chart.js, D3, Mermaid), but the page cannot fetch data, submit forms, open windows or navigate. The page sits on a dark background: use light text, or set your own background.",
+				},
+			},
+			required: ["html"],
 			additionalProperties: false,
 		},
 	},
@@ -358,10 +389,15 @@ async function callBoardTool(
 		});
 		return { text: res.reason, isError: !res.ok };
 	}
-	if (name === "list_peers" || name === "send_message" || name === "ask_user") {
+	if (
+		name === "list_peers" ||
+		name === "send_message" ||
+		name === "ask_user" ||
+		name === "show_page"
+	) {
 		if (!ctx.callerTerminalId || !ctx.callerVerified) {
 			return {
-				text: "messaging and ask_user are only open to an agent Ateam launched in a task (this session has no valid Ateam terminal token; relaunch it from Ateam)",
+				text: "messaging, ask_user and show_page are only open to an agent Ateam launched in a task (this session has no valid Ateam terminal token; relaunch it from Ateam)",
 				isError: true,
 			};
 		}
@@ -376,6 +412,15 @@ async function callBoardTool(
 				options: Array.isArray(args.options) ? args.options : undefined,
 				allowText: typeof args.allowText === "boolean" ? args.allowText : undefined,
 				select: args.select,
+				page: args.page,
+			});
+			return { text: res.reason, isError: !res.ok };
+		}
+		if (name === "show_page") {
+			const res = await board.showPage({
+				callerTerminalId: ctx.callerTerminalId,
+				title: args.title,
+				html: args.html,
 			});
 			return { text: res.reason, isError: !res.ok };
 		}

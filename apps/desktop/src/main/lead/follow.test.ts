@@ -57,6 +57,27 @@ describe("Follower", () => {
 		expect(reads).toHaveLength(0);
 	});
 
+	it("draws a followed task's new page once, but not the one it had or a question's", async () => {
+		const { follower, items } = make();
+		const page = (id: string) => ({ id, title: `page ${id}`, at: 150 });
+		follower.follow(task({ page: page("old") }));
+		await follower.onTaskUpdated(task({ page: page("old") }));
+		expect(items).toHaveLength(0);
+		await follower.onTaskUpdated(task({ page: page("new") }));
+		await follower.onTaskUpdated(task({ page: page("new") }));
+		expect(items).toMatchObject([{ kind: "page", pageId: "new", title: "page new" }]);
+		const question = {
+			id: "q",
+			text: "Which?",
+			options: [],
+			allowText: true,
+			askedAt: 160,
+			pageId: "asked",
+		};
+		await follower.onTaskUpdated(task({ page: page("asked"), question }));
+		expect(items).toHaveLength(1);
+	});
+
 	it("ignores tasks nobody touched from the chat", async () => {
 		const { follower, items, reads } = make();
 		await follower.onTaskUpdated(task({ id: "other", lastReplyAt: 999 }));
