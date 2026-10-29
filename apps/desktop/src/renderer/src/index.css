@@ -2925,13 +2925,10 @@ input {
 /* On that surface, everything that sat on --bg-elev steps up one shade, or it
    would vanish into the background. Scoped to the Lead: the task panel's
    question card keeps its own colours. */
-.lead .lead-user,
-.lead .lead-agent,
 .lead .question,
 .lead .lead-chip,
 .lead .lead-tool-io,
-.lead .md pre,
-.lead .lead-composer textarea {
+.lead .md pre {
 	background: var(--bg-elev-2);
 }
 .lead .md code {
@@ -2971,15 +2968,21 @@ input {
 	min-height: 0;
 	overflow-y: auto;
 }
+/* The rhythm Claude, Codex and T3 Code share: a ~736px column, 20px between
+   the blocks of a turn, a wider break before each of the user's messages, and
+   body text a step up from the app's 13px chrome because this is prose. */
 .lead-thread {
-	max-width: 760px;
+	max-width: 776px;
 	margin: 0 auto;
-	padding: 18px 16px 24px;
+	padding: 24px 20px 32px;
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
-	font-size: 13px;
-	line-height: 1.55;
+	gap: 20px;
+	font-size: 14px;
+	line-height: 1.5;
+}
+.lead-thread > .lead-user:not(:first-child) {
+	margin-top: 16px;
 }
 .lead-empty p {
 	margin: 0 0 12px;
@@ -2999,13 +3002,13 @@ input {
 .lead-suggest button:hover {
 	color: var(--text);
 }
+/* Only the user gets a bubble: a faint fill, no border (Claude: white 5%, r12). */
 .lead-user {
 	align-self: flex-end;
-	max-width: 85%;
-	padding: 8px 12px;
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	background: var(--bg-elev);
+	max-width: 80%;
+	padding: 10px 14px;
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.05);
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
@@ -3021,7 +3024,7 @@ input {
 .md p,
 .md ul,
 .md ol {
-	margin: 0 0 8px;
+	margin: 0 0 0.75em;
 }
 .md ul,
 .md ol {
@@ -3099,21 +3102,24 @@ input {
 	flex-direction: column;
 	gap: 6px;
 }
+/* A group of tool calls is one quiet sentence with the chevron after it. */
 .lead-tools-head {
 	display: flex;
 	align-items: center;
 	gap: 6px;
 	align-self: flex-start;
 	max-width: 100%;
-	padding: 2px 4px;
-	margin-left: -4px;
-	font-size: 12px;
+	min-height: 28px;
+	padding: 2px 6px;
+	margin-left: -6px;
+	font-size: 13px;
 	color: var(--text-dim);
 	background: transparent;
 	border: none;
+	border-radius: 8px;
 }
 .lead-tools-head:hover {
-	background: transparent;
+	background: rgba(255, 255, 255, 0.04);
 	color: var(--text);
 }
 .lead-tools-sum {
@@ -3132,19 +3138,46 @@ input {
 	flex: none;
 	color: var(--red);
 }
-.lead-tools-body {
+/* Opened: a hairline card, one row per step. */
+.lead-steps {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
-	padding-left: 18px;
+	border-radius: 12px;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+	overflow: hidden;
 }
-.lead-tool-name {
-	font-size: 11px;
+.lead-step + .lead-step {
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.lead-step-row {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	width: 100%;
+	min-height: 36px;
+	padding: 8px 12px;
+	font-size: 13px;
+	text-align: left;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+}
+.lead-step-row:hover {
+	background: rgba(255, 255, 255, 0.03);
+}
+.lead-step-label {
+	flex: none;
+}
+.lead-step-result {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
 	color: var(--text-dim);
-	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.lead-tool.error .lead-tool-name {
-	color: var(--red);
+.lead-step-detail {
+	padding: 0 12px 10px;
 }
 .lead-tool-io {
 	margin: 4px 0 0;
@@ -3155,10 +3188,40 @@ input {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	color: var(--text-dim);
 	background: var(--bg-elev);
-	border: 1px solid var(--border);
 	border-radius: 6px;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
+}
+/* Working: the label shimmers instead of a spinner turning beside it. */
+.shimmer {
+	color: transparent;
+	background: linear-gradient(
+		90deg,
+		var(--text-dim) 0%,
+		var(--text-dim) 40%,
+		var(--text) 50%,
+		var(--text-dim) 60%,
+		var(--text-dim) 100%
+	);
+	background-size: 200% 100%;
+	background-clip: text;
+	-webkit-background-clip: text;
+	animation: lead-shimmer 2s linear infinite;
+}
+@keyframes lead-shimmer {
+	from {
+		background-position: 100% 0;
+	}
+	to {
+		background-position: -100% 0;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.shimmer {
+		animation: none;
+		color: var(--text-dim);
+		background: none;
+	}
 }
 .lead-chips {
 	display: flex;
@@ -3191,48 +3254,59 @@ input {
 	color: var(--red);
 }
 .lead-thinking {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	font-size: 12px;
-	color: var(--text-dim);
+	font-size: 13px;
 }
+/* One floating card with the send button inside (Claude: r14, an inset ring
+   at white 8%, 44px at one line, growing to ~380px). */
 .lead-composer {
+	width: 100%;
+	max-width: 776px;
+	margin: 0 auto;
+	padding: 0 20px 16px;
+}
+.lead-box {
 	display: flex;
 	align-items: flex-end;
 	gap: 8px;
-	width: 100%;
-	max-width: 760px;
-	margin: 0 auto;
-	padding: 0 16px 16px;
+	padding: 8px 8px 8px 14px;
+	background: #222228;
+	border-radius: 14px;
+	box-shadow:
+		inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+		0 4px 20px rgba(0, 0, 0, 0.25);
 }
-.lead-composer textarea {
+.lead-box:focus-within {
+	box-shadow:
+		inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+		0 4px 20px rgba(0, 0, 0, 0.25);
+}
+.lead-box textarea {
 	flex: 1;
 	field-sizing: content;
-	min-height: 38px;
-	max-height: 200px;
+	min-height: 28px;
+	max-height: 380px;
 	resize: none;
-	padding: 9px 12px;
+	padding: 4px 0;
 	font: inherit;
-	font-size: 13px;
+	font-size: 14px;
+	line-height: 20px;
 	color: var(--text);
-	background: var(--bg-elev);
-	border: 1px solid var(--border);
-	border-radius: 10px;
+	background: transparent;
+	border: none;
 	outline: none;
 }
-.lead-composer textarea:focus {
-	border-color: #4a4a56;
+.lead-box textarea::placeholder {
+	color: var(--text-dim);
 }
 .lead-send {
 	flex: none;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 38px;
-	height: 38px;
+	width: 28px;
+	height: 28px;
 	padding: 0;
-	border-radius: 10px;
+	border-radius: 50%;
 	background: var(--text);
 	border-color: var(--text);
 	color: var(--bg);
@@ -3423,11 +3497,11 @@ input {
 	flex-direction: column;
 	gap: 8px;
 	width: 100%;
-	max-width: 760px;
+	max-width: 776px;
 	max-height: 40vh;
 	overflow-y: auto;
 	margin: 0 auto;
-	padding: 0 16px 10px;
+	padding: 0 20px 10px;
 }
 .lead-asking-title {
 	font-size: 11px;
@@ -3440,14 +3514,15 @@ input {
 }
 
 /* ---- a followed task talking back in the Lead chat ---- */
+/* A task talking back: same language as the user's bubble, a hairline instead of a border. */
 .lead-agent {
 	display: flex;
 	flex-direction: column;
-	gap: 6px;
-	padding: 10px 12px;
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	background: var(--bg-elev);
+	gap: 8px;
+	padding: 12px 14px;
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.03);
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 .lead-agent-head {
 	display: flex;

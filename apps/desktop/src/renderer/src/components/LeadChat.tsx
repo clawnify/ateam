@@ -3,14 +3,7 @@
 // terminal: the user's messages, the Lead's prose, and its board moves folded
 // into one line each, with the tasks it touched as chips that open the task.
 import type { TaskDTO } from "@ateam/protocol";
-import {
-	ArrowUp,
-	ChevronRight,
-	CornerDownRight,
-	LoaderCircle,
-	Square,
-	SquarePen,
-} from "lucide-react";
+import { ArrowUp, ChevronRight, CornerDownRight, Square, SquarePen } from "lucide-react";
 import {
 	type FormEvent,
 	type KeyboardEvent,
@@ -99,9 +92,51 @@ function describe(tool: ToolItem, tasks: TaskDTO[]): string {
 			return `Started ${name}`;
 		case "send_message":
 			return `Messaged ${name}`;
+		case "answer_question":
+			return `Answered ${name}`;
 		default:
 			return tool.name;
 	}
+}
+
+/** The group as one sentence, the way Claude and Cursor fold their tool calls:
+ *  "Read the board, messaged landing page copy". A repeated step is counted. */
+function summarize(tools: ToolItem[], tasks: TaskDTO[]): string {
+	const counts = new Map<string, number>();
+	for (const t of tools) {
+		const d = describe(t, tasks);
+		counts.set(d, (counts.get(d) ?? 0) + 1);
+	}
+	const parts = [...counts].map(([d, n], i) => {
+		const phrase = i === 0 ? d : d.charAt(0).toLowerCase() + d.slice(1);
+		return n > 1 ? `${phrase} (${n}×)` : phrase;
+	});
+	return parts.join(", ");
+}
+
+/** What a step came back with, in a few words: the row is a summary, the raw
+ *  result opens below. Board reads count rows; task reads give where it is. */
+function resultSummary(tool: ToolItem): string {
+	const text = tool.result ?? "";
+	if (tool.name === "get_board") {
+		const rows = text.split("\n").filter((l) => / \| /.test(l)).length - 1;
+		return rows > 0 ? `${rows} task${rows === 1 ? "" : "s"}` : "nothing matches";
+	}
+	if (tool.name === "read_task") {
+		try {
+			const t = JSON.parse(text) as { column?: string; state?: string };
+			return [t.column, t.state].filter(Boolean).join(", ");
+		} catch {
+			/* an error text: shown as it is below */
+		}
+	}
+	return (
+		text
+			.split("\n")
+			.find((l) => /\w/.test(l))
+			?.trim()
+			.slice(0, 140) ?? ""
+	);
 }
 
 function ToolGroup({
@@ -126,25 +161,22 @@ function ToolGroup({
 		.filter((x): x is { tool: ToolItem; task: TaskDTO } => x.task != null);
 	return (
 		<div className="lead-tools">
-			<button type="button" className="lead-tools-head" onClick={() => setOpen((o) => !o)}>
-				{running ? (
-					<LoaderCircle size={12} className="spin" />
-				) : (
-					<ChevronRight size={12} className={open ? "lead-chev open" : "lead-chev"} />
-				)}
-				<span className="lead-tools-sum">{tools.map((t) => describe(t, tasks)).join(" · ")}</span>
-				{failed > 0 && <span className="lead-tools-failed">{failed} failed</span>}
+			<button
+				type="button"
+				className="lead-tools-head"
+				aria-expanded={open}
+				onClick={() => setOpen((o) => !o)}
+			>
+				<span className={running ? "lead-tools-sum shimmer" : "lead-tools-sum"}>
+					{summarize(tools, tasks)}
+				</span>
+				{failed > 0 && <span className="lead-tools-failed">Failed</span>}
+				<ChevronRight size={12} className={open ? "lead-chev open" : "lead-chev"} />
 			</button>
 			{open && (
-				<div className="lead-tools-body">
+				<div className="lead-steps">
 					{tools.map((t) => (
-						<div key={t.id} className={t.isError ? "lead-tool error" : "lead-tool"}>
-							<div className="lead-tool-name">{t.name}</div>
-							{Object.keys(t.input).length > 0 && (
-								<pre className="lead-tool-io">{JSON.stringify(t.input, null, 2)}</pre>
-							)}
-							{t.result !== undefined && <pre className="lead-tool-io">{t.result}</pre>}
-						</div>
+						<ToolStep key={t.id} tool={t} label={describe(t, tasks)} solo={tools.length === 1} />
 					))}
 				</div>
 			)}
@@ -165,6 +197,34 @@ function ToolGroup({
 							</span>
 						</button>
 					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+/** One step in an opened group: what it did and how it ended; its raw input
+ *  and result open below on a click, for when the summary isn't enough. */
+function ToolStep({ tool, label, solo }: { tool: ToolItem; label: string; solo: boolean }) {
+	// A group of one has nothing to summarize twice: its detail is what was asked for.
+	const [open, setOpen] = useState(solo);
+	const running = tool.result === undefined;
+	return (
+		<div className={tool.isError ? "lead-step error" : "lead-step"}>
+			<button type="button" className="lead-step-row" onClick={() => setOpen((o) => !o)}>
+				<span className={running ? "lead-step-label shimmer" : "lead-step-label"}>{label}</span>
+				{tool.isError ? (
+					<span className="lead-tools-failed">Failed</span>
+				) : (
+					!running && <span className="lead-step-result">{resultSummary(tool)}</span>
+				)}
+			</button>
+			{open && (
+				<div className="lead-step-detail">
+					{Object.keys(tool.input).length > 0 && (
+						<pre className="lead-tool-io">{JSON.stringify(tool.input, null, 2)}</pre>
+					)}
+					{!running && <pre className="lead-tool-io">{tool.result}</pre>}
 				</div>
 			)}
 		</div>
@@ -278,8 +338,7 @@ function Thinking() {
 	const secs = Math.floor((Date.now() - start) / 1000);
 	return (
 		<div className="lead-thinking">
-			<LoaderCircle size={12} className="spin" />
-			Working{secs > 0 ? ` for ${secs}s` : ""}
+			<span className="shimmer">Working{secs > 0 ? ` for ${secs}s` : "…"}</span>
 		</div>
 	);
 }
@@ -453,36 +512,39 @@ export function LeadChat({
 			)}
 
 			<div className="lead-composer">
-				<textarea
-					ref={input}
-					value={text}
-					rows={1}
-					placeholder="Message the Lead"
-					onChange={(e) => setText(e.target.value)}
-					onKeyDown={onKey}
-				/>
-				{snap.busy ? (
-					<button
-						type="button"
-						className="lead-send"
-						title="Stop"
-						aria-label="Stop"
-						onClick={() => void window.ateamLead.interrupt()}
-					>
-						<Square size={12} fill="currentColor" />
-					</button>
-				) : (
-					<button
-						type="button"
-						className="lead-send"
-						title="Send"
-						aria-label="Send"
-						disabled={!text.trim()}
-						onClick={() => send()}
-					>
-						<ArrowUp size={14} />
-					</button>
-				)}
+				<div className="lead-box">
+					<textarea
+						ref={input}
+						value={text}
+						rows={1}
+						placeholder="Message the Lead"
+						aria-label="Message the Lead"
+						onChange={(e) => setText(e.target.value)}
+						onKeyDown={onKey}
+					/>
+					{snap.busy ? (
+						<button
+							type="button"
+							className="lead-send"
+							title="Stop"
+							aria-label="Stop"
+							onClick={() => void window.ateamLead.interrupt()}
+						>
+							<Square size={10} fill="currentColor" />
+						</button>
+					) : (
+						<button
+							type="button"
+							className="lead-send"
+							title="Send"
+							aria-label="Send"
+							disabled={!text.trim()}
+							onClick={() => send()}
+						>
+							<ArrowUp size={14} />
+						</button>
+					)}
+				</div>
 			</div>
 		</div>
 	);
