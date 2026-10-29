@@ -41,6 +41,22 @@ export function waitNotice(
 }
 
 /**
+ * A question a task's agent just asked (ask_user; see questions.ts in the
+ * server). Same rules as a wait: once per question id, and only while fresh.
+ */
+export function questionNotice(
+	task: TaskDTO,
+	shown: ReadonlySet<string>,
+	now: number,
+): WaitNotice | null {
+	const q = task.question;
+	if (!q || now - q.askedAt > FRESH_MS) return null;
+	const key = `${task.id}:q:${q.id}`;
+	if (shown.has(key)) return null;
+	return { key, title: task.name, body: q.text };
+}
+
+/**
  * Wire it: returns the function to call with every taskUpdated payload.
  * `onClick` brings a window forward and opens the task there.
  */
@@ -50,7 +66,8 @@ export function createWaitNotifier(onClick: (task: TaskDTO) => void): (task: Tas
 	// which turns a click into a no-op; hold each one until it is done with.
 	const live = new Set<Notification>();
 	return (task) => {
-		const notice = waitNotice(task, shown, Date.now());
+		const now = Date.now();
+		const notice = waitNotice(task, shown, now) ?? questionNotice(task, shown, now);
 		if (!notice || !Notification.isSupported()) return;
 		shown.add(notice.key);
 		const n = new Notification({ title: notice.title, body: notice.body });

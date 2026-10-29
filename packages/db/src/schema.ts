@@ -49,6 +49,29 @@ export type LoopCadenceMode = "fixed" | "self_paced" | "cron";
 /** Outcome class of a Loop's last run, surfaced in the Loops panel. */
 export type LoopRunStatus = "ok" | "error" | "done";
 
+/** A question an agent asked the user (ask_user); mirrors @ateam/protocol's
+ *  TaskQuestionDTO, which documents each field. */
+export interface TaskQuestion {
+	id: string;
+	text: string;
+	options: string[];
+	allowText: boolean;
+	askedAt: number;
+	choices?: QuestionChoice[];
+	select?: "one" | "many";
+	kind?: "permission";
+}
+
+export interface QuestionChoice {
+	label: string;
+	description?: string;
+	pros?: string[];
+	cons?: string[];
+	risk?: "low" | "medium" | "high";
+	recommended?: boolean;
+	checked?: boolean;
+}
+
 export interface GitStatusSnapshot {
 	ahead: number;
 	behind: number;
@@ -131,6 +154,14 @@ export const tasks = sqliteTable(
 		 *  issue again). The sweep counts idleness from here too, or a task idle
 		 *  for months would be archived again within the hour. */
 		restoredAt: integer("restored_at"),
+		/** The agent's last finished turn, from its Stop hook, so the Lead chat
+		 *  can read what a task said without opening its terminal. Capped at
+		 *  LAST_REPLY_MAX in the engine; null until a turn has ended. */
+		lastReply: text("last_reply"),
+		/** What the agent asked the user (ask_user) and waits on; null when
+		 *  nothing is pending. One at a time: a new ask replaces it. */
+		question: text("question", { mode: "json" }).$type<TaskQuestion>(),
+		lastReplyAt: integer("last_reply_at"),
 		lastEventAt: integer("last_event_at"),
 		isUnread: integer("is_unread", { mode: "boolean" }).default(false),
 		createdBy: text("created_by")

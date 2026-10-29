@@ -84,6 +84,15 @@ export interface PeerInboxHandlers {
 	};
 }
 
+/** Claude Code's PermissionRequest hook, held open until someone decides
+ *  (permissions.ts). A null decision tells the hook to leave it to the terminal. */
+export type PermissionHandler = (req: {
+	terminalId: string;
+	toolName: string;
+	toolInput: Record<string, unknown>;
+	suggestions: unknown[];
+}) => { result: Promise<unknown | null>; cancel: () => void };
+
 /** Only localhost origins may reach the MCP endpoint (DNS-rebinding guard). */
 const LOCAL_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
 
@@ -100,7 +109,13 @@ export class HookServer extends EventEmitter {
 	private followUp?: FollowUpResolver;
 	private merge?: MergeHandler;
 	private inbox?: PeerInboxHandlers;
+	private permission?: PermissionHandler;
 	port = 0;
+
+	/** Wire Claude's permission prompts to the clients (`/hook/permission`). */
+	setPermissionHandler(handler: PermissionHandler): void {
+		this.permission = handler;
+	}
 
 	/** Wire the peer inbox (token checks + `/inbox/wait`). */
 	setPeerInbox(handlers: PeerInboxHandlers): void {
@@ -189,6 +204,66 @@ export class HookServer extends EventEmitter {
 									error: { code: -32603, message: String(e) },
 								}),
 							);
+					});
+					return;
+				}
+
+				// Claude's PermissionRequest hook (permission.sh) asking for a decision.
+				// 200 + the decision JSON: print it to Claude. 204: no decision, the
+				// terminal's own prompt stands. 401: wrong token. The token gate keeps
+				// anything else on this machine from putting a fake prompt in front of
+				// the user.
+				if (req.method === "POST" && url.pathname === "/hook/permission") {
+					const terminalId = url.searchParams.get("terminalId") ?? "";
+					const token = (req.headers["x-ateam-terminal-token"] as string | undefined) ?? "";
+					if (!this.permission || !this.inbox) {
+						res.writeHead(204);
+						res.end();
+						return;
+					}
+					if (!terminalId || !token || !this.inbox.verify(terminalId, token)) {
+						res.writeHead(401);
+						res.end();
+						return;
+					}
+					const permission = this.permission;
+					let body = "";
+					req.on("data", (c) => {
+						body += c;
+						if (body.length > 1_000_000) req.destroy();
+					});
+					req.on("end", () => {
+						let input: Record<string, unknown> = {};
+						try {
+							input = JSON.parse(body) as Record<string, unknown>;
+						} catch {
+							/* no usable request: nothing to show */
+						}
+						if (typeof input.tool_name !== "string") {
+							res.writeHead(204);
+							res.end();
+							return;
+						}
+						const { result, cancel } = permission({
+							terminalId,
+							toolName: input.tool_name,
+							toolInput: (input.tool_input as Record<string, unknown>) ?? {},
+							suggestions: Array.isArray(input.permission_suggestions)
+								? input.permission_suggestions
+								: [],
+						});
+						// The hook's own timeout (or Claude ending the session) closes the
+						// connection: drop the card with it. A terminal answer does not;
+						// the engine sees the agent move on (PermissionBridge.settle).
+						res.on("close", cancel);
+						result.then((decision) => {
+							if (res.writableEnded || res.destroyed) return;
+							if (decision) json(200, decision);
+							else {
+								res.writeHead(204);
+								res.end();
+							}
+						});
 					});
 					return;
 				}

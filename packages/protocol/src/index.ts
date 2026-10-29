@@ -92,7 +92,60 @@
 // the Archived view alone), and TaskDTO gained `archivedAt`, nullable. Settings
 // gained `engine.archiveAfterDays`; a v17 engine stores it and archives nothing,
 // which hides nothing, so it needs no gate.
-export const PROTOCOL_VERSION = 18;
+// v19: the Lead chat. tasks:lastReply reads a task's last finished turn and
+// peers:sendFromLead messages its agent on the user's behalf. New methods, so
+// no gate: a v18 engine answers "Unknown method" and the Lead tells the user
+// that box needs an update. Same version, agents can ask the user a question
+// (the ask_user board tool): TaskDTO gained `question`, optional, so an older
+// engine reads as "nothing asked", and tasks:answerQuestion answers it.
+export const PROTOCOL_VERSION = 19;
+
+/**
+ * A decision an agent is waiting on (ask_user). Answered from any client with
+ * tasks:answerQuestion; the answer reaches the agent as a message from the user.
+ */
+export interface TaskQuestionDTO {
+	/** An answer names the question it answers, so it can't land on a newer one. */
+	id: string;
+	text: string;
+	/** The choices' labels, always filled: a client that knows nothing of
+	 *  `choices`, `select` or `blocks` still offers these as buttons. */
+	options: string[];
+	/** Whether a typed answer is accepted (always, when there are no options). */
+	allowText: boolean;
+	askedAt: number;
+	/** The options with what the agent knows about each, same order as `options`.
+	 *  Absent when the agent gave plain labels. */
+	choices?: QuestionChoiceDTO[];
+	/** "many": a checklist, answered with the labels the user left ticked.
+	 *  Absent means "one". */
+	select?: "one" | "many";
+	/** "permission": not something the agent asked with ask_user but Claude Code
+	 *  asking to use a tool (permissions.ts). Answered the same way, with its
+	 *  options; it can also be answered in the task's terminal, which wins if
+	 *  that comes first. */
+	kind?: "permission";
+}
+
+/** One option of a question, as a card (select one) or a checklist row (many). */
+export interface QuestionChoiceDTO {
+	label: string;
+	/** What it means or what happens: the consequence, in a line or two. */
+	description?: string;
+	pros?: string[];
+	cons?: string[];
+	risk?: "low" | "medium" | "high";
+	/** The agent's pick; at most one. */
+	recommended?: boolean;
+	/** For a checklist: ticked to begin with. */
+	checked?: boolean;
+}
+
+/** A task's last finished turn, as the Lead chat reads it (tasks:lastReply). */
+export interface TaskLastReplyDTO {
+	text: string;
+	at: number;
+}
 
 /**
  * The engine version each SHAPE-SENSITIVE feature needs, and the reason why.
@@ -325,6 +378,13 @@ export interface TaskDTO {
 	/** When the task was archived; null while it is on the board, and on an
 	 *  engine older than v18. tasks:list never returns an archived task. */
 	archivedAt: number | null;
+	/** What the task's agent asked the user (the ask_user board tool) and is
+	 *  waiting on; null when nothing is pending. Absent on an engine older than
+	 *  v19, which reads the same. */
+	question?: TaskQuestionDTO | null;
+	/** When the agent last finished a turn with a reply (read it with
+	 *  tasks:lastReply); null until one has. Absent on an engine older than v19. */
+	lastReplyAt?: number | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
 }
@@ -833,6 +893,11 @@ export const CH = {
 	tasksCleanupCandidates: "tasks:cleanupCandidates",
 	tasksListArchived: "tasks:listArchived",
 	tasksSetArchived: "tasks:setArchived",
+	tasksLastReply: "tasks:lastReply",
+	tasksGet: "tasks:get",
+	tasksMessage: "tasks:message",
+	tasksAnswerQuestion: "tasks:answerQuestion",
+	peersSendFromLead: "peers:sendFromLead",
 	gitCommit: "git:commit",
 	gitPush: "git:push",
 	gitUpdate: "git:update",
@@ -1019,6 +1084,16 @@ export interface AteamApi {
 		markRead(id: string): Promise<TaskDTO>;
 		/** Park the task on an outside party until a date, or clear it (null). */
 		setWaiting(id: string, wait: TaskWait): Promise<TaskDTO>;
+		/** Answer the question the task's agent asked (ask_user), or dismiss it
+		 *  with null. `questionId` must be the pending one; a stale answer throws. */
+		answerQuestion(input: {
+			taskId: string;
+			questionId: string;
+			/** A label or typed text; for a checklist, the ticked labels. */
+			answer: string | string[] | null;
+			/** The Lead chat passing on the user's answer (see questions.ts). */
+			via?: "lead";
+		}): Promise<TaskDTO>;
 		/** Preview which tasks a cleanup would remove vs keep (and why). */
 		cleanupPreview(projectId: string): Promise<CleanupReport>;
 		/** Worktrees advised for cleanup (idle/finished), with their terminals. */

@@ -34,6 +34,8 @@ import { reapableSessions } from "./pty/reap";
 import { makeStrandReconciler } from "./pty/reconcile";
 import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
+import { PermissionBridge } from "./permissions";
+import { answerQuestion, applyAskUser, CLEAR_QUESTION, columnWithQuestion } from "./questions";
 import { readSettings } from "./settings-file";
 import { createTurnClassifier } from "./turn-classifier";
 import { applySetWaiting, CLEAR_WAIT, isFiredWait, WaitTimers } from "./waits";
@@ -75,6 +77,19 @@ export interface Engine {
 	sendTaskRemoved(taskId: string): void;
 	/** Emit the current loop list. */
 	sendLoopsUpdated(): void;
+	/** Queue a message to a task's agent from the Lead chat or from the user
+	 *  typing in an Ateam client (peer-messages.ts). */
+	messageFrom(
+		sender: "lead" | "user",
+		req: { to: string; body: string },
+	): { ok: boolean; reason: string };
+	/** Answer (or with null dismiss) the question a task's agent asked (questions.ts). */
+	answerQuestion(req: {
+		taskId: string;
+		questionId: string;
+		answer: string | string[] | null;
+		via?: "lead";
+	}): void;
 	/** Keeps every task's git + PR facts fresh, not just the open one. The
 	 *  `CH.gitStatus` handler shares its throttle (see worktree-sweep.ts). */
 	readonly worktreeSweep: WorktreeSweep;
@@ -264,6 +279,12 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		setWaiting: async (req) => applySetWaiting(db, req, waits, sendTaskUpdated),
 		listPeers: async (callerTerminalId) => peers.listPeers(callerTerminalId),
 		sendMessage: async (req) => peers.send(req),
+		askUser: async (req) => {
+			const session = repo.getSessionByTerminal(db, req.callerTerminalId);
+			if (!session)
+				return { ok: false, reason: "only an agent working in a task can ask the user" };
+			return applyAskUser(db, { taskId: session.taskId, ...req }, sendTaskUpdated);
+		},
 	});
 
 	// A finished turn with a follow-up armed continues instead of stopping. The
@@ -303,6 +324,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			}
 			pty.on("exit", onExit);
 		});
+	// Claude's permission prompts, answerable from any client (permissions.ts).
+	const permissions = new PermissionBridge({ db, notify: (id) => sendTaskUpdated(id) });
+	hooks.setPermissionHandler((req) => permissions.ask(req));
+
 	const peers = new PeerMessenger({
 		db,
 		isLive: (terminalId) => pty.has(terminalId),
@@ -376,6 +401,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	pty.on("data", (e) => emitter.emit("ptyData", e));
 	pty.on("exit", (e) => {
 		emitter.emit("ptyExit", e);
+		permissions.settle(e.terminalId);
 		// Record the exit in the DB so a session is never left looking "running"
 		// after its process is gone — the gap that previously stranded cards in
 		// the running column. Code that needs liveness must ask the PTY daemon
@@ -437,6 +463,11 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	hooks.on("hook", (e: HookEvent) => {
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
+		// The agent moving on means a prompt held for an Ateam client was answered
+		// in its terminal (or abandoned): take that card down. Its own
+		// PermissionRequest notification is not moving on.
+		if (e.eventType !== "PermissionRequest" && e.eventType !== "BrowserUse")
+			permissions.settle(e.terminalId, e.eventType);
 		// The agent called a browser tool. Its Working fires alongside and drives
 		// the status, so this only stamps the task.
 		if (e.eventType === "BrowserUse") {
@@ -488,7 +519,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				repo.updateTask(db, task.id, { archivedAt: null, restoredAt: Date.now() });
 				sendTaskUpdated(task.id);
 			}
-			const column = mapEventToColumn(e.eventType);
+			const column = columnWithQuestion(task, mapEventToColumn(e.eventType));
 			// Subagents fire PreToolUse too, so a Working event must never mask a
 			// pending question — only an explicit user reply (UserReply), Stop, or
 			// a fresh Start may move a task out of needs_attention.
@@ -516,6 +547,12 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				// unless the Stop is just a loop's tick ending on schedule.
 				isUnread: mapEventToUnread(e.eventType, ownedByLoop),
 				...(cameBack ? CLEAR_WAIT : {}),
+				// The user typed into the task: that is their answer to its question.
+				...(e.eventType === "UserReply" && task.question ? CLEAR_QUESTION : {}),
+				// What the Lead chat reads back (tasks:lastReply).
+				...(e.eventType === "Stop" && e.lastAssistantMessage
+					? { lastReply: e.lastAssistantMessage, lastReplyAt: Date.now() }
+					: {}),
 			});
 			sendTaskUpdated(task.id);
 			if (e.eventType === "UserReply" && e.prompt) turns.userReplied(task.id, e.prompt);
@@ -615,6 +652,19 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		sendLoopsUpdated() {
 			emitter.emit("loopsUpdated", loopRunner.describe());
 		},
+		messageFrom: (sender, req) => peers.sendFrom(sender, req),
+		answerQuestion: (req) => {
+			// A permission prompt is answered by resolving the hook that holds it,
+			// not by a message: the agent is mid-turn, waiting on exactly this.
+			if (permissions.holds(req.questionId)) {
+				const answer = Array.isArray(req.answer) ? (req.answer[0] ?? null) : req.answer;
+				return permissions.answer(req.questionId, answer);
+			}
+			const q = repo.getTask(db, req.taskId)?.question;
+			if (q?.kind === "permission")
+				throw new Error("That prompt is no longer waiting. Answer it in the task's terminal.");
+			return answerQuestion(db, (sender, r) => peers.sendFrom(sender, r), req, sendTaskUpdated);
+		},
 		async connectPty() {
 			try {
 				await pty.connect();
@@ -658,6 +708,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			}
 			waits.stop();
 			peers.stop();
+			permissions.stop();
 		},
 		stopHooks() {
 			hooks.stop();

@@ -51,6 +51,7 @@ import {
 	type RegisterProjectOptions,
 	type SettingsPatch,
 	type SettingsResult,
+	type TaskLastReplyDTO,
 	type TaskWait,
 	type UpdateLoopInput,
 } from "@ateam/protocol";
@@ -406,6 +407,39 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			const row = repo.updateTask(db, id, { isUnread: false });
 			engine.sendTaskUpdated(id);
 			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
+		},
+		// The Lead chat (desktop main) reads what a task last said, and messages
+		// its agent on the user's behalf. Not on window.ateam: only main calls them.
+		[CH.tasksLastReply]: async (id: string): Promise<TaskLastReplyDTO | null> => {
+			const task = repo.getTask(db, id);
+			if (!task) throw new Error(`Task not found: ${id}`);
+			return task.lastReply && task.lastReplyAt
+				? { text: task.lastReply, at: task.lastReplyAt }
+				: null;
+		},
+		[CH.tasksGet]: async (id: string) => {
+			const task = repo.getTask(db, id);
+			if (!task) throw new Error(`Task not found: ${id}`);
+			return toTaskDTO(task, false, liveAgentIds(db, services.pty, id));
+		},
+		[CH.peersSendFromLead]: async (req: { taskId: string; body: string }) =>
+			engine.messageFrom("lead", { to: req.taskId, body: req.body }),
+		// The user replying to a task's agent from the Lead chat, without opening it.
+		[CH.tasksMessage]: async (req: { taskId: string; body: string }) =>
+			engine.messageFrom("user", { to: req.taskId, body: req.body }),
+		// Any client answering the question a task's agent asked (questions.ts).
+		[CH.tasksAnswerQuestion]: async (req: {
+			taskId: string;
+			questionId: string;
+			answer: string | string[] | null;
+			via?: "lead";
+		}) => {
+			engine.answerQuestion(req);
+			return toTaskDTO(
+				repo.getTask(db, req.taskId)!,
+				false,
+				liveAgentIds(db, services.pty, req.taskId),
+			);
 		},
 		// The user parks a task from the sidebar (or clears the wait). The agent's
 		// path is the MCP tool; both land in applySetWaiting.

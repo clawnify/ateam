@@ -2929,3 +2929,668 @@ input {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
+
+/* ---- lead chat ---- */
+.lead {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	/* The sidebar's surface, so the chat reads as part of the app's chrome. */
+	background: var(--bg-elev);
+}
+/* On that surface, everything that sat on --bg-elev steps up one shade, or it
+   would vanish into the background. Scoped to the Lead: the task panel's
+   question card keeps its own colours. */
+.lead .question,
+.lead .lead-chip,
+.lead .lead-tool-io,
+.lead .md pre {
+	background: var(--bg-elev-2);
+}
+.lead .md code {
+	background: #26262e;
+}
+.lead .md pre code {
+	background: none;
+}
+/* Pele draws some text in its background colour: match what the diagram sits on. */
+.lead .diagram .pele {
+	--pele-bg: var(--bg-elev);
+	--pele-surface: var(--bg-elev-2);
+}
+.lead .question .diagram .pele {
+	--pele-bg: var(--bg-elev-2);
+	--pele-surface: #26262e;
+}
+.lead-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 16px 16px 10px;
+	border-bottom: 1px solid var(--border);
+}
+.lead-head h2 {
+	margin: 0 0 4px;
+	font-size: 15px;
+}
+.lead-head p {
+	margin: 0;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.lead-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+}
+/* The rhythm Claude, Codex and T3 Code share: a ~736px column, 20px between
+   the blocks of a turn, a wider break before each of the user's messages, and
+   body text a step up from the app's 13px chrome because this is prose. */
+.lead-thread {
+	max-width: 776px;
+	margin: 0 auto;
+	padding: 24px 20px 32px;
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+	font-size: 14px;
+	line-height: 1.5;
+}
+.lead-thread > .lead-user:not(:first-child) {
+	margin-top: 16px;
+}
+.lead-empty p {
+	margin: 0 0 12px;
+	color: var(--text-dim);
+	max-width: 520px;
+}
+.lead-suggest {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.lead-suggest button {
+	font-size: 12px;
+	color: var(--text-dim);
+	background: transparent;
+}
+.lead-suggest button:hover {
+	color: var(--text);
+}
+/* Only the user gets a bubble: a faint fill, no border (Claude: white 5%, r12). */
+.lead-user {
+	align-self: flex-end;
+	max-width: 80%;
+	padding: 10px 14px;
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.05);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.md {
+	overflow-wrap: anywhere;
+}
+.md > :first-child {
+	margin-top: 0;
+}
+.md > :last-child {
+	margin-bottom: 0;
+}
+.md p,
+.md ul,
+.md ol {
+	margin: 0 0 0.75em;
+}
+.md ul,
+.md ol {
+	padding-left: 20px;
+}
+.md code {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12px;
+	background: var(--bg-elev-2);
+	border-radius: 4px;
+	padding: 1px 4px;
+}
+.md pre {
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 8px 10px;
+	overflow-x: auto;
+}
+.md pre code {
+	background: none;
+	padding: 0;
+}
+.md table {
+	border-collapse: collapse;
+	margin: 0 0 8px;
+}
+.md th,
+.md td {
+	border: 1px solid var(--border);
+	padding: 4px 8px;
+	text-align: left;
+}
+.md.streaming > :last-child::after {
+	content: "▍";
+	color: var(--text-dim);
+	animation: lead-blink 1s steps(2) infinite;
+}
+@keyframes lead-blink {
+	50% {
+		opacity: 0;
+	}
+}
+.md-link {
+	text-decoration: underline;
+	text-decoration-color: var(--text-dim);
+}
+/* A mermaid diagram drawn by Pele, in the app's palette. */
+.diagram {
+	margin: 4px 0 8px;
+	overflow-x: auto;
+}
+.diagram .pele {
+	--pele-bg: var(--bg-elev);
+	--pele-fg: var(--text);
+	--pele-muted: var(--text-dim);
+	--pele-line: #8a8a96;
+	--pele-surface: var(--bg-elev-2);
+	--pele-surface-alt: #18181d;
+	--pele-border: #44444f;
+	--pele-accent: var(--blue);
+	--pele-critical: var(--red);
+	--pele-error: var(--red);
+}
+.diagram.failed pre {
+	margin: 0;
+}
+.diagram-error {
+	margin-top: 4px;
+	font-size: 11px;
+	color: var(--text-dim);
+}
+.lead-tools {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+/* A group of tool calls is one quiet sentence with the chevron after it. */
+.lead-tools-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	align-self: flex-start;
+	max-width: 100%;
+	min-height: 28px;
+	padding: 2px 6px;
+	margin-left: -6px;
+	font-size: 13px;
+	color: var(--text-dim);
+	background: transparent;
+	border: none;
+	border-radius: 8px;
+}
+.lead-tools-head:hover {
+	background: rgba(255, 255, 255, 0.04);
+	color: var(--text);
+}
+.lead-tools-sum {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.lead-chev {
+	flex: none;
+	transition: transform 0.12s;
+}
+.lead-chev.open {
+	transform: rotate(90deg);
+}
+.lead-tools-failed {
+	flex: none;
+	color: var(--red);
+}
+/* Opened: a hairline card, one row per step. */
+.lead-steps {
+	display: flex;
+	flex-direction: column;
+	border-radius: 12px;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+	overflow: hidden;
+}
+.lead-step + .lead-step {
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.lead-step-row {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	width: 100%;
+	min-height: 36px;
+	padding: 8px 12px;
+	font-size: 13px;
+	text-align: left;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+}
+.lead-step-row:hover {
+	background: rgba(255, 255, 255, 0.03);
+}
+.lead-step-label {
+	flex: none;
+}
+.lead-step-result {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.lead-step-detail {
+	padding: 0 12px 10px;
+}
+.lead-tool-io {
+	margin: 4px 0 0;
+	max-height: 220px;
+	overflow: auto;
+	padding: 6px 8px;
+	font-size: 11px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	color: var(--text-dim);
+	background: var(--bg-elev);
+	border-radius: 6px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+/* Working: the label shimmers instead of a spinner turning beside it. */
+.shimmer {
+	color: transparent;
+	background: linear-gradient(
+		90deg,
+		var(--text-dim) 0%,
+		var(--text-dim) 40%,
+		var(--text) 50%,
+		var(--text-dim) 60%,
+		var(--text-dim) 100%
+	);
+	background-size: 200% 100%;
+	background-clip: text;
+	-webkit-background-clip: text;
+	animation: lead-shimmer 2s linear infinite;
+}
+@keyframes lead-shimmer {
+	from {
+		background-position: 100% 0;
+	}
+	to {
+		background-position: -100% 0;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.shimmer {
+		animation: none;
+		color: var(--text-dim);
+		background: none;
+	}
+}
+.lead-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.lead-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 100%;
+	padding: 3px 8px;
+	font-size: 12px;
+	border-radius: 6px;
+	background: var(--bg-elev);
+}
+.lead-chip-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.lead-chip-what {
+	color: var(--text-dim);
+}
+.lead-notice {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.lead-notice.error {
+	color: var(--red);
+}
+.lead-thinking {
+	font-size: 13px;
+}
+/* One floating card with the send button inside (Claude: r14, an inset ring
+   at white 8%, 44px at one line, growing to ~380px). */
+.lead-composer {
+	width: 100%;
+	max-width: 776px;
+	margin: 0 auto;
+	padding: 0 20px 16px;
+}
+.lead-box {
+	display: flex;
+	align-items: flex-end;
+	gap: 8px;
+	padding: 8px 8px 8px 14px;
+	background: #222228;
+	border-radius: 14px;
+	box-shadow:
+		inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+		0 4px 20px rgba(0, 0, 0, 0.25);
+}
+.lead-box:focus-within {
+	box-shadow:
+		inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+		0 4px 20px rgba(0, 0, 0, 0.25);
+}
+.lead-box textarea {
+	flex: 1;
+	field-sizing: content;
+	min-height: 28px;
+	max-height: 380px;
+	resize: none;
+	padding: 4px 0;
+	font: inherit;
+	font-size: 14px;
+	line-height: 20px;
+	color: var(--text);
+	background: transparent;
+	border: none;
+	outline: none;
+}
+.lead-box textarea::placeholder {
+	color: var(--text-dim);
+}
+.lead-send {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border-radius: 50%;
+	background: var(--text);
+	border-color: var(--text);
+	color: var(--bg);
+}
+.lead-send:hover {
+	background: #d4d4da;
+	border-color: #d4d4da;
+}
+.lead-send:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
+/* ---- questions an agent asked the user (ask_user) ---- */
+.question {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-left: 2px solid var(--amber);
+	border-radius: 8px;
+	background: var(--bg-elev);
+	font-size: 13px;
+}
+.question-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+.question-icon {
+	flex: none;
+	color: var(--amber);
+}
+.question-who {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.question-when {
+	margin-left: auto;
+	flex: none;
+	font-size: 11px;
+	color: var(--text-dim);
+}
+.question-dismiss {
+	flex: none;
+	width: 22px;
+	height: 22px;
+}
+.question-text {
+	line-height: 1.5;
+}
+.choices {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	gap: 8px;
+}
+.choice {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 6px;
+	padding: 10px;
+	text-align: left;
+	background: var(--bg);
+	border-radius: 8px;
+}
+.choice.recommended {
+	border-color: var(--text);
+}
+.choice-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+}
+.choice-label {
+	font-weight: 600;
+}
+.choice-desc {
+	color: var(--text-dim);
+	font-size: 12px;
+	line-height: 1.45;
+}
+.choice-tradeoffs {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	font-size: 12px;
+}
+.choice-tradeoffs .pro {
+	color: var(--green);
+}
+.choice-tradeoffs .con {
+	color: var(--red);
+}
+.badge {
+	padding: 1px 6px;
+	font-size: 10px;
+	font-weight: 600;
+	color: var(--bg);
+	background: var(--text);
+	border-radius: 4px;
+}
+.risk {
+	padding: 0 6px;
+	font-size: 10px;
+	border: 1px solid currentColor;
+	border-radius: 4px;
+}
+.risk.low {
+	color: var(--green);
+}
+.risk.medium {
+	color: var(--amber);
+}
+.risk.high {
+	color: var(--red);
+}
+.checklist {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.check-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 6px 4px;
+	border-radius: 6px;
+	cursor: pointer;
+}
+.check-row:hover {
+	background: var(--bg-elev-2);
+}
+/* The global `input` rule is for text fields (width: 100%, padding): undo it,
+   or the box stretches across the row and pushes its label to the far edge. */
+.check-row input {
+	flex: none;
+	width: 14px;
+	height: 14px;
+	margin: 3px 0 0;
+	padding: 0;
+	accent-color: var(--text);
+}
+.check-body {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+.checklist-foot {
+	padding-top: 6px;
+}
+.question-options {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.question-reply {
+	display: flex;
+	gap: 6px;
+}
+.question-reply input {
+	flex: 1;
+	min-width: 0;
+	padding: 5px 10px;
+	font: inherit;
+	font-size: 13px;
+	color: var(--text);
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	outline: none;
+}
+.question-reply input:focus {
+	border-color: #4a4a56;
+}
+.question-error {
+	margin: 0;
+	font-size: 12px;
+	color: var(--red);
+}
+.lead-asking {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	width: 100%;
+	max-width: 776px;
+	max-height: 40vh;
+	overflow-y: auto;
+	margin: 0 auto;
+	padding: 0 20px 10px;
+}
+.lead-asking-title {
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--text-dim);
+}
+.panel-question {
+	padding: 8px 10px 0;
+}
+
+/* ---- a followed task talking back in the Lead chat ---- */
+/* A task talking back: same language as the user's bubble, a hairline instead of a border. */
+.lead-agent {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px 14px;
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.03);
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.lead-agent-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.lead-agent-said {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.lead-agent-reply {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	align-self: flex-start;
+	padding: 2px 6px;
+	margin-left: -6px;
+	font-size: 12px;
+	color: var(--text-dim);
+	background: transparent;
+	border: none;
+}
+.lead-agent-reply:hover {
+	background: transparent;
+	color: var(--text);
+}
+.lead-user-to {
+	margin-bottom: 2px;
+	font-size: 11px;
+	color: var(--text-dim);
+}
+.lead-notice .lead-chip {
+	margin-left: 8px;
+}
+.lead-waiting {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.lead-waiting button {
+	font-size: 12px;
+	padding: 2px 8px;
+}
+/* A tool permission Claude Code asks for, as opposed to the agent's own question. */
+.question-kind {
+	padding: 0 6px;
+	font-size: 10px;
+	color: var(--amber);
+	border: 1px solid currentColor;
+	border-radius: 4px;
+}

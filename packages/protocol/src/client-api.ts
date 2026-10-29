@@ -122,6 +122,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			setColumn: (id, column: KanbanColumn) => call<TaskDTO>(CH.tasksSetColumn, [id, column]),
 			markRead: (id) => call<TaskDTO>(CH.tasksMarkRead, [id]),
 			setWaiting: (id, wait) => call<TaskDTO>(CH.tasksSetWaiting, [id, wait]),
+			answerQuestion: (input) => call<TaskDTO>(CH.tasksAnswerQuestion, [input]),
 			cleanupPreview: (projectId) => call<CleanupReport>(CH.tasksCleanupPreview, [projectId]),
 			cleanupCandidates: (projectId) =>
 				call<CleanupCandidate[]>(CH.tasksCleanupCandidates, [projectId]),

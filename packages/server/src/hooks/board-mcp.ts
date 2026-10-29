@@ -42,6 +42,15 @@ export interface BoardHandlers {
 		to: string;
 		body: string;
 	}): Promise<{ ok: boolean; reason: string }>;
+	/** File a question for the user on the caller's task (questions.ts). */
+	askUser(req: {
+		callerTerminalId: string;
+		text: string;
+		/** Labels or option objects, as the model sent them (validated in questions.ts). */
+		options?: unknown[];
+		allowText?: boolean;
+		select?: unknown;
+	}): Promise<{ ok: boolean; reason: string }>;
 }
 
 /** Per-request context the HTTP layer derives (e.g. the caller's terminal id). */
@@ -65,7 +74,7 @@ const SERVER_INFO = { name: "ateam_board", version: "0.1.0" };
  * inside a shell-quoted TOML string unescaped.
  */
 export const BOARD_INSTRUCTIONS =
-	"You are working in an Ateam task. The agents in the other tasks on this board can be reached with the ateam_board send_message tool, even when they are stopped, and list_peers shows who they are. For those tasks use it rather than any other agent messaging tool: only it also reaches Codex and OpenCode agents and stopped tasks. Message one when your work affects theirs, to hand off work, or to ask something only their task knows. A message that starts with [Ateam] comes from another agent, not from the user.";
+	"You are working in an Ateam task. The agents in the other tasks on this board can be reached with the ateam_board send_message tool, even when they are stopped, and list_peers shows who they are. For those tasks use it rather than any other agent messaging tool: only it also reaches Codex and OpenCode agents and stopped tasks. Message one when your work affects theirs, to hand off work, or to ask something only their task knows. A message that starts with [Ateam] comes from another agent, not from the user, unless it says it comes from the user. When you need a decision or an approval from the user before you can go on, ask it with the ateam_board ask_user tool rather than only in your reply: the user may not be watching this terminal, and ask_user reaches them on the board and their phone with your options as buttons.";
 
 /** The board tools. `to` is constrained to the assignable columns to steer the
  *  model; the guardrails (validateSetStatus, validateWait) still enforce
@@ -147,16 +156,98 @@ const TOOLS = [
 			additionalProperties: false,
 		},
 	},
+	{
+		name: "ask_user",
+		description:
+			"Ask the user a question you cannot go on without, or for their approval before something hard to undo (deleting data, force-pushing, deploying, spending money, changing permissions). The user sees it as a card on the board, in the Lead chat and on their phone, so they can answer without opening this terminal. Make the decision easy to take: give each option what it means and its tradeoffs, mark the one you recommend, and for a list of things to act on (branches to delete, files to remove) use select many so they untick what to keep. Calling it again replaces the pending question. After calling it, end your turn and do not repeat the question in your reply: the answer arrives as a message starting with [Ateam] that says it comes from the user.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				question: {
+					type: "string",
+					description:
+						"The question, self-contained: the user may read it on their phone without your conversation. Markdown; a ```mermaid fenced block is drawn as a diagram (a flow, a sequence, a before/after). At most 4000 characters.",
+				},
+				options: {
+					type: "array",
+					maxItems: 20,
+					description:
+						"The answers to offer: up to 4 for one choice, up to 20 rows for select many. Each is a short label, or an object with the label and what you know about it.",
+					items: {
+						anyOf: [
+							{ type: "string" },
+							{
+								type: "object",
+								properties: {
+									label: { type: "string", description: "Short, at most 80 characters." },
+									description: {
+										type: "string",
+										description: "What it means or what happens if chosen, in a line or two.",
+									},
+									pros: { type: "array", items: { type: "string" }, maxItems: 4 },
+									cons: { type: "array", items: { type: "string" }, maxItems: 4 },
+									risk: { type: "string", enum: ["low", "medium", "high"] },
+									recommended: {
+										type: "boolean",
+										description: "Your pick; at most one option.",
+									},
+									checked: {
+										type: "boolean",
+										description: "select many only: ticked to begin with (the safe ones).",
+									},
+								},
+								required: ["label"],
+								additionalProperties: false,
+							},
+						],
+					},
+				},
+				select: {
+					type: "string",
+					enum: ["one", "many"],
+					description:
+						"one (default): the user picks an option. many: a checklist; the answer lists what they left ticked and what they did not.",
+				},
+				allowText: {
+					type: "boolean",
+					description:
+						"select one: whether the user may type an answer of their own besides the options. Default true.",
+				},
+			},
+			required: ["question"],
+			additionalProperties: false,
+		},
+	},
 ];
 
 /** What the HTTP layer should send back. `accepted` → 202 no body (notifications). */
 export type McpReply = { kind: "accepted" } | { kind: "json"; body: unknown };
 
-interface JsonRpcMessage {
+export interface JsonRpcMessage {
 	jsonrpc?: string;
 	id?: string | number | null;
 	method?: string;
 	params?: Record<string, unknown>;
+}
+
+/** One tool call's answer, as text for the model. */
+export interface McpToolResult {
+	text: string;
+	isError?: boolean;
+}
+
+/**
+ * A tools-only MCP server: what the JSON-RPC envelope in `dispatchMcpTools`
+ * serves. The board tools here and the desktop's Lead chat tools are both one
+ * of these, so the protocol handling exists once.
+ */
+export interface McpToolServer {
+	info: { name: string; version: string };
+	instructions: string;
+	tools: readonly unknown[];
+	/** Run one tool; null when there is no tool by that name. A throw becomes an
+	 *  error result the model can read, not a protocol error. */
+	call(name: string, args: Record<string, unknown>): Promise<McpToolResult | null>;
 }
 
 const ok = (id: JsonRpcMessage["id"], result: unknown): McpReply => ({
@@ -172,11 +263,10 @@ const textContent = (text: string, isError = false) => ({
 	isError,
 });
 
-/** Dispatch one parsed JSON-RPC message against the board handlers. */
-export async function dispatchMcp(
+/** Dispatch one parsed JSON-RPC message against a tools-only MCP server. */
+export async function dispatchMcpTools(
 	msg: JsonRpcMessage,
-	board: BoardHandlers,
-	ctx: McpContext = {},
+	server: McpToolServer,
 ): Promise<McpReply> {
 	const { method, id } = msg;
 
@@ -189,92 +279,113 @@ export async function dispatchMcp(
 			return ok(id, {
 				protocolVersion: clientVersion,
 				capabilities: { tools: { listChanged: false } },
-				serverInfo: SERVER_INFO,
-				instructions: BOARD_INSTRUCTIONS,
+				serverInfo: server.info,
+				instructions: server.instructions,
 			});
 		}
 		case "ping":
 			return ok(id, {});
 		case "tools/list":
-			return ok(id, { tools: TOOLS });
-		case "tools/call":
-			return callTool(msg, board, ctx);
+			return ok(id, { tools: server.tools });
+		case "tools/call": {
+			const name = msg.params?.name as string | undefined;
+			const args = (msg.params?.arguments as Record<string, unknown>) ?? {};
+			let res: McpToolResult | null;
+			try {
+				res = await server.call(name ?? "", args);
+			} catch (e) {
+				res = { text: `tool failed: ${e instanceof Error ? e.message : String(e)}`, isError: true };
+			}
+			if (!res) return err(id, -32602, `unknown tool: ${name}`);
+			return ok(id, textContent(res.text, res.isError));
+		}
 		default:
 			return err(id, -32601, `method not found: ${method}`);
 	}
 }
 
-async function callTool(
+/** Dispatch one parsed JSON-RPC message against the board handlers. */
+export function dispatchMcp(
 	msg: JsonRpcMessage,
 	board: BoardHandlers,
-	ctx: McpContext,
+	ctx: McpContext = {},
 ): Promise<McpReply> {
-	const { id } = msg;
-	const name = msg.params?.name as string | undefined;
-	const args = (msg.params?.arguments as Record<string, unknown>) ?? {};
-	try {
-		if (name === "get_board") {
-			const view = await board.get();
-			return ok(id, textContent(JSON.stringify(view, null, 2)));
-		}
-		if (name === "set_status") {
-			const taskId = String(args.taskId ?? "");
-			const to = String(args.to ?? "");
-			const reason = args.reason != null ? String(args.reason) : undefined;
-			if (!taskId || !to) {
-				return ok(id, textContent("taskId and to are required", true));
-			}
-			const res = await board.setStatus({
-				taskId,
-				to,
-				reason,
-				callerTerminalId: ctx.callerTerminalId,
-			});
-			return ok(id, textContent(res.reason, !res.ok));
-		}
-		if (name === "set_waiting") {
-			const taskId = args.taskId != null ? String(args.taskId) : undefined;
-			const reason = String(args.reason ?? "");
-			const untilText = String(args.until ?? "");
-			if (!reason || !untilText) {
-				return ok(id, textContent("reason and until are required", true));
-			}
-			const until = parseUntil(untilText);
-			if (until == null) {
-				return ok(id, textContent(`until is not an ISO 8601 date: ${untilText}`, true));
-			}
-			const res = await board.setWaiting({
-				taskId,
-				reason,
-				until,
-				callerTerminalId: ctx.callerTerminalId,
-			});
-			return ok(id, textContent(res.reason, !res.ok));
-		}
-		if (name === "list_peers" || name === "send_message") {
-			if (!ctx.callerTerminalId || !ctx.callerVerified) {
-				return ok(
-					id,
-					textContent(
-						"messaging is only open to an agent Ateam launched in a task (this session has no valid Ateam terminal token; relaunch it from Ateam)",
-						true,
-					),
-				);
-			}
-			if (name === "list_peers") {
-				const peers = await board.listPeers(ctx.callerTerminalId);
-				return ok(id, textContent(JSON.stringify(peers, null, 2)));
-			}
-			const to = String(args.to ?? "");
-			const body = String(args.message ?? "");
-			if (!to || !body) return ok(id, textContent("to and message are required", true));
-			const res = await board.sendMessage({ fromTerminalId: ctx.callerTerminalId, to, body });
-			return ok(id, textContent(res.reason, !res.ok));
-		}
-		return err(id, -32602, `unknown tool: ${name}`);
-	} catch (e) {
-		return ok(id, textContent(`tool failed: ${e instanceof Error ? e.message : String(e)}`, true));
+	return dispatchMcpTools(msg, {
+		info: SERVER_INFO,
+		instructions: BOARD_INSTRUCTIONS,
+		tools: TOOLS,
+		call: (name, args) => callBoardTool(name, args, board, ctx),
+	});
+}
+
+async function callBoardTool(
+	name: string,
+	args: Record<string, unknown>,
+	board: BoardHandlers,
+	ctx: McpContext,
+): Promise<McpToolResult | null> {
+	if (name === "get_board") {
+		const view = await board.get();
+		return { text: JSON.stringify(view, null, 2) };
 	}
+	if (name === "set_status") {
+		const taskId = String(args.taskId ?? "");
+		const to = String(args.to ?? "");
+		const reason = args.reason != null ? String(args.reason) : undefined;
+		if (!taskId || !to) return { text: "taskId and to are required", isError: true };
+		const res = await board.setStatus({
+			taskId,
+			to,
+			reason,
+			callerTerminalId: ctx.callerTerminalId,
+		});
+		return { text: res.reason, isError: !res.ok };
+	}
+	if (name === "set_waiting") {
+		const taskId = args.taskId != null ? String(args.taskId) : undefined;
+		const reason = String(args.reason ?? "");
+		const untilText = String(args.until ?? "");
+		if (!reason || !untilText) return { text: "reason and until are required", isError: true };
+		const until = parseUntil(untilText);
+		if (until == null) {
+			return { text: `until is not an ISO 8601 date: ${untilText}`, isError: true };
+		}
+		const res = await board.setWaiting({
+			taskId,
+			reason,
+			until,
+			callerTerminalId: ctx.callerTerminalId,
+		});
+		return { text: res.reason, isError: !res.ok };
+	}
+	if (name === "list_peers" || name === "send_message" || name === "ask_user") {
+		if (!ctx.callerTerminalId || !ctx.callerVerified) {
+			return {
+				text: "messaging and ask_user are only open to an agent Ateam launched in a task (this session has no valid Ateam terminal token; relaunch it from Ateam)",
+				isError: true,
+			};
+		}
+		if (name === "list_peers") {
+			const peers = await board.listPeers(ctx.callerTerminalId);
+			return { text: JSON.stringify(peers, null, 2) };
+		}
+		if (name === "ask_user") {
+			const res = await board.askUser({
+				callerTerminalId: ctx.callerTerminalId,
+				text: String(args.question ?? ""),
+				options: Array.isArray(args.options) ? args.options : undefined,
+				allowText: typeof args.allowText === "boolean" ? args.allowText : undefined,
+				select: args.select,
+			});
+			return { text: res.reason, isError: !res.ok };
+		}
+		const to = String(args.to ?? "");
+		const body = String(args.message ?? "");
+		if (!to || !body) return { text: "to and message are required", isError: true };
+		const res = await board.sendMessage({ fromTerminalId: ctx.callerTerminalId, to, body });
+		return { text: res.reason, isError: !res.ok };
+	}
+	return null;
 }
 
 /**

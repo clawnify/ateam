@@ -17,6 +17,7 @@ import {
 	type HostStatus,
 	type InstallLogEvent,
 } from "../shared/host";
+import { type AteamLead, LEAD_CH, type LeadEvent } from "../shared/lead";
 
 const api: AteamApi = {
 	projects: {
@@ -37,6 +38,7 @@ const api: AteamApi = {
 		setColumn: (id, column: KanbanColumn) => ipcRenderer.invoke(CH.tasksSetColumn, id, column),
 		markRead: (id) => ipcRenderer.invoke(CH.tasksMarkRead, id),
 		setWaiting: (id, wait) => ipcRenderer.invoke(CH.tasksSetWaiting, id, wait),
+		answerQuestion: (input) => ipcRenderer.invoke(CH.tasksAnswerQuestion, input),
 		cleanupPreview: (projectId) => ipcRenderer.invoke(CH.tasksCleanupPreview, projectId),
 		cleanup: (projectId) => ipcRenderer.invoke(CH.tasksCleanup, projectId),
 		cleanupCandidates: (projectId) => ipcRenderer.invoke(CH.tasksCleanupCandidates, projectId),
@@ -206,3 +208,18 @@ const host: AteamHost = {
 };
 
 contextBridge.exposeInMainWorld("ateamHost", host);
+
+const lead: AteamLead = {
+	snapshot: () => ipcRenderer.invoke(LEAD_CH.snapshot),
+	send: (text) => ipcRenderer.invoke(LEAD_CH.send, text),
+	interrupt: () => ipcRenderer.invoke(LEAD_CH.interrupt),
+	reset: () => ipcRenderer.invoke(LEAD_CH.reset),
+	reply: (taskId, text) => ipcRenderer.invoke(LEAD_CH.reply, taskId, text),
+	answer: (input) => ipcRenderer.invoke(LEAD_CH.answer, input),
+	onEvent: (cb: (e: LeadEvent) => void) => {
+		const handler = (_: unknown, e: LeadEvent) => cb(e);
+		ipcRenderer.on(LEAD_CH.evtEvent, handler);
+		return () => ipcRenderer.off(LEAD_CH.evtEvent, handler);
+	},
+};
+contextBridge.exposeInMainWorld("ateamLead", lead);

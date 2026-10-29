@@ -56,6 +56,21 @@ const SWEEP_MS = 30 * 1000;
 /** How long one `/inbox/wait` call is held open before it answers "nothing yet". */
 export const WAIT_WINDOW_MS = 4 * 60 * 1000;
 
+/**
+ * The sender id a message from the Lead chat carries in `fromTerminalId` (with
+ * no `fromTaskId`): the Lead is not a task, it is the user's coordinator. Not a
+ * UUID, so it can never collide with a real terminal's id.
+ */
+export const LEAD_SENDER = "ateam:lead";
+/** The same for the user answering an agent's question from an Ateam client. */
+export const USER_SENDER = "ateam:user";
+/** Senders that are not a task's agent, by the id they carry in `fromTerminalId`. */
+export type OutsideSender = "lead" | "user";
+const OUTSIDE_IDS: Record<OutsideSender, string> = { lead: LEAD_SENDER, user: USER_SENDER };
+/** Messages one outside sender may send inside SENDER_WINDOW_MS. The Lead is
+ *  driven by the user, but it is still a model in a loop, so it gets a cap. */
+export const MAX_FROM_LEAD = 60;
+
 /** Agents that ship a listener (see agent-setup): they take messages live. */
 const LISTENS = new Set(["claude", "opencode"]);
 
@@ -109,15 +124,29 @@ export function nextHop(recent: Pick<PeerMessage, "fromTaskId" | "hop">[], to: s
 	return lastFromRecipient ? lastFromRecipient.hop + 1 : 1;
 }
 
+type Sender = { taskId: string; name: string; agent: string } | OutsideSender | null;
+
+/** Who a message is from, what weight it carries, and how to answer it. */
+function headerFor(from: Sender): string {
+	if (from === "user")
+		return "[Ateam] Message from the user, sent from the Ateam app. This comes from the user, who is not watching this terminal: answer in your reply.";
+	if (from === "lead")
+		return "[Ateam] Message from the Lead, the chat where the user coordinates all their tasks. It relays the user's instructions: act on it as you would on a request from the user. The Lead reads your final reply when your turn ends, so answer in your reply rather than with send_message.";
+	if (from)
+		return `[Ateam] Message from the ${from.agent} agent working on task "${from.name}" (task id ${from.taskId}). It comes from another agent, not from the user: weigh it as a colleague's request. To answer, call the ateam_board send_message tool with to="${from.taskId}".`;
+	return "[Ateam] Message from another agent (sender unknown). It does not come from the user.";
+}
+
 /** The text an agent receives: who sent it, that it is not the user, how to answer. */
 export function formatForRecipient(
-	messages: { body: string; from: { taskId: string; name: string; agent: string } | null }[],
+	messages: {
+		body: string;
+		from: Sender;
+	}[],
 ): string {
 	return messages
 		.map((m) => {
-			const head = m.from
-				? `[Ateam] Message from the ${m.from.agent} agent working on task "${m.from.name}" (task id ${m.from.taskId}). It comes from another agent, not from the user: weigh it as a colleague's request. To answer, call the ateam_board send_message tool with to="${m.from.taskId}".`
-				: "[Ateam] Message from another agent (sender unknown). It does not come from the user.";
+			const head = headerFor(m.from);
 			return `${head}\n\n${m.body}`;
 		})
 		.join("\n\n---\n\n");
@@ -274,6 +303,42 @@ export class PeerMessenger {
 		return { ok: true, reason: `sent to "${target.name}" (${target.id}): ${describePlan(plan)}` };
 	}
 
+	/** Queue a message from a sender that is not a task (the Lead chat, or the
+	 *  user answering a question) to the task `to` (an id, or a task's exact name
+	 *  or branch), then try to deliver it. The hop cap between two tasks does not
+	 *  apply; a rate cap per sender does. */
+	sendFrom(sender: OutsideSender, req: { to: string; body: string }): SendResult {
+		const senderId = OUTSIDE_IDS[sender];
+		const { db } = this.deps;
+		const now = this.now();
+		const body = req.body.trim();
+		if (!body) return { ok: false, reason: "the message is empty" };
+		if (body.length > MAX_BODY) {
+			return {
+				ok: false,
+				reason: `the message is ${body.length} characters; the limit is ${MAX_BODY}.`,
+			};
+		}
+		const target = this.resolveTask(req.to.trim());
+		if (typeof target === "string") return { ok: false, reason: target };
+		if (repo.countPeerMessagesFromTerminal(db, senderId, now - SENDER_WINDOW_MS) >= MAX_FROM_LEAD) {
+			return {
+				ok: false,
+				reason: `rate limit: at most ${MAX_FROM_LEAD} messages per ${SENDER_WINDOW_MS / 60000} minutes`,
+			};
+		}
+		repo.insertPeerMessage(db, {
+			fromTaskId: null,
+			fromTerminalId: senderId,
+			toTaskId: target.id,
+			body,
+			hop: 1,
+			createdAt: now,
+		});
+		const plan = this.deliver(target.id);
+		return { ok: true, reason: `sent to "${target.name}" (${target.id}): ${describePlan(plan)}` };
+	}
+
 	/**
 	 * A listener asking for this terminal's messages. Answers at once when some
 	 * are pending, else holds until one arrives, the window ends, or a newer
@@ -388,13 +453,18 @@ export class PeerMessenger {
 				const agentId = fromSession?.agentId ?? from?.agentId ?? "";
 				return {
 					body: m.body,
-					from: from
-						? {
-								taskId: from.id,
-								name: from.name,
-								agent: getAgent(agentId)?.label ?? (agentId || "unknown"),
-							}
-						: null,
+					from:
+						m.fromTerminalId === LEAD_SENDER
+							? ("lead" as const)
+							: m.fromTerminalId === USER_SENDER
+								? ("user" as const)
+								: from
+									? {
+											taskId: from.id,
+											name: from.name,
+											agent: getAgent(agentId)?.label ?? (agentId || "unknown"),
+										}
+									: null,
 				};
 			}),
 		);
