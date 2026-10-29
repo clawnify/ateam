@@ -3,7 +3,14 @@
 // terminal: the user's messages, the Lead's prose, and its board moves folded
 // into one line each, with the tasks it touched as chips that open the task.
 import type { TaskDTO } from "@ateam/protocol";
-import { ArrowUp, ChevronRight, CornerDownRight, Square, SquarePen } from "lucide-react";
+import {
+	ArrowUp,
+	ChevronRight,
+	CircleHelp,
+	CornerDownRight,
+	Square,
+	SquarePen,
+} from "lucide-react";
 import {
 	type FormEvent,
 	type KeyboardEvent,
@@ -13,7 +20,13 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { LeadEvent, LeadItem, LeadSnapshot, LeadTaskRef } from "../../../shared/lead";
+import type {
+	LeadEvent,
+	LeadItem,
+	LeadPermissionAnswer,
+	LeadSnapshot,
+	LeadTaskRef,
+} from "../../../shared/lead";
 import { AgentIcon } from "./AgentIcon";
 import { Markdown } from "./Markdown";
 import { QuestionCard } from "./QuestionCard";
@@ -81,6 +94,19 @@ function toolTask(tool: ToolItem, tasks: TaskDTO[]): TaskDTO | undefined {
 	return findTask(tasks, tool.input.task);
 }
 
+/** An MCP tool's server and tool, "mcp__claude_ai_Granola__get_meetings" →
+ *  ["Granola", "get meetings"]: the names the user knows them by. */
+function mcpParts(name: string): [string, string] | null {
+	const m = /^mcp__(.+?)__(.+)$/.exec(name);
+	if (!m) return null;
+	const [, server = "", tool = ""] = m;
+	return [server.replace(/^claude_ai_/, "").replace(/_/g, " "), tool.replace(/_/g, " ")];
+}
+
+const str = (v: unknown) => (typeof v === "string" ? v : "");
+
+/** What a step did, in the words a group summary counts: the Lead's own board
+ *  tools, then the user's Claude Code tools and connectors. */
 function describe(tool: ToolItem, tasks: TaskDTO[]): string {
 	const name = toolTask(tool, tasks)?.name ?? String(tool.input.name ?? tool.input.task ?? "");
 	switch (tool.name) {
@@ -94,9 +120,55 @@ function describe(tool: ToolItem, tasks: TaskDTO[]): string {
 			return `Messaged ${name}`;
 		case "answer_question":
 			return `Answered ${name}`;
-		default:
-			return tool.name;
+		case "Bash":
+			return "Ran a command";
+		case "Read":
+			return "Read a file";
+		case "Write":
+			return "Wrote a file";
+		case "Edit":
+		case "MultiEdit":
+		case "NotebookEdit":
+			return "Edited a file";
+		case "Glob":
+		case "Grep":
+			return "Searched files";
+		case "WebFetch":
+			return "Fetched a page";
+		case "WebSearch":
+			return "Searched the web";
+		case "Skill":
+			return `Used ${str(tool.input.skill) || "a skill"}`;
+		case "Task":
+		case "Agent":
+			return "Ran a subagent";
+		case "TodoWrite":
+			return "Updated the plan";
+		case "ToolSearch":
+			return "Loaded tools";
 	}
+	const mcp = mcpParts(tool.name);
+	return mcp ? `Used ${mcp[0]}` : tool.name;
+}
+
+/** One step in an opened group, more specifically: which command, which file. */
+function stepLabel(tool: ToolItem, tasks: TaskDTO[]): string {
+	const i = tool.input;
+	const detail =
+		tool.name === "Bash"
+			? str(i.description) || str(i.command)
+			: ["Read", "Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool.name)
+				? str(i.file_path) || str(i.notebook_path)
+				: tool.name === "Grep" || tool.name === "Glob"
+					? str(i.pattern)
+					: tool.name === "WebFetch"
+						? str(i.url)
+						: tool.name === "WebSearch"
+							? str(i.query)
+							: "";
+	if (detail) return detail.length > 90 ? `${detail.slice(0, 89)}…` : detail;
+	const mcp = mcpParts(tool.name);
+	return mcp ? `${mcp[0]}: ${mcp[1]}` : describe(tool, tasks);
 }
 
 /** The group as one sentence, the way Claude and Cursor fold their tool calls:
@@ -176,7 +248,7 @@ function ToolGroup({
 			{open && (
 				<div className="lead-steps">
 					{tools.map((t) => (
-						<ToolStep key={t.id} tool={t} label={describe(t, tasks)} solo={tools.length === 1} />
+						<ToolStep key={t.id} tool={t} label={stepLabel(t, tasks)} solo={tools.length === 1} />
 					))}
 				</div>
 			)}
@@ -260,6 +332,79 @@ function TaskChip({
 			<AgentIcon agentId={task.agentId} size={12} />
 			<span className="lead-chip-name">{task.name}</span>
 		</button>
+	);
+}
+
+const OUTCOME: Record<LeadPermissionAnswer | "cancelled", string> = {
+	allow: "Allowed",
+	always: "Allowed, and won't ask again",
+	deny: "Denied",
+	cancelled: "No longer waiting",
+};
+
+/** The Lead's agent asks before using a tool: answered here, since nobody
+ *  watches its terminal. Answered or not, it stays in the thread as a record. */
+function LeadPermission({ item }: { item: Extract<LeadItem, { kind: "permission" }> }) {
+	const [sending, setSending] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const decide = async (answer: LeadPermissionAnswer) => {
+		setSending(true);
+		setError(null);
+		try {
+			await window.ateamLead.permission(item.id, answer);
+		} catch (e) {
+			setError(cleanError(e));
+		} finally {
+			setSending(false);
+		}
+	};
+	return (
+		<section className="question" aria-label="The Lead asks for permission">
+			<div className="question-head">
+				<CircleHelp size={13} className="question-icon" />
+				<span className="question-who">The Lead asks</span>
+				<span className="question-kind">permission</span>
+			</div>
+			<div className="md question-text">
+				<Markdown text={item.text} />
+			</div>
+			{item.answer ? (
+				<div className="lead-permission-outcome">
+					{item.answer === "always" && item.always
+						? `Allowed, and won't ask again for ${item.always}`
+						: OUTCOME[item.answer]}
+				</div>
+			) : (
+				<div className="question-options">
+					<button
+						type="button"
+						className="primary"
+						disabled={sending}
+						onClick={() => void decide("allow")}
+					>
+						Allow
+					</button>
+					{item.canAlways && (
+						<button
+							type="button"
+							disabled={sending}
+							title={
+								item.always
+									? `Don't ask again in the Lead for ${item.always}`
+									: "Don't ask again in the Lead"
+							}
+							onClick={() => void decide("always")}
+						>
+							Always allow
+						</button>
+					)}
+					<button type="button" disabled={sending} onClick={() => void decide("deny")}>
+						Deny
+					</button>
+				</div>
+			)}
+			{error && <p className="question-error">{error}</p>}
+		</section>
 	);
 }
 
@@ -461,6 +606,8 @@ export function LeadChat({
 							</div>
 						) : b.item.kind === "agent" ? (
 							<AgentReply key={b.item.id} item={b.item} tasks={tasks} onOpenTask={onOpenTask} />
+						) : b.item.kind === "permission" ? (
+							<LeadPermission key={b.item.id} item={b.item} />
 						) : b.item.kind === "assistant" ? (
 							<div key={b.item.id} className="md">
 								<Markdown text={b.item.text} />

@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { CH, type TaskDTO } from "@ateam/protocol";
 import { ipcMain } from "electron";
-import { LEAD_CH, type LeadEvent } from "../../shared/lead";
+import { LEAD_CH, type LeadEvent, type LeadPermissionAnswer } from "../../shared/lead";
 import type { Router } from "../backend";
 import { Follower, refOf } from "./follow";
 import { startLeadMcpServer } from "./mcp-http";
@@ -54,6 +54,9 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	ipcMain.handle(LEAD_CH.send, (_e, text: string) => lead.send(String(text)));
 	ipcMain.handle(LEAD_CH.interrupt, () => lead.interrupt());
 	ipcMain.handle(LEAD_CH.reset, () => lead.reset());
+	ipcMain.handle(LEAD_CH.permission, (_e, id: string, answer: LeadPermissionAnswer) =>
+		lead.answerPermission(String(id), answer),
+	);
 
 	// The user talking to a task's agent straight from the chat: delivered as
 	// from the user, shown in the thread, and the task followed for its reply.

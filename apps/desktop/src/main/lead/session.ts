@@ -4,6 +4,13 @@
 // turn on stdin, an `interrupt` control request stops a turn without ending the
 // process, and --include-partial-messages streams the text as it is written.
 //
+// It is the user's own Claude Code: their settings, plugins, skills and MCP
+// servers load as they do in a terminal, with Ateam's tools added on top. A
+// tool their permission settings ask about is asked here: with
+// --permission-prompt-tool stdio, Claude sends a `can_use_tool` control request
+// and waits for our answer (without it, headless Claude denies silently), and a
+// Stop withdraws it with a `control_cancel_request`. Verified on 2.1.312.
+//
 // The process starts on the first message, not at app launch, and is resumed by
 // session id after a restart. What the chat shows is our own transcript
 // (transcript.jsonl), not Claude's: it is what the renderer draws, and it
@@ -19,10 +26,13 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import type { LeadEvent, LeadItem, LeadSnapshot } from "../../shared/lead";
+import { describeAsk, ruleText } from "@ateam/server";
+import type { LeadEvent, LeadItem, LeadPermissionAnswer, LeadSnapshot } from "../../shared/lead";
 import { LEAD_MCP_NAME } from "./tools";
 
-export const LEAD_PROMPT = `You are the Lead in Ateam, the user's coordinator for a crew of coding agents. Each task on the user's board is one agent (Claude Code, Codex or OpenCode) working in its own git worktree, on this Mac or on a remote box. You do not write code or run commands yourself, and you have no shell or file tools: you get work done through the ${LEAD_MCP_NAME} tools.
+export const LEAD_PROMPT = `You are the Lead in Ateam, the user's coordinator for a crew of coding agents. Each task on the user's board is one agent (Claude Code, Codex or OpenCode) working in its own git worktree, on this Mac or on a remote box. You run as the user's own Claude Code, with their skills, plugins and MCP servers, and you drive the board through the ${LEAD_MCP_NAME} tools.
+
+- Code changes belong in tasks: start one with create_task rather than editing a repository yourself. Your working folder is Ateam's, not a project. Use your own tools for what the user asks of you directly: lookups, their skills, their connectors.
 
 - Read the board (get_board) before acting on it.
 - Start work with create_task. Its agent cannot see this chat, so the prompt must stand on its own.
@@ -87,6 +97,8 @@ export class LeadSession {
 	/** Lines written to this process before its init, replayed on a fresh retry. */
 	private sentBeforeInit: string[] = [];
 	private stderr = "";
+	/** Permission prompts the agent is waiting on, by Claude's request id. */
+	private asking = new Map<string, { input: Record<string, unknown>; suggestions: unknown[] }>();
 	private readonly transcript: string;
 	private readonly statePath: string;
 
@@ -137,6 +149,27 @@ export class LeadSession {
 		this.kill();
 	}
 
+	/** The user answered a permission prompt. Throws when it no longer waits
+	 *  (the turn stopped, the app restarted), so the chat can say so. */
+	answerPermission(id: string, answer: LeadPermissionAnswer): void {
+		const ask = this.asking.get(id);
+		const item = this.items.get(id);
+		if (!ask || item?.kind !== "permission") throw new Error("This request is no longer waiting.");
+		this.asking.delete(id);
+		const response =
+			answer === "deny"
+				? { behavior: "deny", message: "The user said no from the Lead chat." }
+				: {
+						behavior: "allow",
+						updatedInput: ask.input,
+						...(answer === "always" ? { updatedPermissions: ask.suggestions } : {}),
+					};
+		this.write(
+			`${JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: id, response } })}\n`,
+		);
+		this.put({ ...item, answer });
+	}
+
 	/** Add an item that is not part of the model's conversation: a followed
 	 *  task's reply, the user's message to a task. It shows and is kept, but
 	 *  the Lead's agent never sees it. */
@@ -174,20 +207,16 @@ export class LeadSession {
 			"stream-json",
 			"--verbose",
 			"--include-partial-messages",
-			// The user's own hooks, plugins and MCP servers are for their coding
-			// sessions, not for the coordinator: a Stop hook that blocks, or a
-			// plugin that injects context, would steer the Lead. Our --mcp-config
-			// and system prompt are passed explicitly, so they still apply.
-			"--setting-sources",
-			"",
+			// The user's settings, plugins, skills and MCP servers load as usual;
+			// this adds Ateam's server to them.
 			"--mcp-config",
 			mcpConfig,
-			"--strict-mcp-config",
-			// No built-in tools: the Lead coordinates, the tasks do the work.
-			"--tools",
-			"",
+			// Ateam's own tools never ask; everything else follows the user's
+			// permission settings, and what asks is answered in the chat.
 			"--allowedTools",
 			this.opts.allowedTools.join(","),
+			"--permission-prompt-tool",
+			"stdio",
 			"--append-system-prompt",
 			LEAD_PROMPT,
 			...(resume ? ["--resume", resume] : ["--session-id", this.state.sessionId as string]),
@@ -231,11 +260,24 @@ export class LeadSession {
 		const proc = this.proc;
 		this.proc = null;
 		proc?.kill("SIGTERM");
+		this.cancelAsking();
+	}
+
+	/** The process that asked is gone: its prompts can no longer be answered. */
+	private cancelAsking(): void {
+		for (const id of [...this.asking.keys()]) this.cancelAsk(id);
+	}
+
+	private cancelAsk(id: string): void {
+		this.asking.delete(id);
+		const item = this.items.get(id);
+		if (item?.kind === "permission" && !item.answer) this.put({ ...item, answer: "cancelled" });
 	}
 
 	private onExit(proc: ChildProcess, code: number | null, error?: string): void {
 		if (this.proc !== proc) return;
 		this.proc = null;
+		this.cancelAsking();
 		// A resume whose conversation is gone (Claude's store was cleared, or the
 		// id was never written because the first start died): start fresh once,
 		// replaying what was sent, rather than leave the chat dead.
@@ -274,6 +316,35 @@ export class LeadSession {
 					if (typeof m.session_id === "string") this.state.sessionId = m.session_id;
 					this.saveState();
 				}
+				return;
+			case "control_request": {
+				const id = String(m.request_id ?? "");
+				const req = (m.request ?? {}) as Record<string, unknown>;
+				if (req.subtype !== "can_use_tool") {
+					// Nothing else is ours to answer; say so rather than leave it waiting.
+					this.write(
+						`${JSON.stringify({ type: "control_response", response: { subtype: "error", request_id: id, error: `Unsupported: ${String(req.subtype)}` } })}\n`,
+					);
+					return;
+				}
+				const tool = String(req.tool_name ?? "");
+				const input = (req.input as Record<string, unknown>) ?? {};
+				const suggestions = Array.isArray(req.permission_suggestions)
+					? req.permission_suggestions
+					: [];
+				this.asking.set(id, { input, suggestions });
+				this.put({
+					kind: "permission",
+					id,
+					text: describeAsk(tool, input),
+					canAlways: suggestions.length > 0,
+					always: ruleText(suggestions),
+					at: now,
+				});
+				return;
+			}
+			case "control_cancel_request":
+				this.cancelAsk(String(m.request_id ?? ""));
 				return;
 			case "stream_event": {
 				const ev = m.event as { type?: string; delta?: { type?: string; text?: string } };
@@ -361,6 +432,10 @@ export class LeadSession {
 				/* a torn last line from a crash: skip it */
 			}
 		}
+		// A prompt left waiting when the app closed went with its process.
+		for (const item of this.items.values())
+			if (item.kind === "permission" && !item.answer)
+				this.items.set(item.id, { ...item, answer: "cancelled" });
 	}
 
 	private readState(): LeadState {

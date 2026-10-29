@@ -3529,6 +3529,11 @@ input {
 .panel-question {
 	padding: 8px 10px 0;
 }
+/* What the user decided on the Lead's own permission prompt, kept in the thread. */
+.lead-permission-outcome {
+	font-size: 12px;
+	color: var(--text-dim);
+}
 
 /* ---- a followed task talking back in the Lead chat ---- */
 /* A task talking back: same language as the user's bubble, a hairline instead of a border. */

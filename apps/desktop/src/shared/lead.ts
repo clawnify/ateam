@@ -17,6 +17,8 @@ export const LEAD_CH = {
 	reply: "lead:reply",
 	/** The user answers a task's question from the chat; the task is then followed. */
 	answer: "lead:answer",
+	/** The user answers the Lead's own permission prompt (its agent wants a tool). */
+	permission: "lead:permission",
 	evtEvent: "evt:lead:event",
 } as const;
 
@@ -26,6 +28,9 @@ export interface LeadTaskRef {
 	name: string;
 	agentId: string | null;
 }
+
+/** How the user answered the Lead's permission prompt. */
+export type LeadPermissionAnswer = "allow" | "always" | "deny";
 
 /** One rendered entry in the chat. A tool entry is updated in place when its result lands. */
 export type LeadItem =
@@ -44,6 +49,22 @@ export type LeadItem =
 			/** Absent while the call runs. */
 			result?: string;
 			isError?: boolean;
+			at: number;
+	  }
+	/** The Lead's agent asks before using a tool, as the user's permission
+	 *  settings say it must. Nobody watches its terminal, so it is answered here.
+	 *  `answer` is absent while it waits, and "cancelled" once the turn stopped
+	 *  or the agent went away. */
+	| {
+			kind: "permission";
+			id: string;
+			/** What it wants to do, in markdown (the same words as a task's card). */
+			text: string;
+			/** Claude offers a rule for "Always allow"; kept in the Lead's own settings. */
+			canAlways: boolean;
+			/** That rule, like "Bash(npm test *)", when there is one. */
+			always: string | null;
+			answer?: LeadPermissionAnswer | "cancelled";
 			at: number;
 	  }
 	/** Something about the conversation itself: stopped, failed, restarted. */
@@ -84,5 +105,6 @@ export interface AteamLead {
 		questionId: string;
 		answer: string | string[] | null;
 	}): Promise<void>;
+	permission(id: string, answer: LeadPermissionAnswer): Promise<void>;
 	onEvent(cb: (e: LeadEvent) => void): () => void;
 }
