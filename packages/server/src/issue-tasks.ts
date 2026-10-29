@@ -28,6 +28,16 @@ export async function createIssueTask(
 	}
 	return queue.enqueue(url, async () => {
 		const existing = repo.findTaskByIssue(services.db, url);
+		if (existing?.archivedAt != null) {
+			// Starting the issue again is coming back to it: return the card first,
+			// or the caller would open a task no board shows.
+			const back = repo.updateTask(services.db, existing.id, {
+				archivedAt: null,
+				restoredAt: Date.now(),
+			});
+			notify(existing.id);
+			return { task: back ?? existing, created: false };
+		}
 		if (existing) return { task: existing, created: false };
 		const task = await createTaskInProject(services, notify, input, {
 			url,

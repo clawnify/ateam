@@ -312,6 +312,10 @@ export function App() {
 	);
 	const [customOrder, setCustomOrder] = useState<string[]>([]);
 	const [cleanupOpen, setCleanupOpen] = useState(false);
+	const [archivedCount, setArchivedCount] = useState(0);
+	// Bumped whenever a card leaves a board, which is also what an archive looks
+	// like from here, so the archived count on Clean up follows the sweep.
+	const [archivedTick, setArchivedTick] = useState(0);
 	const [composerOpen, setComposerOpen] = useState(false);
 	// Free-text task filter driven by the centered search bar in the topbar.
 	// Filters the sidebar list and the board by task name; the selected task
@@ -388,6 +392,7 @@ export function App() {
 		// Removal (delete/cleanup) from any window — drop the card everywhere and
 		// clear the selection if it was pointing at the now-gone task.
 		const offRemoved = window.ateam.events.onTaskRemoved((taskId) => {
+			setArchivedTick((n) => n + 1);
 			setTasksByProject((prev) => {
 				const next: Record<string, TaskDTO[]> = {};
 				for (const [pid, list] of Object.entries(prev)) {
@@ -678,6 +683,23 @@ export function App() {
 		: activeProjectId
 			? (tasksByProject[activeProjectId] ?? [])
 			: [];
+	// Archived tasks of the project Clean up opens on, which is where they are
+	// shown and brought back.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: archivedTick is the trigger, not a value the body reads: it re-counts after a card leaves the board.
+	useEffect(() => {
+		if (!activeProjectId) return setArchivedCount(0);
+		let stale = false;
+		// An engine older than v18 has no archive: it rejects, and counts as none.
+		void window.ateam.tasks
+			.listArchived(activeProjectId)
+			.catch(() => [])
+			.then((list) => {
+				if (!stale) setArchivedCount(list.length);
+			});
+		return () => {
+			stale = true;
+		};
+	}, [activeProjectId, archivedTick]);
 	const linkedIssues = new Set(
 		activeTasks.flatMap((task) => (task.issueUrl ? [task.issueUrl.toLowerCase()] : [])),
 	);
@@ -1735,6 +1757,7 @@ export function App() {
 						>
 							<Brush size={14} strokeWidth={1.75} />
 							Clean up
+							{archivedCount > 0 && <span className="muted">{archivedCount} archived</span>}
 						</button>
 						<button type="button" className="navbtn" onClick={newTask} disabled={!activeProjectId}>
 							<Plus size={14} strokeWidth={1.75} />
@@ -1941,7 +1964,10 @@ export function App() {
 					projectId={activeProjectId}
 					confirm={confirm}
 					reload={() => activeProjectId && loadTasks(activeProjectId)}
-					onClose={() => setCleanupOpen(false)}
+					onClose={() => {
+						setCleanupOpen(false);
+						setArchivedTick((n) => n + 1);
+					}}
 				/>
 			)}
 			{newIssueOpen && issueRepository && (

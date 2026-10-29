@@ -70,6 +70,15 @@ const IDLE_SLEEP_OPTIONS: { value: number; label: string }[] = [
 	{ value: 0, label: "Never" },
 ];
 
+const ARCHIVE_OPTIONS: { value: number; label: string }[] = [
+	{ value: 7, label: "After 7 days" },
+	{ value: 14, label: "After 14 days" },
+	{ value: 30, label: "After 30 days" },
+	{ value: 60, label: "After 60 days" },
+	{ value: 90, label: "After 90 days" },
+	{ value: 0, label: "Never" },
+];
+
 const ROWS: Row[] = [
 	{
 		id: "client.autoDownloadUpdates",
@@ -119,6 +128,34 @@ const ROWS: Row[] = [
 					{(IDLE_SLEEP_OPTIONS.some((o) => o.value === minutes)
 						? IDLE_SLEEP_OPTIONS
 						: [{ value: minutes, label: `After ${minutes} minutes` }, ...IDLE_SLEEP_OPTIONS]
+					).map((o) => (
+						<option key={o.value} value={String(o.value)}>
+							{o.label}
+						</option>
+					))}
+				</select>
+			);
+		},
+	},
+	{
+		id: "engine.archiveAfterDays",
+		section: "general",
+		title: "Archive idle tasks",
+		description:
+			"Take a task that is still open off the board, the phone and the agents' board tools once nothing has happened in it for this long. Its worktree and conversation stay; activity in it, or Unarchive, brings it back.",
+		control: (s, { patch }) => {
+			// A box whose engine predates this setting doesn't report it, and archives nothing.
+			const days = s.engine.archiveAfterDays ?? 0;
+			return (
+				<select
+					className="settings-select"
+					value={String(days)}
+					onChange={(e) => patch({ engine: { archiveAfterDays: Number(e.target.value) } })}
+				>
+					{/* A hand-edited value outside the presets still shows as itself. */}
+					{(ARCHIVE_OPTIONS.some((o) => o.value === days)
+						? ARCHIVE_OPTIONS
+						: [{ value: days, label: `After ${days} days` }, ...ARCHIVE_OPTIONS]
 					).map((o) => (
 						<option key={o.value} value={String(o.value)}>
 							{o.label}
