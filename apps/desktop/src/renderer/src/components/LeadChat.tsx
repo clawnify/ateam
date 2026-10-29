@@ -3,12 +3,26 @@
 // terminal: the user's messages, the Lead's prose, and its board moves folded
 // into one line each, with the tasks it touched as chips that open the task.
 import type { TaskDTO } from "@ateam/protocol";
-import { ArrowUp, ChevronRight, LoaderCircle, Square, SquarePen } from "lucide-react";
-import { type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import Markdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
-import type { LeadEvent, LeadItem, LeadSnapshot } from "../../../shared/lead";
+import {
+	ArrowUp,
+	ChevronRight,
+	CornerDownRight,
+	LoaderCircle,
+	Square,
+	SquarePen,
+} from "lucide-react";
+import {
+	type FormEvent,
+	type KeyboardEvent,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+import type { LeadEvent, LeadItem, LeadSnapshot, LeadTaskRef } from "../../../shared/lead";
 import { AgentIcon } from "./AgentIcon";
+import { Markdown } from "./Markdown";
 import { QuestionCard } from "./QuestionCard";
 
 type ToolItem = Extract<LeadItem, { kind: "tool" }>;
@@ -90,15 +104,6 @@ function describe(tool: ToolItem, tasks: TaskDTO[]): string {
 	}
 }
 
-/** A link in the Lead's prose. Rendered inert: a click must not navigate the app's window. */
-const MD: Components = {
-	a: ({ children, href }) => (
-		<span className="lead-link" title={href}>
-			{children}
-		</span>
-	),
-};
-
 function ToolGroup({
 	tools,
 	tasks,
@@ -166,6 +171,103 @@ function ToolGroup({
 	);
 }
 
+/** An IPC rejection carries Electron's prefix before the engine's own words. */
+const cleanError = (e: unknown) =>
+	(e instanceof Error ? e.message : String(e)).replace(
+		/^Error invoking remote method '[^']+': (Error: )?/,
+		"",
+	);
+
+/** A task named in the thread; opens it when it is on a board this window has loaded. */
+function TaskChip({
+	task,
+	tasks,
+	onOpenTask,
+}: {
+	task: LeadTaskRef;
+	tasks: TaskDTO[];
+	onOpenTask: (t: TaskDTO) => void;
+}) {
+	const loaded = tasks.find((t) => t.id === task.taskId);
+	return (
+		<button
+			type="button"
+			className="lead-chip"
+			title={loaded ? `Open ${task.name}` : task.name}
+			disabled={!loaded}
+			onClick={() => loaded && onOpenTask(loaded)}
+		>
+			<AgentIcon agentId={task.agentId} size={12} />
+			<span className="lead-chip-name">{task.name}</span>
+		</button>
+	);
+}
+
+/** A followed task's agent, talking back: its reply, and a box to answer it here. */
+function AgentReply({
+	item,
+	tasks,
+	onOpenTask,
+}: {
+	item: Extract<LeadItem, { kind: "agent" }>;
+	tasks: TaskDTO[];
+	onOpenTask: (t: TaskDTO) => void;
+}) {
+	const [open, setOpen] = useState(false);
+	const [text, setText] = useState("");
+	const [sending, setSending] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const submit = async (e: FormEvent) => {
+		e.preventDefault();
+		if (!text.trim()) return;
+		setSending(true);
+		setError(null);
+		try {
+			await window.ateamLead.reply(item.task.taskId, text);
+			setText("");
+			setOpen(false);
+		} catch (err) {
+			setError(cleanError(err));
+		} finally {
+			setSending(false);
+		}
+	};
+	return (
+		<div className="lead-agent">
+			<div className="lead-agent-head">
+				<TaskChip task={item.task} tasks={tasks} onOpenTask={onOpenTask} />
+				<span className="lead-agent-said">replied</span>
+			</div>
+			<div className="md">
+				<Markdown text={item.text} />
+			</div>
+			{open ? (
+				<form className="question-reply" onSubmit={submit}>
+					<input
+						// biome-ignore lint/a11y/noAutofocus: opened by the user's own click on Reply.
+						autoFocus
+						value={text}
+						placeholder={`Reply to ${item.task.name}`}
+						aria-label={`Reply to ${item.task.name}`}
+						disabled={sending}
+						onChange={(e) => setText(e.target.value)}
+						onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
+					/>
+					<button type="submit" disabled={sending || !text.trim()}>
+						Send
+					</button>
+				</form>
+			) : (
+				<button type="button" className="lead-agent-reply" onClick={() => setOpen(true)}>
+					<CornerDownRight size={12} />
+					Reply
+				</button>
+			)}
+			{error && <p className="question-error">{error}</p>}
+		</div>
+	);
+}
+
 function Thinking() {
 	const [start] = useState(() => Date.now());
 	const [, tick] = useState(0);
@@ -221,6 +323,13 @@ export function LeadChat({
 			tasks
 				.filter((t) => t.question)
 				.sort((a, b) => (b.question?.askedAt ?? 0) - (a.question?.askedAt ?? 0)),
+		[tasks],
+	);
+	// In Needs You for another reason (a finished turn that asks in prose, a
+	// prompt in its terminal): counted, not listed, so a busy board can't bury
+	// the questions; the Lead can go through them.
+	const waiting = useMemo(
+		() => tasks.filter((t) => t.column === "needs_attention" && !t.question).length,
 		[tasks],
 	);
 	const lastBlock = blocks[blocks.length - 1];
@@ -288,25 +397,27 @@ export function LeadChat({
 							<ToolGroup key={b.id} tools={b.tools} tasks={tasks} onOpenTask={onOpenTask} />
 						) : b.item.kind === "user" ? (
 							<div key={b.item.id} className="lead-user">
+								{b.item.to && <div className="lead-user-to">to {b.item.to.name}</div>}
 								{b.item.text}
 							</div>
+						) : b.item.kind === "agent" ? (
+							<AgentReply key={b.item.id} item={b.item} tasks={tasks} onOpenTask={onOpenTask} />
 						) : b.item.kind === "assistant" ? (
-							<div key={b.item.id} className="lead-md">
-								<Markdown remarkPlugins={[remarkGfm]} components={MD}>
-									{b.item.text}
-								</Markdown>
+							<div key={b.item.id} className="md">
+								<Markdown text={b.item.text} />
 							</div>
 						) : b.item.kind === "notice" ? (
 							<div key={b.item.id} className={`lead-notice ${b.item.tone}`}>
 								{b.item.text}
+								{b.item.task && (
+									<TaskChip task={b.item.task} tasks={tasks} onOpenTask={onOpenTask} />
+								)}
 							</div>
 						) : null,
 					)}
 					{snap.draft ? (
-						<div className="lead-md streaming">
-							<Markdown remarkPlugins={[remarkGfm]} components={MD}>
-								{snap.draft}
-							</Markdown>
+						<div className="md streaming">
+							<Markdown text={snap.draft} />
 						</div>
 					) : (
 						snap.busy && !toolRunning && <Thinking />
@@ -314,12 +425,30 @@ export function LeadChat({
 				</div>
 			</div>
 
-			{asking.length > 0 && (
+			{(asking.length > 0 || waiting > 0) && (
 				<div className="lead-asking">
 					<div className="lead-asking-title">Waiting on you</div>
 					{asking.map((t) => (
-						<QuestionCard key={t.id} task={t} onOpenTask={onOpenTask} />
+						<QuestionCard
+							key={t.id}
+							task={t}
+							onOpenTask={onOpenTask}
+							onAnswer={(input) => window.ateamLead.answer(input)}
+						/>
 					))}
+					{waiting > 0 && (
+						<div className="lead-waiting">
+							{waiting === 1 ? "1 other task is" : `${waiting} other tasks are`} in Needs you
+							without a question.
+							<button
+								type="button"
+								disabled={snap.busy}
+								onClick={() => send("Go through the tasks that need me: what does each one need?")}
+							>
+								Ask the Lead
+							</button>
+						</div>
+					)}
 				</div>
 			)}
 

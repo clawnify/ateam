@@ -49,13 +49,26 @@ export type LoopCadenceMode = "fixed" | "self_paced" | "cron";
 /** Outcome class of a Loop's last run, surfaced in the Loops panel. */
 export type LoopRunStatus = "ok" | "error" | "done";
 
-/** A question an agent asked the user (ask_user); mirrors @ateam/protocol's TaskQuestionDTO. */
+/** A question an agent asked the user (ask_user); mirrors @ateam/protocol's
+ *  TaskQuestionDTO, which documents each field. */
 export interface TaskQuestion {
 	id: string;
 	text: string;
 	options: string[];
 	allowText: boolean;
 	askedAt: number;
+	choices?: QuestionChoice[];
+	select?: "one" | "many";
+}
+
+export interface QuestionChoice {
+	label: string;
+	description?: string;
+	pros?: string[];
+	cons?: string[];
+	risk?: "low" | "medium" | "high";
+	recommended?: boolean;
+	checked?: boolean;
 }
 
 export interface GitStatusSnapshot {

@@ -1,11 +1,16 @@
 // A question a task's agent asked the user (the ask_user board tool), answered
-// here instead of in its terminal: the options as buttons, a typed answer when
-// the agent allows one. The answer reaches the agent as a message from the user
-// (see questions.ts in the server). Shown in the Lead chat and on the task panel.
-import type { TaskDTO } from "@ateam/protocol";
+// here instead of in its terminal. The agent shapes the decision, not just the
+// wording: options can carry what they mean, their tradeoffs, a risk and the
+// agent's pick (shown as cards), a list of things to act on is a checklist
+// with the safe rows pre-ticked, and the question itself is markdown whose
+// ```mermaid blocks are drawn as diagrams. The answer reaches the agent as a
+// message from the user (see questions.ts in the server). Shown in the Lead chat
+// and on the task panel.
+import type { QuestionChoiceDTO, TaskDTO } from "@ateam/protocol";
 import { CircleHelp, X } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { AgentIcon } from "./AgentIcon";
+import { Markdown } from "./Markdown";
 
 /** An IPC rejection carries Electron's prefix before the engine's own words. */
 const cleanError = (e: unknown) =>
@@ -22,13 +27,119 @@ function ago(at: number): string {
 	return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
 }
 
+function Risk({ risk }: { risk: QuestionChoiceDTO["risk"] }) {
+	return risk ? <span className={`risk ${risk}`}>{risk} risk</span> : null;
+}
+
+/** One option as a card: the tradeoffs are the point, the click is the answer. */
+function ChoiceCard({
+	choice,
+	disabled,
+	onPick,
+}: {
+	choice: QuestionChoiceDTO;
+	disabled: boolean;
+	onPick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			className={`choice${choice.recommended ? " recommended" : ""}`}
+			disabled={disabled}
+			onClick={onPick}
+		>
+			<span className="choice-head">
+				<span className="choice-label">{choice.label}</span>
+				{choice.recommended && <span className="badge">Recommended</span>}
+				<Risk risk={choice.risk} />
+			</span>
+			{choice.description && <span className="choice-desc">{choice.description}</span>}
+			{(choice.pros?.length || choice.cons?.length) && (
+				<span className="choice-tradeoffs">
+					{choice.pros?.map((p) => (
+						<span key={`+${p}`} className="pro">
+							+ {p}
+						</span>
+					))}
+					{choice.cons?.map((c) => (
+						<span key={`-${c}`} className="con">
+							− {c}
+						</span>
+					))}
+				</span>
+			)}
+		</button>
+	);
+}
+
+/** A list to act on: the agent pre-ticks the safe rows, the user unticks what to keep. */
+function Checklist({
+	choices,
+	disabled,
+	onSend,
+}: {
+	choices: QuestionChoiceDTO[];
+	disabled: boolean;
+	onSend: (ticked: string[]) => void;
+}) {
+	const [ticked, setTicked] = useState(
+		() => new Set(choices.filter((c) => c.checked).map((c) => c.label)),
+	);
+	const toggle = (label: string) =>
+		setTicked((s) => {
+			const next = new Set(s);
+			if (!next.delete(label)) next.add(label);
+			return next;
+		});
+	return (
+		<div className="checklist">
+			{choices.map((c) => (
+				<label key={c.label} className="check-row">
+					<input
+						type="checkbox"
+						checked={ticked.has(c.label)}
+						disabled={disabled}
+						onChange={() => toggle(c.label)}
+					/>
+					<span className="check-body">
+						<span className="choice-head">
+							<span className="choice-label">{c.label}</span>
+							<Risk risk={c.risk} />
+						</span>
+						{c.description && <span className="choice-desc">{c.description}</span>}
+					</span>
+				</label>
+			))}
+			<div className="checklist-foot">
+				<button
+					type="button"
+					className="primary"
+					disabled={disabled}
+					// In the agent's order, not the order they were clicked.
+					onClick={() => onSend(choices.map((c) => c.label).filter((l) => ticked.has(l)))}
+				>
+					{ticked.size === 0 ? "Send: none ticked" : `Send ${ticked.size} ticked`}
+				</button>
+			</div>
+		</div>
+	);
+}
+
 export function QuestionCard({
 	task,
 	onOpenTask,
+	onAnswer = (input) => window.ateam.tasks.answerQuestion(input),
 }: {
 	task: TaskDTO;
 	/** Show the task as a chip that opens it (the Lead's list); omit on the task's own panel. */
 	onOpenTask?: (t: TaskDTO) => void;
+	/** How the answer is sent. The Lead routes it through main, which also shows
+	 *  it in the thread and follows the task for its reply; default: straight to the engine. */
+	onAnswer?: (input: {
+		taskId: string;
+		questionId: string;
+		answer: string | string[] | null;
+	}) => Promise<unknown>;
 }) {
 	const q = task.question;
 	const [text, setText] = useState("");
@@ -36,11 +147,11 @@ export function QuestionCard({
 	const [error, setError] = useState<string | null>(null);
 	if (!q) return null;
 
-	const answer = async (value: string | null) => {
+	const answer = async (value: string | string[] | null) => {
 		setSending(true);
 		setError(null);
 		try {
-			await window.ateam.tasks.answerQuestion({ taskId: task.id, questionId: q.id, answer: value });
+			await onAnswer({ taskId: task.id, questionId: q.id, answer: value });
 			setText("");
 		} catch (e) {
 			const msg = cleanError(e);
@@ -85,23 +196,40 @@ export function QuestionCard({
 					<X size={13} />
 				</button>
 			</div>
-			<p className="question-text">{q.text}</p>
-			{q.options.length > 0 && (
-				<div className="question-options">
-					{q.options.map((o, i) => (
-						<button
-							type="button"
-							key={o}
-							className={i === 0 ? "primary" : undefined}
+			<div className="md question-text">
+				<Markdown text={q.text} />
+			</div>
+			{q.select === "many" && q.choices ? (
+				<Checklist choices={q.choices} disabled={sending} onSend={(t) => void answer(t)} />
+			) : q.choices ? (
+				<div className="choices">
+					{q.choices.map((c) => (
+						<ChoiceCard
+							key={c.label}
+							choice={c}
 							disabled={sending}
-							onClick={() => void answer(o)}
-						>
-							{o}
-						</button>
+							onPick={() => void answer(c.label)}
+						/>
 					))}
 				</div>
+			) : (
+				q.options.length > 0 && (
+					<div className="question-options">
+						{q.options.map((o, i) => (
+							<button
+								type="button"
+								key={o}
+								className={i === 0 ? "primary" : undefined}
+								disabled={sending}
+								onClick={() => void answer(o)}
+							>
+								{o}
+							</button>
+						))}
+					</div>
+				)
 			)}
-			{q.allowText && (
+			{q.allowText && q.select !== "many" && (
 				<form className="question-reply" onSubmit={submit}>
 					<input
 						value={text}

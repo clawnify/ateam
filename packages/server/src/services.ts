@@ -123,6 +123,7 @@ export function toTaskDTO(t: Task, preparing = false, agentIds: string[] = []): 
 		waitingFiredAt: t.waitingFiredAt ?? null,
 		browserUsedAt: t.browserUsedAt ?? null,
 		question: t.question ?? null,
+		lastReplyAt: t.lastReplyAt ?? null,
 		triage: triageTask(t),
 	};
 }

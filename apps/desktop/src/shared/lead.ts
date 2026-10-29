@@ -13,12 +13,27 @@ export const LEAD_CH = {
 	interrupt: "lead:interrupt",
 	/** Start a new conversation (the old one is archived, not deleted). */
 	reset: "lead:reset",
+	/** The user replies to a task's agent from the chat (not through the Lead model). */
+	reply: "lead:reply",
+	/** The user answers a task's question from the chat; the task is then followed. */
+	answer: "lead:answer",
 	evtEvent: "evt:lead:event",
 } as const;
 
+/** A task named in the chat: enough to label it and open it. */
+export interface LeadTaskRef {
+	taskId: string;
+	name: string;
+	agentId: string | null;
+}
+
 /** One rendered entry in the chat. A tool entry is updated in place when its result lands. */
 export type LeadItem =
-	| { kind: "user"; id: string; text: string; at: number }
+	/** The user's words; `to` when they went to a task's agent, not to the Lead. */
+	| { kind: "user"; id: string; text: string; at: number; to?: LeadTaskRef }
+	/** A followed task's agent finished a turn: its reply, shown to the user only
+	 *  (never fed to the Lead's model, so following costs nothing). */
+	| { kind: "agent"; id: string; task: LeadTaskRef; text: string; at: number }
 	| { kind: "assistant"; id: string; text: string; at: number }
 	| {
 			kind: "tool";
@@ -32,7 +47,15 @@ export type LeadItem =
 			at: number;
 	  }
 	/** Something about the conversation itself: stopped, failed, restarted. */
-	| { kind: "notice"; id: string; text: string; tone: "info" | "error"; at: number };
+	| {
+			kind: "notice";
+			id: string;
+			text: string;
+			tone: "info" | "error";
+			at: number;
+			/** The task it is about, when it is about one: the chat offers to open it. */
+			task?: LeadTaskRef;
+	  };
 
 export interface LeadSnapshot {
 	items: LeadItem[];
@@ -55,5 +78,11 @@ export interface AteamLead {
 	send(text: string): Promise<void>;
 	interrupt(): Promise<void>;
 	reset(): Promise<void>;
+	reply(taskId: string, text: string): Promise<void>;
+	answer(input: {
+		taskId: string;
+		questionId: string;
+		answer: string | string[] | null;
+	}): Promise<void>;
 	onEvent(cb: (e: LeadEvent) => void): () => void;
 }

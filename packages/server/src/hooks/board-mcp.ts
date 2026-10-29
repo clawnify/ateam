@@ -46,8 +46,10 @@ export interface BoardHandlers {
 	askUser(req: {
 		callerTerminalId: string;
 		text: string;
-		options?: string[];
+		/** Labels or option objects, as the model sent them (validated in questions.ts). */
+		options?: unknown[];
 		allowText?: boolean;
+		select?: unknown;
 	}): Promise<{ ok: boolean; reason: string }>;
 }
 
@@ -157,26 +159,59 @@ const TOOLS = [
 	{
 		name: "ask_user",
 		description:
-			"Ask the user a question you cannot go on without, or for their approval before something hard to undo (deleting data, force-pushing, deploying, spending money, changing permissions). The user sees it as a card on the board, in the Lead chat and on their phone, with your options as buttons, so they can answer without opening this terminal. Calling it again replaces the pending question. After calling it, end your turn and do not repeat the question in your reply: the answer arrives as a message starting with [Ateam] that says it comes from the user.",
+			"Ask the user a question you cannot go on without, or for their approval before something hard to undo (deleting data, force-pushing, deploying, spending money, changing permissions). The user sees it as a card on the board, in the Lead chat and on their phone, so they can answer without opening this terminal. Make the decision easy to take: give each option what it means and its tradeoffs, mark the one you recommend, and for a list of things to act on (branches to delete, files to remove) use select many so they untick what to keep. Calling it again replaces the pending question. After calling it, end your turn and do not repeat the question in your reply: the answer arrives as a message starting with [Ateam] that says it comes from the user.",
 		inputSchema: {
 			type: "object",
 			properties: {
 				question: {
 					type: "string",
 					description:
-						"The question, self-contained: the user may read it on their phone without your conversation. At most 1000 characters.",
+						"The question, self-contained: the user may read it on their phone without your conversation. Markdown; a ```mermaid fenced block is drawn as a diagram (a flow, a sequence, a before/after). At most 4000 characters.",
 				},
 				options: {
 					type: "array",
-					items: { type: "string" },
-					maxItems: 4,
+					maxItems: 20,
 					description:
-						"Up to 4 short answers to offer as buttons (e.g. ['Approve', 'Deny']). Leave out for an open question.",
+						"The answers to offer: up to 4 for one choice, up to 20 rows for select many. Each is a short label, or an object with the label and what you know about it.",
+					items: {
+						anyOf: [
+							{ type: "string" },
+							{
+								type: "object",
+								properties: {
+									label: { type: "string", description: "Short, at most 80 characters." },
+									description: {
+										type: "string",
+										description: "What it means or what happens if chosen, in a line or two.",
+									},
+									pros: { type: "array", items: { type: "string" }, maxItems: 4 },
+									cons: { type: "array", items: { type: "string" }, maxItems: 4 },
+									risk: { type: "string", enum: ["low", "medium", "high"] },
+									recommended: {
+										type: "boolean",
+										description: "Your pick; at most one option.",
+									},
+									checked: {
+										type: "boolean",
+										description: "select many only: ticked to begin with (the safe ones).",
+									},
+								},
+								required: ["label"],
+								additionalProperties: false,
+							},
+						],
+					},
+				},
+				select: {
+					type: "string",
+					enum: ["one", "many"],
+					description:
+						"one (default): the user picks an option. many: a checklist; the answer lists what they left ticked and what they did not.",
 				},
 				allowText: {
 					type: "boolean",
 					description:
-						"Whether the user may type an answer of their own besides the options. Default true.",
+						"select one: whether the user may type an answer of their own besides the options. Default true.",
 				},
 			},
 			required: ["question"],
@@ -338,8 +373,9 @@ async function callBoardTool(
 			const res = await board.askUser({
 				callerTerminalId: ctx.callerTerminalId,
 				text: String(args.question ?? ""),
-				options: Array.isArray(args.options) ? args.options.map(String) : undefined,
+				options: Array.isArray(args.options) ? args.options : undefined,
 				allowText: typeof args.allowText === "boolean" ? args.allowText : undefined,
+				select: args.select,
 			});
 			return { text: res.reason, isError: !res.ok };
 		}

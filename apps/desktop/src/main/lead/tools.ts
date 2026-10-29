@@ -18,6 +18,8 @@ export interface LeadToolDeps {
 	handle(method: string, args: unknown[]): Promise<unknown>;
 	/** The box an entity lives on, or null for this Mac. */
 	machineOf(id: string): string | null;
+	/** A task the Lead started, messaged or answered: its replies come back to the chat. */
+	onTouch?(task: TaskDTO): void;
 }
 
 /** The MCP server name; Claude Code prefixes each tool with mcp__<name>__. */
@@ -27,8 +29,22 @@ const TOOLS = [
 	{
 		name: "get_board",
 		description:
-			"List every project and its in-play tasks (merged ones are left out), on this Mac and on every connected box. Each task has its id, name, board column, whether its agent is working, needs the user, idle or not running, which agent it uses, and what it was asked to do. Read this before creating or messaging anything.",
-		inputSchema: { type: "object", properties: {}, additionalProperties: false },
+			"List the in-play tasks (merged ones are left out) on this Mac and every connected box, one line each: id | name | board column | state (working, needs_you, idle or not_running) | agent, plus what it waits for or asks the user. Filter to what you need: needs_you for what is waiting on the user, working for what is running. For what a task was asked to do and its last reply, use read_task.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				filter: {
+					type: "string",
+					enum: ["all", "needs_you", "working"],
+					description: "all (default), needs_you, or working.",
+				},
+				project: {
+					type: "string",
+					description: "Only this project (its id from an earlier get_board, or its name).",
+				},
+			},
+			additionalProperties: false,
+		},
 	},
 	{
 		name: "create_task",
@@ -100,8 +116,9 @@ const TOOLS = [
 			properties: {
 				task: { type: "string", description: "The task's id from get_board (or its exact name)." },
 				answer: {
-					type: "string",
-					description: "The user's answer, in their words or as the option they chose.",
+					anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+					description:
+						"The user's answer, in their words or as the option they chose. For a checklist (select many), the labels they want ticked.",
 				},
 			},
 			required: ["task", "answer"],
@@ -132,10 +149,18 @@ function agentState(t: TaskDTO): string {
 
 const machineLabel = (alias: string | null) => alias ?? "this Mac";
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const firstLine = (text: string) =>
+	(text.split("\n").find((l) => l.trim()) ?? text)
+		.replace(/[*_`#]/g, "")
+		.trim()
+		.slice(0, 160);
+
 /** A pending question as the Lead reads it (no ids: it answers by task). */
 const questionView = (q: TaskQuestionDTO) => ({
 	text: q.text,
-	...(q.options.length ? { options: q.options } : {}),
+	...(q.choices ? { options: q.choices } : q.options.length ? { options: q.options } : {}),
+	...(q.select === "many" ? { checklist: true } : {}),
 	...(q.options.length && !q.allowText ? { onlyTheseOptions: true } : {}),
 	askedAt: new Date(q.askedAt).toISOString(),
 });
@@ -178,9 +203,20 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 	}
 
 	/** A task by id, or by exact name or branch when exactly one matches. */
+	/** A task by id (asked of its own engine, no board scan), or by exact name or
+	 *  branch when exactly one matches. An id the router hasn't learned yet falls
+	 *  back to the scan, which teaches it. */
 	async function findTask(ref: string): Promise<TaskDTO | string> {
+		const id = ref.trim();
+		if (UUID.test(id)) {
+			try {
+				return await call<TaskDTO>(CH.tasksGet, [id]);
+			} catch {
+				/* not learned, on an older box, or gone: the scan below decides */
+			}
+		}
 		const all = (await board()).flatMap((b) => b.tasks ?? []);
-		const byId = all.find((t) => t.id === ref);
+		const byId = all.find((t) => t.id === id);
 		if (byId) return byId;
 		const want = ref.trim().toLowerCase();
 		const named = all.filter(
@@ -191,29 +227,43 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		return `no task "${ref}"; call get_board for ids.`;
 	}
 
-	async function getBoard(): Promise<McpToolResult> {
-		const view = (await board()).map(({ project, tasks }) => ({
-			project: project.name,
-			projectId: project.id,
-			machine: machineLabel(deps.machineOf(project.id)),
-			...(tasks == null
-				? { unreachable: true }
-				: {
-						tasks: tasks
-							.filter((t) => t.column !== "merged")
-							.map((t) => ({
-								id: t.id,
-								name: t.name,
-								column: t.column,
-								agent: t.agentId,
-								state: agentState(t),
-								...(t.waitingReason ? { waitingFor: t.waitingReason } : {}),
-								...(t.question ? { question: questionView(t.question) } : {}),
-								...(t.description ? { asked: t.description.slice(0, 280) } : {}),
-							})),
-					}),
-		}));
-		return { text: JSON.stringify(view, null, 2) };
+	async function getBoard(args: Record<string, unknown>): Promise<McpToolResult> {
+		const filter = args.filter === "needs_you" || args.filter === "working" ? args.filter : "all";
+		const only = typeof args.project === "string" ? args.project.trim().toLowerCase() : "";
+		const keep = (t: TaskDTO) => {
+			if (t.column === "merged") return false;
+			const state = agentState(t);
+			if (filter === "needs_you")
+				return t.column === "needs_attention" || state === "needs_you" || !!t.question;
+			if (filter === "working") return state === "working" || t.column === "running";
+			return true;
+		};
+		const projects = (await board()).filter(
+			({ project }) => !only || project.id === only || project.name.toLowerCase() === only,
+		);
+		// One line per task, not JSON: every board the Lead reads stays in its
+		// context, and repeated keys were half of it (14k chars down to 7k on a
+		// 59-task board).
+		const lines = ["id | name | column | state | agent"];
+		for (const { project, tasks } of projects) {
+			const where = `${project.name} (${machineLabel(deps.machineOf(project.id))}, project ${project.id})`;
+			if (tasks == null) {
+				lines.push("", `${where}: unreachable right now`);
+				continue;
+			}
+			const rows = tasks.filter(keep);
+			if (rows.length === 0) continue;
+			lines.push("", where);
+			for (const t of rows) {
+				const extra = [
+					t.waitingReason ? `waits for: ${t.waitingReason}` : "",
+					t.question ? `asks the user: ${firstLine(t.question.text)}` : "",
+				].filter(Boolean);
+				lines.push([t.id, t.name, t.column, agentState(t), t.agentId ?? "-", ...extra].join(" | "));
+			}
+		}
+		if (lines.length === 1) lines.push("", "Nothing matches.");
+		return { text: lines.join("\n") };
 	}
 
 	async function createTask(args: Record<string, unknown>): Promise<McpToolResult> {
@@ -229,6 +279,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 				? args.agent
 				: (await call<SettingsResult>(CH.settingsGet, [])).settings.engine.defaultAgentId;
 		const task = await call<TaskDTO>(CH.tasksCreate, [{ projectId: project.id, name, agentId }]);
+		deps.onTouch?.(task);
 		try {
 			await call(CH.ptySpawnAgent, [
 				{ taskId: task.id, agentId, prompt, yolo: args.yolo === true },
@@ -252,6 +303,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 			const res = await call<{ ok: boolean; reason: string }>(CH.peersSendFromLead, [
 				{ taskId: task.id, body },
 			]);
+			if (res.ok) deps.onTouch?.(task);
 			return { text: res.reason, isError: !res.ok };
 		} catch (e) {
 			return { text: explain(e, "Messaging that task"), isError: true };
@@ -292,8 +344,14 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		if (!task.question) return { text: `"${task.name}" has no question waiting.`, isError: true };
 		try {
 			await call(CH.tasksAnswerQuestion, [
-				{ taskId: task.id, questionId: task.question.id, answer: String(args.answer ?? "") },
+				{
+					taskId: task.id,
+					questionId: task.question.id,
+					via: "lead",
+					answer: Array.isArray(args.answer) ? args.answer.map(String) : String(args.answer ?? ""),
+				},
 			]);
+			deps.onTouch?.(task);
 			return { text: `Passed the answer to "${task.name}"; its agent continues with it.` };
 		} catch (e) {
 			return { text: explain(e, "Answering that question"), isError: true };
@@ -307,7 +365,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		async call(name, args) {
 			switch (name) {
 				case "get_board":
-					return getBoard();
+					return getBoard(args);
 				case "create_task":
 					return createTask(args);
 				case "send_message":

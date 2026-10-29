@@ -15,27 +15,64 @@
  * pending the card stays in Needs You, even across the agent's Stop.
  */
 import { randomUUID } from "node:crypto";
-import { type AteamDb, repo, type Task, type TaskQuestion } from "@ateam/db";
+import { type AteamDb, type QuestionChoice, repo, type Task, type TaskQuestion } from "@ateam/db";
 import type { OutsideSender, SendResult } from "./peer-messages";
 
-export const MAX_QUESTION = 1000;
+/** Room for a mermaid diagram (rendered by every client) beside the question. */
+export const MAX_QUESTION = 4000;
+/** Options for a single choice: few enough to weigh side by side. */
 export const MAX_OPTIONS = 4;
+/** Rows of a checklist (select "many"): a list to tick through. */
+export const MAX_CHECKLIST = 20;
 export const MAX_OPTION = 80;
-export const MAX_ANSWER = 4000;
+/** A typed answer; the message carrying it (with the quoted question) holds 8000. */
+export const MAX_ANSWER = 6000;
+/** How much of the question an answer quotes back. */
+const QUOTE = 300;
 
 /** The patch that ends a question, whoever ends it. */
 export const CLEAR_QUESTION = { question: null } as const;
 
+/** What ask_user hands over: the model's arguments, not yet trusted. */
 export interface AskRequest {
 	taskId: string;
 	text: string;
-	options?: string[];
+	/** Labels, or objects with a label and what the agent knows about it. */
+	options?: unknown[];
 	allowText?: boolean;
+	select?: unknown;
 }
 
 export type AskVerdict =
 	| { ok: true; question: Omit<TaskQuestion, "id" | "askedAt"> }
 	| { ok: false; reason: string };
+
+const str = (v: unknown, max: number): string | undefined =>
+	typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined;
+const strs = (v: unknown, n: number, max: number): string[] | undefined => {
+	const out = Array.isArray(v) ? v.map((x) => str(x, max)).filter((x): x is string => !!x) : [];
+	return out.length ? out.slice(0, n) : undefined;
+};
+const RISKS = new Set(["low", "medium", "high"]);
+
+function toChoice(raw: unknown): QuestionChoice | string {
+	if (typeof raw === "string") return { label: raw.trim() };
+	if (!raw || typeof raw !== "object") return "each option is a label or an object with a label";
+	const o = raw as Record<string, unknown>;
+	if (typeof o.label !== "string") return "each option object needs a label";
+	const choice: QuestionChoice = { label: o.label.trim() };
+	const description = str(o.description, 300);
+	const pros = strs(o.pros, 4, 120);
+	const cons = strs(o.cons, 4, 120);
+	if (description) choice.description = description;
+	if (pros) choice.pros = pros;
+	if (cons) choice.cons = cons;
+	if (typeof o.risk === "string" && RISKS.has(o.risk))
+		choice.risk = o.risk as QuestionChoice["risk"];
+	if (o.recommended === true) choice.recommended = true;
+	if (o.checked === true) choice.checked = true;
+	return choice;
+}
 
 export function validateAsk(req: Omit<AskRequest, "taskId">): AskVerdict {
 	const text = req.text.trim();
@@ -43,17 +80,49 @@ export function validateAsk(req: Omit<AskRequest, "taskId">): AskVerdict {
 	if (text.length > MAX_QUESTION)
 		return {
 			ok: false,
-			reason: `the question is ${text.length} characters; keep it under ${MAX_QUESTION} and put detail in your reply`,
+			reason: `the question is ${text.length} characters; keep it under ${MAX_QUESTION} and put the detail in your reply`,
 		};
-	const options = [...new Set((req.options ?? []).map((o) => o.trim()).filter(Boolean))];
-	if (options.length > MAX_OPTIONS)
-		return { ok: false, reason: `give at most ${MAX_OPTIONS} options` };
-	const long = options.find((o) => o.length > MAX_OPTION);
-	if (long)
-		return { ok: false, reason: `option "${long.slice(0, 30)}…" is over ${MAX_OPTION} characters` };
-	// With nothing to pick from, the user has to be able to type.
-	const allowText = options.length === 0 ? true : req.allowText !== false;
-	return { ok: true, question: { text, options, allowText } };
+	const select = req.select === "many" ? "many" : "one";
+
+	const choices: QuestionChoice[] = [];
+	for (const raw of req.options ?? []) {
+		const c = toChoice(raw);
+		if (typeof c === "string") return { ok: false, reason: c };
+		if (!c.label) continue;
+		if (c.label.length > MAX_OPTION)
+			return {
+				ok: false,
+				reason: `option "${c.label.slice(0, 30)}…" is over ${MAX_OPTION} characters`,
+			};
+		if (choices.some((x) => x.label === c.label)) continue;
+		choices.push(c);
+	}
+	const cap = select === "many" ? MAX_CHECKLIST : MAX_OPTIONS;
+	if (choices.length > cap)
+		return {
+			ok: false,
+			reason:
+				select === "many"
+					? `a checklist holds at most ${MAX_CHECKLIST} rows`
+					: `give at most ${MAX_OPTIONS} options; for a longer list to tick through, use select "many"`,
+		};
+	if (select === "many" && choices.length === 0)
+		return { ok: false, reason: 'a checklist (select "many") needs options to tick' };
+	if (choices.filter((c) => c.recommended).length > 1)
+		return { ok: false, reason: "recommend at most one option" };
+
+	const options = choices.map((c) => c.label);
+	const rich = select === "many" || choices.some((c) => Object.keys(c).length > 1);
+	const question: Omit<TaskQuestion, "id" | "askedAt"> = {
+		text,
+		options,
+		// A checklist is answered by what is ticked; with nothing to pick from,
+		// the user has to be able to type.
+		allowText: select === "many" ? false : options.length === 0 ? true : req.allowText !== false,
+		...(rich ? { choices } : {}),
+		...(select === "many" ? { select } : {}),
+	};
+	return { ok: true, question };
 }
 
 /** File the question on its task and put the card in Needs You. */
@@ -94,7 +163,14 @@ export function columnWithQuestion<C extends string>(task: Task, column: C): C |
 export function answerQuestion(
 	db: AteamDb,
 	send: (sender: OutsideSender, req: { to: string; body: string }) => SendResult,
-	req: { taskId: string; questionId: string; answer: string | null },
+	req: {
+		taskId: string;
+		questionId: string;
+		answer: string | string[] | null;
+		/** "lead": the Lead chat passed on what the user told it, so the agent is
+		 *  told it came through the Lead rather than from the user's own click. */
+		via?: "lead";
+	},
 	notify: (taskId: string) => void,
 ): void {
 	const task = repo.getTask(db, req.taskId);
@@ -108,17 +184,39 @@ export function answerQuestion(
 		notify(task.id);
 		return;
 	}
-	const answer = req.answer.trim();
-	if (!answer) throw new Error("The answer is empty.");
-	if (answer.length > MAX_ANSWER)
-		throw new Error(`Keep the answer under ${MAX_ANSWER} characters.`);
-	if (!q.allowText && !q.options.includes(answer))
-		throw new Error(`Pick one of: ${q.options.join(", ")}.`);
-	const res = send("user", {
+	// The agent has its question in its own context: quoting its first line is
+	// enough to say which one, and keeps a long question plus a long answer
+	// under the message cap.
+	const asked = (q.text.split("\n").find((l) => l.trim()) ?? q.text).slice(0, QUOTE);
+	const res = send(req.via === "lead" ? "lead" : "user", {
 		to: task.id,
-		body: `You asked: ${q.text}\n\nThe user's answer: ${answer}`,
+		body: `Answer to your ask_user question "${asked}"\n\n${answerText(q, req.answer)}`,
 	});
 	if (!res.ok) throw new Error(res.reason);
 	repo.updateTask(db, task.id, { ...CLEAR_QUESTION, column: "running", isUnread: false });
 	notify(task.id);
+}
+
+/** The answer as the agent reads it; throws when it doesn't fit the question. */
+function answerText(q: TaskQuestion, answer: string | string[]): string {
+	// A checklist: what the user left ticked, and what they didn't.
+	if (q.select === "many") {
+		const picked = [...new Set((Array.isArray(answer) ? answer : [answer]).map((a) => a.trim()))];
+		const unknown = picked.find((a) => !q.options.includes(a));
+		if (unknown !== undefined) throw new Error(`"${unknown}" is not on the list.`);
+		const left = q.options.filter((o) => !picked.includes(o));
+		const list = (xs: string[]) => xs.map((x) => `- ${x}`).join("\n");
+		return [
+			picked.length ? `The user ticked:\n${list(picked)}` : "The user ticked nothing.",
+			left.length ? `They left unticked:\n${list(left)}` : "",
+		]
+			.filter(Boolean)
+			.join("\n\n");
+	}
+	const text = (Array.isArray(answer) ? answer.join(", ") : answer).trim();
+	if (!text) throw new Error("The answer is empty.");
+	if (text.length > MAX_ANSWER) throw new Error(`Keep the answer under ${MAX_ANSWER} characters.`);
+	if (!q.allowText && !q.options.includes(text))
+		throw new Error(`Pick one of: ${q.options.join(", ")}.`);
+	return `The user's answer: ${text}`;
 }

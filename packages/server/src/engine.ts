@@ -75,10 +75,19 @@ export interface Engine {
 	sendTaskRemoved(taskId: string): void;
 	/** Emit the current loop list. */
 	sendLoopsUpdated(): void;
-	/** Queue a message from the Lead chat to a task's agent (peer-messages.ts). */
-	messageFromLead(req: { to: string; body: string }): { ok: boolean; reason: string };
+	/** Queue a message to a task's agent from the Lead chat or from the user
+	 *  typing in an Ateam client (peer-messages.ts). */
+	messageFrom(
+		sender: "lead" | "user",
+		req: { to: string; body: string },
+	): { ok: boolean; reason: string };
 	/** Answer (or with null dismiss) the question a task's agent asked (questions.ts). */
-	answerQuestion(req: { taskId: string; questionId: string; answer: string | null }): void;
+	answerQuestion(req: {
+		taskId: string;
+		questionId: string;
+		answer: string | string[] | null;
+		via?: "lead";
+	}): void;
 	/** Keeps every task's git + PR facts fresh, not just the open one. The
 	 *  `CH.gitStatus` handler shares its throttle (see worktree-sweep.ts). */
 	readonly worktreeSweep: WorktreeSweep;
@@ -601,7 +610,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		sendLoopsUpdated() {
 			emitter.emit("loopsUpdated", loopRunner.describe());
 		},
-		messageFromLead: (req) => peers.sendFrom("lead", req),
+		messageFrom: (sender, req) => peers.sendFrom(sender, req),
 		answerQuestion: (req) =>
 			answerQuestion(db, (sender, r) => peers.sendFrom(sender, r), req, sendTaskUpdated),
 		async connectPty() {

@@ -84,7 +84,11 @@ describe("asking and answering", () => {
 		const id = pending()?.id as string;
 		answerQuestion(db, send, { taskId: task.id, questionId: id, answer: "Wait" }, notify);
 		expect(sent).toEqual([
-			{ sender: "user", to: task.id, body: "You asked: Deploy?\n\nThe user's answer: Wait" },
+			{
+				sender: "user",
+				to: task.id,
+				body: 'Answer to your ask_user question "Deploy?"\n\nThe user\'s answer: Wait',
+			},
 		]);
 		expect(pending()).toBeNull();
 		expect(repo.getTask(db, task.id)?.column).toBe("running");
@@ -127,7 +131,107 @@ describe("asking and answering", () => {
 describe("the answer's framing", () => {
 	it("says it comes from the user", () => {
 		const text = formatForRecipient([{ body: "The user's answer: Wait", from: "user" }]);
-		expect(text).toContain("This comes from the user.");
+		expect(text).toContain("This comes from the user,");
 		expect(text).not.toContain("not from the user");
+	});
+});
+
+describe("rich options and checklists", () => {
+	it("keeps what the agent knows about each option, and its labels for older clients", () => {
+		const v = validateAsk({
+			text: "Which migration?",
+			options: [
+				{ label: "In place", description: "Alter the table", cons: ["Locks writes"], risk: "high" },
+				{ label: "Shadow table", pros: ["No downtime"], risk: "low", recommended: true },
+				"Skip",
+			],
+		});
+		if (!v.ok) throw new Error(v.reason);
+		expect(v.question.options).toEqual(["In place", "Shadow table", "Skip"]);
+		expect(v.question.choices?.[1]).toEqual({
+			label: "Shadow table",
+			pros: ["No downtime"],
+			risk: "low",
+			recommended: true,
+		});
+		// Plain labels stay plain: no choices to carry.
+		const plain = validateAsk({ text: "x", options: ["a", "b"] });
+		expect(plain.ok && plain.question).toEqual({ text: "x", options: ["a", "b"], allowText: true });
+	});
+
+	it("refuses two recommendations, a bad option, and a long single choice", () => {
+		const two = [
+			{ label: "a", recommended: true },
+			{ label: "b", recommended: true },
+		];
+		expect(validateAsk({ text: "x", options: two }).ok).toBe(false);
+		expect(validateAsk({ text: "x", options: [{ nope: 1 }] }).ok).toBe(false);
+		const five = ["a", "b", "c", "d", "e"];
+		expect(validateAsk({ text: "x", options: five })).toMatchObject({ ok: false });
+		expect(validateAsk({ text: "x", options: five, select: "many" }).ok).toBe(true);
+	});
+
+	it("answers a checklist with what was ticked and what was left", () => {
+		applyAskUser(
+			db,
+			{
+				taskId: task.id,
+				text: "Delete these branches?",
+				select: "many",
+				options: [{ label: "old-a", checked: true }, { label: "old-b", checked: true }, "keep-c"],
+			},
+			notify,
+		);
+		const q = pending();
+		expect(q).toMatchObject({ select: "many", allowText: false });
+		answerQuestion(
+			db,
+			send,
+			{ taskId: task.id, questionId: q?.id as string, answer: ["old-a"] },
+			notify,
+		);
+		expect(sent[0]?.body).toBe(
+			'Answer to your ask_user question "Delete these branches?"\n\nThe user ticked:\n- old-a\n\nThey left unticked:\n- old-b\n- keep-c',
+		);
+	});
+
+	it("refuses a checklist answer that isn't on the list", () => {
+		applyAskUser(
+			db,
+			{ taskId: task.id, text: "Delete?", select: "many", options: ["a", "b"] },
+			notify,
+		);
+		const id = pending()?.id as string;
+		expect(() =>
+			answerQuestion(db, send, { taskId: task.id, questionId: id, answer: ["z"] }, notify),
+		).toThrow("not on the list");
+	});
+});
+
+describe("answer framing and size", () => {
+	it("quotes only the question's first line, so a long question and a long answer still fit", () => {
+		const long = `Which plan?\n\n\`\`\`mermaid\nflowchart LR\n${"  A --> B\n".repeat(300)}\`\`\``;
+		applyAskUser(db, { taskId: task.id, text: long.slice(0, 4000) }, notify);
+		const answer = "x".repeat(5900);
+		answerQuestion(
+			db,
+			send,
+			{ taskId: task.id, questionId: pending()?.id as string, answer },
+			notify,
+		);
+		expect(sent[0]?.body.startsWith('Answer to your ask_user question "Which plan?"')).toBe(true);
+		expect(sent[0]?.body.length).toBeLessThan(8000);
+	});
+
+	it("sends an answer the Lead passed on as from the Lead, not from the user's own click", () => {
+		applyAskUser(db, { taskId: task.id, text: "Deploy?", options: ["Deploy", "Wait"] }, notify);
+		const id = pending()?.id as string;
+		answerQuestion(
+			db,
+			send,
+			{ taskId: task.id, questionId: id, answer: "Deploy", via: "lead" },
+			notify,
+		);
+		expect(sent[0]?.sender).toBe("lead");
 	});
 });

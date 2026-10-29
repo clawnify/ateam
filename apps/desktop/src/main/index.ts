@@ -7,7 +7,7 @@ import { autoUpdater } from "electron-updater";
 import { APP_NAME } from "./app-name";
 import { createHost, registerHostIpc } from "./host";
 import { registerIpc } from "./ipc";
-import { startLead } from "./lead";
+import { type Lead, startLead } from "./lead";
 import { showStartupFailure } from "./startup-failure";
 import { createWaitNotifier } from "./wait-notify";
 
@@ -358,10 +358,15 @@ app
 		// Every engine's events pass through here on their way to the windows, so
 		// this is where a due wait becomes a macOS notification (wait-notify.ts).
 		const notifyWait = createWaitNotifier(openTaskInMainWindow);
+		// The Lead starts below, once the host exists; until then no task reports back to it.
+		let lead: Lead | null = null;
 		const host = createHost({
 			localEngine: engine,
 			broadcast: (channel, ...args) => {
-				if (channel === CH.evtTaskUpdated) notifyWait(args[0] as TaskDTO);
+				if (channel === CH.evtTaskUpdated) {
+					notifyWait(args[0] as TaskDTO);
+					lead?.onTaskUpdated(args[0] as TaskDTO);
+				}
 				broadcast(channel, ...args);
 			},
 		});
@@ -384,13 +389,14 @@ app
 		// The Lead chat's agent starts on the first message, not here; this only
 		// opens its tool endpoint and IPC. A failure costs the Lead, not the app.
 		try {
-			const lead = await startLead({
+			const started = await startLead({
 				router: host.router,
 				machineOf: (id) => host.origins()[id] ?? null,
 				dir: join(app.getPath("userData"), "lead"),
 				broadcast,
 			});
-			app.on("will-quit", () => lead.dispose());
+			lead = started;
+			app.on("will-quit", () => started.dispose());
 		} catch (err) {
 			console.error("[ateam] Lead chat failed to start:", err);
 		}

@@ -60,10 +60,10 @@ describe("lead tools", () => {
 		const r = fakeRouter();
 		const tools = createLeadTools({ handle: r.handle, machineOf: () => "hetzner" });
 		const res = await tools.call("get_board", {});
-		const view = JSON.parse(res?.text ?? "");
-		expect(view[0].machine).toBe("hetzner");
-		expect(view[0].tasks.map((t: { name: string }) => t.name)).toEqual(["fix login"]);
-		expect(view[0].tasks[0].state).toBe("idle");
+		const text = res?.text ?? "";
+		expect(text).toContain("ateam (hetzner, project p1)");
+		expect(text).toContain("t1 | fix login | review | idle | claude");
+		expect(text).not.toContain("old work");
 	});
 
 	it("create_task creates on the project, then starts the default agent with the prompt", async () => {
@@ -118,12 +118,43 @@ describe("lead tools", () => {
 		const asked = TASKS.map((t) => (t.id === "t1" ? { ...t, question } : t));
 		const r = fakeRouter({ [CH.tasksList]: () => asked, [CH.tasksAnswerQuestion]: () => ({}) });
 		const tools = createLeadTools({ handle: r.handle, machineOf: () => null });
-		const view = JSON.parse((await tools.call("get_board", {}))?.text ?? "");
-		expect(view[0].tasks[0].question).toMatchObject({ text: "Deploy?", onlyTheseOptions: true });
+		const board = (await tools.call("get_board", {}))?.text ?? "";
+		expect(board).toContain("asks the user: Deploy?");
 		const res = await tools.call("answer_question", { task: "fix login", answer: "Wait" });
 		expect(res?.isError).toBeFalsy();
 		const sent = r.calls.find((c) => c.method === CH.tasksAnswerQuestion);
-		expect(sent?.args[0]).toEqual({ taskId: "t1", questionId: "q1", answer: "Wait" });
+		expect(sent?.args[0]).toEqual({ taskId: "t1", questionId: "q1", via: "lead", answer: "Wait" });
+	});
+
+	it("filters the board to what needs the user, in compact rows", async () => {
+		const waiting = TASKS.map((t) => (t.id === "t1" ? { ...t, column: "needs_attention" } : t));
+		const extra = {
+			...TASKS[0],
+			id: "t3",
+			name: "busy",
+			column: "running",
+			agentStatus: "running",
+		};
+		const r = fakeRouter({ [CH.tasksList]: () => [...waiting, extra] });
+		const tools = createLeadTools({ handle: r.handle, machineOf: () => null });
+		const needs = (await tools.call("get_board", { filter: "needs_you" }))?.text ?? "";
+		expect(needs).toContain("t1 | fix login");
+		expect(needs).not.toContain("t3 | busy");
+		expect(needs).not.toContain("Fix the redirect loop");
+		const working = (await tools.call("get_board", { filter: "working" }))?.text ?? "";
+		expect(working).toContain("t3 | busy");
+		expect(working).not.toContain("t1 | fix login");
+	});
+
+	it("looks a task up by id on its own engine, without listing the board", async () => {
+		const id = "11111111-2222-4333-8444-555555555555";
+		const r = fakeRouter({
+			[CH.tasksGet]: () => ({ ...TASKS[0], id }),
+			[CH.peersSendFromLead]: () => ({ ok: true, reason: "sent" }),
+		});
+		const tools = createLeadTools({ handle: r.handle, machineOf: () => null });
+		await tools.call("send_message", { task: id, message: "rebase" });
+		expect(r.calls.map((c) => c.method)).toEqual([CH.tasksGet, CH.peersSendFromLead]);
 	});
 
 	it("answers null for a tool it does not have", async () => {

@@ -103,11 +103,32 @@ export interface TaskQuestionDTO {
 	/** An answer names the question it answers, so it can't land on a newer one. */
 	id: string;
 	text: string;
-	/** The answers to offer as buttons, at most four; may be empty. */
+	/** The choices' labels, always filled: a client that knows nothing of
+	 *  `choices`, `select` or `blocks` still offers these as buttons. */
 	options: string[];
 	/** Whether a typed answer is accepted (always, when there are no options). */
 	allowText: boolean;
 	askedAt: number;
+	/** The options with what the agent knows about each, same order as `options`.
+	 *  Absent when the agent gave plain labels. */
+	choices?: QuestionChoiceDTO[];
+	/** "many": a checklist, answered with the labels the user left ticked.
+	 *  Absent means "one". */
+	select?: "one" | "many";
+}
+
+/** One option of a question, as a card (select one) or a checklist row (many). */
+export interface QuestionChoiceDTO {
+	label: string;
+	/** What it means or what happens: the consequence, in a line or two. */
+	description?: string;
+	pros?: string[];
+	cons?: string[];
+	risk?: "low" | "medium" | "high";
+	/** The agent's pick; at most one. */
+	recommended?: boolean;
+	/** For a checklist: ticked to begin with. */
+	checked?: boolean;
 }
 
 /** A task's last finished turn, as the Lead chat reads it (tasks:lastReply). */
@@ -348,6 +369,9 @@ export interface TaskDTO {
 	 *  waiting on; null when nothing is pending. Absent on an engine older than
 	 *  v18, which reads the same. */
 	question?: TaskQuestionDTO | null;
+	/** When the agent last finished a turn with a reply (read it with
+	 *  tasks:lastReply); null until one has. Absent on an engine older than v18. */
+	lastReplyAt?: number | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
 }
@@ -849,6 +873,8 @@ export const CH = {
 	tasksCleanupPreview: "tasks:cleanupPreview",
 	tasksCleanupCandidates: "tasks:cleanupCandidates",
 	tasksLastReply: "tasks:lastReply",
+	tasksGet: "tasks:get",
+	tasksMessage: "tasks:message",
 	tasksAnswerQuestion: "tasks:answerQuestion",
 	peersSendFromLead: "peers:sendFromLead",
 	gitCommit: "git:commit",
@@ -1042,7 +1068,10 @@ export interface AteamApi {
 		answerQuestion(input: {
 			taskId: string;
 			questionId: string;
-			answer: string | null;
+			/** A label or typed text; for a checklist, the ticked labels. */
+			answer: string | string[] | null;
+			/** The Lead chat passing on the user's answer (see questions.ts). */
+			via?: "lead";
 		}): Promise<TaskDTO>;
 		/** Preview which tasks a cleanup would remove vs keep (and why). */
 		cleanupPreview(projectId: string): Promise<CleanupReport>;

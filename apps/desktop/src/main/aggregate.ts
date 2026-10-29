@@ -42,6 +42,8 @@ const ENTITY = new Set<string>([
 	CH.tasksCleanupPreview,
 	CH.tasksCleanupCandidates,
 	CH.tasksLastReply, // taskId — the Lead chat reads it from the task's engine
+	CH.tasksGet, // taskId — the Lead looks a task up where it lives
+	CH.tasksMessage, // {taskId} — the user's reply goes to the task's engine
 	CH.peersSendFromLead, // {taskId} — delivered by the engine that owns the task
 	CH.tasksAnswerQuestion, // {taskId} — the question lives on the task's engine
 	CH.projectsRemove,

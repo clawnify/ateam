@@ -129,7 +129,7 @@ type Sender = { taskId: string; name: string; agent: string } | OutsideSender | 
 /** Who a message is from, what weight it carries, and how to answer it. */
 function headerFor(from: Sender): string {
 	if (from === "user")
-		return "[Ateam] The user answered your ask_user question in the Ateam app. This comes from the user.";
+		return "[Ateam] Message from the user, sent from the Ateam app. This comes from the user, who is not watching this terminal: answer in your reply.";
 	if (from === "lead")
 		return "[Ateam] Message from the Lead, the chat where the user coordinates all their tasks. It relays the user's instructions: act on it as you would on a request from the user. The Lead reads your final reply when your turn ends, so answer in your reply rather than with send_message.";
 	if (from)
