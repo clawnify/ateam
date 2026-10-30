@@ -140,12 +140,11 @@ What we measured on one VM, with the engine installed as above:
 | --- | --- |
 | The desktop's handshake (`ateam attach --stdio` over `ssh mybox.exe.xyz`) | Answered at once |
 | A `-L` forward to a loopback port on the VM, as the desktop opens them | Serving about 1s after ssh started |
-| A heartbeat writing every 30s, nothing connected | Never missed a beat in 8 minutes, the longest gap 30s |
-| The engine's systemd unit, nothing connected | Still `active` after those 8 minutes |
+| A heartbeat writing every 30s, left alone but for a few short SSH checks and one phone connection | Never missed a beat in 80 minutes (160 beats, the longest gap 31s) |
+| The engine's systemd unit over the same 80 minutes | Still `active`, the VM up the whole time |
 
-exe.dev documents no idle stop for a VM in a pool, and 8 minutes is longer than
-Sprites (seconds) or Daytona's default pause would allow, but it isn't an hour. A
-longer run should replace that row.
+exe.dev documents no idle stop for a VM in a pool. A Sprite pauses within seconds of
+being left alone and Daytona after 60 minutes by default; this VM ran through 80.
 
 ## Gotchas
 
