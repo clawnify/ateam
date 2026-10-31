@@ -350,7 +350,13 @@ describe("PeerMessenger.listPeers", () => {
 		addSession(a, "claude", "ta", "running");
 		const peers = messenger.listPeers("ta");
 		expect(peers.map((p) => p.name).sort()).toEqual(["a", "b"]);
-		expect(peers.find((p) => p.taskId === a.id)).toMatchObject({ state: "working", you: true });
+		expect(peers.find((p) => p.taskId === a.id)).toMatchObject({
+			state: "working",
+			you: true,
+			project: "Repo",
+			// The seed project has no GitHub remote, so its repo is the clone's path.
+			repo: "/tmp/repo",
+		});
 		expect(peers.find((p) => p.taskId === b.id)).toMatchObject({
 			state: "not_running",
 			agent: "codex",

@@ -108,6 +108,15 @@ input {
 .app.rail {
 	grid-template-columns: 56px 1fr;
 }
+/* The Lead as a sidebar on the right: a third full-height column, the mirror
+   of the left one. Capped at 40% (MAX_LEAD_SHARE in App.tsx), below the left
+   one's 50%, so the board keeps some room with both open. */
+.app.lead-open {
+	grid-template-columns: min(var(--sidebar-w, 240px), 50%) 1fr min(var(--lead-w, 400px), 40%);
+}
+.app.rail.lead-open {
+	grid-template-columns: 56px 1fr min(var(--lead-w, 400px), 40%);
+}
 
 /* Invisible drag strip sitting over the sidebar/main divider. No visible
    chrome — just a col-resize hit area aligned to the current sidebar width. */
@@ -118,6 +127,18 @@ input {
 	left: min(var(--sidebar-w, 240px), 50%);
 	width: 8px;
 	margin-left: -4px;
+	cursor: col-resize;
+	z-index: 20;
+	-webkit-app-region: no-drag;
+}
+/* The same strip over the main/Lead divider. */
+.lead-resizer {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	right: min(var(--lead-w, 400px), 40%);
+	width: 8px;
+	margin-right: -4px;
 	cursor: col-resize;
 	z-index: 20;
 	-webkit-app-region: no-drag;
@@ -203,6 +224,12 @@ input {
 .rail-tile.active {
 	background: var(--bg-elev-2);
 	color: var(--text);
+}
+/* aria-disabled, not :disabled, so the tooltip still opens to say why. */
+.rail-tile[aria-disabled="true"] {
+	opacity: 0.35;
+	cursor: default;
+	background: transparent;
 }
 /* How many sessions the tile stands for, when more than one: the tile has
    room for one glyph, so the rest are a number. Opposite corner to the status
@@ -801,53 +828,55 @@ input {
 	scroll-margin-right: calc(var(--panel-w) + 14px);
 }
 .card .name {
+	display: flex;
+	align-items: center;
+	gap: 6px;
 	font-size: 13px;
 	font-weight: 500;
 	margin-bottom: 4px;
+}
+.card .name .name-text {
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.card .branch {
-	font-size: 11px;
-	color: var(--text-dim);
-	font-family: ui-monospace, Menlo, monospace;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-/* Tags share the branch's row and only surface on hover, so the board never
-   reflows and a resting card stays quiet. Same shared-slot swap the sidebar
-   already uses for its status dot / delete button (.task-trail). */
-.card .branch-slot {
-	position: relative;
-}
-.card .tags {
-	position: absolute;
-	inset: 0;
-	display: flex;
+/* Tags surface on hover inside the name's line, squeezing the name (which
+   ellipsizes), so a resting card stays quiet and hovering never reflows the
+   board. Zero height for the same reason as the sidebar's .row-tags: the chip
+   is taller than the name's line box. The right margin keeps them off the
+   agent ring in the corner. */
+.card .card-tags {
+	display: none;
+	flex: none;
+	gap: 3px;
+	height: 0;
 	align-items: center;
-	gap: 4px;
-	opacity: 0;
-	pointer-events: none;
-	transition: opacity 120ms ease;
+	margin-right: 14px;
 }
-.card:hover .branch-slot.has-tags .branch {
-	opacity: 0;
+.card:hover .card-tags {
+	display: flex;
 }
-.card:hover .branch-slot.has-tags .tags {
-	opacity: 1;
-}
-.tag {
+/* The one pill: a short name in a border, filled with a faint tint of that
+   same border colour. Neutral by default (task tags, "archived"); a colour
+   class sets --pill and the text follows it. */
+.pill {
+	--pill: var(--border);
+	flex: none;
 	font-size: 9.5px;
+	font-weight: 400;
 	line-height: 1;
 	letter-spacing: 0.02em;
 	padding: 3px 6px;
 	border-radius: 999px;
-	border: 1px solid var(--border);
-	background: var(--bg-elev-2);
+	border: 1px solid var(--pill);
+	background: color-mix(in srgb, var(--pill) 15%, transparent);
 	color: var(--text-dim);
 	white-space: nowrap;
+}
+.pill.green {
+	--pill: var(--green);
+	color: var(--green);
 }
 .card .meta {
 	display: flex;
@@ -863,7 +892,7 @@ input {
 	color: var(--red);
 }
 /* Why this card sits where it does (the triage reason). Sits between the
-   branch and the git counts, dimmer than both so it reads as a caption. */
+   name and the meta row, dimmer than both so it reads as a caption. */
 .card .triage {
 	margin-top: 6px;
 	font-size: 10.5px;
@@ -1002,6 +1031,50 @@ input {
 .panel .head .title {
 	font-size: 15px;
 	font-weight: 600;
+}
+/* The open task's branch: the one place it shows, and a click copies it. */
+.branch-line {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	font-size: 11.5px;
+	font-family: ui-monospace, Menlo, monospace;
+}
+.branch-copy {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	min-width: 0;
+	margin-left: -4px;
+	padding: 1px 4px;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+.branch-copy:hover {
+	background: var(--bg-elev-2);
+	color: var(--text);
+}
+.branch-copy .branch-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.branch-copy .copy-icon {
+	opacity: 0;
+}
+.branch-copy:hover .copy-icon,
+.branch-copy:focus-visible .copy-icon {
+	opacity: 1;
+}
+.branch-line .branch-base {
+	flex: none;
+	white-space: nowrap;
 }
 .panel .actions {
 	display: flex;
@@ -1203,7 +1276,8 @@ input {
 	display: flex;
 	flex-direction: column;
 }
-/* slim bar under each terminal: `+` menu (attach files, …) */
+/* slim bar under each terminal: `+` menu (attach files, …) and the agent's
+   skills on the left; grammar fixes and Done on the right. */
 .term-toolbar {
 	display: flex;
 	align-items: center;
@@ -1211,6 +1285,120 @@ input {
 	padding: 2px 6px;
 	border-top: 1px solid var(--border);
 	flex: none;
+	min-width: 0;
+}
+/* The right-hand group. When the bar runs out of room the pinned skills give
+   way first (they shrink far faster), since a grammar fix is the thing you
+   act on now. */
+.term-toolbar-end {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 0;
+	margin-left: auto;
+	flex: 0 1 auto;
+}
+
+/* Pinned skills: one compact button each, clipped rather than wrapped. */
+.skill-chips {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	flex: 0 100 auto;
+}
+/* How many times a pinned skill was sent in this session, after its name. */
+.skill-chip-sent {
+	margin-left: 3px;
+	color: var(--text-dim);
+	font-size: 10px;
+	font-variant-numeric: tabular-nums;
+}
+.skill-hint {
+	padding-left: 4px;
+	color: var(--text-dim);
+	font-size: 11px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* A row in the Skills menu: the command and what it does, with a pin toggle
+   that shows on hover (always, once pinned). */
+.skill-row {
+	display: flex;
+	align-items: center;
+	border-radius: 4px;
+}
+.skill-row:hover,
+.skill-row:focus-within {
+	background: var(--bg-elev-2);
+}
+.skill-row-main {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 1px;
+	flex: 1;
+	min-width: 0;
+	padding: 4px 8px;
+	border: none;
+	background: transparent;
+	color: var(--text);
+	text-align: left;
+	cursor: pointer;
+}
+.skill-row-main:hover {
+	background: transparent;
+}
+.skill-row-name {
+	font-family: ui-monospace, Menlo, monospace;
+	font-size: 11.5px;
+}
+.skill-row-desc {
+	width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-dim);
+	font-size: 11px;
+}
+.skill-row-uses {
+	flex: none;
+	padding: 0 4px;
+	color: var(--text-dim);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
+.skill-row-pin {
+	display: grid;
+	place-items: center;
+	flex: none;
+	margin-right: 4px;
+	padding: 4px;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text-dim);
+	opacity: 0;
+	cursor: pointer;
+}
+.skill-row:hover .skill-row-pin,
+.skill-row-pin:focus-visible,
+.skill-row-pin[data-pinned="true"] {
+	opacity: 1;
+}
+.skill-row-pin[data-pinned="true"] {
+	color: var(--text);
+}
+.skill-row-pin:hover {
+	color: var(--text);
+	background: rgba(255, 255, 255, 0.08);
+}
+.skill-empty {
+	padding: 8px;
+	font-size: 11.5px;
 }
 
 /* Grammar corrections for the prompt being typed: the first suggestion per
@@ -1231,10 +1419,11 @@ input {
 	margin-right: 2px;
 }
 
-/* "Done" action: compact so it clears the toolbar's top/bottom edges,
-   pushed to the far right of the bar. */
+/* "Done" action: compact so it clears the toolbar's top/bottom edges; it
+   closes the right-hand group, so it sits at the far right of the bar. */
 .term-done {
-	margin-left: auto;
+	margin-left: 4px;
+	flex: none;
 	padding: 1px 10px;
 	font-size: 11px;
 	font-weight: 500;
@@ -1259,11 +1448,19 @@ input {
 .diffstat.active {
 	background: var(--bg-elev-2);
 }
-.diffstat .add {
+.diffstat .add,
+.work-size .add {
 	color: var(--green);
 }
-.diffstat .del {
+.diffstat .del,
+.work-size .del {
 	color: var(--red);
+}
+/* A task's +N -M on the board card. */
+.work-size {
+	flex: none;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
 }
 
 /* changes view: GitHub-Desktop layout — file list left, diff right */
@@ -1467,6 +1664,22 @@ input {
 	grid-template-columns: minmax(0, 1fr);
 	grid-auto-rows: 100%;
 }
+/* Nothing live: the message is centered in the whole area. As a grid item it
+   would sit in the layout's first cell, up and to the left. */
+.mc.mc-none {
+	display: flex;
+}
+.mc .empty .navbtn {
+	margin-top: 10px;
+}
+/* The first open slot of a page that isn't full: framed like a tile, with
+   New task in its middle. */
+.mc .mc-slot {
+	border: 1px solid var(--bg-elev);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
 
 /* Pager overlay: sits translucent over the bottom-right corner, full opacity
    on hover. Clicking the chevrons (or Cmd/Ctrl+Alt+Up/Down) flips to the
@@ -1599,6 +1812,17 @@ input {
 	width: 20px;
 	height: 20px;
 }
+/* The name gives way first, so the size and PR stay readable on a narrow tile. */
+.mc .tile .bar .bar-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.mc .tile .bar .bar-pr {
+	flex: none;
+	white-space: nowrap;
+}
 /* The tile's +N -N, sized to the bar like the expand button. */
 .mc .tile .bar .diffstat {
 	padding: 1px 6px;
@@ -1725,15 +1949,6 @@ input {
 	color: var(--text);
 	font-size: 14px;
 }
-.branch-preview {
-	font-family: ui-monospace, Menlo, monospace;
-	font-size: 11.5px;
-	color: var(--text-dim);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	max-width: 200px;
-}
 .comp-prompt {
 	min-height: 96px;
 	resize: vertical;
@@ -1747,13 +1962,17 @@ input {
 	outline: none;
 }
 .dialog.composer.dropping {
-	outline: 2px dashed var(--accent, #6ea8fe);
+	outline: 2px dashed var(--text);
 	outline-offset: -4px;
 }
 .comp-files {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 6px;
+}
+.comp-note {
+	display: block;
+	font-size: 12px;
 }
 .file-chip {
 	display: inline-flex;
@@ -1818,6 +2037,13 @@ input {
 	opacity: 0.35;
 	cursor: default;
 }
+/* ⇧ held: the task will be created in the background, so the button turns
+   from "go there" (filled arrow) to "add" (outlined plus). */
+.comp-go.stay {
+	background: transparent;
+	color: var(--text);
+	box-shadow: inset 0 0 0 1.5px var(--text);
+}
 
 .dtitle {
 	font-size: 13px;
@@ -1864,6 +2090,45 @@ input {
 	background: #14201a;
 	border-color: var(--green);
 	color: #d7ffe6;
+}
+.toast-action {
+	margin-left: 14px;
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--text);
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+}
+.toast-action:hover {
+	text-decoration: underline;
+}
+
+/* A task created in the background (⇧⌘⏎) shows where it landed: its sidebar
+   row and board card blink a white ring twice, then settle. Inset, so a
+   column's overflow can't clip it. */
+.tasknode.just-started,
+.rail-tile.just-started,
+.card.just-started {
+	animation: just-started 0.8s ease-in-out 2;
+}
+@keyframes just-started {
+	0%,
+	100% {
+		box-shadow: inset 0 0 0 0 transparent;
+	}
+	50% {
+		box-shadow: inset 0 0 0 1.5px var(--text);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.tasknode.just-started,
+	.rail-tile.just-started,
+	.card.just-started {
+		animation: none;
+		box-shadow: inset 0 0 0 1px var(--text);
+	}
 }
 
 /* ---- ghost icon buttons (VSCode-style) ---- */
@@ -2173,24 +2438,22 @@ input {
 	background: var(--bg-elev-2);
 	border-left: 2px solid #fff;
 }
+/* Name, then the "recommended" pill when the sweep would take this one
+   (advice, not a filter). The name ellipsizes; the pill never shrinks.
+   Stretched because buttons align their children flex-start, which sized
+   this line to its content and pushed the pill off the row's edge. */
 .cleanup-item .tname {
+	display: flex;
+	align-self: stretch;
+	align-items: center;
+	gap: 6px;
 	font-size: 13px;
+}
+.cleanup-item .tname-text {
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-}
-.cleanup-item .tname {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-}
-/* The sweep would take this one — advice, not a filter. */
-.cleanup-item .rec-dot {
-	flex: none;
-	width: 5px;
-	height: 5px;
-	border-radius: 50%;
-	background: var(--green);
 }
 .cleanup-factors {
 	display: flex;
@@ -2215,24 +2478,13 @@ input {
 .cleanup-factors .pr.closed {
 	color: var(--red);
 }
-.cleanup-detail-head .rec-tag {
+.cleanup-detail-head .title .pill {
 	margin-left: 8px;
-	font-size: 10px;
-	font-weight: 400;
-	color: var(--green);
-	border: 1px solid var(--green);
-	border-radius: 4px;
-	padding: 1px 5px;
 	vertical-align: middle;
-}
-.cleanup-detail-head .rec-tag.archived {
-	color: var(--text-dim);
-	border-color: var(--border);
 }
 .cleanup-item .sub {
 	font-size: 11px;
 	color: var(--text-dim);
-	font-family: ui-monospace, Menlo, monospace;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -2534,7 +2786,8 @@ input {
 	border-color: var(--text-dim);
 }
 /* Sidebar LOOPS row for a paused loop. */
-.tasknode.loop-paused {
+.tasknode.loop-paused,
+.rail-tile.loop-paused {
 	opacity: 0.5;
 }
 /* A task on a box that isn't held: what the box showed last, not a live state,
@@ -2997,6 +3250,51 @@ input {
 	--pele-bg: var(--bg-elev-2);
 	--pele-surface: #26262e;
 }
+/* The Lead as the sidebar on the right (see .app.lead-open). */
+.lead-side {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	border-left: 1px solid var(--border);
+}
+.lead-side > .lead {
+	min-height: 0;
+}
+/* Its slim top strip: as tall as the top bar beside it, with the same bottom
+   border, so the two read as one header line; draggable like it. */
+.lead-side-head {
+	height: 44px;
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	/* 13px on the right centres the hide toggle where the top bar's show
+	   toggle sat (that one is 26px wide inside 14px of padding). */
+	padding: 0 13px 0 16px;
+	border-bottom: 1px solid var(--border);
+	-webkit-app-region: drag;
+}
+.lead-side-head .iconbtn {
+	-webkit-app-region: no-drag;
+}
+.lead-side-title {
+	flex: 1;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+}
+/* A narrow column: tighter gutters than the full-width chat. */
+.lead-side .lead-thread {
+	padding: 16px 16px 48px;
+}
+.lead-side .lead-asking {
+	padding: 12px 16px 16px;
+}
+.lead-side .lead-composer {
+	padding: 0 12px 12px;
+}
 .lead-head {
 	display: flex;
 	align-items: flex-start;
@@ -3099,6 +3397,11 @@ input {
 .md pre code {
 	background: none;
 	padding: 0;
+}
+/* An image in an agent's reply (often a full-size screenshot) fits the
+   message instead of running past it. */
+.md img {
+	max-width: 100%;
 }
 .md table {
 	border-collapse: collapse;
@@ -3295,6 +3598,15 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* A task the Lead names in its prose: the same chip, slimmed to 20px so it sits
+   in a 21px line of text, with air above and below so chips on consecutive
+   lines (a list of tasks) don't touch each other or the text around them. */
+.md .lead-chip {
+	padding: 1px 7px;
+	line-height: 16px;
+	margin: 2px 0;
+	vertical-align: middle;
+}
 .lead-chip-what {
 	color: var(--text-dim);
 }
@@ -3318,9 +3630,10 @@ input {
 }
 .lead-box {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: flex-end;
 	gap: 8px;
-	padding: 8px 8px 8px 14px;
+	padding: 8px;
 	background: #222228;
 	border-radius: 14px;
 	box-shadow:
@@ -3348,6 +3661,62 @@ input {
 	outline: none;
 }
 .lead-box textarea::placeholder {
+	color: var(--text-dim);
+}
+.lead-box.dropping {
+	box-shadow:
+		inset 0 0 0 1px var(--text),
+		0 4px 20px rgba(0, 0, 0, 0.25);
+}
+/* Attached files: a row of their own above the line being typed, and at the
+   top of the message they went with. */
+.lead-files {
+	flex-basis: 100%;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+}
+.lead-user .lead-files {
+	margin-bottom: 6px;
+}
+.lead-thumb {
+	position: relative;
+	display: inline-flex;
+	border-radius: 8px;
+	overflow: hidden;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+/* Scaled to fit, never cropped: a screenshot's edges are often the point. */
+.lead-thumb img {
+	display: block;
+	max-height: 64px;
+	max-width: 160px;
+}
+.lead-user .lead-thumb img {
+	max-height: 120px;
+	max-width: 240px;
+}
+.lead-thumb .fc-x {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	display: inline-flex;
+	padding: 2px;
+	border: none;
+	border-radius: 4px;
+	background: rgba(0, 0, 0, 0.6);
+	color: var(--text);
+	cursor: pointer;
+}
+.lead-file-size {
+	flex: none;
+	color: var(--text-dim);
+	opacity: 0.7;
+}
+.lead-attach-note {
+	padding: 0 4px 6px;
+	font-size: 12px;
 	color: var(--text-dim);
 }
 .lead-send {
@@ -3404,13 +3773,54 @@ input {
 	font-size: 11px;
 	color: var(--text-dim);
 }
-.question-dismiss {
+.question-dismiss,
+.question-fold {
 	flex: none;
 	width: 22px;
 	height: 22px;
 }
+/* Folded: only the head row, with the question's first line as the reminder.
+   Hidden, not unmounted, so a typed answer, the ticks and a page keep their state. */
+.question.collapsed > :not(.question-head) {
+	display: none;
+}
+.question-summary {
+	flex: 1;
+	min-width: 0;
+	padding: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-align: left;
+	font: inherit;
+	font-weight: 600;
+	color: var(--text);
+	background: none;
+	border: 0;
+	cursor: pointer;
+}
+.question-summary + .question-when {
+	margin-left: 0;
+}
 .question-text {
 	line-height: 1.5;
+}
+/* When the card is capped (the Lead's tray), the question gives up room and
+   scrolls, never the options or the reply box: those keep their size as flex
+   items, and only this scroller can shrink. A block, not a flex column, or the
+   page frame inside it (overflow: hidden) would be squashed instead of
+   scrolled. The floor keeps three lines readable (all of a shorter question),
+   and past it the card itself scrolls rather than clip what is below. */
+.question {
+	max-height: 100%;
+	overflow-y: auto;
+}
+.question-body {
+	min-height: calc-size(max-content, min(size, 4.5em));
+	overflow-y: auto;
+}
+.question-body > * + * {
+	margin-top: 8px;
 }
 .choices {
 	display: grid;
@@ -3482,7 +3892,14 @@ input {
 .checklist {
 	display: flex;
 	flex-direction: column;
+	min-height: 0;
+}
+.check-rows {
+	display: flex;
+	flex-direction: column;
 	gap: 2px;
+	min-height: calc-size(max-content, min(size, 4.5em));
+	overflow-y: auto;
 }
 .check-row {
 	display: flex;
@@ -3544,16 +3961,32 @@ input {
 	font-size: 12px;
 	color: var(--red);
 }
+/* Room for a question's options with a few of its lines above them: three
+   option cards with tradeoffs run ~310px, so the old 40% left the question
+   none. 60% of the Lead, and on a short window up to 460px as long as the
+   thread keeps ~3 lines (the 200px is the Lead's header, composer and those
+   lines). The title stays put; the list scrolls between cards, and each card
+   is at most the list's height, so a card in view shows its options. */
 .lead-asking {
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
 	width: 100%;
 	max-width: 776px;
-	max-height: 40vh;
-	overflow-y: auto;
+	max-height: max(60%, min(460px, 100% - 200px));
+	min-height: 0;
 	margin: 0 auto;
 	padding: 16px 20px 20px;
+}
+.lead-asking-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-height: 0;
+	overflow-y: auto;
+}
+.lead-asking-list > .question {
+	flex: none;
 }
 .lead-asking-title {
 	font-size: 11px;
@@ -3569,8 +4002,9 @@ input {
 	font-size: 12px;
 	color: var(--text-dim);
 }
+/* Below the terminal, at the bottom of the panel. */
 .panel-page {
-	padding: 8px 10px 0;
+	padding: 8px 10px;
 }
 
 /* ---- an agent's page (PageFrame): its own HTML in a sandboxed frame ---- */
@@ -3593,6 +4027,33 @@ input {
 }
 .page:not(.collapsed) > .page-head {
 	border-bottom: 1px solid var(--border);
+}
+/* The collapsed bar is one button. Hover and focus paint the .page, not the
+   button: a background on the button would cover the .page's inset border. */
+.page-open {
+	width: 100%;
+	padding: 0 12px 0 10px;
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+	text-align: left;
+	transition: color 0.1s;
+}
+.page-open:hover {
+	background: transparent;
+	color: var(--text);
+}
+.page-open:focus-visible {
+	outline: none;
+}
+.page.collapsed {
+	transition: background 0.1s;
+}
+.page.collapsed:has(> .page-open:hover) {
+	background: var(--bg-elev-2);
+}
+.page.collapsed:has(> .page-open:focus-visible) {
+	box-shadow: inset 0 0 0 1px var(--text);
 }
 .page-icon {
 	flex: none;
@@ -3671,6 +4132,44 @@ input {
 	background: transparent;
 	color: var(--text);
 }
+/* One reply of a stack (AgentStack): the body under the card's shared head. */
+.lead-agent-body {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.lead-agent-body[hidden] {
+	display: none;
+}
+.lead-agent-head > .lead-chip {
+	min-width: 0;
+}
+.lead-stack-nav {
+	display: flex;
+	flex-shrink: 0;
+	align-items: center;
+	gap: 2px;
+	margin-left: auto;
+}
+.lead-stack-nav .iconbtn {
+	width: 22px;
+	height: 22px;
+}
+/* A reply came in after the one being read. */
+.lead-stack-next {
+	position: relative;
+	display: inline-flex;
+}
+.lead-stack-dot {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--text);
+	pointer-events: none;
+}
 .lead-user-to {
 	margin-bottom: 2px;
 	font-size: 11px;
@@ -3678,18 +4177,6 @@ input {
 }
 .lead-notice .lead-chip {
 	margin-left: 8px;
-}
-.lead-waiting {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 8px;
-	font-size: 12px;
-	color: var(--text-dim);
-}
-.lead-waiting button {
-	font-size: 12px;
-	padding: 2px 8px;
 }
 /* A tool permission Claude Code asks for, as opposed to the agent's own question. */
 .question-kind {

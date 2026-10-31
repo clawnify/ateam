@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AteamDb, KanbanColumn, Task } from "@ateam/db";
 import { repo } from "@ateam/db";
+import { projectRepo } from "@ateam/protocol";
 import { signalsFromTask } from "../task-triage";
 import { validateSetStatus } from "./board-organizer";
 import { agentAlive } from "./session-liveness";
@@ -27,6 +28,10 @@ export interface BoardTaskView {
 	taskId: string;
 	name: string;
 	projectId: string;
+	/** The project's name. */
+	project: string;
+	/** What the project is a clone of (projectRepo): `owner/name`, or its path. */
+	repo: string;
 	column: KanbanColumn;
 	branch: string;
 	prNumber: number | null;
@@ -89,6 +94,8 @@ export async function buildBoardView(db: AteamDb, now = Date.now()): Promise<Boa
 				taskId: task.id,
 				name: task.name,
 				projectId: project.id,
+				project: project.name,
+				repo: projectRepo(project),
 				column: task.column,
 				branch: task.branch,
 				prNumber: task.prNumber ?? null,
@@ -141,7 +148,15 @@ export function applySetStatus(
 	});
 	if (!verdict.ok) return { ok: false, reason: verdict.reason };
 
-	repo.updateTask(db, task.id, { column: verdict.change.to });
+	// Held in Needs You while it waits on the user (repo.updateTask): no move to
+	// record, and the caller is told why.
+	if (repo.updateTask(db, task.id, { column: verdict.change.to })?.column !== verdict.change.to) {
+		return {
+			ok: false,
+			reason:
+				"the task is waiting on the user (an open question or an agent at a prompt), so it stays in needs_attention until they answer",
+		};
+	}
 	repo.recordBoardChange(db, {
 		taskId: task.id,
 		fromColumn: verdict.change.from,

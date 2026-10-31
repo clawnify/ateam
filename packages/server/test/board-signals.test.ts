@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import { type AteamDb, bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
-import { applySetStatus } from "../src/loops/board-signals";
+import { applySetStatus, buildBoardView } from "../src/loops/board-signals";
 
 function createTestDb(): AteamDb {
 	const sqlite = new Database(":memory:");
@@ -32,6 +32,34 @@ const onUpdated = (id: string) => updated.push(id);
 beforeEach(() => {
 	db = createTestDb();
 	updated = [];
+});
+
+describe("buildBoardView", () => {
+	it("names each task's project and the GitHub repo that project is a clone of", async () => {
+		const project = repo.upsertProject(db, {
+			repoPath: "/tmp/site",
+			name: "Site",
+			githubOwner: "acme",
+			githubName: "website",
+		});
+		const t = repo.createTask(db, {
+			projectId: project.id,
+			name: "a task",
+			slug: "a-task",
+			branch: "feat/a",
+			baseBranch: "main",
+			worktreePath: "/tmp/site/.ateam/worktrees/a",
+			column: "todo",
+		});
+		const view = await buildBoardView(db);
+		expect(view.tasks).toHaveLength(1);
+		expect(view.tasks[0]).toMatchObject({
+			taskId: t.id,
+			projectId: project.id,
+			project: "Site",
+			repo: "acme/website",
+		});
+	});
 });
 
 describe("applySetStatus — endpoint integration (guardrail + audit + db)", () => {
@@ -95,6 +123,30 @@ describe("applySetStatus — endpoint integration (guardrail + audit + db)", () 
 		expect(r.ok).toBe(true);
 		expect(repo.getTask(db, t.id)?.column).toBe("review");
 		expect(repo.listBoardChanges(db, { taskId: t.id })[0].source).toBe("session");
+	});
+
+	it("refuses a self-move while the task waits on the user, and records nothing", () => {
+		const t = makeTask(db, "running");
+		repo.createSession(db, {
+			taskId: t.id,
+			agentId: "claude",
+			terminalId: "term-self",
+			cwd: t.worktreePath,
+			pid: process.pid,
+		});
+		repo.updateTask(db, t.id, {
+			question: { id: "q1", askedAt: 1, text: "Deploy?", options: [], allowText: true },
+		});
+		const r = applySetStatus(
+			db,
+			{ taskId: t.id, to: "review", reason: "done", callerTerminalId: "term-self" },
+			onUpdated,
+		);
+		expect(r.ok).toBe(false);
+		expect(r.reason).toContain("waiting on the user");
+		expect(repo.getTask(db, t.id)?.column).toBe("needs_attention");
+		expect(repo.listBoardChanges(db, { taskId: t.id })).toHaveLength(0);
+		expect(updated).toEqual([]);
 	});
 
 	it("forbids a session from moving a DIFFERENT task", () => {

@@ -5,17 +5,34 @@ import type { Readable, Writable } from "node:stream";
 import type { ClientFrame, ClientTransport, ServerFrame } from "@ateam/protocol";
 import type { ServerTransport } from "../rpc";
 
+const NEWLINE = 0x0a;
+
+/**
+ * Each line, decoded once it is whole. A frame can run to megabytes (a file
+ * sent to a box arrives as one line, in many chunks), so a chunk with no
+ * newline is only kept, and the kept chunks are joined once when the line
+ * ends: growing one string and searching it from the start on every chunk took
+ * 1.5 s for a 25 MB file, all of it with every other frame on this connection
+ * waiting. Most chunks instead carry many small frames (terminal output), so a
+ * chunk is decoded once, up to its last newline, and then split: joining and
+ * decoding each line on its own was about 5x slower for 80-byte frames. A
+ * newline byte is never part of a UTF-8 character, so a character whose bytes
+ * straddle two chunks stays intact.
+ */
 function readLines(readable: Readable, onLine: (line: string) => void): void {
-	let buf = "";
-	readable.on("data", (chunk: Buffer | string) => {
-		buf += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-		let nl: number;
-		// biome-ignore lint/suspicious/noAssignInExpressions: stream framing
-		while ((nl = buf.indexOf("\n")) !== -1) {
-			const line = buf.slice(0, nl);
-			buf = buf.slice(nl + 1);
-			if (line.trim()) onLine(line);
+	// The bytes after the last newline, the start of a line not yet ended.
+	let pending: Buffer[] = [];
+	readable.on("data", (data: Buffer | string) => {
+		const chunk = typeof data === "string" ? Buffer.from(data, "utf8") : data;
+		const last = chunk.lastIndexOf(NEWLINE);
+		if (last === -1) {
+			pending.push(chunk);
+			return;
 		}
+		const head = chunk.subarray(0, last);
+		const text = (pending.length ? Buffer.concat([...pending, head]) : head).toString("utf8");
+		pending = last + 1 < chunk.length ? [chunk.subarray(last + 1)] : [];
+		for (const line of text.split("\n")) if (line.trim()) onLine(line);
 	});
 }
 

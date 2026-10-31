@@ -44,7 +44,16 @@ function fakeRouter(overrides: Record<string, (args: unknown[]) => unknown> = {}
 	const handle = async (method: string, args: unknown[]) => {
 		calls.push({ method, args });
 		if (overrides[method]) return overrides[method](args);
-		if (method === CH.projectsList) return [{ id: "p1", name: "ateam" }];
+		if (method === CH.projectsList)
+			return [
+				{
+					id: "p1",
+					name: "ateam",
+					repoPath: "/Users/me/Codes/ateam",
+					githubOwner: "clawnify",
+					githubName: "ateam",
+				},
+			];
 		if (method === CH.tasksList) return TASKS;
 		if (method === CH.settingsGet) return { settings: { engine: { defaultAgentId: "claude" } } };
 		if (method === CH.tasksCreate)
@@ -56,12 +65,12 @@ function fakeRouter(overrides: Record<string, (args: unknown[]) => unknown> = {}
 }
 
 describe("lead tools", () => {
-	it("get_board leaves merged tasks out and names the machine", async () => {
+	it("get_board leaves merged tasks out and names the repo and the machine", async () => {
 		const r = fakeRouter();
 		const tools = createLeadTools({ handle: r.handle, machineOf: () => "hetzner" });
 		const res = await tools.call("get_board", {});
 		const text = res?.text ?? "";
-		expect(text).toContain("ateam (hetzner, project p1)");
+		expect(text).toContain("ateam (repo clawnify/ateam, hetzner, project p1)");
 		expect(text).toContain("t1 | fix login | review | idle | claude");
 		expect(text).not.toContain("old work");
 	});
@@ -85,6 +94,72 @@ describe("lead tools", () => {
 		expect(res).toEqual({ text: "sent", isError: false });
 		const send = r.calls.find((c) => c.method === CH.peersSendFromLead);
 		expect(send?.args[0]).toEqual({ taskId: "t1", body: "rebase" });
+	});
+
+	it("create_task sends attached files to the project's machine before the task exists", async () => {
+		const r = fakeRouter();
+		const delivered: { owner: string; paths: string[] }[] = [];
+		const tools = createLeadTools({
+			handle: r.handle,
+			machineOf: () => "hetzner",
+			files: {
+				resolve: (paths) =>
+					paths.every((p) => p.startsWith("/att/")) ? paths : "not attached in this chat",
+				deliver: async (owner, paths) => {
+					delivered.push({ owner, paths });
+					return { paths: paths.map((p) => `/box${p}`) };
+				},
+			},
+		});
+		const res = await tools.call("create_task", {
+			project: "ateam",
+			name: "new",
+			prompt: "fix what the screenshot shows",
+			files: ["/att/1/shot.png"],
+		});
+		expect(res?.isError).toBeFalsy();
+		expect(res?.text).toContain("working on your prompt. It has 1 attached file.");
+		expect(delivered).toEqual([{ owner: "p1", paths: ["/att/1/shot.png"] }]);
+		const spawn = r.calls.find((c) => c.method === CH.ptySpawnAgent);
+		expect(spawn?.args[0]).toMatchObject({ files: ["/box/att/1/shot.png"] });
+	});
+
+	it("create_task starts nothing when a file isn't attached here or can't reach the box", async () => {
+		const r = fakeRouter();
+		const files = {
+			resolve: (paths: string[]) =>
+				paths.every((p) => p.startsWith("/att/")) ? paths : "not attached in this chat",
+			deliver: async () => ({ error: "big.mov is 40 MB" }),
+		};
+		const tools = createLeadTools({ handle: r.handle, machineOf: () => null, files });
+		const args = { project: "ateam", name: "new", prompt: "x" };
+		const outside = await tools.call("create_task", { ...args, files: ["/Users/me/.ssh/id"] });
+		expect(outside).toEqual({ text: "not attached in this chat", isError: true });
+		const tooBig = await tools.call("create_task", { ...args, files: ["/att/1/big.mov"] });
+		expect(tooBig).toEqual({ text: "big.mov is 40 MB", isError: true });
+		expect(r.calls.some((c) => c.method === CH.tasksCreate)).toBe(false);
+	});
+
+	it("send_message lists attached files under the message, as the task's machine sees them", async () => {
+		const r = fakeRouter({ [CH.peersSendFromLead]: () => ({ ok: true, reason: "sent" }) });
+		const tools = createLeadTools({
+			handle: r.handle,
+			machineOf: () => null,
+			files: {
+				resolve: (paths) => paths,
+				deliver: async (owner, paths) => ({ paths: paths.map((p) => `${owner}:${p}`) }),
+			},
+		});
+		await tools.call("send_message", {
+			task: "t1",
+			message: "see spec ",
+			files: ["/att/spec.pdf"],
+		});
+		const send = r.calls.find((c) => c.method === CH.peersSendFromLead);
+		expect(send?.args[0]).toEqual({
+			taskId: "t1",
+			body: "see spec\n\nAttached files:\n- t1:/att/spec.pdf",
+		});
 	});
 
 	it("says a box needs an update when its engine predates the Lead", async () => {
@@ -144,6 +219,66 @@ describe("lead tools", () => {
 		const working = (await tools.call("get_board", { filter: "working" }))?.text ?? "";
 		expect(working).toContain("t3 | busy");
 		expect(working).not.toContain("t1 | fix login");
+	});
+
+	it("lists the latest activity first and says how long ago each task changed", async () => {
+		const now = Date.now();
+		const tasks = [
+			{ ...TASKS[0], id: "t4", name: "made monday", lastEventAt: now - 3 * 86_400_000 },
+			{ ...TASKS[0], id: "t5", name: "just finished", lastEventAt: now - 5 * 60_000 },
+			{ ...TASKS[0], id: "t6", name: "never ran", lastEventAt: null },
+		];
+		const r = fakeRouter({ [CH.tasksList]: () => tasks });
+		const tools = createLeadTools({ handle: r.handle, machineOf: () => null });
+		const rows = ((await tools.call("get_board", {}))?.text ?? "")
+			.split("\n")
+			.filter((l) => / \| /.test(l));
+		expect(rows).toEqual([
+			"id | name | column | state | agent | updated",
+			"t5 | just finished | review | idle | claude | 5m ago",
+			"t4 | made monday | review | idle | claude | 3d ago",
+			"t6 | never ran | review | idle | claude | -",
+		]);
+	});
+
+	it("recent lists the newest tasks across projects, merged ones included", async () => {
+		const now = Date.now();
+		const byProject: Record<string, unknown[]> = {
+			p1: [
+				{ ...TASKS[1], id: "a-old", name: "a old", lastEventAt: now - 2 * 86_400_000 },
+				{ ...TASKS[1], id: "a-merged", name: "a merged", lastEventAt: now - 2 * 60_000 },
+			],
+			p2: [
+				{ ...TASKS[0], id: "b-new", name: "b new", projectId: "p2", lastEventAt: now - 1_000 },
+				{ ...TASKS[0], id: "b-mid", name: "b mid", projectId: "p2", lastEventAt: now - 3_600_000 },
+			],
+		};
+		const r = fakeRouter({
+			[CH.projectsList]: () => [
+				{
+					id: "p1",
+					name: "ateam",
+					repoPath: "/r/ateam",
+					githubOwner: "clawnify",
+					githubName: "ateam",
+				},
+				{ id: "p2", name: "site", repoPath: "/r/site", githubOwner: null, githubName: null },
+			],
+			[CH.tasksList]: ([projectId]) => byProject[String(projectId)] ?? [],
+		});
+		const tools = createLeadTools({ handle: r.handle, machineOf: () => null });
+		const text = (await tools.call("get_board", { filter: "recent", limit: 3 }))?.text ?? "";
+		// The project with the newest task comes first; the oldest task is past the limit.
+		expect(text.indexOf("site (")).toBeLessThan(text.indexOf("ateam ("));
+		// A project with no GitHub remote names its clone's path as the repo.
+		expect(text).toContain("site (repo /r/site, this Mac, project p2)");
+		expect(text).toContain("b-new | b new | review | idle | claude | just now");
+		expect(text).toContain("a-merged | a merged | merged | not_running | codex | 2m ago");
+		expect(text).toContain("b-mid | b mid");
+		expect(text).not.toContain("a old");
+		// Without recent, merged work stays out.
+		const all = (await tools.call("get_board", {}))?.text ?? "";
+		expect(all).not.toContain("a merged");
 	});
 
 	it("looks a task up by id on its own engine, without listing the board", async () => {
@@ -264,6 +399,27 @@ describe("LeadSession", () => {
 		again.session.send("and now?");
 		const args = (again.procs[0] as FakeClaude).args;
 		expect(args[args.indexOf("--resume") + 1]).toBe("sess-1");
+	});
+
+	it("tells the Lead where attached files are, and shows them on the message", async () => {
+		const { session, procs } = makeSession();
+		const file = { path: "/lead/attachments/a/shot.png", name: "shot.png", size: 3, image: true };
+		session.send("what is wrong here?", [file]);
+		session.send("", [file]);
+		await tick();
+		const p = procs[0] as FakeClaude;
+		expect(p.written[0]).toMatchObject({
+			message: {
+				content: "what is wrong here?\n\nAttached files:\n- /lead/attachments/a/shot.png",
+			},
+		});
+		expect(p.written[1]).toMatchObject({
+			message: { content: "Attached files:\n- /lead/attachments/a/shot.png" },
+		});
+		const users = session.snapshot().items.filter((i) => i.kind === "user");
+		expect(users[0]).toMatchObject({ text: "what is wrong here?", files: [file] });
+		session.send("   ");
+		expect(session.snapshot().items.filter((i) => i.kind === "user")).toHaveLength(2);
 	});
 
 	it("runs as the user's own Claude Code, asking the chat about permissions", () => {

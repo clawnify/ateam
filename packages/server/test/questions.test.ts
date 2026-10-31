@@ -5,7 +5,7 @@ import { bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
 import { formatForRecipient, type OutsideSender, type SendResult } from "../src/peer-messages";
-import { answerQuestion, applyAskUser, columnWithQuestion, validateAsk } from "../src/questions";
+import { answerQuestion, applyAskUser, validateAsk } from "../src/questions";
 
 let db: AteamDb;
 let task: Task;
@@ -75,8 +75,11 @@ describe("asking and answering", () => {
 			options: ["Deploy", "Wait"],
 			allowText: true,
 		});
-		expect(columnWithQuestion(t, "review")).toBe("needs_attention");
-		expect(columnWithQuestion(t, "running")).toBe("running");
+		// The agent's Stop, another agent's message waking it, its exit: none
+		// moves the card while the question is open.
+		for (const column of ["review", "running", "todo"] as const) {
+			expect(repo.updateTask(db, task.id, { column })?.column).toBe("needs_attention");
+		}
 	});
 
 	it("delivers the answer as a message from the user, then clears the question", () => {
@@ -125,6 +128,30 @@ describe("asking and answering", () => {
 		expect(sent).toHaveLength(0);
 		expect(pending()).toBeNull();
 		expect(repo.getTask(db, task.id)?.column).toBe("review");
+	});
+
+	it("refuses an answer to a permission prompt no hook holds, but still dismisses it", () => {
+		// The card a previous process filed: its hook request died with it.
+		for (const kind of ["permission", "askUserQuestion"] as const) {
+			repo.updateTask(db, task.id, {
+				question: {
+					id: kind,
+					askedAt: 1,
+					text: "Use X?",
+					options: ["Allow"],
+					allowText: false,
+					kind,
+				},
+				column: "needs_attention",
+			});
+			expect(() =>
+				answerQuestion(db, send, { taskId: task.id, questionId: kind, answer: "Allow" }, notify),
+			).toThrow("no longer waiting");
+			expect(pending()?.id).toBe(kind);
+			answerQuestion(db, send, { taskId: task.id, questionId: kind, answer: null }, notify);
+			expect(pending()).toBeNull();
+		}
+		expect(sent).toHaveLength(0);
 	});
 });
 

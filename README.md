@@ -216,17 +216,26 @@ bun run --filter @ateam/desktop build      # production bundle
 Working: project registration (with optional `git init` for plain folders),
 worktree-per-task lifecycle, commit/push/update/merge, a GitHub-style changes
 view (aggregate diffstat → file list + side-by-side diffs), prompt-first task
-composer (pick the agent and type the first instruction in one step) reused for
-extra sessions inside an existing task, many terminals per task as tabs (agent
+composer (pick the agent and type the first instruction in one step; ⌘⏎ opens
+the new task, ⇧⌘⏎ starts it in the background and leaves you where you are, as
+does long-pressing send on the phone) reused for extra sessions inside an
+existing task, many terminals per task as tabs (agent
 sessions or plain shells, side by side), agent spawning in PTYs (Claude Code,
-OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection,
+OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection
+(each column lists its most recently active task first),
 Mission Control grid (one tile per task, its sessions as read-only tabs; tiles
 keep their own order, drag to swap them across pages, Sync to take the sidebar's;
 an Auto layout that fits the live terminals each time it opens and never
 re-lays them out while you watch; each tile's +N -N opens its changes and diffs
 in place of its terminal),
 collapsible sidebar rail, image drag-drop & paste into
-agent terminals, session search (the topbar box answers in a popover listing
+agent terminals, skills on each agent terminal's toolbar (a menu of every skill
+that agent can invoke, read from its own skill folders on the machine it runs
+on, plus pinned buttons seeded from the ones you type most, each marked with how
+many times you already sent it in that terminal's conversation; a click puts
+`/name`, or Codex's `$name`, in front of the prompt you are typing and leaves
+Enter to you; "Add skill…" links a skill folder into `~/.claude/skills` and
+`~/.agents/skills` so edits reach every agent), session search (the topbar box answers in a popover listing
 matching tasks and the past sessions that discussed them, with an AI row that
 finds a session from a description of the work, reading Claude Code / Codex /
 OpenCode transcripts),
@@ -236,12 +245,17 @@ recommended), idle-task archiving (an open task untouched for 30 days, set in
 Settings, leaves the board, the phone and the agents' board tools but keeps its
 worktree; any activity in it, or Unarchive in Clean up, brings it back), the
 Lead chat (one conversation that reads the board on this Mac and every box,
-starts tasks, messages their agents and brings their replies back; it runs as
+briefs you on the latest tasks, starts tasks, messages their agents and brings
+their replies back, with every task it names a chip that opens it; it runs as
 your own Claude Code, with your skills, plugins and MCP servers, and asks for
-its permissions in the chat), questions agents ask you with the `ask_user`
+its permissions in the chat; it has its own tab, or sits as a sidebar on the
+right beside the board; files you attach or paste there can go to a new task or
+to a running one, copied to its box when it runs on one, up to 10 MB a file),
+questions agents ask you with the `ask_user`
 board tool (option cards with tradeoffs, or a checklist, answered from the
 board, the task panel or the Lead chat), Claude Code's permission prompts
 answered from Ateam (Allow, Always allow, Deny) as well as in the terminal,
+and so are its own questions (AskUserQuestion, one card per question),
 agent pages (HTML an agent makes for you with `show_page`, such as a dashboard
 or a comparison, drawn in a sandboxed frame; a question can carry one whose
 buttons answer it), and signed/notarized builds

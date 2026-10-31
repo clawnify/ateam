@@ -3,9 +3,8 @@
 // window wide and tall), "main" gives the first tile the full-height left half
 // and stacks the next two in the right half, "split" lays them side-by-side at
 // full window height, "stack" stacks them full-width, "grid3x2" is three
-// columns by two rows (and tucks the sidebar into its rail while shown, since
-// a third column is only readable with the width back). Extra tiles go to
-// further pages, flipped via the bottom-right pager or Ctrl/Cmd+Up/Down.
+// columns by two rows. Extra tiles go to further pages, flipped via the
+// bottom-right pager or Ctrl/Cmd+Up/Down.
 export type McLayout = "grid" | "grid3x2" | "main" | "split" | "stack";
 // What a project's layout is set to: one of the layouts, or "auto", which picks
 // the one that fits the live tiles each time Mission Control opens.

@@ -6,12 +6,14 @@
 import {
 	CH,
 	type ProjectDTO,
+	projectRepo,
 	type SettingsResult,
 	type TaskDTO,
 	type TaskLastReplyDTO,
 	type TaskQuestionDTO,
 } from "@ateam/protocol";
 import type { McpToolResult, McpToolServer } from "@ateam/server";
+import { byLatestActivity, relativeAge } from "../../shared/recency";
 
 export interface LeadToolDeps {
 	/** Route one engine call (the aggregate router's handle). */
@@ -20,7 +22,21 @@ export interface LeadToolDeps {
 	machineOf(id: string): string | null;
 	/** A task the Lead started, messaged or answered: its replies come back to the chat. */
 	onTouch?(task: TaskDTO): void;
+	/** Files the user attached in the chat, and getting them to a task's machine. */
+	files?: {
+		/** These paths if each is a file attached in the chat, else why not. */
+		resolve(paths: string[]): string[] | string;
+		/** The paths the agent on `ownerId`'s machine reads them at (deliver-files.ts). */
+		deliver(ownerId: string, paths: string[]): Promise<{ paths: string[] } | { error: string }>;
+	};
 }
+
+const FILES_PARAM = {
+	type: "array",
+	items: { type: "string" },
+	description:
+		"Paths from the user's Attached files in this chat, to hand to the agent. Only files attached here can be sent; a task on a box gets its own copy.",
+} as const;
 
 /** The MCP server name; Claude Code prefixes each tool with mcp__<name>__. */
 export const LEAD_MCP_NAME = "ateam_lead";
@@ -29,14 +45,20 @@ const TOOLS = [
 	{
 		name: "get_board",
 		description:
-			"List the in-play tasks (merged ones are left out) on this Mac and every connected box, one line each: id | name | board column | state (working, needs_you, idle or not_running) | agent, plus what it waits for or asks the user. Filter to what you need: needs_you for what is waiting on the user, working for what is running. For what a task was asked to do and its last reply, use read_task.",
+			"List the tasks on this Mac and every connected box, grouped under each project's name, the repo it is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its machine and its id; one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus what it waits for or asks the user. Filter to what you need: all (the default) is every task still in play, merged ones left out; needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project, merged ones included (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.",
 		inputSchema: {
 			type: "object",
 			properties: {
 				filter: {
 					type: "string",
-					enum: ["all", "needs_you", "working"],
-					description: "all (default), needs_you, or working.",
+					enum: ["all", "needs_you", "working", "recent"],
+					description: "all (default), needs_you, working, or recent.",
+				},
+				limit: {
+					type: "integer",
+					minimum: 1,
+					maximum: 50,
+					description: "With recent: how many of the newest tasks to list (default 10).",
 				},
 				project: {
 					type: "string",
@@ -72,6 +94,7 @@ const TOOLS = [
 					description:
 						"Run without permission prompts. Only when the user asked for it: otherwise the agent stops and asks the user before risky actions.",
 				},
+				files: FILES_PARAM,
 			},
 			required: ["project", "name", "prompt"],
 			additionalProperties: false,
@@ -89,6 +112,7 @@ const TOOLS = [
 					type: "string",
 					description: "What to tell the agent, at most 8000 characters.",
 				},
+				files: FILES_PARAM,
 			},
 			required: ["task", "message"],
 			additionalProperties: false,
@@ -228,30 +252,60 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 	}
 
 	async function getBoard(args: Record<string, unknown>): Promise<McpToolResult> {
-		const filter = args.filter === "needs_you" || args.filter === "working" ? args.filter : "all";
+		const filter =
+			args.filter === "needs_you" || args.filter === "working" || args.filter === "recent"
+				? args.filter
+				: "all";
 		const only = typeof args.project === "string" ? args.project.trim().toLowerCase() : "";
 		const keep = (t: TaskDTO) => {
-			if (t.column === "merged") return false;
+			// Merged work is out of play, but it is news: a briefing on the latest
+			// tasks includes what just merged.
+			if (t.column === "merged") return filter === "recent";
 			const state = agentState(t);
 			if (filter === "needs_you")
 				return t.column === "needs_attention" || state === "needs_you" || !!t.question;
 			if (filter === "working") return state === "working" || t.column === "running";
 			return true;
 		};
-		const projects = (await board()).filter(
-			({ project }) => !only || project.id === only || project.name.toLowerCase() === only,
-		);
+		const groups = (await board())
+			.filter(({ project }) => !only || project.id === only || project.name.toLowerCase() === only)
+			.map(({ project, tasks }) => ({
+				project,
+				rows: tasks ? tasks.filter(keep).sort(byLatestActivity) : null,
+			}));
+		// The newest few across every project and machine, not a few per project.
+		if (filter === "recent") {
+			const limit =
+				typeof args.limit === "number" && args.limit >= 1
+					? Math.min(Math.floor(args.limit), 50)
+					: 10;
+			const newest = new Set(
+				groups
+					.flatMap((g) => g.rows ?? [])
+					.sort(byLatestActivity)
+					.slice(0, limit)
+					.map((t) => t.id),
+			);
+			for (const g of groups) if (g.rows) g.rows = g.rows.filter((t) => newest.has(t.id));
+		}
+		// The project with the latest activity first, one that can't be reached last.
+		const latest = (g: (typeof groups)[number]) => (g.rows ? (g.rows[0]?.lastEventAt ?? 0) : -1);
+		groups.sort((a, b) => latest(b) - latest(a));
+		const now = Date.now();
+		const updated = (t: TaskDTO) => {
+			const age = relativeAge(t.lastEventAt, now);
+			return age == null ? "-" : age === "just now" ? age : `${age} ago`;
+		};
 		// One line per task, not JSON: every board the Lead reads stays in its
 		// context, and repeated keys were half of it (14k chars down to 7k on a
 		// 59-task board).
-		const lines = ["id | name | column | state | agent"];
-		for (const { project, tasks } of projects) {
-			const where = `${project.name} (${machineLabel(deps.machineOf(project.id))}, project ${project.id})`;
-			if (tasks == null) {
+		const lines = ["id | name | column | state | agent | updated"];
+		for (const { project, rows } of groups) {
+			const where = `${project.name} (repo ${projectRepo(project)}, ${machineLabel(deps.machineOf(project.id))}, project ${project.id})`;
+			if (rows == null) {
 				lines.push("", `${where}: unreachable right now`);
 				continue;
 			}
-			const rows = tasks.filter(keep);
 			if (rows.length === 0) continue;
 			lines.push("", where);
 			for (const t of rows) {
@@ -259,12 +313,32 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 					t.waitingReason ? `waits for: ${t.waitingReason}` : "",
 					t.question ? `asks the user: ${firstLine(t.question.text)}` : "",
 				].filter(Boolean);
-				lines.push([t.id, t.name, t.column, agentState(t), t.agentId ?? "-", ...extra].join(" | "));
+				lines.push(
+					[t.id, t.name, t.column, agentState(t), t.agentId ?? "-", updated(t), ...extra].join(
+						" | ",
+					),
+				);
 			}
 		}
 		if (lines.length === 1) lines.push("", "Nothing matches.");
 		return { text: lines.join("\n") };
 	}
+
+	/** Attached files for the machine `ownerId` is on: its paths for them, or why not. */
+	async function filesFor(
+		ownerId: string,
+		asked: unknown,
+	): Promise<{ paths: string[] } | { error: string }> {
+		const paths = Array.isArray(asked) ? asked.map(String).filter(Boolean) : [];
+		if (!paths.length) return { paths: [] };
+		if (!deps.files) return { error: "Attaching files isn't available here." };
+		const attached = deps.files.resolve(paths);
+		if (typeof attached === "string") return { error: attached };
+		return deps.files.deliver(ownerId, attached);
+	}
+
+	const filesNote = (n: number) =>
+		n ? ` It has ${n === 1 ? "1 attached file" : `${n} attached files`}.` : "";
 
 	async function createTask(args: Record<string, unknown>): Promise<McpToolResult> {
 		const prompt = String(args.prompt ?? "").trim();
@@ -274,6 +348,10 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		if (!prompt || !name) return { text: "project, name and prompt are required", isError: true };
 		const project = await findProject(String(args.project ?? ""));
 		if (typeof project === "string") return { text: project, isError: true };
+		// Before the task exists: one that can't get its files is not started at
+		// all. The project's machine is the one the task will be created on.
+		const files = await filesFor(project.id, args.files);
+		if ("error" in files) return { text: files.error, isError: true };
 		const agentId =
 			typeof args.agent === "string" && args.agent
 				? args.agent
@@ -282,7 +360,13 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		deps.onTouch?.(task);
 		try {
 			await call(CH.ptySpawnAgent, [
-				{ taskId: task.id, agentId, prompt, yolo: args.yolo === true },
+				{
+					taskId: task.id,
+					agentId,
+					prompt,
+					yolo: args.yolo === true,
+					...(files.paths.length ? { files: files.paths } : {}),
+				},
 			]);
 		} catch (e) {
 			return {
@@ -291,14 +375,19 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 			};
 		}
 		return {
-			text: `Started task "${task.name}" (${task.id}) in ${project.name} on ${machineLabel(deps.machineOf(project.id))}, with ${agentId} working on your prompt.`,
+			text: `Started task "${task.name}" (${task.id}) in ${project.name} on ${machineLabel(deps.machineOf(project.id))}, with ${agentId} working on your prompt.${filesNote(files.paths.length)}`,
 		};
 	}
 
 	async function sendMessage(args: Record<string, unknown>): Promise<McpToolResult> {
-		const body = String(args.message ?? "");
+		let body = String(args.message ?? "");
 		const task = await findTask(String(args.task ?? ""));
 		if (typeof task === "string") return { text: task, isError: true };
+		const files = await filesFor(task.id, args.files);
+		if ("error" in files) return { text: files.error, isError: true };
+		// The same footer an agent's first prompt gets (server sessions.ts).
+		if (files.paths.length)
+			body = `${body.trim()}\n\nAttached files:\n${files.paths.map((p) => `- ${p}`).join("\n")}`;
 		try {
 			const res = await call<{ ok: boolean; reason: string }>(CH.peersSendFromLead, [
 				{ taskId: task.id, body },

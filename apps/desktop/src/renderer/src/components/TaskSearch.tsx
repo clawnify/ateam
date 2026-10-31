@@ -38,6 +38,7 @@ export function TaskSearch({
 	onQuery,
 	projectIds,
 	tasks,
+	describeTask,
 	onOpenTask,
 	onOpenSession,
 }: {
@@ -48,6 +49,9 @@ export function TaskSearch({
 	projectIds: string[];
 	/** Tasks on the active board, for the instant local name match. */
 	tasks: TaskDTO[];
+	/** A task row's second line (where it sits, how long ago it moved). The
+	 *  branch matches a search but is not shown: it is the name as a slug. */
+	describeTask: (task: TaskDTO) => string;
 	onOpenTask: (task: TaskDTO) => void;
 	onOpenSession: (hit: SessionHitDTO) => void;
 }) {
@@ -109,14 +113,14 @@ export function TaskSearch({
 				kind: "result",
 				key: task.id,
 				name: task.name,
-				subtitle: task.branch,
-				meta: "",
+				subtitle: "",
+				meta: describeTask(task),
 				open: () => onOpenTask(task),
 			});
 		}
 		out.push({ kind: "ai" });
 		return out;
-	}, [open, aiHits, trimmed, tasks, onOpenTask, onOpenSession]);
+	}, [open, aiHits, trimmed, tasks, describeTask, onOpenTask, onOpenSession]);
 
 	// Highlight, scoped to the list it was chosen from: a new question, or the
 	// AI's answer replacing the task matches, starts back at the top. Clamped
@@ -230,7 +234,7 @@ export function TaskSearch({
 								onClick={() => activate(row)}
 							>
 								<span className="ts-hit-name">{row.name}</span>
-								<span className="ts-hit-why">{row.subtitle}</span>
+								{row.subtitle && <span className="ts-hit-why">{row.subtitle}</span>}
 								{row.meta && <span className="ts-hit-meta">{row.meta}</span>}
 							</button>
 						),

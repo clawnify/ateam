@@ -12,10 +12,11 @@
  * the user thought it over is resumed with the answer.
  *
  * One question per task: a new ask replaces the pending one. While one is
- * pending the card stays in Needs You, even across the agent's Stop.
+ * pending the card stays in Needs You, whatever moves it (a Stop, another
+ * agent's message waking it, its agent exiting): repo.updateTask holds it there.
  */
 import { randomUUID } from "node:crypto";
-import { type AteamDb, type QuestionChoice, repo, type Task, type TaskQuestion } from "@ateam/db";
+import { type AteamDb, type QuestionChoice, repo, type TaskQuestion } from "@ateam/db";
 import { savePage, titleFrom, validatePage } from "./pages";
 import type { OutsideSender, SendResult } from "./peer-messages";
 
@@ -163,12 +164,6 @@ export function applyAskUser(
 	};
 }
 
-/** The column a hook event lands a card in, given a pending question: a Stop
- *  must not bury the question in Review. */
-export function columnWithQuestion<C extends string>(task: Task, column: C): C | "needs_attention" {
-	return task.question && column === "review" ? "needs_attention" : column;
-}
-
 /**
  * Answer the pending question (or dismiss it with null). The answer is
  * delivered before the question is cleared, so a refused delivery (the rate
@@ -198,6 +193,11 @@ export function answerQuestion(
 		notify(task.id);
 		return;
 	}
+	// A prompt Claude asked through its hook is answered by resolving that hook
+	// (permissions.ts). Reaching here, nothing holds it any more: only the
+	// terminal can answer it, though the card can still be dismissed above.
+	if (q.kind === "permission" || q.kind === "askUserQuestion")
+		throw new Error("That prompt is no longer waiting. Answer it in the task's terminal.");
 	// The agent has its question in its own context: quoting its first line is
 	// enough to say which one, and keeps a long question plus a long answer
 	// under the message cap.
