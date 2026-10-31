@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, notExists } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, notExists, sql } from "drizzle-orm";
 import {
 	agentEvents,
 	agentSessions,
@@ -166,6 +166,23 @@ export const repo = {
 		db.update(tasks)
 			.set({ agentStatus: "stopped" })
 			.where(and(eq(tasks.agentStatus, "awaiting_input"), notExists(open)))
+			.run();
+	},
+
+	/**
+	 * Take down permission prompt cards a previous process filed. Only the
+	 * process holding Claude's hook request can answer one, so at startup each
+	 * one is a card nothing can answer, often over a terminal that is gone (a
+	 * quit on macOS never runs the engine's stop, which would have cleared it).
+	 * The card stays where it is on the board: if the agent survived, its own
+	 * dialog is still up in the terminal.
+	 */
+	clearStalePermissionPrompts(db: AteamDb) {
+		db.update(tasks)
+			.set({ question: null })
+			.where(
+				inArray(sql`json_extract(${tasks.question}, '$.kind')`, ["permission", "askUserQuestion"]),
+			)
 			.run();
 	},
 

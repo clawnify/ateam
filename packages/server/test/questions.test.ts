@@ -129,6 +129,30 @@ describe("asking and answering", () => {
 		expect(pending()).toBeNull();
 		expect(repo.getTask(db, task.id)?.column).toBe("review");
 	});
+
+	it("refuses an answer to a permission prompt no hook holds, but still dismisses it", () => {
+		// The card a previous process filed: its hook request died with it.
+		for (const kind of ["permission", "askUserQuestion"] as const) {
+			repo.updateTask(db, task.id, {
+				question: {
+					id: kind,
+					askedAt: 1,
+					text: "Use X?",
+					options: ["Allow"],
+					allowText: false,
+					kind,
+				},
+				column: "needs_attention",
+			});
+			expect(() =>
+				answerQuestion(db, send, { taskId: task.id, questionId: kind, answer: "Allow" }, notify),
+			).toThrow("no longer waiting");
+			expect(pending()?.id).toBe(kind);
+			answerQuestion(db, send, { taskId: task.id, questionId: kind, answer: null }, notify);
+			expect(pending()).toBeNull();
+		}
+		expect(sent).toHaveLength(0);
+	});
 });
 
 describe("the answer's framing", () => {
