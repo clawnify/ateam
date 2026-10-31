@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { SimpleGit } from "simple-git";
 import { GitCoreError } from "./errors";
-import { gitFor, refExists, safeRaw } from "./git-client";
+import { baseRef, gitFor, refExists, safeRaw } from "./git-client";
 import { detectDefaultBranch, ensureWorktreesIgnored } from "./project";
 import { slugify } from "./util";
 import { safeResolveWorktreePath } from "./worktree-paths";
@@ -81,13 +81,7 @@ export async function fetchBase(repoPath: string, baseBranch: string): Promise<v
 async function resolveStartPoint(repoPath: string, baseBranch: string): Promise<string> {
 	const git = gitFor(repoPath);
 	await fetchBase(repoPath, baseBranch);
-	if (await refExists(git, `refs/remotes/origin/${baseBranch}`)) {
-		return `origin/${baseBranch}`;
-	}
-	if (await refExists(git, `refs/heads/${baseBranch}`)) {
-		return baseBranch;
-	}
-	return "HEAD";
+	return (await baseRef(git, baseBranch)) ?? "HEAD";
 }
 
 /** Give up after this many suffixed variants (guards against a pathological repo). */

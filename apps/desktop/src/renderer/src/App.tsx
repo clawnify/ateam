@@ -861,6 +861,16 @@ export function App() {
 			? bestMcLayout(mcTileCount)
 			: null;
 	const mcRefitDue = mcRefit !== null && mcRefit !== mcLayout;
+	// The Auto button's tooltip and its accessible name both, so a screen reader
+	// hears the re-fit the dot shows.
+	const mcAutoLabel =
+		mcRefit && mcRefitDue
+			? `Mission Control: Auto layout. ${mcTileCount} live now: click to fit them in ${mcLayoutLabel(mcRefit)}`
+			: view !== "mission" || mcChoice !== "auto"
+				? "Mission Control: Auto layout (fits the live terminals each time it opens)"
+				: mcFitPending
+					? "Mission Control: Auto layout (fits the terminals once one is live)"
+					: `Mission Control: Auto layout (${mcLayoutLabel(mcLayout)} for the live terminals; click to fit again)`;
 	// The Auto button: on the grid it fits what is there now; from anywhere
 	// else the opening does it.
 	const chooseAutoLayout = () => {
@@ -1938,16 +1948,8 @@ export function App() {
 								className={`navbtn icon ${view === "mission" && mcChoice === "auto" ? "active" : ""} ${
 									mcRefitDue ? "refit" : ""
 								}`}
-								title={
-									mcRefit && mcRefitDue
-										? `Mission Control: Auto layout. ${mcTileCount} live now: click to fit them in ${mcLayoutLabel(mcRefit)}`
-										: view !== "mission" || mcChoice !== "auto"
-											? "Mission Control: Auto layout (fits the live terminals each time it opens)"
-											: mcFitPending
-												? "Mission Control: Auto layout (fits the terminals once one is live)"
-												: `Mission Control: Auto layout (${mcLayoutLabel(mcLayout)} for the live terminals; click to fit again)`
-								}
-								aria-label="Mission Control: Auto layout"
+								title={mcAutoLabel}
+								aria-label={mcAutoLabel}
 								aria-pressed={view === "mission" && mcChoice === "auto"}
 								onClick={chooseAutoLayout}
 							>

@@ -687,6 +687,57 @@ describe("commit & diff", () => {
 	});
 });
 
+// A plain folder Ateam made a repository has no remote, so its tasks branch off
+// the local base (see createTask): their changes count against that branch.
+describe("diff in a repository with no remote", () => {
+	it("counts the task's commits and shows each file's patch", async () => {
+		const plain = await mkdtemp(join(repo.dir, "plain-"));
+		await Bun.write(join(plain, "app.ts"), "console.log('hi')\n");
+		await initRepository(plain);
+		const task = await createTask({ repoPath: plain, name: "local only" });
+
+		await commitFile(task.worktreePath, "feature.ts", "one\ntwo\n", "add feature");
+		await Bun.write(join(task.worktreePath, "app.ts"), "console.log('hi')\nconsole.log('more')\n");
+
+		const d = await diff({ worktreePath: task.worktreePath, baseBranch: "main" });
+		expect(d.files.find((f) => f.path === "feature.ts")).toMatchObject({
+			additions: 2,
+			deletions: 0,
+		});
+		expect(d.files.find((f) => f.path === "app.ts")).toMatchObject({ additions: 1, deletions: 0 });
+
+		const committed = await fileDiff({
+			worktreePath: task.worktreePath,
+			file: "feature.ts",
+			baseBranch: "main",
+		});
+		expect(committed).toContain("+two");
+		const edited = await fileDiff({
+			worktreePath: task.worktreePath,
+			file: "app.ts",
+			baseBranch: "main",
+		});
+		expect(edited).toContain("+console.log('more')");
+	});
+
+	// No base to compare with at all: the counts are the uncommitted edits,
+	// staged ones included, and a file's patch has to show the same edits.
+	it("shows a staged edit's patch when the base branch doesn't exist", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "no base" });
+		await Bun.write(join(task.worktreePath, "README.md"), "# temp repo\nstaged\n");
+		await simpleGit(task.worktreePath).add("README.md");
+
+		const d = await diff({ worktreePath: task.worktreePath, baseBranch: "gone" });
+		expect(d.files.find((f) => f.path === "README.md")).toMatchObject({ additions: 1 });
+		const patch = await fileDiff({
+			worktreePath: task.worktreePath,
+			file: "README.md",
+			baseBranch: "gone",
+		});
+		expect(patch).toContain("+staged");
+	});
+});
+
 /** Squash-merge `branch` into origin/main from a throwaway clone, the way
  *  `gh pr merge --squash` lands it: one new commit, the branch's own commits
  *  never becoming ancestors of main. */
