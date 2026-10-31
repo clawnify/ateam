@@ -92,9 +92,7 @@ export function Composer({
 				{agentMode ? <Text style={styles.fieldLabel}>TASK NAME</Text> : null}
 				<TextInput
 					style={styles.input}
-					placeholder={
-						agentMode ? "Name this task (its worktree branch)" : "What do you want to do?"
-					}
+					placeholder={agentMode ? "Name this task" : "What do you want to do?"}
 					placeholderTextColor={C.faint}
 					value={text}
 					onChangeText={setText}
