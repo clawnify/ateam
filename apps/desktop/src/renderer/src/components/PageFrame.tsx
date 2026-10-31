@@ -115,19 +115,33 @@ export function PageFrame({
 
 	return (
 		<div className={`page${collapsed ? " collapsed" : ""}`}>
-			<div className="page-head">
-				<FileText size={12} className="page-icon" />
-				<span className="page-title">{title}</span>
+			{collapsed ? (
+				// Only the bar is showing, so the whole bar opens the page.
 				<button
 					type="button"
-					className="iconbtn"
-					title="Expand"
-					aria-label={`Expand ${title}`}
+					className="page-head page-open"
+					aria-label={`Open ${title}`}
 					onClick={() => setExpanded(true)}
 				>
-					<Maximize2 size={12} />
+					<FileText size={12} className="page-icon" />
+					<span className="page-title">{title}</span>
+					<Maximize2 size={12} className="page-icon" />
 				</button>
-			</div>
+			) : (
+				<div className="page-head">
+					<FileText size={12} className="page-icon" />
+					<span className="page-title">{title}</span>
+					<button
+						type="button"
+						className="iconbtn"
+						title="Expand"
+						aria-label={`Expand ${title}`}
+						onClick={() => setExpanded(true)}
+					>
+						<Maximize2 size={12} />
+					</button>
+				</div>
+			)}
 			{/* Stays while expanded: taking it out would change the height of
 			    whatever it sits in, and a chat would lose its scroll position. */}
 			{!collapsed && (

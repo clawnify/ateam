@@ -32,8 +32,10 @@ import {
 	ChevronUp,
 	CircleAlert,
 	Columns2,
+	Copy,
 	ExternalLink,
 	FolderPlus,
+	GitBranch,
 	GitCommitVertical,
 	GitMerge,
 	GitPullRequest,
@@ -87,9 +89,11 @@ import { PageFrame } from "./components/PageFrame";
 import { PanelRightFilled } from "./components/PanelRightFilled";
 import { PromptComposer } from "./components/PromptComposer";
 import { QuestionCard } from "./components/QuestionCard";
+import { RailTile } from "./components/RailTile";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
 import { bestMcLayout, MC_PAGE_SIZE, type McChoice, type McLayout } from "./mc-layout";
@@ -338,21 +342,12 @@ export function App() {
 	// A mutation's return and the push event both carry ONE engine's loops, so
 	// every refresh re-lists the union.
 	const refreshLoops = useCallback(() => void window.ateam.loops.list().then(setLoops), []);
-	const [railPref, setRailPref] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
-	// Mission Control's 3x2 grid collapses the sidebar for as long as it is on
-	// screen, without touching the saved preference: leaving the layout or the
-	// view puts back whatever you had. Expanding it by hand while there holds
-	// until you leave.
-	const autoRail = view === "mission" && mcLayout === "grid3x2";
-	const [railKept, setRailKept] = useState(false);
-	if (!autoRail && railKept) setRailKept(false);
-	const rail = autoRail ? !railKept : railPref;
+	// Collapsing the sidebar is only ever the user's call, in every view and
+	// layout. Mission Control's 3x2 grid used to tuck it away for wider tiles;
+	// the sidebar vanishing on its own cost more than the extra columns gave.
+	const [rail, setRail] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
 	const toggleRail = () => {
-		if (autoRail) {
-			setRailKept((k) => !k);
-			return;
-		}
-		setRailPref((r) => {
+		setRail((r) => {
 			localStorage.setItem("ateam.sidebarRail", r ? "0" : "1");
 			return !r;
 		});
@@ -1417,24 +1412,35 @@ export function App() {
 				</div>
 
 				{rail ? (
-					<>
-						<button type="button" className="rail-tile" title="Expand sidebar" onClick={toggleRail}>
+					// The expanded sidebar's three sections as tile groups, each led
+					// by the action its header carries (Add project, New task, New
+					// loop), so collapsing the sidebar never takes a way to create
+					// something. One provider: gliding down the strip opens each
+					// tile's name at once instead of waiting out the delay again.
+					<TooltipProvider delayDuration={150} skipDelayDuration={400} disableHoverableContent>
+						<RailTile label="Expand sidebar" onClick={toggleRail}>
 							<PanelLeft size={16} strokeWidth={1.75} />
-						</button>
+						</RailTile>
 						<div className="rail-divider" />
+						{/* A detached window is one project, so like its expanded header
+						    it offers no way to add another. */}
+						{!boundProjectId && (
+							<RailTile label="Add project" onClick={addProject}>
+								<FolderPlus size={16} strokeWidth={1.75} />
+							</RailTile>
+						)}
 						{unifiedProjects.map((card) => {
 							const alert = cardAlert(card);
 							const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
 							if (!primary) return null;
 							const active = card.members.some((m) => m.projectId === activeProjectId);
 							return (
-								<button
-									type="button"
+								<RailTile
 									key={card.key}
-									className={`rail-tile ${active ? "active" : ""} ${dropCardKey === card.key ? "file-drop" : ""}`}
-									title={
-										boundProjectId ? card.name : `${card.name} — double-click to open in new window`
-									}
+									label={card.name}
+									hint={boundProjectId ? undefined : "Double-click to open in a new window"}
+									active={active}
+									className={dropCardKey === card.key ? "file-drop" : undefined}
 									{...projectDropProps(card.key, primary.projectId)}
 									onClick={() => selectProject(primary.projectId)}
 									onDoubleClick={
@@ -1445,30 +1451,28 @@ export function App() {
 								>
 									{card.name.charAt(0).toUpperCase()}
 									{alert && <span className={`corner pulse ${alert}`} />}
-								</button>
+								</RailTile>
 							);
 						})}
 						<div className="rail-divider" />
-						<button
-							type="button"
-							className="rail-tile"
-							title="New task"
+						<RailTile
+							label="New task"
+							hint={activeProjectId ? undefined : "Select a project first"}
 							onClick={newTask}
 							disabled={!activeProjectId}
 						>
 							<Plus size={16} strokeWidth={1.75} />
-						</button>
+						</RailTile>
 						{visibleSidebarTasks.map((t) => {
 							const Icon = taskIcon(t.name);
 							// One tile, one glyph: the first live session, and a count when
 							// there are more — the row and the card have room to show them all.
 							const [glyph, ...rest] = taskGlyphs(t);
 							return (
-								<button
-									type="button"
+								<RailTile
 									key={t.id}
-									className={`rail-tile ${t.id === sidebarSelectedId ? "active" : ""}`}
-									title={t.name}
+									label={t.name}
+									active={t.id === sidebarSelectedId}
 									onClick={() => toggleTask(t)}
 								>
 									{glyph ? (
@@ -1482,10 +1486,37 @@ export function App() {
 									) : (
 										t.agentStatus && <span className={`corner ${t.agentStatus}`} />
 									)}
-								</button>
+								</RailTile>
 							);
 						})}
-					</>
+						<div className="rail-divider" />
+						<RailTile
+							label="New loop"
+							hint={activeProjectId ? undefined : "Select a project first"}
+							onClick={() => setLoopDialog({ editId: null })}
+							disabled={!activeProjectId}
+						>
+							<Plus size={16} strokeWidth={1.75} />
+						</RailTile>
+						{sortedLoops.map((l) => {
+							// Same row as the LOOPS section: the loop's own task, or the
+							// Loops tab before its first run.
+							const task = l.taskId ? (activeTasks.find((t) => t.id === l.taskId) ?? null) : null;
+							return (
+								<RailTile
+									key={l.id}
+									label={l.title}
+									hint={l.enabled ? undefined : "Paused"}
+									active={task != null && task.id === sidebarSelectedId}
+									className={l.enabled ? undefined : "loop-paused"}
+									onClick={() => (task ? toggleTask(task) : goToView("loops"))}
+								>
+									<Repeat size={16} strokeWidth={1.75} />
+									{task?.agentStatus && <span className={`corner ${task.agentStatus}`} />}
+								</RailTile>
+							);
+						})}
+					</TooltipProvider>
 				) : (
 					<>
 						{/* A detached window IS one project — show a static header, not a
@@ -1809,6 +1840,17 @@ export function App() {
 						onQuery={setTaskQuery}
 						projectIds={searchProjectIds}
 						tasks={activeTasks}
+						describeTask={(t) => {
+							const age = relativeAge(t.lastEventAt, Date.now());
+							const box = originOf(t.projectId);
+							return [
+								COLUMNS.find((c) => c.key === t.column)?.label,
+								age && (age === "just now" ? age : `${age} ago`),
+								box && aliasLabel(box),
+							]
+								.filter(Boolean)
+								.join(" · ");
+						}}
 						onOpenTask={openTask}
 						onOpenSession={openSessionHit}
 					/>
@@ -2105,6 +2147,7 @@ export function App() {
 								if (t) openTask(t);
 							}}
 							onReorder={reorderMission}
+							onNewTask={activeProjectId ? newTask : undefined}
 						/>
 					) : view === "settings" ? (
 						<SettingsPanel agents={agents} />
@@ -2298,9 +2341,7 @@ function OfflineTaskPanel({
 					<span className="title">{task.name}</span>
 					<IconButton icon={X} label="Close" onClick={onClose} />
 				</div>
-				<div className="branch muted">
-					{task.branch} ← {task.baseBranch}
-				</div>
+				<BranchLine task={task} />
 			</div>
 			<div className="empty">
 				{waking ? (
@@ -2551,31 +2592,30 @@ function Board({
 											className={`ring ${t.triage.bucket === "stalled" ? "stalled" : t.agentStatus}`}
 										/>
 									)}
+									{/* No branch line: the branch is the name as a slug, so the card
+								    carries state instead and the branch lives in the open task.
+								    Tags show on hover inside the name's line, the sidebar row's
+								    treatment, so hovering never reflows the board. */}
 									<div className="name">
-										{t.isUnread && <span className="unread" title="New since you last looked" />}
-										{t.name}
+										<span className="name-text">
+											{t.isUnread && <span className="unread" title="New since you last looked" />}
+											{t.name}
+										</span>
+										{tags.length > 0 && (
+											<span className="card-tags">
+												{tags.map((tag) => (
+													<span className="tag" key={tag}>
+														{tag}
+													</span>
+												))}
+											</span>
+										)}
 									</div>
 									{originLabel(t) && (
 										<span className="card-env muted" style={{ fontSize: 10 }}>
 											{originLabel(t)}
 										</span>
 									)}
-									{/* Tags live in the branch's slot and appear only on hover (the
-								    branch is the most redundant line on the card, being a slug of the
-								    name). Sharing one fixed-height row means hovering never reflows
-								    the board. */}
-									<div className={`branch-slot ${tags.length ? "has-tags" : ""}`}>
-										<div className="branch">{t.branch}</div>
-										{tags.length > 0 && (
-											<div className="tags">
-												{tags.map((tag) => (
-													<span className="tag" key={tag}>
-														{tag}
-													</span>
-												))}
-											</div>
-										)}
-									</div>
 									{/* Why this card is where it is — the triage verdict that until now
 								    was computed on every refresh and shown only to the MCP tool. */}
 									{/* Parked on an outside party: the wait IS why the card is where it
@@ -2587,11 +2627,7 @@ function Board({
 										{waitingLabel(t, Date.now()) ?? t.triage.reason}
 									</div>
 									<div className="meta">
-										{t.gitStatus && (
-											<span>
-												↑{t.gitStatus.ahead} ↓{t.gitStatus.behind} · {t.gitStatus.dirty} changed
-											</span>
-										)}
+										<WorkSize task={t} files />
 										{t.issueUrl && (
 											<a
 												className="issue-link"
@@ -2628,6 +2664,72 @@ function Board({
 					</div>
 				);
 			})}
+		</div>
+	);
+}
+
+/**
+ * How big a task's work is: `+N -M` lines, as the task panel's button counts
+ * them (the same diff, read from the git sweep's snapshot). `files` adds the
+ * file count, for the card. Nothing until the sweep has measured the lines,
+ * which an older engine never does.
+ */
+function WorkSize({ task, files = false }: { task: TaskDTO; files?: boolean }) {
+	const g = task.gitStatus;
+	if (!g) return null;
+	const lines = g.additions != null && g.deletions != null && g.additions + g.deletions > 0;
+	const showFiles = files && g.dirty > 0;
+	if (!lines && !showFiles) return null;
+	return (
+		<span className="work-size">
+			{lines && (
+				<>
+					<span className="add">+{g.additions}</span> <span className="del">-{g.deletions}</span>
+				</>
+			)}
+			{lines && showFiles && " · "}
+			{showFiles && `${g.dirty} ${g.dirty === 1 ? "file" : "files"}`}
+		</span>
+	);
+}
+
+/**
+ * The open task's branch, the one place it shows: here is where you act on
+ * git, so a click copies it. Commits ahead of / behind the pushed branch ride
+ * along when there are any.
+ */
+function BranchLine({ task }: { task: TaskDTO }) {
+	const [copied, setCopied] = useState(false);
+	const ahead = task.gitStatus?.ahead ?? 0;
+	const behind = task.gitStatus?.behind ?? 0;
+	const copy = () => {
+		void navigator.clipboard.writeText(task.branch).then(
+			() => {
+				setCopied(true);
+				window.setTimeout(() => setCopied(false), 1200);
+			},
+			() => {},
+		);
+	};
+	return (
+		<div className="branch-line muted">
+			<button
+				type="button"
+				className="branch-copy"
+				title={copied ? "Copied" : "Copy branch name"}
+				aria-label={`Copy branch name ${task.branch}`}
+				onClick={copy}
+			>
+				<GitBranch size={12} strokeWidth={1.75} />
+				<span className="branch-name">{task.branch}</span>
+				{copied ? <Check size={11} /> : <Copy size={11} className="copy-icon" />}
+			</button>
+			<span className="branch-base">← {task.baseBranch}</span>
+			{(ahead > 0 || behind > 0) && (
+				<span title="Commits not yet pushed / commits on the pushed branch you don't have">
+					↑{ahead} ↓{behind}
+				</span>
+			)}
 		</div>
 	);
 }
@@ -2990,9 +3092,7 @@ function TaskPanel({
 						<IconButton icon={X} label="Close" onClick={onClose} />
 					</span>
 				</div>
-				<div className="branch muted">
-					{task.branch} ← {task.baseBranch}
-				</div>
+				<BranchLine task={task} />
 			</div>
 
 			<div className="actions">
@@ -3282,12 +3382,6 @@ function TaskPanel({
 					<QuestionCard task={task} />
 				</div>
 			)}
-			{task.page && task.question?.pageId !== task.page.id && (
-				<div className="panel-page">
-					<PageFrame taskId={task.id} pageId={task.page.id} title={task.page.title} collapsed />
-				</div>
-			)}
-
 			<div className={`panel-body${termDocked ? " docked-term" : ""}`}>
 				{/* Keep the terminal mounted (xterm state survives) while the
 				    changes view is open — just hide it, or dock it beside the
@@ -3384,6 +3478,12 @@ function TaskPanel({
 					</div>
 				)}
 			</div>
+
+			{task.page && task.question?.pageId !== task.page.id && (
+				<div className="panel-page">
+					<PageFrame taskId={task.id} pageId={task.page.id} title={task.page.title} collapsed />
+				</div>
+			)}
 		</section>
 	);
 }
@@ -3402,8 +3502,10 @@ function MissionControl({
 	jump,
 	onJumpMissing,
 	onReorder,
+	onNewTask,
 }: {
-	/** Which list `tasks` was drawn from; only the empty state differs. */
+	/** Which list `tasks` was drawn from; only the empty state and the New
+	 *  task slot differ. */
 	mode: "tasks" | "loops";
 	tasks: TaskDTO[];
 	/** Agent catalog, for naming a session's tab the way the task panel does. */
@@ -3426,6 +3528,8 @@ function MissionControl({
 	onJumpMissing: (taskId: string) => void;
 	/** The tiles' order changed (a tile arrived, died, or was dragged). */
 	onReorder: (tileIds: string[]) => void;
+	/** Opens the task composer. Absent when there is no project to create in. */
+	onNewTask?: () => void;
 }) {
 	// One tile per TASK, not per session: a task with an agent and two shells is
 	// one piece of work, and splaying it across three identically-titled tiles
@@ -3779,10 +3883,20 @@ function MissionControl({
 		onDragLeave: stopFlipTimer,
 	});
 
+	// Tasks only: a loop's session is started by the loop, not from here.
+	const newTaskButton =
+		mode === "tasks" && onNewTask ? (
+			<button type="button" className="navbtn" onClick={onNewTask}>
+				<Plus size={14} strokeWidth={1.75} />
+				New task
+			</button>
+		) : null;
+
 	if (tiles.length === 0) {
 		if (!loaded) return <div className="mc" data-layout={layout} />;
+		// mc-none: centered in the whole area, not in the layout's first cell.
 		return (
-			<div className="mc" data-layout={layout}>
+			<div className="mc mc-none" data-layout={layout}>
 				{mode === "loops" ? (
 					<div className="empty">
 						No loop sessions running.
@@ -3792,7 +3906,13 @@ function MissionControl({
 					<div className="empty">
 						No live agents yet.
 						<br />
-						Launch agents from the Board to watch them work side by side here.
+						Start a task to watch its agent work here.
+						{newTaskButton && (
+							<>
+								<br />
+								{newTaskButton}
+							</>
+						)}
 					</div>
 				)}
 			</div>
@@ -3885,8 +4005,11 @@ function MissionControl({
 									setDropTarget(null);
 								}}
 							>
-								<span>{task.name}</span>
-								<span className="muted">· {task.branch}</span>
+								<span className="bar-name">{task.name}</span>
+								{/* What the terminal below can't show: whether it has a PR (its
+								    size is the +N -M on the right). The branch used to sit here,
+								    but it is the name again as a slug. */}
+								{task.prNumber && <span className="bar-pr">PR #{task.prNumber}</span>}
 								<span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
 									{diff && (
 										<DiffStat
@@ -3962,6 +4085,19 @@ function MissionControl({
 						</motion.div>
 					);
 				})}
+				{/* A page with room left (only ever the last one) offers a new task
+				    in its first open slot; the tile that task grows takes the slot,
+				    and the offer moves on to the next one, gliding like the tiles. */}
+				{newTaskButton && visible.length < pageSize && (
+					<motion.div
+						key="mc-slot"
+						className="mc-slot"
+						layout="position"
+						transition={{ layout: springy }}
+					>
+						{newTaskButton}
+					</motion.div>
+				)}
 			</motion.div>
 			{dragging && clampedPage > 0 && (
 				<div className="mcflip top" {...flipOnHold(-1)}>

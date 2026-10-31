@@ -299,6 +299,12 @@ export interface GitStatusSnapshot {
 	ahead: number;
 	behind: number;
 	dirty: number;
+	/** Lines added and removed across the `dirty` files: the size of the work,
+	 *  the task's `+N -M`. Absent from a snapshot written before these fields
+	 *  existed (stored rows, older engines), which reads as "not known yet": a
+	 *  read-only addition, so no protocol bump. */
+	additions?: number;
+	deletions?: number;
 	updatedAt: number;
 }
 
