@@ -3182,6 +3182,11 @@ input {
 	background: none;
 	padding: 0;
 }
+/* An image in an agent's reply (often a full-size screenshot) fits the
+   message instead of running past it. */
+.md img {
+	max-width: 100%;
+}
 .md table {
 	border-collapse: collapse;
 	margin: 0 0 8px;
