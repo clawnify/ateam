@@ -97,7 +97,13 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
 import { bestMcLayout, MC_PAGE_SIZE, type McChoice, type McLayout } from "./mc-layout";
-import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
+import {
+	activeTerminal,
+	conversationToResume,
+	sessionTabs,
+	taskGlyphs,
+	tileSessions,
+} from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
 import {
@@ -3016,11 +3022,13 @@ function TaskPanel({
 
 	// Keep the active tab pointed at something real. Covers (re)opening a task
 	// with surviving daemon sessions, and a session ending — its tab disappears
-	// and the newest survivor takes focus. With nothing left, resume the agent's
+	// and the newest survivor takes focus. With no agent left, resume the agent's
 	// last conversation if the task is still active work (running or awaiting
-	// input). Terminal columns (review/merged) are left alone — there a relaunch
-	// is a deliberate act via the + menu, not a side effect of opening the task
-	// (and spawning would bounce the card back to "running").
+	// input). With shells still open that happens only on opening the task, or
+	// for the agent tab you were looking at, never in place of a live tab you
+	// are on (conversationToResume). Terminal columns (review/merged) are left
+	// alone: there a relaunch is a deliberate act via the + menu, not a side
+	// effect of opening the task.
 	//
 	// The one thing `sessions` alone must never settle is "this task has none".
 	// A spawn announces itself as a task update — the very event that flips the
@@ -3035,27 +3043,31 @@ function TaskPanel({
 	useEffect(() => {
 		if (!sessions) return; // list not read yet — don't judge the task by it
 		const next = activeTerminal(sessions, terminalId);
-		if (next) {
-			if (next !== terminalId) setTerminal(next);
-			return;
-		}
 		const resumable =
 			(task.column === "running" || task.column === "needs_attention") &&
 			autoResumedRef.current !== task.id;
-		if (terminalId === null && !resumable) return;
+		// Something to bring back instead of settling on `next`: judged on this
+		// list, and re-read below before anything is spawned.
+		const wake = resumable && conversationToResume(sessions, restorable, terminalId) !== null;
+		if (next && !wake) {
+			if (next !== terminalId) setTerminal(next);
+			return;
+		}
+		if (!next && terminalId === null && !resumable) return;
 		let cancelled = false;
 		void refreshSessions().then(({ live, restorable: stranded }) => {
-			if (cancelled || live.length) return; // it wasn't empty after all
-			if (terminalId !== null) setTerminal(null);
+			if (cancelled) return;
+			if (!live.length && terminalId !== null) setTerminal(null);
 			if (!resumable) return;
+			// Prefer the newest tab that was actually open when it went down or
+			// was reaped: it resumes THAT conversation by id. "latest" is the
+			// fallback for a task with nothing at all left, and can only reach the
+			// newest conversation in the worktree, whichever tab that was.
+			const target = conversationToResume(live, stranded, terminalId);
+			if (!target) return; // settled after all: the next run shows what is live
 			autoResumedRef.current = task.id;
-			// Prefer the newest tab that was actually open when we went down: it
-			// resumes THAT conversation by id. `launch(resume)` is the fallback for
-			// a task with nothing stranded (or nothing but shells) — it can only
-			// reach the newest conversation in the worktree, whichever tab that was.
-			const newest = [...stranded].reverse().find((s) => s.agentId !== "shell");
-			if (newest) void restoreTab(newest);
-			else void launch(false, true);
+			if (target === "latest") void launch(false, true);
+			else void restoreTab(target);
 		});
 		return () => {
 			cancelled = true;
@@ -3064,6 +3076,7 @@ function TaskPanel({
 		task.id,
 		task.column,
 		sessions,
+		restorable,
 		terminalId,
 		setTerminal,
 		launch,
@@ -3801,15 +3814,11 @@ function MissionControl({
 				);
 				if (cancelled) return;
 				// listForTask hands sessions back latest-first; reverse so the tabs
-				// read oldest to newest, exactly as they do in the task panel. A
-				// session whose agent quit (`stopped` while its PTY lives on as a
-				// shell) is not an agent to watch, so it gets no tab here, and a task
-				// left with none gets no tile. The task panel still has it.
+				// read oldest to newest, exactly as they do in the task panel. A task
+				// with no live agent gets no tile (tileSessions); the task panel
+				// still has its shells.
 				sessionsRef.current = perTask
-					.map(({ task, sessions }) => ({
-						task,
-						sessions: sessions.filter((s) => s.status !== "stopped").reverse(),
-					}))
+					.map(({ task, sessions }) => ({ task, sessions: tileSessions(sessions).reverse() }))
 					.filter(({ sessions }) => sessions.length > 0);
 				resort();
 				setLoaded(true);

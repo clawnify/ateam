@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import type { AgentDTO, SessionDTO } from "@ateam/protocol";
-import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
+import {
+	activeTerminal,
+	conversationToResume,
+	sessionTabs,
+	taskGlyphs,
+	tileSessions,
+} from "./session-tabs";
 
 const AGENTS: AgentDTO[] = [
 	{ id: "claude", label: "Claude Code", description: "", available: true },
@@ -138,4 +144,80 @@ test("a task's glyphs are its live sessions, falling back to the last agent laun
 	// An engine too old to send the field reads the same as nothing live.
 	expect(taskGlyphs({ agentId: "codex" })).toEqual(["codex"]);
 	expect(taskGlyphs({ agentId: null })).toEqual([]);
+});
+
+// --- an agent asleep behind a shell -----------------------------------------
+// The reaper takes idle agents and never shells, so the shell a task had open
+// beside its agent outlives it.
+
+test("opening a task whose agent sleeps beside a live shell brings the agent back", () => {
+	const live = [session("sh", "shell")];
+	const reaped = session("c", "claude");
+	expect(conversationToResume(live, [reaped], null)).toBe(reaped);
+});
+
+test("a shell you are on is never swapped away when the agent beside it goes to sleep", () => {
+	const live = [session("sh", "shell")];
+	expect(conversationToResume(live, [session("c", "claude")], "sh")).toBeNull();
+});
+
+test("the agent you were looking at going to sleep brings that one back, not a newer one", () => {
+	const yours = session("c1", "claude");
+	const live = [session("sh", "shell")];
+	expect(conversationToResume(live, [yours, session("c2", "claude")], "c1")).toBe(yours);
+	// With nothing live at all, the same.
+	expect(conversationToResume([], [yours, session("c2", "claude")], "c1")).toBe(yours);
+});
+
+test("closing an agent on purpose beside a shell does not revive an older conversation", () => {
+	// The closed tab is neither live nor restorable; an older reaped one is.
+	const live = [session("sh", "shell")];
+	expect(conversationToResume(live, [session("old", "claude")], "closed")).toBeNull();
+});
+
+test("a live agent settles it, whatever else is restorable", () => {
+	const live = [session("a", "claude"), session("sh", "shell")];
+	expect(conversationToResume(live, [session("old", "claude")], null)).toBeNull();
+});
+
+test("a quit agent still on its pane counts as live, so nothing is relaunched behind it", () => {
+	const quit = { ...session("a", "claude"), status: "stopped" as const };
+	expect(conversationToResume([quit], [session("old", "claude")], null)).toBeNull();
+});
+
+test("shells alone with nothing asleep start nothing: no --continue behind a shell", () => {
+	expect(conversationToResume([session("sh", "shell")], [], null)).toBeNull();
+	// A restorable shell is not a conversation.
+	expect(
+		conversationToResume([session("sh", "shell")], [session("old", "shell")], null),
+	).toBeNull();
+});
+
+test("the newest sleeping agent wins, skipping restorable shells", () => {
+	const older = session("c1", "claude");
+	const newer = session("c2", "codex");
+	expect(conversationToResume([], [older, newer, session("s", "shell")], null)).toBe(newer);
+	// A closed tab you were on changes nothing when nothing is live.
+	expect(conversationToResume([], [older, newer], "closed")).toBe(newer);
+});
+
+test("a task with nothing at all left resumes the latest conversation", () => {
+	expect(conversationToResume([], [], null)).toBe("latest");
+	expect(conversationToResume([], [session("s", "shell")], "s")).toBe("latest");
+});
+
+test("a task with an agent live is a tile, its shells riding along as tabs", () => {
+	const sessions = [session("sh", "shell"), session("a", "claude")];
+	expect(tileSessions(sessions)).toEqual(sessions);
+});
+
+test("a task left with only a shell is not a tile", () => {
+	expect(tileSessions([session("sh", "shell")])).toEqual([]);
+});
+
+test("a quit agent gets no tab, and leaves no tile when shells are all that remain", () => {
+	const quit = { ...session("a", "claude"), status: "stopped" as const };
+	expect(tileSessions([quit, session("sh", "shell")])).toEqual([]);
+	const live = session("b", "codex");
+	expect(tileSessions([quit, live])).toEqual([live]);
 });
