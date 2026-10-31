@@ -3128,6 +3128,13 @@ function TaskPanel({
 		setChangesOpen(false);
 	};
 
+	// The question card folded to one line, to read the terminal behind it. Held
+	// by question id (a UUID), so the agent's next question opens unfolded.
+	const [foldedQuestion, setFoldedQuestion] = useState<string | null>(null);
+	const questionFolded = !!task.question && foldedQuestion === task.question.id;
+	const toggleQuestion = () =>
+		setFoldedQuestion(questionFolded ? null : (task.question?.id ?? null));
+
 	const toggleChanges = () => {
 		if (changesOpen) {
 			setChangesOpen(false);
@@ -3219,6 +3226,16 @@ function TaskPanel({
 								className="sess-tab-name"
 								title={live ? label : `${label} — closed by a restart. Click to resume it.`}
 								onClick={() => {
+									// The tab already on screen folds the question card over it.
+									if (
+										live &&
+										task.question &&
+										session.terminalId === terminalId &&
+										!mainViewOpen
+									) {
+										toggleQuestion();
+										return;
+									}
 									if (live) {
 										showTerminal(session.terminalId);
 										return;
@@ -3484,7 +3501,7 @@ function TaskPanel({
 
 			{task.question && (
 				<div className="panel-question">
-					<QuestionCard task={task} />
+					<QuestionCard task={task} folded={questionFolded} onFold={toggleQuestion} />
 				</div>
 			)}
 			<div className={`panel-body${termDocked ? " docked-term" : ""}`}>

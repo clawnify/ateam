@@ -3773,10 +3773,34 @@ input {
 	font-size: 11px;
 	color: var(--text-dim);
 }
-.question-dismiss {
+.question-dismiss,
+.question-fold {
 	flex: none;
 	width: 22px;
 	height: 22px;
+}
+/* Folded: only the head row, with the question's first line as the reminder.
+   Hidden, not unmounted, so a typed answer, the ticks and a page keep their state. */
+.question.collapsed > :not(.question-head) {
+	display: none;
+}
+.question-summary {
+	flex: 1;
+	min-width: 0;
+	padding: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-align: left;
+	font: inherit;
+	font-weight: 600;
+	color: var(--text);
+	background: none;
+	border: 0;
+	cursor: pointer;
+}
+.question-summary + .question-when {
+	margin-left: 0;
 }
 .question-text {
 	line-height: 1.5;
