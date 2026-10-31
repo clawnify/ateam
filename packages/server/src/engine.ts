@@ -180,6 +180,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	// An agent marked at a prompt holds its card in Needs You (repo.updateTask),
 	// so a mark left behind by an agent that is long gone must not.
 	repo.clearStrandedPrompts(db);
+	// Likewise a permission prompt's card: the hook request behind it died with
+	// the process that held it, so only its terminal can answer it now.
+	repo.clearStalePermissionPrompts(db);
 
 	// Before anything is spawned: a GUI launch inherits launchd's PATH, so the
 	// agent CLIs, `gh` and every headless turn would look uninstalled. Awaited
@@ -678,9 +681,6 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			// A permission prompt is answered by resolving the hook that holds it,
 			// not by a message: the agent is mid-turn, waiting on exactly this.
 			if (permissions.holds(req.questionId)) return permissions.answer(req.questionId, req.answer);
-			const q = repo.getTask(db, req.taskId)?.question;
-			if (q?.kind === "permission" || q?.kind === "askUserQuestion")
-				throw new Error("That prompt is no longer waiting. Answer it in the task's terminal.");
 			return answerQuestion(db, (sender, r) => peers.sendFrom(sender, r), req, sendTaskUpdated);
 		},
 		async connectPty() {

@@ -5,6 +5,7 @@
 import type { TaskDTO } from "@ateam/protocol";
 import {
 	ArrowUp,
+	ChevronLeft,
 	ChevronRight,
 	CircleHelp,
 	CornerDownRight,
@@ -25,6 +26,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { flushSync } from "react-dom";
 import type {
 	LeadAttachResult,
 	LeadEvent,
@@ -34,15 +36,32 @@ import type {
 	LeadSnapshot,
 	LeadTaskRef,
 } from "../../../shared/lead";
+import {
+	type AgentItem,
+	arrived,
+	FOLLOWING,
+	firstLine,
+	goTo,
+	type StackView,
+	shown,
+	type ToolItem,
+	toBlocks,
+	unseen,
+} from "../lead-blocks";
 import { AgentIcon } from "./AgentIcon";
 import { IconButton } from "./IconButton";
 import { Markdown, TaskLinkContext } from "./Markdown";
 import { PageFrame } from "./PageFrame";
 import { PanelRightFilled } from "./PanelRightFilled";
 import { QuestionCard } from "./QuestionCard";
-
-type ToolItem = Extract<LeadItem, { kind: "tool" }>;
-type Block = { kind: "item"; item: LeadItem } | { kind: "tools"; id: string; tools: ToolItem[] };
+import { Button } from "./ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 
 const EMPTY: LeadSnapshot = { items: [], draft: "", busy: false };
 
@@ -68,19 +87,6 @@ function apply(s: LeadSnapshot, e: LeadEvent): LeadSnapshot {
 		case "reset":
 			return e.snapshot;
 	}
-}
-
-/** Consecutive tool calls read as one step, so they fold into one row. */
-function toBlocks(items: LeadItem[]): Block[] {
-	const out: Block[] = [];
-	for (const item of items) {
-		const last = out[out.length - 1];
-		if (item.kind === "tool") {
-			if (last?.kind === "tools") last.tools.push(item);
-			else out.push({ kind: "tools", id: item.id, tools: [item] });
-		} else out.push({ kind: "item", item });
-	}
-	return out;
 }
 
 /** create_task answers "Started task "x" (<uuid>) ..."; the id is the chip's target. */
@@ -506,15 +512,15 @@ function LeadPermission({ item }: { item: Extract<LeadItem, { kind: "permission"
 	);
 }
 
-/** A followed task's agent, talking back: its reply, and a box to answer it here. */
+/** A followed task's agent, talking back: its reply, and a box to answer it
+ *  here. The card and its head are the stack's (AgentStack). */
 function AgentReply({
 	item,
-	tasks,
-	onOpenTask,
+	hidden,
 }: {
-	item: Extract<LeadItem, { kind: "agent" }>;
-	tasks: TaskDTO[];
-	onOpenTask: (t: TaskDTO) => void;
+	item: AgentItem;
+	/** Another reply of its stack is shown. Kept mounted, so a half-typed answer survives. */
+	hidden: boolean;
 }) {
 	const [open, setOpen] = useState(false);
 	const [text, setText] = useState("");
@@ -536,11 +542,7 @@ function AgentReply({
 		}
 	};
 	return (
-		<div className="lead-agent">
-			<div className="lead-agent-head">
-				<TaskChip task={item.task} tasks={tasks} onOpenTask={onOpenTask} />
-				<span className="lead-agent-said">replied</span>
-			</div>
+		<div className="lead-agent-body" hidden={hidden}>
 			<div className="md">
 				<Markdown text={item.text} />
 			</div>
@@ -567,6 +569,130 @@ function AgentReply({
 				</button>
 			)}
 			{error && <p className="question-error">{error}</p>}
+		</div>
+	);
+}
+
+/** Replies that came in one after another: one card showing one at a time, the
+ *  newest first (the rules are in lead-blocks.ts). The arrows and ←/→ step
+ *  through them, and the "2 of 5" count lists them all to jump to one. The
+ *  head stays mounted while the reply below it changes, so a focused arrow
+ *  keeps focus and the next press goes on stepping. */
+function AgentStack({
+	replies,
+	tasks,
+	onOpenTask,
+	atBottom,
+	onPaged,
+}: {
+	replies: AgentItem[];
+	tasks: TaskDTO[];
+	onOpenTask: (t: TaskDTO) => void;
+	/** Whether the user is following the bottom of the chat. */
+	atBottom: () => boolean;
+	/** The user switched replies: the card, to keep its top in view. */
+	onPaged: (card: HTMLElement) => void;
+}) {
+	const n = replies.length;
+	const [view, setView] = useState<StackView>(FOLLOWING);
+	const [count, setCount] = useState(n);
+	if (count !== n) {
+		setCount(n);
+		setView((v) => arrived(v, count, n, atBottom()));
+	}
+	const cur = shown(view, n);
+	const card = useRef<HTMLDivElement>(null);
+	const countBtn = useRef<HTMLButtonElement>(null);
+	const go = (i: number) => {
+		if (i === cur || i < 0 || i >= n) return;
+		const focused = card.current?.contains(document.activeElement);
+		// Committed now, so the card is measured showing the reply it switched to.
+		flushSync(() => setView((v) => goTo(v, i, n)));
+		// At the first or last reply the arrow that stepped there disables itself
+		// and drops focus; the count takes it, so ←/→ go on working.
+		const a = document.activeElement as HTMLButtonElement | null;
+		if (focused && (a?.disabled || !card.current?.contains(a)))
+			countBtn.current?.focus({ preventScroll: true });
+		if (card.current) onPaged(card.current);
+	};
+	const reply = replies[cur];
+	const prev = replies[cur - 1];
+	const next = replies[cur + 1];
+	const fresh = unseen(view, n);
+	if (!reply) return null;
+	const nav = n > 1 && (
+		<div className="lead-stack-nav">
+			<IconButton
+				icon={ChevronLeft}
+				size={14}
+				label={prev ? `Previous: ${prev.task.name}` : "Previous"}
+				disabled={!prev}
+				onClick={() => go(cur - 1)}
+			/>
+			<DropdownMenu modal={false}>
+				<DropdownMenuTrigger asChild>
+					<Button
+						ref={countBtn}
+						variant="ghost"
+						size="xs"
+						className="tabular-nums"
+						title="All replies"
+						aria-label={`Reply ${cur + 1} of ${n}, list all`}
+					>
+						{cur + 1} of {n}
+					</Button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end" collisionPadding={8} className="w-[320px]">
+					<DropdownMenuRadioGroup value={String(cur)} onValueChange={(v) => go(Number(v))}>
+						{replies.map((r, i) => (
+							<DropdownMenuRadioItem key={r.id} value={String(i)}>
+								<AgentIcon agentId={r.task.agentId} size={12} />
+								<span className="flex min-w-0 flex-col">
+									<span className="truncate">{r.task.name}</span>
+									<span className="truncate text-xs text-muted-foreground">
+										{firstLine(r.text)}
+									</span>
+								</span>
+							</DropdownMenuRadioItem>
+						))}
+					</DropdownMenuRadioGroup>
+				</DropdownMenuContent>
+			</DropdownMenu>
+			<span className="lead-stack-next">
+				<IconButton
+					icon={ChevronRight}
+					size={14}
+					label={next ? `Next: ${next.task.name}${fresh ? " (new)" : ""}` : "Next"}
+					disabled={!next}
+					onClick={() => go(cur + 1)}
+				/>
+				{fresh && <span className="lead-stack-dot" />}
+			</span>
+		</div>
+	);
+	return (
+		// biome-ignore lint/a11y/noStaticElementInteractions: ←/→ step through the replies from anywhere in the card, not from one control
+		<div
+			ref={card}
+			className="lead-agent"
+			onKeyDown={(e) => {
+				// Not while typing an answer, and not from the list (a portal, outside the card).
+				const t = e.target as HTMLElement;
+				if (n < 2 || t.closest("input, textarea") || !e.currentTarget.contains(t)) return;
+				if (e.key === "ArrowLeft" && prev) go(cur - 1);
+				else if (e.key === "ArrowRight" && next) go(cur + 1);
+				else return;
+				e.preventDefault();
+			}}
+		>
+			<div className="lead-agent-head">
+				<TaskChip task={reply.task} tasks={tasks} onOpenTask={onOpenTask} />
+				<span className="lead-agent-said">replied</span>
+				{nav}
+			</div>
+			{replies.map((r, i) => (
+				<AgentReply key={r.id} item={r} hidden={i !== cur} />
+			))}
 		</div>
 	);
 }
@@ -661,6 +787,17 @@ export function LeadChat({
 		});
 		ro.observe(content);
 		return () => ro.disconnect();
+	}, []);
+	const atBottom = useCallback(() => pinned.current, []);
+	// Switching replies in a stack is reading, not the thread growing: the card's
+	// top stays in view, and a longer reply no longer counts as "at the bottom",
+	// so the observer above doesn't jump to its last line.
+	const keepInView = useCallback((card: HTMLElement) => {
+		const el = scroller.current;
+		if (!el) return;
+		const above = card.getBoundingClientRect().top - el.getBoundingClientRect().top;
+		if (above < 0) el.scrollTop += above - 8;
+		pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 	}, []);
 
 	const blocks = useMemo(() => toBlocks(snap.items), [snap.items]);
@@ -821,6 +958,15 @@ export function LeadChat({
 					{blocks.map((b) =>
 						b.kind === "tools" ? (
 							<ToolGroup key={b.id} tools={b.tools} tasks={tasks} onOpenTask={onOpenTask} />
+						) : b.kind === "agents" ? (
+							<AgentStack
+								key={b.id}
+								replies={b.replies}
+								tasks={tasks}
+								onOpenTask={onOpenTask}
+								atBottom={atBottom}
+								onPaged={keepInView}
+							/>
 						) : b.item.kind === "user" ? (
 							<div key={b.item.id} className="lead-user">
 								{b.item.to && <div className="lead-user-to">to {b.item.to.name}</div>}
@@ -833,8 +979,6 @@ export function LeadChat({
 								) : null}
 								{b.item.text}
 							</div>
-						) : b.item.kind === "agent" ? (
-							<AgentReply key={b.item.id} item={b.item} tasks={tasks} onOpenTask={onOpenTask} />
 						) : b.item.kind === "permission" ? (
 							<LeadPermission key={b.item.id} item={b.item} />
 						) : b.item.kind === "page" ? (

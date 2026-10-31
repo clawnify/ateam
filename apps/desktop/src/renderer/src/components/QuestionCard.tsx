@@ -7,7 +7,7 @@
 // message from the user (see questions.ts in the server). Shown in the Lead chat
 // and on the task panel.
 import type { QuestionChoiceDTO, TaskDTO } from "@ateam/protocol";
-import { CircleHelp, X } from "lucide-react";
+import { ChevronDown, ChevronUp, CircleHelp, X } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { AgentIcon } from "./AgentIcon";
 import { Markdown } from "./Markdown";
@@ -26,6 +26,15 @@ function ago(at: number): string {
 	if (mins < 60) return `${mins}m ago`;
 	const hours = Math.round(mins / 60);
 	return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
+}
+
+/** The question's first line as plain text, for the collapsed card's one-line reminder. */
+function headline(text: string): string {
+	const line = text.split("\n").find((l) => l.trim()) ?? "";
+	return line
+		.replace(/^\s*(#+|[-*>]|\d+\.)\s+/, "")
+		.replace(/[*_`]/g, "")
+		.trim();
 }
 
 function Risk({ risk }: { risk: QuestionChoiceDTO["risk"] }) {
@@ -133,8 +142,15 @@ export function QuestionCard({
 	task,
 	onOpenTask,
 	onAnswer = (input) => window.ateam.tasks.answerQuestion(input),
+	folded,
+	onFold,
 }: {
 	task: TaskDTO;
+	/** Folded to its head row, to read the terminal behind it. The task panel
+	 *  holds this, since its session tab folds the card too; without `onFold`
+	 *  the card has no fold control (the Lead's tray). */
+	folded?: boolean;
+	onFold?: () => void;
 	/** Show the task as a chip that opens it (the Lead's list); omit on the task's own panel. */
 	onOpenTask?: (t: TaskDTO) => void;
 	/** How the answer is sent. The Lead routes it through main, which also shows
@@ -150,6 +166,7 @@ export function QuestionCard({
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	if (!q) return null;
+	const collapsed = Boolean(onFold && folded);
 
 	const answer = async (value: string | string[] | null) => {
 		setSending(true);
@@ -172,7 +189,10 @@ export function QuestionCard({
 	};
 
 	return (
-		<section className="question" aria-label={`Question from ${task.name}`}>
+		<section
+			className={`question${collapsed ? " collapsed" : ""}`}
+			aria-label={`Question from ${task.name}`}
+		>
 			<div className="question-head">
 				<CircleHelp size={13} className="question-icon" />
 				{onOpenTask ? (
@@ -186,10 +206,34 @@ export function QuestionCard({
 						<span className="lead-chip-name">{task.name}</span>
 					</button>
 				) : (
-					<span className="question-who">The agent is asking you</span>
+					!collapsed && <span className="question-who">The agent is asking you</span>
 				)}
 				{q.kind === "permission" && <span className="question-kind">permission</span>}
+				{collapsed && (
+					// A bigger target than the chevron; the chevron is the keyboard path.
+					<button
+						type="button"
+						className="question-summary"
+						tabIndex={-1}
+						title="Show the question"
+						onClick={onFold}
+					>
+						{headline(q.text)}
+					</button>
+				)}
 				<span className="question-when">{ago(q.askedAt)}</span>
+				{onFold && (
+					<button
+						type="button"
+						className="iconbtn question-fold"
+						title={collapsed ? "Show the question" : "Fold away to read the terminal"}
+						aria-label={collapsed ? "Expand question" : "Collapse question"}
+						aria-expanded={!collapsed}
+						onClick={onFold}
+					>
+						{collapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+					</button>
+				)}
 				<button
 					type="button"
 					className="iconbtn question-dismiss"
@@ -217,7 +261,15 @@ export function QuestionCard({
 				)}
 			</div>
 			{q.select === "many" && q.choices ? (
-				<Checklist choices={q.choices} disabled={sending} onSend={(t) => void answer(t)} />
+				// Keyed by question: the card stays mounted when the next question
+				// replaces this one (an AskUserQuestion call's next card, an ask_user
+				// re-ask), and the ticks must not carry over.
+				<Checklist
+					key={q.id}
+					choices={q.choices}
+					disabled={sending}
+					onSend={(t) => void answer(t)}
+				/>
 			) : q.choices ? (
 				<div className="choices">
 					{q.choices.map((c) => (
