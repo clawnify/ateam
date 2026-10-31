@@ -21,7 +21,21 @@ export interface LeadToolDeps {
 	machineOf(id: string): string | null;
 	/** A task the Lead started, messaged or answered: its replies come back to the chat. */
 	onTouch?(task: TaskDTO): void;
+	/** Files the user attached in the chat, and getting them to a task's machine. */
+	files?: {
+		/** These paths if each is a file attached in the chat, else why not. */
+		resolve(paths: string[]): string[] | string;
+		/** The paths the agent on `ownerId`'s machine reads them at (deliver-files.ts). */
+		deliver(ownerId: string, paths: string[]): Promise<{ paths: string[] } | { error: string }>;
+	};
 }
+
+const FILES_PARAM = {
+	type: "array",
+	items: { type: "string" },
+	description:
+		"Paths from the user's Attached files in this chat, to hand to the agent. Only files attached here can be sent; a task on a box gets its own copy.",
+} as const;
 
 /** The MCP server name; Claude Code prefixes each tool with mcp__<name>__. */
 export const LEAD_MCP_NAME = "ateam_lead";
@@ -79,6 +93,7 @@ const TOOLS = [
 					description:
 						"Run without permission prompts. Only when the user asked for it: otherwise the agent stops and asks the user before risky actions.",
 				},
+				files: FILES_PARAM,
 			},
 			required: ["project", "name", "prompt"],
 			additionalProperties: false,
@@ -96,6 +111,7 @@ const TOOLS = [
 					type: "string",
 					description: "What to tell the agent, at most 8000 characters.",
 				},
+				files: FILES_PARAM,
 			},
 			required: ["task", "message"],
 			additionalProperties: false,
@@ -307,6 +323,22 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		return { text: lines.join("\n") };
 	}
 
+	/** Attached files for the machine `ownerId` is on: its paths for them, or why not. */
+	async function filesFor(
+		ownerId: string,
+		asked: unknown,
+	): Promise<{ paths: string[] } | { error: string }> {
+		const paths = Array.isArray(asked) ? asked.map(String).filter(Boolean) : [];
+		if (!paths.length) return { paths: [] };
+		if (!deps.files) return { error: "Attaching files isn't available here." };
+		const attached = deps.files.resolve(paths);
+		if (typeof attached === "string") return { error: attached };
+		return deps.files.deliver(ownerId, attached);
+	}
+
+	const filesNote = (n: number) =>
+		n ? ` It has ${n === 1 ? "1 attached file" : `${n} attached files`}.` : "";
+
 	async function createTask(args: Record<string, unknown>): Promise<McpToolResult> {
 		const prompt = String(args.prompt ?? "").trim();
 		const name = String(args.name ?? "")
@@ -315,6 +347,10 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		if (!prompt || !name) return { text: "project, name and prompt are required", isError: true };
 		const project = await findProject(String(args.project ?? ""));
 		if (typeof project === "string") return { text: project, isError: true };
+		// Before the task exists: one that can't get its files is not started at
+		// all. The project's machine is the one the task will be created on.
+		const files = await filesFor(project.id, args.files);
+		if ("error" in files) return { text: files.error, isError: true };
 		const agentId =
 			typeof args.agent === "string" && args.agent
 				? args.agent
@@ -323,7 +359,13 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		deps.onTouch?.(task);
 		try {
 			await call(CH.ptySpawnAgent, [
-				{ taskId: task.id, agentId, prompt, yolo: args.yolo === true },
+				{
+					taskId: task.id,
+					agentId,
+					prompt,
+					yolo: args.yolo === true,
+					...(files.paths.length ? { files: files.paths } : {}),
+				},
 			]);
 		} catch (e) {
 			return {
@@ -332,14 +374,19 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 			};
 		}
 		return {
-			text: `Started task "${task.name}" (${task.id}) in ${project.name} on ${machineLabel(deps.machineOf(project.id))}, with ${agentId} working on your prompt.`,
+			text: `Started task "${task.name}" (${task.id}) in ${project.name} on ${machineLabel(deps.machineOf(project.id))}, with ${agentId} working on your prompt.${filesNote(files.paths.length)}`,
 		};
 	}
 
 	async function sendMessage(args: Record<string, unknown>): Promise<McpToolResult> {
-		const body = String(args.message ?? "");
+		let body = String(args.message ?? "");
 		const task = await findTask(String(args.task ?? ""));
 		if (typeof task === "string") return { text: task, isError: true };
+		const files = await filesFor(task.id, args.files);
+		if ("error" in files) return { text: files.error, isError: true };
+		// The same footer an agent's first prompt gets (server sessions.ts).
+		if (files.paths.length)
+			body = `${body.trim()}\n\nAttached files:\n${files.paths.map((p) => `- ${p}`).join("\n")}`;
 		try {
 			const res = await call<{ ok: boolean; reason: string }>(CH.peersSendFromLead, [
 				{ taskId: task.id, body },

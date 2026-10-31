@@ -63,3 +63,45 @@ describe("RPC over a separate read/write stream pair (the SSH shape)", () => {
 		expect(events).toContain(task.id);
 	});
 });
+
+describe("line framing", () => {
+	/** Frames the client side reads off `s2c`, fed as the given chunks. */
+	function framesFrom(chunks: (Buffer | string)[]): unknown[] {
+		const s2c = new PassThrough();
+		const frames: unknown[] = [];
+		streamClientTransport(s2c, new PassThrough()).onFrame((f) => frames.push(f));
+		for (const c of chunks) s2c.write(c);
+		return frames;
+	}
+	const flush = () => new Promise((r) => setTimeout(r, 0));
+
+	it("joins a frame split across many chunks, and splits several in one", async () => {
+		const line = `${JSON.stringify({ id: 1, result: "x".repeat(5000) })}\n`;
+		const parts = line.match(/[\s\S]{1,7}/g) ?? [];
+		const frames = framesFrom([
+			...parts,
+			`${JSON.stringify({ id: 2 })}\n\n${JSON.stringify({ id: 3 })}\n`,
+		]);
+		await flush();
+		expect(frames).toEqual([{ id: 1, result: "x".repeat(5000) }, { id: 2 }, { id: 3 }]);
+	});
+
+	it("keeps a character whose bytes arrive in two chunks", async () => {
+		const bytes = Buffer.from(`${JSON.stringify({ name: "café ✓" })}\n`, "utf8");
+		const cut = bytes.indexOf(0xa9); // the second byte of "é"
+		const frames = framesFrom([bytes.subarray(0, cut), bytes.subarray(cut)]);
+		await flush();
+		expect(frames).toEqual([{ name: "café ✓" }]);
+	});
+
+	it("reads a 25 MB frame that arrives 64 KiB at a time", async () => {
+		const payload = "A".repeat(25 * 1024 * 1024);
+		const bytes = Buffer.from(`${JSON.stringify({ id: 9, args: [payload] })}\n`);
+		const chunks: Buffer[] = [];
+		for (let i = 0; i < bytes.length; i += 64 * 1024) chunks.push(bytes.subarray(i, i + 64 * 1024));
+		const frames = framesFrom(chunks) as { id: number; args: string[] }[];
+		await flush();
+		expect(frames).toHaveLength(1);
+		expect(frames[0]?.args[0]?.length).toBe(payload.length);
+	});
+});

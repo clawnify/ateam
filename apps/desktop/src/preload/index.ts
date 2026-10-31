@@ -211,7 +211,10 @@ contextBridge.exposeInMainWorld("ateamHost", host);
 
 const lead: AteamLead = {
 	snapshot: () => ipcRenderer.invoke(LEAD_CH.snapshot),
-	send: (text) => ipcRenderer.invoke(LEAD_CH.send, text),
+	send: (text, files) => ipcRenderer.invoke(LEAD_CH.send, text, files),
+	attach: (paths) => ipcRenderer.invoke(LEAD_CH.attach, paths),
+	attachBytes: (name, data) => ipcRenderer.invoke(LEAD_CH.attachBytes, name, data),
+	thumb: (path) => ipcRenderer.invoke(LEAD_CH.thumb, path),
 	interrupt: () => ipcRenderer.invoke(LEAD_CH.interrupt),
 	reset: () => ipcRenderer.invoke(LEAD_CH.reset),
 	reply: (taskId, text) => ipcRenderer.invoke(LEAD_CH.reply, taskId, text),

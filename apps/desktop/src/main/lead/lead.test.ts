@@ -87,6 +87,72 @@ describe("lead tools", () => {
 		expect(send?.args[0]).toEqual({ taskId: "t1", body: "rebase" });
 	});
 
+	it("create_task sends attached files to the project's machine before the task exists", async () => {
+		const r = fakeRouter();
+		const delivered: { owner: string; paths: string[] }[] = [];
+		const tools = createLeadTools({
+			handle: r.handle,
+			machineOf: () => "hetzner",
+			files: {
+				resolve: (paths) =>
+					paths.every((p) => p.startsWith("/att/")) ? paths : "not attached in this chat",
+				deliver: async (owner, paths) => {
+					delivered.push({ owner, paths });
+					return { paths: paths.map((p) => `/box${p}`) };
+				},
+			},
+		});
+		const res = await tools.call("create_task", {
+			project: "ateam",
+			name: "new",
+			prompt: "fix what the screenshot shows",
+			files: ["/att/1/shot.png"],
+		});
+		expect(res?.isError).toBeFalsy();
+		expect(res?.text).toContain("working on your prompt. It has 1 attached file.");
+		expect(delivered).toEqual([{ owner: "p1", paths: ["/att/1/shot.png"] }]);
+		const spawn = r.calls.find((c) => c.method === CH.ptySpawnAgent);
+		expect(spawn?.args[0]).toMatchObject({ files: ["/box/att/1/shot.png"] });
+	});
+
+	it("create_task starts nothing when a file isn't attached here or can't reach the box", async () => {
+		const r = fakeRouter();
+		const files = {
+			resolve: (paths: string[]) =>
+				paths.every((p) => p.startsWith("/att/")) ? paths : "not attached in this chat",
+			deliver: async () => ({ error: "big.mov is 40 MB" }),
+		};
+		const tools = createLeadTools({ handle: r.handle, machineOf: () => null, files });
+		const args = { project: "ateam", name: "new", prompt: "x" };
+		const outside = await tools.call("create_task", { ...args, files: ["/Users/me/.ssh/id"] });
+		expect(outside).toEqual({ text: "not attached in this chat", isError: true });
+		const tooBig = await tools.call("create_task", { ...args, files: ["/att/1/big.mov"] });
+		expect(tooBig).toEqual({ text: "big.mov is 40 MB", isError: true });
+		expect(r.calls.some((c) => c.method === CH.tasksCreate)).toBe(false);
+	});
+
+	it("send_message lists attached files under the message, as the task's machine sees them", async () => {
+		const r = fakeRouter({ [CH.peersSendFromLead]: () => ({ ok: true, reason: "sent" }) });
+		const tools = createLeadTools({
+			handle: r.handle,
+			machineOf: () => null,
+			files: {
+				resolve: (paths) => paths,
+				deliver: async (owner, paths) => ({ paths: paths.map((p) => `${owner}:${p}`) }),
+			},
+		});
+		await tools.call("send_message", {
+			task: "t1",
+			message: "see spec ",
+			files: ["/att/spec.pdf"],
+		});
+		const send = r.calls.find((c) => c.method === CH.peersSendFromLead);
+		expect(send?.args[0]).toEqual({
+			taskId: "t1",
+			body: "see spec\n\nAttached files:\n- t1:/att/spec.pdf",
+		});
+	});
+
 	it("says a box needs an update when its engine predates the Lead", async () => {
 		const r = fakeRouter({
 			[CH.peersSendFromLead]: () => {
@@ -316,6 +382,27 @@ describe("LeadSession", () => {
 		again.session.send("and now?");
 		const args = (again.procs[0] as FakeClaude).args;
 		expect(args[args.indexOf("--resume") + 1]).toBe("sess-1");
+	});
+
+	it("tells the Lead where attached files are, and shows them on the message", async () => {
+		const { session, procs } = makeSession();
+		const file = { path: "/lead/attachments/a/shot.png", name: "shot.png", size: 3, image: true };
+		session.send("what is wrong here?", [file]);
+		session.send("", [file]);
+		await tick();
+		const p = procs[0] as FakeClaude;
+		expect(p.written[0]).toMatchObject({
+			message: {
+				content: "what is wrong here?\n\nAttached files:\n- /lead/attachments/a/shot.png",
+			},
+		});
+		expect(p.written[1]).toMatchObject({
+			message: { content: "Attached files:\n- /lead/attachments/a/shot.png" },
+		});
+		const users = session.snapshot().items.filter((i) => i.kind === "user");
+		expect(users[0]).toMatchObject({ text: "what is wrong here?", files: [file] });
+		session.send("   ");
+		expect(session.snapshot().items.filter((i) => i.kind === "user")).toHaveLength(2);
 	});
 
 	it("runs as the user's own Claude Code, asking the chat about permissions", () => {
