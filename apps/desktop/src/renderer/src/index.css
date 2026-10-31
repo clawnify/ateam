@@ -1846,13 +1846,17 @@ input {
 	outline: none;
 }
 .dialog.composer.dropping {
-	outline: 2px dashed var(--accent, #6ea8fe);
+	outline: 2px dashed var(--text);
 	outline-offset: -4px;
 }
 .comp-files {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 6px;
+}
+.comp-note {
+	display: block;
+	font-size: 12px;
 }
 .file-chip {
 	display: inline-flex;

@@ -11,6 +11,16 @@ function baseName(p: string): string {
 	return p.split(/[/\\]/).pop() || p;
 }
 
+/** A file's bytes as base64, for writeImageBytes. */
+function toBase64(f: File): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const r = new FileReader();
+		r.onload = () => resolve(String(r.result).split(",")[1] ?? "");
+		r.onerror = () => reject(r.error);
+		r.readAsDataURL(f);
+	});
+}
+
 /**
  * Prompt-first agent launch, in two variants over the same form.
  *
@@ -87,6 +97,9 @@ export function PromptComposer({
 	const [yolo, setYolo] = useState(false);
 	const [files, setFiles] = useState<string[]>(initialFiles);
 	const [dragging, setDragging] = useState(false);
+	// Files still being saved from their bytes, and a line about a drop that can't attach.
+	const [pending, setPending] = useState(0);
+	const [note, setNote] = useState<string | null>(null);
 	// Remember the last-picked environment across tasks (and app restarts) so it isn't
 	// re-selected every time; fall back to the first runnable one (Local, unless the repo
 	// isn't here) when nothing valid is saved for this project. "__local__" = the Mac.
@@ -121,23 +134,80 @@ export function PromptComposer({
 	}, [availOnEnv, agentId, agents]);
 
 	// A session has no name to fall back on — it needs something to say.
-	const canSubmit = Boolean(
-		session ? prompt.trim() || files.length : name.trim() || prompt.trim() || files.length,
-	);
+	// A file still being saved isn't in `files` yet: a quick ⌘⏎ would start the agent without it.
+	const canSubmit =
+		pending === 0 &&
+		Boolean(session ? prompt.trim() || files.length : name.trim() || prompt.trim() || files.length);
 
 	// De-duped append, preserving order — the picker and drops both feed here.
 	const addFiles = (paths: string[]) =>
 		setFiles((cur) => [...cur, ...paths.filter((p) => p && !cur.includes(p))]);
 	const removeFile = (path: string) => setFiles((cur) => cur.filter((p) => p !== path));
+	// Chip labels for files saved from bytes: their temp path is a random name.
+	const [labels, setLabels] = useState<Record<string, string>>({});
 
 	const pickFiles = async () => {
 		addFiles(await window.ateam.utils.pickFiles());
 	};
 
-	const onDrop = (e: React.DragEvent) => {
+	/** Files from a drop or a paste. Those on disk attach by their path; the rest
+	 *  (a pasted screenshot, an image dragged out of a page) have no path, so their
+	 *  bytes are saved to a temp file on this Mac and that path is attached. */
+	const attach = async (list: File[]) => {
+		setNote(null);
+		const paths = list.map((f) => window.ateam.utils.pathForFile(f));
+		addFiles(paths);
+		const unsaved = list.filter((_, i) => !paths[i]);
+		setPending((n) => n + unsaved.length);
+		for (const f of unsaved) {
+			try {
+				const ext = /\.([a-z0-9]+)$/i.exec(f.name)?.[1] ?? f.type.split("/")[1] ?? "";
+				const path = await window.ateam.utils.writeImageBytes(await toBase64(f), ext);
+				setLabels((cur) => ({ ...cur, [path]: f.name || baseName(path) }));
+				addFiles([path]);
+			} catch (err) {
+				console.warn("composer: could not attach", f.name, err);
+			} finally {
+				setPending((n) => n - 1);
+			}
+		}
+	};
+
+	// The whole backdrop takes the drop, not just the dialog: a file let go
+	// anywhere in the window while the composer is open attaches.
+	const dropProps = {
+		onDragOver: (e: React.DragEvent) => {
+			if (!e.dataTransfer.types.includes("Files")) return;
+			e.preventDefault();
+			e.dataTransfer.dropEffect = "copy";
+			setDragging(true);
+		},
+		onDragLeave: (e: React.DragEvent) => {
+			// Crossing onto a child is not leaving; leaving the window is (null).
+			if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+		},
+		onDrop: (e: React.DragEvent) => {
+			setDragging(false);
+			if (!e.dataTransfer.files.length) {
+				// An image dragged out of a browser or Slack arrives as a link to it, never
+				// the file: this Electron's Chromium (132) hands a page no image data from
+				// another app's drag. Say what does work instead of doing nothing.
+				if (/<img\b/i.test(e.dataTransfer.getData("text/html")))
+					setNote("This app sent a link, not the image. Copy the image, then press ⌘V.");
+				return;
+			}
+			e.preventDefault();
+			void attach(Array.from(e.dataTransfer.files));
+		},
+	};
+
+	// A copied screenshot or Finder file arrives as files with no text; text
+	// pastes as text.
+	const onPaste = (e: React.ClipboardEvent) => {
+		const dt = e.clipboardData;
+		if (dt.getData("text/plain") || dt.files.length === 0) return;
 		e.preventDefault();
-		setDragging(false);
-		addFiles(Array.from(e.dataTransfer.files).map((f) => window.ateam.utils.pathForFile(f)));
+		void attach(Array.from(dt.files));
 	};
 
 	const submit = () => {
@@ -156,17 +226,12 @@ export function PromptComposer({
 	};
 
 	return (
-		<div className="overlay" onMouseDown={onClose}>
+		<div className="overlay" onMouseDown={onClose} {...dropProps}>
 			<div
 				className={`dialog composer ${dragging ? "dropping" : ""}`}
 				onMouseDown={(e) => e.stopPropagation()}
 				onKeyDown={onKeys}
-				onDragOver={(e) => {
-					e.preventDefault();
-					setDragging(true);
-				}}
-				onDragLeave={() => setDragging(false)}
-				onDrop={onDrop}
+				onPaste={onPaste}
 			>
 				{!session && (
 					<div className="comp-head">
@@ -190,11 +255,11 @@ export function PromptComposer({
 					<div className="comp-files">
 						{files.map((f) => (
 							<span key={f} className="file-chip" title={f}>
-								<span className="fc-name">{baseName(f)}</span>
+								<span className="fc-name">{labels[f] ?? baseName(f)}</span>
 								<button
 									type="button"
 									className="fc-x"
-									aria-label={`Remove ${baseName(f)}`}
+									aria-label={`Remove ${labels[f] ?? baseName(f)}`}
 									onClick={() => removeFile(f)}
 								>
 									<X size={12} strokeWidth={2.25} />
@@ -203,6 +268,7 @@ export function PromptComposer({
 						))}
 					</div>
 				)}
+				{note && <output className="comp-note muted">{note}</output>}
 				<div className="comp-foot">
 					<button
 						type="button"
