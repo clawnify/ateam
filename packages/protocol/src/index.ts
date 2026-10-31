@@ -281,7 +281,7 @@ export interface ProjectDTO {
 
 /** The repo a project is a clone of, as an agent reads it: GitHub's `owner/name`
  *  when the project has a GitHub remote, else the clone's path on its machine.
- *  A project's name can differ from its repo's (AgentSync is clawnify/agent-squash). */
+ *  A project's name can differ from its repo's, so the name alone does not say. */
 export function projectRepo(
 	p: Pick<ProjectDTO, "repoPath" | "githubOwner" | "githubName">,
 ): string {

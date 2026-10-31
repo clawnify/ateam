@@ -37,10 +37,10 @@ beforeEach(() => {
 describe("buildBoardView", () => {
 	it("names each task's project and the GitHub repo that project is a clone of", async () => {
 		const project = repo.upsertProject(db, {
-			repoPath: "/tmp/agentsync",
-			name: "AgentSync",
-			githubOwner: "clawnify",
-			githubName: "agent-squash",
+			repoPath: "/tmp/site",
+			name: "Site",
+			githubOwner: "acme",
+			githubName: "website",
 		});
 		const t = repo.createTask(db, {
 			projectId: project.id,
@@ -48,7 +48,7 @@ describe("buildBoardView", () => {
 			slug: "a-task",
 			branch: "feat/a",
 			baseBranch: "main",
-			worktreePath: "/tmp/agentsync/.ateam/worktrees/a",
+			worktreePath: "/tmp/site/.ateam/worktrees/a",
 			column: "todo",
 		});
 		const view = await buildBoardView(db);
@@ -56,8 +56,8 @@ describe("buildBoardView", () => {
 		expect(view.tasks[0]).toMatchObject({
 			taskId: t.id,
 			projectId: project.id,
-			project: "AgentSync",
-			repo: "clawnify/agent-squash",
+			project: "Site",
+			repo: "acme/website",
 		});
 	});
 });
