@@ -304,10 +304,16 @@ export function CleanupDialog({
 									onClick={() => setSelectedId(it.task.id)}
 								>
 									<span className="tname">
-										{it.task.name}
-										{it.recommended && <span className="rec-dot" title={it.reason} />}
+										<span className="tname-text">{it.task.name}</span>
+										{it.recommended && (
+											<span className="pill green" title={it.reason}>
+												recommended
+											</span>
+										)}
 									</span>
-									<span className="sub">{it.task.branch}</span>
+									{/* Why it is (or isn't) recommended, which until now only the
+									    dot's tooltip said. The branch is in the detail pane. */}
+									<span className="sub">{it.reason}</span>
 									<Factors item={it} now={now} />
 								</button>
 							))
@@ -321,10 +327,8 @@ export function CleanupDialog({
 									<div style={{ minWidth: 0 }}>
 										<div className="title">
 											{selected.task.name}
-											{selected.recommended && <span className="rec-tag">recommended</span>}
-											{selected.task.archivedAt != null && (
-												<span className="rec-tag archived">archived</span>
-											)}
+											{selected.recommended && <span className="pill green">recommended</span>}
+											{selected.task.archivedAt != null && <span className="pill">archived</span>}
 										</div>
 										<div className="branch muted">
 											{selected.task.branch} · {selected.reason}

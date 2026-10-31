@@ -19,6 +19,12 @@ export const LEAD_CH = {
 	answer: "lead:answer",
 	/** The user answers the Lead's own permission prompt (its agent wants a tool). */
 	permission: "lead:permission",
+	/** Attach files from this Mac (paths, or null for the picker) to the next message. */
+	attach: "lead:attach",
+	/** Attach a file that has no path here: a pasted screenshot, an image dragged from a page. */
+	attachBytes: "lead:attachBytes",
+	/** A small preview of an attached image, as a data: URL (the window's CSP allows no files). */
+	thumb: "lead:thumb",
 	evtEvent: "evt:lead:event",
 } as const;
 
@@ -33,13 +39,28 @@ export interface LeadTaskRef {
 	agentId: string | null;
 }
 
+/** A file the user attached in the chat: a copy in the Lead's folder on this Mac. */
+export interface LeadFile {
+	path: string;
+	name: string;
+	size: number;
+	/** Shown as a thumbnail rather than a chip. */
+	image: boolean;
+}
+
+/** What attaching gave: the files kept, and why any others were not. */
+export interface LeadAttachResult {
+	files: LeadFile[];
+	failed: string[];
+}
+
 /** How the user answered the Lead's permission prompt. */
 export type LeadPermissionAnswer = "allow" | "always" | "deny";
 
 /** One rendered entry in the chat. A tool entry is updated in place when its result lands. */
 export type LeadItem =
 	/** The user's words; `to` when they went to a task's agent, not to the Lead. */
-	| { kind: "user"; id: string; text: string; at: number; to?: LeadTaskRef }
+	| { kind: "user"; id: string; text: string; at: number; to?: LeadTaskRef; files?: LeadFile[] }
 	/** A followed task's agent finished a turn: its reply, shown to the user only
 	 *  (never fed to the Lead's model, so following costs nothing). */
 	| { kind: "agent"; id: string; task: LeadTaskRef; text: string; at: number }
@@ -103,7 +124,11 @@ export type LeadEvent =
 /** window.ateamLead. */
 export interface AteamLead {
 	snapshot(): Promise<LeadSnapshot>;
-	send(text: string): Promise<void>;
+	/** `files`: paths of files attached in this chat (from attach or attachBytes). */
+	send(text: string, files?: string[]): Promise<void>;
+	attach(paths: string[] | null): Promise<LeadAttachResult>;
+	attachBytes(name: string, data: Uint8Array): Promise<LeadFile>;
+	thumb(path: string): Promise<string | null>;
 	interrupt(): Promise<void>;
 	reset(): Promise<void>;
 	reply(taskId: string, text: string): Promise<void>;

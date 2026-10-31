@@ -43,6 +43,9 @@ export async function computeGitStatus(
 		ahead: tracking?.ahead ?? 0,
 		behind: tracking?.behind ?? 0,
 		dirty: d.files.length,
+		// Same diff the task panel's +N -M button reads, so the card agrees with it.
+		additions: d.files.reduce((n, f) => n + f.additions, 0),
+		deletions: d.files.reduce((n, f) => n + f.deletions, 0),
 		updatedAt: Date.now(),
 	};
 }

@@ -56,6 +56,7 @@ const EMPTY_READS = new Set<string>([
 	CH.ptyListForTask,
 	CH.ptyListRestorable,
 	CH.searchSessions,
+	CH.skillsList,
 ]);
 
 /** The marker in the refusal, so a caller can tell "wake it first" from a real failure. */
