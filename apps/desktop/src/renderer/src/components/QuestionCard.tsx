@@ -261,7 +261,15 @@ export function QuestionCard({
 				)}
 			</div>
 			{q.select === "many" && q.choices ? (
-				<Checklist choices={q.choices} disabled={sending} onSend={(t) => void answer(t)} />
+				// Keyed by question: the card stays mounted when the next question
+				// replaces this one (an AskUserQuestion call's next card, an ask_user
+				// re-ask), and the ticks must not carry over.
+				<Checklist
+					key={q.id}
+					choices={q.choices}
+					disabled={sending}
+					onSend={(t) => void answer(t)}
+				/>
 			) : q.choices ? (
 				<div className="choices">
 					{q.choices.map((c) => (

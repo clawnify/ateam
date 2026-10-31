@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AteamDb, KanbanColumn, Task } from "@ateam/db";
 import { repo } from "@ateam/db";
+import { projectRepo } from "@ateam/protocol";
 import { signalsFromTask } from "../task-triage";
 import { validateSetStatus } from "./board-organizer";
 import { agentAlive } from "./session-liveness";
@@ -27,6 +28,10 @@ export interface BoardTaskView {
 	taskId: string;
 	name: string;
 	projectId: string;
+	/** The project's name. */
+	project: string;
+	/** What the project is a clone of (projectRepo): `owner/name`, or its path. */
+	repo: string;
 	column: KanbanColumn;
 	branch: string;
 	prNumber: number | null;
@@ -89,6 +94,8 @@ export async function buildBoardView(db: AteamDb, now = Date.now()): Promise<Boa
 				taskId: task.id,
 				name: task.name,
 				projectId: project.id,
+				project: project.name,
+				repo: projectRepo(project),
 				column: task.column,
 				branch: task.branch,
 				prNumber: task.prNumber ?? null,

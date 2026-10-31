@@ -44,7 +44,16 @@ function fakeRouter(overrides: Record<string, (args: unknown[]) => unknown> = {}
 	const handle = async (method: string, args: unknown[]) => {
 		calls.push({ method, args });
 		if (overrides[method]) return overrides[method](args);
-		if (method === CH.projectsList) return [{ id: "p1", name: "ateam" }];
+		if (method === CH.projectsList)
+			return [
+				{
+					id: "p1",
+					name: "ateam",
+					repoPath: "/Users/me/Codes/ateam",
+					githubOwner: "clawnify",
+					githubName: "ateam",
+				},
+			];
 		if (method === CH.tasksList) return TASKS;
 		if (method === CH.settingsGet) return { settings: { engine: { defaultAgentId: "claude" } } };
 		if (method === CH.tasksCreate)
@@ -56,12 +65,12 @@ function fakeRouter(overrides: Record<string, (args: unknown[]) => unknown> = {}
 }
 
 describe("lead tools", () => {
-	it("get_board leaves merged tasks out and names the machine", async () => {
+	it("get_board leaves merged tasks out and names the repo and the machine", async () => {
 		const r = fakeRouter();
 		const tools = createLeadTools({ handle: r.handle, machineOf: () => "hetzner" });
 		const res = await tools.call("get_board", {});
 		const text = res?.text ?? "";
-		expect(text).toContain("ateam (hetzner, project p1)");
+		expect(text).toContain("ateam (repo clawnify/ateam, hetzner, project p1)");
 		expect(text).toContain("t1 | fix login | review | idle | claude");
 		expect(text).not.toContain("old work");
 	});
@@ -279,8 +288,14 @@ describe("lead tools", () => {
 		};
 		const r = fakeRouter({
 			[CH.projectsList]: () => [
-				{ id: "p1", name: "ateam" },
-				{ id: "p2", name: "site" },
+				{
+					id: "p1",
+					name: "ateam",
+					repoPath: "/r/ateam",
+					githubOwner: "clawnify",
+					githubName: "ateam",
+				},
+				{ id: "p2", name: "site", repoPath: "/r/site", githubOwner: null, githubName: null },
 			],
 			[CH.tasksList]: ([projectId]) => byProject[String(projectId)] ?? [],
 		});
@@ -288,6 +303,8 @@ describe("lead tools", () => {
 		const text = (await tools.call("get_board", { filter: "recent", limit: 3 }))?.text ?? "";
 		// The project with the newest task comes first; the oldest task is past the limit.
 		expect(text.indexOf("site (")).toBeLessThan(text.indexOf("ateam ("));
+		// A project with no GitHub remote names its clone's path as the repo.
+		expect(text).toContain("site (repo /r/site, this Mac, project p2)");
 		expect(text).toContain("b-new | b new | review | idle | claude | just now");
 		expect(text).toContain("a-merged | a merged | merged | not_running | codex | 2m ago");
 		expect(text).toContain("b-mid | b mid");

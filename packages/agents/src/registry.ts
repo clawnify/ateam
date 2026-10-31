@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
-import { resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const pexec = promisify(execFile);
@@ -26,6 +28,13 @@ export interface AgentDefinition {
 	 * the CLI's own --help.
 	 */
 	yoloFlag?: string;
+	/**
+	 * Flag(s) that pin the CLI's asking mode, for a launch with Auto off on a
+	 * machine whose own config would start the agent with every permission check
+	 * off (a box whose Claude settings default to bypassPermissions). Auto off must
+	 * never be looser than Auto on. Omitted for an agent with no such config.
+	 */
+	askFlag?: string;
 	/**
 	 * Command that resumes the most recent conversation in the cwd — used to
 	 * pick a session back up after the agent process ended (e.g. app restart).
@@ -116,6 +125,10 @@ export const AGENTS = [
 		bin: "claude",
 		command: "claude",
 		yoloFlag: "--permission-mode auto",
+		// `manual` is the spelling `--help` lists today; `default` is the older
+		// name and still accepted (verified on 2.1.223 and 2.1.316, both start in
+		// `default`), so it also works on a box whose image pins an older CLI.
+		askFlag: "--permission-mode default",
 		resumeCommand: "claude --continue",
 		// Verified against the CLI itself: `--session-id <uuid>` names the
 		// transcript (~/.claude/projects/<slug>/<uuid>.jsonl) and `--resume <uuid>`
@@ -195,6 +208,11 @@ export function agentCommand(
 	agent: AgentDefinition,
 	opts: {
 		yolo?: boolean;
+		/**
+		 * This machine's config would start the agent with every check off
+		 * (`skipsAskingByDefault`): with Auto off, pin the asking mode instead.
+		 */
+		pinAsk?: boolean;
 		resume?: boolean;
 		agentMode?: boolean;
 		/** Working dir to scope agent mode to (the task's worktree). */
@@ -206,14 +224,17 @@ export function agentCommand(
 		resumeSessionId?: string;
 	} = {},
 ): string {
+	// Auto picks the agent's automatic mode. Off, the agent's own config decides,
+	// unless that config would skip every check, which Auto off must never do.
+	const mode = opts.yolo ? agent.yoloFlag : opts.pinAsk ? agent.askFlag : undefined;
+	const withMode = (cmd: string) => (mode ? `${cmd} ${mode}` : cmd);
 	// Agent mode launches the tool's own multi-agent board (interactive — it takes
 	// the task description itself), so it ignores the prompt/resume variants. The
 	// board is NOT scoped by the process cwd — it needs an explicit `--cwd` to
 	// filter to this worktree (e.g. `claude agents --cwd <worktree>`).
 	if (opts.agentMode && agent.agentsCommand) {
 		const cwd = opts.cwd ? ` --cwd '${opts.cwd.replace(/'/g, `'\\''`)}'` : "";
-		const base = `${agent.agentsCommand}${cwd}`;
-		return opts.yolo && agent.yoloFlag ? `${base} ${agent.yoloFlag}` : base;
+		return withMode(`${agent.agentsCommand}${cwd}`);
 	}
 	const sq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
 	const resumeOne =
@@ -222,7 +243,7 @@ export function agentCommand(
 			: null;
 	const base =
 		resumeOne ?? (opts.resume && agent.resumeCommand ? agent.resumeCommand : agent.command);
-	let cmd = opts.yolo && agent.yoloFlag ? `${base} ${agent.yoloFlag}` : base;
+	let cmd = withMode(base);
 	// Only a fresh launch takes an id: a resumed conversation already has one,
 	// and handing it a second would either be refused or fork it in two.
 	if (opts.sessionId && agent.sessionIdFlag && !resumeOne && !opts.resume) {
@@ -239,6 +260,29 @@ export type AgentId = (typeof AGENTS)[number]["id"];
 
 export function getAgent(id: string): AgentDefinition | undefined {
 	return AGENTS.find((a) => a.id === id);
+}
+
+/**
+ * Would this machine's own config start the agent with every permission check
+ * off? Claude takes `permissions.defaultMode` from the user's settings, and a box
+ * can carry it as `bypassPermissions` (one of our Sprites did), which turns a
+ * launch with Auto off into the loosest mode there is. Only the user file is
+ * read: Claude ignored a bypass default in a repo's `.claude/settings.json` when
+ * tested, and managed settings are an admin's call. Unreadable means no.
+ */
+export async function skipsAskingByDefault(
+	agent: AgentDefinition,
+	configDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"),
+): Promise<boolean> {
+	if (agent.id !== "claude") return false;
+	try {
+		const settings = JSON.parse(await readFile(join(configDir, "settings.json"), "utf8")) as {
+			permissions?: { defaultMode?: unknown };
+		} | null;
+		return settings?.permissions?.defaultMode === "bypassPermissions";
+	} catch {
+		return false;
+	}
 }
 
 /**

@@ -106,7 +106,7 @@ const TOOLS = [
 	{
 		name: "get_board",
 		description:
-			"List every in-play task (excludes merged) with its board column and a triage verdict — whether it looks done or still ongoing, and why. Read this before moving anything.",
+			"List every in-play task (excludes merged) with its project, the repo that project is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its board column and a triage verdict — whether it looks done or still ongoing, and why. Read this before moving anything.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 	},
 	{
@@ -158,7 +158,7 @@ const TOOLS = [
 	{
 		name: "list_peers",
 		description:
-			"List the user's other tasks you can message with send_message: each task's id, name, project, branch, which agent works in it (Claude Code, Codex, OpenCode), and its state (working, needs_you, idle, or not_running). Your own task is marked you: true.",
+			"List the user's other tasks you can message with send_message: each task's id, name, project, repo (the project's GitHub owner/name, or its clone's path when it has no GitHub remote), branch, which agent works in it (Claude Code, Codex, OpenCode), and its state (working, needs_you, idle, or not_running). Your own task is marked you: true.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 	},
 	{
