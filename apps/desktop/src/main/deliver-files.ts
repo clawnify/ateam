@@ -10,9 +10,10 @@ import { CH } from "@ateam/protocol";
 import type { Router } from "./backend";
 
 /** The most one file may weigh on its way to a box. The engine connection
- *  carries each message as one line, which the box rescans as it arrives
- *  (packages/server/src/transport/stream.ts), and every terminal on that box
- *  waits meanwhile: measured, 10 MB holds it ~0.2 s, 25 MB ~1.5 s.
+ *  carries each message as one line, and a box older than this commit rescans
+ *  that line on every chunk it reads (packages/server/src/transport/stream.ts,
+ *  now linear), with every terminal on it waiting: measured, 10 MB held it
+ *  ~0.2 s, 25 MB ~1.5 s. Raise this once every box has the linear framing.
  *  shortcut: a cap, not a chunked transfer; chunk it if bigger files matter. */
 export const MAX_BOX_FILE_BYTES = 10 * 1024 * 1024;
 
