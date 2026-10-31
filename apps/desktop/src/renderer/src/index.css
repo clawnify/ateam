@@ -857,16 +857,26 @@ input {
 .card:hover .card-tags {
 	display: flex;
 }
-.tag {
+/* The one pill: a short name in a border, filled with a faint tint of that
+   same border colour. Neutral by default (task tags, "archived"); a colour
+   class sets --pill and the text follows it. */
+.pill {
+	--pill: var(--border);
+	flex: none;
 	font-size: 9.5px;
+	font-weight: 400;
 	line-height: 1;
 	letter-spacing: 0.02em;
 	padding: 3px 6px;
 	border-radius: 999px;
-	border: 1px solid var(--border);
-	background: var(--bg-elev-2);
+	border: 1px solid var(--pill);
+	background: color-mix(in srgb, var(--pill) 15%, transparent);
 	color: var(--text-dim);
 	white-space: nowrap;
+}
+.pill.green {
+	--pill: var(--green);
+	color: var(--green);
 }
 .card .meta {
 	display: flex;
@@ -1266,7 +1276,8 @@ input {
 	display: flex;
 	flex-direction: column;
 }
-/* slim bar under each terminal: `+` menu (attach files, …) */
+/* slim bar under each terminal: `+` menu (attach files, …) and the agent's
+   skills on the left; grammar fixes and Done on the right. */
 .term-toolbar {
 	display: flex;
 	align-items: center;
@@ -1274,6 +1285,120 @@ input {
 	padding: 2px 6px;
 	border-top: 1px solid var(--border);
 	flex: none;
+	min-width: 0;
+}
+/* The right-hand group. When the bar runs out of room the pinned skills give
+   way first (they shrink far faster), since a grammar fix is the thing you
+   act on now. */
+.term-toolbar-end {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 0;
+	margin-left: auto;
+	flex: 0 1 auto;
+}
+
+/* Pinned skills: one compact button each, clipped rather than wrapped. */
+.skill-chips {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	flex: 0 100 auto;
+}
+/* How many times a pinned skill was sent in this session, after its name. */
+.skill-chip-sent {
+	margin-left: 3px;
+	color: var(--text-dim);
+	font-size: 10px;
+	font-variant-numeric: tabular-nums;
+}
+.skill-hint {
+	padding-left: 4px;
+	color: var(--text-dim);
+	font-size: 11px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* A row in the Skills menu: the command and what it does, with a pin toggle
+   that shows on hover (always, once pinned). */
+.skill-row {
+	display: flex;
+	align-items: center;
+	border-radius: 4px;
+}
+.skill-row:hover,
+.skill-row:focus-within {
+	background: var(--bg-elev-2);
+}
+.skill-row-main {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 1px;
+	flex: 1;
+	min-width: 0;
+	padding: 4px 8px;
+	border: none;
+	background: transparent;
+	color: var(--text);
+	text-align: left;
+	cursor: pointer;
+}
+.skill-row-main:hover {
+	background: transparent;
+}
+.skill-row-name {
+	font-family: ui-monospace, Menlo, monospace;
+	font-size: 11.5px;
+}
+.skill-row-desc {
+	width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-dim);
+	font-size: 11px;
+}
+.skill-row-uses {
+	flex: none;
+	padding: 0 4px;
+	color: var(--text-dim);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
+.skill-row-pin {
+	display: grid;
+	place-items: center;
+	flex: none;
+	margin-right: 4px;
+	padding: 4px;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text-dim);
+	opacity: 0;
+	cursor: pointer;
+}
+.skill-row:hover .skill-row-pin,
+.skill-row-pin:focus-visible,
+.skill-row-pin[data-pinned="true"] {
+	opacity: 1;
+}
+.skill-row-pin[data-pinned="true"] {
+	color: var(--text);
+}
+.skill-row-pin:hover {
+	color: var(--text);
+	background: rgba(255, 255, 255, 0.08);
+}
+.skill-empty {
+	padding: 8px;
+	font-size: 11.5px;
 }
 
 /* Grammar corrections for the prompt being typed: the first suggestion per
@@ -1294,10 +1419,11 @@ input {
 	margin-right: 2px;
 }
 
-/* "Done" action: compact so it clears the toolbar's top/bottom edges,
-   pushed to the far right of the bar. */
+/* "Done" action: compact so it clears the toolbar's top/bottom edges; it
+   closes the right-hand group, so it sits at the far right of the bar. */
 .term-done {
-	margin-left: auto;
+	margin-left: 4px;
+	flex: none;
 	padding: 1px 10px;
 	font-size: 11px;
 	font-weight: 500;
@@ -1836,13 +1962,17 @@ input {
 	outline: none;
 }
 .dialog.composer.dropping {
-	outline: 2px dashed var(--accent, #6ea8fe);
+	outline: 2px dashed var(--text);
 	outline-offset: -4px;
 }
 .comp-files {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 6px;
+}
+.comp-note {
+	display: block;
+	font-size: 12px;
 }
 .file-chip {
 	display: inline-flex;
@@ -1907,6 +2037,13 @@ input {
 	opacity: 0.35;
 	cursor: default;
 }
+/* ⇧ held: the task will be created in the background, so the button turns
+   from "go there" (filled arrow) to "add" (outlined plus). */
+.comp-go.stay {
+	background: transparent;
+	color: var(--text);
+	box-shadow: inset 0 0 0 1.5px var(--text);
+}
 
 .dtitle {
 	font-size: 13px;
@@ -1953,6 +2090,45 @@ input {
 	background: #14201a;
 	border-color: var(--green);
 	color: #d7ffe6;
+}
+.toast-action {
+	margin-left: 14px;
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--text);
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+}
+.toast-action:hover {
+	text-decoration: underline;
+}
+
+/* A task created in the background (⇧⌘⏎) shows where it landed: its sidebar
+   row and board card blink a white ring twice, then settle. Inset, so a
+   column's overflow can't clip it. */
+.tasknode.just-started,
+.rail-tile.just-started,
+.card.just-started {
+	animation: just-started 0.8s ease-in-out 2;
+}
+@keyframes just-started {
+	0%,
+	100% {
+		box-shadow: inset 0 0 0 0 transparent;
+	}
+	50% {
+		box-shadow: inset 0 0 0 1.5px var(--text);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.tasknode.just-started,
+	.rail-tile.just-started,
+	.card.just-started {
+		animation: none;
+		box-shadow: inset 0 0 0 1px var(--text);
+	}
 }
 
 /* ---- ghost icon buttons (VSCode-style) ---- */
@@ -2262,24 +2438,22 @@ input {
 	background: var(--bg-elev-2);
 	border-left: 2px solid #fff;
 }
+/* Name, then the "recommended" pill when the sweep would take this one
+   (advice, not a filter). The name ellipsizes; the pill never shrinks.
+   Stretched because buttons align their children flex-start, which sized
+   this line to its content and pushed the pill off the row's edge. */
 .cleanup-item .tname {
+	display: flex;
+	align-self: stretch;
+	align-items: center;
+	gap: 6px;
 	font-size: 13px;
+}
+.cleanup-item .tname-text {
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-}
-.cleanup-item .tname {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-}
-/* The sweep would take this one — advice, not a filter. */
-.cleanup-item .rec-dot {
-	flex: none;
-	width: 5px;
-	height: 5px;
-	border-radius: 50%;
-	background: var(--green);
 }
 .cleanup-factors {
 	display: flex;
@@ -2304,19 +2478,9 @@ input {
 .cleanup-factors .pr.closed {
 	color: var(--red);
 }
-.cleanup-detail-head .rec-tag {
+.cleanup-detail-head .title .pill {
 	margin-left: 8px;
-	font-size: 10px;
-	font-weight: 400;
-	color: var(--green);
-	border: 1px solid var(--green);
-	border-radius: 4px;
-	padding: 1px 5px;
 	vertical-align: middle;
-}
-.cleanup-detail-head .rec-tag.archived {
-	color: var(--text-dim);
-	border-color: var(--border);
 }
 .cleanup-item .sub {
 	font-size: 11px;
@@ -3466,9 +3630,10 @@ input {
 }
 .lead-box {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: flex-end;
 	gap: 8px;
-	padding: 8px 8px 8px 14px;
+	padding: 8px;
 	background: #222228;
 	border-radius: 14px;
 	box-shadow:
@@ -3496,6 +3661,62 @@ input {
 	outline: none;
 }
 .lead-box textarea::placeholder {
+	color: var(--text-dim);
+}
+.lead-box.dropping {
+	box-shadow:
+		inset 0 0 0 1px var(--text),
+		0 4px 20px rgba(0, 0, 0, 0.25);
+}
+/* Attached files: a row of their own above the line being typed, and at the
+   top of the message they went with. */
+.lead-files {
+	flex-basis: 100%;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+}
+.lead-user .lead-files {
+	margin-bottom: 6px;
+}
+.lead-thumb {
+	position: relative;
+	display: inline-flex;
+	border-radius: 8px;
+	overflow: hidden;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+/* Scaled to fit, never cropped: a screenshot's edges are often the point. */
+.lead-thumb img {
+	display: block;
+	max-height: 64px;
+	max-width: 160px;
+}
+.lead-user .lead-thumb img {
+	max-height: 120px;
+	max-width: 240px;
+}
+.lead-thumb .fc-x {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	display: inline-flex;
+	padding: 2px;
+	border: none;
+	border-radius: 4px;
+	background: rgba(0, 0, 0, 0.6);
+	color: var(--text);
+	cursor: pointer;
+}
+.lead-file-size {
+	flex: none;
+	color: var(--text-dim);
+	opacity: 0.7;
+}
+.lead-attach-note {
+	padding: 0 4px 6px;
+	font-size: 12px;
 	color: var(--text-dim);
 }
 .lead-send {

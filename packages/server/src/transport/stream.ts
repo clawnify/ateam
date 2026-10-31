@@ -5,17 +5,31 @@ import type { Readable, Writable } from "node:stream";
 import type { ClientFrame, ClientTransport, ServerFrame } from "@ateam/protocol";
 import type { ServerTransport } from "../rpc";
 
+const NEWLINE = 0x0a;
+
+/**
+ * Each line, decoded once it is whole. A frame can run to megabytes (a file
+ * sent to a box arrives as one line, in many chunks), so each chunk is searched
+ * once and a line's chunks are joined once: growing one string and searching it
+ * from the start on every chunk took 1.5 s for a 25 MB file, all of it with
+ * every other frame on this connection waiting. Decoding whole lines also keeps
+ * a character whose bytes straddle two chunks intact.
+ */
 function readLines(readable: Readable, onLine: (line: string) => void): void {
-	let buf = "";
-	readable.on("data", (chunk: Buffer | string) => {
-		buf += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-		let nl: number;
-		// biome-ignore lint/suspicious/noAssignInExpressions: stream framing
-		while ((nl = buf.indexOf("\n")) !== -1) {
-			const line = buf.slice(0, nl);
-			buf = buf.slice(nl + 1);
+	// The bytes of the line not yet ended.
+	let pending: Buffer[] = [];
+	readable.on("data", (data: Buffer | string) => {
+		let chunk = typeof data === "string" ? Buffer.from(data, "utf8") : data;
+		let nl = chunk.indexOf(NEWLINE);
+		while (nl !== -1) {
+			pending.push(chunk.subarray(0, nl));
+			const line = Buffer.concat(pending).toString("utf8");
+			pending = [];
 			if (line.trim()) onLine(line);
+			chunk = chunk.subarray(nl + 1);
+			nl = chunk.indexOf(NEWLINE);
 		}
+		if (chunk.length) pending.push(chunk);
 	});
 }
 

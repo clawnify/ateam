@@ -29,7 +29,7 @@ export function GithubIssueCard({
 			<div className="name">{issue.title}</div>
 			<div className="issue-labels">
 				{issue.labels.map((label) => (
-					<span className="tag" key={label}>
+					<span className="pill" key={label}>
 						{label}
 					</span>
 				))}
@@ -66,7 +66,7 @@ export function GithubIssuePanel({
 				<div className="issue-byline">Opened by {issue.author}</div>
 				<div className="issue-labels">
 					{issue.labels.map((label) => (
-						<span className="tag" key={label}>
+						<span className="pill" key={label}>
 							{label}
 						</span>
 					))}

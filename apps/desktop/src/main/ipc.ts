@@ -11,6 +11,7 @@ import {
 import { endpointUrl } from "@ateam/server";
 import { clipboard, dialog, ipcMain, nativeImage } from "electron";
 import type { Router } from "./backend";
+import { deliverFiles } from "./deliver-files";
 
 /**
  * Load an image file and put it on the clipboard as a real bitmap, so a
@@ -130,6 +131,16 @@ export function registerIpc(router: Router, native: NativeHandlers): void {
 				method,
 				(e, ...args: unknown[]) => void router.handle(method, args, { client: clientOf(e.sender) }),
 			);
+		} else if (method === CH.ptySpawnAgent) {
+			// Files picked on this Mac (the new-task dialog, a drop on a project) are
+			// paths an agent on a box can't open: send them to its box first, and
+			// hand it the box-side paths.
+			ipcMain.handle(method, async (_e, input: { taskId: string; files?: string[] }) => {
+				if (!input?.files?.length) return router.handle(method, [input]);
+				const sent = await deliverFiles(router, input.taskId, input.files);
+				if ("error" in sent) throw new Error(`${sent.error} The agent was not started.`);
+				return router.handle(method, [{ ...input, files: sent.paths }]);
+			});
 		} else {
 			ipcMain.handle(method, (_e, ...args: unknown[]) => router.handle(method, args));
 		}
@@ -163,6 +174,17 @@ export function registerIpc(router: Router, native: NativeHandlers): void {
 			title: "Add files to terminal",
 		});
 		return res.canceled ? [] : res.filePaths;
+	});
+
+	// The Skills menu's "Add skill…": a skill is its folder, but people often
+	// hold the SKILL.md itself, so the panel takes either.
+	ipcMain.handle(CH.skillsPick, async () => {
+		const res = await dialog.showOpenDialog({
+			properties: ["openDirectory", "openFile"],
+			filters: [{ name: "Skill", extensions: ["md"] }],
+			title: "Choose a skill folder or its SKILL.md",
+		});
+		return res.canceled ? null : (res.filePaths[0] ?? null);
 	});
 
 	// Deliver local image files to the terminal's agent, wherever it runs. The
