@@ -22,6 +22,10 @@ export const LEAD_CH = {
 	evtEvent: "evt:lead:event",
 } as const;
 
+/** How the Lead links a task in its replies, `[fix login](task:<id>)` (its
+ *  prompt says so): the chat draws the link as a chip that opens the task. */
+export const TASK_LINK_SCHEME = "task:";
+
 /** A task named in the chat: enough to label it and open it. */
 export interface LeadTaskRef {
 	taskId: string;
