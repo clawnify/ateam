@@ -204,6 +204,12 @@ input {
 	background: var(--bg-elev-2);
 	color: var(--text);
 }
+/* aria-disabled, not :disabled, so the tooltip still opens to say why. */
+.rail-tile[aria-disabled="true"] {
+	opacity: 0.35;
+	cursor: default;
+	background: transparent;
+}
 /* How many sessions the tile stands for, when more than one: the tile has
    room for one glyph, so the rest are a number. Opposite corner to the status
    dot. */
@@ -2500,7 +2506,8 @@ input {
 	border-color: var(--text-dim);
 }
 /* Sidebar LOOPS row for a paused loop. */
-.tasknode.loop-paused {
+.tasknode.loop-paused,
+.rail-tile.loop-paused {
 	opacity: 0.5;
 }
 /* A task on a box that isn't held: what the box showed last, not a live state,
