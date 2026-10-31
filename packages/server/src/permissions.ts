@@ -229,7 +229,9 @@ export class PermissionBridge {
 		if (task?.question?.id === p.questionId) {
 			repo.updateTask(this.deps.db, p.taskId, {
 				...CLEAR_QUESTION,
-				...(column ? { column, isUnread: false } : {}),
+				// The agent is past its prompt: left at awaiting_input, the card
+				// would be held in Needs You (repo.updateTask).
+				...(column ? { column, agentStatus: "running" as const, isUnread: false } : {}),
 			});
 			this.deps.notify(p.taskId);
 		}

@@ -36,7 +36,7 @@ import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
 import { PermissionBridge } from "./permissions";
 import { applyShowPage } from "./pages";
-import { answerQuestion, applyAskUser, CLEAR_QUESTION, columnWithQuestion } from "./questions";
+import { answerQuestion, applyAskUser, CLEAR_QUESTION } from "./questions";
 import { readSettings } from "./settings-file";
 import { createTurnClassifier } from "./turn-classifier";
 import { applySetWaiting, CLEAR_WAIT, isFiredWait, WaitTimers } from "./waits";
@@ -177,6 +177,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		}
 	}
 	const db = createDb(dbPath);
+	// An agent marked at a prompt holds its card in Needs You (repo.updateTask),
+	// so a mark left behind by an agent that is long gone must not.
+	repo.clearStrandedPrompts(db);
 
 	// Before anything is spawned: a GUI launch inherits launchd's PATH, so the
 	// agent CLIs, `gh` and every headless turn would look uninstalled. Awaited
@@ -396,6 +399,16 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				column: columnAfterExit(task),
 				...(markUnread ? { isUnread: true } : {}),
 			});
+		} else if (
+			task.agentStatus === "awaiting_input" &&
+			!repo
+				.listSessionsByTask(db, task.id)
+				.some((s) => s.status === "awaiting_input" && pty.has(s.terminalId))
+		) {
+			// No agent of the task is at a prompt now. Left as it was, the mark
+			// would hold the card in Needs You (repo.updateTask) after its agent
+			// is gone.
+			repo.updateTask(db, task.id, { agentStatus: "stopped" });
 		}
 		// Announced whether or not the column moved: a session ending changes
 		// what the task is running (TaskDTO.agentIds), and a shell closing on a
@@ -525,7 +538,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				repo.updateTask(db, task.id, { archivedAt: null, restoredAt: Date.now() });
 				sendTaskUpdated(task.id);
 			}
-			const column = columnWithQuestion(task, mapEventToColumn(e.eventType));
+			// A pending question holds the card in Needs You whatever this says
+			// (repo.updateTask), so a Stop cannot bury it in Review.
+			const column = mapEventToColumn(e.eventType);
 			// Subagents fire PreToolUse too, so a Working event must never mask a
 			// pending question — only an explicit user reply (UserReply), Stop, or
 			// a fresh Start may move a task out of needs_attention.
