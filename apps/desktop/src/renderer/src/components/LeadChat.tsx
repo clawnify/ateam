@@ -14,6 +14,8 @@ import {
 import {
 	type FormEvent,
 	type KeyboardEvent,
+	type ReactNode,
+	useCallback,
 	useEffect,
 	useLayoutEffect,
 	useMemo,
@@ -28,8 +30,10 @@ import type {
 	LeadTaskRef,
 } from "../../../shared/lead";
 import { AgentIcon } from "./AgentIcon";
-import { Markdown } from "./Markdown";
+import { IconButton } from "./IconButton";
+import { Markdown, TaskLinkContext } from "./Markdown";
 import { PageFrame } from "./PageFrame";
+import { PanelRightFilled } from "./PanelRightFilled";
 import { QuestionCard } from "./QuestionCard";
 
 type ToolItem = Extract<LeadItem, { kind: "tool" }>;
@@ -336,6 +340,37 @@ function TaskChip({
 	);
 }
 
+/** A task the Lead named in its prose, `[fix login](task:<id>)`: a chip that
+ *  opens it, in the Lead's own words. Those are often clearer than the task's
+ *  name, which is usually the first words of its prompt ("In our website in
+ *  Clawnify org"), so the name goes in the tooltip. One this window can't find
+ *  (deleted, or on a box that isn't connected) is greyed. */
+function TaskLink({
+	target,
+	label,
+	tasks,
+	onOpenTask,
+}: {
+	target: string;
+	label: ReactNode;
+	tasks: TaskDTO[];
+	onOpenTask: (t: TaskDTO) => void;
+}) {
+	const task = findTask(tasks, target);
+	return (
+		<button
+			type="button"
+			className="lead-chip"
+			title={task ? `Open ${task.name}` : "Not on a board this window has loaded"}
+			disabled={!task}
+			onClick={() => task && onOpenTask(task)}
+		>
+			{task && <AgentIcon agentId={task.agentId} size={12} />}
+			<span className="lead-chip-name">{label}</span>
+		</button>
+	);
+}
+
 const OUTCOME: Record<LeadPermissionAnswer | "cancelled", string> = {
 	allow: "Allowed",
 	always: "Allowed, and won't ask again",
@@ -489,16 +524,37 @@ function Thinking() {
 	);
 }
 
+/** What the user has typed and not sent. Outlives the component, because the
+ *  chat moves between the Lead tab and the sidebar by unmounting one and
+ *  mounting the other, and hiding the sidebar unmounts it too. */
+let unsent = "";
+
 export function LeadChat({
 	tasks,
 	onOpenTask,
+	onHide,
 }: {
 	/** Every loaded task, across projects and machines, to name and open the ones the Lead touches. */
 	tasks: TaskDTO[];
 	onOpenTask: (t: TaskDTO) => void;
+	/** Set when the chat is the sidebar on the right: its header is then the
+	 *  slim strip that hides it, not the Lead tab's title. */
+	onHide?: () => void;
 }) {
 	const [snap, setSnap] = useState<LeadSnapshot>(EMPTY);
-	const [text, setText] = useState("");
+	const [text, setTextState] = useState(() => unsent);
+	const setText = (value: string) => {
+		unsent = value;
+		setTextState(value);
+	};
+	// The Lead names tasks as links (its prompt says how); each is drawn as a
+	// chip that opens the task.
+	const renderTaskLink = useCallback(
+		(target: string, label: ReactNode) => (
+			<TaskLink target={target} label={label} tasks={tasks} onOpenTask={onOpenTask} />
+		),
+		[tasks, onOpenTask],
+	);
 	const scroller = useRef<HTMLDivElement>(null);
 	const thread = useRef<HTMLDivElement>(null);
 	const input = useRef<HTMLTextAreaElement>(null);
@@ -569,22 +625,44 @@ export function LeadChat({
 
 	return (
 		<div className="lead">
-			<div className="lead-head">
-				<div>
-					<h2>Lead</h2>
-					<p>One chat for every task, on this Mac and on your boxes.</p>
+			{onHide ? (
+				// The sidebar's top strip, level with the top bar beside it. Its hide
+				// toggle sits where the top bar's show toggle was, so the button
+				// doesn't move when the sidebar opens.
+				<div className="lead-side-head">
+					<span className="lead-side-title">Lead</span>
+					<IconButton
+						icon={SquarePen}
+						label="New conversation"
+						size={14}
+						disabled={snap.items.length === 0}
+						onClick={() => void window.ateamLead.reset()}
+					/>
+					<IconButton
+						icon={PanelRightFilled}
+						label="Hide Lead sidebar"
+						size={14}
+						onClick={onHide}
+					/>
 				</div>
-				<button
-					type="button"
-					className="iconbtn"
-					title="New conversation"
-					aria-label="New conversation"
-					disabled={snap.items.length === 0}
-					onClick={() => void window.ateamLead.reset()}
-				>
-					<SquarePen size={14} />
-				</button>
-			</div>
+			) : (
+				<div className="lead-head">
+					<div>
+						<h2>Lead</h2>
+						<p>One chat for every task, on this Mac and on your boxes.</p>
+					</div>
+					<button
+						type="button"
+						className="iconbtn"
+						title="New conversation"
+						aria-label="New conversation"
+						disabled={snap.items.length === 0}
+						onClick={() => void window.ateamLead.reset()}
+					>
+						<SquarePen size={14} />
+					</button>
+				</div>
+			)}
 
 			<div
 				className="lead-scroll"
@@ -636,7 +714,9 @@ export function LeadChat({
 							</div>
 						) : b.item.kind === "assistant" ? (
 							<div key={b.item.id} className="md">
-								<Markdown text={b.item.text} />
+								<TaskLinkContext value={renderTaskLink}>
+									<Markdown text={b.item.text} />
+								</TaskLinkContext>
 							</div>
 						) : b.item.kind === "notice" ? (
 							<div key={b.item.id} className={`lead-notice ${b.item.tone}`}>
@@ -649,7 +729,9 @@ export function LeadChat({
 					)}
 					{snap.draft ? (
 						<div className="md streaming">
-							<Markdown text={snap.draft} />
+							<TaskLinkContext value={renderTaskLink}>
+								<Markdown text={snap.draft} />
+							</TaskLinkContext>
 						</div>
 					) : (
 						snap.busy && !toolRunning && <Thinking />

@@ -7,9 +7,43 @@
 // onerror, javascript: links, <script> labels all come out inert). So the SVG
 // is inserted as markup, like its own docs do.
 import { PeleError, render } from "pele";
-import { memo, useMemo } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import { createContext, memo, type ReactNode, useContext, useMemo } from "react";
+import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { TASK_LINK_SCHEME } from "../../../shared/lead";
+
+/** How a `task:` link (the Lead naming a task, `[fix login](task:<id>)`) is
+ *  drawn, given what follows the scheme and the link's text. Provided by the
+ *  Lead chat; anywhere else such a link stays inert like every other. */
+export const TaskLinkContext = createContext<
+	((target: string, label: ReactNode) => ReactNode) | null
+>(null);
+
+function TaskAwareLink({ href, children }: { href?: string; children?: ReactNode }) {
+	const renderTask = useContext(TaskLinkContext);
+	if (renderTask && href?.startsWith(TASK_LINK_SCHEME)) {
+		const target = href.slice(TASK_LINK_SCHEME.length);
+		let decoded = target;
+		try {
+			decoded = decodeURIComponent(target);
+		} catch {
+			/* a stray % in what the model wrote: match it as written */
+		}
+		return renderTask(decoded, children);
+	}
+	// Inert: a click must not navigate the app's window.
+	return (
+		<span className="md-link" title={href}>
+			{children}
+		</span>
+	);
+}
+
+/** react-markdown's default empties any URL whose scheme it doesn't know, so
+ *  a `task:` link would reach TaskAwareLink without its target. Nothing here
+ *  navigates (links render as spans or chips), so keeping it is safe. */
+const urlTransform = (url: string, key: string) =>
+	key === "href" && url.startsWith(TASK_LINK_SCHEME) ? url : defaultUrlTransform(url);
 
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 
@@ -39,12 +73,7 @@ const Diagram = memo(function Diagram({ source }: { source: string }) {
 });
 
 const COMPONENTS: Components = {
-	// Inert: a click must not navigate the app's window.
-	a: ({ children, href }) => (
-		<span className="md-link" title={href}>
-			{children}
-		</span>
-	),
+	a: ({ children, href }) => <TaskAwareLink href={href}>{children}</TaskAwareLink>,
 	pre: ({ node, children }) => {
 		const code = node?.children[0];
 		if (
@@ -61,7 +90,7 @@ const COMPONENTS: Components = {
 
 export function Markdown({ text }: { text: string }) {
 	return (
-		<ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
+		<ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS} urlTransform={urlTransform}>
 			{text}
 		</ReactMarkdown>
 	);
