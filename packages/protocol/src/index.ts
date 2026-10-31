@@ -101,7 +101,12 @@
 // v20: agent pages (the show_page board tool, and ask_user's `page`). TaskDTO
 // gained `page` and TaskQuestionDTO `pageId`, both optional, so an older engine
 // reads as "no page"; tasks:page is a new method.
-export const PROTOCOL_VERSION = 20;
+// v21: skills. skills:list answers which skills the agent in a terminal can
+// invoke, read from that agent's own folders on the engine's machine; a new
+// method, so no gate: a v20 engine answers "Unknown method" and the toolbar
+// shows no skills for that box. skills:link always runs on this Mac's engine.
+// Settings gained `client.pinnedSkills`, read by the desktop alone.
+export const PROTOCOL_VERSION = 21;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -541,6 +546,53 @@ export interface ClientSettings {
 	 * OpenRouter while you type. No key: every issue shows, as with it off.
 	 */
 	filterGrammarWithJev: boolean;
+	/**
+	 * Skills shown as buttons on each agent terminal's toolbar, by name
+	 * (`research-topic`, `greybeard:pressure-test`), in order. A name the
+	 * terminal's agent can't see is skipped there. Null until first chosen:
+	 * the desktop then fills it from the skills you type most and saves it,
+	 * so the buttons stay put rather than following usage.
+	 */
+	pinnedSkills: string[] | null;
+}
+
+/** Where a skill came from, in the order its agent prefers them. */
+export type SkillScope = "personal" | "project" | "plugin" | "command" | "system";
+
+/** One skill the agent in a terminal can invoke (skills:list). */
+export interface SkillDTO {
+	/** As the agent knows it: `research-topic`, `greybeard:pressure-test`. */
+	name: string;
+	/** What to type to run it in that agent: `/name` (Claude, OpenCode), `$name` (Codex). */
+	command: string;
+	description: string;
+	scope: SkillScope;
+	/** The SKILL.md (or command file) it was read from, on the engine's machine. */
+	path: string;
+	/** Times typed in the last 30 days, from the agent's own prompt history. Orders the menu. */
+	uses: number;
+	/**
+	 * Times sent in this terminal's own agent conversation, from its transcript:
+	 * so you can see you already ran it here. 0 when the conversation's
+	 * transcript can't be found (OpenCode, or an id the agent never reported).
+	 */
+	sessionUses: number;
+}
+
+/** skills:link's answer: each agent folder the skill was (or would be) linked into. */
+export interface SkillLinkResult {
+	name: string;
+	/** The skill folder the links point at. */
+	source: string;
+	description: string;
+	links: {
+		/** The link itself, e.g. ~/.claude/skills/<name>. */
+		path: string;
+		/** Where its folder really is: a dotfiles repo when ~/.claude/skills is a link. */
+		realDir: string;
+		/** `exists`: already linked to this same skill, so nothing to write. */
+		status: "create" | "exists";
+	}[];
 }
 export interface AteamSettings {
 	version: number;
@@ -942,6 +994,9 @@ export const CH = {
 	agentsList: "agents:list",
 	agentsInstall: "agents:install",
 	searchSessions: "search:sessions",
+	skillsList: "skills:list",
+	skillsLink: "skills:link",
+	skillsPick: "skills:pick",
 	systemHello: "system:hello",
 	systemUpdate: "system:update",
 	fsListDir: "fs:listDir",
@@ -1188,6 +1243,23 @@ export interface AteamApi {
 		 * box with no browser installed.
 		 */
 		view(taskId: string): Promise<{ url: string }>;
+	};
+	skills: {
+		/**
+		 * The skills the agent in this terminal can invoke, most typed first. Read on
+		 * the machine the terminal runs on, from that agent's own skill folders, so
+		 * a box lists the box's skills. Empty for a shell.
+		 */
+		list(terminalId: string): Promise<SkillDTO[]>;
+		/**
+		 * Link a skill folder (or its SKILL.md) into this Mac's agent skill folders
+		 * (~/.claude/skills and ~/.agents/skills) as symlinks, so edits at the source
+		 * reach every agent. `dryRun` returns the plan without writing. Refuses a
+		 * name another skill already holds.
+		 */
+		link(input: { path: string; dryRun?: boolean }): Promise<SkillLinkResult>;
+		/** Native picker for a skill folder or SKILL.md; null when cancelled. */
+		pick(): Promise<string | null>;
 	};
 	fs: {
 		/**

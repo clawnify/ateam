@@ -223,7 +223,13 @@ OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection
 Mission Control grid (one tile per task, its sessions as read-only tabs; tiles
 keep their own order, drag to swap them across pages, Sync to take the sidebar's),
 collapsible sidebar rail, image drag-drop & paste into
-agent terminals, session search (the topbar box answers in a popover listing
+agent terminals, skills on each agent terminal's toolbar (a menu of every skill
+that agent can invoke, read from its own skill folders on the machine it runs
+on, plus pinned buttons seeded from the ones you type most, each marked with how
+many times you already sent it in that terminal's conversation; a click puts
+`/name`, or Codex's `$name`, in front of the prompt you are typing and leaves
+Enter to you; "Add skill…" links a skill folder into `~/.claude/skills` and
+`~/.agents/skills` so edits reach every agent), session search (the topbar box answers in a popover listing
 matching tasks and the past sessions that discussed them, with an AI row that
 finds a session from a description of the work, reading Claude Code / Codex /
 OpenCode transcripts),

@@ -70,6 +70,7 @@ import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } fr
 import { searchSessions } from "./session-search";
 import { createTaskInProject, type SpawnAgentInput, shell, spawnAgentInTask } from "./sessions";
 import { readSettings, settingsPath, updateSettings } from "./settings-file";
+import { linkSkill, listSkills } from "./skills";
 import { applySetWaiting, clearWaiting } from "./waits";
 
 /**
@@ -654,6 +655,26 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		// machine that ran the agent, so a box searches its own history.
 		[CH.searchSessions]: async (input: { projectId: string; query: string; ai?: boolean }) =>
 			searchSessions(services, input),
+
+		// ---- skills ----
+		// What the agent in a terminal can invoke, read from that agent's own
+		// folders on this machine (see skills.ts). Keyed by terminal because the
+		// answer depends on the agent AND the folder it runs in (project skills).
+		[CH.skillsList]: async (terminalId: string) => {
+			const session = repo.getSessionByTerminal(db, terminalId);
+			if (!session || session.agentId === "shell") return [];
+			const task = repo.getTask(db, session.taskId);
+			const root = task?.worktreePath ?? session.cwd;
+			// The conversation: minted by Ateam for Claude, else the id the agent's
+			// own hooks last reported from this terminal (Codex).
+			const sessionId =
+				session.agentSessionId ?? repo.latestReportedAgentSessionId(db, terminalId);
+			return listSkills(session.agentId, { cwd: session.cwd || root, root, sessionId });
+		},
+		// Writes into this machine's agent skill folders. The desktop routes it to
+		// its own engine only: the picked path is a path on the Mac.
+		[CH.skillsLink]: async (input: { path: string; dryRun?: boolean }) =>
+			linkSkill(input.path, { dryRun: input.dryRun }),
 
 		// ---- system: connect-time handshake ----
 		// The client calls this first over a fresh transport and checks

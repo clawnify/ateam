@@ -165,6 +165,17 @@ export function registerIpc(router: Router, native: NativeHandlers): void {
 		return res.canceled ? [] : res.filePaths;
 	});
 
+	// The Skills menu's "Add skill…": a skill is its folder, but people often
+	// hold the SKILL.md itself, so the panel takes either.
+	ipcMain.handle(CH.skillsPick, async () => {
+		const res = await dialog.showOpenDialog({
+			properties: ["openDirectory", "openFile"],
+			filters: [{ name: "Skill", extensions: ["md"] }],
+			title: "Choose a skill folder or its SKILL.md",
+		});
+		return res.canceled ? null : (res.filePaths[0] ?? null);
+	});
+
 	// Deliver local image files to the terminal's agent, wherever it runs. The
 	// aggregate knows which engine owns each terminal, so this is where the local
 	// clipboard trick and the remote byte-push fork:

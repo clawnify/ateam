@@ -2507,6 +2507,28 @@ function TaskPanel({
 	// Which agent a relaunch uses when nothing is chosen: the one already on this
 	// task, else the first installed. Picking a different one is the composer's job.
 	const fallbackAgentId = task.agentId ?? agents.find((a) => a.available)?.id ?? "claude";
+	// The Skills menu's "Add skill…": link a skill folder into this Mac's agent
+	// skill folders. Shows where the link really lands first, since a skills
+	// folder is often a link into a dotfiles repo.
+	const addSkill = () =>
+		run(async () => {
+			const path = await window.ateam.skills.pick();
+			if (!path) return;
+			const plan = await window.ateam.skills.link({ path, dryRun: true });
+			const fresh = plan.links.filter((l) => l.status === "create");
+			if (!fresh.length) {
+				await confirm(`"${plan.name}" is already linked`, "Every agent folder already points at this skill.");
+				return;
+			}
+			const where = fresh
+				.map((l) => (l.path.startsWith(`${l.realDir}/`) ? l.path : `${l.path} (in ${l.realDir})`))
+				.join(" and ");
+			const ok = await confirm(
+				`Link "${plan.name}" for your agents?`,
+				`Adds a link at ${where}, pointing at ${plan.source}. Edits there reach the agents with nothing to sync. Claude Code and Codex pick it up in running sessions, OpenCode at its next start.`,
+			);
+			if (ok) await window.ateam.skills.link({ path });
+		});
 	const [sessionComposerOpen, setSessionComposerOpen] = useState(false);
 	const [diff, setDiff] = useState<DiffResultDTO | null>(null);
 	const [changesOpen, setChangesOpen] = useState(false);
@@ -2774,6 +2796,10 @@ function TaskPanel({
 	};
 
 	const tabs = sessionTabs(sessions ?? [], agents, restorable);
+	// The shown terminal runs an agent (not a shell): it gets the grammar check and skills.
+	const agentTerminal = tabs.some(
+		({ session }) => session.terminalId === terminalId && session.agentId !== "shell",
+	);
 
 	// Whether a view covers the terminal, and whether the terminal instead docks
 	// beside it (both open at once). Only when the toggle wants it.
@@ -3143,9 +3169,9 @@ function TaskPanel({
 					{terminalId ? (
 						<TerminalView
 							terminalId={terminalId}
-							grammar={tabs.some(
-								({ session }) => session.terminalId === terminalId && session.agentId !== "shell",
-							)}
+							grammar={agentTerminal}
+							skills={agentTerminal}
+							onAddSkill={alias === null ? addSkill : undefined}
 							showDone={task.column === "review"}
 							onDone={() =>
 								run(async () => {

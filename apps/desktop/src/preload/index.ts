@@ -76,6 +76,11 @@ const api: AteamApi = {
 	search: {
 		sessions: (input) => ipcRenderer.invoke(CH.searchSessions, input),
 	},
+	skills: {
+		list: (terminalId) => ipcRenderer.invoke(CH.skillsList, terminalId),
+		link: (input) => ipcRenderer.invoke(CH.skillsLink, input),
+		pick: () => ipcRenderer.invoke(CH.skillsPick),
+	},
 	fs: {
 		listDir: (path) => ipcRenderer.invoke(CH.fsListDir, path),
 	},
