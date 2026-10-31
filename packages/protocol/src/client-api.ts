@@ -35,6 +35,8 @@ import type {
 	SessionDTO,
 	SessionHitDTO,
 	SettingsResult,
+	SkillDTO,
+	SkillLinkResult,
 	SystemInfo,
 	TaskDTO,
 	UpdateLoopInput,
@@ -93,6 +95,9 @@ export interface NativeClientApi {
 	editorOpen?(taskId: string): Promise<{ url: string } | { needsInstall: true }>;
 	/** Resolve a task's box browser URL, for the same reason as editorOpen. */
 	browserView?(taskId: string): Promise<{ url: string }>;
+	/** Pick a skill folder or SKILL.md. Optional: a client with no file dialog
+	 *  omits it and skills.pick resolves null. */
+	pickSkill?(): Promise<string | null>;
 }
 
 /** Build the full AteamApi over an RpcClient, delegating client-local bits to `native`. */
@@ -165,6 +170,11 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		},
 		search: {
 			sessions: (input) => call<SessionHitDTO[]>(CH.searchSessions, [input]),
+		},
+		skills: {
+			list: (terminalId) => call<SkillDTO[]>(CH.skillsList, [terminalId]),
+			link: (input) => call<SkillLinkResult>(CH.skillsLink, [input]),
+			pick: native.pickSkill ?? (() => Promise.resolve(null)),
 		},
 		fs: {
 			listDir: (path) => call<DirListingDTO>(CH.fsListDir, [path]),

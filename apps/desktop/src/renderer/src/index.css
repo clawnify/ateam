@@ -1276,7 +1276,8 @@ input {
 	display: flex;
 	flex-direction: column;
 }
-/* slim bar under each terminal: `+` menu (attach files, …) */
+/* slim bar under each terminal: `+` menu (attach files, …) and the agent's
+   skills on the left; grammar fixes and Done on the right. */
 .term-toolbar {
 	display: flex;
 	align-items: center;
@@ -1284,6 +1285,120 @@ input {
 	padding: 2px 6px;
 	border-top: 1px solid var(--border);
 	flex: none;
+	min-width: 0;
+}
+/* The right-hand group. When the bar runs out of room the pinned skills give
+   way first (they shrink far faster), since a grammar fix is the thing you
+   act on now. */
+.term-toolbar-end {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 0;
+	margin-left: auto;
+	flex: 0 1 auto;
+}
+
+/* Pinned skills: one compact button each, clipped rather than wrapped. */
+.skill-chips {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	flex: 0 100 auto;
+}
+/* How many times a pinned skill was sent in this session, after its name. */
+.skill-chip-sent {
+	margin-left: 3px;
+	color: var(--text-dim);
+	font-size: 10px;
+	font-variant-numeric: tabular-nums;
+}
+.skill-hint {
+	padding-left: 4px;
+	color: var(--text-dim);
+	font-size: 11px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* A row in the Skills menu: the command and what it does, with a pin toggle
+   that shows on hover (always, once pinned). */
+.skill-row {
+	display: flex;
+	align-items: center;
+	border-radius: 4px;
+}
+.skill-row:hover,
+.skill-row:focus-within {
+	background: var(--bg-elev-2);
+}
+.skill-row-main {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 1px;
+	flex: 1;
+	min-width: 0;
+	padding: 4px 8px;
+	border: none;
+	background: transparent;
+	color: var(--text);
+	text-align: left;
+	cursor: pointer;
+}
+.skill-row-main:hover {
+	background: transparent;
+}
+.skill-row-name {
+	font-family: ui-monospace, Menlo, monospace;
+	font-size: 11.5px;
+}
+.skill-row-desc {
+	width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-dim);
+	font-size: 11px;
+}
+.skill-row-uses {
+	flex: none;
+	padding: 0 4px;
+	color: var(--text-dim);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
+.skill-row-pin {
+	display: grid;
+	place-items: center;
+	flex: none;
+	margin-right: 4px;
+	padding: 4px;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text-dim);
+	opacity: 0;
+	cursor: pointer;
+}
+.skill-row:hover .skill-row-pin,
+.skill-row-pin:focus-visible,
+.skill-row-pin[data-pinned="true"] {
+	opacity: 1;
+}
+.skill-row-pin[data-pinned="true"] {
+	color: var(--text);
+}
+.skill-row-pin:hover {
+	color: var(--text);
+	background: rgba(255, 255, 255, 0.08);
+}
+.skill-empty {
+	padding: 8px;
+	font-size: 11.5px;
 }
 
 /* Grammar corrections for the prompt being typed: the first suggestion per
@@ -1304,10 +1419,11 @@ input {
 	margin-right: 2px;
 }
 
-/* "Done" action: compact so it clears the toolbar's top/bottom edges,
-   pushed to the far right of the bar. */
+/* "Done" action: compact so it clears the toolbar's top/bottom edges; it
+   closes the right-hand group, so it sits at the far right of the bar. */
 .term-done {
-	margin-left: auto;
+	margin-left: 4px;
+	flex: none;
 	padding: 1px 10px;
 	font-size: 11px;
 	font-weight: 500;
