@@ -193,6 +193,11 @@ export function answerQuestion(
 		notify(task.id);
 		return;
 	}
+	// A prompt Claude asked through its hook is answered by resolving that hook
+	// (permissions.ts). Reaching here, nothing holds it any more: only the
+	// terminal can answer it, though the card can still be dismissed above.
+	if (q.kind === "permission" || q.kind === "askUserQuestion")
+		throw new Error("That prompt is no longer waiting. Answer it in the task's terminal.");
 	// The agent has its question in its own context: quoting its first line is
 	// enough to say which one, and keeps a long question plus a long answer
 	// under the message cap.
