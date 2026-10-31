@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import { type AteamDb, bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
-import { applySetStatus } from "../src/loops/board-signals";
+import { applySetStatus, buildBoardView } from "../src/loops/board-signals";
 
 function createTestDb(): AteamDb {
 	const sqlite = new Database(":memory:");
@@ -32,6 +32,34 @@ const onUpdated = (id: string) => updated.push(id);
 beforeEach(() => {
 	db = createTestDb();
 	updated = [];
+});
+
+describe("buildBoardView", () => {
+	it("names each task's project and the GitHub repo that project is a clone of", async () => {
+		const project = repo.upsertProject(db, {
+			repoPath: "/tmp/agentsync",
+			name: "AgentSync",
+			githubOwner: "clawnify",
+			githubName: "agent-squash",
+		});
+		const t = repo.createTask(db, {
+			projectId: project.id,
+			name: "a task",
+			slug: "a-task",
+			branch: "feat/a",
+			baseBranch: "main",
+			worktreePath: "/tmp/agentsync/.ateam/worktrees/a",
+			column: "todo",
+		});
+		const view = await buildBoardView(db);
+		expect(view.tasks).toHaveLength(1);
+		expect(view.tasks[0]).toMatchObject({
+			taskId: t.id,
+			projectId: project.id,
+			project: "AgentSync",
+			repo: "clawnify/agent-squash",
+		});
+	});
 });
 
 describe("applySetStatus — endpoint integration (guardrail + audit + db)", () => {
