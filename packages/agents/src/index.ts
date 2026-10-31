@@ -15,7 +15,6 @@ export {
 	latestSessionInDir,
 	listAgents,
 	probeAgentBinary,
-	skipsAskingByDefault,
 } from "./registry";
 export type { TagOptions } from "./tagging";
 export {
