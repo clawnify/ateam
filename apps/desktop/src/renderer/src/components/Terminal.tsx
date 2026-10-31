@@ -10,6 +10,7 @@ import { osc52Text } from "../terminal-clipboard";
 import { terminalScroll } from "../terminal-scroll";
 import { GrammarFixes } from "./GrammarFixes";
 import { Menu } from "./Menu";
+import { SkillsBar } from "./SkillsBar";
 
 /**
  * Backslash-escape a path so it survives being TYPED into a PTY. Drops and the
@@ -37,18 +38,25 @@ const writeDelivery = (terminalId: string, d: AttachDelivery) => {
  * One xterm.js view bound to a main-process PTY by terminalId. Replays the
  * ring-buffer snapshot on mount (so re-attaching shows recent scrollback),
  * streams live output, and forwards keystrokes + resize back to the PTY.
- * A slim toolbar underneath offers a `+` menu (e.g. attach files by path) and,
- * for an agent session, a grammar check of the prompt being typed.
+ * A slim toolbar underneath offers a `+` menu (e.g. attach files by path),
+ * for an agent session its skills on the left, and on the right a grammar
+ * check of the prompt being typed.
  */
 export function TerminalView({
 	terminalId,
 	grammar = false,
+	skills = false,
+	onAddSkill,
 	showDone,
 	onDone,
 }: {
 	terminalId: string;
 	/** Grammar-check the prompt as it's typed. For agent sessions, not a shell. */
 	grammar?: boolean;
+	/** Offer the agent's skills on the toolbar. For an agent session, not a shell. */
+	skills?: boolean;
+	/** Link a new skill from the Skills menu. Only where the picked path means something (this Mac). */
+	onAddSkill?: () => Promise<void>;
 	/** Show a "Done" action in the toolbar (e.g. task is in Review). */
 	showDone?: boolean;
 	/** Called when Done is clicked — the parent owns the status change. */
@@ -57,9 +65,14 @@ export function TerminalView({
 	const ref = useRef<HTMLDivElement>(null);
 	const termRef = useRef<Terminal | null>(null);
 	const [issues, setIssues] = useState<GrammarIssue[]>([]);
+	// Prompts sent from this terminal, counted so the skills bar knows to recount.
+	const [submits, setSubmits] = useState(0);
 	const grammarRef = useRef(grammar);
 	grammarRef.current = grammar;
+	const skillsRef = useRef(skills);
+	skillsRef.current = skills;
 	const applyFixRef = useRef<(result: string) => void>(() => {});
+	const insertSkillRef = useRef<(command: string) => boolean>(() => false);
 
 	useEffect(() => {
 		const el = ref.current;
@@ -258,8 +271,15 @@ export function TerminalView({
 		let heldKeys: string[] = []; // what you typed meanwhile, sent once it's done
 		const forward = (d: string) => {
 			window.ateam.pty.write(terminalId, d);
-			if (!grammarRef.current) return;
+			// The draft is followed for the grammar check and for putting a skill
+			// in front of it; only the grammar check lints it.
+			if (!grammarRef.current && !skillsRef.current) return;
+			const before = draft.draft;
 			draft.feed(d);
+			// A non-empty draft emptied by Enter went to the agent (a trailing `\`
+			// + Enter is a newline in Claude Code, and leaves the draft non-empty).
+			if (before && d.includes("\r") && draft.draft === "") setSubmits((n) => n + 1);
+			if (!grammarRef.current) return;
 			clearTimeout(lintTimer);
 			const text = draft.draft;
 			const seq = ++lintSeq;
@@ -292,12 +312,12 @@ export function TerminalView({
 			else term.input(d);
 			injecting = false;
 		};
-		applyFixRef.current = async (result) => {
-			const from = draft.draft;
-			if (fixing || from === null || from !== checked) return;
-			const { backspaces, tail } = retype(from, result);
+		// Turn the draft `from` into `to` in the agent's input. False when it
+		// can't be done safely, before anything is typed.
+		const rewrite = async (from: string, to: string): Promise<boolean> => {
+			const { backspaces, tail } = retype(from, to);
 			// Without bracketed paste a newline would reach the agent as Enter.
-			if (tail.includes("\n") && !term.modes.bracketedPasteMode) return;
+			if (tail.includes("\n") && !term.modes.bracketedPasteMode) return false;
 			fixing = true;
 			setIssues([]);
 			for (let i = 0; i < backspaces && !disposed; i++) {
@@ -311,6 +331,29 @@ export function TerminalView({
 			for (const d of heldKeys) forward(d);
 			heldKeys = [];
 			term.focus();
+			return true;
+		};
+		applyFixRef.current = (result) => {
+			const from = draft.draft;
+			if (fixing || from === null || from !== checked) return;
+			void rewrite(from, result);
+		};
+		// Put a skill's command in front of whatever is being typed, so the draft
+		// becomes its arguments: "fix the login test" → "/research-topic fix the
+		// login test". Every agent wants the command first (Codex accepts `$name`
+		// anywhere, but first works there too) and, with nothing after it, a
+		// trailing space: an open `/` or `$` menu would take the user's Enter.
+		// Never presses Enter itself. With the draft unknown (arrows, history)
+		// nothing is typed: a command dropped mid-text would not run.
+		insertSkillRef.current = (command) => {
+			const from = draft.draft;
+			if (from === null) return false;
+			if (fixing) return true;
+			const rest = from.trimStart();
+			void rewrite(from, rest ? `${command} ${rest}` : `${command} `).then((ok) => {
+				if (!ok) term.focus();
+			});
+			return true;
 		};
 
 		// Resize handling. Layout toggles fire several ResizeObserver callbacks
@@ -436,12 +479,22 @@ export function TerminalView({
 						{ label: "Files…", icon: FileUp, onClick: addFiles },
 					]}
 				/>
-				{grammar && <GrammarFixes issues={issues} onApply={(r) => applyFixRef.current(r)} />}
-				{showDone && (
-					<button type="button" className="term-done primary" onClick={onDone}>
-						Done
-					</button>
+				{skills && (
+					<SkillsBar
+						terminalId={terminalId}
+						submits={submits}
+						onInsert={(command) => insertSkillRef.current(command)}
+						onAddSkill={onAddSkill}
+					/>
 				)}
+				<div className="term-toolbar-end">
+					{grammar && <GrammarFixes issues={issues} onApply={(r) => applyFixRef.current(r)} />}
+					{showDone && (
+						<button type="button" className="term-done primary" onClick={onDone}>
+							Done
+						</button>
+					)}
+				</div>
 			</div>
 		</div>
 	);

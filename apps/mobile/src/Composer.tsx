@@ -1,13 +1,26 @@
 // Bottom composer on the board — mobile counterpart to the desktop
 // NewTaskComposer. Type a prompt, pick the agent + launch mode, send: it creates
 // a task (worktree on the box) and launches the agent, then opens its terminal.
+// Long-press send to start it and stay on the board instead (a snackbar above
+// the composer then offers the way in).
 // Auto mode = permission-free (yolo); Agent mode = the tool's own multi-agent
 // board (`claude agents`) in that worktree. Attachments are a fast-follow
 // (cross-machine: the phone has no files the remote agent can read).
 
 import type { AgentDTO } from "@ateam/protocol";
-import { useEffect, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import {
+	ActionSheetIOS,
+	Alert,
+	findNodeHandle,
+	Modal,
+	Platform,
+	Pressable,
+	StyleSheet,
+	Text,
+	TextInput,
+	View,
+} from "react-native";
 import { AgentIcon } from "./AgentIcon";
 import { useKeyboardVisible } from "./useKeyboardVisible";
 
@@ -32,16 +45,25 @@ export interface ComposerSubmit {
 	agentId: string;
 	yolo: boolean;
 	agentMode: boolean;
+	/** false: start it in the background and stay on the board (long-press send). */
+	open: boolean;
 }
 
 export function Composer({
 	agents,
 	busy,
 	onSubmit,
+	started,
+	onOpenStarted,
+	onDismissStarted,
 }: {
 	agents: AgentDTO[];
 	busy: boolean;
 	onSubmit: (input: ComposerSubmit) => void;
+	/** Name of the task just started in the background, shown in the snackbar. */
+	started: string | null;
+	onOpenStarted: () => void;
+	onDismissStarted: () => void;
 }) {
 	// Prefer an installed agent; fall back to claude so the picker is never empty
 	// even when the box's availability probe came back empty (non-login daemon).
@@ -73,19 +95,56 @@ export function Composer({
 	// Always need something: a prompt (normal) or a task name (agent mode).
 	const canSubmit = !busy && text.trim().length > 0;
 
-	const submit = () => {
+	const submit = (open: boolean) => {
 		if (!canSubmit) return;
 		const value = text.trim();
 		onSubmit(
 			agentMode
-				? { prompt: "", name: value, agentId, yolo, agentMode: true }
-				: { prompt: value, agentId, yolo, agentMode: false },
+				? { prompt: "", name: value, agentId, yolo, agentMode: true, open }
+				: { prompt: value, agentId, yolo, agentMode: false, open },
 		);
 		setText("");
 	};
 
+	// Long-press send: choose between opening the new task and staying here. A tap
+	// still opens it, as it always has.
+	const sendRef = useRef<View>(null);
+	const chooseLanding = () => {
+		if (!canSubmit) return;
+		const options = ["Start and open", "Start, stay on board"];
+		if (Platform.OS === "ios") {
+			const anchor = sendRef.current ? findNodeHandle(sendRef.current) : null;
+			ActionSheetIOS.showActionSheetWithOptions(
+				// iPad shows the sheet as a popover, pointing at the send button.
+				{ options: [...options, "Cancel"], cancelButtonIndex: 2, anchor: anchor ?? undefined },
+				(i) => {
+					if (i === 0) submit(true);
+					if (i === 1) submit(false);
+				},
+			);
+			return;
+		}
+		Alert.alert("Start task", undefined, [
+			{ text: options[0], onPress: () => submit(true) },
+			{ text: options[1], onPress: () => submit(false) },
+			{ text: "Cancel", style: "cancel" },
+		]);
+	};
+
 	return (
 		<View style={[styles.wrap, keyboardUp && styles.wrapKeyboard]}>
+			{started ? (
+				<View style={styles.snack} accessibilityLiveRegion="polite">
+					<Pressable style={styles.snackMain} onPress={onDismissStarted}>
+						<Text style={styles.snackText} numberOfLines={1}>
+							Started {started}
+						</Text>
+					</Pressable>
+					<Pressable onPress={onOpenStarted} hitSlop={10} accessibilityRole="button">
+						<Text style={styles.snackAction}>Open</Text>
+					</Pressable>
+				</View>
+			) : null}
 			<View style={styles.inner}>
 				{/* Agent mode passes no prompt — but we still need to name the worktree, so
 			    the field becomes an explicit task-name input (clearly labelled). */}
@@ -163,10 +222,15 @@ export function Composer({
 					</Pressable>
 					{/* Send */}
 					<Pressable
+						ref={sendRef}
 						style={[styles.send, !canSubmit && styles.sendOff]}
-						onPress={submit}
+						onPress={() => submit(true)}
+						onLongPress={chooseLanding}
 						disabled={!canSubmit}
 						hitSlop={6}
+						accessibilityRole="button"
+						accessibilityLabel="Start task"
+						accessibilityHint="Opens the new task. Long press to start it and stay on the board."
 					>
 						<Text style={styles.sendText}>↑</Text>
 					</Pressable>
@@ -279,5 +343,25 @@ const styles = StyleSheet.create({
 		justifyContent: "center",
 	},
 	sendOff: { opacity: 0.35 },
+	// Floats just above the composer, over the bottom of the board.
+	snack: {
+		position: "absolute",
+		bottom: "100%",
+		left: 12,
+		right: 12,
+		marginBottom: 8,
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 12,
+		backgroundColor: C.sunken,
+		borderWidth: 1,
+		borderColor: C.line,
+		borderRadius: 10,
+		paddingHorizontal: 14,
+		paddingVertical: 11,
+	},
+	snackMain: { flex: 1 },
+	snackText: { color: C.ink, fontSize: 14 },
+	snackAction: { color: C.ink, fontSize: 14, fontWeight: "700" },
 	sendText: { color: "#15151a", fontSize: 18, fontWeight: "800" },
 });

@@ -42,7 +42,10 @@ export function waitNotice(
 
 /**
  * A question a task's agent just asked (ask_user; see questions.ts in the
- * server). Same rules as a wait: once per question id, and only while fresh.
+ * server), or Claude Code asking through its hook (permissions.ts). Same rules
+ * as a wait: once per question, and only while fresh. "Once" is per askedAt,
+ * not per id: the cards of one AskUserQuestion call share it, so answering the
+ * first card doesn't pop a banner for the next one.
  */
 export function questionNotice(
 	task: TaskDTO,
@@ -51,9 +54,43 @@ export function questionNotice(
 ): WaitNotice | null {
 	const q = task.question;
 	if (!q || now - q.askedAt > FRESH_MS) return null;
-	const key = `${task.id}:q:${q.id}`;
+	const key = `${task.id}:q:${q.askedAt}`;
 	if (shown.has(key)) return null;
-	return { key, title: task.name, body: q.text };
+	// An AskUserQuestion card's option previews follow its question, each a bold
+	// label over a fenced mockup (askCard in permissions.ts). A banner can't draw
+	// them, so it stops before the first.
+	const text = q.kind === "askUserQuestion" ? (q.text.split(PREVIEW)[0] ?? "") : q.text;
+	return { key, title: task.name, body: plainText(text) };
+}
+
+const PREVIEW = /\n\n\*\*[^\n]*\*\*\n\n```/;
+
+/**
+ * A question's markdown as the plain text a notification shows. Fence lines,
+ * heading marks, `*` emphasis, code ticks and link syntax go; what is inside
+ * code (a permission prompt's command, a path) stays as written. Underscores
+ * stay too: in a path or a tool name they are not emphasis.
+ */
+export function plainText(md: string): string {
+	let inFence = false;
+	const lines: string[] = [];
+	for (const line of md.split("\n")) {
+		if (line.trimStart().startsWith("```")) inFence = !inFence;
+		else if (line.trim()) lines.push(inFence ? line : plainLine(line));
+	}
+	return lines.join("\n");
+}
+
+function plainLine(line: string): string {
+	// Inline code is set aside first, so a `*` or `[` inside it is left alone.
+	const code: string[] = [];
+	return line
+		.replace(/`([^`]+)`/g, (_, c: string) => `${code.push(c) - 1}`)
+		.replace(/^\s*#{1,6}\s+/, "")
+		.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+		.replace(/\*\*(\S(?:.*?\S)?)\*\*/g, "$1")
+		.replace(/(^|\W)\*(\S(?:.*?\S)?)\*(?=\W|$)/g, "$1$2")
+		.replace(/(\d+)/g, (_, i: string) => code[Number(i)] ?? "");
 }
 
 /**

@@ -80,6 +80,7 @@ const ENTITY = new Set<string>([
 	// never learned by `learn()` and would fall back to the local engine,
 	// looking for a box's session in the wrong db.
 	CH.ptyRestoreSession,
+	CH.skillsList, // terminalId — the skills the terminal's agent sees on its own machine
 	CH.ptyWrite, // terminalId
 	CH.ptyResize,
 	CH.ptyKill,
