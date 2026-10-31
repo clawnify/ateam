@@ -331,6 +331,23 @@ export const repo = {
 		return db.insert(agentEvents).values(e).returning().get();
 	},
 
+	/**
+	 * The conversation id the agent itself last reported from this terminal's
+	 * hooks: how a harness that mints its own id (Codex) gets named at all.
+	 */
+	latestReportedAgentSessionId(db: AteamDb, terminalId: string): string | null {
+		return (
+			db
+				.select({ id: agentEvents.rawAgentSessionId })
+				.from(agentEvents)
+				.where(
+					and(eq(agentEvents.terminalId, terminalId), isNotNull(agentEvents.rawAgentSessionId)),
+				)
+				.orderBy(desc(agentEvents.createdAt))
+				.get()?.id ?? null
+		);
+	},
+
 	// ---- settings (single row, id=1) ----
 	getSettings(db: AteamDb): Settings {
 		const row = db.select().from(settings).where(eq(settings.id, 1)).get();

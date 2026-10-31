@@ -4,9 +4,11 @@
 // tasks the user touches from the chat report back into it (follow.ts).
 import { randomUUID } from "node:crypto";
 import { CH, type TaskDTO } from "@ateam/protocol";
-import { ipcMain } from "electron";
+import { dialog, ipcMain, nativeImage } from "electron";
 import { LEAD_CH, type LeadEvent, type LeadPermissionAnswer } from "../../shared/lead";
 import type { Router } from "../backend";
+import { deliverFiles } from "../deliver-files";
+import { LeadAttachments } from "./attachments";
 import { Follower, refOf } from "./follow";
 import { startLeadMcpServer } from "./mcp-http";
 import { LeadSession } from "./session";
@@ -37,10 +39,19 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	// The session is created below; the follower records into it through this.
 	let session: LeadSession | null = null;
 	const follower = new Follower({ dir: deps.dir, handle, record: (item) => session?.record(item) });
+	const attachments = new LeadAttachments(deps.dir);
+	attachments.prune();
 	const tools = createLeadTools({
 		handle,
 		machineOf: deps.machineOf,
 		onTouch: (task) => follower.follow(task),
+		files: {
+			resolve: (paths) => {
+				const files = attachments.resolve(paths);
+				return typeof files === "string" ? files : files.map((f) => f.path);
+			},
+			deliver: (ownerId, paths) => deliverFiles(deps.router, ownerId, paths),
+		},
 	});
 	const mcp = await startLeadMcpServer(tools);
 	session = new LeadSession({
@@ -51,7 +62,49 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	});
 	const lead = session;
 	ipcMain.handle(LEAD_CH.snapshot, () => lead.snapshot());
-	ipcMain.handle(LEAD_CH.send, (_e, text: string) => lead.send(String(text)));
+	ipcMain.handle(LEAD_CH.send, (_e, text: string, paths?: string[]) => {
+		const files = paths?.length ? attachments.resolve(paths.map(String)) : [];
+		if (typeof files === "string") fail(files);
+		else lead.send(String(text), files);
+	});
+	// Attach: paths dropped or pasted from Finder, or null for the picker.
+	ipcMain.handle(LEAD_CH.attach, async (_e, paths: string[] | null) => {
+		let list = paths;
+		if (!list) {
+			const res = await dialog.showOpenDialog({
+				properties: ["openFile", "multiSelections"],
+				title: "Attach files",
+			});
+			list = res.canceled ? [] : res.filePaths;
+		}
+		return attachments.addPaths(list.map(String));
+	});
+	ipcMain.handle(LEAD_CH.attachBytes, (_e, name: string, data: Uint8Array) =>
+		attachments.addBytes(String(name), data),
+	);
+	// A preview for an attached image. Only attachments: the renderer never names
+	// a file on this Mac to be read.
+	ipcMain.handle(LEAD_CH.thumb, async (_e, path: string) => {
+		const files = attachments.resolve([String(path)]);
+		if (typeof files === "string" || !files[0]?.image) return null;
+		try {
+			// Decoded and scaled keeping its shape. Quick Look's thumbnail
+			// (createThumbnailFromPath) stretches to the box it is given, so it is
+			// only the fallback, for what nativeImage can't decode (HEIC).
+			const img = nativeImage.createFromPath(files[0].path);
+			if (!img.isEmpty()) {
+				const { height } = img.getSize();
+				return (height > 240 ? img.resize({ height: 240 }) : img).toDataURL();
+			}
+			const ql = await nativeImage.createThumbnailFromPath(files[0].path, {
+				width: 240,
+				height: 240,
+			});
+			return ql.isEmpty() ? null : ql.toDataURL();
+		} catch {
+			return null;
+		}
+	});
 	ipcMain.handle(LEAD_CH.interrupt, () => lead.interrupt());
 	ipcMain.handle(LEAD_CH.reset, () => lead.reset());
 	ipcMain.handle(LEAD_CH.permission, (_e, id: string, answer: LeadPermissionAnswer) =>

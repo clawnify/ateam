@@ -227,7 +227,13 @@ an Auto layout that fits the live terminals each time it opens and never
 re-lays them out while you watch; each tile's +N -N opens its changes and diffs
 in place of its terminal),
 collapsible sidebar rail, image drag-drop & paste into
-agent terminals, session search (the topbar box answers in a popover listing
+agent terminals, skills on each agent terminal's toolbar (a menu of every skill
+that agent can invoke, read from its own skill folders on the machine it runs
+on, plus pinned buttons seeded from the ones you type most, each marked with how
+many times you already sent it in that terminal's conversation; a click puts
+`/name`, or Codex's `$name`, in front of the prompt you are typing and leaves
+Enter to you; "Add skill…" links a skill folder into `~/.claude/skills` and
+`~/.agents/skills` so edits reach every agent), session search (the topbar box answers in a popover listing
 matching tasks and the past sessions that discussed them, with an AI row that
 finds a session from a description of the work, reading Claude Code / Codex /
 OpenCode transcripts),
@@ -241,7 +247,9 @@ briefs you on the latest tasks, starts tasks, messages their agents and brings
 their replies back, with every task it names a chip that opens it; it runs as
 your own Claude Code, with your skills, plugins and MCP servers, and asks for
 its permissions in the chat; it has its own tab, or sits as a sidebar on the
-right beside the board), questions agents ask you with the `ask_user`
+right beside the board; files you attach or paste there can go to a new task or
+to a running one, copied to its box when it runs on one, up to 10 MB a file),
+questions agents ask you with the `ask_user`
 board tool (option cards with tradeoffs, or a checklist, answered from the
 board, the task panel or the Lead chat), Claude Code's permission prompts
 answered from Ateam (Allow, Always allow, Deny) as well as in the terminal,
