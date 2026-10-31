@@ -5,7 +5,7 @@ import { bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
 import { formatForRecipient, type OutsideSender, type SendResult } from "../src/peer-messages";
-import { answerQuestion, applyAskUser, columnWithQuestion, validateAsk } from "../src/questions";
+import { answerQuestion, applyAskUser, validateAsk } from "../src/questions";
 
 let db: AteamDb;
 let task: Task;
@@ -75,8 +75,11 @@ describe("asking and answering", () => {
 			options: ["Deploy", "Wait"],
 			allowText: true,
 		});
-		expect(columnWithQuestion(t, "review")).toBe("needs_attention");
-		expect(columnWithQuestion(t, "running")).toBe("running");
+		// The agent's Stop, another agent's message waking it, its exit: none
+		// moves the card while the question is open.
+		for (const column of ["review", "running", "todo"] as const) {
+			expect(repo.updateTask(db, task.id, { column })?.column).toBe("needs_attention");
+		}
 	});
 
 	it("delivers the answer as a message from the user, then clears the question", () => {

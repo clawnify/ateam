@@ -43,6 +43,7 @@ import {
 	Grid3x2,
 	History,
 	Hourglass,
+	LayoutDashboard,
 	LayoutGrid,
 	LayoutPanelLeft,
 	Maximize2,
@@ -73,7 +74,9 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { byLatestActivity } from "../../shared/recency";
 import { SessionGlyphs, SessionIcon } from "./components/AgentIcon";
+import { ChangesList, DiffStat } from "./components/Changes";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { ConnectSteps } from "./components/ConnectSteps";
 import { FileDiffView } from "./components/FileDiffView";
@@ -86,11 +89,14 @@ import { PageFrame } from "./components/PageFrame";
 import { PanelRightFilled } from "./components/PanelRightFilled";
 import { PromptComposer } from "./components/PromptComposer";
 import { QuestionCard } from "./components/QuestionCard";
+import { RailTile } from "./components/RailTile";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
+import { bestMcLayout, MC_PAGE_SIZE, type McChoice, type McLayout } from "./mc-layout";
 import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
@@ -114,23 +120,24 @@ const COLUMNS: { key: KanbanColumn; label: string }[] = [
 // ---- sidebar task ordering ----
 type TaskSortMode = "next" | "status" | "updated" | "custom";
 
-// ---- mission control layout ----
-// How agent tiles are arranged: "grid" is a 2x2 overview (tiles half the
-// window wide and tall), "main" gives the first tile the full-height left half
-// and stacks the next two in the right half, "split" lays them side-by-side at
-// full window height, "stack" stacks them full-width, "grid3x2" is three
-// columns by two rows (and tucks the sidebar into its rail while shown, since
-// a third column is only readable with the width back). Extra tiles go to
-// further pages, flipped via the bottom-right pager or Ctrl/Cmd+Up/Down.
-type McLayout = "grid" | "grid3x2" | "main" | "split" | "stack";
-
-// Tiles per page: how many terminals each layout actually shows at once.
-const MC_PAGE_SIZE: Record<McLayout, number> = { grid: 4, grid3x2: 6, main: 3, split: 2, stack: 1 };
+// The topbar's Mission Control layout buttons, in the order they sit.
+const MC_LAYOUTS = [
+	["grid", LayoutGrid, "Grid"],
+	["grid3x2", Grid3x2, "3x2 grid"],
+	["main", LayoutPanelLeft, "Main + side"],
+	["split", Columns2, "Split"],
+	["stack", Rows2, "Stack"],
+] as const;
+const mcLayoutLabel = (l: McLayout) => MC_LAYOUTS.find(([mode]) => mode === l)?.[2] ?? l;
 
 // A saved layout, or null when unset or naming one that no longer exists.
 function storedMcLayout(key: string): McLayout | null {
 	const v = localStorage.getItem(key);
 	return v && v in MC_PAGE_SIZE ? (v as McLayout) : null;
+}
+// A saved choice: a layout or "auto".
+function storedMcChoice(key: string): McChoice | null {
+	return localStorage.getItem(key) === "auto" ? "auto" : storedMcLayout(key);
 }
 
 // dataTransfer type a tile's bar carries while dragged, so a tile only lights
@@ -158,6 +165,51 @@ const springy = { type: "spring", stiffness: 550, damping: 42 } as const;
 // Minimum (and default) expanded-sidebar width in px. The resizer never shrinks
 // below this; the upper bound is 50% of the window (see startSidebarResize).
 const MIN_SIDEBAR_W = 240;
+// The Lead sidebar on the right: floor, default, and cap as a share of the
+// window. The cap is lower than the left one's so that with both open the board
+// keeps some room; index.css repeats it (min(var(--lead-w), 40%)).
+const MIN_LEAD_W = 320;
+const DEFAULT_LEAD_W = 400;
+const MAX_LEAD_SHARE = 0.4;
+
+/**
+ * Drag a sidebar's edge to resize it. `dir` is 1 when dragging right widens it
+ * (the left sidebar) and -1 when dragging left does (the Lead's, on the right).
+ * Clamped to [min, share of the window] while dragging, saved under `key` when
+ * the drag ends.
+ */
+function dragWidth(
+	e: ReactMouseEvent,
+	opts: {
+		from: number;
+		dir: 1 | -1;
+		min: number;
+		share: number;
+		key: string;
+		set: (w: number) => void;
+	},
+) {
+	e.preventDefault();
+	const startX = e.clientX;
+	let latest = opts.from;
+	const onMove = (ev: MouseEvent) => {
+		const max = Math.round(window.innerWidth * opts.share);
+		latest = Math.min(max, Math.max(opts.min, opts.from + opts.dir * (ev.clientX - startX)));
+		opts.set(latest);
+	};
+	const onUp = () => {
+		window.removeEventListener("mousemove", onMove);
+		window.removeEventListener("mouseup", onUp);
+		document.body.style.cursor = "";
+		document.body.style.userSelect = "";
+		localStorage.setItem(opts.key, String(latest));
+	};
+	window.addEventListener("mousemove", onMove);
+	window.addEventListener("mouseup", onUp);
+	// Keep the resize cursor and suppress text selection for the whole drag.
+	document.body.style.cursor = "col-resize";
+	document.body.style.userSelect = "none";
+}
 
 // Where collapsing a focused task takes you — it's whatever view the task was
 // opened over, so the tooltip has to name that view, not the board.
@@ -219,17 +271,43 @@ export function App() {
 	// Layout is per project: one project may run twice the terminals of another.
 	// Read during render, not synced in an effect, so switching projects never
 	// paints a frame of the previous project's layout (which would also flick
-	// the 3x2 rail). A project never set falls back to the old app-wide choice.
-	const [mcLayoutSet, setMcLayoutSet] = useState<Record<string, McLayout>>({});
-	const mcLayout =
+	// the 3x2 rail). A project never set falls back to the old app-wide choice,
+	// and failing that to Auto.
+	const [mcLayoutSet, setMcLayoutSet] = useState<Record<string, McChoice>>({});
+	const mcChoice: McChoice =
 		(activeProjectId &&
-			(mcLayoutSet[activeProjectId] ?? storedMcLayout(`ateam.mcLayout.${activeProjectId}`))) ||
+			(mcLayoutSet[activeProjectId] ?? storedMcChoice(`ateam.mcLayout.${activeProjectId}`))) ||
 		storedMcLayout("ateam.mcLayout") ||
-		"grid";
-	const setMcLayout = (l: McLayout) => {
+		"auto";
+	const setMcLayout = (l: McChoice) => {
 		if (!activeProjectId) return;
 		localStorage.setItem(`ateam.mcLayout.${activeProjectId}`, l);
 		setMcLayoutSet((m) => ({ ...m, [activeProjectId]: l }));
+	};
+	// The layout Auto last fitted for the project, kept so the grid reopens in it
+	// (the 3x2's sidebar rail included) until the fresh count says otherwise.
+	const [mcFitSet, setMcFitSet] = useState<Record<string, McLayout>>({});
+	const mcFit =
+		(activeProjectId &&
+			(mcFitSet[activeProjectId] ?? storedMcLayout(`ateam.mcFit.${activeProjectId}`))) ||
+		"grid";
+	const mcLayout: McLayout = mcChoice === "auto" ? mcFit : mcChoice;
+	// Auto fits when Mission Control opens, never while it is up: a refit
+	// resizes every terminal on the grid (each agent redraws), re-pages the tiles
+	// and, into or out of the 3x2, moves the sidebar, none of which an agent
+	// starting or quitting should do under your cursor. Opening sets the fit
+	// pending and the open grid's tile count clears it (see reorderMission).
+	const [mcFitPending, setMcFitPending] = useState(false);
+	// How many tiles the open grid has; null until it reports, after opening.
+	const [mcTileCount, setMcTileCount] = useState<number | null>(null);
+	// Fit to this many tiles. A grid with none yet stays pending, so the first
+	// tiles to arrive are what it fits.
+	const fitMission = (tiles: number) => {
+		if (!activeProjectId || tiles === 0) return;
+		setMcFitPending(false);
+		const l = bestMcLayout(tiles);
+		localStorage.setItem(`ateam.mcFit.${activeProjectId}`, l);
+		setMcFitSet((m) => ({ ...m, [activeProjectId]: l }));
 	};
 	// Bumped by the Sync button: Mission Control re-sorts its tiles to the
 	// sidebar's order once, then holds still again (see mcOrder).
@@ -264,21 +342,12 @@ export function App() {
 	// A mutation's return and the push event both carry ONE engine's loops, so
 	// every refresh re-lists the union.
 	const refreshLoops = useCallback(() => void window.ateam.loops.list().then(setLoops), []);
-	const [railPref, setRailPref] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
-	// Mission Control's 3x2 grid collapses the sidebar for as long as it is on
-	// screen, without touching the saved preference: leaving the layout or the
-	// view puts back whatever you had. Expanding it by hand while there holds
-	// until you leave.
-	const autoRail = view === "mission" && mcLayout === "grid3x2";
-	const [railKept, setRailKept] = useState(false);
-	if (!autoRail && railKept) setRailKept(false);
-	const rail = autoRail ? !railKept : railPref;
+	// Collapsing the sidebar is only ever the user's call, in every view and
+	// layout. Mission Control's 3x2 grid used to tuck it away for wider tiles;
+	// the sidebar vanishing on its own cost more than the extra columns gave.
+	const [rail, setRail] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
 	const toggleRail = () => {
-		if (autoRail) {
-			setRailKept((k) => !k);
-			return;
-		}
-		setRailPref((r) => {
+		setRail((r) => {
 			localStorage.setItem("ateam.sidebarRail", r ? "0" : "1");
 			return !r;
 		});
@@ -290,29 +359,39 @@ export function App() {
 		const saved = Number(localStorage.getItem("ateam.sidebarWidth"));
 		return Number.isFinite(saved) && saved >= MIN_SIDEBAR_W ? saved : MIN_SIDEBAR_W;
 	});
-	const startSidebarResize = (e: ReactMouseEvent) => {
-		e.preventDefault();
-		const startX = e.clientX;
-		const startW = sidebarWidth;
-		let latest = startW;
-		const onMove = (ev: MouseEvent) => {
-			const max = Math.round(window.innerWidth * 0.5);
-			latest = Math.min(max, Math.max(MIN_SIDEBAR_W, startW + (ev.clientX - startX)));
-			setSidebarWidth(latest);
-		};
-		const onUp = () => {
-			window.removeEventListener("mousemove", onMove);
-			window.removeEventListener("mouseup", onUp);
-			document.body.style.cursor = "";
-			document.body.style.userSelect = "";
-			localStorage.setItem("ateam.sidebarWidth", String(latest));
-		};
-		window.addEventListener("mousemove", onMove);
-		window.addEventListener("mouseup", onUp);
-		// Keep the resize cursor and suppress text selection for the whole drag.
-		document.body.style.cursor = "col-resize";
-		document.body.style.userSelect = "none";
+	const startSidebarResize = (e: ReactMouseEvent) =>
+		dragWidth(e, {
+			from: sidebarWidth,
+			dir: 1,
+			min: MIN_SIDEBAR_W,
+			share: 0.5,
+			key: "ateam.sidebarWidth",
+			set: setSidebarWidth,
+		});
+	// The Lead as a sidebar on the right, the mirror of this one: a full-height
+	// column with a draggable width, still open after a restart. The Lead tab
+	// keeps the full-width chat and hides the sidebar, so there is one copy.
+	const [leadSide, setLeadSideState] = useState(
+		() => localStorage.getItem("ateam.leadSide") === "1",
+	);
+	const setLeadSide = (on: boolean) => {
+		localStorage.setItem("ateam.leadSide", on ? "1" : "0");
+		setLeadSideState(on);
 	};
+	const [leadWidth, setLeadWidth] = useState(() => {
+		const saved = Number(localStorage.getItem("ateam.leadWidth"));
+		return Number.isFinite(saved) && saved >= MIN_LEAD_W ? saved : DEFAULT_LEAD_W;
+	});
+	const startLeadResize = (e: ReactMouseEvent) =>
+		dragWidth(e, {
+			from: leadWidth,
+			dir: -1,
+			min: MIN_LEAD_W,
+			share: MAX_LEAD_SHARE,
+			key: "ateam.leadWidth",
+			set: setLeadWidth,
+		});
+	const leadShown = leadSide && view !== "lead";
 	const [taskSort, setTaskSortState] = useState<TaskSortMode>(
 		// Default: last updated first. The list you scan is the list you just
 		// touched, so the freshest work sits at the top without a menu trip.
@@ -730,6 +809,33 @@ export function App() {
 	// selection, since a click there highlights rather than opens.
 	const mcGridShown = view === "mission" && !(selectedTask && panelMode === "full");
 	const sidebarSelectedId = mcGridShown ? mcHighlightId : selectedTaskId;
+	// Opening Mission Control, which is when Auto fits: switching to it, or to
+	// another project's or mode's grid while on it. Coming back from a tile
+	// expanded full width is not an opening (the view never changed), even
+	// though the grid remounts. Settled during render, like the rail.
+	const mcGridKey = `${activeCard?.key ?? activeProjectId}:${mcMode}`;
+	const mcOpenKey = view === "mission" ? mcGridKey : null;
+	const [mcOpenSeen, setMcOpenSeen] = useState(mcOpenKey);
+	if (mcOpenSeen !== mcOpenKey) {
+		setMcOpenSeen(mcOpenKey);
+		setMcTileCount(null);
+		if (mcOpenKey) setMcFitPending(true);
+	}
+	// Auto fitted when the grid opened, and agents may have started or quit
+	// since. That is shown on the Auto button, not acted on: one click re-fits.
+	const mcRefit =
+		mcChoice === "auto" && mcGridShown && !mcFitPending && mcTileCount
+			? bestMcLayout(mcTileCount)
+			: null;
+	const mcRefitDue = mcRefit !== null && mcRefit !== mcLayout;
+	// The Auto button: on the grid it fits what is there now; from anywhere
+	// else the opening does it.
+	const chooseAutoLayout = () => {
+		setMcLayout("auto");
+		if (mcGridShown && mcTileCount) fitMission(mcTileCount);
+		else setMcFitPending(true);
+		goToView("mission");
+	};
 	// Loops of the active repo card (whichever engine holds them), and the task
 	// each one owns. Loop-owned tasks show under LOOPS, not again under TASKS
 	// (they stay on the board — it's the status surface).
@@ -790,7 +896,7 @@ export function App() {
 		} else if (taskSort === "status") {
 			list.sort((a, b) => STATUS_RANK[a.column] - STATUS_RANK[b.column]);
 		} else if (taskSort === "updated") {
-			list.sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0));
+			list.sort(byLatestActivity);
 		} else {
 			const rank = new Map(customOrder.map((id, i) => [id, i]));
 			list.sort(
@@ -853,7 +959,10 @@ export function App() {
 	};
 	// Mission Control reports the tiles' order whenever it changes; they lead
 	// the saved order and everything else keeps its relative place behind them.
+	// The report is also the grid's tile count, which an opening waits on to fit.
 	const reorderMission = (tileIds: string[]) => {
+		setMcTileCount(tileIds.length);
+		if (mcFitPending && mcChoice === "auto") fitMission(tileIds.length);
 		const onTiles = new Set(tileIds);
 		const next = [...tileIds, ...mcOrder.filter((id) => !onTiles.has(id))];
 		if (next.length === mcOrder.length && next.every((id, i) => id === mcOrder[i])) return;
@@ -1283,8 +1392,8 @@ export function App() {
 
 	return (
 		<div
-			className={`app ${rail ? "rail" : ""}`}
-			style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
+			className={`app ${rail ? "rail" : ""} ${leadShown ? "lead-open" : ""}`}
+			style={{ "--sidebar-w": `${sidebarWidth}px`, "--lead-w": `${leadWidth}px` } as CSSProperties}
 		>
 			<aside className={`sidebar ${rail ? "rail" : ""}`}>
 				{/* In rail mode the traffic lights own this strip; the toggle moves
@@ -1303,24 +1412,35 @@ export function App() {
 				</div>
 
 				{rail ? (
-					<>
-						<button type="button" className="rail-tile" title="Expand sidebar" onClick={toggleRail}>
+					// The expanded sidebar's three sections as tile groups, each led
+					// by the action its header carries (Add project, New task, New
+					// loop), so collapsing the sidebar never takes a way to create
+					// something. One provider: gliding down the strip opens each
+					// tile's name at once instead of waiting out the delay again.
+					<TooltipProvider delayDuration={150} skipDelayDuration={400} disableHoverableContent>
+						<RailTile label="Expand sidebar" onClick={toggleRail}>
 							<PanelLeft size={16} strokeWidth={1.75} />
-						</button>
+						</RailTile>
 						<div className="rail-divider" />
+						{/* A detached window is one project, so like its expanded header
+						    it offers no way to add another. */}
+						{!boundProjectId && (
+							<RailTile label="Add project" onClick={addProject}>
+								<FolderPlus size={16} strokeWidth={1.75} />
+							</RailTile>
+						)}
 						{unifiedProjects.map((card) => {
 							const alert = cardAlert(card);
 							const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
 							if (!primary) return null;
 							const active = card.members.some((m) => m.projectId === activeProjectId);
 							return (
-								<button
-									type="button"
+								<RailTile
 									key={card.key}
-									className={`rail-tile ${active ? "active" : ""} ${dropCardKey === card.key ? "file-drop" : ""}`}
-									title={
-										boundProjectId ? card.name : `${card.name} — double-click to open in new window`
-									}
+									label={card.name}
+									hint={boundProjectId ? undefined : "Double-click to open in a new window"}
+									active={active}
+									className={dropCardKey === card.key ? "file-drop" : undefined}
 									{...projectDropProps(card.key, primary.projectId)}
 									onClick={() => selectProject(primary.projectId)}
 									onDoubleClick={
@@ -1331,30 +1451,28 @@ export function App() {
 								>
 									{card.name.charAt(0).toUpperCase()}
 									{alert && <span className={`corner pulse ${alert}`} />}
-								</button>
+								</RailTile>
 							);
 						})}
 						<div className="rail-divider" />
-						<button
-							type="button"
-							className="rail-tile"
-							title="New task"
+						<RailTile
+							label="New task"
+							hint={activeProjectId ? undefined : "Select a project first"}
 							onClick={newTask}
 							disabled={!activeProjectId}
 						>
 							<Plus size={16} strokeWidth={1.75} />
-						</button>
+						</RailTile>
 						{visibleSidebarTasks.map((t) => {
 							const Icon = taskIcon(t.name);
 							// One tile, one glyph: the first live session, and a count when
 							// there are more — the row and the card have room to show them all.
 							const [glyph, ...rest] = taskGlyphs(t);
 							return (
-								<button
-									type="button"
+								<RailTile
 									key={t.id}
-									className={`rail-tile ${t.id === sidebarSelectedId ? "active" : ""}`}
-									title={t.name}
+									label={t.name}
+									active={t.id === sidebarSelectedId}
 									onClick={() => toggleTask(t)}
 								>
 									{glyph ? (
@@ -1368,10 +1486,37 @@ export function App() {
 									) : (
 										t.agentStatus && <span className={`corner ${t.agentStatus}`} />
 									)}
-								</button>
+								</RailTile>
 							);
 						})}
-					</>
+						<div className="rail-divider" />
+						<RailTile
+							label="New loop"
+							hint={activeProjectId ? undefined : "Select a project first"}
+							onClick={() => setLoopDialog({ editId: null })}
+							disabled={!activeProjectId}
+						>
+							<Plus size={16} strokeWidth={1.75} />
+						</RailTile>
+						{sortedLoops.map((l) => {
+							// Same row as the LOOPS section: the loop's own task, or the
+							// Loops tab before its first run.
+							const task = l.taskId ? (activeTasks.find((t) => t.id === l.taskId) ?? null) : null;
+							return (
+								<RailTile
+									key={l.id}
+									label={l.title}
+									hint={l.enabled ? undefined : "Paused"}
+									active={task != null && task.id === sidebarSelectedId}
+									className={l.enabled ? undefined : "loop-paused"}
+									onClick={() => (task ? toggleTask(task) : goToView("loops"))}
+								>
+									<Repeat size={16} strokeWidth={1.75} />
+									{task?.agentStatus && <span className={`corner ${task.agentStatus}`} />}
+								</RailTile>
+							);
+						})}
+					</TooltipProvider>
 				) : (
 					<>
 						{/* A detached window IS one project — show a static header, not a
@@ -1735,24 +1880,37 @@ export function App() {
 						{/* Always shown, and the way into Mission Control (it has no tab):
 						    picking a layout opens the grid in it. Lit like a tab: only on
 						    Mission Control (a task focused over it included), so from the
-						    Board none of them reads as current. */}
+						    Board none of them reads as current. Under Auto only Auto is
+						    lit; its tooltip names the layout it fitted. */}
 						<div className="mclayout" role="group" aria-label="Mission Control layout">
-							{(
-								[
-									["grid", LayoutGrid, "Grid"],
-									["grid3x2", Grid3x2, "3x2 grid"],
-									["main", LayoutPanelLeft, "Main + side"],
-									["split", Columns2, "Split"],
-									["stack", Rows2, "Stack"],
-								] as const
-							).map(([mode, Icon, label]) => (
+							<button
+								type="button"
+								className={`navbtn icon ${view === "mission" && mcChoice === "auto" ? "active" : ""} ${
+									mcRefitDue ? "refit" : ""
+								}`}
+								title={
+									mcRefit && mcRefitDue
+										? `Mission Control: Auto layout. ${mcTileCount} live now: click to fit them in ${mcLayoutLabel(mcRefit)}`
+										: view !== "mission" || mcChoice !== "auto"
+											? "Mission Control: Auto layout (fits the live terminals each time it opens)"
+											: mcFitPending
+												? "Mission Control: Auto layout (fits the terminals once one is live)"
+												: `Mission Control: Auto layout (${mcLayoutLabel(mcLayout)} for the live terminals; click to fit again)`
+								}
+								aria-label="Mission Control: Auto layout"
+								aria-pressed={view === "mission" && mcChoice === "auto"}
+								onClick={chooseAutoLayout}
+							>
+								<LayoutDashboard size={14} strokeWidth={1.75} />
+							</button>
+							{MC_LAYOUTS.map(([mode, Icon, label]) => (
 								<button
 									key={mode}
 									type="button"
-									className={`navbtn icon ${view === "mission" && mcLayout === mode ? "active" : ""}`}
+									className={`navbtn icon ${view === "mission" && mcChoice === mode ? "active" : ""}`}
 									title={`Mission Control: ${label} layout`}
 									aria-label={`Mission Control: ${label} layout`}
-									aria-pressed={view === "mission" && mcLayout === mode}
+									aria-pressed={view === "mission" && mcChoice === mode}
 									onClick={() => {
 										setMcLayout(mode);
 										goToView("mission");
@@ -1791,6 +1949,23 @@ export function App() {
 							<Plus size={14} strokeWidth={1.75} />
 							New task
 						</button>
+						{/* Opens the Lead as a sidebar on the right. Once open, the sidebar's
+						    own strip holds the hide toggle in this same spot. From the Lead
+						    tab, the chat moves beside the board. */}
+						{!leadShown && (
+							<button
+								type="button"
+								className="navbtn icon"
+								title="Show Lead sidebar"
+								aria-label="Show Lead sidebar"
+								onClick={() => {
+									setLeadSide(true);
+									if (view === "lead") goToView("board");
+								}}
+							>
+								<PanelRight size={14} strokeWidth={1.75} />
+							</button>
+						)}
 					</div>
 				</div>
 
@@ -1955,12 +2130,13 @@ export function App() {
 							// that kept this instance showed the last project's tiles
 							// until some agent happened to emit an event. Same for the
 							// Tasks/Loops switch: a new mode is a new set of tiles.
-							key={`${activeCard?.key ?? activeProjectId}:${mcMode}`}
+							key={mcGridKey}
 							mode={mcMode}
 							tasks={missionTasks}
 							agents={agents}
 							order={missionOrderIds}
 							layout={mcLayout}
+							holdForFit={mcFitPending && mcChoice === "auto"}
 							syncSeq={mcSyncSeq}
 							onExpand={openFromMission}
 							highlightId={mcHighlightId}
@@ -1971,6 +2147,7 @@ export function App() {
 								if (t) openTask(t);
 							}}
 							onReorder={reorderMission}
+							onNewTask={activeProjectId ? newTask : undefined}
 						/>
 					) : view === "settings" ? (
 						<SettingsPanel agents={agents} />
@@ -1988,6 +2165,22 @@ export function App() {
 					)}
 				</div>
 			</main>
+
+			{leadShown && (
+				<>
+					{/* Its edge drags like the left sidebar's. */}
+					<div
+						className="lead-resizer"
+						onMouseDown={startLeadResize}
+						role="separator"
+						aria-orientation="vertical"
+						aria-label="Resize Lead sidebar"
+					/>
+					<aside className="lead-side" aria-label="Lead">
+						<LeadChat tasks={allTasks} onOpenTask={openTask} onHide={() => setLeadSide(false)} />
+					</aside>
+				</>
+			)}
 
 			{cleanupOpen && activeProjectId && (
 				<CleanupDialog
@@ -2346,7 +2539,10 @@ function Board({
 		// Clicking empty board space deselects; card clicks stopPropagation.
 		<div className="board" onClick={onDeselect}>
 			{COLUMNS.map((col) => {
-				const items = tasks.filter((t) => t.column === col.key);
+				// Latest activity on top, the sidebar's "Recently updated" order: a
+				// task that just finished a turn is the first card in its column, not
+				// wherever its creation date (or its machine) put it.
+				const items = tasks.filter((t) => t.column === col.key).sort(byLatestActivity);
 				return (
 					<div className="col" key={col.key}>
 						<h3>
@@ -2819,8 +3015,6 @@ function TaskPanel({
 			refreshDiff();
 		});
 
-	const additions = diff?.files.reduce((n, f) => n + f.additions, 0) ?? 0;
-	const deletions = diff?.files.reduce((n, f) => n + f.deletions, 0) ?? 0;
 	/**
 	 * Selecting a tab means "show me that terminal" — so it leaves whatever view
 	 * is covering the terminal. Clicking a tab and seeing nothing change (because
@@ -3180,15 +3374,7 @@ function TaskPanel({
 					]}
 				/>
 
-				<button
-					type="button"
-					className={`diffstat ${changesOpen ? "active" : ""}`}
-					title={changesOpen ? "Back to terminal" : "Show changes"}
-					onClick={toggleChanges}
-				>
-					<span className="add">+{additions}</span>
-					<span className="del">-{deletions}</span>
-				</button>
+				<DiffStat diff={diff} open={changesOpen} onToggle={toggleChanges} />
 			</div>
 
 			{task.question && (
@@ -3275,33 +3461,12 @@ function TaskPanel({
 
 				{changesOpen && (
 					<div className="changes-view">
-						<div className="changes">
-							<div className="changes-head">
-								<strong>Changes</strong>
-								<IconButton icon={RotateCw} label="Refresh changes" onClick={refreshDiff} />
-							</div>
-							{diff?.files.length ? (
-								diff.files.map((f) => (
-									<button
-										type="button"
-										key={f.path}
-										className={`file ${viewFile === f.path ? "selected" : ""}`}
-										title={f.path}
-										onClick={() => setViewFile(f.path)}
-									>
-										<span className="fpath">{f.path}</span>
-										<span className="fstat">
-											<span className="add">+{f.additions}</span>{" "}
-											<span className="del">-{f.deletions}</span>
-										</span>
-									</button>
-								))
-							) : (
-								<div className="muted" style={{ padding: "4px 10px" }}>
-									No changes
-								</div>
-							)}
-						</div>
+						<ChangesList
+							diff={diff}
+							selected={viewFile}
+							onSelect={setViewFile}
+							onRefresh={refreshDiff}
+						/>
 						<div className="changes-diff">
 							{viewFile ? (
 								<FileDiffView
@@ -3329,6 +3494,7 @@ function MissionControl({
 	agents,
 	order,
 	layout,
+	holdForFit,
 	syncSeq,
 	onExpand,
 	highlightId,
@@ -3336,8 +3502,10 @@ function MissionControl({
 	jump,
 	onJumpMissing,
 	onReorder,
+	onNewTask,
 }: {
-	/** Which list `tasks` was drawn from; only the empty state differs. */
+	/** Which list `tasks` was drawn from; only the empty state and the New
+	 *  task slot differ. */
 	mode: "tasks" | "loops";
 	tasks: TaskDTO[];
 	/** Agent catalog, for naming a session's tab the way the task panel does. */
@@ -3345,6 +3513,9 @@ function MissionControl({
 	/** The rank tiles take on mount and on Sync; read at no other time. */
 	order: string[];
 	layout: McLayout;
+	/** Auto is about to fit `layout` to the tile count this grid reports, so no
+	 *  terminal should mount at a size it is about to leave. */
+	holdForFit: boolean;
 	/** Bumped by the Sync button: re-sort the tiles to `order` once. */
 	syncSeq: number;
 	onExpand: (task: TaskDTO, terminalId: string) => void;
@@ -3357,6 +3528,8 @@ function MissionControl({
 	onJumpMissing: (taskId: string) => void;
 	/** The tiles' order changed (a tile arrived, died, or was dragged). */
 	onReorder: (tileIds: string[]) => void;
+	/** Opens the task composer. Absent when there is no project to create in. */
+	onNewTask?: () => void;
 }) {
 	// One tile per TASK, not per session: a task with an agent and two shells is
 	// one piece of work, and splaying it across three identically-titled tiles
@@ -3577,6 +3750,54 @@ function MissionControl({
 		});
 	}, [onScreen]);
 
+	// Each tile's changes, for its +N -N and its changes view. Kept per task for
+	// the grid's life, so flipping pages doesn't run git again for tiles already
+	// counted.
+	const [diffs, setDiffs] = useState<Record<string, DiffResultDTO>>({});
+	// The tiles showing their changes instead of their terminal, each with the
+	// file whose diff is open (null: the file list).
+	const [changesOf, setChangesOf] = useState<Record<string, string | null>>({});
+	const diffSeqRef = useRef(new Map<string, number>());
+	const fetchDiff = useCallback((taskId: string) => {
+		// Numbered, so an older answer landing after a newer one is dropped.
+		const seq = (diffSeqRef.current.get(taskId) ?? 0) + 1;
+		diffSeqRef.current.set(taskId, seq);
+		window.ateam.git.diff(taskId).then(
+			(d) => {
+				if (diffSeqRef.current.get(taskId) === seq) setDiffs((m) => ({ ...m, [taskId]: d }));
+			},
+			// An unreachable box or an engine without git: the tile shows no stat.
+			() => {},
+		);
+	}, []);
+	// When to count a tile's changes: the first time it is on screen, and on
+	// screen again once its agent finishes a turn (leaves "running"), which is
+	// when that turn's edits are all in. Counting at a turn's start, or on every
+	// event, would run git for nothing. Turns are read from `tasks`, the app's
+	// live list; a tile's own copy is only as fresh as the last session fetch.
+	const busyRef = useRef(new Map<string, boolean>());
+	const countedRef = useRef(new Set<string>());
+	useEffect(() => {
+		for (const task of tasks) {
+			const busy = task.agentStatus === "running";
+			if (busyRef.current.get(task.id) && !busy) countedRef.current.delete(task.id);
+			busyRef.current.set(task.id, busy);
+		}
+		for (const id of onScreen ? onScreen.split(" ") : []) {
+			if (countedRef.current.has(id)) continue;
+			countedRef.current.add(id);
+			fetchDiff(id);
+		}
+	}, [tasks, onScreen, fetchDiff]);
+	const toggleChanges = (taskId: string) => {
+		if (taskId in changesOf) {
+			setChangesOf((m) => Object.fromEntries(Object.entries(m).filter(([id]) => id !== taskId)));
+			return;
+		}
+		fetchDiff(taskId); // opening is asking for the current state
+		setChangesOf((m) => ({ ...m, [taskId]: null }));
+	};
+
 	// A sidebar click lands here: flip to the page holding that task's tile and
 	// focus its terminal once the tile is on screen. Only jumps sent while
 	// mounted count; the one left over from a previous visit is not a request.
@@ -3662,10 +3883,20 @@ function MissionControl({
 		onDragLeave: stopFlipTimer,
 	});
 
+	// Tasks only: a loop's session is started by the loop, not from here.
+	const newTaskButton =
+		mode === "tasks" && onNewTask ? (
+			<button type="button" className="navbtn" onClick={onNewTask}>
+				<Plus size={14} strokeWidth={1.75} />
+				New task
+			</button>
+		) : null;
+
 	if (tiles.length === 0) {
 		if (!loaded) return <div className="mc" data-layout={layout} />;
+		// mc-none: centered in the whole area, not in the layout's first cell.
 		return (
-			<div className="mc" data-layout={layout}>
+			<div className="mc mc-none" data-layout={layout}>
 				{mode === "loops" ? (
 					<div className="empty">
 						No loop sessions running.
@@ -3675,12 +3906,20 @@ function MissionControl({
 					<div className="empty">
 						No live agents yet.
 						<br />
-						Launch agents from the Board to watch them work side by side here.
+						Start a task to watch its agent work here.
+						{newTaskButton && (
+							<>
+								<br />
+								{newTaskButton}
+							</>
+						)}
 					</div>
 				)}
 			</div>
 		);
 	}
+	// The tiles are counted; the layout to show them in lands next render.
+	if (holdForFit) return <div className="mc" data-layout={layout} />;
 
 	return (
 		<div className="mc-wrap">
@@ -3700,6 +3939,9 @@ function MissionControl({
 					const shown = activeTerminal(sessions, shownByTask[task.id]?.terminalId ?? null);
 					if (!shown) return null; // a task with no live session is not a tile
 					const tabs = sessionTabs(sessions, agents);
+					const diff = diffs[task.id];
+					const changesOpen = task.id in changesOf;
+					const openFile = changesOf[task.id] ?? null;
 					return (
 						<motion.div
 							key={task.id}
@@ -3764,12 +4006,18 @@ function MissionControl({
 								}}
 							>
 								<span className="bar-name">{task.name}</span>
-								{/* What the terminal below can't show: how big the work is and
-								    whether it has a PR. The branch used to sit here, but it is
-								    the name again as a slug. */}
-								<WorkSize task={task} />
+								{/* What the terminal below can't show: whether it has a PR (its
+								    size is the +N -M on the right). The branch used to sit here,
+								    but it is the name again as a slug. */}
 								{task.prNumber && <span className="bar-pr">PR #{task.prNumber}</span>}
 								<span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+									{diff && (
+										<DiffStat
+											diff={diff}
+											open={changesOpen}
+											onToggle={() => toggleChanges(task.id)}
+										/>
+									)}
 									{task.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
 									<IconButton
 										icon={Maximize2}
@@ -3790,25 +4038,66 @@ function MissionControl({
 											aria-selected={session.terminalId === shown}
 											className={`mc-tab ${session.terminalId === shown ? "active" : ""}`}
 											title={label}
-											onClick={() =>
+											onClick={() => {
 												setShownByTask((m) => ({
 													...m,
 													[task.id]: { terminalId: session.terminalId, pinned: true },
-												}))
-											}
+												}));
+												// A tab means "show me that terminal", as in the task panel.
+												if (changesOpen) toggleChanges(task.id);
+											}}
 										>
 											{label}
 										</button>
 									))}
 								</div>
 							)}
-							<TerminalView
-								terminalId={shown}
-								grammar={sessions.some((s) => s.terminalId === shown && s.agentId !== "shell")}
-							/>
+							{/* Hidden, not unmounted, under the changes view, so the xterm
+							    survives (the task panel does the same). */}
+							<div className="term-wrap" style={{ display: changesOpen ? "none" : "flex" }}>
+								<TerminalView
+									terminalId={shown}
+									grammar={sessions.some((s) => s.terminalId === shown && s.agentId !== "shell")}
+								/>
+							</div>
+							{/* A tile is too narrow for the panel's list-beside-diff, so the
+							    list fills it and a file's diff opens in its place. */}
+							{changesOpen && (
+								<div className="mc-changes">
+									{openFile ? (
+										<FileDiffView
+											taskId={task.id}
+											file={openFile}
+											split={false}
+											closeLabel="Back to files"
+											onClose={() => setChangesOf((m) => ({ ...m, [task.id]: null }))}
+										/>
+									) : (
+										<ChangesList
+											diff={diff ?? null}
+											selected={null}
+											onSelect={(path) => setChangesOf((m) => ({ ...m, [task.id]: path }))}
+											onRefresh={() => fetchDiff(task.id)}
+										/>
+									)}
+								</div>
+							)}
 						</motion.div>
 					);
 				})}
+				{/* A page with room left (only ever the last one) offers a new task
+				    in its first open slot; the tile that task grows takes the slot,
+				    and the offer moves on to the next one, gliding like the tiles. */}
+				{newTaskButton && visible.length < pageSize && (
+					<motion.div
+						key="mc-slot"
+						className="mc-slot"
+						layout="position"
+						transition={{ layout: springy }}
+					>
+						{newTaskButton}
+					</motion.div>
+				)}
 			</motion.div>
 			{dragging && clampedPage > 0 && (
 				<div className="mcflip top" {...flipOnHold(-1)}>

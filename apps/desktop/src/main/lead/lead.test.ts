@@ -146,6 +146,58 @@ describe("lead tools", () => {
 		expect(working).not.toContain("t1 | fix login");
 	});
 
+	it("lists the latest activity first and says how long ago each task changed", async () => {
+		const now = Date.now();
+		const tasks = [
+			{ ...TASKS[0], id: "t4", name: "made monday", lastEventAt: now - 3 * 86_400_000 },
+			{ ...TASKS[0], id: "t5", name: "just finished", lastEventAt: now - 5 * 60_000 },
+			{ ...TASKS[0], id: "t6", name: "never ran", lastEventAt: null },
+		];
+		const r = fakeRouter({ [CH.tasksList]: () => tasks });
+		const tools = createLeadTools({ handle: r.handle, machineOf: () => null });
+		const rows = ((await tools.call("get_board", {}))?.text ?? "")
+			.split("\n")
+			.filter((l) => / \| /.test(l));
+		expect(rows).toEqual([
+			"id | name | column | state | agent | updated",
+			"t5 | just finished | review | idle | claude | 5m ago",
+			"t4 | made monday | review | idle | claude | 3d ago",
+			"t6 | never ran | review | idle | claude | -",
+		]);
+	});
+
+	it("recent lists the newest tasks across projects, merged ones included", async () => {
+		const now = Date.now();
+		const byProject: Record<string, unknown[]> = {
+			p1: [
+				{ ...TASKS[1], id: "a-old", name: "a old", lastEventAt: now - 2 * 86_400_000 },
+				{ ...TASKS[1], id: "a-merged", name: "a merged", lastEventAt: now - 2 * 60_000 },
+			],
+			p2: [
+				{ ...TASKS[0], id: "b-new", name: "b new", projectId: "p2", lastEventAt: now - 1_000 },
+				{ ...TASKS[0], id: "b-mid", name: "b mid", projectId: "p2", lastEventAt: now - 3_600_000 },
+			],
+		};
+		const r = fakeRouter({
+			[CH.projectsList]: () => [
+				{ id: "p1", name: "ateam" },
+				{ id: "p2", name: "site" },
+			],
+			[CH.tasksList]: ([projectId]) => byProject[String(projectId)] ?? [],
+		});
+		const tools = createLeadTools({ handle: r.handle, machineOf: () => null });
+		const text = (await tools.call("get_board", { filter: "recent", limit: 3 }))?.text ?? "";
+		// The project with the newest task comes first; the oldest task is past the limit.
+		expect(text.indexOf("site (")).toBeLessThan(text.indexOf("ateam ("));
+		expect(text).toContain("b-new | b new | review | idle | claude | just now");
+		expect(text).toContain("a-merged | a merged | merged | not_running | codex | 2m ago");
+		expect(text).toContain("b-mid | b mid");
+		expect(text).not.toContain("a old");
+		// Without recent, merged work stays out.
+		const all = (await tools.call("get_board", {}))?.text ?? "";
+		expect(all).not.toContain("a merged");
+	});
+
 	it("looks a task up by id on its own engine, without listing the board", async () => {
 		const id = "11111111-2222-4333-8444-555555555555";
 		const r = fakeRouter({

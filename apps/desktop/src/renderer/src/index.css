@@ -108,6 +108,15 @@ input {
 .app.rail {
 	grid-template-columns: 56px 1fr;
 }
+/* The Lead as a sidebar on the right: a third full-height column, the mirror
+   of the left one. Capped at 40% (MAX_LEAD_SHARE in App.tsx), below the left
+   one's 50%, so the board keeps some room with both open. */
+.app.lead-open {
+	grid-template-columns: min(var(--sidebar-w, 240px), 50%) 1fr min(var(--lead-w, 400px), 40%);
+}
+.app.rail.lead-open {
+	grid-template-columns: 56px 1fr min(var(--lead-w, 400px), 40%);
+}
 
 /* Invisible drag strip sitting over the sidebar/main divider. No visible
    chrome — just a col-resize hit area aligned to the current sidebar width. */
@@ -118,6 +127,18 @@ input {
 	left: min(var(--sidebar-w, 240px), 50%);
 	width: 8px;
 	margin-left: -4px;
+	cursor: col-resize;
+	z-index: 20;
+	-webkit-app-region: no-drag;
+}
+/* The same strip over the main/Lead divider. */
+.lead-resizer {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	right: min(var(--lead-w, 400px), 40%);
+	width: 8px;
+	margin-right: -4px;
 	cursor: col-resize;
 	z-index: 20;
 	-webkit-app-region: no-drag;
@@ -203,6 +224,12 @@ input {
 .rail-tile.active {
 	background: var(--bg-elev-2);
 	color: var(--text);
+}
+/* aria-disabled, not :disabled, so the tooltip still opens to say why. */
+.rail-tile[aria-disabled="true"] {
+	opacity: 0.35;
+	cursor: default;
+	background: transparent;
 }
 /* How many sessions the tile stands for, when more than one: the tile has
    room for one glyph, so the rest are a number. Opposite corner to the status
@@ -1303,7 +1330,7 @@ input {
 .work-size .del {
 	color: var(--red);
 }
-/* A task's +N -M on the card and the Mission Control bar. */
+/* A task's +N -M on the board card. */
 .work-size {
 	flex: none;
 	white-space: nowrap;
@@ -1419,15 +1446,26 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* react-diff-view's stylesheet is unlayered and this file sits in the `app`
+   layer (globals.css), so a rule here loses to any of its rules that targets
+   the same element: an insert line's background stayed its light #eaffee under
+   our light text. Its colours are custom properties set on :root, though, and
+   declaring them here sets them on another element, which layers don't
+   arbitrate: the table below inherits these. */
 .filediff-body {
 	flex: 1;
 	overflow: auto;
+	--diff-background-color: transparent;
+	--diff-text-color: var(--text);
+	--diff-font-family: ui-monospace, Menlo, monospace;
+	--diff-gutter-insert-background-color: rgba(63, 185, 80, 0.16);
+	--diff-code-insert-background-color: rgba(63, 185, 80, 0.16);
+	--diff-gutter-delete-background-color: rgba(248, 81, 73, 0.16);
+	--diff-code-delete-background-color: rgba(248, 81, 73, 0.16);
+	--diff-code-insert-edit-background-color: transparent;
+	--diff-code-delete-edit-background-color: transparent;
 }
 .filediff-body .diff {
-	width: 100%;
-	background: transparent;
-	color: var(--text);
-	font-family: ui-monospace, Menlo, monospace;
 	font-size: 11.5px;
 }
 .filediff-body .diff-gutter {
@@ -1436,17 +1474,6 @@ input {
 }
 .filediff-body .diff-code {
 	color: var(--text);
-}
-.filediff-body .diff-gutter-insert,
-.filediff-body .diff-code-insert {
-	background: rgba(63, 185, 80, 0.16);
-}
-.filediff-body .diff-gutter-delete,
-.filediff-body .diff-code-delete {
-	background: rgba(248, 81, 73, 0.16);
-}
-.filediff-body .diff-code-edit {
-	background: transparent;
 }
 .filediff-body .diff-hunk-header,
 .filediff-body .diff-gutter-omit,
@@ -1510,6 +1537,22 @@ input {
 .mc[data-layout="stack"] {
 	grid-template-columns: minmax(0, 1fr);
 	grid-auto-rows: 100%;
+}
+/* Nothing live: the message is centered in the whole area. As a grid item it
+   would sit in the layout's first cell, up and to the left. */
+.mc.mc-none {
+	display: flex;
+}
+.mc .empty .navbtn {
+	margin-top: 10px;
+}
+/* The first open slot of a page that isn't full: framed like a tile, with
+   New task in its middle. */
+.mc .mc-slot {
+	border: 1px solid var(--bg-elev);
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 
 /* Pager overlay: sits translucent over the bottom-right corner, full opacity
@@ -1653,6 +1696,40 @@ input {
 .mc .tile .bar .bar-pr {
 	flex: none;
 	white-space: nowrap;
+}
+/* The tile's +N -N, sized to the bar like the expand button. */
+.mc .tile .bar .diffstat {
+	padding: 1px 6px;
+	font-size: 11px;
+}
+/* A tile's changes: the file list fills the tile (the panel's 220px list
+   column would leave no room for a diff), and a file's diff takes its place. */
+.mc-changes {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+.mc-changes .changes {
+	flex: 1 1 auto;
+	min-height: 0;
+	border-right: none;
+}
+
+/* Auto layout's re-fit hint: agents started or quit since Auto fitted the
+   grid, and a click would fit them. A dot, since nothing moves by itself. */
+.navbtn.refit {
+	position: relative;
+}
+.navbtn.refit::after {
+	content: "";
+	position: absolute;
+	top: 3px;
+	right: 3px;
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: var(--text);
 }
 
 /* A tile's sessions as read-only tabs: switching only. Creating and closing
@@ -2545,7 +2622,8 @@ input {
 	border-color: var(--text-dim);
 }
 /* Sidebar LOOPS row for a paused loop. */
-.tasknode.loop-paused {
+.tasknode.loop-paused,
+.rail-tile.loop-paused {
 	opacity: 0.5;
 }
 /* A task on a box that isn't held: what the box showed last, not a live state,
@@ -3008,6 +3086,51 @@ input {
 	--pele-bg: var(--bg-elev-2);
 	--pele-surface: #26262e;
 }
+/* The Lead as the sidebar on the right (see .app.lead-open). */
+.lead-side {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	border-left: 1px solid var(--border);
+}
+.lead-side > .lead {
+	min-height: 0;
+}
+/* Its slim top strip: as tall as the top bar beside it, with the same bottom
+   border, so the two read as one header line; draggable like it. */
+.lead-side-head {
+	height: 44px;
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	/* 13px on the right centres the hide toggle where the top bar's show
+	   toggle sat (that one is 26px wide inside 14px of padding). */
+	padding: 0 13px 0 16px;
+	border-bottom: 1px solid var(--border);
+	-webkit-app-region: drag;
+}
+.lead-side-head .iconbtn {
+	-webkit-app-region: no-drag;
+}
+.lead-side-title {
+	flex: 1;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+}
+/* A narrow column: tighter gutters than the full-width chat. */
+.lead-side .lead-thread {
+	padding: 16px 16px 48px;
+}
+.lead-side .lead-asking {
+	padding: 12px 16px 16px;
+}
+.lead-side .lead-composer {
+	padding: 0 12px 12px;
+}
 .lead-head {
 	display: flex;
 	align-items: flex-start;
@@ -3110,6 +3233,11 @@ input {
 .md pre code {
 	background: none;
 	padding: 0;
+}
+/* An image in an agent's reply (often a full-size screenshot) fits the
+   message instead of running past it. */
+.md img {
+	max-width: 100%;
 }
 .md table {
 	border-collapse: collapse;
@@ -3306,6 +3434,15 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+/* A task the Lead names in its prose: the same chip, slimmed to 20px so it sits
+   in a 21px line of text, with air above and below so chips on consecutive
+   lines (a list of tasks) don't touch each other or the text around them. */
+.md .lead-chip {
+	padding: 1px 7px;
+	line-height: 16px;
+	margin: 2px 0;
+	vertical-align: middle;
+}
 .lead-chip-what {
 	color: var(--text-dim);
 }
@@ -3423,6 +3560,23 @@ input {
 .question-text {
 	line-height: 1.5;
 }
+/* When the card is capped (the Lead's tray), the question gives up room and
+   scrolls, never the options or the reply box: those keep their size as flex
+   items, and only this scroller can shrink. A block, not a flex column, or the
+   page frame inside it (overflow: hidden) would be squashed instead of
+   scrolled. The floor keeps three lines readable (all of a shorter question),
+   and past it the card itself scrolls rather than clip what is below. */
+.question {
+	max-height: 100%;
+	overflow-y: auto;
+}
+.question-body {
+	min-height: calc-size(max-content, min(size, 4.5em));
+	overflow-y: auto;
+}
+.question-body > * + * {
+	margin-top: 8px;
+}
 .choices {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -3493,7 +3647,14 @@ input {
 .checklist {
 	display: flex;
 	flex-direction: column;
+	min-height: 0;
+}
+.check-rows {
+	display: flex;
+	flex-direction: column;
 	gap: 2px;
+	min-height: calc-size(max-content, min(size, 4.5em));
+	overflow-y: auto;
 }
 .check-row {
 	display: flex;
@@ -3555,16 +3716,32 @@ input {
 	font-size: 12px;
 	color: var(--red);
 }
+/* Room for a question's options with a few of its lines above them: three
+   option cards with tradeoffs run ~310px, so the old 40% left the question
+   none. 60% of the Lead, and on a short window up to 460px as long as the
+   thread keeps ~3 lines (the 200px is the Lead's header, composer and those
+   lines). The title stays put; the list scrolls between cards, and each card
+   is at most the list's height, so a card in view shows its options. */
 .lead-asking {
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
 	width: 100%;
 	max-width: 776px;
-	max-height: 40vh;
-	overflow-y: auto;
+	max-height: max(60%, min(460px, 100% - 200px));
+	min-height: 0;
 	margin: 0 auto;
 	padding: 16px 20px 20px;
+}
+.lead-asking-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-height: 0;
+	overflow-y: auto;
+}
+.lead-asking-list > .question {
+	flex: none;
 }
 .lead-asking-title {
 	font-size: 11px;
@@ -3689,18 +3866,6 @@ input {
 }
 .lead-notice .lead-chip {
 	margin-left: 8px;
-}
-.lead-waiting {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 8px;
-	font-size: 12px;
-	color: var(--text-dim);
-}
-.lead-waiting button {
-	font-size: 12px;
-	padding: 2px 8px;
 }
 /* A tool permission Claude Code asks for, as opposed to the agent's own question. */
 .question-kind {

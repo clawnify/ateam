@@ -94,23 +94,26 @@ function Checklist({
 		});
 	return (
 		<div className="checklist">
-			{choices.map((c) => (
-				<label key={c.label} className="check-row">
-					<input
-						type="checkbox"
-						checked={ticked.has(c.label)}
-						disabled={disabled}
-						onChange={() => toggle(c.label)}
-					/>
-					<span className="check-body">
-						<span className="choice-head">
-							<span className="choice-label">{c.label}</span>
-							<Risk risk={c.risk} />
+			{/* Scrolls when the list is long, so Send stays in view. */}
+			<div className="check-rows">
+				{choices.map((c) => (
+					<label key={c.label} className="check-row">
+						<input
+							type="checkbox"
+							checked={ticked.has(c.label)}
+							disabled={disabled}
+							onChange={() => toggle(c.label)}
+						/>
+						<span className="check-body">
+							<span className="choice-head">
+								<span className="choice-label">{c.label}</span>
+								<Risk risk={c.risk} />
+							</span>
+							{c.description && <span className="choice-desc">{c.description}</span>}
 						</span>
-						{c.description && <span className="choice-desc">{c.description}</span>}
-					</span>
-				</label>
-			))}
+					</label>
+				))}
+			</div>
 			<div className="checklist-foot">
 				<button
 					type="button"
@@ -198,17 +201,21 @@ export function QuestionCard({
 					<X size={13} />
 				</button>
 			</div>
-			<div className="md question-text">
-				<Markdown text={q.text} />
+			{/* The part that scrolls when the card is short of room: the options
+			    and the reply box below it always stay in view. */}
+			<div className="question-body">
+				<div className="md question-text">
+					<Markdown text={q.text} />
+				</div>
+				{q.pageId && task.page?.id === q.pageId && (
+					<PageFrame
+						taskId={task.id}
+						pageId={q.pageId}
+						title={task.page.title}
+						onAnswer={(v) => !sending && void answer(v)}
+					/>
+				)}
 			</div>
-			{q.pageId && task.page?.id === q.pageId && (
-				<PageFrame
-					taskId={task.id}
-					pageId={q.pageId}
-					title={task.page.title}
-					onAnswer={(v) => !sending && void answer(v)}
-				/>
-			)}
 			{q.select === "many" && q.choices ? (
 				<Checklist choices={q.choices} disabled={sending} onSend={(t) => void answer(t)} />
 			) : q.choices ? (

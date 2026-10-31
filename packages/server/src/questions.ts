@@ -12,10 +12,11 @@
  * the user thought it over is resumed with the answer.
  *
  * One question per task: a new ask replaces the pending one. While one is
- * pending the card stays in Needs You, even across the agent's Stop.
+ * pending the card stays in Needs You, whatever moves it (a Stop, another
+ * agent's message waking it, its agent exiting): repo.updateTask holds it there.
  */
 import { randomUUID } from "node:crypto";
-import { type AteamDb, type QuestionChoice, repo, type Task, type TaskQuestion } from "@ateam/db";
+import { type AteamDb, type QuestionChoice, repo, type TaskQuestion } from "@ateam/db";
 import { savePage, titleFrom, validatePage } from "./pages";
 import type { OutsideSender, SendResult } from "./peer-messages";
 
@@ -161,12 +162,6 @@ export function applyAskUser(
 		reason:
 			"Asked. The user sees it on the board, in the Lead chat and on their phone. End your turn now and do not ask it again in your reply: their answer arrives as a message starting with [Ateam], and continues this conversation.",
 	};
-}
-
-/** The column a hook event lands a card in, given a pending question: a Stop
- *  must not bury the question in Review. */
-export function columnWithQuestion<C extends string>(task: Task, column: C): C | "needs_attention" {
-	return task.question && column === "review" ? "needs_attention" : column;
 }
 
 /**
