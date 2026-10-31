@@ -838,16 +838,26 @@ input {
 .card:hover .branch-slot.has-tags .tags {
 	opacity: 1;
 }
-.tag {
+/* The one pill: a short name in a border, filled with a faint tint of that
+   same border colour. Neutral by default (task tags, "archived"); a colour
+   class sets --pill and the text follows it. */
+.pill {
+	--pill: var(--border);
+	flex: none;
 	font-size: 9.5px;
+	font-weight: 400;
 	line-height: 1;
 	letter-spacing: 0.02em;
 	padding: 3px 6px;
 	border-radius: 999px;
-	border: 1px solid var(--border);
-	background: var(--bg-elev-2);
+	border: 1px solid var(--pill);
+	background: color-mix(in srgb, var(--pill) 15%, transparent);
 	color: var(--text-dim);
 	white-space: nowrap;
+}
+.pill.green {
+	--pill: var(--green);
+	color: var(--green);
 }
 .card .meta {
 	display: flex;
@@ -2139,24 +2149,22 @@ input {
 	background: var(--bg-elev-2);
 	border-left: 2px solid #fff;
 }
+/* Name, then the "recommended" pill when the sweep would take this one
+   (advice, not a filter). The name ellipsizes; the pill never shrinks.
+   Stretched because buttons align their children flex-start, which sized
+   this line to its content and pushed the pill off the row's edge. */
 .cleanup-item .tname {
+	display: flex;
+	align-self: stretch;
+	align-items: center;
+	gap: 6px;
 	font-size: 13px;
+}
+.cleanup-item .tname-text {
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-}
-.cleanup-item .tname {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-}
-/* The sweep would take this one — advice, not a filter. */
-.cleanup-item .rec-dot {
-	flex: none;
-	width: 5px;
-	height: 5px;
-	border-radius: 50%;
-	background: var(--green);
 }
 .cleanup-factors {
 	display: flex;
@@ -2181,19 +2189,9 @@ input {
 .cleanup-factors .pr.closed {
 	color: var(--red);
 }
-.cleanup-detail-head .rec-tag {
+.cleanup-detail-head .title .pill {
 	margin-left: 8px;
-	font-size: 10px;
-	font-weight: 400;
-	color: var(--green);
-	border: 1px solid var(--green);
-	border-radius: 4px;
-	padding: 1px 5px;
 	vertical-align: middle;
-}
-.cleanup-detail-head .rec-tag.archived {
-	color: var(--text-dim);
-	border-color: var(--border);
 }
 .cleanup-item .sub {
 	font-size: 11px;
