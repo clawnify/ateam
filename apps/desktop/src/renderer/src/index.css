@@ -3712,8 +3712,9 @@ input {
 	font-size: 12px;
 	color: var(--text-dim);
 }
+/* Below the terminal, at the bottom of the panel. */
 .panel-page {
-	padding: 8px 10px 0;
+	padding: 8px 10px;
 }
 
 /* ---- an agent's page (PageFrame): its own HTML in a sandboxed frame ---- */
@@ -3736,6 +3737,33 @@ input {
 }
 .page:not(.collapsed) > .page-head {
 	border-bottom: 1px solid var(--border);
+}
+/* The collapsed bar is one button. Hover and focus paint the .page, not the
+   button: a background on the button would cover the .page's inset border. */
+.page-open {
+	width: 100%;
+	padding: 0 12px 0 10px;
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+	text-align: left;
+	transition: color 0.1s;
+}
+.page-open:hover {
+	background: transparent;
+	color: var(--text);
+}
+.page-open:focus-visible {
+	outline: none;
+}
+.page.collapsed {
+	transition: background 0.1s;
+}
+.page.collapsed:has(> .page-open:hover) {
+	background: var(--bg-elev-2);
+}
+.page.collapsed:has(> .page-open:focus-visible) {
+	box-shadow: inset 0 0 0 1px var(--text);
 }
 .page-icon {
 	flex: none;
