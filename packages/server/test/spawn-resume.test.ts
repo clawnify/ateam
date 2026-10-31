@@ -26,6 +26,9 @@ function createTestDb(): AteamDb {
 	return drizzle(sqlite, { schema }) as unknown as AteamDb;
 }
 
+// The no-bypass guard every Claude launch carries (agents registry `guardFlag`).
+const G = `--settings '{"permissions":{"disableBypassPermissionsMode":"disable"}}'`;
+
 let db: AteamDb;
 let services: Services;
 let taskId: string;
@@ -64,8 +67,6 @@ beforeEach(() => {
 		// Overridden per-test. Defaults to "asked, nothing here", which is what an
 		// agent with no conversation in this worktree looks like.
 		latestSession: async () => ({ ok: true, id: null }),
-		// The machine running the tests leaves the permission mode to Claude.
-		skipsAsking: async () => false,
 	} as unknown as Services;
 	const project = repo.upsertProject(db, {
 		repoPath: "/tmp/repo",
@@ -99,39 +100,28 @@ describe("the launch line", () => {
 	});
 });
 
-// One of our Sprites had Claude's settings defaulting to bypassPermissions, which
-// made a task launched with Auto off skip every check while Auto on still had
-// auto mode's.
-describe("the permission mode on a box whose Claude defaults to bypass", () => {
-	beforeEach(() => {
-		services.skipsAsking = async () => true;
-	});
-
-	it("Auto off asks", async () => {
+// Fly's Sprite image defaults Claude to bypassPermissions, which made a task
+// launched with Auto off skip every check while Auto on still had auto mode's.
+describe("the no-bypass guard on the launch line", () => {
+	it("Auto off carries it and leaves the mode to the user's settings", async () => {
 		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", prompt: "go" });
-		expect(spawned?.command).toStartWith("claude --permission-mode default --session-id ");
+		expect(spawned?.command).toStartWith(`claude ${G} --session-id `);
+		expect(spawned?.command).not.toInclude("--permission-mode");
 	});
 
-	it("Auto on is auto mode", async () => {
+	it("Auto on carries it next to auto mode", async () => {
 		await spawnAgentInTask(services, () => {}, {
 			taskId,
 			agentId: "claude",
 			prompt: "go",
 			yolo: true,
 		});
-		expect(spawned?.command).toStartWith("claude --permission-mode auto ");
-		expect(spawned?.command).not.toInclude("--permission-mode default");
+		expect(spawned?.command).toStartWith(`claude --permission-mode auto ${G} `);
 	});
 
-	it("a resume asks too", async () => {
+	it("a resume carries it too", async () => {
 		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", resume: true });
-		expect(spawned?.command).toStartWith("claude --continue --permission-mode default");
-	});
-
-	it("a box that leaves the mode to Claude gets no flag", async () => {
-		services.skipsAsking = async () => false;
-		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", prompt: "go" });
-		expect(spawned?.command).not.toInclude("--permission-mode");
+		expect(spawned?.command).toStartWith(`claude --continue ${G}`);
 	});
 });
 
@@ -330,7 +320,7 @@ describe("peer messaging on the launch line", () => {
 		});
 		expect(repo.getTask(db, taskId)).toMatchObject({ column: "running", agentStatus: "running" });
 		expect(launches[0]?.args.at(-1)).toContain(
-			"claude --resume 'conv-1' '[Ateam] Message from ...'",
+			`claude --resume 'conv-1' ${G} '[Ateam] Message from ...'`,
 		);
 		// The task's description stays what the user started it with.
 		expect(repo.getTask(db, taskId)?.description ?? null).toBeNull();

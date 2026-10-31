@@ -97,7 +97,13 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
 import { bestMcLayout, MC_PAGE_SIZE, type McChoice, type McLayout } from "./mc-layout";
-import { activeTerminal, sessionTabs, taskGlyphs } from "./session-tabs";
+import {
+	activeTerminal,
+	conversationToResume,
+	sessionTabs,
+	taskGlyphs,
+	tileSessions,
+} from "./session-tabs";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
 import {
@@ -292,11 +298,13 @@ export function App() {
 			(mcFitSet[activeProjectId] ?? storedMcLayout(`ateam.mcFit.${activeProjectId}`))) ||
 		"grid";
 	const mcLayout: McLayout = mcChoice === "auto" ? mcFit : mcChoice;
-	// Auto fits when Mission Control opens, never while it is up: a refit
-	// resizes every terminal on the grid (each agent redraws), re-pages the tiles
-	// and, into or out of the 3x2, moves the sidebar, none of which an agent
-	// starting or quitting should do under your cursor. Opening sets the fit
-	// pending and the open grid's tile count clears it (see reorderMission).
+	// Auto fits the grid to its live tiles when Mission Control opens and again
+	// each time a tile arrives or leaves while it is up: deleting a task or
+	// starting one is a change you made and expect the layout to follow. A refit
+	// resizes every terminal (each agent redraws) and re-pages the tiles, so a
+	// grid that must hold still is what the fixed layouts are for. Opening sets
+	// the fit pending, which holds the terminals unmounted until the grid
+	// reports its tile count (see reorderMission).
 	const [mcFitPending, setMcFitPending] = useState(false);
 	// How many tiles the open grid has; null until it reports, after opening.
 	const [mcTileCount, setMcTileCount] = useState<number | null>(null);
@@ -306,6 +314,7 @@ export function App() {
 		if (!activeProjectId || tiles === 0) return;
 		setMcFitPending(false);
 		const l = bestMcLayout(tiles);
+		if (l === mcFit) return;
 		localStorage.setItem(`ateam.mcFit.${activeProjectId}`, l);
 		setMcFitSet((m) => ({ ...m, [activeProjectId]: l }));
 	};
@@ -842,7 +851,8 @@ export function App() {
 	// selection, since a click there highlights rather than opens.
 	const mcGridShown = view === "mission" && !(selectedTask && panelMode === "full");
 	const sidebarSelectedId = mcGridShown ? mcHighlightId : selectedTaskId;
-	// Opening Mission Control, which is when Auto fits: switching to it, or to
+	// Opening Mission Control, which Auto holds the terminals for until it has
+	// fitted: switching to it, or to
 	// another project's or mode's grid while on it. Coming back from a tile
 	// expanded full width is not an opening (the view never changed), even
 	// though the grid remounts. Settled during render, like the rail.
@@ -854,25 +864,8 @@ export function App() {
 		setMcTileCount(null);
 		if (mcOpenKey) setMcFitPending(true);
 	}
-	// Auto fitted when the grid opened, and agents may have started or quit
-	// since. That is shown on the Auto button, not acted on: one click re-fits.
-	const mcRefit =
-		mcChoice === "auto" && mcGridShown && !mcFitPending && mcTileCount
-			? bestMcLayout(mcTileCount)
-			: null;
-	const mcRefitDue = mcRefit !== null && mcRefit !== mcLayout;
-	// The Auto button's tooltip and its accessible name both, so a screen reader
-	// hears the re-fit the dot shows.
-	const mcAutoLabel =
-		mcRefit && mcRefitDue
-			? `Mission Control: Auto layout. ${mcTileCount} live now: click to fit them in ${mcLayoutLabel(mcRefit)}`
-			: view !== "mission" || mcChoice !== "auto"
-				? "Mission Control: Auto layout (fits the live terminals each time it opens)"
-				: mcFitPending
-					? "Mission Control: Auto layout (fits the terminals once one is live)"
-					: `Mission Control: Auto layout (${mcLayoutLabel(mcLayout)} for the live terminals; click to fit again)`;
-	// The Auto button: on the grid it fits what is there now; from anywhere
-	// else the opening does it.
+	// The Auto button: on the grid it fits what is there now (no tile report is
+	// coming to do it); from anywhere else the opening does it.
 	const chooseAutoLayout = () => {
 		setMcLayout("auto");
 		if (mcGridShown && mcTileCount) fitMission(mcTileCount);
@@ -1002,10 +995,11 @@ export function App() {
 	};
 	// Mission Control reports the tiles' order whenever it changes; they lead
 	// the saved order and everything else keeps its relative place behind them.
-	// The report is also the grid's tile count, which an opening waits on to fit.
+	// The report is also the grid's tile count, which Auto fits to: the opening
+	// waits on it, and every later arrival or departure refits.
 	const reorderMission = (tileIds: string[]) => {
 		setMcTileCount(tileIds.length);
-		if (mcFitPending && mcChoice === "auto") fitMission(tileIds.length);
+		if (mcChoice === "auto") fitMission(tileIds.length);
 		const onTiles = new Set(tileIds);
 		const next = [...tileIds, ...mcOrder.filter((id) => !onTiles.has(id))];
 		if (next.length === mcOrder.length && next.every((id, i) => id === mcOrder[i])) return;
@@ -1945,11 +1939,15 @@ export function App() {
 						<div className="mclayout" role="group" aria-label="Mission Control layout">
 							<button
 								type="button"
-								className={`navbtn icon ${view === "mission" && mcChoice === "auto" ? "active" : ""} ${
-									mcRefitDue ? "refit" : ""
-								}`}
-								title={mcAutoLabel}
-								aria-label={mcAutoLabel}
+								className={`navbtn icon ${view === "mission" && mcChoice === "auto" ? "active" : ""}`}
+								title={
+									view !== "mission" || mcChoice !== "auto"
+										? "Mission Control: Auto layout (fits the live terminals as they come and go)"
+										: mcFitPending
+											? "Mission Control: Auto layout (fits the terminals once one is live)"
+											: `Mission Control: Auto layout (${mcLayoutLabel(mcLayout)} for the live terminals)`
+								}
+								aria-label="Mission Control: Auto layout"
 								aria-pressed={view === "mission" && mcChoice === "auto"}
 								onClick={chooseAutoLayout}
 							>
@@ -3024,11 +3022,13 @@ function TaskPanel({
 
 	// Keep the active tab pointed at something real. Covers (re)opening a task
 	// with surviving daemon sessions, and a session ending — its tab disappears
-	// and the newest survivor takes focus. With nothing left, resume the agent's
+	// and the newest survivor takes focus. With no agent left, resume the agent's
 	// last conversation if the task is still active work (running or awaiting
-	// input). Terminal columns (review/merged) are left alone — there a relaunch
-	// is a deliberate act via the + menu, not a side effect of opening the task
-	// (and spawning would bounce the card back to "running").
+	// input). With shells still open that happens only on opening the task, or
+	// for the agent tab you were looking at, never in place of a live tab you
+	// are on (conversationToResume). Terminal columns (review/merged) are left
+	// alone: there a relaunch is a deliberate act via the + menu, not a side
+	// effect of opening the task.
 	//
 	// The one thing `sessions` alone must never settle is "this task has none".
 	// A spawn announces itself as a task update — the very event that flips the
@@ -3043,27 +3043,31 @@ function TaskPanel({
 	useEffect(() => {
 		if (!sessions) return; // list not read yet — don't judge the task by it
 		const next = activeTerminal(sessions, terminalId);
-		if (next) {
-			if (next !== terminalId) setTerminal(next);
-			return;
-		}
 		const resumable =
 			(task.column === "running" || task.column === "needs_attention") &&
 			autoResumedRef.current !== task.id;
-		if (terminalId === null && !resumable) return;
+		// Something to bring back instead of settling on `next`: judged on this
+		// list, and re-read below before anything is spawned.
+		const wake = resumable && conversationToResume(sessions, restorable, terminalId) !== null;
+		if (next && !wake) {
+			if (next !== terminalId) setTerminal(next);
+			return;
+		}
+		if (!next && terminalId === null && !resumable) return;
 		let cancelled = false;
 		void refreshSessions().then(({ live, restorable: stranded }) => {
-			if (cancelled || live.length) return; // it wasn't empty after all
-			if (terminalId !== null) setTerminal(null);
+			if (cancelled) return;
+			if (!live.length && terminalId !== null) setTerminal(null);
 			if (!resumable) return;
+			// Prefer the newest tab that was actually open when it went down or
+			// was reaped: it resumes THAT conversation by id. "latest" is the
+			// fallback for a task with nothing at all left, and can only reach the
+			// newest conversation in the worktree, whichever tab that was.
+			const target = conversationToResume(live, stranded, terminalId);
+			if (!target) return; // settled after all: the next run shows what is live
 			autoResumedRef.current = task.id;
-			// Prefer the newest tab that was actually open when we went down: it
-			// resumes THAT conversation by id. `launch(resume)` is the fallback for
-			// a task with nothing stranded (or nothing but shells) — it can only
-			// reach the newest conversation in the worktree, whichever tab that was.
-			const newest = [...stranded].reverse().find((s) => s.agentId !== "shell");
-			if (newest) void restoreTab(newest);
-			else void launch(false, true);
+			if (target === "latest") void launch(false, true);
+			else void restoreTab(target);
 		});
 		return () => {
 			cancelled = true;
@@ -3072,6 +3076,7 @@ function TaskPanel({
 		task.id,
 		task.column,
 		sessions,
+		restorable,
 		terminalId,
 		setTerminal,
 		launch,
@@ -3809,15 +3814,11 @@ function MissionControl({
 				);
 				if (cancelled) return;
 				// listForTask hands sessions back latest-first; reverse so the tabs
-				// read oldest to newest, exactly as they do in the task panel. A
-				// session whose agent quit (`stopped` while its PTY lives on as a
-				// shell) is not an agent to watch, so it gets no tab here, and a task
-				// left with none gets no tile. The task panel still has it.
+				// read oldest to newest, exactly as they do in the task panel. A task
+				// with no live agent gets no tile (tileSessions); the task panel
+				// still has its shells.
 				sessionsRef.current = perTask
-					.map(({ task, sessions }) => ({
-						task,
-						sessions: sessions.filter((s) => s.status !== "stopped").reverse(),
-					}))
+					.map(({ task, sessions }) => ({ task, sessions: tileSessions(sessions).reverse() }))
 					.filter(({ sessions }) => sessions.length > 0);
 				resort();
 				setLoaded(true);

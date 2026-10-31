@@ -10,7 +10,6 @@ import {
 	getAgent,
 	latestSessionInDir,
 	probeAgentBinary,
-	skipsAskingByDefault,
 } from "@ateam/agents";
 import { repo, type Task } from "@ateam/db";
 import { createTask as gitCreateTask, seedWorktree } from "@ateam/git-core";
@@ -299,15 +298,8 @@ async function launchAgent(
 		const list = input.files.map((f) => `- ${f}`).join("\n");
 		prompt = prompt ? `${prompt}\n\nAttached files:\n${list}` : `Attached files:\n${list}`;
 	}
-	// Auto off must never be looser than Auto on. Where this machine's own config
-	// would start the agent with every check off (Claude settings defaulting to
-	// bypassPermissions, as on one of our Sprites), pin the asking mode. Resumes
-	// and agent mode too: each is a fresh process that would read the same default.
-	const skipsAsking = services.skipsAsking ?? skipsAskingByDefault;
-	const pinAsk = !input.yolo && Boolean(agent.askFlag) && (await skipsAsking(agent));
 	let agentCmd = agentCommand(agent, {
 		yolo: input.yolo,
-		pinAsk,
 		resume: resumeNewest,
 		agentMode: input.agentMode,
 		cwd: task.worktreePath,
