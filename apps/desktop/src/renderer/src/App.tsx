@@ -32,8 +32,10 @@ import {
 	ChevronUp,
 	CircleAlert,
 	Columns2,
+	Copy,
 	ExternalLink,
 	FolderPlus,
+	GitBranch,
 	GitCommitVertical,
 	GitMerge,
 	GitPullRequest,
@@ -1693,6 +1695,17 @@ export function App() {
 						onQuery={setTaskQuery}
 						projectIds={searchProjectIds}
 						tasks={activeTasks}
+						describeTask={(t) => {
+							const age = relativeAge(t.lastEventAt, Date.now());
+							const box = originOf(t.projectId);
+							return [
+								COLUMNS.find((c) => c.key === t.column)?.label,
+								age && (age === "just now" ? age : `${age} ago`),
+								box && aliasLabel(box),
+							]
+								.filter(Boolean)
+								.join(" · ");
+						}}
 						onOpenTask={openTask}
 						onOpenSession={openSessionHit}
 					/>
@@ -2135,9 +2148,7 @@ function OfflineTaskPanel({
 					<span className="title">{task.name}</span>
 					<IconButton icon={X} label="Close" onClick={onClose} />
 				</div>
-				<div className="branch muted">
-					{task.branch} ← {task.baseBranch}
-				</div>
+				<BranchLine task={task} />
 			</div>
 			<div className="empty">
 				{waking ? (
@@ -2385,31 +2396,30 @@ function Board({
 											className={`ring ${t.triage.bucket === "stalled" ? "stalled" : t.agentStatus}`}
 										/>
 									)}
+									{/* No branch line: the branch is the name as a slug, so the card
+								    carries state instead and the branch lives in the open task.
+								    Tags show on hover inside the name's line, the sidebar row's
+								    treatment, so hovering never reflows the board. */}
 									<div className="name">
-										{t.isUnread && <span className="unread" title="New since you last looked" />}
-										{t.name}
+										<span className="name-text">
+											{t.isUnread && <span className="unread" title="New since you last looked" />}
+											{t.name}
+										</span>
+										{tags.length > 0 && (
+											<span className="card-tags">
+												{tags.map((tag) => (
+													<span className="tag" key={tag}>
+														{tag}
+													</span>
+												))}
+											</span>
+										)}
 									</div>
 									{originLabel(t) && (
 										<span className="card-env muted" style={{ fontSize: 10 }}>
 											{originLabel(t)}
 										</span>
 									)}
-									{/* Tags live in the branch's slot and appear only on hover (the
-								    branch is the most redundant line on the card, being a slug of the
-								    name). Sharing one fixed-height row means hovering never reflows
-								    the board. */}
-									<div className={`branch-slot ${tags.length ? "has-tags" : ""}`}>
-										<div className="branch">{t.branch}</div>
-										{tags.length > 0 && (
-											<div className="tags">
-												{tags.map((tag) => (
-													<span className="tag" key={tag}>
-														{tag}
-													</span>
-												))}
-											</div>
-										)}
-									</div>
 									{/* Why this card is where it is — the triage verdict that until now
 								    was computed on every refresh and shown only to the MCP tool. */}
 									{/* Parked on an outside party: the wait IS why the card is where it
@@ -2421,11 +2431,7 @@ function Board({
 										{waitingLabel(t, Date.now()) ?? t.triage.reason}
 									</div>
 									<div className="meta">
-										{t.gitStatus && (
-											<span>
-												↑{t.gitStatus.ahead} ↓{t.gitStatus.behind} · {t.gitStatus.dirty} changed
-											</span>
-										)}
+										<WorkSize task={t} files />
 										{t.issueUrl && (
 											<a
 												className="issue-link"
@@ -2462,6 +2468,72 @@ function Board({
 					</div>
 				);
 			})}
+		</div>
+	);
+}
+
+/**
+ * How big a task's work is: `+N -M` lines, as the task panel's button counts
+ * them (the same diff, read from the git sweep's snapshot). `files` adds the
+ * file count, for the card. Nothing until the sweep has measured the lines,
+ * which an older engine never does.
+ */
+function WorkSize({ task, files = false }: { task: TaskDTO; files?: boolean }) {
+	const g = task.gitStatus;
+	if (!g) return null;
+	const lines = g.additions != null && g.deletions != null && g.additions + g.deletions > 0;
+	const showFiles = files && g.dirty > 0;
+	if (!lines && !showFiles) return null;
+	return (
+		<span className="work-size">
+			{lines && (
+				<>
+					<span className="add">+{g.additions}</span> <span className="del">-{g.deletions}</span>
+				</>
+			)}
+			{lines && showFiles && " · "}
+			{showFiles && `${g.dirty} ${g.dirty === 1 ? "file" : "files"}`}
+		</span>
+	);
+}
+
+/**
+ * The open task's branch, the one place it shows: here is where you act on
+ * git, so a click copies it. Commits ahead of / behind the pushed branch ride
+ * along when there are any.
+ */
+function BranchLine({ task }: { task: TaskDTO }) {
+	const [copied, setCopied] = useState(false);
+	const ahead = task.gitStatus?.ahead ?? 0;
+	const behind = task.gitStatus?.behind ?? 0;
+	const copy = () => {
+		void navigator.clipboard.writeText(task.branch).then(
+			() => {
+				setCopied(true);
+				window.setTimeout(() => setCopied(false), 1200);
+			},
+			() => {},
+		);
+	};
+	return (
+		<div className="branch-line muted">
+			<button
+				type="button"
+				className="branch-copy"
+				title={copied ? "Copied" : "Copy branch name"}
+				aria-label={`Copy branch name ${task.branch}`}
+				onClick={copy}
+			>
+				<GitBranch size={12} strokeWidth={1.75} />
+				<span className="branch-name">{task.branch}</span>
+				{copied ? <Check size={11} /> : <Copy size={11} className="copy-icon" />}
+			</button>
+			<span className="branch-base">← {task.baseBranch}</span>
+			{(ahead > 0 || behind > 0) && (
+				<span title="Commits not yet pushed / commits on the pushed branch you don't have">
+					↑{ahead} ↓{behind}
+				</span>
+			)}
 		</div>
 	);
 }
@@ -2826,9 +2898,7 @@ function TaskPanel({
 						<IconButton icon={X} label="Close" onClick={onClose} />
 					</span>
 				</div>
-				<div className="branch muted">
-					{task.branch} ← {task.baseBranch}
-				</div>
+				<BranchLine task={task} />
 			</div>
 
 			<div className="actions">
@@ -3693,8 +3763,12 @@ function MissionControl({
 									setDropTarget(null);
 								}}
 							>
-								<span>{task.name}</span>
-								<span className="muted">· {task.branch}</span>
+								<span className="bar-name">{task.name}</span>
+								{/* What the terminal below can't show: how big the work is and
+								    whether it has a PR. The branch used to sit here, but it is
+								    the name again as a slug. */}
+								<WorkSize task={task} />
+								{task.prNumber && <span className="bar-pr">PR #{task.prNumber}</span>}
 								<span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
 									{task.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
 									<IconButton

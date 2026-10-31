@@ -11,20 +11,11 @@ function baseName(p: string): string {
 	return p.split(/[/\\]/).pop() || p;
 }
 
-/** Mirror of git-core's slugify, for the live branch-name preview. */
-function slugify(s: string): string {
-	return s
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "")
-		.slice(0, 48);
-}
-
 /**
  * Prompt-first agent launch, in two variants over the same form.
  *
  *   "task"    creates a branch + worktree and launches there: name is optional
- *             (the live branch preview shows what you'll get) and you choose
+ *             (the branch is its slug, shown in the open task) and you choose
  *             which machine runs it.
  *   "session" opens another agent session inside a task that already exists —
  *             same prompt, agent, attachments and YOLO, but no name and no
@@ -129,7 +120,6 @@ export function PromptComposer({
 		if (first) setAgentId(first.id);
 	}, [availOnEnv, agentId, agents]);
 
-	const branch = slugify(name.trim() || titleFromPrompt(prompt));
 	// A session has no name to fall back on — it needs something to say.
 	const canSubmit = Boolean(
 		session ? prompt.trim() || files.length : name.trim() || prompt.trim() || files.length,
@@ -186,9 +176,6 @@ export function PromptComposer({
 							value={name}
 							onChange={(e) => setName(e.target.value)}
 						/>
-						<span className="branch-preview" title="Branch name">
-							{branch || "branch name"}
-						</span>
 					</div>
 				)}
 				{/* biome-ignore lint/a11y/noAutofocus: composer should focus its prompt */}

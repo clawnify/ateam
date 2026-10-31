@@ -801,42 +801,34 @@ input {
 	scroll-margin-right: calc(var(--panel-w) + 14px);
 }
 .card .name {
+	display: flex;
+	align-items: center;
+	gap: 6px;
 	font-size: 13px;
 	font-weight: 500;
 	margin-bottom: 4px;
+}
+.card .name .name-text {
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.card .branch {
-	font-size: 11px;
-	color: var(--text-dim);
-	font-family: ui-monospace, Menlo, monospace;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-/* Tags share the branch's row and only surface on hover, so the board never
-   reflows and a resting card stays quiet. Same shared-slot swap the sidebar
-   already uses for its status dot / delete button (.task-trail). */
-.card .branch-slot {
-	position: relative;
-}
-.card .tags {
-	position: absolute;
-	inset: 0;
-	display: flex;
+/* Tags surface on hover inside the name's line, squeezing the name (which
+   ellipsizes), so a resting card stays quiet and hovering never reflows the
+   board. Zero height for the same reason as the sidebar's .row-tags: the chip
+   is taller than the name's line box. The right margin keeps them off the
+   agent ring in the corner. */
+.card .card-tags {
+	display: none;
+	flex: none;
+	gap: 3px;
+	height: 0;
 	align-items: center;
-	gap: 4px;
-	opacity: 0;
-	pointer-events: none;
-	transition: opacity 120ms ease;
+	margin-right: 14px;
 }
-.card:hover .branch-slot.has-tags .branch {
-	opacity: 0;
-}
-.card:hover .branch-slot.has-tags .tags {
-	opacity: 1;
+.card:hover .card-tags {
+	display: flex;
 }
 .tag {
 	font-size: 9.5px;
@@ -863,7 +855,7 @@ input {
 	color: var(--red);
 }
 /* Why this card sits where it does (the triage reason). Sits between the
-   branch and the git counts, dimmer than both so it reads as a caption. */
+   name and the meta row, dimmer than both so it reads as a caption. */
 .card .triage {
 	margin-top: 6px;
 	font-size: 10.5px;
@@ -1002,6 +994,50 @@ input {
 .panel .head .title {
 	font-size: 15px;
 	font-weight: 600;
+}
+/* The open task's branch: the one place it shows, and a click copies it. */
+.branch-line {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	font-size: 11.5px;
+	font-family: ui-monospace, Menlo, monospace;
+}
+.branch-copy {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	min-width: 0;
+	margin-left: -4px;
+	padding: 1px 4px;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+.branch-copy:hover {
+	background: var(--bg-elev-2);
+	color: var(--text);
+}
+.branch-copy .branch-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.branch-copy .copy-icon {
+	opacity: 0;
+}
+.branch-copy:hover .copy-icon,
+.branch-copy:focus-visible .copy-icon {
+	opacity: 1;
+}
+.branch-line .branch-base {
+	flex: none;
+	white-space: nowrap;
 }
 .panel .actions {
 	display: flex;
@@ -1259,11 +1295,19 @@ input {
 .diffstat.active {
 	background: var(--bg-elev-2);
 }
-.diffstat .add {
+.diffstat .add,
+.work-size .add {
 	color: var(--green);
 }
-.diffstat .del {
+.diffstat .del,
+.work-size .del {
 	color: var(--red);
+}
+/* A task's +N -M on the card and the Mission Control bar. */
+.work-size {
+	flex: none;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
 }
 
 /* changes view: GitHub-Desktop layout — file list left, diff right */
@@ -1599,6 +1643,17 @@ input {
 	width: 20px;
 	height: 20px;
 }
+/* The name gives way first, so the size and PR stay readable on a narrow tile. */
+.mc .tile .bar .bar-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.mc .tile .bar .bar-pr {
+	flex: none;
+	white-space: nowrap;
+}
 
 /* A tile's sessions as read-only tabs: switching only. Creating and closing
    sessions belongs to the task panel, where the + and the x live, so a tile
@@ -1690,15 +1745,6 @@ input {
 	outline: none;
 	color: var(--text);
 	font-size: 14px;
-}
-.branch-preview {
-	font-family: ui-monospace, Menlo, monospace;
-	font-size: 11.5px;
-	color: var(--text-dim);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	max-width: 200px;
 }
 .comp-prompt {
 	min-height: 96px;
@@ -2198,7 +2244,6 @@ input {
 .cleanup-item .sub {
 	font-size: 11px;
 	color: var(--text-dim);
-	font-family: ui-monospace, Menlo, monospace;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
