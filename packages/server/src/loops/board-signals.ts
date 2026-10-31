@@ -141,7 +141,15 @@ export function applySetStatus(
 	});
 	if (!verdict.ok) return { ok: false, reason: verdict.reason };
 
-	repo.updateTask(db, task.id, { column: verdict.change.to });
+	// Held in Needs You while it waits on the user (repo.updateTask): no move to
+	// record, and the caller is told why.
+	if (repo.updateTask(db, task.id, { column: verdict.change.to })?.column !== verdict.change.to) {
+		return {
+			ok: false,
+			reason:
+				"the task is waiting on the user (an open question or an agent at a prompt), so it stays in needs_attention until they answer",
+		};
+	}
 	repo.recordBoardChange(db, {
 		taskId: task.id,
 		fromColumn: verdict.change.from,

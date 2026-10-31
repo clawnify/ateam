@@ -46,6 +46,83 @@ describe("tasks", () => {
 		expect(repo.listTasks(db, p!.id).length).toBe(0);
 	});
 
+	describe("a task waiting on the user stays in Needs You", () => {
+		const seed = () => {
+			const p = repo.upsertProject(db, { repoPath: "/r/a", name: "A" });
+			return repo.createTask(db, {
+				projectId: p!.id,
+				name: "t",
+				slug: "t",
+				branch: "t",
+				baseBranch: "main",
+				worktreePath: "/wt/t",
+			});
+		};
+		const question = { id: "q1", askedAt: 1, text: "Deploy?", options: ["Yes"], allowText: true };
+
+		it("holds a card with an open question, until the question ends", () => {
+			const t = seed();
+			repo.updateTask(db, t.id, { question, column: "needs_attention" });
+			expect(repo.updateTask(db, t.id, { column: "running", agentStatus: "running" })?.column).toBe(
+				"needs_attention",
+			);
+			expect(repo.updateTask(db, t.id, { column: "review" })?.column).toBe("needs_attention");
+			// Answered: the same write that clears it moves the card.
+			expect(repo.updateTask(db, t.id, { question: null, column: "running" })?.column).toBe(
+				"running",
+			);
+		});
+
+		it("files a question written on its own, and lets Done override", () => {
+			const t = seed();
+			repo.updateTask(db, t.id, { column: "review" });
+			expect(repo.updateTask(db, t.id, { question })?.column).toBe("needs_attention");
+			expect(repo.updateTask(db, t.id, { column: "merged" })?.column).toBe("merged");
+		});
+
+		it("holds a card whose agent is at a prompt, until it moves on", () => {
+			const t = seed();
+			repo.updateTask(db, t.id, { column: "needs_attention", agentStatus: "awaiting_input" });
+			expect(repo.updateTask(db, t.id, { column: "review" })?.column).toBe("needs_attention");
+			expect(repo.updateTask(db, t.id, { column: "review", agentStatus: "idle" })?.column).toBe(
+				"review",
+			);
+		});
+
+		it("drops the at-a-prompt mark of a task with no session open, and only those", () => {
+			const gone = seed();
+			const live = repo.createTask(db, {
+				projectId: gone.projectId,
+				name: "u",
+				slug: "u",
+				branch: "u",
+				baseBranch: "main",
+				worktreePath: "/wt/u",
+			});
+			for (const id of [gone.id, live.id])
+				repo.updateTask(db, id, { column: "needs_attention", agentStatus: "awaiting_input" });
+			const ended = repo.createSession(db, {
+				taskId: gone.id,
+				agentId: "claude",
+				terminalId: "term-gone",
+				cwd: "/wt/t",
+			});
+			repo.updateSession(db, ended.id, { status: "stopped", exitedAt: 2 });
+			repo.createSession(db, {
+				taskId: live.id,
+				agentId: "claude",
+				terminalId: "term-live",
+				cwd: "/wt/u",
+			});
+
+			repo.clearStrandedPrompts(db);
+			expect(repo.getTask(db, gone.id)?.agentStatus).toBe("stopped");
+			expect(repo.getTask(db, live.id)?.agentStatus).toBe("awaiting_input");
+			// No longer held: the card can leave Needs You.
+			expect(repo.updateTask(db, gone.id, { column: "review" })?.column).toBe("review");
+		});
+	});
+
 	it("cascades task deletion when project is removed", () => {
 		const p = repo.upsertProject(db, { repoPath: "/r/a", name: "A" });
 		repo.createTask(db, {
