@@ -7,7 +7,7 @@
 // bottom-right pager or Ctrl/Cmd+Up/Down.
 export type McLayout = "grid" | "grid3x2" | "main" | "split" | "stack";
 // What a project's layout is set to: one of the layouts, or "auto", which picks
-// the one that fits the live tiles each time Mission Control opens.
+// the one that fits the live tiles, and refits as tiles arrive and leave.
 export type McChoice = McLayout | "auto";
 
 // Tiles per page: how many terminals each layout actually shows at once.

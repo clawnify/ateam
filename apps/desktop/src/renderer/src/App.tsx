@@ -292,11 +292,13 @@ export function App() {
 			(mcFitSet[activeProjectId] ?? storedMcLayout(`ateam.mcFit.${activeProjectId}`))) ||
 		"grid";
 	const mcLayout: McLayout = mcChoice === "auto" ? mcFit : mcChoice;
-	// Auto fits when Mission Control opens, never while it is up: a refit
-	// resizes every terminal on the grid (each agent redraws), re-pages the tiles
-	// and, into or out of the 3x2, moves the sidebar, none of which an agent
-	// starting or quitting should do under your cursor. Opening sets the fit
-	// pending and the open grid's tile count clears it (see reorderMission).
+	// Auto fits the grid to its live tiles when Mission Control opens and again
+	// each time a tile arrives or leaves while it is up: deleting a task or
+	// starting one is a change you made and expect the layout to follow. A refit
+	// resizes every terminal (each agent redraws) and re-pages the tiles, so a
+	// grid that must hold still is what the fixed layouts are for. Opening sets
+	// the fit pending, which holds the terminals unmounted until the grid
+	// reports its tile count (see reorderMission).
 	const [mcFitPending, setMcFitPending] = useState(false);
 	// How many tiles the open grid has; null until it reports, after opening.
 	const [mcTileCount, setMcTileCount] = useState<number | null>(null);
@@ -306,6 +308,7 @@ export function App() {
 		if (!activeProjectId || tiles === 0) return;
 		setMcFitPending(false);
 		const l = bestMcLayout(tiles);
+		if (l === mcFit) return;
 		localStorage.setItem(`ateam.mcFit.${activeProjectId}`, l);
 		setMcFitSet((m) => ({ ...m, [activeProjectId]: l }));
 	};
@@ -842,7 +845,8 @@ export function App() {
 	// selection, since a click there highlights rather than opens.
 	const mcGridShown = view === "mission" && !(selectedTask && panelMode === "full");
 	const sidebarSelectedId = mcGridShown ? mcHighlightId : selectedTaskId;
-	// Opening Mission Control, which is when Auto fits: switching to it, or to
+	// Opening Mission Control, which Auto holds the terminals for until it has
+	// fitted: switching to it, or to
 	// another project's or mode's grid while on it. Coming back from a tile
 	// expanded full width is not an opening (the view never changed), even
 	// though the grid remounts. Settled during render, like the rail.
@@ -854,15 +858,8 @@ export function App() {
 		setMcTileCount(null);
 		if (mcOpenKey) setMcFitPending(true);
 	}
-	// Auto fitted when the grid opened, and agents may have started or quit
-	// since. That is shown on the Auto button, not acted on: one click re-fits.
-	const mcRefit =
-		mcChoice === "auto" && mcGridShown && !mcFitPending && mcTileCount
-			? bestMcLayout(mcTileCount)
-			: null;
-	const mcRefitDue = mcRefit !== null && mcRefit !== mcLayout;
-	// The Auto button: on the grid it fits what is there now; from anywhere
-	// else the opening does it.
+	// The Auto button: on the grid it fits what is there now (no tile report is
+	// coming to do it); from anywhere else the opening does it.
 	const chooseAutoLayout = () => {
 		setMcLayout("auto");
 		if (mcGridShown && mcTileCount) fitMission(mcTileCount);
@@ -992,10 +989,11 @@ export function App() {
 	};
 	// Mission Control reports the tiles' order whenever it changes; they lead
 	// the saved order and everything else keeps its relative place behind them.
-	// The report is also the grid's tile count, which an opening waits on to fit.
+	// The report is also the grid's tile count, which Auto fits to: the opening
+	// waits on it, and every later arrival or departure refits.
 	const reorderMission = (tileIds: string[]) => {
 		setMcTileCount(tileIds.length);
-		if (mcFitPending && mcChoice === "auto") fitMission(tileIds.length);
+		if (mcChoice === "auto") fitMission(tileIds.length);
 		const onTiles = new Set(tileIds);
 		const next = [...tileIds, ...mcOrder.filter((id) => !onTiles.has(id))];
 		if (next.length === mcOrder.length && next.every((id, i) => id === mcOrder[i])) return;
@@ -1935,17 +1933,13 @@ export function App() {
 						<div className="mclayout" role="group" aria-label="Mission Control layout">
 							<button
 								type="button"
-								className={`navbtn icon ${view === "mission" && mcChoice === "auto" ? "active" : ""} ${
-									mcRefitDue ? "refit" : ""
-								}`}
+								className={`navbtn icon ${view === "mission" && mcChoice === "auto" ? "active" : ""}`}
 								title={
-									mcRefit && mcRefitDue
-										? `Mission Control: Auto layout. ${mcTileCount} live now: click to fit them in ${mcLayoutLabel(mcRefit)}`
-										: view !== "mission" || mcChoice !== "auto"
-											? "Mission Control: Auto layout (fits the live terminals each time it opens)"
-											: mcFitPending
-												? "Mission Control: Auto layout (fits the terminals once one is live)"
-												: `Mission Control: Auto layout (${mcLayoutLabel(mcLayout)} for the live terminals; click to fit again)`
+									view !== "mission" || mcChoice !== "auto"
+										? "Mission Control: Auto layout (fits the live terminals as they come and go)"
+										: mcFitPending
+											? "Mission Control: Auto layout (fits the terminals once one is live)"
+											: `Mission Control: Auto layout (${mcLayoutLabel(mcLayout)} for the live terminals)`
 								}
 								aria-label="Mission Control: Auto layout"
 								aria-pressed={view === "mission" && mcChoice === "auto"}
