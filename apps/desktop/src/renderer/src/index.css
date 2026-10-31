@@ -3378,6 +3378,23 @@ input {
 .question-text {
 	line-height: 1.5;
 }
+/* When the card is capped (the Lead's tray), the question gives up room and
+   scrolls, never the options or the reply box: those keep their size as flex
+   items, and only this scroller can shrink. A block, not a flex column, or the
+   page frame inside it (overflow: hidden) would be squashed instead of
+   scrolled. The floor keeps three lines readable (all of a shorter question),
+   and past it the card itself scrolls rather than clip what is below. */
+.question {
+	max-height: 100%;
+	overflow-y: auto;
+}
+.question-body {
+	min-height: calc-size(max-content, min(size, 4.5em));
+	overflow-y: auto;
+}
+.question-body > * + * {
+	margin-top: 8px;
+}
 .choices {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -3448,7 +3465,14 @@ input {
 .checklist {
 	display: flex;
 	flex-direction: column;
+	min-height: 0;
+}
+.check-rows {
+	display: flex;
+	flex-direction: column;
 	gap: 2px;
+	min-height: calc-size(max-content, min(size, 4.5em));
+	overflow-y: auto;
 }
 .check-row {
 	display: flex;
@@ -3510,16 +3534,33 @@ input {
 	font-size: 12px;
 	color: var(--red);
 }
+/* Room for a question's options with a few of its lines above them: three
+   option cards with tradeoffs run ~310px, so the old 40% left the question
+   none. 60% of the Lead, and on a short window up to 460px as long as the
+   thread keeps ~3 lines (the 200px is the Lead's header, composer and those
+   lines). The title and the "other tasks" line stay put; the list scrolls
+   between cards, and each card is at most the list's height, so a card in
+   view shows its options. */
 .lead-asking {
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
 	width: 100%;
 	max-width: 776px;
-	max-height: 40vh;
-	overflow-y: auto;
+	max-height: max(60%, min(460px, 100% - 200px));
+	min-height: 0;
 	margin: 0 auto;
 	padding: 16px 20px 20px;
+}
+.lead-asking-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-height: 0;
+	overflow-y: auto;
+}
+.lead-asking-list > .question {
+	flex: none;
 }
 .lead-asking-title {
 	font-size: 11px;
