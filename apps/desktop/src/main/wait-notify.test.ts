@@ -3,7 +3,7 @@ import type { TaskDTO } from "@ateam/protocol";
 
 // The pure half needs no Electron; stub the import so the module loads under bun.
 mock.module("electron", () => ({ Notification: class {} }));
-const { FRESH_MS, questionNotice, waitNotice } = await import("./wait-notify");
+const { FRESH_MS, plainText, questionNotice, waitNotice } = await import("./wait-notify");
 
 const NOW = 1_700_000_000_000;
 
@@ -66,7 +66,11 @@ describe("questionNotice", () => {
 	it("announces a fresh question once, with the question as the body", () => {
 		const t = task({ waitingFiredAt: null, question: q });
 		const n = questionNotice(t, new Set(), NOW);
-		expect(n).toEqual({ key: "t1:q:q1", title: "permission rollout", body: "Deploy to prod?" });
+		expect(n).toEqual({
+			key: `t1:q:${NOW - 1000}`,
+			title: "permission rollout",
+			body: "Deploy to prod?",
+		});
 		expect(questionNotice(t, new Set([n?.key as string]), NOW)).toBeNull();
 	});
 
@@ -74,5 +78,53 @@ describe("questionNotice", () => {
 		expect(questionNotice(task({ question: null }), new Set(), NOW)).toBeNull();
 		const old = task({ question: { ...q, askedAt: NOW - FRESH_MS - 1 } });
 		expect(questionNotice(old, new Set(), NOW)).toBeNull();
+	});
+
+	// The server gives every card of one AskUserQuestion call the call's askedAt.
+	it("gives one banner for a whole AskUserQuestion call, not one per card", () => {
+		const card = (id: string, text: string) =>
+			task({
+				waitingFiredAt: null,
+				question: { ...q, id, text, kind: "askUserQuestion" as const },
+			});
+		const first = questionNotice(card("q1", "*Color · 1 of 2*\n\nWhich color?"), new Set(), NOW);
+		expect(first?.body).toBe("Color · 1 of 2\nWhich color?");
+		const shown = new Set([first?.key as string]);
+		expect(questionNotice(card("q2", "*Toppings · 2 of 2*\n\nWhich?"), shown, NOW)).toBeNull();
+	});
+
+	it("shows a permission prompt as plain text, command included", () => {
+		const text =
+			"**Run a command?**\n\n```sh\nrm -rf build/**/*.tmp\n```\nClean the build\n\n**Edit `src/__init__.py`?**";
+		const n = questionNotice(
+			task({ waitingFiredAt: null, question: { ...q, text } }),
+			new Set(),
+			NOW,
+		);
+		expect(n?.body).toBe(
+			"Run a command?\nrm -rf build/**/*.tmp\nClean the build\nEdit src/__init__.py?",
+		);
+	});
+
+	it("leaves an AskUserQuestion card's option previews out of the banner", () => {
+		const text =
+			"Which layout?\n\n**Grid**\n\n```\n+--+--+\n|  |  |\n```\n\n**List**\n\n```\n----\n```";
+		const n = questionNotice(
+			task({ waitingFiredAt: null, question: { ...q, text, kind: "askUserQuestion" } }),
+			new Set(),
+			NOW,
+		);
+		expect(n?.body).toBe("Which layout?");
+	});
+});
+
+describe("plainText", () => {
+	it("drops heading marks, emphasis and link syntax, and leaves names alone", () => {
+		expect(
+			plainText("# Ship it?\nSee [PR #12](https://x.test/12) and *read* `mcp__gh__merge`"),
+		).toBe("Ship it?\nSee PR #12 and read mcp__gh__merge");
+		expect(plainText("rm *.tmp and *.log, keep snake_case_name")).toBe(
+			"rm *.tmp and *.log, keep snake_case_name",
+		);
 	});
 });

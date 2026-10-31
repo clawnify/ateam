@@ -59,7 +59,7 @@ export interface TaskQuestion {
 	askedAt: number;
 	choices?: QuestionChoice[];
 	select?: "one" | "many";
-	kind?: "permission";
+	kind?: "permission" | "askUserQuestion";
 	pageId?: string;
 }
 

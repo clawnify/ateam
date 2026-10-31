@@ -245,6 +245,7 @@ right beside the board), questions agents ask you with the `ask_user`
 board tool (option cards with tradeoffs, or a checklist, answered from the
 board, the task panel or the Lead chat), Claude Code's permission prompts
 answered from Ateam (Allow, Always allow, Deny) as well as in the terminal,
+and so are its own questions (AskUserQuestion, one card per question),
 agent pages (HTML an agent makes for you with `show_page`, such as a dashboard
 or a comparison, drawn in a sandboxed frame; a question can carry one whose
 buttons answer it), and signed/notarized builds
