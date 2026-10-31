@@ -9,27 +9,30 @@ const NEWLINE = 0x0a;
 
 /**
  * Each line, decoded once it is whole. A frame can run to megabytes (a file
- * sent to a box arrives as one line, in many chunks), so each chunk is searched
- * once and a line's chunks are joined once: growing one string and searching it
- * from the start on every chunk took 1.5 s for a 25 MB file, all of it with
- * every other frame on this connection waiting. Decoding whole lines also keeps
- * a character whose bytes straddle two chunks intact.
+ * sent to a box arrives as one line, in many chunks), so a chunk with no
+ * newline is only kept, and the kept chunks are joined once when the line
+ * ends: growing one string and searching it from the start on every chunk took
+ * 1.5 s for a 25 MB file, all of it with every other frame on this connection
+ * waiting. Most chunks instead carry many small frames (terminal output), so a
+ * chunk is decoded once, up to its last newline, and then split: joining and
+ * decoding each line on its own was about 5x slower for 80-byte frames. A
+ * newline byte is never part of a UTF-8 character, so a character whose bytes
+ * straddle two chunks stays intact.
  */
 function readLines(readable: Readable, onLine: (line: string) => void): void {
-	// The bytes of the line not yet ended.
+	// The bytes after the last newline, the start of a line not yet ended.
 	let pending: Buffer[] = [];
 	readable.on("data", (data: Buffer | string) => {
-		let chunk = typeof data === "string" ? Buffer.from(data, "utf8") : data;
-		let nl = chunk.indexOf(NEWLINE);
-		while (nl !== -1) {
-			pending.push(chunk.subarray(0, nl));
-			const line = Buffer.concat(pending).toString("utf8");
-			pending = [];
-			if (line.trim()) onLine(line);
-			chunk = chunk.subarray(nl + 1);
-			nl = chunk.indexOf(NEWLINE);
+		const chunk = typeof data === "string" ? Buffer.from(data, "utf8") : data;
+		const last = chunk.lastIndexOf(NEWLINE);
+		if (last === -1) {
+			pending.push(chunk);
+			return;
 		}
-		if (chunk.length) pending.push(chunk);
+		const head = chunk.subarray(0, last);
+		const text = (pending.length ? Buffer.concat([...pending, head]) : head).toString("utf8");
+		pending = last + 1 < chunk.length ? [chunk.subarray(last + 1)] : [];
+		for (const line of text.split("\n")) if (line.trim()) onLine(line);
 	});
 }
 

@@ -1,5 +1,5 @@
 import type { AgentDTO, BoxWake } from "@ateam/protocol";
-import { ArrowUp, Paperclip, X, Zap } from "lucide-react";
+import { ArrowUp, Paperclip, Plus, X, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { HostStatus } from "../../../shared/host";
 import { titleFromPrompt } from "../titleFromPrompt";
@@ -34,6 +34,9 @@ function toBase64(f: File): Promise<string> {
  *
  * Either way the prompt is handed to the chosen agent as its first instruction,
  * and YOLO launches it permission-free.
+ *
+ * A task is created and opened (⌘⏎), or created and left in the background
+ * (⇧⌘⏎, or ⇧-click) so the view you were on stays put.
  */
 export function PromptComposer({
 	agents,
@@ -86,6 +89,9 @@ export function PromptComposer({
 		yolo: boolean;
 		files: string[];
 		alias: string | null;
+		/** false: create it in the background and leave the view as it is (⇧⌘⏎).
+		 *  A session always opens, being a tab of the task already on screen. */
+		open: boolean;
 	}) => void;
 }) {
 	const [name, setName] = useState(initialName);
@@ -100,6 +106,28 @@ export function PromptComposer({
 	// Files still being saved from their bytes, and a line about a drop that can't attach.
 	const [pending, setPending] = useState(0);
 	const [note, setNote] = useState<string | null>(null);
+	// ⇧ together with ⌘ (or with the pointer on the go button) means "create and
+	// stay", and the button says so before you commit. ⇧ alone is only a capital
+	// letter being typed, so it leaves the button alone.
+	const [mods, setMods] = useState({ shift: false, cmd: false });
+	const [overGo, setOverGo] = useState(false);
+	useEffect(() => {
+		if (session) return;
+		const track = (e: KeyboardEvent) => {
+			const next = { shift: e.shiftKey, cmd: e.metaKey || e.ctrlKey };
+			setMods((cur) => (cur.shift === next.shift && cur.cmd === next.cmd ? cur : next));
+		};
+		const reset = () => setMods({ shift: false, cmd: false });
+		window.addEventListener("keydown", track);
+		window.addEventListener("keyup", track);
+		window.addEventListener("blur", reset);
+		return () => {
+			window.removeEventListener("keydown", track);
+			window.removeEventListener("keyup", track);
+			window.removeEventListener("blur", reset);
+		};
+	}, [session]);
+	const staying = !session && mods.shift && (mods.cmd || overGo);
 	// Remember the last-picked environment across tasks (and app restarts) so it isn't
 	// re-selected every time; fall back to the first runnable one (Local, unless the repo
 	// isn't here) when nothing valid is saved for this project. "__local__" = the Mac.
@@ -210,17 +238,25 @@ export function PromptComposer({
 		void attach(Array.from(dt.files));
 	};
 
-	const submit = () => {
+	const submit = (open: boolean) => {
 		if (!canSubmit) return;
 		const finalName =
 			name.trim() || titleFromPrompt(prompt) || `task ${new Date().toISOString().slice(0, 10)}`;
-		onCreate({ name: finalName, prompt: prompt.trim(), agentId, yolo, files, alias });
+		onCreate({
+			name: finalName,
+			prompt: prompt.trim(),
+			agentId,
+			yolo,
+			files,
+			alias,
+			open: session || open,
+		});
 	};
 
 	const onKeys = (e: React.KeyboardEvent) => {
 		if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
 			e.preventDefault();
-			submit();
+			submit(!e.shiftKey);
 		}
 		if (e.key === "Escape") onClose();
 	};
@@ -308,20 +344,31 @@ export function PromptComposer({
 					</button>
 					<span className="spacer" />
 					<span className="muted" style={{ fontSize: 11 }}>
-						⌘⏎
+						{session ? "⌘⏎" : "⌘⏎ open · ⇧⌘⏎ stay"}
 					</span>
 					<button
 						type="button"
-						className="comp-go"
+						className={`comp-go ${staying ? "stay" : ""}`}
 						disabled={!canSubmit}
 						title={
 							session
 								? "Launch another agent session in this task (⌘⏎)"
-								: "Create task and launch the agent (⌘⏎)"
+								: staying
+									? "Create task and stay here (⇧⌘⏎)"
+									: "Create task and open it (⌘⏎). Hold ⇧ to stay here."
 						}
-						onClick={submit}
+						aria-label={
+							session ? "Launch session" : staying ? "Create task and stay here" : "Create task"
+						}
+						onMouseEnter={() => setOverGo(true)}
+						onMouseLeave={() => setOverGo(false)}
+						onClick={(e) => submit(!e.shiftKey)}
 					>
-						<ArrowUp size={15} strokeWidth={2.25} />
+						{staying ? (
+							<Plus size={15} strokeWidth={2.25} />
+						) : (
+							<ArrowUp size={15} strokeWidth={2.25} />
+						)}
 					</button>
 				</div>
 			</div>

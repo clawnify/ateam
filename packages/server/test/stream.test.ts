@@ -86,6 +86,16 @@ describe("line framing", () => {
 		expect(frames).toEqual([{ id: 1, result: "x".repeat(5000) }, { id: 2 }, { id: 3 }]);
 	});
 
+	it("reads many frames however the chunks cut them", async () => {
+		const sent = Array.from({ length: 50 }, (_, i) => ({ id: i, data: "y".repeat(i) }));
+		const bytes = Buffer.from(sent.map((f) => `${JSON.stringify(f)}\n`).join(""));
+		const chunks: Buffer[] = [];
+		for (let i = 0; i < bytes.length; i += 13) chunks.push(bytes.subarray(i, i + 13));
+		const frames = framesFrom(chunks);
+		await flush();
+		expect(frames).toEqual(sent);
+	});
+
 	it("keeps a character whose bytes arrive in two chunks", async () => {
 		const bytes = Buffer.from(`${JSON.stringify({ name: "café ✓" })}\n`, "utf8");
 		const cut = bytes.indexOf(0xa9); // the second byte of "é"

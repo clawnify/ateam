@@ -2037,6 +2037,13 @@ input {
 	opacity: 0.35;
 	cursor: default;
 }
+/* ⇧ held: the task will be created in the background, so the button turns
+   from "go there" (filled arrow) to "add" (outlined plus). */
+.comp-go.stay {
+	background: transparent;
+	color: var(--text);
+	box-shadow: inset 0 0 0 1.5px var(--text);
+}
 
 .dtitle {
 	font-size: 13px;
@@ -2083,6 +2090,45 @@ input {
 	background: #14201a;
 	border-color: var(--green);
 	color: #d7ffe6;
+}
+.toast-action {
+	margin-left: 14px;
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--text);
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+}
+.toast-action:hover {
+	text-decoration: underline;
+}
+
+/* A task created in the background (⇧⌘⏎) shows where it landed: its sidebar
+   row and board card blink a white ring twice, then settle. Inset, so a
+   column's overflow can't clip it. */
+.tasknode.just-started,
+.rail-tile.just-started,
+.card.just-started {
+	animation: just-started 0.8s ease-in-out 2;
+}
+@keyframes just-started {
+	0%,
+	100% {
+		box-shadow: inset 0 0 0 0 transparent;
+	}
+	50% {
+		box-shadow: inset 0 0 0 1.5px var(--text);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.tasknode.just-started,
+	.rail-tile.just-started,
+	.card.just-started {
+		animation: none;
+		box-shadow: inset 0 0 0 1px var(--text);
+	}
 }
 
 /* ---- ghost icon buttons (VSCode-style) ---- */
@@ -3727,10 +3773,34 @@ input {
 	font-size: 11px;
 	color: var(--text-dim);
 }
-.question-dismiss {
+.question-dismiss,
+.question-fold {
 	flex: none;
 	width: 22px;
 	height: 22px;
+}
+/* Folded: only the head row, with the question's first line as the reminder.
+   Hidden, not unmounted, so a typed answer, the ticks and a page keep their state. */
+.question.collapsed > :not(.question-head) {
+	display: none;
+}
+.question-summary {
+	flex: 1;
+	min-width: 0;
+	padding: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-align: left;
+	font: inherit;
+	font-weight: 600;
+	color: var(--text);
+	background: none;
+	border: 0;
+	cursor: pointer;
+}
+.question-summary + .question-when {
+	margin-left: 0;
 }
 .question-text {
 	line-height: 1.5;
@@ -4061,6 +4131,44 @@ input {
 .lead-agent-reply:hover {
 	background: transparent;
 	color: var(--text);
+}
+/* One reply of a stack (AgentStack): the body under the card's shared head. */
+.lead-agent-body {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.lead-agent-body[hidden] {
+	display: none;
+}
+.lead-agent-head > .lead-chip {
+	min-width: 0;
+}
+.lead-stack-nav {
+	display: flex;
+	flex-shrink: 0;
+	align-items: center;
+	gap: 2px;
+	margin-left: auto;
+}
+.lead-stack-nav .iconbtn {
+	width: 22px;
+	height: 22px;
+}
+/* A reply came in after the one being read. */
+.lead-stack-next {
+	position: relative;
+	display: inline-flex;
+}
+.lead-stack-dot {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--text);
+	pointer-events: none;
 }
 .lead-user-to {
 	margin-bottom: 2px;
