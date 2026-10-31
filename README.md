@@ -219,7 +219,8 @@ view (aggregate diffstat → file list + side-by-side diffs), prompt-first task
 composer (pick the agent and type the first instruction in one step) reused for
 extra sessions inside an existing task, many terminals per task as tabs (agent
 sessions or plain shells, side by side), agent spawning in PTYs (Claude Code,
-OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection,
+OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection
+(each column lists its most recently active task first),
 Mission Control grid (one tile per task, its sessions as read-only tabs; tiles
 keep their own order, drag to swap them across pages, Sync to take the sidebar's;
 an Auto layout that fits the live terminals each time it opens and never
@@ -236,9 +237,11 @@ recommended), idle-task archiving (an open task untouched for 30 days, set in
 Settings, leaves the board, the phone and the agents' board tools but keeps its
 worktree; any activity in it, or Unarchive in Clean up, brings it back), the
 Lead chat (one conversation that reads the board on this Mac and every box,
-starts tasks, messages their agents and brings their replies back; it runs as
+briefs you on the latest tasks, starts tasks, messages their agents and brings
+their replies back, with every task it names a chip that opens it; it runs as
 your own Claude Code, with your skills, plugins and MCP servers, and asks for
-its permissions in the chat), questions agents ask you with the `ask_user`
+its permissions in the chat; it has its own tab, or sits as a sidebar on the
+right beside the board), questions agents ask you with the `ask_user`
 board tool (option cards with tradeoffs, or a checklist, answered from the
 board, the task panel or the Lead chat), Claude Code's permission prompts
 answered from Ateam (Allow, Always allow, Deny) as well as in the terminal,

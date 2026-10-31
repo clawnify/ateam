@@ -108,6 +108,15 @@ input {
 .app.rail {
 	grid-template-columns: 56px 1fr;
 }
+/* The Lead as a sidebar on the right: a third full-height column, the mirror
+   of the left one. Capped at 40% (MAX_LEAD_SHARE in App.tsx), below the left
+   one's 50%, so the board keeps some room with both open. */
+.app.lead-open {
+	grid-template-columns: min(var(--sidebar-w, 240px), 50%) 1fr min(var(--lead-w, 400px), 40%);
+}
+.app.rail.lead-open {
+	grid-template-columns: 56px 1fr min(var(--lead-w, 400px), 40%);
+}
 
 /* Invisible drag strip sitting over the sidebar/main divider. No visible
    chrome — just a col-resize hit area aligned to the current sidebar width. */
@@ -118,6 +127,18 @@ input {
 	left: min(var(--sidebar-w, 240px), 50%);
 	width: 8px;
 	margin-left: -4px;
+	cursor: col-resize;
+	z-index: 20;
+	-webkit-app-region: no-drag;
+}
+/* The same strip over the main/Lead divider. */
+.lead-resizer {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	right: min(var(--lead-w, 400px), 40%);
+	width: 8px;
+	margin-right: -4px;
 	cursor: col-resize;
 	z-index: 20;
 	-webkit-app-region: no-drag;
@@ -2997,6 +3018,51 @@ input {
 	--pele-bg: var(--bg-elev-2);
 	--pele-surface: #26262e;
 }
+/* The Lead as the sidebar on the right (see .app.lead-open). */
+.lead-side {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	border-left: 1px solid var(--border);
+}
+.lead-side > .lead {
+	min-height: 0;
+}
+/* Its slim top strip: as tall as the top bar beside it, with the same bottom
+   border, so the two read as one header line; draggable like it. */
+.lead-side-head {
+	height: 44px;
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	/* 13px on the right centres the hide toggle where the top bar's show
+	   toggle sat (that one is 26px wide inside 14px of padding). */
+	padding: 0 13px 0 16px;
+	border-bottom: 1px solid var(--border);
+	-webkit-app-region: drag;
+}
+.lead-side-head .iconbtn {
+	-webkit-app-region: no-drag;
+}
+.lead-side-title {
+	flex: 1;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+}
+/* A narrow column: tighter gutters than the full-width chat. */
+.lead-side .lead-thread {
+	padding: 16px 16px 48px;
+}
+.lead-side .lead-asking {
+	padding: 12px 16px 16px;
+}
+.lead-side .lead-composer {
+	padding: 0 12px 12px;
+}
 .lead-head {
 	display: flex;
 	align-items: flex-start;
@@ -3294,6 +3360,15 @@ input {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+/* A task the Lead names in its prose: the same chip, slimmed to 20px so it sits
+   in a 21px line of text, with air above and below so chips on consecutive
+   lines (a list of tasks) don't touch each other or the text around them. */
+.md .lead-chip {
+	padding: 1px 7px;
+	line-height: 16px;
+	margin: 2px 0;
+	vertical-align: middle;
 }
 .lead-chip-what {
 	color: var(--text-dim);

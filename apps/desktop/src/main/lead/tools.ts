@@ -12,6 +12,7 @@ import {
 	type TaskQuestionDTO,
 } from "@ateam/protocol";
 import type { McpToolResult, McpToolServer } from "@ateam/server";
+import { byLatestActivity, relativeAge } from "../../shared/recency";
 
 export interface LeadToolDeps {
 	/** Route one engine call (the aggregate router's handle). */
@@ -29,14 +30,20 @@ const TOOLS = [
 	{
 		name: "get_board",
 		description:
-			"List the in-play tasks (merged ones are left out) on this Mac and every connected box, one line each: id | name | board column | state (working, needs_you, idle or not_running) | agent, plus what it waits for or asks the user. Filter to what you need: needs_you for what is waiting on the user, working for what is running. For what a task was asked to do and its last reply, use read_task.",
+			"List the tasks on this Mac and every connected box, one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus what it waits for or asks the user. Filter to what you need: all (the default) is every task still in play, merged ones left out; needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project, merged ones included (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.",
 		inputSchema: {
 			type: "object",
 			properties: {
 				filter: {
 					type: "string",
-					enum: ["all", "needs_you", "working"],
-					description: "all (default), needs_you, or working.",
+					enum: ["all", "needs_you", "working", "recent"],
+					description: "all (default), needs_you, working, or recent.",
+				},
+				limit: {
+					type: "integer",
+					minimum: 1,
+					maximum: 50,
+					description: "With recent: how many of the newest tasks to list (default 10).",
 				},
 				project: {
 					type: "string",
@@ -228,30 +235,60 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 	}
 
 	async function getBoard(args: Record<string, unknown>): Promise<McpToolResult> {
-		const filter = args.filter === "needs_you" || args.filter === "working" ? args.filter : "all";
+		const filter =
+			args.filter === "needs_you" || args.filter === "working" || args.filter === "recent"
+				? args.filter
+				: "all";
 		const only = typeof args.project === "string" ? args.project.trim().toLowerCase() : "";
 		const keep = (t: TaskDTO) => {
-			if (t.column === "merged") return false;
+			// Merged work is out of play, but it is news: a briefing on the latest
+			// tasks includes what just merged.
+			if (t.column === "merged") return filter === "recent";
 			const state = agentState(t);
 			if (filter === "needs_you")
 				return t.column === "needs_attention" || state === "needs_you" || !!t.question;
 			if (filter === "working") return state === "working" || t.column === "running";
 			return true;
 		};
-		const projects = (await board()).filter(
-			({ project }) => !only || project.id === only || project.name.toLowerCase() === only,
-		);
+		const groups = (await board())
+			.filter(({ project }) => !only || project.id === only || project.name.toLowerCase() === only)
+			.map(({ project, tasks }) => ({
+				project,
+				rows: tasks ? tasks.filter(keep).sort(byLatestActivity) : null,
+			}));
+		// The newest few across every project and machine, not a few per project.
+		if (filter === "recent") {
+			const limit =
+				typeof args.limit === "number" && args.limit >= 1
+					? Math.min(Math.floor(args.limit), 50)
+					: 10;
+			const newest = new Set(
+				groups
+					.flatMap((g) => g.rows ?? [])
+					.sort(byLatestActivity)
+					.slice(0, limit)
+					.map((t) => t.id),
+			);
+			for (const g of groups) if (g.rows) g.rows = g.rows.filter((t) => newest.has(t.id));
+		}
+		// The project with the latest activity first, one that can't be reached last.
+		const latest = (g: (typeof groups)[number]) => (g.rows ? (g.rows[0]?.lastEventAt ?? 0) : -1);
+		groups.sort((a, b) => latest(b) - latest(a));
+		const now = Date.now();
+		const updated = (t: TaskDTO) => {
+			const age = relativeAge(t.lastEventAt, now);
+			return age == null ? "-" : age === "just now" ? age : `${age} ago`;
+		};
 		// One line per task, not JSON: every board the Lead reads stays in its
 		// context, and repeated keys were half of it (14k chars down to 7k on a
 		// 59-task board).
-		const lines = ["id | name | column | state | agent"];
-		for (const { project, tasks } of projects) {
+		const lines = ["id | name | column | state | agent | updated"];
+		for (const { project, rows } of groups) {
 			const where = `${project.name} (${machineLabel(deps.machineOf(project.id))}, project ${project.id})`;
-			if (tasks == null) {
+			if (rows == null) {
 				lines.push("", `${where}: unreachable right now`);
 				continue;
 			}
-			const rows = tasks.filter(keep);
 			if (rows.length === 0) continue;
 			lines.push("", where);
 			for (const t of rows) {
@@ -259,7 +296,11 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 					t.waitingReason ? `waits for: ${t.waitingReason}` : "",
 					t.question ? `asks the user: ${firstLine(t.question.text)}` : "",
 				].filter(Boolean);
-				lines.push([t.id, t.name, t.column, agentState(t), t.agentId ?? "-", ...extra].join(" | "));
+				lines.push(
+					[t.id, t.name, t.column, agentState(t), t.agentId ?? "-", updated(t), ...extra].join(
+						" | ",
+					),
+				);
 			}
 		}
 		if (lines.length === 1) lines.push("", "Nothing matches.");

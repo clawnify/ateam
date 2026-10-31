@@ -72,6 +72,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { byLatestActivity } from "../../shared/recency";
 import { SessionGlyphs, SessionIcon } from "./components/AgentIcon";
 import { ChangesList, DiffStat } from "./components/Changes";
 import { CleanupDialog } from "./components/CleanupDialog";
@@ -160,6 +161,51 @@ const springy = { type: "spring", stiffness: 550, damping: 42 } as const;
 // Minimum (and default) expanded-sidebar width in px. The resizer never shrinks
 // below this; the upper bound is 50% of the window (see startSidebarResize).
 const MIN_SIDEBAR_W = 240;
+// The Lead sidebar on the right: floor, default, and cap as a share of the
+// window. The cap is lower than the left one's so that with both open the board
+// keeps some room; index.css repeats it (min(var(--lead-w), 40%)).
+const MIN_LEAD_W = 320;
+const DEFAULT_LEAD_W = 400;
+const MAX_LEAD_SHARE = 0.4;
+
+/**
+ * Drag a sidebar's edge to resize it. `dir` is 1 when dragging right widens it
+ * (the left sidebar) and -1 when dragging left does (the Lead's, on the right).
+ * Clamped to [min, share of the window] while dragging, saved under `key` when
+ * the drag ends.
+ */
+function dragWidth(
+	e: ReactMouseEvent,
+	opts: {
+		from: number;
+		dir: 1 | -1;
+		min: number;
+		share: number;
+		key: string;
+		set: (w: number) => void;
+	},
+) {
+	e.preventDefault();
+	const startX = e.clientX;
+	let latest = opts.from;
+	const onMove = (ev: MouseEvent) => {
+		const max = Math.round(window.innerWidth * opts.share);
+		latest = Math.min(max, Math.max(opts.min, opts.from + opts.dir * (ev.clientX - startX)));
+		opts.set(latest);
+	};
+	const onUp = () => {
+		window.removeEventListener("mousemove", onMove);
+		window.removeEventListener("mouseup", onUp);
+		document.body.style.cursor = "";
+		document.body.style.userSelect = "";
+		localStorage.setItem(opts.key, String(latest));
+	};
+	window.addEventListener("mousemove", onMove);
+	window.addEventListener("mouseup", onUp);
+	// Keep the resize cursor and suppress text selection for the whole drag.
+	document.body.style.cursor = "col-resize";
+	document.body.style.userSelect = "none";
+}
 
 // Where collapsing a focused task takes you — it's whatever view the task was
 // opened over, so the tooltip has to name that view, not the board.
@@ -318,29 +364,39 @@ export function App() {
 		const saved = Number(localStorage.getItem("ateam.sidebarWidth"));
 		return Number.isFinite(saved) && saved >= MIN_SIDEBAR_W ? saved : MIN_SIDEBAR_W;
 	});
-	const startSidebarResize = (e: ReactMouseEvent) => {
-		e.preventDefault();
-		const startX = e.clientX;
-		const startW = sidebarWidth;
-		let latest = startW;
-		const onMove = (ev: MouseEvent) => {
-			const max = Math.round(window.innerWidth * 0.5);
-			latest = Math.min(max, Math.max(MIN_SIDEBAR_W, startW + (ev.clientX - startX)));
-			setSidebarWidth(latest);
-		};
-		const onUp = () => {
-			window.removeEventListener("mousemove", onMove);
-			window.removeEventListener("mouseup", onUp);
-			document.body.style.cursor = "";
-			document.body.style.userSelect = "";
-			localStorage.setItem("ateam.sidebarWidth", String(latest));
-		};
-		window.addEventListener("mousemove", onMove);
-		window.addEventListener("mouseup", onUp);
-		// Keep the resize cursor and suppress text selection for the whole drag.
-		document.body.style.cursor = "col-resize";
-		document.body.style.userSelect = "none";
+	const startSidebarResize = (e: ReactMouseEvent) =>
+		dragWidth(e, {
+			from: sidebarWidth,
+			dir: 1,
+			min: MIN_SIDEBAR_W,
+			share: 0.5,
+			key: "ateam.sidebarWidth",
+			set: setSidebarWidth,
+		});
+	// The Lead as a sidebar on the right, the mirror of this one: a full-height
+	// column with a draggable width, still open after a restart. The Lead tab
+	// keeps the full-width chat and hides the sidebar, so there is one copy.
+	const [leadSide, setLeadSideState] = useState(
+		() => localStorage.getItem("ateam.leadSide") === "1",
+	);
+	const setLeadSide = (on: boolean) => {
+		localStorage.setItem("ateam.leadSide", on ? "1" : "0");
+		setLeadSideState(on);
 	};
+	const [leadWidth, setLeadWidth] = useState(() => {
+		const saved = Number(localStorage.getItem("ateam.leadWidth"));
+		return Number.isFinite(saved) && saved >= MIN_LEAD_W ? saved : DEFAULT_LEAD_W;
+	});
+	const startLeadResize = (e: ReactMouseEvent) =>
+		dragWidth(e, {
+			from: leadWidth,
+			dir: -1,
+			min: MIN_LEAD_W,
+			share: MAX_LEAD_SHARE,
+			key: "ateam.leadWidth",
+			set: setLeadWidth,
+		});
+	const leadShown = leadSide && view !== "lead";
 	const [taskSort, setTaskSortState] = useState<TaskSortMode>(
 		// Default: last updated first. The list you scan is the list you just
 		// touched, so the freshest work sits at the top without a menu trip.
@@ -845,7 +901,7 @@ export function App() {
 		} else if (taskSort === "status") {
 			list.sort((a, b) => STATUS_RANK[a.column] - STATUS_RANK[b.column]);
 		} else if (taskSort === "updated") {
-			list.sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0));
+			list.sort(byLatestActivity);
 		} else {
 			const rank = new Map(customOrder.map((id, i) => [id, i]));
 			list.sort(
@@ -1341,8 +1397,8 @@ export function App() {
 
 	return (
 		<div
-			className={`app ${rail ? "rail" : ""}`}
-			style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
+			className={`app ${rail ? "rail" : ""} ${leadShown ? "lead-open" : ""}`}
+			style={{ "--sidebar-w": `${sidebarWidth}px`, "--lead-w": `${leadWidth}px` } as CSSProperties}
 		>
 			<aside className={`sidebar ${rail ? "rail" : ""}`}>
 				{/* In rail mode the traffic lights own this strip; the toggle moves
@@ -1851,6 +1907,23 @@ export function App() {
 							<Plus size={14} strokeWidth={1.75} />
 							New task
 						</button>
+						{/* Opens the Lead as a sidebar on the right. Once open, the sidebar's
+						    own strip holds the hide toggle in this same spot. From the Lead
+						    tab, the chat moves beside the board. */}
+						{!leadShown && (
+							<button
+								type="button"
+								className="navbtn icon"
+								title="Show Lead sidebar"
+								aria-label="Show Lead sidebar"
+								onClick={() => {
+									setLeadSide(true);
+									if (view === "lead") goToView("board");
+								}}
+							>
+								<PanelRight size={14} strokeWidth={1.75} />
+							</button>
+						)}
 					</div>
 				</div>
 
@@ -2049,6 +2122,22 @@ export function App() {
 					)}
 				</div>
 			</main>
+
+			{leadShown && (
+				<>
+					{/* Its edge drags like the left sidebar's. */}
+					<div
+						className="lead-resizer"
+						onMouseDown={startLeadResize}
+						role="separator"
+						aria-orientation="vertical"
+						aria-label="Resize Lead sidebar"
+					/>
+					<aside className="lead-side" aria-label="Lead">
+						<LeadChat tasks={allTasks} onOpenTask={openTask} onHide={() => setLeadSide(false)} />
+					</aside>
+				</>
+			)}
 
 			{cleanupOpen && activeProjectId && (
 				<CleanupDialog
@@ -2409,7 +2498,10 @@ function Board({
 		// Clicking empty board space deselects; card clicks stopPropagation.
 		<div className="board" onClick={onDeselect}>
 			{COLUMNS.map((col) => {
-				const items = tasks.filter((t) => t.column === col.key);
+				// Latest activity on top, the sidebar's "Recently updated" order: a
+				// task that just finished a turn is the first card in its column, not
+				// wherever its creation date (or its machine) put it.
+				const items = tasks.filter((t) => t.column === col.key).sort(byLatestActivity);
 				return (
 					<div className="col" key={col.key}>
 						<h3>
