@@ -1842,22 +1842,6 @@ input {
 	border-right: none;
 }
 
-/* Auto layout's re-fit hint: agents started or quit since Auto fitted the
-   grid, and a click would fit them. A dot, since nothing moves by itself. */
-.navbtn.refit {
-	position: relative;
-}
-.navbtn.refit::after {
-	content: "";
-	position: absolute;
-	top: 3px;
-	right: 3px;
-	width: 5px;
-	height: 5px;
-	border-radius: 50%;
-	background: var(--text);
-}
-
 /* A tile's sessions as read-only tabs: switching only. Creating and closing
    sessions belongs to the task panel, where the + and the x live, so a tile
    carries no affordance that could change what exists. Shown only when the task
