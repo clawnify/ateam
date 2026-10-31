@@ -87,9 +87,11 @@ import { PageFrame } from "./components/PageFrame";
 import { PanelRightFilled } from "./components/PanelRightFilled";
 import { PromptComposer } from "./components/PromptComposer";
 import { QuestionCard } from "./components/QuestionCard";
+import { RailTile } from "./components/RailTile";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
 import { bestMcLayout, MC_PAGE_SIZE, type McChoice, type McLayout } from "./mc-layout";
@@ -338,21 +340,12 @@ export function App() {
 	// A mutation's return and the push event both carry ONE engine's loops, so
 	// every refresh re-lists the union.
 	const refreshLoops = useCallback(() => void window.ateam.loops.list().then(setLoops), []);
-	const [railPref, setRailPref] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
-	// Mission Control's 3x2 grid collapses the sidebar for as long as it is on
-	// screen, without touching the saved preference: leaving the layout or the
-	// view puts back whatever you had. Expanding it by hand while there holds
-	// until you leave.
-	const autoRail = view === "mission" && mcLayout === "grid3x2";
-	const [railKept, setRailKept] = useState(false);
-	if (!autoRail && railKept) setRailKept(false);
-	const rail = autoRail ? !railKept : railPref;
+	// Collapsing the sidebar is only ever the user's call, in every view and
+	// layout. Mission Control's 3x2 grid used to tuck it away for wider tiles;
+	// the sidebar vanishing on its own cost more than the extra columns gave.
+	const [rail, setRail] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
 	const toggleRail = () => {
-		if (autoRail) {
-			setRailKept((k) => !k);
-			return;
-		}
-		setRailPref((r) => {
+		setRail((r) => {
 			localStorage.setItem("ateam.sidebarRail", r ? "0" : "1");
 			return !r;
 		});
@@ -1417,24 +1410,35 @@ export function App() {
 				</div>
 
 				{rail ? (
-					<>
-						<button type="button" className="rail-tile" title="Expand sidebar" onClick={toggleRail}>
+					// The expanded sidebar's three sections as tile groups, each led
+					// by the action its header carries (Add project, New task, New
+					// loop), so collapsing the sidebar never takes a way to create
+					// something. One provider: gliding down the strip opens each
+					// tile's name at once instead of waiting out the delay again.
+					<TooltipProvider delayDuration={150} skipDelayDuration={400} disableHoverableContent>
+						<RailTile label="Expand sidebar" onClick={toggleRail}>
 							<PanelLeft size={16} strokeWidth={1.75} />
-						</button>
+						</RailTile>
 						<div className="rail-divider" />
+						{/* A detached window is one project, so like its expanded header
+						    it offers no way to add another. */}
+						{!boundProjectId && (
+							<RailTile label="Add project" onClick={addProject}>
+								<FolderPlus size={16} strokeWidth={1.75} />
+							</RailTile>
+						)}
 						{unifiedProjects.map((card) => {
 							const alert = cardAlert(card);
 							const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
 							if (!primary) return null;
 							const active = card.members.some((m) => m.projectId === activeProjectId);
 							return (
-								<button
-									type="button"
+								<RailTile
 									key={card.key}
-									className={`rail-tile ${active ? "active" : ""} ${dropCardKey === card.key ? "file-drop" : ""}`}
-									title={
-										boundProjectId ? card.name : `${card.name} — double-click to open in new window`
-									}
+									label={card.name}
+									hint={boundProjectId ? undefined : "Double-click to open in a new window"}
+									active={active}
+									className={dropCardKey === card.key ? "file-drop" : undefined}
 									{...projectDropProps(card.key, primary.projectId)}
 									onClick={() => selectProject(primary.projectId)}
 									onDoubleClick={
@@ -1445,30 +1449,28 @@ export function App() {
 								>
 									{card.name.charAt(0).toUpperCase()}
 									{alert && <span className={`corner pulse ${alert}`} />}
-								</button>
+								</RailTile>
 							);
 						})}
 						<div className="rail-divider" />
-						<button
-							type="button"
-							className="rail-tile"
-							title="New task"
+						<RailTile
+							label="New task"
+							hint={activeProjectId ? undefined : "Select a project first"}
 							onClick={newTask}
 							disabled={!activeProjectId}
 						>
 							<Plus size={16} strokeWidth={1.75} />
-						</button>
+						</RailTile>
 						{visibleSidebarTasks.map((t) => {
 							const Icon = taskIcon(t.name);
 							// One tile, one glyph: the first live session, and a count when
 							// there are more — the row and the card have room to show them all.
 							const [glyph, ...rest] = taskGlyphs(t);
 							return (
-								<button
-									type="button"
+								<RailTile
 									key={t.id}
-									className={`rail-tile ${t.id === sidebarSelectedId ? "active" : ""}`}
-									title={t.name}
+									label={t.name}
+									active={t.id === sidebarSelectedId}
 									onClick={() => toggleTask(t)}
 								>
 									{glyph ? (
@@ -1482,10 +1484,37 @@ export function App() {
 									) : (
 										t.agentStatus && <span className={`corner ${t.agentStatus}`} />
 									)}
-								</button>
+								</RailTile>
 							);
 						})}
-					</>
+						<div className="rail-divider" />
+						<RailTile
+							label="New loop"
+							hint={activeProjectId ? undefined : "Select a project first"}
+							onClick={() => setLoopDialog({ editId: null })}
+							disabled={!activeProjectId}
+						>
+							<Plus size={16} strokeWidth={1.75} />
+						</RailTile>
+						{sortedLoops.map((l) => {
+							// Same row as the LOOPS section: the loop's own task, or the
+							// Loops tab before its first run.
+							const task = l.taskId ? (activeTasks.find((t) => t.id === l.taskId) ?? null) : null;
+							return (
+								<RailTile
+									key={l.id}
+									label={l.title}
+									hint={l.enabled ? undefined : "Paused"}
+									active={task != null && task.id === sidebarSelectedId}
+									className={l.enabled ? undefined : "loop-paused"}
+									onClick={() => (task ? toggleTask(task) : goToView("loops"))}
+								>
+									<Repeat size={16} strokeWidth={1.75} />
+									{task?.agentStatus && <span className={`corner ${task.agentStatus}`} />}
+								</RailTile>
+							);
+						})}
+					</TooltipProvider>
 				) : (
 					<>
 						{/* A detached window IS one project — show a static header, not a
