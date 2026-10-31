@@ -4,7 +4,14 @@ import type { AteamDb, Task } from "@ateam/db";
 import { bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
-import { ALLOW, ALLOW_ALWAYS, DENY, describeAsk, PermissionBridge } from "../src/permissions";
+import {
+	ALLOW,
+	ALLOW_ALWAYS,
+	ASK_TOOL,
+	DENY,
+	describeAsk,
+	PermissionBridge,
+} from "../src/permissions";
 
 let db: AteamDb;
 let task: Task;
@@ -116,5 +123,115 @@ describe("PermissionBridge", () => {
 		expect(describeAsk("Write", { file_path: "src/a.ts" })).toBe("**Write `src/a.ts`?**");
 		expect(describeAsk("WebFetch", { url: "https://x.dev" })).toBe("**Fetch https://x.dev?**");
 		expect(describeAsk("mcp__gh__merge", { pr: 3 })).toContain("**Use mcp__gh__merge?**");
+	});
+});
+
+// Claude Code's AskUserQuestion, as it reaches the PermissionRequest hook
+// (captured from 2.1.316).
+const COLOR = {
+	question: "Which color?",
+	header: "Color",
+	options: [
+		{ label: "Blue (Recommended)", description: "The calm one." },
+		{ label: "Red", description: "The loud one." },
+	],
+	multiSelect: false,
+};
+const TOPPINGS = {
+	question: "Which toppings?",
+	header: "Toppings",
+	options: [{ label: "Ham" }, { label: "Olives" }, { label: "Basil", preview: "~~~ basil ~~~" }],
+	multiSelect: true,
+};
+const askQuestions = (questions: unknown) =>
+	bridge.ask({ terminalId: "term", toolName: ASK_TOOL, toolInput: { questions }, suggestions: [] });
+
+describe("PermissionBridge: AskUserQuestion", () => {
+	it("shows the question with its options, and answers with Claude's answers field", async () => {
+		const { result } = askQuestions([COLOR]);
+		const q = question();
+		expect(q).toMatchObject({
+			kind: "askUserQuestion",
+			text: "Which color?",
+			options: ["Blue", "Red"],
+			allowText: true,
+			choices: [
+				{ label: "Blue", description: "The calm one.", recommended: true },
+				{ label: "Red", description: "The loud one." },
+			],
+		});
+		expect(repo.getTask(db, task.id)?.column).toBe("needs_attention");
+		bridge.answer(q?.id as string, "Red");
+		expect(await result).toEqual({
+			hookSpecificOutput: {
+				hookEventName: "PermissionRequest",
+				decision: {
+					behavior: "allow",
+					updatedInput: { questions: [COLOR], answers: { "Which color?": "Red" } },
+				},
+			},
+		});
+		expect(question()).toBeNull();
+		expect(repo.getTask(db, task.id)?.column).toBe("running");
+	});
+
+	it("passes a typed answer through as it was typed", async () => {
+		const { result } = askQuestions([COLOR]);
+		expect(() => bridge.answer(question()?.id as string, "  ")).toThrow("type an answer");
+		bridge.answer(question()?.id as string, " Green, actually ");
+		expect(await result).toMatchObject({
+			hookSpecificOutput: {
+				decision: { updatedInput: { answers: { "Which color?": "Green, actually" } } },
+			},
+		});
+	});
+
+	it("asks one card at a time and hands Claude every answer with the last", async () => {
+		const { result } = askQuestions([COLOR, TOPPINGS]);
+		const first = question();
+		expect(first?.text).toBe("*Color · 1 of 2*\n\nWhich color?");
+		bridge.answer(first?.id as string, "Blue");
+
+		const second = question();
+		expect(second?.id).not.toBe(first?.id);
+		expect(second?.askedAt).toBe(first?.askedAt as number);
+		expect(bridge.holds(first?.id as string)).toBe(false);
+		expect(second).toMatchObject({
+			kind: "askUserQuestion",
+			select: "many",
+			allowText: false,
+			options: ["Ham", "Olives", "Basil"],
+		});
+		expect(second?.text).toContain("~~~ basil ~~~");
+		expect(repo.getTask(db, task.id)?.column).toBe("needs_attention");
+
+		bridge.answer(second?.id as string, ["Ham", "Olives"]);
+		expect(await result).toMatchObject({
+			hookSpecificOutput: {
+				decision: {
+					behavior: "allow",
+					updatedInput: {
+						questions: [COLOR, TOPPINGS],
+						answers: { "Which color?": "Blue", "Which toppings?": "Ham, Olives" },
+					},
+				},
+			},
+		});
+		expect(question()).toBeNull();
+	});
+
+	it("lets the hook drop out mid-way: the card for the current question comes down", async () => {
+		const { result, cancel } = askQuestions([COLOR, TOPPINGS]);
+		bridge.answer(question()?.id as string, "Blue");
+		const second = question()?.id as string;
+		cancel();
+		expect(await result).toBeNull();
+		expect(question()).toBeNull();
+		expect(() => bridge.answer(second, ["Ham"])).toThrow("no longer waiting");
+	});
+
+	it("falls back to a permission prompt when the input isn't the documented shape", () => {
+		askQuestions("not a list");
+		expect(question()).toMatchObject({ kind: "permission", options: [ALLOW, DENY] });
 	});
 });

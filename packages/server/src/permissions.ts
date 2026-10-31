@@ -15,10 +15,16 @@
  * the phone. The click resolves the request the hook holds open; the answer
  * never goes through the peer-message doors, because the agent is mid-turn and
  * waiting on exactly this.
+ *
+ * Claude's own question tool, AskUserQuestion, asks through the same hook. It
+ * is shown as the question it is (kind "askUserQuestion"), one card per
+ * question, and answered with `updatedInput.answers` keyed by question text.
+ * Verified on Claude Code 2.1.316: that closes the terminal's dialog and the
+ * agent gets the answers; a plain allow leaves the dialog up, unanswered.
  */
 import { randomUUID } from "node:crypto";
 import { type AteamDb, repo, type TaskQuestion } from "@ateam/db";
-import { CLEAR_QUESTION, MAX_QUESTION } from "./questions";
+import { CLEAR_QUESTION, MAX_ANSWER, MAX_QUESTION } from "./questions";
 
 /** What Claude's PermissionRequest hook hands over (its stdin JSON). */
 export interface PermissionAsk {
@@ -34,10 +40,75 @@ export type PermissionDecision = {
 	hookSpecificOutput: {
 		hookEventName: "PermissionRequest";
 		decision:
-			| { behavior: "allow"; updatedPermissions?: unknown[] }
+			| {
+					behavior: "allow";
+					updatedPermissions?: unknown[];
+					updatedInput?: Record<string, unknown>;
+			  }
 			| { behavior: "deny"; message: string };
 	};
 } | null;
+
+export const ASK_TOOL = "AskUserQuestion";
+
+/** One question of an AskUserQuestion call, as Claude hands it over. */
+interface AskedQuestion {
+	question: string;
+	header: string;
+	options: { label: string; description?: string; preview?: string }[];
+	multiSelect: boolean;
+}
+
+/** The call's questions, or null when they aren't the shape Claude documents
+ *  (then it is shown as a plain permission prompt, as before). */
+export function parseQuestions(input: Record<string, unknown>): AskedQuestion[] | null {
+	const raw = input.questions;
+	if (!Array.isArray(raw) || raw.length === 0) return null;
+	const out: AskedQuestion[] = [];
+	for (const q of raw as Record<string, unknown>[]) {
+		if (typeof q?.question !== "string" || !Array.isArray(q.options)) return null;
+		const options = (q.options as Record<string, unknown>[]).filter(
+			(o) => typeof o?.label === "string",
+		) as AskedQuestion["options"];
+		if (options.length === 0) return null;
+		out.push({
+			question: q.question,
+			header: typeof q.header === "string" ? q.header : "",
+			options,
+			multiSelect: q.multiSelect === true,
+		});
+	}
+	return out;
+}
+
+const RECOMMENDED = /\s*\(recommended\)\s*$/i;
+
+/** Question `i` of the call as a card: Claude's "(Recommended)" label suffix
+ *  becomes the badge, and option previews are drawn under the question. */
+function askCard(qs: AskedQuestion[], i: number): Omit<TaskQuestion, "id" | "askedAt"> {
+	const q = qs[i] as AskedQuestion;
+	const choices = q.options.map((o) => ({
+		label: o.label.replace(RECOMMENDED, "") || o.label,
+		...(o.description ? { description: o.description } : {}),
+		...(RECOMMENDED.test(o.label) ? { recommended: true } : {}),
+	}));
+	const previews = q.options
+		.filter((o) => typeof o.preview === "string" && o.preview.trim())
+		.map(
+			(o) =>
+				`**${o.label.replace(RECOMMENDED, "")}**\n\n\`\`\`\n${fence(o.preview as string)}\n\`\`\``,
+		);
+	const step = qs.length > 1 ? `*${q.header || "Question"} · ${i + 1} of ${qs.length}*\n\n` : "";
+	return {
+		text: [step + q.question, ...previews].join("\n\n").slice(0, MAX_QUESTION),
+		options: choices.map((c) => c.label),
+		// Claude's dialog always offers "Type something" beside the options.
+		allowText: !q.multiSelect,
+		choices,
+		...(q.multiSelect ? { select: "many" as const } : {}),
+		kind: "askUserQuestion",
+	};
+}
 
 export const ALLOW = "Allow";
 export const ALLOW_ALWAYS = "Always allow";
@@ -55,6 +126,14 @@ interface Pending {
 	askedAt: number;
 	resolve: (d: PermissionDecision) => void;
 	timer: ReturnType<typeof setTimeout>;
+	/** An AskUserQuestion call: its input, its questions, the answers so far
+	 *  and which question's card is up. `questionId` follows that card. */
+	asked?: {
+		input: Record<string, unknown>;
+		questions: AskedQuestion[];
+		answers: Record<string, string>;
+		index: number;
+	};
 }
 
 const fence = (s: string) => s.replace(/```/g, "ʼʼʼ");
@@ -112,6 +191,7 @@ export class PermissionBridge {
 		// A newer prompt from the same terminal replaces an older one still showing.
 		this.settle(a.terminalId);
 
+		const questions = a.toolName === ASK_TOOL ? parseQuestions(a.toolInput) : null;
 		const always = a.suggestions.length > 0 ? ruleText(a.suggestions) : null;
 		const choices = [
 			{ label: ALLOW, description: "Just this once.", recommended: true },
@@ -129,12 +209,16 @@ export class PermissionBridge {
 		];
 		const question: TaskQuestion = {
 			id: randomUUID(),
-			text: describeAsk(a.toolName, a.toolInput),
-			options: choices.map((c) => c.label),
-			allowText: false,
 			askedAt: this.now(),
-			choices,
-			kind: "permission",
+			...(questions
+				? askCard(questions, 0)
+				: {
+						text: describeAsk(a.toolName, a.toolInput),
+						options: choices.map((c) => c.label),
+						allowText: false,
+						choices,
+						kind: "permission" as const,
+					}),
 		};
 		repo.updateTask(db, task.id, { question, column: "needs_attention", isUnread: true });
 		this.deps.notify(task.id);
@@ -143,18 +227,19 @@ export class PermissionBridge {
 		const result = new Promise<PermissionDecision>((r) => {
 			resolve = r;
 		});
-		const timer = setTimeout(() => this.release(question.id), this.deps.holdMs ?? HOLD_MS);
-		this.pending.set(question.id, {
+		const p: Pending = {
 			taskId: task.id,
 			terminalId: a.terminalId,
 			questionId: question.id,
 			suggestions: a.suggestions,
 			askedAt: question.askedAt,
 			resolve,
-			timer,
-		});
+			timer: setTimeout(() => this.release(p), this.deps.holdMs ?? HOLD_MS),
+			...(questions ? { asked: { input: a.toolInput, questions, answers: {}, index: 0 } } : {}),
+		};
+		this.pending.set(question.id, p);
 		// The hook's connection dropped (Claude cancelled it): nothing to answer any more.
-		return { result, cancel: () => this.release(question.id) };
+		return { result, cancel: () => this.release(p) };
 	}
 
 	/** Is this question one the bridge holds a request for? */
@@ -167,13 +252,18 @@ export class PermissionBridge {
 	 * waiting (answered in the terminal, timed out, or the app restarted), so the
 	 * client says so instead of looking like it worked.
 	 */
-	answer(questionId: string, answer: string | null): void {
+	answer(questionId: string, value: string | string[] | null): void {
 		const p = this.pending.get(questionId);
 		if (!p) throw new Error("That prompt is no longer waiting. Answer it in the task's terminal.");
-		if (answer === null) {
-			this.release(questionId);
+		if (value === null) {
+			this.release(p);
 			return;
 		}
+		if (p.asked) {
+			this.answerAsked(p, p.asked, value);
+			return;
+		}
+		const answer = Array.isArray(value) ? value[0] : value;
 		let decision: PermissionDecision;
 		if (answer === ALLOW || answer === ALLOW_ALWAYS) {
 			decision = {
@@ -196,6 +286,44 @@ export class PermissionBridge {
 		this.finish(p, decision, "running");
 	}
 
+	/** One question of an AskUserQuestion call answered: the next one gets its
+	 *  card, and the last one hands Claude every answer at once. */
+	private answerAsked(p: Pending, asked: NonNullable<Pending["asked"]>, value: string | string[]) {
+		const { db, notify } = this.deps;
+		const q = asked.questions[asked.index] as AskedQuestion;
+		// Claude's own form: a multi-select answer is its labels joined with ", ".
+		const text = Array.isArray(value) ? value.join(", ") || "None" : value.trim();
+		if (!text) throw new Error("Pick an option or type an answer.");
+		asked.answers[q.question] = text.slice(0, MAX_ANSWER);
+		asked.index++;
+		if (asked.index < asked.questions.length) {
+			// A new id, so a late answer to the last card can't land on this one;
+			// the call's askedAt, because Claude asked them all at once (and the
+			// desktop notifies once per askedAt, not once per card).
+			const next: TaskQuestion = {
+				id: randomUUID(),
+				askedAt: p.askedAt,
+				...askCard(asked.questions, asked.index),
+			};
+			this.pending.delete(p.questionId);
+			p.questionId = next.id;
+			this.pending.set(next.id, p);
+			repo.updateTask(db, p.taskId, { question: next, column: "needs_attention" });
+			notify(p.taskId);
+			return;
+		}
+		this.finish(
+			p,
+			{
+				hookSpecificOutput: {
+					hookEventName: "PermissionRequest",
+					decision: { behavior: "allow", updatedInput: { ...asked.input, answers: asked.answers } },
+				},
+			},
+			"running",
+		);
+	}
+
 	/**
 	 * The agent moved on in its terminal (the user answered there, or it was
 	 * interrupted): stop holding its prompt and take the card down. A PreToolUse
@@ -206,18 +334,18 @@ export class PermissionBridge {
 		for (const p of this.pending.values()) {
 			if (p.terminalId !== terminalId) continue;
 			if (eventType === "Working" && this.now() - p.askedAt < 1000) continue;
-			this.release(p.questionId);
+			this.release(p);
 		}
 	}
 
 	/** Every held request, answered with "no decision": the terminal keeps the prompt. */
 	stop(): void {
-		for (const id of [...this.pending.keys()]) this.release(id);
+		for (const p of [...this.pending.values()]) this.release(p);
 	}
 
-	private release(questionId: string): void {
-		const p = this.pending.get(questionId);
-		if (p) this.finish(p, null, null);
+	/** Hand the prompt back to the terminal, if it is still held. */
+	private release(p: Pending): void {
+		if (this.pending.get(p.questionId) === p) this.finish(p, null, null);
 	}
 
 	private finish(p: Pending, decision: PermissionDecision, column: "running" | null): void {
@@ -229,7 +357,9 @@ export class PermissionBridge {
 		if (task?.question?.id === p.questionId) {
 			repo.updateTask(this.deps.db, p.taskId, {
 				...CLEAR_QUESTION,
-				...(column ? { column, isUnread: false } : {}),
+				// The agent is past its prompt: left at awaiting_input, the card
+				// would be held in Needs You (repo.updateTask).
+				...(column ? { column, agentStatus: "running" as const, isUnread: false } : {}),
 			});
 			this.deps.notify(p.taskId);
 		}

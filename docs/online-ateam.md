@@ -235,6 +235,14 @@ ssh my-ateam-box "bash -lc 'ateam'"
 > the next release first). Off, each box keeps its own, edited by selecting it.
 > The **client** half (updates, this toggle) is per machine and never syncs.
 
+> **Skills on a box.** The Skills menu on an agent terminal's toolbar lists the
+> skills that agent can invoke on the machine it runs on, so a task on a box
+> shows the box's own skill folders (`~/.claude/skills`, `~/.agents/skills` and
+> the agents' others there), not your Mac's. **Add skill…** links a folder on
+> this Mac, so it is offered on local tasks only: for a box, put the skill in
+> the box's folders. A box on an Ateam older than the skills menu says so in the
+> menu and takes the next release first.
+
 ### Optional: a browser for the box's agents
 
 Browser MCP tools usually drive the Chrome on your laptop, and that only works

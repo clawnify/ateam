@@ -5,35 +5,63 @@
 import type { TaskDTO } from "@ateam/protocol";
 import {
 	ArrowUp,
+	ChevronLeft,
 	ChevronRight,
 	CircleHelp,
 	CornerDownRight,
+	Paperclip,
 	Square,
 	SquarePen,
+	X,
 } from "lucide-react";
 import {
+	type ClipboardEvent,
 	type FormEvent,
 	type KeyboardEvent,
+	type ReactNode,
+	useCallback,
 	useEffect,
 	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
 } from "react";
+import { flushSync } from "react-dom";
 import type {
+	LeadAttachResult,
 	LeadEvent,
+	LeadFile,
 	LeadItem,
 	LeadPermissionAnswer,
 	LeadSnapshot,
 	LeadTaskRef,
 } from "../../../shared/lead";
+import {
+	type AgentItem,
+	arrived,
+	FOLLOWING,
+	firstLine,
+	goTo,
+	type StackView,
+	shown,
+	type ToolItem,
+	toBlocks,
+	unseen,
+} from "../lead-blocks";
 import { AgentIcon } from "./AgentIcon";
-import { Markdown } from "./Markdown";
+import { IconButton } from "./IconButton";
+import { Markdown, TaskLinkContext } from "./Markdown";
 import { PageFrame } from "./PageFrame";
+import { PanelRightFilled } from "./PanelRightFilled";
 import { QuestionCard } from "./QuestionCard";
-
-type ToolItem = Extract<LeadItem, { kind: "tool" }>;
-type Block = { kind: "item"; item: LeadItem } | { kind: "tools"; id: string; tools: ToolItem[] };
+import { Button } from "./ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 
 const EMPTY: LeadSnapshot = { items: [], draft: "", busy: false };
 
@@ -59,19 +87,6 @@ function apply(s: LeadSnapshot, e: LeadEvent): LeadSnapshot {
 		case "reset":
 			return e.snapshot;
 	}
-}
-
-/** Consecutive tool calls read as one step, so they fold into one row. */
-function toBlocks(items: LeadItem[]): Block[] {
-	const out: Block[] = [];
-	for (const item of items) {
-		const last = out[out.length - 1];
-		if (item.kind === "tool") {
-			if (last?.kind === "tools") last.tools.push(item);
-			else out.push({ kind: "tools", id: item.id, tools: [item] });
-		} else out.push({ kind: "item", item });
-	}
-	return out;
 }
 
 /** create_task answers "Started task "x" (<uuid>) ..."; the id is the chip's target. */
@@ -311,6 +326,63 @@ const cleanError = (e: unknown) =>
 		"",
 	);
 
+/** Previews by path, fetched once: an attachment never changes. */
+const thumbs = new Map<string, Promise<string | null>>();
+
+function useThumb(file: LeadFile): string | null {
+	const [src, setSrc] = useState<string | null>(null);
+	useEffect(() => {
+		if (!file.image) return;
+		let live = true;
+		let p = thumbs.get(file.path);
+		if (!p) {
+			p = window.ateamLead.thumb(file.path).catch(() => null);
+			thumbs.set(file.path, p);
+		}
+		void p.then((s) => live && setSrc(s));
+		return () => {
+			live = false;
+		};
+	}, [file.path, file.image]);
+	return src;
+}
+
+const sizeLabel = (n: number) =>
+	n < 1024 * 1024
+		? `${Math.max(1, Math.round(n / 1024))} KB`
+		: `${Math.round((n / 1024 / 1024) * 10) / 10} MB`;
+
+/** An attached file: a thumbnail for an image, a chip for anything else (or
+ *  an image whose copy is gone). */
+function Attachment({ file, onRemove }: { file: LeadFile; onRemove?: () => void }) {
+	const src = useThumb(file);
+	const remove = onRemove && (
+		<button
+			type="button"
+			className="fc-x"
+			aria-label={`Remove ${file.name}`}
+			title="Remove"
+			onClick={onRemove}
+		>
+			<X size={12} strokeWidth={2.25} />
+		</button>
+	);
+	if (src)
+		return (
+			<span className="lead-thumb" title={file.name}>
+				<img src={src} alt={file.name} />
+				{remove}
+			</span>
+		);
+	return (
+		<span className="file-chip" title={file.path}>
+			<span className="fc-name">{file.name}</span>
+			<span className="lead-file-size">{sizeLabel(file.size)}</span>
+			{remove}
+		</span>
+	);
+}
+
 /** A task named in the thread; opens it when it is on a board this window has loaded. */
 function TaskChip({
 	task,
@@ -332,6 +404,37 @@ function TaskChip({
 		>
 			<AgentIcon agentId={task.agentId} size={12} />
 			<span className="lead-chip-name">{task.name}</span>
+		</button>
+	);
+}
+
+/** A task the Lead named in its prose, `[fix login](task:<id>)`: a chip that
+ *  opens it, in the Lead's own words. Those are often clearer than the task's
+ *  name, which is usually the first words of its prompt ("In our website in
+ *  Clawnify org"), so the name goes in the tooltip. One this window can't find
+ *  (deleted, or on a box that isn't connected) is greyed. */
+function TaskLink({
+	target,
+	label,
+	tasks,
+	onOpenTask,
+}: {
+	target: string;
+	label: ReactNode;
+	tasks: TaskDTO[];
+	onOpenTask: (t: TaskDTO) => void;
+}) {
+	const task = findTask(tasks, target);
+	return (
+		<button
+			type="button"
+			className="lead-chip"
+			title={task ? `Open ${task.name}` : "Not on a board this window has loaded"}
+			disabled={!task}
+			onClick={() => task && onOpenTask(task)}
+		>
+			{task && <AgentIcon agentId={task.agentId} size={12} />}
+			<span className="lead-chip-name">{label}</span>
 		</button>
 	);
 }
@@ -409,15 +512,15 @@ function LeadPermission({ item }: { item: Extract<LeadItem, { kind: "permission"
 	);
 }
 
-/** A followed task's agent, talking back: its reply, and a box to answer it here. */
+/** A followed task's agent, talking back: its reply, and a box to answer it
+ *  here. The card and its head are the stack's (AgentStack). */
 function AgentReply({
 	item,
-	tasks,
-	onOpenTask,
+	hidden,
 }: {
-	item: Extract<LeadItem, { kind: "agent" }>;
-	tasks: TaskDTO[];
-	onOpenTask: (t: TaskDTO) => void;
+	item: AgentItem;
+	/** Another reply of its stack is shown. Kept mounted, so a half-typed answer survives. */
+	hidden: boolean;
 }) {
 	const [open, setOpen] = useState(false);
 	const [text, setText] = useState("");
@@ -439,11 +542,7 @@ function AgentReply({
 		}
 	};
 	return (
-		<div className="lead-agent">
-			<div className="lead-agent-head">
-				<TaskChip task={item.task} tasks={tasks} onOpenTask={onOpenTask} />
-				<span className="lead-agent-said">replied</span>
-			</div>
+		<div className="lead-agent-body" hidden={hidden}>
 			<div className="md">
 				<Markdown text={item.text} />
 			</div>
@@ -474,6 +573,130 @@ function AgentReply({
 	);
 }
 
+/** Replies that came in one after another: one card showing one at a time, the
+ *  newest first (the rules are in lead-blocks.ts). The arrows and ←/→ step
+ *  through them, and the "2 of 5" count lists them all to jump to one. The
+ *  head stays mounted while the reply below it changes, so a focused arrow
+ *  keeps focus and the next press goes on stepping. */
+function AgentStack({
+	replies,
+	tasks,
+	onOpenTask,
+	atBottom,
+	onPaged,
+}: {
+	replies: AgentItem[];
+	tasks: TaskDTO[];
+	onOpenTask: (t: TaskDTO) => void;
+	/** Whether the user is following the bottom of the chat. */
+	atBottom: () => boolean;
+	/** The user switched replies: the card, to keep its top in view. */
+	onPaged: (card: HTMLElement) => void;
+}) {
+	const n = replies.length;
+	const [view, setView] = useState<StackView>(FOLLOWING);
+	const [count, setCount] = useState(n);
+	if (count !== n) {
+		setCount(n);
+		setView((v) => arrived(v, count, n, atBottom()));
+	}
+	const cur = shown(view, n);
+	const card = useRef<HTMLDivElement>(null);
+	const countBtn = useRef<HTMLButtonElement>(null);
+	const go = (i: number) => {
+		if (i === cur || i < 0 || i >= n) return;
+		const focused = card.current?.contains(document.activeElement);
+		// Committed now, so the card is measured showing the reply it switched to.
+		flushSync(() => setView((v) => goTo(v, i, n)));
+		// At the first or last reply the arrow that stepped there disables itself
+		// and drops focus; the count takes it, so ←/→ go on working.
+		const a = document.activeElement as HTMLButtonElement | null;
+		if (focused && (a?.disabled || !card.current?.contains(a)))
+			countBtn.current?.focus({ preventScroll: true });
+		if (card.current) onPaged(card.current);
+	};
+	const reply = replies[cur];
+	const prev = replies[cur - 1];
+	const next = replies[cur + 1];
+	const fresh = unseen(view, n);
+	if (!reply) return null;
+	const nav = n > 1 && (
+		<div className="lead-stack-nav">
+			<IconButton
+				icon={ChevronLeft}
+				size={14}
+				label={prev ? `Previous: ${prev.task.name}` : "Previous"}
+				disabled={!prev}
+				onClick={() => go(cur - 1)}
+			/>
+			<DropdownMenu modal={false}>
+				<DropdownMenuTrigger asChild>
+					<Button
+						ref={countBtn}
+						variant="ghost"
+						size="xs"
+						className="tabular-nums"
+						title="All replies"
+						aria-label={`Reply ${cur + 1} of ${n}, list all`}
+					>
+						{cur + 1} of {n}
+					</Button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end" collisionPadding={8} className="w-[320px]">
+					<DropdownMenuRadioGroup value={String(cur)} onValueChange={(v) => go(Number(v))}>
+						{replies.map((r, i) => (
+							<DropdownMenuRadioItem key={r.id} value={String(i)}>
+								<AgentIcon agentId={r.task.agentId} size={12} />
+								<span className="flex min-w-0 flex-col">
+									<span className="truncate">{r.task.name}</span>
+									<span className="truncate text-xs text-muted-foreground">
+										{firstLine(r.text)}
+									</span>
+								</span>
+							</DropdownMenuRadioItem>
+						))}
+					</DropdownMenuRadioGroup>
+				</DropdownMenuContent>
+			</DropdownMenu>
+			<span className="lead-stack-next">
+				<IconButton
+					icon={ChevronRight}
+					size={14}
+					label={next ? `Next: ${next.task.name}${fresh ? " (new)" : ""}` : "Next"}
+					disabled={!next}
+					onClick={() => go(cur + 1)}
+				/>
+				{fresh && <span className="lead-stack-dot" />}
+			</span>
+		</div>
+	);
+	return (
+		// biome-ignore lint/a11y/noStaticElementInteractions: ←/→ step through the replies from anywhere in the card, not from one control
+		<div
+			ref={card}
+			className="lead-agent"
+			onKeyDown={(e) => {
+				// Not while typing an answer, and not from the list (a portal, outside the card).
+				const t = e.target as HTMLElement;
+				if (n < 2 || t.closest("input, textarea") || !e.currentTarget.contains(t)) return;
+				if (e.key === "ArrowLeft" && prev) go(cur - 1);
+				else if (e.key === "ArrowRight" && next) go(cur + 1);
+				else return;
+				e.preventDefault();
+			}}
+		>
+			<div className="lead-agent-head">
+				<TaskChip task={reply.task} tasks={tasks} onOpenTask={onOpenTask} />
+				<span className="lead-agent-said">replied</span>
+				{nav}
+			</div>
+			{replies.map((r, i) => (
+				<AgentReply key={r.id} item={r} hidden={i !== cur} />
+			))}
+		</div>
+	);
+}
+
 function Thinking() {
 	const [start] = useState(() => Date.now());
 	const [, tick] = useState(0);
@@ -489,16 +712,49 @@ function Thinking() {
 	);
 }
 
+/** What the user has typed and not sent. Outlives the component, because the
+ *  chat moves between the Lead tab and the sidebar by unmounting one and
+ *  mounting the other, and hiding the sidebar unmounts it too. */
+let unsent = "";
+/** The files attached to that draft, kept the same way. */
+let unsentFiles: LeadFile[] = [];
+
 export function LeadChat({
 	tasks,
 	onOpenTask,
+	onHide,
 }: {
 	/** Every loaded task, across projects and machines, to name and open the ones the Lead touches. */
 	tasks: TaskDTO[];
 	onOpenTask: (t: TaskDTO) => void;
+	/** Set when the chat is the sidebar on the right: its header is then the
+	 *  slim strip that hides it, not the Lead tab's title. */
+	onHide?: () => void;
 }) {
 	const [snap, setSnap] = useState<LeadSnapshot>(EMPTY);
-	const [text, setText] = useState("");
+	const [text, setTextState] = useState(() => unsent);
+	const setText = (value: string) => {
+		unsent = value;
+		setTextState(value);
+	};
+	// The Lead names tasks as links (its prompt says how); each is drawn as a
+	// chip that opens the task.
+	const renderTaskLink = useCallback(
+		(target: string, label: ReactNode) => (
+			<TaskLink target={target} label={label} tasks={tasks} onOpenTask={onOpenTask} />
+		),
+		[tasks, onOpenTask],
+	);
+	// Attached to the next message; already copied into the Lead's folder.
+	const [files, setFilesState] = useState<LeadFile[]>(() => unsentFiles);
+	const setFiles = (update: (cur: LeadFile[]) => LeadFile[]) =>
+		setFilesState((cur) => {
+			unsentFiles = update(cur);
+			return unsentFiles;
+		});
+	// Why an attach or a send didn't go through, under the composer.
+	const [attachNote, setAttachNote] = useState<string | null>(null);
+	const [dragging, setDragging] = useState(false);
 	const scroller = useRef<HTMLDivElement>(null);
 	const thread = useRef<HTMLDivElement>(null);
 	const input = useRef<HTMLTextAreaElement>(null);
@@ -532,6 +788,17 @@ export function LeadChat({
 		ro.observe(content);
 		return () => ro.disconnect();
 	}, []);
+	const atBottom = useCallback(() => pinned.current, []);
+	// Switching replies in a stack is reading, not the thread growing: the card's
+	// top stays in view, and a longer reply no longer counts as "at the bottom",
+	// so the observer above doesn't jump to its last line.
+	const keepInView = useCallback((card: HTMLElement) => {
+		const el = scroller.current;
+		if (!el) return;
+		const above = card.getBoundingClientRect().top - el.getBoundingClientRect().top;
+		if (above < 0) el.scrollTop += above - 8;
+		pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+	}, []);
 
 	const blocks = useMemo(() => toBlocks(snap.items), [snap.items]);
 	// Every agent waiting on the user, newest first: they live on the tasks, not
@@ -543,22 +810,60 @@ export function LeadChat({
 				.sort((a, b) => (b.question?.askedAt ?? 0) - (a.question?.askedAt ?? 0)),
 		[tasks],
 	);
-	// In Needs You for another reason (a finished turn that asks in prose, a
-	// prompt in its terminal): counted, not listed, so a busy board can't bury
-	// the questions; the Lead can go through them.
-	const waiting = useMemo(
-		() => tasks.filter((t) => t.column === "needs_attention" && !t.question).length,
-		[tasks],
-	);
 	const lastBlock = blocks[blocks.length - 1];
 	const toolRunning =
 		lastBlock?.kind === "tools" && lastBlock.tools.some((t) => t.result === undefined);
 
-	const send = (body = text) => {
-		if (!body.trim()) return;
+	const send = (body = text, attach = files) => {
+		if (!body.trim() && !attach.length) return;
 		pinned.current = true;
-		void window.ateamLead.send(body);
+		window.ateamLead
+			.send(
+				body,
+				attach.map((f) => f.path),
+			)
+			.catch((e) => setAttachNote(cleanError(e)));
 		setText("");
+		if (attach.length) setFiles(() => []);
+		setAttachNote(null);
+	};
+
+	const took = (r: LeadAttachResult) => {
+		setFiles((cur) => [...cur, ...r.files]);
+		setAttachNote(r.failed.length ? r.failed.join(" ") : null);
+		input.current?.focus();
+	};
+	/** Files from a drop or a paste: those on disk by their path, the rest (a
+	 *  screenshot, an image dragged from a page) by their bytes. */
+	const attachFiles = async (list: File[]) => {
+		const paths = list.map((f) => window.ateam.utils.pathForFile(f));
+		const result: LeadAttachResult = { files: [], failed: [] };
+		try {
+			const onDisk = paths.filter(Boolean);
+			if (onDisk.length) {
+				const r = await window.ateamLead.attach(onDisk);
+				result.files.push(...r.files);
+				result.failed.push(...r.failed);
+			}
+			for (const [i, f] of list.entries()) {
+				if (paths[i]) continue;
+				const data = new Uint8Array(await f.arrayBuffer());
+				result.files.push(await window.ateamLead.attachBytes(f.name, data));
+			}
+		} catch (e) {
+			result.failed.push(cleanError(e));
+		}
+		took(result);
+	};
+	const pickFiles = () =>
+		void window.ateamLead.attach(null).then(took, (e) => setAttachNote(cleanError(e)));
+	// A copied screenshot or Finder file arrives as files with no text; text
+	// pastes as text.
+	const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+		const dt = e.clipboardData;
+		if (dt.getData("text/plain") || dt.files.length === 0) return;
+		e.preventDefault();
+		void attachFiles(Array.from(dt.files));
 	};
 	const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
 		if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -568,23 +873,63 @@ export function LeadChat({
 	};
 
 	return (
-		<div className="lead">
-			<div className="lead-head">
-				<div>
-					<h2>Lead</h2>
-					<p>One chat for every task, on this Mac and on your boxes.</p>
+		// biome-ignore lint/a11y/noStaticElementInteractions: a file dropped anywhere on the chat attaches it; the paperclip does the same from the keyboard
+		<div
+			className="lead"
+			onDragOver={(e) => {
+				if (!e.dataTransfer.types.includes("Files")) return;
+				e.preventDefault();
+				setDragging(true);
+			}}
+			onDragLeave={(e) => {
+				if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+			}}
+			onDrop={(e) => {
+				setDragging(false);
+				if (!e.dataTransfer.files.length) return;
+				e.preventDefault();
+				e.stopPropagation();
+				void attachFiles(Array.from(e.dataTransfer.files));
+			}}
+		>
+			{onHide ? (
+				// The sidebar's top strip, level with the top bar beside it. Its hide
+				// toggle sits where the top bar's show toggle was, so the button
+				// doesn't move when the sidebar opens.
+				<div className="lead-side-head">
+					<span className="lead-side-title">Lead</span>
+					<IconButton
+						icon={SquarePen}
+						label="New conversation"
+						size={14}
+						disabled={snap.items.length === 0}
+						onClick={() => void window.ateamLead.reset()}
+					/>
+					<IconButton
+						icon={PanelRightFilled}
+						label="Hide Lead sidebar"
+						size={14}
+						onClick={onHide}
+					/>
 				</div>
-				<button
-					type="button"
-					className="iconbtn"
-					title="New conversation"
-					aria-label="New conversation"
-					disabled={snap.items.length === 0}
-					onClick={() => void window.ateamLead.reset()}
-				>
-					<SquarePen size={14} />
-				</button>
-			</div>
+			) : (
+				<div className="lead-head">
+					<div>
+						<h2>Lead</h2>
+						<p>One chat for every task, on this Mac and on your boxes.</p>
+					</div>
+					<button
+						type="button"
+						className="iconbtn"
+						title="New conversation"
+						aria-label="New conversation"
+						disabled={snap.items.length === 0}
+						onClick={() => void window.ateamLead.reset()}
+					>
+						<SquarePen size={14} />
+					</button>
+				</div>
+			)}
 
 			<div
 				className="lead-scroll"
@@ -603,7 +948,7 @@ export function LeadChat({
 							</p>
 							<div className="lead-suggest">
 								{SUGGESTIONS.map((s) => (
-									<button type="button" key={s} onClick={() => send(s)}>
+									<button type="button" key={s} onClick={() => send(s, [])}>
 										{s}
 									</button>
 								))}
@@ -613,13 +958,27 @@ export function LeadChat({
 					{blocks.map((b) =>
 						b.kind === "tools" ? (
 							<ToolGroup key={b.id} tools={b.tools} tasks={tasks} onOpenTask={onOpenTask} />
+						) : b.kind === "agents" ? (
+							<AgentStack
+								key={b.id}
+								replies={b.replies}
+								tasks={tasks}
+								onOpenTask={onOpenTask}
+								atBottom={atBottom}
+								onPaged={keepInView}
+							/>
 						) : b.item.kind === "user" ? (
 							<div key={b.item.id} className="lead-user">
 								{b.item.to && <div className="lead-user-to">to {b.item.to.name}</div>}
+								{b.item.files?.length ? (
+									<div className="lead-files">
+										{b.item.files.map((f) => (
+											<Attachment key={f.path} file={f} />
+										))}
+									</div>
+								) : null}
 								{b.item.text}
 							</div>
-						) : b.item.kind === "agent" ? (
-							<AgentReply key={b.item.id} item={b.item} tasks={tasks} onOpenTask={onOpenTask} />
 						) : b.item.kind === "permission" ? (
 							<LeadPermission key={b.item.id} item={b.item} />
 						) : b.item.kind === "page" ? (
@@ -636,7 +995,9 @@ export function LeadChat({
 							</div>
 						) : b.item.kind === "assistant" ? (
 							<div key={b.item.id} className="md">
-								<Markdown text={b.item.text} />
+								<TaskLinkContext value={renderTaskLink}>
+									<Markdown text={b.item.text} />
+								</TaskLinkContext>
 							</div>
 						) : b.item.kind === "notice" ? (
 							<div key={b.item.id} className={`lead-notice ${b.item.tone}`}>
@@ -649,7 +1010,9 @@ export function LeadChat({
 					)}
 					{snap.draft ? (
 						<div className="md streaming">
-							<Markdown text={snap.draft} />
+							<TaskLinkContext value={renderTaskLink}>
+								<Markdown text={snap.draft} />
+							</TaskLinkContext>
 						</div>
 					) : (
 						snap.busy && !toolRunning && <Thinking />
@@ -657,35 +1020,40 @@ export function LeadChat({
 				</div>
 			</div>
 
-			{(asking.length > 0 || waiting > 0) && (
+			{/* Only questions. A task in Needs You for another reason is on the
+			    board, and one touched from this chat already replies into the
+			    thread (main/lead/follow.ts), so a count here repeated both. */}
+			{asking.length > 0 && (
 				<div className="lead-asking">
 					<div className="lead-asking-title">Waiting on you</div>
-					{asking.map((t) => (
-						<QuestionCard
-							key={t.id}
-							task={t}
-							onOpenTask={onOpenTask}
-							onAnswer={(input) => window.ateamLead.answer(input)}
-						/>
-					))}
-					{waiting > 0 && (
-						<div className="lead-waiting">
-							{waiting === 1 ? "1 other task is" : `${waiting} other tasks are`} in Needs you
-							without a question.
-							<button
-								type="button"
-								disabled={snap.busy}
-								onClick={() => send("Go through the tasks that need me: what does each one need?")}
-							>
-								Ask the Lead
-							</button>
-						</div>
-					)}
+					<div className="lead-asking-list">
+						{asking.map((t) => (
+							<QuestionCard
+								key={t.id}
+								task={t}
+								onOpenTask={onOpenTask}
+								onAnswer={(input) => window.ateamLead.answer(input)}
+							/>
+						))}
+					</div>
 				</div>
 			)}
 
 			<div className="lead-composer">
-				<div className="lead-box">
+				{attachNote && <div className="lead-attach-note">{attachNote}</div>}
+				<div className={`lead-box ${dragging ? "dropping" : ""}`}>
+					{files.length > 0 && (
+						<div className="lead-files">
+							{files.map((f) => (
+								<Attachment
+									key={f.path}
+									file={f}
+									onRemove={() => setFiles((cur) => cur.filter((x) => x.path !== f.path))}
+								/>
+							))}
+						</div>
+					)}
+					<IconButton icon={Paperclip} label="Attach files" size={15} onClick={pickFiles} />
 					<textarea
 						ref={input}
 						value={text}
@@ -694,6 +1062,7 @@ export function LeadChat({
 						aria-label="Message the Lead"
 						onChange={(e) => setText(e.target.value)}
 						onKeyDown={onKey}
+						onPaste={onPaste}
 					/>
 					{snap.busy ? (
 						<button
@@ -711,7 +1080,7 @@ export function LeadChat({
 							className="lead-send"
 							title="Send"
 							aria-label="Send"
-							disabled={!text.trim()}
+							disabled={!text.trim() && !files.length}
 							onClick={() => send()}
 						>
 							<ArrowUp size={14} />
