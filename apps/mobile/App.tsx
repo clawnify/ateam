@@ -154,16 +154,6 @@ function LogoMark() {
 	);
 }
 
-function Chip({ children }: { children: string }) {
-	return (
-		<View style={styles.chip}>
-			<Text style={styles.chipText} numberOfLines={1}>
-				{children}
-			</Text>
-		</View>
-	);
-}
-
 function Badge({ children, tint }: { children: string; tint: string }) {
 	return (
 		<View style={[styles.badge, { backgroundColor: TINT[tint] ?? C.sunken }]}>
@@ -196,8 +186,8 @@ function TaskCard({ task, tint, onOpen }: { task: TaskDTO; tint: string; onOpen:
 					{task.name}
 				</Text>
 			</View>
+			{/* No branch chip: the branch is the name as a slug. */}
 			<View style={styles.cardMeta}>
-				<Chip>{task.branch}</Chip>
 				<Badge tint={tint}>{taskNote(task)}</Badge>
 			</View>
 		</Pressable>
@@ -2067,15 +2057,6 @@ const styles = StyleSheet.create({
 	agentInitial: { color: C.muted, fontSize: 11, fontWeight: "700" },
 	cardName: { color: C.ink, fontSize: 15, fontWeight: "600", flex: 1, lineHeight: 20 },
 	cardMeta: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" },
-	chip: {
-		backgroundColor: C.sunken,
-		borderWidth: 1,
-		borderColor: C.line,
-		borderRadius: 6,
-		paddingHorizontal: 7,
-		paddingVertical: 3,
-	},
-	chipText: { color: C.muted, fontSize: 11, fontVariant: ["tabular-nums"] },
 	badge: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
 	badgeText: { fontSize: 11, fontWeight: "600" },
 	footnote: { color: C.faint, fontSize: 11, textAlign: "center", marginTop: 8 },
