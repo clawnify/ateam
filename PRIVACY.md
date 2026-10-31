@@ -89,7 +89,11 @@ of the AI providers you use:
 
 The desktop app's Lead chat is one more of these agents: it runs the Claude
 Code you installed, under your own account and with your own Claude Code
-settings, plugins and connectors, exactly as it runs in your terminal.
+settings, plugins and connectors, exactly as it runs in your terminal. Files
+you attach in the Lead chat are copied into the app's own folder on your Mac
+and deleted after 30 days. The Lead reads them like any file you show Claude
+Code, and when you hand one to a task on one of your boxes, a copy goes to
+that box over your own connection.
 
 GitHub operations (push, pull, PRs) are performed by the `gh` CLI on your own
 machine, under your own GitHub authentication.

@@ -241,7 +241,9 @@ briefs you on the latest tasks, starts tasks, messages their agents and brings
 their replies back, with every task it names a chip that opens it; it runs as
 your own Claude Code, with your skills, plugins and MCP servers, and asks for
 its permissions in the chat; it has its own tab, or sits as a sidebar on the
-right beside the board), questions agents ask you with the `ask_user`
+right beside the board; files you attach or paste there can go to a new task or
+to a running one, copied to its box when it runs on one, up to 10 MB a file),
+questions agents ask you with the `ask_user`
 board tool (option cards with tradeoffs, or a checklist, answered from the
 board, the task panel or the Lead chat), Claude Code's permission prompts
 answered from Ateam (Allow, Always allow, Deny) as well as in the terminal,
