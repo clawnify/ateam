@@ -1,6 +1,7 @@
 import type { CleanupCandidate } from "@ateam/protocol";
 import { Archive, ArchiveRestore, GitPullRequest, MessageSquare, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { landingAfter } from "../cleanup-select";
 import { relativeAge } from "../triage-order";
 import { IconButton } from "./IconButton";
 import { TerminalView } from "./Terminal";
@@ -23,6 +24,10 @@ import { TerminalView } from "./Terminal";
  * answer to a stale task (off the board, worktree kept), so both live in one
  * place. A task on the board can be archived from here, and an archived one
  * brought back.
+ *
+ * A row that leaves the list hands the selection to the row below it, so a run
+ * of deletes is one click each. "Delete N recommended" takes all of the sweep's
+ * picks in one go.
  */
 
 type Filter = "all" | "recommended" | "archived";
@@ -77,6 +82,9 @@ export function CleanupDialog({
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [filter, setFilter] = useState<Filter>(initialFilter);
+	// A delete in flight: every action waits for it, so a quick second click
+	// can't land on a row you haven't looked at yet.
+	const [busy, setBusy] = useState<"one" | "all" | null>(null);
 	// One clock for every age label, so the rows can't disagree with each other.
 	const now = useMemo(() => Date.now(), []);
 
@@ -98,6 +106,20 @@ export function CleanupDialog({
 	);
 	const recommendedCount = items.filter((i) => i.recommended).length;
 	const archivedCount = items.filter((i) => i.task.archivedAt != null).length;
+	// The list as shown NOW: a delete awaits git, so the render that started it
+	// is stale by the time it lands.
+	const shownRef = useRef(shown);
+	shownRef.current = shown;
+
+	/** Move a selection on `id` to the next row down, skipping `leaving` too. */
+	const advanceFrom = (id: string, leaving: ReadonlySet<string> = new Set([id])) => {
+		const to = landingAfter(
+			shownRef.current.map((i) => i.task.id),
+			id,
+			leaving,
+		);
+		setSelectedId((cur) => (cur === id ? to : cur));
+	};
 
 	// Archive or bring back in place: the row stays, so the decision can go on.
 	const setArchived = async (item: CleanupCandidate, archived: boolean) => {
@@ -108,13 +130,15 @@ export function CleanupDialog({
 			console.error("[cleanup] archive failed", e);
 			return;
 		}
+		// Brought back under "Archived", the row stays but leaves this view.
+		if (!archived && filter === "archived") advanceFrom(task.id);
 		setItems((prev) => prev.map((i) => (i.task.id === task.id ? { ...i, task } : i)));
 	};
 
-	const dismiss = (id: string) => {
+	const dismiss = (id: string, leaving?: ReadonlySet<string>) => {
+		advanceFrom(id, leaving);
 		setItems((prev) => {
 			const next = prev.filter((i) => i.task.id !== id);
-			setSelectedId((cur) => (cur === id ? (next[0]?.task.id ?? null) : cur));
 			if (next.length === 0) onClose();
 			return next;
 		});
@@ -130,34 +154,78 @@ export function CleanupDialog({
 			);
 			if (!ok) return;
 		}
+		setBusy("one");
 		try {
-			await window.ateam.tasks.remove({ id: item.task.id, deleteBranch: true });
-		} catch (e) {
-			// git refuses to remove a dirty/unmerged worktree without --force.
-			const msg = e instanceof Error ? e.message : String(e);
-			if (/modified or untracked|not fully merged|use --force/i.test(msg)) {
-				const ok = await confirm(
-					"Force delete?",
-					`"${item.task.name}" has uncommitted/untracked changes or an unmerged branch. Delete it anyway?`,
-				);
-				if (!ok) return;
-				try {
-					await window.ateam.tasks.remove({
-						id: item.task.id,
-						deleteBranch: true,
-						force: true,
-					});
-				} catch (e2) {
-					console.error("[cleanup] force delete failed", e2);
+			try {
+				await window.ateam.tasks.remove({ id: item.task.id, deleteBranch: true });
+			} catch (e) {
+				// git refuses to remove a dirty/unmerged worktree without --force.
+				const msg = e instanceof Error ? e.message : String(e);
+				if (/modified or untracked|not fully merged|use --force/i.test(msg)) {
+					const ok = await confirm(
+						"Force delete?",
+						`"${item.task.name}" has uncommitted/untracked changes or an unmerged branch. Delete it anyway?`,
+					);
+					if (!ok) return;
+					try {
+						await window.ateam.tasks.remove({
+							id: item.task.id,
+							deleteBranch: true,
+							force: true,
+						});
+					} catch (e2) {
+						console.error("[cleanup] force delete failed", e2);
+						return;
+					}
+				} else {
+					console.error("[cleanup] delete failed", e);
 					return;
 				}
-			} else {
-				console.error("[cleanup] delete failed", e);
-				return;
 			}
+			reload();
+			dismiss(item.task.id);
+		} finally {
+			setBusy(null);
 		}
-		reload();
-		dismiss(item.task.id);
+	};
+
+	// Every recommended row in one go. Not the server's sweep (tasks.cleanup):
+	// that takes whatever is recommended project-wide, including a row you just
+	// chose to keep. This takes the rows you were shown, after a fresh scan
+	// drops any that went live or dirty while the dialog sat open, because
+	// `remove` kills a live session.
+	const deleteRecommended = async () => {
+		const picks = items.filter((i) => i.recommended).map((i) => i.task.id);
+		const ok = await confirm(
+			`Delete ${picks.length} recommended worktree${picks.length === 1 ? "" : "s"}?`,
+			"Each is merged, clean and has no live session. Its worktree and branch go away.",
+		);
+		if (!ok) return;
+		setBusy("all");
+		try {
+			const fresh = new Map(
+				(await window.ateam.tasks.cleanupCandidates(projectId)).map((c) => [c.task.id, c]),
+			);
+			// Rows show the fresh verdict, so one that dropped out says why.
+			setItems((prev) => prev.map((i) => fresh.get(i.task.id) ?? i));
+			const ids = picks.filter((id) => fresh.get(id)?.recommended);
+			const leaving = new Set(ids);
+			// One at a time, so each row leaves the list as it goes.
+			for (const id of ids) {
+				try {
+					await window.ateam.tasks.remove({ id, deleteBranch: true });
+				} catch (e) {
+					console.error("[cleanup] delete failed", e);
+					continue;
+				}
+				dismiss(id, leaving);
+			}
+			reload();
+		} catch (e) {
+			console.error("[cleanup] rescan failed", e);
+		} finally {
+			setBusy(null);
+		}
 	};
 
 	const selected = shown.find((i) => i.task.id === selectedId) ?? null;
@@ -172,6 +240,19 @@ export function CleanupDialog({
 						{archivedCount > 0 && ` · ${archivedCount} archived`}
 					</span>
 					<span style={{ flex: 1 }} />
+					{recommendedCount > 0 && (
+						<button
+							type="button"
+							className="navbtn danger"
+							style={{ marginRight: 8 }}
+							disabled={busy !== null}
+							onClick={() => void deleteRecommended()}
+							title="Delete every recommended worktree and its branch"
+						>
+							<Trash2 size={14} strokeWidth={1.75} />
+							{busy === "all" ? "Deleting…" : `Delete ${recommendedCount} recommended`}
+						</button>
+					)}
 					<div className="cleanup-filter">
 						<button
 							type="button"
@@ -255,6 +336,7 @@ export function CleanupDialog({
 											<button
 												type="button"
 												className="navbtn"
+												disabled={busy !== null}
 												onClick={() => void setArchived(selected, false)}
 												title="Put it back on the board"
 											>
@@ -266,6 +348,7 @@ export function CleanupDialog({
 												<button
 													type="button"
 													className="navbtn"
+													disabled={busy !== null}
 													onClick={() => void setArchived(selected, true)}
 													title="Take it off the board, keeping the worktree and its conversation"
 												>
@@ -275,6 +358,7 @@ export function CleanupDialog({
 												<button
 													type="button"
 													className="navbtn"
+													disabled={busy !== null}
 													onClick={() => dismiss(selected.task.id)}
 													title="Keep this worktree and jump back into its terminal"
 												>
@@ -286,11 +370,12 @@ export function CleanupDialog({
 										<button
 											type="button"
 											className="navbtn danger"
+											disabled={busy !== null}
 											onClick={() => del(selected)}
 											title="Delete this worktree and its branch"
 										>
 											<Trash2 size={14} strokeWidth={1.75} />
-											Delete
+											{busy === "one" ? "Deleting…" : "Delete"}
 										</button>
 									</div>
 								</div>
