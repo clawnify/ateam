@@ -2406,7 +2406,7 @@ function TaskRow({
 				{tags.length > 0 && (
 					<span className="row-tags">
 						{tags.map((tag) => (
-							<span className="tag" key={tag}>
+							<span className="pill" key={tag}>
 								{tag}
 							</span>
 						))}
@@ -2604,7 +2604,7 @@ function Board({
 										{tags.length > 0 && (
 											<span className="card-tags">
 												{tags.map((tag) => (
-													<span className="tag" key={tag}>
+													<span className="pill" key={tag}>
 														{tag}
 													</span>
 												))}
