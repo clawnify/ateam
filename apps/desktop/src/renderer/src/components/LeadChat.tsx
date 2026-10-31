@@ -599,13 +599,6 @@ export function LeadChat({
 				.sort((a, b) => (b.question?.askedAt ?? 0) - (a.question?.askedAt ?? 0)),
 		[tasks],
 	);
-	// In Needs You for another reason (a finished turn that asks in prose, a
-	// prompt in its terminal): counted, not listed, so a busy board can't bury
-	// the questions; the Lead can go through them.
-	const waiting = useMemo(
-		() => tasks.filter((t) => t.column === "needs_attention" && !t.question).length,
-		[tasks],
-	);
 	const lastBlock = blocks[blocks.length - 1];
 	const toolRunning =
 		lastBlock?.kind === "tools" && lastBlock.tools.some((t) => t.result === undefined);
@@ -739,34 +732,22 @@ export function LeadChat({
 				</div>
 			</div>
 
-			{(asking.length > 0 || waiting > 0) && (
+			{/* Only questions. A task in Needs You for another reason is on the
+			    board, and one touched from this chat already replies into the
+			    thread (main/lead/follow.ts), so a count here repeated both. */}
+			{asking.length > 0 && (
 				<div className="lead-asking">
 					<div className="lead-asking-title">Waiting on you</div>
-					{asking.length > 0 && (
-						<div className="lead-asking-list">
-							{asking.map((t) => (
-								<QuestionCard
-									key={t.id}
-									task={t}
-									onOpenTask={onOpenTask}
-									onAnswer={(input) => window.ateamLead.answer(input)}
-								/>
-							))}
-						</div>
-					)}
-					{waiting > 0 && (
-						<div className="lead-waiting">
-							{waiting === 1 ? "1 other task is" : `${waiting} other tasks are`} in Needs you
-							without a question.
-							<button
-								type="button"
-								disabled={snap.busy}
-								onClick={() => send("Go through the tasks that need me: what does each one need?")}
-							>
-								Ask the Lead
-							</button>
-						</div>
-					)}
+					<div className="lead-asking-list">
+						{asking.map((t) => (
+							<QuestionCard
+								key={t.id}
+								task={t}
+								onOpenTask={onOpenTask}
+								onAnswer={(input) => window.ateamLead.answer(input)}
+							/>
+						))}
+					</div>
 				</div>
 			)}
 
