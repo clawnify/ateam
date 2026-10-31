@@ -221,7 +221,10 @@ extra sessions inside an existing task, many terminals per task as tabs (agent
 sessions or plain shells, side by side), agent spawning in PTYs (Claude Code,
 OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection,
 Mission Control grid (one tile per task, its sessions as read-only tabs; tiles
-keep their own order, drag to swap them across pages, Sync to take the sidebar's),
+keep their own order, drag to swap them across pages, Sync to take the sidebar's;
+an Auto layout that fits the live terminals each time it opens and never
+re-lays them out while you watch; each tile's +N -N opens its changes and diffs
+in place of its terminal),
 collapsible sidebar rail, image drag-drop & paste into
 agent terminals, session search (the topbar box answers in a popover listing
 matching tasks and the past sessions that discussed them, with an AI row that
