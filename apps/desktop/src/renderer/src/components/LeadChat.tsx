@@ -660,14 +660,18 @@ export function LeadChat({
 			{(asking.length > 0 || waiting > 0) && (
 				<div className="lead-asking">
 					<div className="lead-asking-title">Waiting on you</div>
-					{asking.map((t) => (
-						<QuestionCard
-							key={t.id}
-							task={t}
-							onOpenTask={onOpenTask}
-							onAnswer={(input) => window.ateamLead.answer(input)}
-						/>
-					))}
+					{asking.length > 0 && (
+						<div className="lead-asking-list">
+							{asking.map((t) => (
+								<QuestionCard
+									key={t.id}
+									task={t}
+									onOpenTask={onOpenTask}
+									onAnswer={(input) => window.ateamLead.answer(input)}
+								/>
+							))}
+						</div>
+					)}
 					{waiting > 0 && (
 						<div className="lead-waiting">
 							{waiting === 1 ? "1 other task is" : `${waiting} other tasks are`} in Needs you
