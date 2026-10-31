@@ -307,7 +307,9 @@ export function CleanupDialog({
 										{it.task.name}
 										{it.recommended && <span className="rec-dot" title={it.reason} />}
 									</span>
-									<span className="sub">{it.task.branch}</span>
+									{/* Why it is (or isn't) recommended, which until now only the
+									    dot's tooltip said. The branch is in the detail pane. */}
+									<span className="sub">{it.reason}</span>
 									<Factors item={it} now={now} />
 								</button>
 							))
