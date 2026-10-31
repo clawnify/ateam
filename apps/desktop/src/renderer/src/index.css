@@ -3786,6 +3786,44 @@ input {
 	background: transparent;
 	color: var(--text);
 }
+/* One reply of a stack (AgentStack): the body under the card's shared head. */
+.lead-agent-body {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.lead-agent-body[hidden] {
+	display: none;
+}
+.lead-agent-head > .lead-chip {
+	min-width: 0;
+}
+.lead-stack-nav {
+	display: flex;
+	flex-shrink: 0;
+	align-items: center;
+	gap: 2px;
+	margin-left: auto;
+}
+.lead-stack-nav .iconbtn {
+	width: 22px;
+	height: 22px;
+}
+/* A reply came in after the one being read. */
+.lead-stack-next {
+	position: relative;
+	display: inline-flex;
+}
+.lead-stack-dot {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--text);
+	pointer-events: none;
+}
 .lead-user-to {
 	margin-bottom: 2px;
 	font-size: 11px;
