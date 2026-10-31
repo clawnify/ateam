@@ -12,11 +12,14 @@ export function FileDiffView({
 	taskId,
 	file,
 	split,
+	closeLabel = "Back to terminal",
 	onClose,
 }: {
 	taskId: string;
 	file: string;
 	split: boolean;
+	/** Where the close button goes: the terminal, or a tile's file list. */
+	closeLabel?: string;
 	onClose: () => void;
 }) {
 	const [text, setText] = useState<string | null>(null);
@@ -42,7 +45,7 @@ export function FileDiffView({
 				<span className="fname" title={file}>
 					{file}
 				</span>
-				<IconButton icon={X} label="Back to terminal" onClick={onClose} />
+				<IconButton icon={X} label={closeLabel} onClick={onClose} />
 			</div>
 			<div className="filediff-body">
 				{text === null ? (
