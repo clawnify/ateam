@@ -3283,12 +3283,6 @@ function TaskPanel({
 					<QuestionCard task={task} />
 				</div>
 			)}
-			{task.page && task.question?.pageId !== task.page.id && (
-				<div className="panel-page">
-					<PageFrame taskId={task.id} pageId={task.page.id} title={task.page.title} collapsed />
-				</div>
-			)}
-
 			<div className={`panel-body${termDocked ? " docked-term" : ""}`}>
 				{/* Keep the terminal mounted (xterm state survives) while the
 				    changes view is open — just hide it, or dock it beside the
@@ -3385,6 +3379,12 @@ function TaskPanel({
 					</div>
 				)}
 			</div>
+
+			{task.page && task.question?.pageId !== task.page.id && (
+				<div className="panel-page">
+					<PageFrame taskId={task.id} pageId={task.page.id} title={task.page.title} collapsed />
+				</div>
+			)}
 		</section>
 	);
 }
