@@ -329,6 +329,39 @@ export function App() {
 	const [taskQuery, setTaskQuery] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [info, setInfo] = useState<string | null>(null);
+	// A task just created in the background (⇧⌘⏎ in the composer). The toast is
+	// the way into it, and its sidebar row and board card pulse once so you can
+	// see where it landed. Hovering the toast holds it open.
+	const [started, setStarted] = useState<{ taskId: string; text: string } | null>(null);
+	const [startedHeld, setStartedHeld] = useState(false);
+	const [pulseId, setPulseId] = useState<string | null>(null);
+	const announceStarted = (taskId: string, text: string) => {
+		setStartedHeld(false);
+		setStarted({ taskId, text });
+	};
+	useEffect(() => {
+		if (!started || startedHeld) return;
+		const timer = setTimeout(() => setStarted(null), 6000);
+		return () => clearTimeout(timer);
+	}, [started, startedHeld]);
+	useEffect(() => {
+		if (!pulseId) return;
+		const timer = setTimeout(() => setPulseId(null), 1700);
+		return () => clearTimeout(timer);
+	}, [pulseId]);
+	// The terminal you were last typing in. The composer opens from a button, and
+	// clicking it moves focus onto the button, so the composer can't tell where you
+	// were; a background create hands focus back here so you keep typing.
+	const lastTerminalRef = useRef<HTMLElement | null>(null);
+	useEffect(() => {
+		const onFocusIn = (e: FocusEvent) => {
+			const el = e.target;
+			if (el instanceof HTMLElement && el.classList.contains("xterm-helper-textarea"))
+				lastTerminalRef.current = el;
+		};
+		window.addEventListener("focusin", onFocusIn);
+		return () => window.removeEventListener("focusin", onFocusIn);
+	}, []);
 	// Which of a task's live sessions is showing in its panel — the active tab.
 	// The sessions themselves live in the PTY daemon; this is only the choice of
 	// which one to look at, and goes null when a task has none left.
@@ -1137,9 +1170,22 @@ export function App() {
 			}
 		});
 
-	// Create the task, open it in the current panel mode (side when on the
-	// board, full when already full-width), and launch the chosen agent with
-	// the prompt as its first instruction.
+	// Land a task in whatever the user is actually looking at: a task open
+	// full-width hands its panel to this one, the board opens it beside itself,
+	// and Mission Control just grows a tile. `panelMode` survives deselection,
+	// so "full" only counts while a task is really on screen, otherwise the
+	// board would jump to a full-width panel the user never opened.
+	const landTask = (id: string) => {
+		if (!(selectedTaskId && panelMode === "full")) setPanelMode("side");
+		setSelectedTaskId(id);
+		// Loops shows only loop-owned tasks, so a new task would land
+		// somewhere it can't be seen; every other view keeps its place.
+		if (view === "loops") setView("board");
+	};
+
+	// Create the task and launch the chosen agent with the prompt as its first
+	// instruction. `open` lands it on screen (see landTask); otherwise nothing
+	// on screen moves, and a toast and a pulse on its row say where it went.
 	const composeTask = (input: {
 		name: string;
 		prompt: string;
@@ -1149,11 +1195,15 @@ export function App() {
 		// Chosen environment: null = this Mac; an alias = that box. A box is connected
 		// and the repo cloned onto it (idempotent) before the task is created there.
 		alias: Alias;
+		open: boolean;
 	}) =>
 		run(async () => {
 			const card = activeCard;
 			if (!card) return;
 			const sourceIssue = composerIssue;
+			// Still on screen (not a closed task's, nor a hidden tab's): back to it.
+			const term = lastTerminalRef.current;
+			if (!input.open && term?.isConnected && term.offsetParent !== null) term.focus();
 			setComposerOpen(false);
 			setComposerIssue(null);
 			setComposerFiles([]);
@@ -1162,8 +1212,9 @@ export function App() {
 					(task) => task.issueUrl?.toLowerCase() === sourceIssue.url.toLowerCase(),
 				);
 				if (existing) {
-					selectFromBoard(existing.id);
 					setSelectedIssue(null);
+					if (input.open) selectFromBoard(existing.id);
+					else announceStarted(existing.id, `#${sourceIssue.number} already has a task`);
 					return;
 				}
 			}
@@ -1240,18 +1291,12 @@ export function App() {
 			// The created task's project is a member of the active card, so its tasks
 			// are already unioned into the board once loaded.
 			await loadTasks(task.projectId);
-			// Land the new task in whatever the user is actually looking at: a
-			// task open full-width hands its panel to the new one, the board
-			// opens it beside itself, and Mission Control just grows a tile.
-			// `panelMode` survives deselection, so "full" only counts while a
-			// task is really on screen — otherwise the board would jump to a
-			// full-width panel the user never opened.
-			if (!(selectedTaskId && panelMode === "full")) setPanelMode("side");
-			setSelectedTaskId(task.id);
-			// Loops shows only loop-owned tasks, so a new task would land
-			// somewhere it can't be seen; every other view keeps its place.
-			if (view === "loops") setView("board");
-			if (!created) return;
+			if (input.open) landTask(task.id);
+			else setPulseId(task.id);
+			if (!created) {
+				if (!input.open) announceStarted(task.id, `${task.name} already has a task`);
+				return;
+			}
 			const { terminalId } = await window.ateam.pty.spawnAgent({
 				taskId: task.id,
 				agentId: input.agentId,
@@ -1260,6 +1305,8 @@ export function App() {
 				files: input.files.length ? input.files : undefined,
 			});
 			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
+			// Only once the agent is really up: a failed launch shows its error instead.
+			if (!input.open) announceStarted(task.id, `Started ${task.name}`);
 		});
 
 	// Cleanup reads a shape that changed in v6, so an older box would not degrade
@@ -1351,7 +1398,7 @@ export function App() {
 								<button
 									type="button"
 									key={t.id}
-									className={`rail-tile ${t.id === sidebarSelectedId ? "active" : ""}`}
+									className={`rail-tile ${t.id === sidebarSelectedId ? "active" : ""} ${t.id === pulseId ? "just-started" : ""}`}
 									title={t.name}
 									onClick={() => toggleTask(t)}
 								>
@@ -1567,6 +1614,7 @@ export function App() {
 														task={t}
 														offline={offlineAliasOf(t) !== null}
 														selected={t.id === sidebarSelectedId}
+														pulse={t.id === pulseId}
 														onClick={() => toggleTask(t)}
 														onDelete={() => deleteTask(t)}
 														onWait={() => toggleWaiting(t)}
@@ -1583,6 +1631,7 @@ export function App() {
 													task={t}
 													offline={offlineAliasOf(t) !== null}
 													selected={t.id === sidebarSelectedId}
+													pulse={t.id === pulseId}
 													onClick={() => toggleTask(t)}
 													onDelete={() => deleteTask(t)}
 													onWait={() => toggleWaiting(t)}
@@ -1874,6 +1923,7 @@ export function App() {
 									setSelectedIssue(issue);
 								}}
 								selectedId={selectedTaskId}
+								pulseId={pulseId}
 								onSelect={(id) => {
 									setSelectedIssue(null);
 									selectFromBoard(id);
@@ -2047,6 +2097,28 @@ export function App() {
 					{error}
 				</div>
 			)}
+			{/* Box progress outranks it: the two share the toast's spot. Gone with the task
+			    (deleted) or with the project (switched away), it has nothing to open. */}
+			{started && !info && activeTasks.some((t) => t.id === started.taskId) && (
+				<output
+					className="toast info"
+					onClick={() => setStarted(null)}
+					onMouseEnter={() => setStartedHeld(true)}
+					onMouseLeave={() => setStartedHeld(false)}
+				>
+					{started.text}
+					<button
+						type="button"
+						className="toast-action"
+						onClick={() => {
+							markRead(started.taskId);
+							landTask(started.taskId);
+						}}
+					>
+						Open
+					</button>
+				</output>
+			)}
 			{info && (
 				<div className="toast info" onClick={() => setInfo(null)}>
 					{info}
@@ -2162,6 +2234,7 @@ function TaskRow({
 	task: t,
 	offline,
 	selected,
+	pulse,
 	onClick,
 	onDelete,
 	onWait,
@@ -2170,6 +2243,8 @@ function TaskRow({
 	/** Its box isn't held: the row is its last-seen state, not a live one. */
 	offline: boolean;
 	selected: boolean;
+	/** Just created in the background: blink once so it can be found. */
+	pulse: boolean;
 	onClick: () => void;
 	onDelete: () => void;
 	onWait: () => void;
@@ -2184,7 +2259,7 @@ function TaskRow({
 		<div className="tasknode-row">
 			<button
 				type="button"
-				className={`tasknode ${selected ? "selected" : ""} ${offline ? "offline" : ""}`}
+				className={`tasknode ${selected ? "selected" : ""} ${offline ? "offline" : ""} ${pulse ? "just-started" : ""}`}
 				title={offline ? "Its box is asleep or out of reach. Open it to wake the box." : undefined}
 				onClick={onClick}
 			>
@@ -2289,6 +2364,7 @@ function Board({
 	selectedIssueNumber,
 	onSelectIssue,
 	selectedId,
+	pulseId,
 	onSelect,
 	onDeselect,
 	originLabel,
@@ -2301,6 +2377,8 @@ function Board({
 	selectedIssueNumber: number | null;
 	onSelectIssue: (issue: GithubIssueDTO) => void;
 	selectedId: string | null;
+	/** A task just created in the background: its card blinks once. */
+	pulseId: string | null;
 	onSelect: (id: string) => void;
 	onDeselect: () => void;
 	/** Engine badge for a task (e.g. a box alias), or null to show none (Local). */
@@ -2372,7 +2450,7 @@ function Board({
 									// carrying the card to another column, or cards above it coming
 									// and going. Re-check from the card's final resting box.
 									onLayoutAnimationComplete={isSelected ? revealSelected : undefined}
-									className={`card ${isSelected ? "selected" : ""} ${isOffline(t) ? "offline" : ""}`}
+									className={`card ${isSelected ? "selected" : ""} ${isOffline(t) ? "offline" : ""} ${t.id === pulseId ? "just-started" : ""}`}
 									onClick={(e) => {
 										e.stopPropagation();
 										onSelect(t.id);

@@ -216,8 +216,10 @@ bun run --filter @ateam/desktop build      # production bundle
 Working: project registration (with optional `git init` for plain folders),
 worktree-per-task lifecycle, commit/push/update/merge, a GitHub-style changes
 view (aggregate diffstat → file list + side-by-side diffs), prompt-first task
-composer (pick the agent and type the first instruction in one step) reused for
-extra sessions inside an existing task, many terminals per task as tabs (agent
+composer (pick the agent and type the first instruction in one step; ⌘⏎ opens
+the new task, ⇧⌘⏎ starts it in the background and leaves you where you are, as
+does long-pressing send on the phone) reused for extra sessions inside an
+existing task, many terminals per task as tabs (agent
 sessions or plain shells, side by side), agent spawning in PTYs (Claude Code,
 OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection,
 Mission Control grid (one tile per task, its sessions as read-only tabs; tiles

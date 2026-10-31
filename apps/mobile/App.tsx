@@ -601,6 +601,9 @@ function Shell({
 	wakeError,
 	onDismissSkew,
 	connGen,
+	started,
+	onOpenStarted,
+	onDismissStarted,
 }: {
 	connColor: string;
 	projects: ProjectDTO[];
@@ -651,6 +654,10 @@ function Shell({
 	onDismissSkew: () => void;
 	/** Keys the terminal so an auto-reattach remounts it onto the fresh api. */
 	connGen: number;
+	/** Name of the task just started in the background, for the composer's snackbar. */
+	started: string | null;
+	onOpenStarted: () => void;
+	onDismissStarted: () => void;
 }) {
 	const shown = tasks.filter((t) => t.projectId === selectedProjectId);
 	// Mission Control tiles: this project's tasks that have (or had) an agent, in
@@ -836,7 +843,14 @@ function Shell({
 			)}
 
 			{!covered && (tab === "board" || tab === "home") && (
-				<Composer agents={agents} busy={creating} onSubmit={onCreate} />
+				<Composer
+					agents={agents}
+					busy={creating}
+					onSubmit={onCreate}
+					started={started}
+					onOpenStarted={onOpenStarted}
+					onDismissStarted={onDismissStarted}
+				/>
 			)}
 		</KeyboardAvoidingView>
 	);
@@ -918,6 +932,14 @@ export default function App() {
 	const [loading, setLoading] = useState(false);
 	const [creating, setCreating] = useState(false);
 	const [openTask, setOpenTask] = useState<TaskDTO | null>(null);
+	// A task started from the composer with "stay on board": the snackbar offers
+	// the way into it for a few seconds.
+	const [startedTask, setStartedTask] = useState<TaskDTO | null>(null);
+	useEffect(() => {
+		if (!startedTask) return;
+		const timer = setTimeout(() => setStartedTask(null), 6000);
+		return () => clearTimeout(timer);
+	}, [startedTask]);
 	const [openTaskFocus, setOpenTaskFocus] = useState(false);
 	const [boxTerminalOpen, setBoxTerminalOpen] = useState(false);
 	// The box version whose banner was dismissed; the banner comes back when the
@@ -1594,7 +1616,8 @@ export default function App() {
 	);
 
 	// Composer submit: create a task in the selected project, launch the agent,
-	// and open its terminal (which attaches to the just-spawned session).
+	// and open its terminal (which attaches to the just-spawned session), or,
+	// asked to stay, leave the board where it is and say so in the snackbar.
 	const onCreate = useCallback(
 		async (input: ComposerSubmit) => {
 			const api = conn.current?.api;
@@ -1617,7 +1640,8 @@ export default function App() {
 				});
 				// Task events from launch already carry newer status and agent data.
 				setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [task, ...prev]));
-				setOpenTask(task);
+				if (input.open) setOpenTask(task);
+				else setStartedTask(task);
 			} catch (err) {
 				setError(err instanceof Error ? err.message : String(err));
 			} finally {
@@ -1733,6 +1757,13 @@ export default function App() {
 				tasks={tasks}
 				loading={loading}
 				creating={creating}
+				started={startedTask?.name ?? null}
+				onOpenStarted={() => {
+					// The list copy has the launch's newer status, if it has arrived.
+					if (startedTask) setOpenTask(tasks.find((t) => t.id === startedTask.id) ?? startedTask);
+					setStartedTask(null);
+				}}
+				onDismissStarted={() => setStartedTask(null)}
 				onOpenConnection={() => {
 					setView("connect");
 					setConnectScreen("list");
