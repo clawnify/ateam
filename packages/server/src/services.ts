@@ -46,13 +46,6 @@ export interface Services {
 	 */
 	latestSession?: (agent: AgentDefinition, cwd: string) => Promise<SessionScan>;
 	/**
-	 * Would this machine's own config start an agent with every permission check
-	 * off (`skipsAskingByDefault`)? A seam for the same reason `probeAgent` is:
-	 * the real one reads the user's agent settings, and a test would otherwise be
-	 * asserting how the machine running it is configured. Defaults to the real read.
-	 */
-	skipsAsking?: (agent: AgentDefinition) => Promise<boolean>;
-	/**
 	 * In-flight `seedWorktree` calls by task id. A task's row is created (and its
 	 * card announced) as soon as the worktree exists, so its dependencies are
 	 * still landing for up to a minute afterwards; anything that needs them —
