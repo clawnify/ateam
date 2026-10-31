@@ -6,6 +6,7 @@
 import {
 	CH,
 	type ProjectDTO,
+	projectRepo,
 	type SettingsResult,
 	type TaskDTO,
 	type TaskLastReplyDTO,
@@ -44,7 +45,7 @@ const TOOLS = [
 	{
 		name: "get_board",
 		description:
-			"List the tasks on this Mac and every connected box, one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus what it waits for or asks the user. Filter to what you need: all (the default) is every task still in play, merged ones left out; needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project, merged ones included (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.",
+			"List the tasks on this Mac and every connected box, grouped under each project's name, the repo it is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its machine and its id; one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus what it waits for or asks the user. Filter to what you need: all (the default) is every task still in play, merged ones left out; needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project, merged ones included (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -300,7 +301,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		// 59-task board).
 		const lines = ["id | name | column | state | agent | updated"];
 		for (const { project, rows } of groups) {
-			const where = `${project.name} (${machineLabel(deps.machineOf(project.id))}, project ${project.id})`;
+			const where = `${project.name} (repo ${projectRepo(project)}, ${machineLabel(deps.machineOf(project.id))}, project ${project.id})`;
 			if (rows == null) {
 				lines.push("", `${where}: unreachable right now`);
 				continue;
