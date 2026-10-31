@@ -10,6 +10,7 @@ import { registerIpc } from "./ipc";
 import { type Lead, startLead } from "./lead";
 import { guardPageFrames, registerPageScheme, servePages } from "./pages";
 import { showStartupFailure } from "./startup-failure";
+import { createUpdateFlow } from "./update-flow";
 import { createWaitNotifier } from "./wait-notify";
 
 // Every live window and the project it's pinned to: null = the main
@@ -54,9 +55,8 @@ function onCheckForUpdates(): void {
 }
 
 /**
- * Auto-update from GitHub Releases (electron-updater), Sparkle-style: ask
- * before downloading (with release notes; "Skip This Version" is remembered),
- * then offer "Restart Now" once downloaded — otherwise it installs on quit.
+ * Auto-update from GitHub Releases (electron-updater). What the user sees of it
+ * (when it asks, what a download in flight shows) lives in update-flow.ts.
  * Checks at launch and every 4 hours, plus on demand via "Check for Updates…".
  */
 function setupAutoUpdate(): void {
@@ -64,111 +64,37 @@ function setupAutoUpdate(): void {
 	autoUpdater.autoDownload = false;
 
 	const skipFile = join(app.getPath("userData"), "skipped-version.txt");
-	const skippedVersion = (): string => {
-		try {
-			return readFileSync(skipFile, "utf8").trim();
-		} catch {
-			return "";
-		}
-	};
-	// "Remind Me Later" = stay quiet until the next app launch.
-	let snoozed = false;
-	// A user-initiated check reports its result (incl. "up to date") and ignores
-	// snooze/skip; background checks stay silent unless there's a fresh update.
-	let manualCheck = false;
-
-	autoUpdater.on("update-available", (info) => {
-		if (!manualCheck && (snoozed || info.version === skippedVersion())) return;
-		// Your call, in ~/.ateam/settings.json (client.autoDownloadUpdates): fetch
-		// it in the background and only ask at the end, when "Restart Now" is a
-		// real choice. Read here, not at startup, so a change takes effect on the
-		// next check without a relaunch. Skip / snooze above still win.
-		if (readSettings().settings.client.autoDownloadUpdates) {
-			void autoUpdater
-				.downloadUpdate()
-				.catch((err) => console.warn("[ateam] update download failed:", err));
-			return;
-		}
-		const notes =
-			typeof info.releaseNotes === "string" ? info.releaseNotes.replace(/<[^>]+>/g, "").trim() : "";
-		void dialog
-			.showMessageBox({
-				type: "info",
-				title: "Software Update",
-				message: `A new version of Ateam is available!`,
-				detail: `Ateam ${info.version} is now available — you have ${app.getVersion()}. Would you like to download it now?${notes ? `\n\n${notes.slice(0, 1500)}` : ""}`,
-				buttons: ["Install Update", "Remind Me Later", "Skip This Version"],
-				defaultId: 0,
-				cancelId: 1,
-			})
-			.then(({ response }) => {
-				if (response === 0) {
-					void autoUpdater
-						.downloadUpdate()
-						.catch((err) => console.warn("[ateam] update download failed:", err));
-				} else if (response === 1) {
-					snoozed = true;
-				} else {
-					try {
-						writeFileSync(skipFile, info.version, "utf8");
-					} catch {
-						/* best-effort */
-					}
+	const flow = createUpdateFlow({
+		updater: autoUpdater,
+		ask: (opts) => dialog.showMessageBox(opts),
+		// On macOS a window's progress bar is drawn on the Dock icon.
+		setProgress: (fraction) => {
+			for (const w of BrowserWindow.getAllWindows()) {
+				if (!w.isDestroyed()) w.setProgressBar(fraction);
+			}
+		},
+		autoDownload: () => readSettings().settings.client.autoDownloadUpdates,
+		currentVersion: app.getVersion(),
+		skipped: {
+			read: () => {
+				try {
+					return readFileSync(skipFile, "utf8").trim();
+				} catch {
+					return "";
 				}
-			});
+			},
+			write: (version) => {
+				try {
+					writeFileSync(skipFile, version, "utf8");
+				} catch {
+					/* best-effort */
+				}
+			},
+		},
 	});
-
-	autoUpdater.on("update-not-available", () => {
-		if (!manualCheck) return;
-		manualCheck = false;
-		void dialog.showMessageBox({
-			type: "info",
-			title: "Software Update",
-			message: "You're up to date!",
-			detail: `Ateam ${app.getVersion()} is the latest version.`,
-			buttons: ["OK"],
-		});
-	});
-
-	autoUpdater.on("error", (err) => {
-		console.warn("[ateam] update check failed:", err);
-		if (!manualCheck) return;
-		manualCheck = false;
-		void dialog.showMessageBox({
-			type: "warning",
-			title: "Software Update",
-			message: "Couldn't check for updates.",
-			detail: String(err?.message ?? err),
-			buttons: ["OK"],
-		});
-	});
-
-	autoUpdater.on("update-downloaded", (info) => {
-		void dialog
-			.showMessageBox({
-				type: "info",
-				title: "Update Ready",
-				message: `Ateam ${info.version} has been downloaded.`,
-				detail:
-					"Restart now to apply it — or keep working, and it will install when you quit. Agent terminals survive the restart.",
-				buttons: ["Restart Now", "Later"],
-				defaultId: 0,
-				cancelId: 1,
-			})
-			.then(({ response }) => {
-				if (response === 0) autoUpdater.quitAndInstall();
-			});
-	});
-
-	const check = (manual: boolean) => {
-		manualCheck = manual;
-		return autoUpdater
-			.checkForUpdates()
-			.catch((err) => console.warn("[ateam] update check failed:", err));
-	};
-	triggerUpdateCheck = () => void check(true);
-	void check(false);
-	setInterval(() => check(false), 4 * 60 * 60 * 1000);
+	triggerUpdateCheck = () => flow.check(true);
+	flow.check(false);
+	setInterval(() => flow.check(false), 4 * 60 * 60 * 1000);
 }
 
 /**

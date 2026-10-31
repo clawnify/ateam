@@ -64,6 +64,8 @@ beforeEach(() => {
 		// Overridden per-test. Defaults to "asked, nothing here", which is what an
 		// agent with no conversation in this worktree looks like.
 		latestSession: async () => ({ ok: true, id: null }),
+		// The machine running the tests leaves the permission mode to Claude.
+		skipsAsking: async () => false,
 	} as unknown as Services;
 	const project = repo.upsertProject(db, {
 		repoPath: "/tmp/repo",
@@ -94,6 +96,42 @@ describe("the launch line", () => {
 		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude" });
 		const notify = services.notifyScriptPath;
 		expect(spawned?.command).toMatch(new RegExp(`; sh '${notify}' AgentExit; exec \\S+ -l$`));
+	});
+});
+
+// One of our Sprites had Claude's settings defaulting to bypassPermissions, which
+// made a task launched with Auto off skip every check while Auto on still had
+// auto mode's.
+describe("the permission mode on a box whose Claude defaults to bypass", () => {
+	beforeEach(() => {
+		services.skipsAsking = async () => true;
+	});
+
+	it("Auto off asks", async () => {
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", prompt: "go" });
+		expect(spawned?.command).toStartWith("claude --permission-mode default --session-id ");
+	});
+
+	it("Auto on is auto mode", async () => {
+		await spawnAgentInTask(services, () => {}, {
+			taskId,
+			agentId: "claude",
+			prompt: "go",
+			yolo: true,
+		});
+		expect(spawned?.command).toStartWith("claude --permission-mode auto ");
+		expect(spawned?.command).not.toInclude("--permission-mode default");
+	});
+
+	it("a resume asks too", async () => {
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", resume: true });
+		expect(spawned?.command).toStartWith("claude --continue --permission-mode default");
+	});
+
+	it("a box that leaves the mode to Claude gets no flag", async () => {
+		services.skipsAsking = async () => false;
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", prompt: "go" });
+		expect(spawned?.command).not.toInclude("--permission-mode");
 	});
 });
 

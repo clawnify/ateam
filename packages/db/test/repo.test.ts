@@ -89,6 +89,40 @@ describe("tasks", () => {
 			);
 		});
 
+		it("takes down permission prompt cards at startup, and leaves ask_user questions", () => {
+			const projectId = seed().projectId;
+			const made = ["permission", "askUserQuestion", undefined].map((kind, i) => {
+				const t = repo.createTask(db, {
+					projectId,
+					name: `q${i}`,
+					slug: `q${i}`,
+					branch: `q${i}`,
+					baseBranch: "main",
+					worktreePath: `/wt/q${i}`,
+				});
+				repo.updateTask(db, t.id, {
+					question: {
+						id: `q${i}`,
+						askedAt: 1,
+						text: "?",
+						options: [],
+						allowText: true,
+						...(kind ? { kind: kind as "permission" | "askUserQuestion" } : {}),
+					},
+				});
+				return t.id;
+			});
+
+			repo.clearStalePermissionPrompts(db);
+			expect(made.map((id) => repo.getTask(db, id)?.question?.id ?? null)).toEqual([
+				null,
+				null,
+				"q2",
+			]);
+			// The card stays in its column: a surviving agent's dialog is still up.
+			expect(repo.getTask(db, made[0] as string)?.column).toBe("needs_attention");
+		});
+
 		it("drops the at-a-prompt mark of a task with no session open, and only those", () => {
 			const gone = seed();
 			const live = repo.createTask(db, {
