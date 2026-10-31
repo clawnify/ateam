@@ -1488,6 +1488,22 @@ input {
 	grid-template-columns: minmax(0, 1fr);
 	grid-auto-rows: 100%;
 }
+/* Nothing live: the message is centered in the whole area. As a grid item it
+   would sit in the layout's first cell, up and to the left. */
+.mc.mc-none {
+	display: flex;
+}
+.mc .empty .navbtn {
+	margin-top: 10px;
+}
+/* The first open slot of a page that isn't full: framed like a tile, with
+   New task in its middle. */
+.mc .mc-slot {
+	border: 1px solid var(--bg-elev);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
 
 /* Pager overlay: sits translucent over the bottom-right corner, full opacity
    on hover. Clicking the chevrons (or Cmd/Ctrl+Alt+Up/Down) flips to the

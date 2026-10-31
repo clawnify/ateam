@@ -2105,6 +2105,7 @@ export function App() {
 								if (t) openTask(t);
 							}}
 							onReorder={reorderMission}
+							onNewTask={activeProjectId ? newTask : undefined}
 						/>
 					) : view === "settings" ? (
 						<SettingsPanel agents={agents} />
@@ -3402,8 +3403,10 @@ function MissionControl({
 	jump,
 	onJumpMissing,
 	onReorder,
+	onNewTask,
 }: {
-	/** Which list `tasks` was drawn from; only the empty state differs. */
+	/** Which list `tasks` was drawn from; only the empty state and the New
+	 *  task slot differ. */
 	mode: "tasks" | "loops";
 	tasks: TaskDTO[];
 	/** Agent catalog, for naming a session's tab the way the task panel does. */
@@ -3426,6 +3429,8 @@ function MissionControl({
 	onJumpMissing: (taskId: string) => void;
 	/** The tiles' order changed (a tile arrived, died, or was dragged). */
 	onReorder: (tileIds: string[]) => void;
+	/** Opens the task composer. Absent when there is no project to create in. */
+	onNewTask?: () => void;
 }) {
 	// One tile per TASK, not per session: a task with an agent and two shells is
 	// one piece of work, and splaying it across three identically-titled tiles
@@ -3779,10 +3784,20 @@ function MissionControl({
 		onDragLeave: stopFlipTimer,
 	});
 
+	// Tasks only: a loop's session is started by the loop, not from here.
+	const newTaskButton =
+		mode === "tasks" && onNewTask ? (
+			<button type="button" className="navbtn" onClick={onNewTask}>
+				<Plus size={14} strokeWidth={1.75} />
+				New task
+			</button>
+		) : null;
+
 	if (tiles.length === 0) {
 		if (!loaded) return <div className="mc" data-layout={layout} />;
+		// mc-none: centered in the whole area, not in the layout's first cell.
 		return (
-			<div className="mc" data-layout={layout}>
+			<div className="mc mc-none" data-layout={layout}>
 				{mode === "loops" ? (
 					<div className="empty">
 						No loop sessions running.
@@ -3792,7 +3807,13 @@ function MissionControl({
 					<div className="empty">
 						No live agents yet.
 						<br />
-						Launch agents from the Board to watch them work side by side here.
+						Start a task to watch its agent work here.
+						{newTaskButton && (
+							<>
+								<br />
+								{newTaskButton}
+							</>
+						)}
 					</div>
 				)}
 			</div>
@@ -3962,6 +3983,19 @@ function MissionControl({
 						</motion.div>
 					);
 				})}
+				{/* A page with room left (only ever the last one) offers a new task
+				    in its first open slot; the tile that task grows takes the slot,
+				    and the offer moves on to the next one, gliding like the tiles. */}
+				{newTaskButton && visible.length < pageSize && (
+					<motion.div
+						key="mc-slot"
+						className="mc-slot"
+						layout="position"
+						transition={{ layout: springy }}
+					>
+						{newTaskButton}
+					</motion.div>
+				)}
 			</motion.div>
 			{dragging && clampedPage > 0 && (
 				<div className="mcflip top" {...flipOnHold(-1)}>
