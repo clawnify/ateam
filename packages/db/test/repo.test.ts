@@ -80,6 +80,27 @@ describe("tasks", () => {
 			expect(repo.updateTask(db, t.id, { column: "merged" })?.column).toBe("merged");
 		});
 
+		it("holds a card with a pending proposal while the agent works, until the last one ends", () => {
+			const t = seed();
+			const proposal = (id: string) => ({
+				id,
+				kind: "task" as const,
+				name: "Fix the flaky login test",
+				prompt: "Find why it flakes and fix it.",
+				proposedAt: 1,
+			});
+			repo.updateTask(db, t.id, { column: "running", agentStatus: "running" });
+			expect(repo.updateTask(db, t.id, { proposals: [proposal("a")] })?.column).toBe(
+				"needs_attention",
+			);
+			// The agent carrying on, or its turn ending, doesn't take it out.
+			expect(repo.updateTask(db, t.id, { column: "running" })?.column).toBe("needs_attention");
+			expect(
+				repo.updateTask(db, t.id, { proposals: [proposal("b")], column: "review" })?.column,
+			).toBe("needs_attention");
+			expect(repo.updateTask(db, t.id, { proposals: [], column: "review" })?.column).toBe("review");
+		});
+
 		it("holds a card whose agent is at a prompt, until it moves on", () => {
 			const t = seed();
 			repo.updateTask(db, t.id, { column: "needs_attention", agentStatus: "awaiting_input" });

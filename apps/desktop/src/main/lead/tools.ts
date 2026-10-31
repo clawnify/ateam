@@ -9,6 +9,7 @@ import {
 	type SettingsResult,
 	type TaskDTO,
 	type TaskLastReplyDTO,
+	type TaskProposalDTO,
 	type TaskQuestionDTO,
 } from "@ateam/protocol";
 import type { McpToolResult, McpToolServer } from "@ateam/server";
@@ -152,7 +153,7 @@ const TOOLS = [
 
 /** Sent on initialize; Claude Code puts it in the system prompt. */
 export const LEAD_INSTRUCTIONS =
-	"These tools drive the user's Ateam board: every task is a coding agent working in its own git worktree, on this Mac or on a box. Use get_board first, create_task to start work, send_message to steer a task's agent, and read_task to see what a task last said. A task with a question is waiting on the user: tell them, and pass their answer on with answer_question.";
+	"These tools drive the user's Ateam board: every task is a coding agent working in its own git worktree, on this Mac or on a box. Use get_board first, create_task to start work, send_message to steer a task's agent, and read_task to see what a task last said. A task with a question is waiting on the user: tell them, and pass their answer on with answer_question. A task that proposes a new task or loop is waiting for the user to create or dismiss it, which they do from that task in Ateam: tell them rather than creating it yourself.";
 
 /** Where an agent is, in the words the Lead uses (same scale as list_peers). */
 function agentState(t: TaskDTO): string {
@@ -186,6 +187,16 @@ const questionView = (q: TaskQuestionDTO) => ({
 	...(q.select === "many" ? { checklist: true } : {}),
 	...(q.options.length && !q.allowText ? { onlyTheseOptions: true } : {}),
 	askedAt: new Date(q.askedAt).toISOString(),
+});
+
+/** A task or loop the task's agent proposed, as read_task shows it. */
+const proposalView = (p: TaskProposalDTO) => ({
+	kind: p.kind,
+	name: p.name,
+	...(p.reason ? { why: p.reason } : {}),
+	prompt: p.prompt,
+	...(p.everyMinutes ? { schedule: `every ${p.everyMinutes} min` } : {}),
+	...(p.dailyAt ? { schedule: `every day at ${p.dailyAt}` } : {}),
 });
 
 /** An older engine answers a v18 method this way; say what to do about it. */
@@ -311,6 +322,9 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 				const extra = [
 					t.waitingReason ? `waits for: ${t.waitingReason}` : "",
 					t.question ? `asks the user: ${firstLine(t.question.text)}` : "",
+					t.proposals?.length
+						? `proposes: ${t.proposals.map((p) => `${p.kind} ${p.name}`).join("; ")}`
+						: "",
 				].filter(Boolean);
 				lines.push(
 					[t.id, t.name, t.column, agentState(t), t.agentId ?? "-", updated(t), ...extra].join(
@@ -417,6 +431,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 			state: agentState(task),
 			...(task.waitingReason ? { waitingFor: task.waitingReason } : {}),
 			...(task.question ? { question: questionView(task.question) } : {}),
+			...(task.proposals?.length ? { proposes: task.proposals.map(proposalView) } : {}),
 			asked: task.description,
 			lastReply: reply
 				? { at: new Date(reply.at).toISOString(), text: reply.text }

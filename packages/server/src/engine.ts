@@ -36,6 +36,7 @@ import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import { createTaskInProject, spawnAgentInTask } from "./sessions";
 import { PermissionBridge } from "./permissions";
 import { applyShowPage } from "./pages";
+import { applyPropose, clearProposal } from "./proposals";
 import { answerQuestion, applyAskUser, CLEAR_QUESTION } from "./questions";
 import { readSettings } from "./settings-file";
 import { createTurnClassifier } from "./turn-classifier";
@@ -91,6 +92,8 @@ export interface Engine {
 		answer: string | string[] | null;
 		via?: "lead";
 	}): void;
+	/** Drop a task or loop the task's agent proposed, once created or dismissed (proposals.ts). */
+	clearProposal(req: { taskId: string; proposalId: string }): void;
 	/** Keeps every task's git + PR facts fresh, not just the open one. The
 	 *  `CH.gitStatus` handler shares its throttle (see worktree-sweep.ts). */
 	readonly worktreeSweep: WorktreeSweep;
@@ -293,6 +296,11 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			const session = repo.getSessionByTerminal(db, req.callerTerminalId);
 			if (!session) return { ok: false, reason: "only an agent working in a task can show a page" };
 			return applyShowPage(db, { taskId: session.taskId, ...req }, sendTaskUpdated);
+		},
+		propose: async (req) => {
+			const session = repo.getSessionByTerminal(db, req.callerTerminalId);
+			if (!session) return { ok: false, reason: "only an agent working in a task can propose" };
+			return applyPropose(db, { taskId: session.taskId, ...req }, sendTaskUpdated);
 		},
 	});
 
@@ -683,6 +691,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				throw new Error("That prompt is no longer waiting. Answer it in the task's terminal.");
 			return answerQuestion(db, (sender, r) => peers.sendFrom(sender, r), req, sendTaskUpdated);
 		},
+		clearProposal: (req) => clearProposal(db, req, sendTaskUpdated),
 		async connectPty() {
 			try {
 				await pty.connect();

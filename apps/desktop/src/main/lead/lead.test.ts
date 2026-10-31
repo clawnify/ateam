@@ -192,6 +192,39 @@ describe("lead tools", () => {
 		expect(sent?.args[0]).toEqual({ taskId: "t1", questionId: "q1", via: "lead", answer: "Wait" });
 	});
 
+	it("says what a task proposes, on the board and in read_task", async () => {
+		const proposals = [
+			{
+				id: "p1",
+				kind: "task",
+				name: "Fix flaky test",
+				prompt: "Find why it flakes.",
+				reason: "Seen twice",
+				proposedAt: 0,
+			},
+			{
+				id: "p2",
+				kind: "loop",
+				name: "Nightly deps",
+				prompt: "Check deps.",
+				dailyAt: "09:00",
+				proposedAt: 0,
+			},
+		];
+		const proposing = TASKS.map((t) =>
+			t.id === "t1" ? { ...t, column: "needs_attention", proposals } : t,
+		);
+		const r = fakeRouter({ [CH.tasksList]: () => proposing, [CH.tasksLastReply]: () => null });
+		const tools = createLeadTools({ handle: r.handle, machineOf: () => null });
+		const board = (await tools.call("get_board", { filter: "needs_you" }))?.text ?? "";
+		expect(board).toContain("proposes: task Fix flaky test; loop Nightly deps");
+		const view = JSON.parse((await tools.call("read_task", { task: "t1" }))?.text ?? "");
+		expect(view.proposes).toEqual([
+			{ kind: "task", name: "Fix flaky test", why: "Seen twice", prompt: "Find why it flakes." },
+			{ kind: "loop", name: "Nightly deps", prompt: "Check deps.", schedule: "every day at 09:00" },
+		]);
+	});
+
 	it("filters the board to what needs the user, in compact rows", async () => {
 		const waiting = TASKS.map((t) => (t.id === "t1" ? { ...t, column: "needs_attention" } : t));
 		const extra = {

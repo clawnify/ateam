@@ -465,6 +465,15 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				liveAgentIds(db, services.pty, req.taskId),
 			);
 		},
+		// The user created a proposed task or loop, or dismissed it (proposals.ts).
+		[CH.tasksClearProposal]: async (req: { taskId: string; proposalId: string }) => {
+			engine.clearProposal(req);
+			return toTaskDTO(
+				repo.getTask(db, req.taskId)!,
+				false,
+				liveAgentIds(db, services.pty, req.taskId),
+			);
+		},
 		// The user parks a task from the sidebar (or clears the wait). The agent's
 		// path is the MCP tool; both land in applySetWaiting.
 		[CH.tasksSetWaiting]: async (id: string, wait: TaskWait) => {

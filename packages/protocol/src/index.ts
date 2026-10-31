@@ -106,7 +106,12 @@
 // method, so no gate: a v20 engine answers "Unknown method" and the toolbar
 // shows no skills for that box. skills:link always runs on this Mac's engine.
 // Settings gained `client.pinnedSkills`, read by the desktop alone.
-export const PROTOCOL_VERSION = 21;
+// v22: proposals. An agent proposes a task or a loop (the propose_task and
+// propose_loop board tools) for the user to start from a filled-in dialog.
+// TaskDTO gained `proposals`, optional, so an older engine reads as "nothing
+// proposed", and tasks:clearProposal is a new method; an older engine never has
+// a proposal to clear, so neither needs a gate.
+export const PROTOCOL_VERSION = 22;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -140,6 +145,37 @@ export interface TaskQuestionDTO {
 	 *  the decision out in HTML, and the page's own buttons can answer. Only
 	 *  while TaskDTO.page still has this id; a newer page replaces it. */
 	pageId?: string;
+}
+
+/**
+ * A task or loop an agent proposed for the user to start (the propose_task and
+ * propose_loop board tools). Nothing is created until the user confirms it in
+ * the New task or New loop dialog, filled in from these fields and editable.
+ * Cleared with tasks:clearProposal once created or dismissed; the agent is not
+ * told either way. While any is pending the card is held in Needs You.
+ */
+export interface TaskProposalDTO {
+	/** Names the proposal to clear, so a click can't clear a newer one. */
+	id: string;
+	kind: "task" | "loop";
+	/** The task's (or loop's) name. */
+	name: string;
+	/** The new agent's first instruction; for a loop, what every run does. */
+	prompt: string;
+	/** Why the agent proposes it, in a line or two, shown with the dialog. */
+	reason?: string;
+	/** Which coding agent; absent leaves it to the dialog's default. */
+	agentId?: string;
+	/** The agent suggests Auto mode. Only a suggestion: clients show it and
+	 *  leave the toggle off, since an agent's input is not the user's word. */
+	yolo?: boolean;
+	/** A loop's schedule: every so many minutes, or every day at `dailyAt`
+	 *  ("HH:MM", the user's local time). Exactly one is set on a loop. */
+	everyMinutes?: number;
+	dailyAt?: string;
+	/** A loop's follow-up, sent once after each run's first reply. */
+	followUp?: string;
+	proposedAt: number;
 }
 
 /**
@@ -425,6 +461,10 @@ export interface TaskDTO {
 	/** The page the task's agent made for the user (show_page); null when none.
 	 *  Absent on an engine older than v20. */
 	page?: TaskPageDTO | null;
+	/** Tasks and loops the task's agent proposed and the user has not yet
+	 *  created or dismissed, oldest first; null or empty when none. Absent on an
+	 *  engine older than v22. */
+	proposals?: TaskProposalDTO[] | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
 }
@@ -984,6 +1024,7 @@ export const CH = {
 	tasksGet: "tasks:get",
 	tasksMessage: "tasks:message",
 	tasksAnswerQuestion: "tasks:answerQuestion",
+	tasksClearProposal: "tasks:clearProposal",
 	tasksPage: "tasks:page",
 	peersSendFromLead: "peers:sendFromLead",
 	gitCommit: "git:commit",
@@ -1185,6 +1226,9 @@ export interface AteamApi {
 			/** The Lead chat passing on the user's answer (see questions.ts). */
 			via?: "lead";
 		}): Promise<TaskDTO>;
+		/** Drop a proposal the task's agent made, once the user created what it
+		 *  proposed or dismissed it. A proposal already gone is not an error. */
+		clearProposal(input: { taskId: string; proposalId: string }): Promise<TaskDTO>;
 		/** Preview which tasks a cleanup would remove vs keep (and why). */
 		cleanupPreview(projectId: string): Promise<CleanupReport>;
 		/** Worktrees advised for cleanup (idle/finished), with their terminals. */

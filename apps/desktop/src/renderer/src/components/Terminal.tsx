@@ -109,9 +109,16 @@ export function TerminalView({
 			/* not laid out yet */
 		}
 
+		// A terminal never takes focus by itself from under an open dialog, or the
+		// keys typed into the dialog (Esc included, which interrupts an agent) go
+		// to the agent. A proposal's dialog opens by itself, so it can be up when
+		// this terminal mounts (its session attaches a moment after the panel
+		// opens) and when the window comes back (it opened while you were away).
+		const mayTakeFocus = () => !document.querySelector(".overlay");
+
 		// Focus so keystrokes (incl. Enter) reach this PTY. In Mission Control
 		// many terminals are mounted; clicking a tile focuses the one you want.
-		term.focus();
+		if (mayTakeFocus()) term.focus();
 		const focusTerm = () => term.focus();
 		el.addEventListener("mousedown", focusTerm);
 
@@ -216,7 +223,7 @@ export function TerminalView({
 			if (hadFocus) term.textarea?.blur();
 		};
 		const onWinFocus = () => {
-			if (hadFocus) term.focus();
+			if (hadFocus && mayTakeFocus()) term.focus();
 		};
 		window.addEventListener("blur", onWinBlur);
 		window.addEventListener("focus", onWinFocus);

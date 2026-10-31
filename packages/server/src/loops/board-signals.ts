@@ -147,7 +147,7 @@ export function applySetStatus(
 		return {
 			ok: false,
 			reason:
-				"the task is waiting on the user (an open question or an agent at a prompt), so it stays in needs_attention until they answer",
+				"the task is waiting on the user (an open question, a task or loop it proposed, or an agent at a prompt), so it stays in needs_attention until they act on it",
 		};
 	}
 	repo.recordBoardChange(db, {

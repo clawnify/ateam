@@ -24,7 +24,7 @@ import {
 	X,
 	Zap,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { type Alias, aliasLabel, type EngineMember } from "../unify";
 import { AgentPicker } from "./AgentPicker";
 import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
@@ -53,8 +53,28 @@ function agoLabel(lastRunAt: number | null, now: number): string {
 /** This machine's zone: what "every day at 09:00" means for whoever sets it. */
 const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
+/** What a new loop's form starts with: a proposal from a task's agent. */
+export interface LoopDraft {
+	name: string;
+	prompt: string;
+	followUp?: string;
+	agentId?: string;
+	/** The proposing task's project: its engine is where the loop runs. */
+	projectId?: string;
+	everyMinutes?: number;
+	/** "HH:MM", local time. */
+	dailyAt?: string;
+}
+
 /** Which kind of schedule a loop has, for the picker: a preset, custom, or a calendar. */
-function scheduleKindOf(loop: LoopDTO | undefined): ScheduleKind {
+function scheduleKindOf(loop: LoopDTO | undefined, draft?: LoopDraft): ScheduleKind {
+	if (!loop && draft?.dailyAt) return { kind: "daily" };
+	if (!loop && draft?.everyMinutes) {
+		const min = draft.everyMinutes;
+		return SCHEDULE_PRESETS.some((p) => p.minutes === min)
+			? { kind: "preset", minutes: min }
+			: { kind: "custom" };
+	}
 	if (loop?.cron) {
 		return dailyTimeOf(loop.cron)
 			? { kind: "daily" }
@@ -83,6 +103,8 @@ function memberFor(members: EngineMember[], projectId: string | null): EngineMem
  */
 export function LoopForm({
 	editing,
+	draft,
+	note,
 	members,
 	agents,
 	envProtocol,
@@ -91,6 +113,10 @@ export function LoopForm({
 	onCancel,
 }: {
 	editing?: LoopDTO;
+	/** A new loop's starting values (ignored when editing). */
+	draft?: LoopDraft;
+	/** Shown above the form, e.g. who proposed this loop and why. */
+	note?: ReactNode;
 	members: EngineMember[];
 	agents: AgentDTO[];
 	envProtocol: Record<string, number>;
@@ -105,34 +131,44 @@ export function LoopForm({
 	// the user is typing.
 	const nameRef = useRef<HTMLInputElement>(null);
 	const promptRef = useRef<HTMLTextAreaElement>(null);
-	const editingLoopId = editing?.id;
+	// A proposal arrives named too, so it opens on the prompt like an edit.
+	const start = editing ? undefined : draft;
+	const named = editing?.id ?? (start ? "draft" : undefined);
 	useEffect(() => {
-		(editingLoopId ? promptRef.current : nameRef.current)?.focus();
-	}, [editingLoopId]);
-	const [name, setName] = useState(editing?.title ?? "");
-	const [prompt, setPrompt] = useState(editing?.prompt ?? "");
-	const [followUp, setFollowUp] = useState(editing?.followUp ?? "");
-	// Default environment: this Mac when it has the repo, else the first box.
+		(named ? promptRef.current : nameRef.current)?.focus();
+	}, [named]);
+	const [name, setName] = useState(editing?.title ?? start?.name ?? "");
+	const [prompt, setPrompt] = useState(editing?.prompt ?? start?.prompt ?? "");
+	const [followUp, setFollowUp] = useState(editing?.followUp ?? start?.followUp ?? "");
+	// Default environment: the proposing task's, else this Mac when it has the
+	// repo, else the first box.
 	const [projectId, setProjectId] = useState(
 		editing?.projectId ??
+			members.find((m) => m.projectId === start?.projectId)?.projectId ??
 			members.find((m) => m.alias === null)?.projectId ??
 			members[0]?.projectId ??
 			"",
 	);
 	// Only agents actually installed on this machine can run a session.
 	const usable = agents.filter((a) => a.available);
-	const [agentId, setAgentId] = useState(editing?.agentId ?? usable[0]?.id ?? "claude");
+	const [agentId, setAgentId] = useState(
+		editing?.agentId ?? start?.agentId ?? usable[0]?.id ?? "claude",
+	);
 	// A loop outlives the toolchain it was made with: the agent it is pinned to
 	// can be uninstalled while the loop keeps ticking (every run then fails at
 	// launch). The AgentPicker keeps the value and marks the pill "not installed"
 	// rather than silently showing the first agent — Save would write the missing
 	// one straight back, and this is the one screen you come to to repair the loop.
-	const [schedule, setSchedule] = useState<ScheduleKind>(() => scheduleKindOf(editing));
+	const [schedule, setSchedule] = useState<ScheduleKind>(() => scheduleKindOf(editing, start));
 	// The inputs beside the picker: minutes for Custom, a wall-clock time for daily.
 	const [everyMin, setEveryMin] = useState(
-		editing?.intervalMs ? String(Math.round(editing.intervalMs / 60_000)) : "60",
+		editing?.intervalMs
+			? String(Math.round(editing.intervalMs / 60_000))
+			: String(start?.everyMinutes ?? 60),
 	);
-	const [dailyAt, setDailyAt] = useState(dailyTimeOf(editing?.cron ?? null) ?? "09:00");
+	const [dailyAt, setDailyAt] = useState(
+		dailyTimeOf(editing?.cron ?? null) ?? start?.dailyAt ?? "09:00",
+	);
 	const [yolo, setYolo] = useState(editing?.yolo ?? false);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -253,6 +289,7 @@ export function LoopForm({
 				onKeyDown={onKeys}
 			>
 				<div className="loop-main">
+					{note}
 					<div className="comp-head">
 						<input
 							ref={nameRef}
