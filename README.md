@@ -29,8 +29,9 @@
 A lean desktop app to orchestrate a crew of AI coding agents
 (Claude Code, OpenCode, Codex) in parallel — each isolated in its own **git
 worktree**, organized by project, with built-in commit/push/pull/merge that
-**never disturbs another worktree's checkout**, and a Mission Control grid to
-watch several agents work at once.
+**never disturbs another worktree's checkout**, a Mission Control grid to
+watch several agents work at once, and a Lead chat that drives them all from
+one conversation.
 
 Identity and all GitHub operations come from the `gh` CLI.
 
@@ -230,8 +231,17 @@ worktree cleanup (every worktree listed with the facts you decide on — age, PR
 state, ahead/dirty counts — and the merged-clean-idle ones flagged as
 recommended), idle-task archiving (an open task untouched for 30 days, set in
 Settings, leaves the board, the phone and the agents' board tools but keeps its
-worktree; any activity in it, or Unarchive in Clean up, brings it back), and
-signed/notarized builds
+worktree; any activity in it, or Unarchive in Clean up, brings it back), the
+Lead chat (one conversation that reads the board on this Mac and every box,
+starts tasks, messages their agents and brings their replies back; it runs as
+your own Claude Code, with your skills, plugins and MCP servers, and asks for
+its permissions in the chat), questions agents ask you with the `ask_user`
+board tool (option cards with tradeoffs, or a checklist, answered from the
+board, the task panel or the Lead chat), Claude Code's permission prompts
+answered from Ateam (Allow, Always allow, Deny) as well as in the terminal,
+agent pages (HTML an agent makes for you with `show_page`, such as a dashboard
+or a comparison, drawn in a sandboxed frame; a question can carry one whose
+buttons answer it), and signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
 Electron main process is boot-verified with native modules.
 

@@ -725,6 +725,72 @@ describe("createDispatcher", () => {
 		expect(by(swept.id).task.prState).toBe("merged");
 	});
 
+	// The row's "N changed" came from the stored git snapshot, which a probe of a
+	// vanished folder never updates (and which also counts committed differences
+	// from main), while `recommended` reads `git status` live. So a recommended
+	// row could claim 210 changes. Where the verdict looked at the tree, the row
+	// must carry the same count.
+	it("gives each merged row the change count the verdict saw, not a stale snapshot", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "ateam-cleanup-count-"));
+		try {
+			const db = createTestDb();
+			const { engine } = makeEngine(db);
+			const d = createDispatcher(engine);
+			const project = repo.upsertProject(db, { repoPath: dir, name: "D", defaultBranch: "main" });
+			const stale = { ahead: 3, behind: 0, dirty: 210, updatedAt: 1 };
+			const mk = (name: string, worktreePath: string, dirty: number) => {
+				const t = repo.createTask(db, {
+					projectId: project!.id,
+					name,
+					slug: name,
+					branch: name,
+					baseBranch: "main",
+					worktreePath,
+				});
+				repo.updateTask(db, t.id, {
+					column: "merged",
+					prState: "merged",
+					gitStatus: { ...stale, dirty },
+				});
+				return t;
+			};
+			const vanished = mk("vanished", join(dir, "gone"), 210);
+			const cleanTree = join(dir, "clean");
+			await gitFor(dir).raw(["init", "-q", cleanTree]);
+			const clean = mk("clean", cleanTree, 2);
+			const dirtyTree = join(dir, "dirty");
+			await gitFor(dir).raw(["init", "-q", dirtyTree]);
+			await Bun.write(join(dirtyTree, "a.txt"), "a");
+			await Bun.write(join(dirtyTree, "b.txt"), "b");
+			const dirty = mk("dirty", dirtyTree, 0);
+
+			const list = (await d.handle(CH.tasksCleanupCandidates, [project!.id])) as Array<{
+				task: { id: string; gitStatus: { dirty: number } | null };
+				recommended: boolean;
+				reason: string;
+			}>;
+			const by = (id: string) => list.find((c) => c.task.id === id)!;
+
+			// Folder already gone: nothing to lose, and no count to show.
+			expect(by(vanished.id)).toMatchObject({
+				recommended: true,
+				reason: "merged, worktree folder already gone",
+			});
+			expect(by(vanished.id).task.gitStatus).toBeNull();
+			// On disk and clean: the stored 2 gives way to what git status says.
+			expect(by(clean.id).recommended).toBe(true);
+			expect(by(clean.id).task.gitStatus?.dirty).toBe(0);
+			// On disk and dirty: the count is the real one, and the reason says it.
+			expect(by(dirty.id)).toMatchObject({
+				recommended: false,
+				reason: "2 uncommitted/untracked changes",
+			});
+			expect(by(dirty.id).task.gitStatus?.dirty).toBe(2);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	// A brand-new project from a client with no native folder dialog (the phone): the
 	// folder doesn't exist yet, so register+init must create it before git-initing.
 	it("creates the folder and inits a repo when registering a brand-new project", async () => {

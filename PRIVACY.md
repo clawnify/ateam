@@ -1,6 +1,6 @@
 # Privacy Policy — Ateam & Ateam Go
 
-**Effective date: October 27, 2026**
+**Effective date: October 31, 2026**
 
 Ateam (the desktop app) and Ateam Go (the iOS companion app) are local-first
 tools published by Clawnify. This policy describes what data the apps handle,
@@ -87,8 +87,22 @@ of the AI providers you use:
 - Anthropic (Claude Code): https://www.anthropic.com/legal/privacy
 - OpenAI (Codex): https://openai.com/policies/privacy-policy
 
+The desktop app's Lead chat is one more of these agents: it runs the Claude
+Code you installed, under your own account and with your own Claude Code
+settings, plugins and connectors, exactly as it runs in your terminal.
+
 GitHub operations (push, pull, PRs) are performed by the `gh` CLI on your own
 machine, under your own GitHub authentication.
+
+## Pages that agents make
+
+An agent can show you an HTML page it made, such as a dashboard or a
+comparison. The desktop app draws it in a sandboxed frame that cannot read
+anything else in Ateam. The page can, however, load scripts, styles, fonts and
+images from public web addresses (for example a library from a CDN such as
+jsDelivr), so opening it makes your computer request those files from the
+sites the page names, as a web browser would. Which sites those are is decided
+by the agent that wrote the page.
 
 ## Demo mode
 
