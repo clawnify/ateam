@@ -8,10 +8,13 @@ import {
 	ChevronRight,
 	CircleHelp,
 	CornerDownRight,
+	Paperclip,
 	Square,
 	SquarePen,
+	X,
 } from "lucide-react";
 import {
+	type ClipboardEvent,
 	type FormEvent,
 	type KeyboardEvent,
 	type ReactNode,
@@ -23,7 +26,9 @@ import {
 	useState,
 } from "react";
 import type {
+	LeadAttachResult,
 	LeadEvent,
+	LeadFile,
 	LeadItem,
 	LeadPermissionAnswer,
 	LeadSnapshot,
@@ -315,6 +320,63 @@ const cleanError = (e: unknown) =>
 		"",
 	);
 
+/** Previews by path, fetched once: an attachment never changes. */
+const thumbs = new Map<string, Promise<string | null>>();
+
+function useThumb(file: LeadFile): string | null {
+	const [src, setSrc] = useState<string | null>(null);
+	useEffect(() => {
+		if (!file.image) return;
+		let live = true;
+		let p = thumbs.get(file.path);
+		if (!p) {
+			p = window.ateamLead.thumb(file.path).catch(() => null);
+			thumbs.set(file.path, p);
+		}
+		void p.then((s) => live && setSrc(s));
+		return () => {
+			live = false;
+		};
+	}, [file.path, file.image]);
+	return src;
+}
+
+const sizeLabel = (n: number) =>
+	n < 1024 * 1024
+		? `${Math.max(1, Math.round(n / 1024))} KB`
+		: `${Math.round((n / 1024 / 1024) * 10) / 10} MB`;
+
+/** An attached file: a thumbnail for an image, a chip for anything else (or
+ *  an image whose copy is gone). */
+function Attachment({ file, onRemove }: { file: LeadFile; onRemove?: () => void }) {
+	const src = useThumb(file);
+	const remove = onRemove && (
+		<button
+			type="button"
+			className="fc-x"
+			aria-label={`Remove ${file.name}`}
+			title="Remove"
+			onClick={onRemove}
+		>
+			<X size={12} strokeWidth={2.25} />
+		</button>
+	);
+	if (src)
+		return (
+			<span className="lead-thumb" title={file.name}>
+				<img src={src} alt={file.name} />
+				{remove}
+			</span>
+		);
+	return (
+		<span className="file-chip" title={file.path}>
+			<span className="fc-name">{file.name}</span>
+			<span className="lead-file-size">{sizeLabel(file.size)}</span>
+			{remove}
+		</span>
+	);
+}
+
 /** A task named in the thread; opens it when it is on a board this window has loaded. */
 function TaskChip({
 	task,
@@ -528,6 +590,8 @@ function Thinking() {
  *  chat moves between the Lead tab and the sidebar by unmounting one and
  *  mounting the other, and hiding the sidebar unmounts it too. */
 let unsent = "";
+/** The files attached to that draft, kept the same way. */
+let unsentFiles: LeadFile[] = [];
 
 export function LeadChat({
 	tasks,
@@ -555,6 +619,16 @@ export function LeadChat({
 		),
 		[tasks, onOpenTask],
 	);
+	// Attached to the next message; already copied into the Lead's folder.
+	const [files, setFilesState] = useState<LeadFile[]>(() => unsentFiles);
+	const setFiles = (update: (cur: LeadFile[]) => LeadFile[]) =>
+		setFilesState((cur) => {
+			unsentFiles = update(cur);
+			return unsentFiles;
+		});
+	// Why an attach or a send didn't go through, under the composer.
+	const [attachNote, setAttachNote] = useState<string | null>(null);
+	const [dragging, setDragging] = useState(false);
 	const scroller = useRef<HTMLDivElement>(null);
 	const thread = useRef<HTMLDivElement>(null);
 	const input = useRef<HTMLTextAreaElement>(null);
@@ -603,11 +677,56 @@ export function LeadChat({
 	const toolRunning =
 		lastBlock?.kind === "tools" && lastBlock.tools.some((t) => t.result === undefined);
 
-	const send = (body = text) => {
-		if (!body.trim()) return;
+	const send = (body = text, attach = files) => {
+		if (!body.trim() && !attach.length) return;
 		pinned.current = true;
-		void window.ateamLead.send(body);
+		window.ateamLead
+			.send(
+				body,
+				attach.map((f) => f.path),
+			)
+			.catch((e) => setAttachNote(cleanError(e)));
 		setText("");
+		if (attach.length) setFiles(() => []);
+		setAttachNote(null);
+	};
+
+	const took = (r: LeadAttachResult) => {
+		setFiles((cur) => [...cur, ...r.files]);
+		setAttachNote(r.failed.length ? r.failed.join(" ") : null);
+		input.current?.focus();
+	};
+	/** Files from a drop or a paste: those on disk by their path, the rest (a
+	 *  screenshot, an image dragged from a page) by their bytes. */
+	const attachFiles = async (list: File[]) => {
+		const paths = list.map((f) => window.ateam.utils.pathForFile(f));
+		const result: LeadAttachResult = { files: [], failed: [] };
+		try {
+			const onDisk = paths.filter(Boolean);
+			if (onDisk.length) {
+				const r = await window.ateamLead.attach(onDisk);
+				result.files.push(...r.files);
+				result.failed.push(...r.failed);
+			}
+			for (const [i, f] of list.entries()) {
+				if (paths[i]) continue;
+				const data = new Uint8Array(await f.arrayBuffer());
+				result.files.push(await window.ateamLead.attachBytes(f.name, data));
+			}
+		} catch (e) {
+			result.failed.push(cleanError(e));
+		}
+		took(result);
+	};
+	const pickFiles = () =>
+		void window.ateamLead.attach(null).then(took, (e) => setAttachNote(cleanError(e)));
+	// A copied screenshot or Finder file arrives as files with no text; text
+	// pastes as text.
+	const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+		const dt = e.clipboardData;
+		if (dt.getData("text/plain") || dt.files.length === 0) return;
+		e.preventDefault();
+		void attachFiles(Array.from(dt.files));
 	};
 	const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
 		if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -617,7 +736,25 @@ export function LeadChat({
 	};
 
 	return (
-		<div className="lead">
+		// biome-ignore lint/a11y/noStaticElementInteractions: a file dropped anywhere on the chat attaches it; the paperclip does the same from the keyboard
+		<div
+			className="lead"
+			onDragOver={(e) => {
+				if (!e.dataTransfer.types.includes("Files")) return;
+				e.preventDefault();
+				setDragging(true);
+			}}
+			onDragLeave={(e) => {
+				if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+			}}
+			onDrop={(e) => {
+				setDragging(false);
+				if (!e.dataTransfer.files.length) return;
+				e.preventDefault();
+				e.stopPropagation();
+				void attachFiles(Array.from(e.dataTransfer.files));
+			}}
+		>
 			{onHide ? (
 				// The sidebar's top strip, level with the top bar beside it. Its hide
 				// toggle sits where the top bar's show toggle was, so the button
@@ -674,7 +811,7 @@ export function LeadChat({
 							</p>
 							<div className="lead-suggest">
 								{SUGGESTIONS.map((s) => (
-									<button type="button" key={s} onClick={() => send(s)}>
+									<button type="button" key={s} onClick={() => send(s, [])}>
 										{s}
 									</button>
 								))}
@@ -687,6 +824,13 @@ export function LeadChat({
 						) : b.item.kind === "user" ? (
 							<div key={b.item.id} className="lead-user">
 								{b.item.to && <div className="lead-user-to">to {b.item.to.name}</div>}
+								{b.item.files?.length ? (
+									<div className="lead-files">
+										{b.item.files.map((f) => (
+											<Attachment key={f.path} file={f} />
+										))}
+									</div>
+								) : null}
 								{b.item.text}
 							</div>
 						) : b.item.kind === "agent" ? (
@@ -752,7 +896,20 @@ export function LeadChat({
 			)}
 
 			<div className="lead-composer">
-				<div className="lead-box">
+				{attachNote && <div className="lead-attach-note">{attachNote}</div>}
+				<div className={`lead-box ${dragging ? "dropping" : ""}`}>
+					{files.length > 0 && (
+						<div className="lead-files">
+							{files.map((f) => (
+								<Attachment
+									key={f.path}
+									file={f}
+									onRemove={() => setFiles((cur) => cur.filter((x) => x.path !== f.path))}
+								/>
+							))}
+						</div>
+					)}
+					<IconButton icon={Paperclip} label="Attach files" size={15} onClick={pickFiles} />
 					<textarea
 						ref={input}
 						value={text}
@@ -761,6 +918,7 @@ export function LeadChat({
 						aria-label="Message the Lead"
 						onChange={(e) => setText(e.target.value)}
 						onKeyDown={onKey}
+						onPaste={onPaste}
 					/>
 					{snap.busy ? (
 						<button
@@ -778,7 +936,7 @@ export function LeadChat({
 							className="lead-send"
 							title="Send"
 							aria-label="Send"
-							disabled={!text.trim()}
+							disabled={!text.trim() && !files.length}
 							onClick={() => send()}
 						>
 							<ArrowUp size={14} />
