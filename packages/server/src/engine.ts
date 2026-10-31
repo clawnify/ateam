@@ -677,12 +677,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		answerQuestion: (req) => {
 			// A permission prompt is answered by resolving the hook that holds it,
 			// not by a message: the agent is mid-turn, waiting on exactly this.
-			if (permissions.holds(req.questionId)) {
-				const answer = Array.isArray(req.answer) ? (req.answer[0] ?? null) : req.answer;
-				return permissions.answer(req.questionId, answer);
-			}
+			if (permissions.holds(req.questionId)) return permissions.answer(req.questionId, req.answer);
 			const q = repo.getTask(db, req.taskId)?.question;
-			if (q?.kind === "permission")
+			if (q?.kind === "permission" || q?.kind === "askUserQuestion")
 				throw new Error("That prompt is no longer waiting. Answer it in the task's terminal.");
 			return answerQuestion(db, (sender, r) => peers.sendFrom(sender, r), req, sendTaskUpdated);
 		},
