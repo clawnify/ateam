@@ -70,6 +70,7 @@ import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } fr
 import { searchSessions } from "./session-search";
 import { createTaskInProject, type SpawnAgentInput, shell, spawnAgentInTask } from "./sessions";
 import { readSettings, settingsPath, updateSettings } from "./settings-file";
+import { linkSkill, listSkills } from "./skills";
 import { applySetWaiting, clearWaiting } from "./waits";
 
 /**
@@ -170,9 +171,13 @@ export function createDispatcher(engine: Engine): Dispatcher {
 	// verdict as advice, because whether a worktree is worth keeping turns on
 	// factors only the user weighs — how stale it is, whether its PR landed,
 	// whether the leftover dirt matters.
-	async function cleanupVerdict(
-		task: Task,
-	): Promise<{ recommended: boolean; reason: string; live: boolean }> {
+	async function cleanupVerdict(task: Task): Promise<{
+		recommended: boolean;
+		reason: string;
+		live: boolean;
+		/** What `git status` counted, null if unreadable; absent when not probed. */
+		changed?: number | null;
+	}> {
 		const live = repo.listSessionsByTask(db, task.id).some((s) => services.pty.has(s.terminalId));
 		const isMerged = task.column === "merged" || task.prState === "merged";
 		if (!isMerged) return { recommended: false, reason: "not merged", live };
@@ -183,14 +188,26 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		// worktree directory is gone (deleted by hand, or pruned elsewhere), and
 		// an unguarded throw here would fail the entire candidate listing. A
 		// vanished tree has nothing left to lose, so it stays sweepable.
-		let dirty = false;
+		let changed: number | null = null;
 		try {
-			dirty = (await gitFor(task.worktreePath).raw(["status", "--porcelain"])).trim() !== "";
+			const out = (await gitFor(task.worktreePath).raw(["status", "--porcelain"])).trim();
+			changed = out === "" ? 0 : out.split("\n").length;
 		} catch {
-			dirty = false;
+			/* unreadable: stays null */
 		}
-		if (dirty) return { recommended: false, reason: "uncommitted/untracked changes", live };
-		return { recommended: true, reason: "merged, clean, no live session", live };
+		if (changed) {
+			return {
+				recommended: false,
+				reason: `${changed} uncommitted/untracked change${changed === 1 ? "" : "s"}`,
+				live,
+				changed,
+			};
+		}
+		const reason =
+			changed === null && !existsSync(task.worktreePath)
+				? "merged, worktree folder already gone"
+				: "merged, clean, no live session";
+		return { recommended: true, reason, live, changed };
 	}
 
 	// A task is removable by the unattended sweep ONLY when `cleanupVerdict`
@@ -501,8 +518,17 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				const live = repo
 					.listSessionsByTask(db, task.id)
 					.find((s) => services.pty.has(s.terminalId));
+				// The stored snapshot can be weeks stale (a probe of a vanished folder
+				// keeps its last value) and counts committed differences from base
+				// too, so a recommended row could claim 210 changes. Where the verdict
+				// read the tree, the row shows what it read.
+				const dto = toTaskDTO(task);
+				if (v.changed === null) dto.gitStatus = null;
+				else if (v.changed !== undefined && dto.gitStatus) {
+					dto.gitStatus = { ...dto.gitStatus, dirty: v.changed };
+				}
 				out.push({
-					task: toTaskDTO(task),
+					task: dto,
 					terminalId: live?.terminalId ?? null,
 					recommended: v.recommended,
 					reason: v.reason,
@@ -654,6 +680,26 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		// machine that ran the agent, so a box searches its own history.
 		[CH.searchSessions]: async (input: { projectId: string; query: string; ai?: boolean }) =>
 			searchSessions(services, input),
+
+		// ---- skills ----
+		// What the agent in a terminal can invoke, read from that agent's own
+		// folders on this machine (see skills.ts). Keyed by terminal because the
+		// answer depends on the agent AND the folder it runs in (project skills).
+		[CH.skillsList]: async (terminalId: string) => {
+			const session = repo.getSessionByTerminal(db, terminalId);
+			if (!session || session.agentId === "shell") return [];
+			const task = repo.getTask(db, session.taskId);
+			const root = task?.worktreePath ?? session.cwd;
+			// The conversation: minted by Ateam for Claude, else the id the agent's
+			// own hooks last reported from this terminal (Codex).
+			const sessionId =
+				session.agentSessionId ?? repo.latestReportedAgentSessionId(db, terminalId);
+			return listSkills(session.agentId, { cwd: session.cwd || root, root, sessionId });
+		},
+		// Writes into this machine's agent skill folders. The desktop routes it to
+		// its own engine only: the picked path is a path on the Mac.
+		[CH.skillsLink]: async (input: { path: string; dryRun?: boolean }) =>
+			linkSkill(input.path, { dryRun: input.dryRun }),
 
 		// ---- system: connect-time handshake ----
 		// The client calls this first over a fresh transport and checks

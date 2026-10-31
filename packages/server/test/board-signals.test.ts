@@ -97,6 +97,30 @@ describe("applySetStatus — endpoint integration (guardrail + audit + db)", () 
 		expect(repo.listBoardChanges(db, { taskId: t.id })[0].source).toBe("session");
 	});
 
+	it("refuses a self-move while the task waits on the user, and records nothing", () => {
+		const t = makeTask(db, "running");
+		repo.createSession(db, {
+			taskId: t.id,
+			agentId: "claude",
+			terminalId: "term-self",
+			cwd: t.worktreePath,
+			pid: process.pid,
+		});
+		repo.updateTask(db, t.id, {
+			question: { id: "q1", askedAt: 1, text: "Deploy?", options: [], allowText: true },
+		});
+		const r = applySetStatus(
+			db,
+			{ taskId: t.id, to: "review", reason: "done", callerTerminalId: "term-self" },
+			onUpdated,
+		);
+		expect(r.ok).toBe(false);
+		expect(r.reason).toContain("waiting on the user");
+		expect(repo.getTask(db, t.id)?.column).toBe("needs_attention");
+		expect(repo.listBoardChanges(db, { taskId: t.id })).toHaveLength(0);
+		expect(updated).toEqual([]);
+	});
+
 	it("forbids a session from moving a DIFFERENT task", () => {
 		const mine = makeTask(db, "running");
 		const other = repo.createTask(db, {

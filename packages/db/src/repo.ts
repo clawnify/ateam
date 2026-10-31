@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, notExists } from "drizzle-orm";
 import {
 	agentEvents,
 	agentSessions,
@@ -23,6 +23,28 @@ import {
 	tasks,
 } from "./schema";
 import type { AteamDb } from "./types";
+
+/**
+ * `patch` with its column held in Needs You while the task waits on the user
+ * (see updateTask). Reads the row only for a write that could move it.
+ */
+function holdForUser(db: AteamDb, id: string, patch: Partial<NewTask>): Partial<NewTask> {
+	if (patch.column === undefined && patch.question === undefined && patch.agentStatus === undefined)
+		return patch;
+	if (patch.column === "needs_attention" || patch.column === "merged") return patch;
+	const now = db
+		.select({ column: tasks.column, question: tasks.question, agentStatus: tasks.agentStatus })
+		.from(tasks)
+		.where(eq(tasks.id, id))
+		.get();
+	if (!now) return patch;
+	const column = patch.column ?? now.column;
+	if (column === "needs_attention" || column === "merged") return patch;
+	const question = patch.question === undefined ? now.question : patch.question;
+	const agentStatus = patch.agentStatus === undefined ? now.agentStatus : patch.agentStatus;
+	const waiting = question != null || agentStatus === "awaiting_input";
+	return waiting ? { ...patch, column: "needs_attention" } : patch;
+}
 
 /**
  * Typed data-access layer over the Ateam db. Pure functions taking a `AteamDb`
@@ -113,12 +135,38 @@ export const repo = {
 		return db.select().from(tasks).where(eq(tasks.id, id)).get();
 	},
 
+	/**
+	 * Patch a task, keeping the board's one rule: a task waiting on the user is
+	 * in Needs You. It waits while it has an open question (ask_user, or a
+	 * permission prompt passed to Ateam) or while its agent sits at a prompt, and
+	 * until then a write that asks for another column lands in needs_attention.
+	 * Only Done overrides it. Kept here because this is the only write to a
+	 * task's column, so no caller can forget it, and the board, the phone, the
+	 * Lead's get_board and list_peers all mean the same by "needs you".
+	 */
 	updateTask(db: AteamDb, id: string, patch: Partial<NewTask>) {
 		db.update(tasks)
-			.set({ ...patch, updatedAt: Date.now() })
+			.set({ ...holdForUser(db, id, patch), updatedAt: Date.now() })
 			.where(eq(tasks.id, id))
 			.run();
 		return repo.getTask(db, id);
+	},
+
+	/**
+	 * Tasks marked as having an agent at a prompt with no session open. An exit
+	 * once settled that mark only for a card in progress, so a card whose agent
+	 * ended in Needs You kept it, and updateTask would hold the card there for
+	 * good. A task with a session still open is the strand reconcile's to settle.
+	 */
+	clearStrandedPrompts(db: AteamDb) {
+		const open = db
+			.select({ id: agentSessions.id })
+			.from(agentSessions)
+			.where(and(eq(agentSessions.taskId, tasks.id), isNull(agentSessions.exitedAt)));
+		db.update(tasks)
+			.set({ agentStatus: "stopped" })
+			.where(and(eq(tasks.agentStatus, "awaiting_input"), notExists(open)))
+			.run();
 	},
 
 	/**
@@ -281,6 +329,23 @@ export const repo = {
 		},
 	) {
 		return db.insert(agentEvents).values(e).returning().get();
+	},
+
+	/**
+	 * The conversation id the agent itself last reported from this terminal's
+	 * hooks: how a harness that mints its own id (Codex) gets named at all.
+	 */
+	latestReportedAgentSessionId(db: AteamDb, terminalId: string): string | null {
+		return (
+			db
+				.select({ id: agentEvents.rawAgentSessionId })
+				.from(agentEvents)
+				.where(
+					and(eq(agentEvents.terminalId, terminalId), isNotNull(agentEvents.rawAgentSessionId)),
+				)
+				.orderBy(desc(agentEvents.createdAt))
+				.get()?.id ?? null
+		);
 	},
 
 	// ---- settings (single row, id=1) ----
