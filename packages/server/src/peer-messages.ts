@@ -36,6 +36,7 @@
 import { getAgent } from "@ateam/agents";
 import type { AgentSession, AteamDb, PeerMessage, Task } from "@ateam/db";
 import { repo } from "@ateam/db";
+import { projectRepo } from "@ateam/protocol";
 
 /** Turns two tasks may trade inside HOP_WINDOW_MS before a human has to step in. */
 export const MAX_HOPS = 12;
@@ -158,6 +159,8 @@ export interface PeerView {
 	taskId: string;
 	name: string;
 	project: string;
+	/** What the project is a clone of (projectRepo): `owner/name`, or its path. */
+	repo: string;
 	branch: string;
 	agent: string | null;
 	/** working · needs_you · idle · not_running */
@@ -239,6 +242,7 @@ export class PeerMessenger {
 					taskId: task.id,
 					name: task.name,
 					project: project.name,
+					repo: projectRepo(project),
 					branch: task.branch,
 					agent: live?.agentId ?? task.agentId ?? null,
 					state: !live
