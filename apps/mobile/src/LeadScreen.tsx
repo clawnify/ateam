@@ -13,7 +13,6 @@ import {
 	type LeadAgentItem,
 	type LeadBlock,
 	type LeadClient,
-	type LeadFile,
 	type LeadItem,
 	type LeadPermissionAnswer,
 	type LeadSnapshot,
@@ -27,7 +26,6 @@ import {
 	toLeadBlocks,
 } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
-import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
 	ActivityIndicator,
@@ -42,8 +40,14 @@ import {
 	View,
 } from "react-native";
 import { AgentIcon } from "./AgentIcon";
+import {
+	AttachmentStrip,
+	chooseAttachments,
+	filesToLead,
+	type PickedFile,
+	previews,
+} from "./attach";
 import { LeadMarkdown } from "./LeadMarkdown";
-import { attachmentName } from "./lead-attach";
 import { type QuestionAnswer, QuestionCard } from "./QuestionCard";
 import { C, CONTENT_MAX } from "./theme";
 
@@ -55,16 +59,10 @@ const SUGGESTIONS = [
 	"What did the last finished task say?",
 ];
 
-interface Pending {
-	file: LeadFile;
-	uri: string;
-}
-
 // Kept across tab switches (the screen unmounts) and reconnects, like the
-// desktop's unsent message. Previews by the box path of a photo sent from here.
+// desktop's unsent message. Photos go up to the box when the message is sent.
 let draftText = "";
-let draftFiles: Pending[] = [];
-const previews = new Map<string, string>();
+let draftFiles: PickedFile[] = [];
 
 const cleanError = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -520,14 +518,14 @@ export function LeadScreen({
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [reload, setReload] = useState(0);
 	const [text, setTextState] = useState(draftText);
-	const [files, setFilesState] = useState<Pending[]>(draftFiles);
+	const [files, setFilesState] = useState<PickedFile[]>(draftFiles);
 	const [attaching, setAttaching] = useState(false);
 	const [note, setNote] = useState<string | null>(null);
 	const setText = (t: string) => {
 		draftText = t;
 		setTextState(t);
 	};
-	const setFiles = (f: Pending[]) => {
+	const setFiles = (f: PickedFile[]) => {
 		draftFiles = f;
 		setFilesState(f);
 	};
@@ -604,10 +602,9 @@ export function LeadScreen({
 		setFiles([]);
 		setNote(null);
 		try {
-			await lead.send(
-				body,
-				attach.map((f) => f.file.path),
-			);
+			if (attach.length) setAttaching(true);
+			const paths = await filesToLead(lead, attach).finally(() => setAttaching(false));
+			await lead.send(body, paths);
 		} catch (e) {
 			// Put it back rather than lose it.
 			setText(body);
@@ -618,38 +615,9 @@ export function LeadScreen({
 
 	const attach = async () => {
 		setNote(null);
-		let res: ImagePicker.ImagePickerResult;
-		try {
-			res = await ImagePicker.launchImageLibraryAsync({
-				mediaTypes: ["images"],
-				base64: true,
-				quality: 0.7,
-				allowsMultipleSelection: true,
-				selectionLimit: 5,
-				// JPEG rather than HEIC: the Lead's agent can read a JPEG.
-				preferredAssetRepresentationMode:
-					ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
-			});
-		} catch (e) {
-			setNote(cleanError(e));
-			return;
-		}
-		if (res.canceled) return;
-		setAttaching(true);
-		const added: Pending[] = [];
-		try {
-			for (const a of res.assets) {
-				if (!a.base64) continue;
-				const file = await lead.attachBytes(attachmentName(a), a.base64);
-				previews.set(file.path, a.uri);
-				added.push({ file, uri: a.uri });
-			}
-		} catch (e) {
-			setNote(cleanError(e));
-		} finally {
-			setFiles([...draftFiles, ...added]);
-			setAttaching(false);
-		}
+		const picked = await chooseAttachments();
+		if (picked.files.length) setFiles([...draftFiles, ...picked.files]);
+		setNote(picked.note);
 	};
 
 	const newConversation = () =>
@@ -732,23 +700,10 @@ export function LeadScreen({
 
 			<View style={styles.composer}>
 				{note && <Text style={[styles.errorText, styles.note]}>{note}</Text>}
-				{files.length > 0 && (
-					<ScrollView horizontal style={styles.pending} contentContainerStyle={styles.gapRow}>
-						{files.map((f) => (
-							<View key={f.file.path}>
-								<Image source={{ uri: f.uri }} style={styles.thumb} />
-								<Pressable
-									style={styles.unattach}
-									onPress={() => setFiles(draftFiles.filter((x) => x.file.path !== f.file.path))}
-									hitSlop={8}
-									accessibilityLabel={`Remove ${f.file.name}`}
-								>
-									<Feather name="x" size={11} color={INK_ON_WHITE} />
-								</Pressable>
-							</View>
-						))}
-					</ScrollView>
-				)}
+				<AttachmentStrip
+					files={files}
+					onRemove={(f) => setFiles(draftFiles.filter((x) => x !== f))}
+				/>
 				<View style={styles.box}>
 					<Pressable
 						onPress={() => void attach()}
@@ -756,7 +711,7 @@ export function LeadScreen({
 						hitSlop={8}
 						style={styles.boxIcon}
 						accessibilityRole="button"
-						accessibilityLabel="Attach photos"
+						accessibilityLabel="Attach photos or files"
 					>
 						{attaching ? (
 							<ActivityIndicator size="small" color={C.muted} />
@@ -856,7 +811,6 @@ const styles = StyleSheet.create({
 	},
 	suggestionText: { color: C.ink, fontSize: 14 },
 	gap: { gap: 8 },
-	gapRow: { gap: 8 },
 	flex: { flex: 1 },
 	chip: {
 		flexDirection: "row",
@@ -986,18 +940,6 @@ const styles = StyleSheet.create({
 		gap: 6,
 	},
 	note: { paddingHorizontal: 4 },
-	pending: { flexGrow: 0 },
-	unattach: {
-		position: "absolute",
-		top: -4,
-		right: -4,
-		width: 18,
-		height: 18,
-		borderRadius: 9,
-		backgroundColor: C.ink,
-		alignItems: "center",
-		justifyContent: "center",
-	},
 	box: {
 		flexDirection: "row",
 		alignItems: "flex-end",
