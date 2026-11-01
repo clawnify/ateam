@@ -11,6 +11,7 @@
 import type {
 	AgentDTO,
 	AteamApi,
+	LeadClient,
 	LoopDTO,
 	ProjectDTO,
 	ProviderDefinition,
@@ -19,6 +20,7 @@ import type {
 import {
 	activeLabel,
 	beginStep,
+	boxSupports,
 	type ConnectStep,
 	failActive,
 	filled,
@@ -53,6 +55,7 @@ import {
 	View,
 } from "react-native";
 import { AgentIcon } from "./src/AgentIcon";
+import { filesToBox } from "./src/attach";
 import { BoxesScreen } from "./src/BoxesScreen";
 import { BoxTerminalScreen } from "./src/BoxTerminalScreen";
 import { boxKey, removeBox, type SavedBox, touchBox } from "./src/boxes";
@@ -61,11 +64,13 @@ import { ConsentScreen } from "./src/ConsentScreen";
 import { type Connection, connect } from "./src/connection";
 import { demoConnection } from "./src/demo";
 import { HomeScreen } from "./src/HomeScreen";
+import { LeadScreen } from "./src/LeadScreen";
 import { LoopForm, LoopsScreen } from "./src/LoopsScreen";
 import { MissionScreen } from "./src/MissionScreen";
 import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
 import { ProviderIcon } from "./src/ProviderIcon";
+import { useScrollFade } from "./src/scroll-fade";
 import {
 	loadBoxes,
 	loadConsent,
@@ -591,9 +596,15 @@ function Shell({
 	wakeError,
 	onDismissSkew,
 	connGen,
-	started,
-	onOpenStarted,
-	onDismissStarted,
+	snack,
+	onOpenSnack,
+	onDismissSnack,
+	composerLead,
+	onLeadSent,
+	lead,
+	boxVersion,
+	leadOpen,
+	onLead,
 }: {
 	connColor: string;
 	projects: ProjectDTO[];
@@ -645,9 +656,20 @@ function Shell({
 	/** Keys the terminal so an auto-reattach remounts it onto the fresh api. */
 	connGen: number;
 	/** Name of the task just started in the background, for the composer's snackbar. */
-	started: string | null;
-	onOpenStarted: () => void;
-	onDismissStarted: () => void;
+	snack: string | null;
+	onOpenSnack: () => void;
+	onDismissSnack: () => void;
+	/** The box's Lead for the composer's Task/Lead switch; absent when it has none. */
+	composerLead?: LeadClient;
+	/** The composer sent a message to the Lead (`open`: show the chat). */
+	onLeadSent: (open: boolean) => void;
+	/** The box's own Lead chat (src/LeadScreen.tsx). */
+	lead: LeadClient | null;
+	/** The box's protocol version, skewed or not. */
+	boxVersion: number;
+	/** The Lead chat covers the tabs (the button in the header's right corner). */
+	leadOpen: boolean;
+	onLead: (open: boolean) => void;
 }) {
 	const shown = tasks.filter((t) => t.projectId === selectedProjectId);
 	// Mission Control tiles: this project's tasks that have (or had) an agent, in
@@ -656,8 +678,15 @@ function Shell({
 		shown.filter((t) => t.column !== "merged" && t.agentStatus !== null),
 		"status",
 	);
-	// A full terminal (a task's, or the box's) covers the tab's content.
+	// A full terminal (a task's, or the box's) covers the tab's content. The Lead
+	// covers it too, under a task opened from one of its chips: closing the task
+	// comes back to the chat.
 	const covered = openTask !== null || boxTerminalOpen;
+	const showLead = leadOpen && !covered;
+	const showTab = !covered && !leadOpen;
+	// The composer's Task | Lead switch floats over these lists: it fades while
+	// one scrolls and returns when it stops.
+	const { faded, scrollProps } = useScrollFade();
 	return (
 		<KeyboardAvoidingView
 			style={styles.root}
@@ -670,28 +699,34 @@ function Shell({
 				</Pressable>
 				<View style={styles.headerCenter}>
 					<TabStrip
-						tab={tab}
+						tab={leadOpen ? null : tab}
 						onChange={(t) => {
-							// A tab tap from the full terminal leaves it, like the desktop.
+							// A tab tap from the full terminal (or the Lead) leaves it, like the desktop.
 							onCloseTask();
 							onBoxTerminal(false);
+							onLead(false);
 							onTab(t);
 						}}
 					/>
 				</View>
-				{/* As wide as the status dot's slot, so the tabs stay centered. */}
+				{/* The Lead, box-wide like the desktop's right sidebar, so it sits apart
+				    from the project's tabs. As wide as the status dot's slot, so the tabs
+				    stay centered. The box terminal is on this box's card in Boxes. */}
 				<Pressable
-					style={styles.boxTerminalHit}
+					style={styles.cornerHit}
 					onPress={() => {
+						// From a task opened out of the chat, back to the chat.
+						const back = openTask !== null || boxTerminalOpen;
 						onCloseTask();
-						onBoxTerminal(!boxTerminalOpen);
+						onBoxTerminal(false);
+						onLead(back || !leadOpen);
 					}}
 					hitSlop={10}
 					accessibilityRole="button"
-					accessibilityLabel="Box terminal"
-					accessibilityState={{ selected: boxTerminalOpen }}
+					accessibilityLabel="Lead chat"
+					accessibilityState={{ selected: showLead }}
 				>
-					<Feather name="terminal" size={18} color={boxTerminalOpen ? C.ink : C.muted} />
+					<Feather name="message-circle" size={19} color={showLead ? C.ink : C.muted} />
 				</Pressable>
 			</View>
 
@@ -765,12 +800,13 @@ function Shell({
 					boxAtLatest={boxAtLatest}
 				/>
 			) : null}
-			{!covered && tab === "board" && (
+			{showTab && tab === "board" && (
 				<ScrollView
 					style={styles.board}
 					contentContainerStyle={styles.boardContent}
 					showsVerticalScrollIndicator={false}
 					keyboardShouldPersistTaps="handled"
+					{...scrollProps}
 				>
 					<View style={styles.contentColumn}>
 						{loading && shown.length === 0 ? (
@@ -803,7 +839,7 @@ function Shell({
 					</View>
 				</ScrollView>
 			)}
-			{!covered && tab === "home" && (
+			{showTab && tab === "home" && (
 				<HomeScreen
 					projects={projects}
 					selectedProjectId={selectedProjectId}
@@ -815,12 +851,24 @@ function Shell({
 					onOpenTask={onOpenTask}
 					onOpenLoops={() => onTab("loops")}
 					onNewLoop={onNewLoop}
+					scrollProps={scrollProps}
 				/>
 			)}
-			{!covered && tab === "mission" && (
+			{showTab && tab === "mission" && (
 				<MissionScreen api={api} tasks={missionTasks} onExpand={onExpandTask} />
 			)}
-			{!covered && tab === "loops" && (
+			{showLead && (
+				<LeadScreen
+					lead={lead}
+					supported={boxSupports("lead", boxVersion)}
+					boxVersion={boxVersion}
+					tasks={tasks}
+					onOpenTask={onOpenTask}
+					onUpdateBox={onUpdateBox}
+					updating={updating}
+				/>
+			)}
+			{showTab && tab === "loops" && (
 				<LoopsScreen
 					api={api}
 					loops={loops}
@@ -832,14 +880,17 @@ function Shell({
 				/>
 			)}
 
-			{!covered && (tab === "board" || tab === "home") && (
+			{showTab && (tab === "board" || tab === "home") && (
 				<Composer
 					agents={agents}
 					busy={creating}
 					onSubmit={onCreate}
-					started={started}
-					onOpenStarted={onOpenStarted}
-					onDismissStarted={onDismissStarted}
+					lead={composerLead}
+					onLeadSent={onLeadSent}
+					switchFaded={faded}
+					snack={snack}
+					onOpenSnack={onOpenSnack}
+					onDismissSnack={onDismissSnack}
 				/>
 			)}
 		</KeyboardAvoidingView>
@@ -930,8 +981,17 @@ export default function App() {
 		const timer = setTimeout(() => setStartedTask(null), 6000);
 		return () => clearTimeout(timer);
 	}, [startedTask]);
+	// The composer sent its text to the Lead and stayed on the board: the
+	// snackbar offers the way into the chat for a few seconds.
+	const [leadSent, setLeadSent] = useState(false);
+	useEffect(() => {
+		if (!leadSent) return;
+		const timer = setTimeout(() => setLeadSent(false), 6000);
+		return () => clearTimeout(timer);
+	}, [leadSent]);
 	const [openTaskFocus, setOpenTaskFocus] = useState(false);
 	const [boxTerminalOpen, setBoxTerminalOpen] = useState(false);
+	const [leadOpen, setLeadOpen] = useState(false);
 	// The box version whose banner was dismissed; the banner comes back when the
 	// box reports a different one. Persisted per box.
 	const [dismissedSkew, setDismissedSkew] = useState<number | null>(null);
@@ -1181,6 +1241,7 @@ export default function App() {
 						setTab("home");
 						setOpenTask(null);
 						setBoxTerminalOpen(false);
+						setLeadOpen(false);
 					}
 				}
 				step((s) => beginStep(s, "Loading projects"));
@@ -1431,6 +1492,7 @@ export default function App() {
 		target.current = null; // demo never reattaches
 		setOpenTask(null);
 		setBoxTerminalOpen(false);
+		setLeadOpen(false);
 		if (retryTimer.current) {
 			clearTimeout(retryTimer.current);
 			retryTimer.current = null;
@@ -1573,6 +1635,7 @@ export default function App() {
 		target.current = null; // intent: stay disconnected — no auto-reattach
 		setOpenTask(null);
 		setBoxTerminalOpen(false);
+		setLeadOpen(false);
 		if (retryTimer.current) {
 			clearTimeout(retryTimer.current);
 			retryTimer.current = null;
@@ -1623,12 +1686,15 @@ export default function App() {
 					// The engine may replace a name nobody typed with a model title, once.
 					nameAuto: !input.name?.trim(),
 				});
+				// Attached on the phone: put on the box, where the agent reads them.
+				const files = input.files.length ? await filesToBox(api, input.files) : [];
 				await api.pty.spawnAgent({
 					taskId: task.id,
 					agentId: input.agentId,
 					yolo: input.yolo,
 					agentMode: input.agentMode,
 					prompt: input.prompt || undefined,
+					...(files.length ? { files } : {}),
 				});
 				// Task events from launch already carry newer status and agent data.
 				setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [task, ...prev]));
@@ -1700,6 +1766,11 @@ export default function App() {
 					onAdd={addBox}
 					onDisconnect={onDisconnect}
 					onDemo={startDemo}
+					onBoxTerminal={() => {
+						setView("board");
+						setOpenTask(null);
+						setBoxTerminalOpen(true);
+					}}
 				/>
 			);
 		}
@@ -1749,13 +1820,30 @@ export default function App() {
 				tasks={tasks}
 				loading={loading}
 				creating={creating}
-				started={startedTask?.name ?? null}
-				onOpenStarted={() => {
+				snack={startedTask ? `Started ${startedTask.name}` : leadSent ? "Sent to the Lead" : null}
+				onOpenSnack={() => {
 					// The list copy has the launch's newer status, if it has arrived.
 					if (startedTask) setOpenTask(tasks.find((t) => t.id === startedTask.id) ?? startedTask);
+					else if (leadSent) setLeadOpen(true);
 					setStartedTask(null);
+					setLeadSent(false);
 				}}
-				onDismissStarted={() => setStartedTask(null)}
+				onDismissSnack={() => {
+					setStartedTask(null);
+					setLeadSent(false);
+				}}
+				composerLead={
+					conn.current && boxSupports("lead", skew ?? PROTOCOL_VERSION)
+						? conn.current.lead
+						: undefined
+				}
+				onLeadSent={(open) => {
+					if (!open) return setLeadSent(true);
+					// The chat streams the answer; it covers the tabs, so close what covers it.
+					setOpenTask(null);
+					setBoxTerminalOpen(false);
+					setLeadOpen(true);
+				}}
 				onOpenConnection={() => {
 					setView("connect");
 					setConnectScreen("list");
@@ -1796,6 +1884,10 @@ export default function App() {
 					void saveDismissedSkew(target.current?.host ?? "", skew);
 				}}
 				connGen={connGen}
+				lead={conn.current?.lead ?? null}
+				boxVersion={skew ?? PROTOCOL_VERSION}
+				leadOpen={leadOpen}
+				onLead={setLeadOpen}
 			/>
 			{loopForm && conn.current && (
 				<LoopForm
@@ -1849,13 +1941,11 @@ const styles = StyleSheet.create({
 		alignItems: "center",
 		paddingHorizontal: 14,
 		paddingBottom: 12,
-		borderBottomWidth: 1,
-		borderBottomColor: C.line,
 	},
 	statusHit: { width: 44, alignItems: "flex-start", justifyContent: "center" },
 	statusDot: { width: 12, height: 12, borderRadius: 6 },
 	headerCenter: { flex: 1, alignItems: "center" },
-	boxTerminalHit: { width: 44, alignItems: "flex-end", justifyContent: "center" },
+	cornerHit: { width: 44, alignItems: "flex-end", justifyContent: "center" },
 	projPill: {
 		flexDirection: "row",
 		alignItems: "center",

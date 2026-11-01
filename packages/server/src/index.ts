@@ -25,12 +25,9 @@ export type { Engine, EngineOptions } from "./engine";
 export { createEngine } from "./engine";
 export type { GrammarJudgeIssue, GrammarVerdict } from "./grammar-jev";
 export { judgeGrammar } from "./grammar-jev";
-export type { JsonRpcMessage, McpReply, McpToolResult, McpToolServer } from "./hooks/board-mcp";
-export { dispatchMcpTools } from "./hooks/board-mcp";
-// The Lead chat asks before its own agent uses a tool, in the same words.
-export { describeAsk, ruleText } from "./permissions";
-// The Lead chat proposes tasks and loops under the same rules as an agent.
-export { validateProposal } from "./proposals";
+// The Lead chat's core: the desktop runs it over every engine it holds (a box's
+// engine runs its own for the phone, cli.ts).
+export { type Lead, type LeadDeps, type LeadPlace, startLead } from "./lead/index";
 export type { BoxProvider, CreatedServer, CreateServerInput, ProviderOptions } from "./provision";
 export {
 	buildCloudInit,

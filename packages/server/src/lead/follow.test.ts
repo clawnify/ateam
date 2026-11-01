@@ -2,8 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CH, type TaskDTO } from "@ateam/protocol";
-import type { LeadItem } from "../../shared/lead";
+import { CH, type LeadItem, type TaskDTO } from "@ateam/protocol";
 import { Follower, MAX_FOLLOWED } from "./follow";
 
 const task = (over: Partial<TaskDTO> = {}): TaskDTO =>

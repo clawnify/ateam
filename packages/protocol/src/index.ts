@@ -116,7 +116,10 @@
 // older engine reads as "no summary yet", and settings gained
 // `engine.textModel` / `engine.openRouterTextModel`, which an older engine
 // stores and never reads. Nothing needs a gate.
-export const PROTOCOL_VERSION = 23;
+// v24: a box's own Lead, for the phone. The engine answers LEAD_RPC (lead.ts)
+// and pushes LEAD_EVENT to a connection that called one. New methods only; the
+// phone hides its Lead below this version (FEATURE_MIN_VERSION.lead).
+export const PROTOCOL_VERSION = 24;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -265,6 +268,9 @@ export const FEATURE_MIN_VERSION = {
 	 *  keeps starting loops, so the Loops banner names it as not paused rather
 	 *  than let "All loops are paused" cover it. */
 	loopsPause: 14,
+	/** v24 added the box's own Lead chat (LEAD_RPC). An older box answers every
+	 *  call "Unknown method", so the phone offers to update the box instead. */
+	lead: 24,
 } as const;
 
 export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
@@ -1503,7 +1509,7 @@ export interface AteamApi {
 export { browserViewUrl } from "./browser-view";
 export type { NativeClientApi } from "./client-api";
 // Client-side binding of the AteamApi surface over an RpcClient.
-export { buildAteamApi, requestBoxUpdate, serverHandshake } from "./client-api";
+export { buildAteamApi, leadClient, requestBoxUpdate, serverHandshake } from "./client-api";
 // WebSocket ClientTransport over the platform-global WebSocket (browser / RN / Bun).
 export {
 	activeLabel,
@@ -1516,6 +1522,10 @@ export {
 	WOKEN_RETRY_GAP_MS,
 	waitingLabel,
 } from "./connect-steps";
+// The Lead chat: its items and events, the desktop's IPC channels and the
+// engine's RPC for a box's own Lead (v24).
+export * from "./lead";
+export * from "./lead-view";
 // Box providers as data: what a client asks the user for to wake a sleeping box.
 export {
 	PROVIDERS,
@@ -1523,6 +1533,8 @@ export {
 	type ProviderInput,
 	providerById,
 } from "./providers";
+// How recently a task last changed, for the board and the Lead's get_board.
+export { byLatestActivity, relativeAge } from "./recency";
 // Transport-agnostic RPC framing + client (shared by every transport).
 export * from "./rpc";
 // Derived task tags (pure), shared by every client; icons are per-client.

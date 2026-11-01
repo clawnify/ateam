@@ -17,6 +17,19 @@ export interface ServerTransport {
 }
 
 /**
+ * Methods served beside the dispatcher's, with events of their own (a box's
+ * Lead, lead/engine-lead.ts). A connection gets those events only once it has
+ * called one of the methods, so a client that never uses the extension (the
+ * desktop over SSH) is never sent them.
+ */
+export interface RpcExtension {
+	readonly methods: readonly string[];
+	handle(method: string, args: unknown[]): Promise<unknown>;
+	/** Start pushing this connection the extension's events; returns the stop. */
+	subscribe(send: (event: string, payload: unknown) => void): () => void;
+}
+
+/**
  * Wire an engine + dispatcher to one client connection. Returns a cleanup that
  * removes the event subscriptions — call it (or fire the transport's onClose)
  * when the client goes away, so a dropped client never leaks listeners or keeps
@@ -26,6 +39,7 @@ export function serveRpc(
 	engine: Engine,
 	dispatcher: Dispatcher,
 	transport: ServerTransport,
+	extensions: readonly RpcExtension[] = [],
 ): () => void {
 	const forward = (event: string) => (payload: unknown) =>
 		transport.send({ t: "evt", event, payload });
@@ -38,15 +52,31 @@ export function serveRpc(
 	// One id per connection: the dispatcher tells viewers of the same terminal
 	// apart by it (whose size the PTY follows), and forgets them when they go.
 	const client = randomUUID();
+	let closed = false;
 	const dispose = () => {
+		closed = true;
 		for (const u of unsubscribe) u();
 		dispatcher.release(client);
+	};
+	const subscribed = new Set<RpcExtension>();
+	const call = (method: string, args: unknown[]): Promise<unknown> => {
+		const ext = extensions.find((x) => x.methods.includes(method));
+		if (!ext) return dispatcher.handle(method, args, { client });
+		// Before the call, so nothing pushed while it runs is missed (a snapshot
+		// then the events after it).
+		if (!subscribed.has(ext) && !closed) {
+			subscribed.add(ext);
+			unsubscribe.push(
+				ext.subscribe((event, payload) => transport.send({ t: "evt", event, payload })),
+			);
+		}
+		return ext.handle(method, args);
 	};
 
 	transport.onFrame(async (frame) => {
 		if (frame.t !== "req") return;
 		try {
-			const result = await dispatcher.handle(frame.method, frame.args, { client });
+			const result = await call(frame.method, frame.args);
 			transport.send({ t: "res", id: frame.id, ok: true, result });
 		} catch (err) {
 			transport.send({ t: "res", id: frame.id, ok: false, error: errorMessage(err) });

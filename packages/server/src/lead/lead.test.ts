@@ -5,8 +5,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { CH } from "@ateam/protocol";
-import type { LeadEvent } from "../../shared/lead";
+import { CH, type LeadEvent } from "@ateam/protocol";
 import { LeadSession } from "./session";
 import { createLeadTools } from "./tools";
 

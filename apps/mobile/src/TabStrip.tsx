@@ -16,7 +16,8 @@ const TABS: { key: Tab; label: string; icon: "home" | "columns" | "grid" | "repe
 
 const INK_ON_WHITE = "#15151a";
 
-export function TabStrip({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
+/** `tab` null: none is active (the Lead covers them). */
+export function TabStrip({ tab, onChange }: { tab: Tab | null; onChange: (t: Tab) => void }) {
 	return (
 		<View style={styles.track}>
 			{TABS.map((t) => {

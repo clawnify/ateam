@@ -17,8 +17,7 @@
 // just above finished work; due, it is blocked on you.
 //
 // Pure + unit-tested (see triage-order.test.ts).
-import type { TaskDTO, TriageBucket } from "@ateam/protocol";
-import { relativeAge } from "../../shared/recency";
+import { relativeAge, type TaskDTO, type TriageBucket } from "@ateam/protocol";
 
 /** How much each triage bucket wants a human, lower first. */
 const BUCKET_RANK: Record<TriageBucket, number> = {

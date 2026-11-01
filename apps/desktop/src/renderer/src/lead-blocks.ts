@@ -1,5 +1,6 @@
-// How the Lead chat's items are drawn as blocks, and how a stack of agent
-// replies decides which one it shows.
+// How a stack of agent replies in the Lead chat decides which one it shows
+// (folding the items into blocks is shared with the phone: toLeadBlocks in
+// @ateam/protocol).
 //
 // Tasks touched from the chat report every finished turn back into it
 // (main/lead/follow.ts), so after a while away several replies land one after
@@ -8,34 +9,6 @@
 // older one holds still while more arrive, and the card says one did.
 //
 // Pure + unit-tested (see lead-blocks.test.ts).
-import type { LeadItem } from "../../shared/lead";
-
-export type ToolItem = Extract<LeadItem, { kind: "tool" }>;
-export type AgentItem = Extract<LeadItem, { kind: "agent" }>;
-export type Block =
-	| { kind: "item"; item: LeadItem }
-	| { kind: "tools"; id: string; tools: ToolItem[] }
-	| { kind: "agents"; id: string; replies: AgentItem[] };
-
-/** Consecutive tool calls read as one step, so they fold into one row.
- *  Consecutive agent replies fold into one card. Anything else in between (the
- *  user's message, the Lead's, a page, a notice) starts a new block. A block's
- *  id is its first item's, which never changes as more join it. */
-export function toBlocks(items: LeadItem[]): Block[] {
-	const out: Block[] = [];
-	for (const item of items) {
-		const last = out[out.length - 1];
-		if (item.kind === "tool") {
-			if (last?.kind === "tools") last.tools.push(item);
-			else out.push({ kind: "tools", id: item.id, tools: [item] });
-		} else if (item.kind === "agent") {
-			if (last?.kind === "agents") last.replies.push(item);
-			else out.push({ kind: "agents", id: item.id, replies: [item] });
-		} else out.push({ kind: "item", item });
-	}
-	return out;
-}
-
 /** Which reply of a stack is shown. `at` null follows the newest; `seen` is the
  *  newest one looked at, kept while `at` holds an older one. */
 export interface StackView {
