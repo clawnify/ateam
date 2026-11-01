@@ -82,7 +82,7 @@ import { ConnectSteps } from "./components/ConnectSteps";
 import { FileDiffView } from "./components/FileDiffView";
 import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
 import { IconButton } from "./components/IconButton";
-import { LeadChat } from "./components/LeadChat";
+import { LeadChat, type LeadProposalItem } from "./components/LeadChat";
 import { LoopForm, LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
 import { PageFrame } from "./components/PageFrame";
@@ -421,6 +421,9 @@ export function App() {
 	const [proposalOpen, setProposalOpen] = useState<{ taskId: string; id: string } | null>(null);
 	// Proposals already opened by themselves, so each opens unasked only once.
 	const autoOpenedProposals = useRef(new Set<string>());
+	// A task or loop the Lead proposed, open in its dialog. Its card in the
+	// chat opens it again; creating it or Dismiss decides it.
+	const [leadProposal, setLeadProposal] = useState<LeadProposalItem | null>(null);
 	// Free-text task filter driven by the centered search bar in the topbar.
 	// Filters the sidebar list and the board by task name; the selected task
 	// stays open even when it doesn't match, so searching never yanks it away.
@@ -865,6 +868,7 @@ export function App() {
 		selectedTask && panelOnScreen(view, panelMode, selectedOffline !== null) ? selectedTask : null;
 	const dialogOpen =
 		proposalOpen !== null ||
+		leadProposal !== null ||
 		composerOpen ||
 		loopDialog !== null ||
 		cleanupOpen ||
@@ -890,6 +894,28 @@ export function App() {
 		run(async () => {
 			await window.ateam.tasks.clearProposal({ taskId, proposalId });
 		});
+	const decideLeadProposal = (id: string, outcome: "created" | "dismissed", taskId?: string) =>
+		run(async () => {
+			await window.ateamLead.proposal(id, outcome, taskId);
+		});
+	// The Lead's proposal, in the New task or New loop dialog. Arriving while
+	// another dialog is up (`auto`), it waits as its card in the chat.
+	const openLeadProposal = (item: LeadProposalItem, auto: boolean) => {
+		if (auto && dialogOpen) return;
+		if (!projects.some((p) => p.id === item.projectId)) {
+			if (!auto) setError(`${item.projectName} isn't on your board any more.`);
+			return;
+		}
+		// The dialog creates in the active project (its machines, its remote) and
+		// the new card lands on its board, so the proposal's project becomes the
+		// active one. The view stays: the Lead tab, or the sidebar beside it.
+		if (!activeCard?.members.some((m) => m.projectId === item.projectId)) {
+			const stay = view;
+			selectProject(item.projectId);
+			setView(stay);
+		}
+		setLeadProposal(item);
+	};
 	// Opening Mission Control, which Auto holds the terminals for until it has
 	// fitted: switching to it, or to
 	// another project's or mode's grid while on it. Coming back from a tile
@@ -1352,7 +1378,7 @@ export function App() {
 			alias: Alias;
 			open: boolean;
 		},
-		onCreated?: () => void,
+		onCreated?: (task: TaskDTO) => void,
 	) =>
 		run(async () => {
 			const card = activeCard;
@@ -1446,7 +1472,7 @@ export function App() {
 			} else task = await window.ateam.tasks.create(taskInput);
 			// The task exists: what a proposal asked for is done, even if its agent
 			// then fails to start (that error shows, and the task can be resumed).
-			onCreated?.();
+			onCreated?.(task);
 			setSelectedIssue(null);
 			// The created task's project is a member of the active card, so its tasks
 			// are already unioned into the board once loaded.
@@ -2250,7 +2276,11 @@ export function App() {
 					) : view === "settings" ? (
 						<SettingsPanel agents={agents} />
 					) : view === "lead" ? (
-						<LeadChat tasks={allTasks} onOpenTask={openTask} />
+						<LeadChat
+							tasks={allTasks}
+							onOpenTask={openTask}
+							onOpenProposal={openLeadProposal}
+						/>
 					) : (
 						<LoopsPanel
 							loops={sortedLoops}
@@ -2275,7 +2305,12 @@ export function App() {
 						aria-label="Resize Lead sidebar"
 					/>
 					<aside className="lead-side" aria-label="Lead">
-						<LeadChat tasks={allTasks} onOpenTask={openTask} onHide={() => setLeadSide(false)} />
+						<LeadChat
+							tasks={allTasks}
+							onOpenTask={openTask}
+							onOpenProposal={openLeadProposal}
+							onHide={() => setLeadSide(false)}
+						/>
 					</aside>
 				</>
 			)}
@@ -2404,6 +2439,74 @@ export function App() {
 								refreshLoops();
 								setLoopsCollapsed(false);
 								setProposalOpen(null);
+							}}
+						/>
+					);
+				})()}
+			{leadProposal &&
+				activeCard &&
+				(() => {
+					const item = leadProposal;
+					const p = { ...item.proposal, id: item.id, proposedAt: item.at };
+					const note = (
+						<ProposalNote
+							from={item.projectName}
+							byLead
+							proposal={p}
+							onDismiss={() => {
+								setLeadProposal(null);
+								void decideLeadProposal(item.id, "dismissed");
+							}}
+						/>
+					);
+					return p.kind === "task" ? (
+						<PromptComposer
+							key={item.id}
+							agents={agents}
+							initialName={p.name}
+							initialPrompt={p.prompt}
+							initialFiles={item.files}
+							defaultAgentId={p.agentId}
+							initialAlias={originOf(item.projectId)}
+							header={note}
+							environments={composerEnvs}
+							envAgents={envAgents}
+							onAdd={addTailscaleBox}
+							onInstall={installBox}
+							onForget={forgetBox}
+							onInstallAgent={installAgentOn}
+							onClose={() => setLeadProposal(null)}
+							onCreate={(input) => {
+								setLeadProposal(null);
+								void composeTask(
+									input,
+									(task) => void decideLeadProposal(item.id, "created", task.id),
+								);
+							}}
+						/>
+					) : (
+						<LoopForm
+							key={item.id}
+							draft={{
+								name: p.name,
+								prompt: p.prompt,
+								followUp: p.followUp,
+								agentId: p.agentId,
+								projectId: item.projectId,
+								everyMinutes: p.everyMinutes,
+								dailyAt: p.dailyAt,
+							}}
+							note={note}
+							members={activeMembers}
+							agents={agents}
+							envProtocol={envProtocol}
+							onInstallAgent={installAgentOn}
+							onCancel={() => setLeadProposal(null)}
+							onSaved={() => {
+								void decideLeadProposal(item.id, "created");
+								refreshLoops();
+								setLoopsCollapsed(false);
+								setLeadProposal(null);
 							}}
 						/>
 					);
