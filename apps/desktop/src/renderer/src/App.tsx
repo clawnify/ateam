@@ -66,8 +66,10 @@ import {
 import { motion, Reorder } from "motion/react";
 import {
 	type CSSProperties,
+	type Dispatch,
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
+	type SetStateAction,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -466,6 +468,11 @@ export function App() {
 	// The sessions themselves live in the PTY daemon; this is only the choice of
 	// which one to look at, and goes null when a task has none left.
 	const [termByTask, setTermByTask] = useState<Record<string, string | null>>({});
+	// The same choice for each Mission Control tile (see TileTab). Held here and
+	// not in the grid, because the grid is remounted per project and per
+	// Tasks/Loops mode: kept there, going to another project and back forgot the
+	// tab you had clicked, and the tile fell to whichever agent spoke last.
+	const [mcShownByTask, setMcShownByTask] = useState<Record<string, TileTab>>({});
 	const { ui: promptUi, ask, confirm } = usePrompt();
 
 	const run = useCallback(async (fn: () => Promise<void>) => {
@@ -2245,6 +2252,8 @@ export function App() {
 							// Tasks/Loops switch: a new mode is a new set of tiles.
 							key={mcGridKey}
 							mode={mcMode}
+							shownByTask={mcShownByTask}
+							setShownByTask={setMcShownByTask}
 							tasks={missionTasks}
 							agents={agents}
 							order={missionOrderIds}
@@ -3834,8 +3843,19 @@ function TaskPanel({
 	);
 }
 
+/**
+ * Which session a Mission Control tile is showing. `pinned` marks a tab the
+ * viewer clicked, which is then kept for as long as that session lives. An
+ * unpinned entry is resolved the moment the tile arrives on the visible page,
+ * and absent (or pointing at a session that has since died) falls back to
+ * activeTerminal.
+ */
+type TileTab = { terminalId: string; pinned: boolean };
+
 function MissionControl({
 	mode,
+	shownByTask,
+	setShownByTask,
 	tasks,
 	agents,
 	order,
@@ -3853,6 +3873,10 @@ function MissionControl({
 	/** Which list `tasks` was drawn from; only the empty state and the New
 	 *  task slot differ. */
 	mode: "tasks" | "loops";
+	/** Each tile's tab, keyed by task. Owned by App so it outlives this instance,
+	 *  which is remounted on every project or mode switch. */
+	shownByTask: Record<string, TileTab>;
+	setShownByTask: Dispatch<SetStateAction<Record<string, TileTab>>>;
 	tasks: TaskDTO[];
 	/** Agent catalog, for naming a session's tab the way the task panel does. */
 	agents: AgentDTO[];
@@ -3883,14 +3907,14 @@ function MissionControl({
 	// between them. Creating and closing sessions stays in the task panel, where
 	// the + and the ✕ live; a tile is a viewport onto work that already exists.
 	const [tiles, setTiles] = useState<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
-	// Which session each tile is showing. `pinned` marks a tab the viewer clicked,
-	// which is then kept for as long as that session lives. An unpinned entry is
-	// resolved the moment the tile arrives on the visible page (see below), and
-	// absent — or pointing at a session that has since died — falls back to
-	// activeTerminal.
-	const [shownByTask, setShownByTask] = useState<
-		Record<string, { terminalId: string; pinned: boolean }>
-	>({});
+	// Only a tab the viewer clicked outlives this grid. The ones it resolved by
+	// itself are re-read when the next grid's tiles arrive, and left in place
+	// they would paint the old tab for a frame before that.
+	useEffect(
+		() => () =>
+			setShownByTask((m) => Object.fromEntries(Object.entries(m).filter(([, t]) => t.pinned))),
+		[setShownByTask],
+	);
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
 	const tilesRef = useRef(tiles);
@@ -4090,7 +4114,7 @@ function MissionControl({
 			}
 			return next;
 		});
-	}, [onScreen]);
+	}, [onScreen, setShownByTask]);
 
 	// Each tile's changes, for its +N -N and its changes view. Kept per task for
 	// the grid's life, so flipping pages doesn't run git again for tiles already
