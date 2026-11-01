@@ -46,6 +46,7 @@ export function TerminalView({
 	terminalId,
 	grammar = false,
 	skills = false,
+	skillButtons,
 	onAddSkill,
 	showDone,
 	onDone,
@@ -55,6 +56,8 @@ export function TerminalView({
 	grammar?: boolean;
 	/** Offer the agent's skills on the toolbar. For an agent session, not a shell. */
 	skills?: boolean;
+	/** Which skills get a button beside the menu (see SkillsBar); pinned by default. */
+	skillButtons?: "pinned" | "sent";
 	/** Link a new skill from the Skills menu. Only where the picked path means something (this Mac). */
 	onAddSkill?: () => Promise<void>;
 	/** Show a "Done" action in the toolbar (e.g. task is in Review). */
@@ -490,6 +493,7 @@ export function TerminalView({
 					<SkillsBar
 						terminalId={terminalId}
 						submits={submits}
+						buttons={skillButtons}
 						onInsert={(command) => insertSkillRef.current(command)}
 						onAddSkill={onAddSkill}
 					/>

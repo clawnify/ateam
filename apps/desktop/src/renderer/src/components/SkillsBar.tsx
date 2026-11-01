@@ -62,12 +62,16 @@ const RECOUNT_AFTER = [1500, 6000];
 export function SkillsBar({
 	terminalId,
 	submits,
+	buttons = "pinned",
 	onInsert,
 	onAddSkill,
 }: {
 	terminalId: string;
 	/** Goes up each time a prompt is sent from this terminal: time to recount. */
 	submits: number;
+	/** Which skills get a button: the pinned ones, or the ones already sent in
+	 *  this session, pinned or not (a Mission Control tile, too narrow for every pin). */
+	buttons?: "pinned" | "sent";
 	/** Type `command` into the agent's input. False: the draft is unknown, nothing typed. */
 	onInsert: (command: string) => boolean;
 	/** Link a new skill (this Mac only). Absent: no "Add skill…" item. */
@@ -124,8 +128,14 @@ export function SkillsBar({
 
 	const byName = useMemo(() => new Map((skills ?? []).map((s) => [s.name, s])), [skills]);
 	// A pinned skill this agent can't see (a Claude plugin skill in a Codex
-	// terminal) is skipped here, not dropped from the list.
-	const chips = (pinned ?? []).map((n) => byName.get(n)).filter((s): s is SkillDTO => !!s);
+	// terminal) is skipped here, not dropped from the list. Sent ones go most
+	// sent first; ties keep the list's most-typed order (sort is stable).
+	const chips =
+		buttons === "sent"
+			? (skills ?? [])
+					.filter((s) => s.sessionUses > 0)
+					.sort((a, b) => b.sessionUses - a.sessionUses)
+			: (pinned ?? []).map((n) => byName.get(n)).filter((s): s is SkillDTO => !!s);
 	const pinnedSet = new Set(pinned ?? []);
 	const q = query.trim().toLowerCase();
 	const filtered = (skills ?? []).filter(
