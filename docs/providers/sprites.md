@@ -39,8 +39,9 @@ processes are Sprite *services* (`sprite-env services`), not systemd units.
 **Claude Code is set to skip every permission check.** The image's
 `~/.claude/settings.json` sets `"defaultMode": "bypassPermissions"`. Ateam starts
 every Claude task with bypass turned off, so a task asks before it acts, or runs in
-auto mode when you turn Auto on. A `claude` you start yourself over SSH still reads
-that default: delete the `defaultMode` line if you want it to ask there too.
+auto mode when you turn Auto on. A `claude` you start yourself, in a shell pane or
+over SSH, still reads that default: delete the `defaultMode` line if you want it to
+ask there too.
 
 ## GitHub credentials
 

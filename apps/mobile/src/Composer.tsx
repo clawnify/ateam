@@ -3,7 +3,7 @@
 // a task (worktree on the box) and launches the agent, then opens its terminal.
 // Long-press send to start it and stay on the board instead (a snackbar above
 // the composer then offers the way in).
-// Auto mode = permission-free (yolo); Agent mode = the tool's own multi-agent
+// Auto mode = the agent's automatic mode (yolo); Agent mode = the tool's own multi-agent
 // board (`claude agents`) in that worktree. Attachments are a fast-follow
 // (cross-machine: the phone has no files the remote agent can read).
 

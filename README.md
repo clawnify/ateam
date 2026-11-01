@@ -254,7 +254,9 @@ to a running one, copied to its box when it runs on one, up to 10 MB a file),
 questions agents ask you with the `ask_user`
 board tool (option cards with tradeoffs, or a checklist, answered from the
 board, the task panel or the Lead chat), Claude Code's permission prompts
-answered from Ateam (Allow, Always allow, Deny) as well as in the terminal,
+answered from Ateam (Allow, Always allow, Deny) as well as in the terminal
+(tasks start with bypass permissions turned off, and any other default mode you
+set still applies),
 and so are its own questions (AskUserQuestion, one card per question),
 agent pages (HTML an agent makes for you with `show_page`, such as a dashboard
 or a comparison, drawn in a sandboxed frame; a question can carry one whose

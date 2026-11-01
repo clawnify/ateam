@@ -33,7 +33,7 @@ function toBase64(f: File): Promise<string> {
  *             because the task already lives on one.
  *
  * Either way the prompt is handed to the chosen agent as its first instruction,
- * and YOLO launches it permission-free.
+ * and YOLO launches it in the agent's automatic mode.
  *
  * A task is created and opened (⌘⏎), or created and left in the background
  * (⇧⌘⏎, or ⇧-click) so the view you were on stays put.
