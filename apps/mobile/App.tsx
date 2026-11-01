@@ -11,6 +11,7 @@
 import type {
 	AgentDTO,
 	AteamApi,
+	LeadClient,
 	LoopDTO,
 	ProjectDTO,
 	ProviderDefinition,
@@ -19,6 +20,7 @@ import type {
 import {
 	activeLabel,
 	beginStep,
+	boxSupports,
 	type ConnectStep,
 	failActive,
 	filled,
@@ -61,6 +63,7 @@ import { ConsentScreen } from "./src/ConsentScreen";
 import { type Connection, connect } from "./src/connection";
 import { demoConnection } from "./src/demo";
 import { HomeScreen } from "./src/HomeScreen";
+import { LeadScreen } from "./src/LeadScreen";
 import { LoopForm, LoopsScreen } from "./src/LoopsScreen";
 import { MissionScreen } from "./src/MissionScreen";
 import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminalScreen";
@@ -594,6 +597,8 @@ function Shell({
 	started,
 	onOpenStarted,
 	onDismissStarted,
+	lead,
+	boxVersion,
 }: {
 	connColor: string;
 	projects: ProjectDTO[];
@@ -648,6 +653,10 @@ function Shell({
 	started: string | null;
 	onOpenStarted: () => void;
 	onDismissStarted: () => void;
+	/** The box's own Lead chat (src/LeadScreen.tsx). */
+	lead: LeadClient | null;
+	/** The box's protocol version, skewed or not. */
+	boxVersion: number;
 }) {
 	const shown = tasks.filter((t) => t.projectId === selectedProjectId);
 	// Mission Control tiles: this project's tasks that have (or had) an agent, in
@@ -819,6 +828,17 @@ function Shell({
 			)}
 			{!covered && tab === "mission" && (
 				<MissionScreen api={api} tasks={missionTasks} onExpand={onExpandTask} />
+			)}
+			{!covered && tab === "lead" && (
+				<LeadScreen
+					lead={lead}
+					supported={boxSupports("lead", boxVersion)}
+					boxVersion={boxVersion}
+					tasks={tasks}
+					onOpenTask={onOpenTask}
+					onUpdateBox={onUpdateBox}
+					updating={updating}
+				/>
 			)}
 			{!covered && tab === "loops" && (
 				<LoopsScreen
@@ -1796,6 +1816,8 @@ export default function App() {
 					void saveDismissedSkew(target.current?.host ?? "", skew);
 				}}
 				connGen={connGen}
+				lead={conn.current?.lead ?? null}
+				boxVersion={skew ?? PROTOCOL_VERSION}
 			/>
 			{loopForm && conn.current && (
 				<LoopForm

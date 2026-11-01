@@ -2,7 +2,25 @@
 // and reads every task on every engine (main/lead). Native rendering, not a
 // terminal: the user's messages, the Lead's prose, and its board moves folded
 // into one line each, with the tasks it touched as chips that open the task.
-import type { ProjectDTO, TaskDTO } from "@ateam/protocol";
+import {
+	applyLeadEvent,
+	findLeadTask,
+	type LeadAgentItem,
+	type LeadAttachResult,
+	type LeadFile,
+	type LeadItem,
+	type LeadPermissionAnswer,
+	type LeadSnapshot,
+	type LeadTaskRef,
+	type LeadToolItem,
+	leadToolResult,
+	leadToolStep,
+	leadToolTask,
+	type ProjectDTO,
+	summarizeLeadTools,
+	type TaskDTO,
+	toLeadBlocks,
+} from "@ateam/protocol";
 import {
 	ArrowUp,
 	ChevronLeft,
@@ -32,27 +50,7 @@ import {
 	useState,
 } from "react";
 import { flushSync } from "react-dom";
-import type {
-	LeadAttachResult,
-	LeadEvent,
-	LeadFile,
-	LeadItem,
-	LeadPermissionAnswer,
-	LeadSnapshot,
-	LeadTaskRef,
-} from "../../../shared/lead";
-import {
-	type AgentItem,
-	arrived,
-	FOLLOWING,
-	firstLine,
-	goTo,
-	type StackView,
-	shown,
-	type ToolItem,
-	toBlocks,
-	unseen,
-} from "../lead-blocks";
+import { arrived, FOLLOWING, firstLine, goTo, type StackView, shown, unseen } from "../lead-blocks";
 import { type DraftRef, expandRefs, splitSent } from "../lead-refs";
 import { recordEmoji, topEmoji } from "../lib/emoji-use";
 import { AgentIcon } from "./AgentIcon";
@@ -88,175 +86,12 @@ const SUGGESTIONS = [
 	"What did the last finished task say?",
 ];
 
-function apply(s: LeadSnapshot, e: LeadEvent): LeadSnapshot {
-	switch (e.type) {
-		case "item": {
-			const at = s.items.findIndex((i) => i.id === e.item.id);
-			if (at < 0) return { ...s, items: [...s.items, e.item] };
-			const items = s.items.slice();
-			items[at] = e.item;
-			return { ...s, items };
-		}
-		case "draft":
-			return { ...s, draft: e.text };
-		case "busy":
-			return { ...s, busy: e.busy };
-		case "auto":
-			return { ...s, auto: e.auto };
-		case "reset":
-			return e.snapshot;
-	}
-}
-
-/** create_task (the Lead's tool before it proposed instead, still in older
- *  conversations) answered "Started task "x" (<uuid>) ..."; the id is the chip's target. */
-const TASK_ID = /\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)/;
-
-function findTask(tasks: TaskDTO[], ref: unknown): TaskDTO | undefined {
-	if (typeof ref !== "string") return undefined;
-	const want = ref.toLowerCase();
-	return (
-		tasks.find((t) => t.id === ref) ??
-		tasks.find((t) => t.name.toLowerCase() === want || t.branch.toLowerCase() === want)
-	);
-}
-
-/** The task a tool call acted on, when it acted on one. */
-function toolTask(tool: ToolItem, tasks: TaskDTO[]): TaskDTO | undefined {
-	if (tool.name === "create_task") {
-		const id = tool.result?.match(TASK_ID)?.[1];
-		return id ? tasks.find((t) => t.id === id) : undefined;
-	}
-	return findTask(tasks, tool.input.task);
-}
-
-/** An MCP tool's server and tool, "mcp__claude_ai_Granola__get_meetings" →
- *  ["Granola", "get meetings"]: the names the user knows them by. */
-function mcpParts(name: string): [string, string] | null {
-	const m = /^mcp__(.+?)__(.+)$/.exec(name);
-	if (!m) return null;
-	const [, server = "", tool = ""] = m;
-	return [server.replace(/^claude_ai_/, "").replace(/_/g, " "), tool.replace(/_/g, " ")];
-}
-
-const str = (v: unknown) => (typeof v === "string" ? v : "");
-
-/** What a step did, in the words a group summary counts: the Lead's own board
- *  tools, then the user's Claude Code tools and connectors. */
-function describe(tool: ToolItem, tasks: TaskDTO[]): string {
-	const name = toolTask(tool, tasks)?.name ?? String(tool.input.name ?? tool.input.task ?? "");
-	switch (tool.name) {
-		case "get_board":
-			return "Read the board";
-		case "read_task":
-			return `Read ${name}`;
-		case "create_task":
-			return `Started ${name}`;
-		case "propose_task":
-			return `Proposed ${name}`;
-		case "propose_loop":
-			return `Proposed the loop ${name}`;
-		case "send_message":
-			return `Messaged ${name}`;
-		case "answer_question":
-			return `Answered ${name}`;
-		case "Bash":
-			return "Ran a command";
-		case "Read":
-			return "Read a file";
-		case "Write":
-			return "Wrote a file";
-		case "Edit":
-		case "MultiEdit":
-		case "NotebookEdit":
-			return "Edited a file";
-		case "Glob":
-		case "Grep":
-			return "Searched files";
-		case "WebFetch":
-			return "Fetched a page";
-		case "WebSearch":
-			return "Searched the web";
-		case "Skill":
-			return `Used ${str(tool.input.skill) || "a skill"}`;
-		case "Task":
-		case "Agent":
-			return "Ran a subagent";
-		case "TodoWrite":
-			return "Updated the plan";
-		case "ToolSearch":
-			return "Loaded tools";
-	}
-	const mcp = mcpParts(tool.name);
-	return mcp ? `Used ${mcp[0]}` : tool.name;
-}
-
-/** One step in an opened group, more specifically: which command, which file. */
-function stepLabel(tool: ToolItem, tasks: TaskDTO[]): string {
-	const i = tool.input;
-	const detail =
-		tool.name === "Bash"
-			? str(i.description) || str(i.command)
-			: ["Read", "Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool.name)
-				? str(i.file_path) || str(i.notebook_path)
-				: tool.name === "Grep" || tool.name === "Glob"
-					? str(i.pattern)
-					: tool.name === "WebFetch"
-						? str(i.url)
-						: tool.name === "WebSearch"
-							? str(i.query)
-							: "";
-	if (detail) return detail.length > 90 ? `${detail.slice(0, 89)}…` : detail;
-	const mcp = mcpParts(tool.name);
-	return mcp ? `${mcp[0]}: ${mcp[1]}` : describe(tool, tasks);
-}
-
-/** The group as one sentence, the way Claude and Cursor fold their tool calls:
- *  "Read the board, messaged landing page copy". A repeated step is counted. */
-function summarize(tools: ToolItem[], tasks: TaskDTO[]): string {
-	const counts = new Map<string, number>();
-	for (const t of tools) {
-		const d = describe(t, tasks);
-		counts.set(d, (counts.get(d) ?? 0) + 1);
-	}
-	const parts = [...counts].map(([d, n], i) => {
-		const phrase = i === 0 ? d : d.charAt(0).toLowerCase() + d.slice(1);
-		return n > 1 ? `${phrase} (${n}×)` : phrase;
-	});
-	return parts.join(", ");
-}
-
-/** What a step came back with, in a few words: the row is a summary, the raw
- *  result opens below. Board reads count rows; task reads give where it is. */
-function resultSummary(tool: ToolItem): string {
-	const text = tool.result ?? "";
-	if (tool.name === "get_board") {
-		const rows = text.split("\n").filter((l) => / \| /.test(l)).length - 1;
-		return rows > 0 ? `${rows} task${rows === 1 ? "" : "s"}` : "nothing matches";
-	}
-	if (tool.name === "read_task") {
-		try {
-			const t = JSON.parse(text) as { column?: string; state?: string };
-			return [t.column, t.state].filter(Boolean).join(", ");
-		} catch {
-			/* an error text: shown as it is below */
-		}
-	}
-	return (
-		text
-			.split("\n")
-			.find((l) => /\w/.test(l))
-			?.trim()
-			.slice(0, 140) ?? ""
-	);
-}
-
 function ToolGroup({
 	tools,
 	tasks,
 	onOpenTask,
 }: {
-	tools: ToolItem[];
+	tools: LeadToolItem[];
 	tasks: TaskDTO[];
 	onOpenTask: (t: TaskDTO) => void;
 }) {
@@ -269,8 +104,8 @@ function ToolGroup({
 		.filter(
 			(t) => (t.name === "create_task" || t.name === "send_message") && t.result && !t.isError,
 		)
-		.map((t) => ({ tool: t, task: toolTask(t, tasks) }))
-		.filter((x): x is { tool: ToolItem; task: TaskDTO } => x.task != null);
+		.map((t) => ({ tool: t, task: leadToolTask(t, tasks) }))
+		.filter((x): x is { tool: LeadToolItem; task: TaskDTO } => x.task != null);
 	return (
 		<div className="lead-tools">
 			<button
@@ -280,7 +115,7 @@ function ToolGroup({
 				onClick={() => setOpen((o) => !o)}
 			>
 				<span className={running ? "lead-tools-sum shimmer" : "lead-tools-sum"}>
-					{summarize(tools, tasks)}
+					{summarizeLeadTools(tools, tasks)}
 				</span>
 				{failed > 0 && <span className="lead-tools-failed">Failed</span>}
 				<ChevronRight size={12} className={open ? "lead-chev open" : "lead-chev"} />
@@ -288,7 +123,12 @@ function ToolGroup({
 			{open && (
 				<div className="lead-steps">
 					{tools.map((t) => (
-						<ToolStep key={t.id} tool={t} label={stepLabel(t, tasks)} solo={tools.length === 1} />
+						<ToolStep
+							key={t.id}
+							tool={t}
+							label={leadToolStep(t, tasks)}
+							solo={tools.length === 1}
+						/>
 					))}
 				</div>
 			)}
@@ -317,7 +157,7 @@ function ToolGroup({
 
 /** One step in an opened group: what it did and how it ended; its raw input
  *  and result open below on a click, for when the summary isn't enough. */
-function ToolStep({ tool, label, solo }: { tool: ToolItem; label: string; solo: boolean }) {
+function ToolStep({ tool, label, solo }: { tool: LeadToolItem; label: string; solo: boolean }) {
 	// A group of one has nothing to summarize twice: its detail is what was asked for.
 	const [open, setOpen] = useState(solo);
 	const running = tool.result === undefined;
@@ -328,7 +168,7 @@ function ToolStep({ tool, label, solo }: { tool: ToolItem; label: string; solo: 
 				{tool.isError ? (
 					<span className="lead-tools-failed">Failed</span>
 				) : (
-					!running && <span className="lead-step-result">{resultSummary(tool)}</span>
+					!running && <span className="lead-step-result">{leadToolResult(tool)}</span>
 				)}
 			</button>
 			{open && (
@@ -448,7 +288,7 @@ function TaskLink({
 	tasks: TaskDTO[];
 	onOpenTask: (t: TaskDTO) => void;
 }) {
-	const task = findTask(tasks, target);
+	const task = findLeadTask(tasks, target);
 	return (
 		<button
 			type="button"
@@ -689,7 +529,7 @@ function AgentReply({
 	onExpandedChange,
 	onCut,
 }: {
-	item: AgentItem;
+	item: LeadAgentItem;
 	/** Another reply of its stack is shown. Kept mounted, so a half-typed answer survives. */
 	hidden: boolean;
 	/** The task's chip, for the dialog's head. */
@@ -827,7 +667,7 @@ function AgentStack({
 	atBottom,
 	onPaged,
 }: {
-	replies: AgentItem[];
+	replies: LeadAgentItem[];
 	tasks: TaskDTO[];
 	onOpenTask: (t: TaskDTO) => void;
 	/** Whether the user is following the bottom of the chat. */
@@ -1065,7 +905,7 @@ export function LeadChat({
 	useEffect(() => {
 		let live = true;
 		const off = window.ateamLead.onEvent((e) => {
-			setSnap((s) => apply(s, e));
+			setSnap((s) => applyLeadEvent(s, e));
 			// A proposal opens its dialog by itself once, as it arrives here; one
 			// that arrived while the chat was closed waits as its card.
 			if (e.type === "item" && e.item.kind === "proposal" && !e.item.outcome) {
@@ -1110,7 +950,7 @@ export function LeadChat({
 		pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 	}, []);
 
-	const blocks = useMemo(() => toBlocks(snap.items), [snap.items]);
+	const blocks = useMemo(() => toLeadBlocks(snap.items), [snap.items]);
 	// Every agent waiting on the user, newest first: they live on the tasks, not
 	// in this conversation, so they stay put above the composer while it scrolls.
 	const asking = useMemo(

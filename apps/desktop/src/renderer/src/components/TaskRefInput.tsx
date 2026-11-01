@@ -3,7 +3,7 @@
 // text box, so typing never leaves it: ↑/↓ move, Enter or Tab picks, Esc
 // closes. A picked task is tinted in place by a layer behind the transparent
 // textarea that lays out the same text with the same metrics (index.css).
-import type { TaskDTO } from "@ateam/protocol";
+import { relativeAge, type TaskDTO } from "@ateam/protocol";
 import {
 	type ClipboardEvent,
 	type KeyboardEvent,
@@ -15,7 +15,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { relativeAge } from "../../../shared/recency";
 import { type DraftRef, matchTasks, refQuery, splitDraft, tokenFor } from "../lead-refs";
 import { AgentIcon } from "./AgentIcon";
 

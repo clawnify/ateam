@@ -1,7 +1,10 @@
-// The Lead chat's renderer↔main contract: one conversation with a coordinator
-// agent that drives every task on every engine (see main/lead). Its own surface,
-// beside window.ateam (one engine's API) and window.ateamHost (choosing
-// engines), because the Lead belongs to the desktop, not to any engine.
+// The Lead chat's contract: one conversation with a coordinator agent that
+// drives the board (packages/server/src/lead). Two hosts run one:
+// - the desktop, in main, over every engine it holds; the renderer reaches it
+//   over Electron IPC on these channels (window.ateamLead);
+// - a box's engine, over that box alone, for the phone, which holds one box and
+//   never reaches the Mac; it answers LEAD_RPC over the engine's own RPC and
+//   pushes LEAD_EVENT.
 // Imports nothing, so both the node and web tsconfigs resolve it.
 
 export const LEAD_CH = {
@@ -31,6 +34,27 @@ export const LEAD_CH = {
 	proposal: "lead:proposal",
 	evtEvent: "evt:lead:event",
 } as const;
+
+/** The channels a box's engine answers for its own Lead (v24). Attaching by
+ *  path and previews are the desktop's: a phone has no paths on the box and
+ *  keeps its own previews. `attachBytes` takes the file as base64 there, since
+ *  RPC frames are JSON. */
+export const LEAD_RPC = [
+	LEAD_CH.snapshot,
+	LEAD_CH.send,
+	LEAD_CH.interrupt,
+	LEAD_CH.reset,
+	LEAD_CH.reply,
+	LEAD_CH.answer,
+	LEAD_CH.permission,
+	LEAD_CH.setAuto,
+	LEAD_CH.attachBytes,
+	LEAD_CH.proposal,
+] as const;
+
+/** The engine's push event for its Lead, with a LeadEvent payload. Sent only
+ *  to a connection that has called one of LEAD_RPC. */
+export const LEAD_EVENT = "leadEvent";
 
 /** How the Lead links a task in its replies, `[fix login](task:<id>)` (its
  *  prompt says so): the chat draws the link as a chip that opens the task. */
@@ -165,6 +189,31 @@ export type LeadEvent =
 	| { type: "busy"; busy: boolean }
 	| { type: "auto"; auto: boolean }
 	| { type: "reset"; snapshot: LeadSnapshot };
+
+/** A box's own Lead, as a remote client (the phone) reaches it over the
+ *  engine's RPC (leadClient in client-api.ts). The desktop's window.ateamLead
+ *  minus what needs a path on the Lead's machine: files arrive as bytes. */
+export interface LeadClient {
+	snapshot(): Promise<LeadSnapshot>;
+	/** `files`: paths `attachBytes` returned. */
+	send(text: string, files?: string[]): Promise<void>;
+	/** A file from this device, base64, at most 10 MB decoded. */
+	attachBytes(name: string, base64: string): Promise<LeadFile>;
+	interrupt(): Promise<void>;
+	reset(): Promise<void>;
+	reply(taskId: string, text: string): Promise<void>;
+	answer(input: {
+		taskId: string;
+		questionId: string;
+		answer: string | string[] | null;
+	}): Promise<void>;
+	permission(id: string, answer: LeadPermissionAnswer): Promise<void>;
+	/** Auto mode on or off for the box's Lead (Claude's own auto mode). */
+	setAuto(on: boolean): Promise<void>;
+	dismissProposal(id: string): Promise<void>;
+	/** Events start once any call above has been made on this connection. */
+	onEvent(cb: (e: LeadEvent) => void): () => void;
+}
 
 /** window.ateamLead. */
 export interface AteamLead {

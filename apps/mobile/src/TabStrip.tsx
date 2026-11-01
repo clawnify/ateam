@@ -5,13 +5,18 @@ import Feather from "@expo/vector-icons/Feather";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { C } from "./theme";
 
-export type Tab = "home" | "board" | "mission" | "loops";
+export type Tab = "home" | "board" | "mission" | "loops" | "lead";
 
-const TABS: { key: Tab; label: string; icon: "home" | "columns" | "grid" | "repeat" }[] = [
+const TABS: {
+	key: Tab;
+	label: string;
+	icon: "home" | "columns" | "grid" | "repeat" | "message-circle";
+}[] = [
 	{ key: "home", label: "Home", icon: "home" },
 	{ key: "board", label: "Board", icon: "columns" },
 	{ key: "mission", label: "Mission", icon: "grid" },
 	{ key: "loops", label: "Loops", icon: "repeat" },
+	{ key: "lead", label: "Lead", icon: "message-circle" },
 ];
 
 const INK_ON_WHITE = "#15151a";

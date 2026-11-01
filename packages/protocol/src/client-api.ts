@@ -43,6 +43,14 @@ import type {
 	UpdateResultDTO,
 } from "./index";
 import { CH } from "./index";
+import {
+	LEAD_CH,
+	LEAD_EVENT,
+	type LeadClient,
+	type LeadEvent,
+	type LeadFile,
+	type LeadSnapshot,
+} from "./lead";
 import type { RpcClient } from "./rpc";
 
 /**
@@ -71,6 +79,28 @@ export function serverHandshake(rpc: RpcClient): Promise<SystemInfo> {
  */
 export function requestBoxUpdate(rpc: RpcClient): Promise<BoxUpdateStarted> {
 	return rpc.call(CH.systemUpdate) as Promise<BoxUpdateStarted>;
+}
+
+/**
+ * A box's own Lead chat (v24), for a client holding one box. Off AteamApi like
+ * the update call: it addresses the box, not an entity a multi-engine client
+ * could route by id. Gate it on boxSupports("lead", info.protocolVersion).
+ */
+export function leadClient(rpc: RpcClient): LeadClient {
+	const call = (method: string, ...args: unknown[]) => rpc.call(method, args);
+	return {
+		snapshot: () => call(LEAD_CH.snapshot) as Promise<LeadSnapshot>,
+		send: async (text, files) => void (await call(LEAD_CH.send, text, files ?? [])),
+		attachBytes: (name, base64) => call(LEAD_CH.attachBytes, name, base64) as Promise<LeadFile>,
+		interrupt: async () => void (await call(LEAD_CH.interrupt)),
+		reset: async () => void (await call(LEAD_CH.reset)),
+		reply: async (taskId, text) => void (await call(LEAD_CH.reply, taskId, text)),
+		answer: async (input) => void (await call(LEAD_CH.answer, input)),
+		permission: async (id, answer) => void (await call(LEAD_CH.permission, id, answer)),
+		setAuto: async (on) => void (await call(LEAD_CH.setAuto, on)),
+		dismissProposal: async (id) => void (await call(LEAD_CH.proposal, id, "dismissed")),
+		onEvent: (cb) => rpc.on(LEAD_EVENT, (e) => cb(e as LeadEvent)),
+	};
 }
 
 /**

@@ -17,7 +17,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { basename, extname, join, sep } from "node:path";
-import type { LeadAttachResult, LeadFile } from "../../shared/lead";
+import type { LeadAttachResult, LeadFile } from "@ateam/protocol";
 
 /** How long an attachment is kept. After that the chat shows it without a preview. */
 export const KEEP_MS = 30 * 24 * 60 * 60 * 1000;

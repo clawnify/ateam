@@ -3,7 +3,7 @@
 // card that reads "2h". `lastEventAt` is the task's last state change from its
 // agent's hooks (a turn starting or ending, a question, a reply), falling back
 // to when it was created; background writes like the git sweep never move it.
-// Imports nothing, so both the node and web tsconfigs resolve it.
+// Imports nothing, so every client resolves it (desktop, phone, engine).
 
 /**
  * Compact age label ("just now", "5m", "3h", "6d"). Deliberately short: on a

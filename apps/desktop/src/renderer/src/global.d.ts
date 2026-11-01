@@ -1,6 +1,5 @@
-import type { AteamApi } from "@ateam/protocol";
+import type { AteamApi, AteamLead } from "@ateam/protocol";
 import type { AteamHost } from "../../shared/host";
-import type { AteamLead } from "../../shared/lead";
 
 declare global {
 	interface Window {

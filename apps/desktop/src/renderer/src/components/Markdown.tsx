@@ -6,11 +6,11 @@
 // in its output can run or reach the network (probed with hostile input:
 // onerror, javascript: links, <script> labels all come out inert). So the SVG
 // is inserted as markup, like its own docs do.
+import { TASK_LINK_SCHEME } from "@ateam/protocol";
 import { PeleError, render } from "pele";
 import { createContext, memo, type ReactNode, useContext, useMemo } from "react";
 import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { TASK_LINK_SCHEME } from "../../../shared/lead";
 
 /** How a `task:` link (the Lead naming a task, `[fix login](task:<id>)`) is
  *  drawn, given what follows the scheme and the link's text. Provided by the
