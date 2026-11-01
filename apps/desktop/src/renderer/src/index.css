@@ -255,22 +255,9 @@ input {
 	border: 2px solid var(--bg-elev);
 	box-sizing: content-box;
 }
-.rail-tile .corner.needs_attention,
-.rail-tile .corner.awaiting_input {
+/* The rail's only dot: a task (or a loop's task) in Needs You. */
+.rail-tile .corner.needs_attention {
 	background: var(--amber);
-}
-.rail-tile .corner.review,
-.rail-tile .corner.idle {
-	background: var(--green);
-}
-.rail-tile .corner.running {
-	background: var(--blue);
-}
-.rail-tile .corner.stopped {
-	background: var(--text-dim);
-}
-.rail-tile .corner.pulse {
-	animation: dotpulse 1.4s ease-in-out infinite;
 }
 .rail-divider {
 	width: 24px;
@@ -323,26 +310,6 @@ input {
 	border-radius: 50%;
 	background: var(--text-dim);
 	flex: none;
-}
-/* A non-selected project with tasks needing eyes pulses its dot. */
-.proj .dot.alert.needs_attention {
-	background: var(--amber);
-	animation: dotpulse 1.4s ease-in-out infinite;
-}
-.proj .dot.alert.review {
-	background: var(--green);
-	animation: dotpulse 1.4s ease-in-out infinite;
-}
-@keyframes dotpulse {
-	0%,
-	100% {
-		transform: scale(1);
-		opacity: 1;
-	}
-	50% {
-		transform: scale(1.45);
-		opacity: 0.5;
-	}
 }
 .proj-name {
 	overflow: hidden;
@@ -405,8 +372,9 @@ input {
 .tasknode-row {
 	position: relative;
 }
-/* Trailing slot: the status dot and delete button occupy the same cell and swap
-   in place — dot at rest, trash on hover/focus — so neither covers the other. */
+/* Trailing slot: the git glyph and the delete button occupy the same cell and
+   swap in place — glyph at rest, trash on hover/focus — so neither covers the
+   other. */
 .task-trail {
 	position: absolute;
 	right: 6px;
@@ -419,27 +387,21 @@ input {
 	grid-area: 1 / 1;
 	transition: opacity 0.12s ease;
 }
-/* Nudge the small dot off the very edge so it lands where it did before. */
-.task-trail .tstatus {
-	margin-right: 8px;
-}
-/* The two actions sit side by side inside the dot's cell. */
-.task-trail .trail-actions {
-	display: flex;
-	gap: 2px;
-}
 .task-trail .iconbtn {
 	opacity: 0;
 	pointer-events: none;
+	/* Snug around its 14px icon rather than the toolbar's 28px, so the row only
+	   gives up the room the trash really needs. */
+	width: 20px;
+	height: 20px;
+	border-radius: 4px;
 }
 .tasknode-row:hover .task-trail .iconbtn,
 .task-trail:focus-within .iconbtn {
 	opacity: 1;
 	pointer-events: auto;
 }
-.tasknode-row:hover .task-trail .tstatus,
 .tasknode-row:hover .task-trail .tstate,
-.task-trail:focus-within .tstatus,
 .task-trail:focus-within .tstate {
 	opacity: 0;
 }
@@ -449,9 +411,10 @@ input {
 	gap: 7px;
 	width: 100%;
 	/* The right padding reserves the trailing slot. `.task-trail` is absolutely
-	   positioned, so it takes no space in this flex row and the name would
-	   otherwise ellipsize straight under the state glyph. Reserved constantly,
-	   not only when a glyph is present, so a task changing state never reflows
+	   positioned, so it takes no space in this flex row and the row's pills
+	   would otherwise sit under the glyph or the trash. Sized for the trash (the
+	   wider of the two, 20px at 6px from the edge) and reserved constantly, so
+	   hovering never moves the status and a task changing state never reflows
 	   its own row. */
 	padding: 5px 28px 5px 22px;
 	cursor: pointer;
@@ -480,8 +443,11 @@ input {
 	align-items: center;
 	gap: 4px;
 }
+/* Takes the room the pills leave (basis 0), down to a floor that keeps its first
+   letters on screen while the hover's tags squeeze it. */
 .tasknode .tname {
 	flex: 1;
+	min-width: 2em;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -504,17 +470,9 @@ input {
 .tstatus.stopped {
 	background: var(--text-dim);
 }
-/* Claims to be running but stopped advancing — the sidebar's copy of
-   `.ring.stalled`: hollow, not pulsing, so it reads as "no longer live". */
-.tstatus.stalled {
-	background: transparent;
-	border: 1.5px solid var(--text-dim);
-}
-/* The work's state, shown in the same trailing slot once no agent is attached
-   (see TriageGlyph). A glyph rather than a dot: these say something structural
-   about the branch, not which of four agent states it is in, and the shapes are
-   the ones the toolbar already uses for the same concepts. Sized to sit on the
-   dot's optical centre so the slot never shifts as a task changes state. */
+/* The work's state, in the row's trailing slot (see TriageGlyph). A glyph: it
+   says something structural about the branch, and the shapes are the ones the
+   toolbar already uses for the same concepts. */
 .tstate {
 	display: inline-flex;
 	align-items: center;
@@ -535,14 +493,6 @@ input {
 }
 /* `.done` keeps the inherited dim: a landed branch is the calmest thing on the
    list and must not compete with live work for attention. */
-/* Dependencies still copying in. Dim rather than a status colour — nothing is
-   wrong and nothing is running yet — with the same pulse the rail uses, so it
-   reads as work in progress instead of a fifth agent state. */
-.tstatus.preparing,
-.rail-tile .corner.preparing {
-	background: var(--text-dim);
-	animation: dotpulse 1.4s ease-in-out infinite;
-}
 .tree-empty {
 	color: var(--text-dim);
 	font-size: 12px;
@@ -858,8 +808,8 @@ input {
 	display: flex;
 }
 /* The one pill: a short name in a border, filled with a faint tint of that
-   same border colour. Neutral by default (task tags, "archived"); a colour
-   class sets --pill and the text follows it. */
+   same border colour. Neutral by default (task tags, "archived", a Backlog or
+   Done status); a colour class sets --pill and the text follows it. */
 .pill {
 	--pill: var(--border);
 	flex: none;
@@ -877,6 +827,14 @@ input {
 .pill.green {
 	--pill: var(--green);
 	color: var(--green);
+}
+.pill.blue {
+	--pill: var(--blue);
+	color: var(--blue);
+}
+.pill.amber {
+	--pill: var(--amber);
+	color: var(--amber);
 }
 .card .meta {
 	display: flex;
@@ -932,21 +890,40 @@ input {
 	color: var(--text);
 	font-weight: 600;
 }
-/* Sidebar chips: hover-only, same as the card's. Kept clear of the absolutely
-   positioned trailing slot (status dot / delete) by a right margin, and hidden
-   outright at rest so a resting row is exactly as it was. */
+/* Sidebar pills: the status always, in a fixed spot at the row's end; on hover
+   the tags join it on its left (same as the card's). Room goes to the pills
+   first, then the name. A pill is 17.5px against the name's 15px line box, so
+   each is pulled in by 2px top and bottom: it takes horizontal room but never
+   grows the row. */
+.tasknode > .pill {
+	margin-block: -2px;
+}
 .tasknode .row-tags {
 	display: none;
-	flex: none;
+	/* Shrinks only once the name is down to its floor, rather than pushing
+	   into the status. */
+	flex: 0 1 auto;
+	min-width: 0;
 	gap: 3px;
-	margin-right: 48px;
-	/* Zero cross-size, so chips take horizontal room (squeezing the name, which
-	   already ellipsizes) but contribute nothing to the row's height: the chip
-	   is 17.5px against a 15px name line box, so in normal flow revealing it on
-	   hover grew the row by 2px under the cursor. Centred overflow keeps the
-	   chip on the row's midline, and the row stays put whatever size it is. */
-	height: 0;
+	/* One pill tall and wrapping: a tag that doesn't fit drops onto a second
+	   line that is clipped away, so tags show whole or not at all. The ones
+	   that fit sit against the status, with any room left over on their left. */
+	flex-wrap: wrap;
+	justify-content: flex-end;
 	align-items: center;
+	height: 18px;
+	margin-block: -2px;
+	overflow: hidden;
+}
+/* A zero-width first item: wrapping never moves a line's first item, so without
+   it a first tag too wide for the room would sit cut on the visible line. Full
+   height, so the first line stays a pill tall even when it holds nothing else;
+   its negative margin cancels the gap after it. */
+.tasknode .row-tags::before {
+	content: "";
+	width: 0;
+	height: 100%;
+	margin-right: -3px;
 }
 .tasknode-row:hover .tasknode .row-tags {
 	display: flex;
@@ -986,14 +963,11 @@ input {
 		opacity: 0.4;
 	}
 }
-/* Respect the OS "reduce motion" setting. The pulsing status dots are decoration —
-   the state each one signals is already carried by its colour — so they stop dead.
+/* Respect the OS "reduce motion" setting. The pulsing status ring is decoration —
+   the state it signals is already carried by its colour — so it stops dead.
    Spinners deliberately keep spinning: they are the only signal that work is in
    flight, and freezing them would read as a hung app. */
 @media (prefers-reduced-motion: reduce) {
-	.rail-tile .corner.pulse,
-	.proj .dot.alert.needs_attention,
-	.proj .dot.alert.review,
 	.ring.awaiting_input {
 		animation: none;
 	}
@@ -3597,7 +3571,8 @@ input {
 /* A task the Lead names in its prose: the same chip, slimmed to 20px so it sits
    in a 21px line of text, with air above and below so chips on consecutive
    lines (a list of tasks) don't touch each other or the text around them. */
-.md .lead-chip {
+.md .lead-chip,
+.lead-user .lead-chip {
 	padding: 1px 7px;
 	line-height: 16px;
 	margin: 2px 0;
@@ -3625,6 +3600,7 @@ input {
 	padding: 0 20px 16px;
 }
 .lead-box {
+	position: relative;
 	display: flex;
 	flex-wrap: wrap;
 	align-items: flex-end;
@@ -3641,8 +3617,47 @@ input {
 		inset 0 0 0 1px rgba(255, 255, 255, 0.16),
 		0 4px 20px rgba(0, 0, 0, 0.25);
 }
-.lead-box textarea {
+/* The text box and, behind it, the layer that tints the tasks picked with "@"
+   (TaskRefInput): both lay out the same text with the same metrics, so a tint
+   sits exactly under its words. */
+.lead-input {
 	flex: 1;
+	position: relative;
+	display: flex;
+	min-width: 0;
+}
+.lead-input-marks {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+	pointer-events: none;
+	padding: 4px 0;
+	font: inherit;
+	font-size: 14px;
+	line-height: 20px;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+	color: transparent;
+	/* The app's scrollbars take width (the ::-webkit-scrollbar rule), so a long
+	   draft's scrollbar would narrow the textarea and its words would wrap apart
+	   from the tints. Both keep the gutter, scrolling or not. */
+	scrollbar-gutter: stable;
+}
+/* No padding: it would push the text after it out of line with the textarea's.
+   The spread gives the tint its air instead. */
+.lead-input-marks mark {
+	color: transparent;
+	background: rgba(255, 255, 255, 0.1);
+	border-radius: 4px;
+	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1);
+	-webkit-box-decoration-break: clone;
+	box-decoration-break: clone;
+}
+.lead-box textarea {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+	scrollbar-gutter: stable;
 	field-sizing: content;
 	min-height: 28px;
 	max-height: 380px;
@@ -3657,6 +3672,57 @@ input {
 	outline: none;
 }
 .lead-box textarea::placeholder {
+	color: var(--text-dim);
+}
+/* The tasks "@" lists: a card over the thread, as wide as the composer. */
+.lead-refs {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: calc(100% + 6px);
+	z-index: 30;
+	padding: 4px;
+	background: #222228;
+	border-radius: 12px;
+	box-shadow:
+		inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+		0 8px 28px rgba(0, 0, 0, 0.35);
+}
+.lead-refs-title {
+	padding: 4px 8px 4px;
+	font-size: 11px;
+	color: var(--text-dim);
+}
+.lead-refs-list {
+	max-height: 248px;
+	overflow-y: auto;
+}
+.lead-ref {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 8px;
+	border-radius: 8px;
+	font-size: 13px;
+	cursor: pointer;
+}
+.lead-ref.active {
+	background: rgba(255, 255, 255, 0.08);
+}
+.lead-ref-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.lead-ref-meta {
+	flex: none;
+	max-width: 45%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
 	color: var(--text-dim);
 }
 .lead-box.dropping {
@@ -4202,11 +4268,20 @@ input {
 	font-size: 12px;
 	color: var(--text-dim);
 }
+/* Under a reply: Reply on the left, the emoji answer on the right. */
+.lead-agent-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+.lead-agent-actions > .question-reply {
+	flex: 1;
+}
 .lead-agent-reply {
 	display: inline-flex;
 	align-items: center;
 	gap: 5px;
-	align-self: flex-start;
 	padding: 2px 6px;
 	margin-left: -6px;
 	font-size: 12px;
@@ -4227,17 +4302,37 @@ input {
 .lead-agent-body[hidden] {
 	display: none;
 }
+/* A long reply scrolls inside the card, so the card keeps about the same
+   height while paging through a stack: the arrows above and Reply below stay
+   on screen. */
+.lead-agent-body > .md {
+	max-height: min(320px, 50vh);
+	overflow-y: auto;
+}
+/* The same reply whole, in its dialog: scrolls once taller than the window. */
+.lead-reply-whole {
+	min-height: 0;
+	overflow-y: auto;
+	outline: none;
+}
 .lead-agent-head > .lead-chip {
 	min-width: 0;
 }
-.lead-stack-nav {
+/* The head's right end: Expand, then the stack's paging. Paging comes last so
+   its arrows stay put while Expand comes and goes with the reply shown. */
+.lead-agent-tools {
 	display: flex;
 	flex-shrink: 0;
 	align-items: center;
 	gap: 2px;
 	margin-left: auto;
 }
-.lead-stack-nav .iconbtn {
+.lead-stack-nav {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+}
+.lead-agent-tools .iconbtn {
 	width: 22px;
 	height: 22px;
 }

@@ -290,7 +290,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		get: () => buildBoardView(db),
 		setStatus: async (req) => applySetStatus(db, req, sendTaskUpdated),
 		setWaiting: async (req) => applySetWaiting(db, req, waits, sendTaskUpdated),
-		listPeers: async (callerTerminalId) => peers.listPeers(callerTerminalId),
+		listPeers: async (callerTerminalId, search) =>
+			search ? peers.searchPeers(callerTerminalId, search) : peers.listPeers(callerTerminalId),
 		sendMessage: async (req) => peers.send(req),
 		askUser: async (req) => {
 			const session = repo.getSessionByTerminal(db, req.callerTerminalId);

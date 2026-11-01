@@ -34,7 +34,7 @@
  */
 
 import { getAgent } from "@ateam/agents";
-import type { AgentSession, AteamDb, PeerMessage, Task } from "@ateam/db";
+import type { AgentSession, AteamDb, PeerMessage, Project, Task } from "@ateam/db";
 import { repo } from "@ateam/db";
 import { isBranchForName } from "@ateam/git-core";
 import { projectRepo } from "@ateam/protocol";
@@ -170,7 +170,18 @@ export interface PeerView {
 	description: string | null;
 	/** Where the task stands, in a sentence or two (task-summaries.ts); null until one is written. */
 	summary: string | null;
+	/** Only a search lists archived tasks. */
+	archived?: true;
 	you?: true;
+}
+
+/** How many tasks a peer search hands back: merged history only grows. */
+export const PEER_SEARCH_LIMIT = 25;
+
+export interface PeerSearch {
+	peers: PeerView[];
+	/** More tasks matched than PEER_SEARCH_LIMIT: add a word to narrow it. */
+	more: boolean;
 }
 
 export interface SendResult {
@@ -233,36 +244,66 @@ export class PeerMessenger {
 	/** Every task outside `merged`, as a sender would choose among them. */
 	listPeers(callerTerminalId: string | undefined): PeerView[] {
 		const { db } = this.deps;
-		const callerTaskId = callerTerminalId
-			? repo.getSessionByTerminal(db, callerTerminalId)?.taskId
-			: undefined;
+		const callerTaskId = this.callerTaskId(callerTerminalId);
 		const peers: PeerView[] = [];
 		for (const project of repo.listProjects(db)) {
 			for (const task of repo.listTasks(db, project.id)) {
 				if (task.column === "merged") continue;
-				const live = this.liveAgentSession(task.id);
-				peers.push({
-					taskId: task.id,
-					name: task.name,
-					project: project.name,
-					repo: projectRepo(project),
-					branch: task.branch,
-					agent: live?.agentId ?? task.agentId ?? null,
-					state: !live
-						? "not_running"
-						: live.status === "running"
-							? "working"
-							: live.status === "awaiting_input"
-								? "needs_you"
-								: "idle",
-					column: task.column,
-					description: task.description ? task.description.slice(0, 280) : null,
-					summary: task.summary ?? null,
-					...(task.id === callerTaskId ? { you: true as const } : {}),
-				});
+				peers.push(this.peerView(task, project, callerTaskId));
 			}
 		}
 		return peers;
+	}
+
+	/**
+	 * The newest tasks whose name, branch or description holds every word of
+	 * `search`, merged and archived ones too. send() reaches those, but
+	 * listPeers leaves them out, so without this an agent told to hand work back
+	 * to the task that built something had no way to find it and went reading
+	 * the sqlite file instead.
+	 */
+	searchPeers(callerTerminalId: string | undefined, search: string): PeerSearch {
+		const { db } = this.deps;
+		const callerTaskId = this.callerTaskId(callerTerminalId);
+		const projects = new Map(repo.listProjects(db).map((p) => [p.id, p]));
+		const terms = search.split(/\s+/).filter(Boolean);
+		const rows = repo.searchTasks(db, terms, PEER_SEARCH_LIMIT + 1);
+		const peers: PeerView[] = [];
+		for (const task of rows.slice(0, PEER_SEARCH_LIMIT)) {
+			const project = projects.get(task.projectId);
+			if (project) peers.push(this.peerView(task, project, callerTaskId));
+		}
+		return { peers, more: rows.length > PEER_SEARCH_LIMIT };
+	}
+
+	private callerTaskId(callerTerminalId: string | undefined): string | undefined {
+		return callerTerminalId
+			? repo.getSessionByTerminal(this.deps.db, callerTerminalId)?.taskId
+			: undefined;
+	}
+
+	private peerView(task: Task, project: Project, callerTaskId: string | undefined): PeerView {
+		const live = this.liveAgentSession(task.id);
+		return {
+			taskId: task.id,
+			name: task.name,
+			project: project.name,
+			repo: projectRepo(project),
+			branch: task.branch,
+			agent: live?.agentId ?? task.agentId ?? null,
+			state: !live
+				? "not_running"
+				: live.status === "running"
+					? "working"
+					: live.status === "awaiting_input"
+						? "needs_you"
+						: "idle",
+			column: task.column,
+			description: task.description ? task.description.slice(0, 280) : null,
+			summary: task.summary ?? null,
+			...(task.archivedAt != null ? { archived: true as const } : {}),
+			...(task.id === callerTaskId ? { you: true as const } : {}),
+		};
 	}
 
 	/** Queue a message from the agent on `fromTerminalId` to the task `to`

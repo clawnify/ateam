@@ -82,7 +82,7 @@ import { ConnectSteps } from "./components/ConnectSteps";
 import { FileDiffView } from "./components/FileDiffView";
 import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
 import { IconButton } from "./components/IconButton";
-import { LeadChat } from "./components/LeadChat";
+import { LeadChat, type LeadProposalItem } from "./components/LeadChat";
 import { LoopForm, LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
 import { PageFrame } from "./components/PageFrame";
@@ -112,7 +112,6 @@ import {
 	type Alias,
 	aliasLabel,
 	type EngineMember,
-	type UnifiedProject,
 	unifyProjects,
 } from "./unify";
 import { useGithubIssues } from "./useGithubIssues";
@@ -421,6 +420,9 @@ export function App() {
 	const [proposalOpen, setProposalOpen] = useState<{ taskId: string; id: string } | null>(null);
 	// Proposals already opened by themselves, so each opens unasked only once.
 	const autoOpenedProposals = useRef(new Set<string>());
+	// A task or loop the Lead proposed, open in its dialog. Its card in the
+	// chat opens it again; creating it or Dismiss decides it.
+	const [leadProposal, setLeadProposal] = useState<LeadProposalItem | null>(null);
 	// Free-text task filter driven by the centered search bar in the topbar.
 	// Filters the sidebar list and the board by task name; the selected task
 	// stays open even when it doesn't match, so searching never yanks it away.
@@ -600,8 +602,8 @@ export function App() {
 	// The box a task is being set up on, so the toast can show its steps.
 	const [provisioning, setProvisioning] = useState<string | null>(null);
 
-	// Load every project's tasks so non-selected projects can surface their
-	// attention state (pulsing dot); evtTaskUpdated keeps them fresh after.
+	// Load every project's tasks, not only the selected one's, so the Lead chat
+	// can name and open any of them; evtTaskUpdated keeps them fresh after.
 	useEffect(() => {
 		for (const p of projects) void loadTasks(p.id);
 	}, [projects, loadTasks]);
@@ -613,15 +615,6 @@ export function App() {
 		const p = projects.find((x) => x.id === boundProjectId);
 		if (p) document.title = p.name;
 	}, [boundProjectId, projects]);
-
-	// Highest-priority alert among a non-selected card's tasks (across all its engines).
-	const cardAlert = (card: UnifiedProject): "needs_attention" | "review" | null => {
-		if (card.members.some((m) => m.projectId === activeProjectId)) return null;
-		const list = card.members.flatMap((m) => tasksByProject[m.projectId] ?? []);
-		if (list.some((t) => t.column === "needs_attention")) return "needs_attention";
-		if (list.some((t) => t.column === "review")) return "review";
-		return null;
-	};
 
 	// The project a detached window is pinned to (for its static header).
 	const boundProject = boundProjectId
@@ -865,6 +858,7 @@ export function App() {
 		selectedTask && panelOnScreen(view, panelMode, selectedOffline !== null) ? selectedTask : null;
 	const dialogOpen =
 		proposalOpen !== null ||
+		leadProposal !== null ||
 		composerOpen ||
 		loopDialog !== null ||
 		cleanupOpen ||
@@ -890,6 +884,28 @@ export function App() {
 		run(async () => {
 			await window.ateam.tasks.clearProposal({ taskId, proposalId });
 		});
+	const decideLeadProposal = (id: string, outcome: "created" | "dismissed", taskId?: string) =>
+		run(async () => {
+			await window.ateamLead.proposal(id, outcome, taskId);
+		});
+	// The Lead's proposal, in the New task or New loop dialog. Arriving while
+	// another dialog is up (`auto`), it waits as its card in the chat.
+	const openLeadProposal = (item: LeadProposalItem, auto: boolean) => {
+		if (auto && dialogOpen) return;
+		if (!projects.some((p) => p.id === item.projectId)) {
+			if (!auto) setError(`${item.projectName} isn't on your board any more.`);
+			return;
+		}
+		// The dialog creates in the active project (its machines, its remote) and
+		// the new card lands on its board, so the proposal's project becomes the
+		// active one. The view stays: the Lead tab, or the sidebar beside it.
+		if (!activeCard?.members.some((m) => m.projectId === item.projectId)) {
+			const stay = view;
+			selectProject(item.projectId);
+			setView(stay);
+		}
+		setLeadProposal(item);
+	};
 	// Opening Mission Control, which Auto holds the terminals for until it has
 	// fitted: switching to it, or to
 	// another project's or mode's grid while on it. Coming back from a tile
@@ -1282,8 +1298,9 @@ export function App() {
 	// Delete a task (and its worktree) straight from the sidebar. Confirm first,
 	// then reuse the same remove + force-fallback flow as the task panel menu.
 	// The onTaskRemoved event listener drops the row and clears the selection.
-	// Park a task on an outside party from the sidebar, or end the wait. The
-	// agent's own path is the `set_waiting` board tool; both meet in the engine.
+	// Park a task on an outside party from the open task's ··· menu, or end the
+	// wait. The agent's own path is the `set_waiting` board tool; both meet in
+	// the engine.
 	const toggleWaiting = (t: TaskDTO) =>
 		run(async () => {
 			if (t.waitingUntil != null) {
@@ -1353,7 +1370,7 @@ export function App() {
 			alias: Alias;
 			open: boolean;
 		},
-		onCreated?: () => void,
+		onCreated?: (task: TaskDTO) => void,
 	) =>
 		run(async () => {
 			const card = activeCard;
@@ -1447,7 +1464,7 @@ export function App() {
 			} else task = await window.ateam.tasks.create({ ...taskInput, nameAuto: input.nameAuto });
 			// The task exists: what a proposal asked for is done, even if its agent
 			// then fails to start (that error shows, and the task can be resumed).
-			onCreated?.();
+			onCreated?.(task);
 			setSelectedIssue(null);
 			// The created task's project is a member of the active card, so its tasks
 			// are already unioned into the board once loaded.
@@ -1526,8 +1543,9 @@ export function App() {
 								<FolderPlus size={16} strokeWidth={1.75} />
 							</RailTile>
 						)}
+						{/* Projects carry no status: a dot summing up every task in a repo
+						    never said which one, or what it wanted. */}
 						{unifiedProjects.map((card) => {
-							const alert = cardAlert(card);
 							const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
 							if (!primary) return null;
 							const active = card.members.some((m) => m.projectId === activeProjectId);
@@ -1547,7 +1565,6 @@ export function App() {
 									}
 								>
 									{card.name.charAt(0).toUpperCase()}
-									{alert && <span className={`corner pulse ${alert}`} />}
 								</RailTile>
 							);
 						})}
@@ -1579,11 +1596,9 @@ export function App() {
 										<Icon size={16} strokeWidth={1.75} />
 									)}
 									{rest.length > 0 && <span className="rail-count">{rest.length + 1}</span>}
-									{t.preparing ? (
-										<span className="corner preparing" />
-									) : (
-										t.agentStatus && <span className={`corner ${t.agentStatus}`} />
-									)}
+									{/* No room for the row's status pill, so the one state worth a
+									    dot gets it: a dot on every tile said nothing. */}
+									{t.column === "needs_attention" && <span className="corner needs_attention" />}
 								</RailTile>
 							);
 						})}
@@ -1610,7 +1625,7 @@ export function App() {
 									onClick={() => (task ? toggleTask(task) : goToView("loops"))}
 								>
 									<Repeat size={16} strokeWidth={1.75} />
-									{task?.agentStatus && <span className={`corner ${task.agentStatus}`} />}
+									{task?.column === "needs_attention" && <span className="corner needs_attention" />}
 								</RailTile>
 							);
 						})}
@@ -1650,7 +1665,6 @@ export function App() {
 								{!projectsCollapsed && (
 									<div className="side-list">
 										{unifiedProjects.map((card) => {
-											const alert = cardAlert(card);
 											// Selecting/detaching acts on the local copy if present, else the first.
 											const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
 											if (!primary) return null;
@@ -1670,9 +1684,10 @@ export function App() {
 														onClick={() => selectProject(primary.projectId)}
 														onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
 													>
+														{/* The project's own colour, never a status. */}
 														<span
-															className={`dot ${alert ? `alert ${alert}` : ""}`}
-															style={!alert && card.color ? { background: card.color } : undefined}
+															className="dot"
+															style={card.color ? { background: card.color } : undefined}
 														/>
 														<span className="proj-name" title={primary.project.repoPath}>
 															{card.name}
@@ -1815,7 +1830,6 @@ export function App() {
 														pulse={t.id === pulseId}
 														onClick={() => toggleTask(t)}
 														onDelete={() => deleteTask(t)}
-														onWait={() => toggleWaiting(t)}
 													/>
 												</Reorder.Item>
 											))}
@@ -1832,7 +1846,6 @@ export function App() {
 													pulse={t.id === pulseId}
 													onClick={() => toggleTask(t)}
 													onDelete={() => deleteTask(t)}
-													onWait={() => toggleWaiting(t)}
 												/>
 											</motion.div>
 										))
@@ -2089,6 +2102,7 @@ export function App() {
 							alias={originOf(selectedTask.projectId)}
 							onInstallAgent={installAgentOn}
 							onOpenProposal={(id) => setProposalOpen({ taskId: selectedTask.id, id })}
+							onWait={() => toggleWaiting(selectedTask)}
 							mode={panelMode}
 							onSetMode={(m) => (m === "side" ? collapseFocus() : setPanelMode(m))}
 							collapseLabel={FOCUS_COLLAPSE_LABEL[view]}
@@ -2207,6 +2221,7 @@ export function App() {
 									alias={originOf(selectedTask.projectId)}
 									onInstallAgent={installAgentOn}
 									onOpenProposal={(id) => setProposalOpen({ taskId: selectedTask.id, id })}
+									onWait={() => toggleWaiting(selectedTask)}
 									mode={panelMode}
 									onSetMode={setPanelMode}
 									terminalId={termByTask[selectedTask.id] ?? null}
@@ -2251,7 +2266,12 @@ export function App() {
 					) : view === "settings" ? (
 						<SettingsPanel agents={agents} />
 					) : view === "lead" ? (
-						<LeadChat tasks={allTasks} onOpenTask={openTask} />
+						<LeadChat
+							tasks={allTasks}
+							projects={projects}
+							onOpenTask={openTask}
+							onOpenProposal={openLeadProposal}
+						/>
 					) : (
 						<LoopsPanel
 							loops={sortedLoops}
@@ -2276,7 +2296,13 @@ export function App() {
 						aria-label="Resize Lead sidebar"
 					/>
 					<aside className="lead-side" aria-label="Lead">
-						<LeadChat tasks={allTasks} onOpenTask={openTask} onHide={() => setLeadSide(false)} />
+						<LeadChat
+							tasks={allTasks}
+							projects={projects}
+							onOpenTask={openTask}
+							onOpenProposal={openLeadProposal}
+							onHide={() => setLeadSide(false)}
+						/>
 					</aside>
 				</>
 			)}
@@ -2409,6 +2435,74 @@ export function App() {
 						/>
 					);
 				})()}
+			{leadProposal &&
+				activeCard &&
+				(() => {
+					const item = leadProposal;
+					const p = { ...item.proposal, id: item.id, proposedAt: item.at };
+					const note = (
+						<ProposalNote
+							from={item.projectName}
+							byLead
+							proposal={p}
+							onDismiss={() => {
+								setLeadProposal(null);
+								void decideLeadProposal(item.id, "dismissed");
+							}}
+						/>
+					);
+					return p.kind === "task" ? (
+						<PromptComposer
+							key={item.id}
+							agents={agents}
+							initialName={p.name}
+							initialPrompt={p.prompt}
+							initialFiles={item.files}
+							defaultAgentId={p.agentId}
+							initialAlias={originOf(item.projectId)}
+							header={note}
+							environments={composerEnvs}
+							envAgents={envAgents}
+							onAdd={addTailscaleBox}
+							onInstall={installBox}
+							onForget={forgetBox}
+							onInstallAgent={installAgentOn}
+							onClose={() => setLeadProposal(null)}
+							onCreate={(input) => {
+								setLeadProposal(null);
+								void composeTask(
+									input,
+									(task) => void decideLeadProposal(item.id, "created", task.id),
+								);
+							}}
+						/>
+					) : (
+						<LoopForm
+							key={item.id}
+							draft={{
+								name: p.name,
+								prompt: p.prompt,
+								followUp: p.followUp,
+								agentId: p.agentId,
+								projectId: item.projectId,
+								everyMinutes: p.everyMinutes,
+								dailyAt: p.dailyAt,
+							}}
+							note={note}
+							members={activeMembers}
+							agents={agents}
+							envProtocol={envProtocol}
+							onInstallAgent={installAgentOn}
+							onCancel={() => setLeadProposal(null)}
+							onSaved={() => {
+								void decideLeadProposal(item.id, "created");
+								refreshLoops();
+								setLoopsCollapsed(false);
+								setLeadProposal(null);
+							}}
+						/>
+					);
+				})()}
 			{promptUi}
 			{error && (
 				<div className="toast" onClick={() => setError(null)}>
@@ -2450,16 +2544,32 @@ export function App() {
 	);
 }
 
+// The status pill's colour per column: the columns that want your eyes take
+// the status colours, Backlog and Done stay neutral.
+const COLUMN_TONE: Partial<Record<KanbanColumn, string>> = {
+	running: "blue",
+	needs_attention: "amber",
+	review: "green",
+};
+
 /**
- * What the row's trailing slot says once no agent is attached.
- *
- * With a live agent the slot belongs to `agentStatus` (blue working, amber
- * needs-you) — that is the most urgent thing a row can report. The rest of the
- * time the useful question is the state of the WORK, which is exactly what
- * `triage` answers, from the task row alone and with no git/gh calls. Before
- * this, every such task wore the same green "idle" dot, so a task merged last
- * week, one that never started, and one genuinely waiting on you were
- * indistinguishable.
+ * A task's status on its sidebar row: its board column, in the board's own
+ * words. It replaced a coloured dot for the agent's state, which needed a
+ * legend and said nothing at all once the agent was idle.
+ */
+function StatusPill({ column, title }: { column: KanbanColumn; title?: string }) {
+	return (
+		<span className={`pill ${COLUMN_TONE[column] ?? ""}`} title={title}>
+			{COLUMNS.find((c) => c.key === column)?.label}
+		</span>
+	);
+}
+
+/**
+ * What the row's trailing slot says: the state of the WORK, which is exactly
+ * what `triage` answers, from the task row alone and with no git/gh calls. The
+ * row's status pill says where the task stands; this says whether its branch
+ * has a PR, landed, or holds uncommitted work.
  *
  * `active` and `not_started` fall through to null deliberately: "recently
  * touched" and "nothing here yet" are the row's resting state, and a glyph for
@@ -2554,7 +2664,6 @@ function TaskRow({
 	pulse,
 	onClick,
 	onDelete,
-	onWait,
 }: {
 	task: TaskDTO;
 	/** Its box isn't held: the row is its last-seen state, not a live one. */
@@ -2564,14 +2673,13 @@ function TaskRow({
 	pulse: boolean;
 	onClick: () => void;
 	onDelete: () => void;
-	onWait: () => void;
 }) {
 	const Icon = taskIcon(t.name);
 	const tags = tagsFor(t);
 	const glyphs = taskGlyphs(t);
 	// Row and trailing slot are siblings so the trash click can't nest inside the
-	// row button (same pattern as proj-row / proj-open above). The status dot and
-	// delete button share the trailing slot and swap in place on hover.
+	// row button (same pattern as proj-row / proj-open above). The git glyph and
+	// the delete button share the trailing slot and swap in place on hover.
 	return (
 		<div className="tasknode-row">
 			<button
@@ -2588,9 +2696,9 @@ function TaskRow({
 					<Icon className="ticon" size={14} strokeWidth={1.75} />
 				)}
 				<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
-				{/* Hover-only, like the card's. The name already ellipsizes, so it
-				    simply truncates further to make room and the row never changes
-				    height. */}
+				{/* The status stays put; on hover the tags slide in beside it, like
+				    the card's. The name already ellipsizes, so it simply truncates
+				    further to make room and the row never changes height. */}
 				{tags.length > 0 && (
 					<span className="row-tags">
 						{tags.map((tag) => (
@@ -2600,49 +2708,26 @@ function TaskRow({
 						))}
 					</span>
 				)}
+				<StatusPill column={t.column} title={t.triage.reason} />
 			</button>
 			<span className="task-trail">
-				{/* A task is `preparing` before it has any agentStatus, so this is
-				    the one dot it gets — otherwise the trail is empty for the whole
-				    copy and the card looks idle while it is anything but. */}
-				{t.preparing ? (
-					<span className="tstatus preparing" title="Copying dependencies into the worktree…" />
-				) : t.agentStatus === "running" || t.agentStatus === "awaiting_input" ? (
-					// A live agent keeps this slot. `stalled` means it claims to be
-					// running but stopped advancing, so it wears the card's hollow
-					// treatment rather than the pulsing live one.
-					<span
-						className={`tstatus ${t.triage.bucket === "stalled" ? "stalled" : t.agentStatus}`}
-						title={t.triage.reason}
-					/>
-				) : (
-					<TriageGlyph triage={t.triage} />
-				)}
-				{/* Two hover actions share the dot's cell; on a parked task the
-				    hourglass reads lit, so the hover also says "this one is waiting". */}
-				<span className="trail-actions">
-					<IconButton
-						icon={Hourglass}
-						label={t.waitingUntil != null ? "Stop waiting" : "Wait on someone…"}
-						active={t.waitingUntil != null}
-						size={14}
-						onClick={onWait}
-					/>
-					<IconButton
-						icon={Trash2}
-						label="Delete task"
-						variant="danger"
-						size={14}
-						onClick={onDelete}
-					/>
-				</span>
+				<TriageGlyph triage={t.triage} />
+				{/* One action, so it fits beside the status without moving it. Wait
+				    on someone lives in the open task's ··· menu. */}
+				<IconButton
+					icon={Trash2}
+					label="Delete task"
+					variant="danger"
+					size={14}
+					onClick={onDelete}
+				/>
 			</span>
 		</div>
 	);
 }
 
 /** Sidebar row for a loop — mirrors TaskRow, with the loop's task supplying
- *  the status dot. A paused loop renders dimmed. */
+ *  the status pill. A paused loop renders dimmed. */
 function LoopRow({
 	loop,
 	task,
@@ -2665,10 +2750,8 @@ function LoopRow({
 					<Repeat size={14} strokeWidth={1.75} />
 				</span>
 				<span className="tname">{loop.title}</span>
+				{task && <StatusPill column={task.column} title={task.triage.reason} />}
 			</button>
-			<span className="task-trail">
-				{task?.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
-			</span>
 		</div>
 	);
 }
@@ -2948,6 +3031,7 @@ function TaskPanel({
 	alias,
 	onInstallAgent,
 	onOpenProposal,
+	onWait,
 	mode,
 	onSetMode,
 	collapseLabel = "Show beside the board",
@@ -2970,6 +3054,8 @@ function TaskPanel({
 	onInstallAgent: (alias: Alias, agentId: string) => Promise<{ loginCommand?: string }>;
 	/** Open a task or loop this task's agent proposed, in its filled-in dialog. */
 	onOpenProposal: (proposalId: string) => void;
+	/** Park this task on an outside party, or end the wait. */
+	onWait: () => void;
 	mode: "side" | "full";
 	onSetMode: (m: "side" | "full") => void;
 	/** Tooltip for the minimize button — where collapsing takes you. */
@@ -3596,6 +3682,11 @@ function TaskPanel({
 				/>
 				<Menu
 					items={[
+						{
+							label: task.waitingUntil != null ? "Stop waiting" : "Wait on someone…",
+							icon: Hourglass,
+							onClick: onWait,
+						},
 						{
 							label: "Remove task & worktree",
 							icon: Trash2,

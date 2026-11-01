@@ -13,6 +13,7 @@ import {
 	MAX_HOPS,
 	MAX_PER_SENDER,
 	nextHop,
+	PEER_SEARCH_LIMIT,
 	PeerMessenger,
 	planDelivery,
 } from "../src/peer-messages";
@@ -421,6 +422,47 @@ describe("PeerMessenger.listPeers", () => {
 		expect(messenger.listPeers(undefined)[0]?.summary).toBe(
 			"Board loads in 200ms; PR #12 is open.",
 		);
+	});
+});
+
+describe("PeerMessenger.searchPeers", () => {
+	it("finds merged and archived tasks by every word, in any case", () => {
+		const built = addTask("agents-can-propose");
+		repo.updateTask(db, built.id, {
+			column: "merged",
+			description: "Add propose_task and propose_loop to the board MCP",
+		});
+		const old = addTask("old-loop-work");
+		repo.updateTask(db, old.id, { description: "propose_loop schedule", archivedAt: now });
+		addTask("unrelated");
+		addSession(addTask("me"), "claude", "ta", "running");
+
+		// Hidden from the plain listing, found by a search.
+		expect(messenger.listPeers("ta").map((p) => p.name)).not.toContain("agents-can-propose");
+		const r = messenger.searchPeers("ta", "PROPOSE_loop");
+		expect(r.more).toBe(false);
+		expect(r.peers.map((p) => p.name).sort()).toEqual(["agents-can-propose", "old-loop-work"]);
+		expect(r.peers.find((p) => p.taskId === built.id)).toMatchObject({ column: "merged" });
+		expect(r.peers.find((p) => p.taskId === built.id)?.archived).toBeUndefined();
+		expect(r.peers.find((p) => p.taskId === old.id)?.archived).toBe(true);
+
+		// Every word must match, each in any field: the branch is feat/<name>.
+		expect(messenger.searchPeers("ta", "feat/agents board").peers.map((p) => p.name)).toEqual([
+			"agents-can-propose",
+		]);
+		expect(messenger.searchPeers("ta", "propose nowhere").peers).toEqual([]);
+		// `_` is a literal character, not a LIKE wildcard.
+		expect(messenger.searchPeers("ta", "propose_t").peers.map((p) => p.name)).toEqual([
+			"agents-can-propose",
+		]);
+		expect(messenger.searchPeers("ta", "me").peers.find((p) => p.name === "me")?.you).toBe(true);
+	});
+
+	it("caps the matches and says more matched", () => {
+		for (let i = 0; i <= PEER_SEARCH_LIMIT; i++) addTask(`fix-${i}`);
+		const r = messenger.searchPeers(undefined, "fix");
+		expect(r.peers).toHaveLength(PEER_SEARCH_LIMIT);
+		expect(r.more).toBe(true);
 	});
 });
 
