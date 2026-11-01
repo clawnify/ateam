@@ -322,8 +322,8 @@ export function LoopForm({
 									<Text style={styles.agentText}>{yolo ? "auto: on" : "auto: off"}</Text>
 								</Pressable>
 								<Text style={styles.help}>
-									Auto runs the agent permission-free, the composer's Auto mode. Off, an unattended
-									run can stall on its first permission ask.
+									Auto runs the agent in its automatic mode, the composer's Auto mode. Off, an
+									unattended run can stall on its first permission ask.
 								</Text>
 							</>
 						) : null}

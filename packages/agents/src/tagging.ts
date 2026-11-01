@@ -29,6 +29,7 @@
 
 import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
+import { CLAUDE_NO_BYPASS_SETTINGS } from "./registry";
 
 /** The house vocabulary: the same categories the card icons already use. */
 export const TAG_VOCABULARY = [
@@ -76,12 +77,27 @@ function buildPrompt(taskPrompt: string, knownTags: string[]): string {
 	].join("\n");
 }
 
+/**
+ * The tagging turn's flags. It runs on the engine, so on a box whose Claude
+ * settings default to bypass (every new Sprite) it would otherwise get Bash
+ * with no checks, on a prompt that can carry a GitHub issue's body verbatim.
+ * The switch keeps it out of bypassPermissions, so its tools keep their checks.
+ */
+export const TAG_ARGS = [
+	"-p",
+	"--strict-mcp-config",
+	"--model",
+	"sonnet",
+	"--settings",
+	CLAUDE_NO_BYPASS_SETTINGS,
+];
+
 /** Run the real CLI: prompt on stdin, cwd a temp dir so no repo config loads. */
 function runClaude(input: string): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const child = execFile(
 			"claude",
-			["-p", "--strict-mcp-config", "--model", "sonnet"],
+			TAG_ARGS,
 			{ cwd: tmpdir(), timeout: TIMEOUT_MS, maxBuffer: 1024 * 1024 },
 			(err, stdout) => (err ? reject(err) : resolve(stdout)),
 		);

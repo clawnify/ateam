@@ -110,6 +110,19 @@ export interface HeadlessInvocation {
 	lastMessageFlag?: string;
 }
 
+/**
+ * Claude's own switch that takes bypassPermissions out of a session, as the
+ * JSON `--settings` takes. Every Claude the engine starts carries it (task
+ * launches through `guardFlag`, tagging through its flags), because a box's
+ * settings can default to bypass: Fly's Sprite image ships
+ * `defaultMode: bypassPermissions` in ~/.claude/settings.json. A session that
+ * would start in bypass starts in `default`, bypass leaves the Shift+Tab cycle,
+ * and a default the user chose that still checks (auto, acceptEdits, plan)
+ * stands, as do their allow/ask/deny rules. Verified on 2.1.223 and 2.1.316.
+ */
+export const CLAUDE_NO_BYPASS_SETTINGS =
+	'{"permissions":{"disableBypassPermissionsMode":"disable"}}';
+
 // Registry of the supported agent CLIs. Command lines and the Auto mode
 // flags come from each tool's own documented CLI surface. `command` is the
 // SAFE default; `yoloFlag` is what makes it autonomous.
@@ -122,14 +135,9 @@ export const AGENTS = [
 		bin: "claude",
 		command: "claude",
 		yoloFlag: "--permission-mode auto",
-		// Ateam never runs Claude in bypassPermissions. Fly's Sprite image ships
-		// `defaultMode: bypassPermissions` in ~/.claude/settings.json, which made a
-		// task with Auto off the loosest launch there is. Claude's own switch closes
-		// it whichever settings file the default comes from: a session that would
-		// start in bypass starts in `default`, bypass leaves the Shift+Tab cycle,
-		// and a default the user chose that still checks (auto, acceptEdits, plan)
-		// stands, as do their allow/ask/deny rules. Verified on 2.1.223 and 2.1.316.
-		guardFlag: `--settings '{"permissions":{"disableBypassPermissionsMode":"disable"}}'`,
+		// Without it, a task with Auto off on a new Sprite would be the loosest
+		// launch there is (see CLAUDE_NO_BYPASS_SETTINGS).
+		guardFlag: `--settings '${CLAUDE_NO_BYPASS_SETTINGS}'`,
 		resumeCommand: "claude --continue",
 		// Verified against the CLI itself: `--session-id <uuid>` names the
 		// transcript (~/.claude/projects/<slug>/<uuid>.jsonl) and `--resume <uuid>`

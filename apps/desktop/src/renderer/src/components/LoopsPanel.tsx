@@ -380,7 +380,7 @@ export function LoopForm({
 							className={`iconbtn comp-yolo ${yolo ? "active" : ""}`}
 							title={
 								autoBlockedBy === null
-									? "Auto mode — each run launches permission-free"
+									? "Auto mode: each run starts in the agent's automatic mode instead of asking you"
 									: `Auto mode — needs Ateam v${FEATURE_MIN_VERSION.loopAutoMode} on this box (it runs v${autoBlockedBy})`
 							}
 							aria-label="Auto mode"
@@ -585,7 +585,10 @@ export function LoopsPanel({
 							<span className="loop-cadence muted">
 								{l.agentId ?? "claude"} · {loopScheduleLabel(l, LOCAL_TZ)}
 								{l.yolo && (
-									<span className="loop-auto" title="Auto mode — each run launches permission-free">
+									<span
+										className="loop-auto"
+										title="Auto mode: each run starts in the agent's automatic mode instead of asking you"
+									>
 										<Zap size={10} strokeWidth={2} />
 									</span>
 								)}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { generateTaskTags, MAX_TAGS, parseTagReply, sanitizeTags } from "../src/tagging";
+import { generateTaskTags, MAX_TAGS, parseTagReply, sanitizeTags, TAG_ARGS } from "../src/tagging";
 
 /** A stubbed CLI: whatever the model "replied". */
 const replying = (out: string) => () => Promise.resolve(out);
@@ -101,5 +101,18 @@ describe("generateTaskTags", () => {
 		};
 		expect(await generateTaskTags("ios build", { knownTags: ["mobile"], run })).toEqual(["mobile"]);
 		expect(seen).toContain("mobile");
+	});
+});
+
+// The turn runs on the engine. On a box whose Claude defaults to bypass it
+// would otherwise get Bash with no checks, on a prompt that can carry a GitHub
+// issue's body. Spelled out here so a typo in the registry fails.
+describe("the tagging turn's flags", () => {
+	it("carry Claude's no-bypass switch", () => {
+		const at = TAG_ARGS.indexOf("--settings");
+		expect(at).toBeGreaterThan(-1);
+		expect(JSON.parse(TAG_ARGS[at + 1] ?? "")).toEqual({
+			permissions: { disableBypassPermissionsMode: "disable" },
+		});
 	});
 });
