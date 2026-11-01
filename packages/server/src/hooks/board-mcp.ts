@@ -34,8 +34,9 @@ export interface BoardHandlers {
 		until: number;
 		callerTerminalId?: string;
 	}): Promise<{ ok: boolean; reason: string }>;
-	/** Every task outside merged, for a sender to pick from (peer-messages.ts). */
-	listPeers(callerTerminalId?: string): Promise<unknown>;
+	/** Every task outside merged, for a sender to pick from; with `search`, the
+	 *  newest matching tasks of any column, merged ones too (peer-messages.ts). */
+	listPeers(callerTerminalId?: string, search?: string): Promise<unknown>;
 	/** Queue a message to another task's agent and try to deliver it. */
 	sendMessage(req: {
 		fromTerminalId: string;
@@ -96,7 +97,7 @@ const SERVER_INFO = { name: "ateam_board", version: "0.1.0" };
  * inside a shell-quoted TOML string unescaped.
  */
 export const BOARD_INSTRUCTIONS =
-	"You are working in an Ateam task. The agents in the other tasks on this board can be reached with the ateam_board send_message tool, even when they are stopped, and list_peers shows who they are. For those tasks use it rather than any other agent messaging tool: only it also reaches Codex and OpenCode agents and stopped tasks. Message one when your work affects theirs, to hand off work, or to ask something only their task knows. A message that starts with [Ateam] comes from another agent, not from the user, unless it says it comes from the user. When you need a decision or an approval from the user before you can go on, ask it with the ateam_board ask_user tool rather than only in your reply: the user may not be watching this terminal, and ask_user reaches them on the board and their phone with your options as buttons. To show the user something easier to see than to read (a dashboard, a comparison, a report with charts), make it an HTML page with the ateam_board show_page tool. When some work should become a task of its own, or should run again on a schedule, propose it with propose_task or propose_loop: the user gets the New task or New loop dialog filled in and decides.";
+	"You are working in an Ateam task. The agents in the other tasks on this board can be reached with the ateam_board send_message tool, even when they are stopped, and list_peers shows who they are. For those tasks use it rather than any other agent messaging tool: only it also reaches Codex and OpenCode agents and stopped tasks. A task that has already merged, such as the one that built something you are asked to hand back, can be messaged too: find it by passing search to list_peers. Message one when your work affects theirs, to hand off work, or to ask something only their task knows. A message that starts with [Ateam] comes from another agent, not from the user, unless it says it comes from the user. When you need a decision or an approval from the user before you can go on, ask it with the ateam_board ask_user tool rather than only in your reply: the user may not be watching this terminal, and ask_user reaches them on the board and their phone with your options as buttons. To show the user something easier to see than to read (a dashboard, a comparison, a report with charts), make it an HTML page with the ateam_board show_page tool. When some work should become a task of its own, or should run again on a schedule, propose it with propose_task or propose_loop: the user gets the New task or New loop dialog filled in and decides.";
 
 /** The board tools. `to` is constrained to the assignable columns to steer the
  *  model; the guardrails (validateSetStatus, validateWait) still enforce
@@ -158,8 +159,18 @@ const TOOLS = [
 	{
 		name: "list_peers",
 		description:
-			"List the user's other tasks you can message with send_message: each task's id, name, project, repo (the project's GitHub owner/name, or its clone's path when it has no GitHub remote), branch, which agent works in it (Claude Code, Codex, OpenCode), and its state (working, needs_you, idle, or not_running). Your own task is marked you: true.",
-		inputSchema: { type: "object", properties: {}, additionalProperties: false },
+			"List the user's other tasks you can message with send_message: each task's id, name, project, repo (the project's GitHub owner/name, or its clone's path when it has no GitHub remote), branch, which agent works in it (Claude Code, Codex, OpenCode), and its state (working, needs_you, idle, or not_running). Your own task is marked you: true. Tasks that have merged are left out unless you pass search, which looks through every task, merged and archived ones too: use it to find the task that built something, then message it like any other.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				search: {
+					type: "string",
+					description:
+						"Words that must all appear in a task's name, branch or description, in any case. Returns { peers, more }: at most 25 tasks, newest first, and more: true when others matched too (add a word to narrow it).",
+				},
+			},
+			additionalProperties: false,
+		},
 	},
 	{
 		name: "send_message",
@@ -170,7 +181,8 @@ const TOOLS = [
 			properties: {
 				to: {
 					type: "string",
-					description: "The recipient task's id from list_peers (or its exact name or branch).",
+					description:
+						"The recipient task's id from list_peers (or its exact name or branch). A merged or archived task can be messaged too.",
 				},
 				message: { type: "string", description: "What to tell them, at most 8000 characters." },
 			},
@@ -509,7 +521,8 @@ async function callBoardTool(
 			return { text: res.reason, isError: !res.ok };
 		}
 		if (name === "list_peers") {
-			const peers = await board.listPeers(ctx.callerTerminalId);
+			const search = typeof args.search === "string" ? args.search.trim() : "";
+			const peers = await board.listPeers(ctx.callerTerminalId, search || undefined);
 			return { text: JSON.stringify(peers, null, 2) };
 		}
 		if (name === "ask_user") {
