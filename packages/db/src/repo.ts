@@ -122,6 +122,22 @@ export const repo = {
 			.all();
 	},
 
+	/**
+	 * Tasks of every project, column and archive state whose name, branch or
+	 * description holds each term (ASCII case ignored), newest first. Filtered
+	 * in SQLite, so a search stays cheap however much merged history piles up.
+	 */
+	searchTasks(db: AteamDb, terms: string[], limit: number) {
+		const text = sql`lower(${tasks.name} || ' ' || ${tasks.branch} || ' ' || coalesce(${tasks.description}, ''))`;
+		return db
+			.select()
+			.from(tasks)
+			.where(and(...terms.map((t) => sql`instr(${text}, lower(${t})) > 0`)))
+			.orderBy(desc(tasks.createdAt))
+			.limit(limit)
+			.all();
+	},
+
 	/** The project's archived tasks, most recently archived first. */
 	listArchivedTasks(db: AteamDb, projectId: string) {
 		return db
