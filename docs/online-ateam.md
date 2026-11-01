@@ -371,6 +371,16 @@ at a set time is scheduled from the Mac, and the phone shows that schedule witho
 changing it). Opening a task keeps the
 navbar; the back arrow is the first key in the shortcut bar.
 
+The speech bubble at the navbar's right corner opens the **Lead**, the chat that reads
+the board and steers its agents. On the phone it runs on the box itself (a **v24 box**;
+an older one offers **Update box** there), so it works with your Mac off. It sees that
+box's tasks only, and it is a different conversation from the Lead on your Mac. The
+composer under Home and Board has a **Task | Lead** switch above it: on Task, sending
+starts a task, as before; on Lead, it asks the Lead and opens the chat. The paperclip
+attaches photos or files from Files (up to 10 MB each) to either. The box's own
+shell, outside every project, is the terminal button on the box's card in **Boxes**
+(tap the status dot).
+
 ### Write a Tailscale ACL — this one isn't optional
 
 A new tailnet's policy **allows every device to reach every other device on every
