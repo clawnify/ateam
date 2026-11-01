@@ -4164,11 +4164,20 @@ input {
 	font-size: 12px;
 	color: var(--text-dim);
 }
+/* Under a reply: Reply on the left, the emoji answer on the right. */
+.lead-agent-actions {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+.lead-agent-actions > .question-reply {
+	flex: 1;
+}
 .lead-agent-reply {
 	display: inline-flex;
 	align-items: center;
 	gap: 5px;
-	align-self: flex-start;
 	padding: 2px 6px;
 	margin-left: -6px;
 	font-size: 12px;
@@ -4189,17 +4198,37 @@ input {
 .lead-agent-body[hidden] {
 	display: none;
 }
+/* A long reply scrolls inside the card, so the card keeps about the same
+   height while paging through a stack: the arrows above and Reply below stay
+   on screen. */
+.lead-agent-body > .md {
+	max-height: min(320px, 50vh);
+	overflow-y: auto;
+}
+/* The same reply whole, in its dialog: scrolls once taller than the window. */
+.lead-reply-whole {
+	min-height: 0;
+	overflow-y: auto;
+	outline: none;
+}
 .lead-agent-head > .lead-chip {
 	min-width: 0;
 }
-.lead-stack-nav {
+/* The head's right end: Expand, then the stack's paging. Paging comes last so
+   its arrows stay put while Expand comes and goes with the reply shown. */
+.lead-agent-tools {
 	display: flex;
 	flex-shrink: 0;
 	align-items: center;
 	gap: 2px;
 	margin-left: auto;
 }
-.lead-stack-nav .iconbtn {
+.lead-stack-nav {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+}
+.lead-agent-tools .iconbtn {
 	width: 22px;
 	height: 22px;
 }

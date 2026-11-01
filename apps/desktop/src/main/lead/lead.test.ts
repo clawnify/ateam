@@ -75,16 +75,98 @@ describe("lead tools", () => {
 		expect(text).not.toContain("old work");
 	});
 
-	it("create_task creates on the project, then starts the default agent with the prompt", async () => {
+	it("propose_task starts nothing: the proposal goes to the chat for the user to create", async () => {
 		const r = fakeRouter();
-		const tools = createLeadTools({ handle: r.handle, machineOf: () => null });
-		const res = await tools.call("create_task", { project: "ateam", name: "new", prompt: "do it" });
+		const proposed: unknown[] = [];
+		const tools = createLeadTools({
+			handle: r.handle,
+			machineOf: () => null,
+			propose: (p) => proposed.push(p),
+		});
+		const res = await tools.call("propose_task", {
+			project: "ateam",
+			name: "Find why DNS setup is manual",
+			prompt: "Find out why the domain dialog still offers manual DNS first, then fix it.",
+			reason: "Cloudflare approved us",
+			yolo: true,
+		});
 		expect(res?.isError).toBeFalsy();
-		expect(res?.text).toContain("(00000000-0000-4000-8000-000000000001)");
-		const create = r.calls.find((c) => c.method === CH.tasksCreate);
-		expect(create?.args[0]).toEqual({ projectId: "p1", name: "new", agentId: "claude" });
-		const spawn = r.calls.find((c) => c.method === CH.ptySpawnAgent);
-		expect(spawn?.args[0]).toMatchObject({ agentId: "claude", prompt: "do it", yolo: false });
+		expect(res?.text).toContain("Nothing starts until they do");
+		expect(proposed).toEqual([
+			{
+				projectId: "p1",
+				projectName: "ateam",
+				proposal: {
+					kind: "task",
+					name: "Find why DNS setup is manual",
+					prompt: "Find out why the domain dialog still offers manual DNS first, then fix it.",
+					reason: "Cloudflare approved us",
+					yolo: true,
+				},
+			},
+		]);
+		expect(r.calls.some((c) => c.method === CH.tasksCreate || c.method === CH.ptySpawnAgent)).toBe(
+			false,
+		);
+	});
+
+	it("the Lead has no tool that starts a task or a loop by itself", async () => {
+		const tools = createLeadTools({ handle: fakeRouter().handle, machineOf: () => null });
+		const names = (tools.tools as readonly { name: string }[]).map((t) => t.name);
+		expect(names).toContain("propose_task");
+		expect(names).toContain("propose_loop");
+		expect(names).not.toContain("create_task");
+		expect(
+			await tools.call("create_task", { project: "ateam", name: "x", prompt: "y" }),
+		).toBeNull();
+	});
+
+	it("propose_task takes only files attached in this chat, and delivers none before the task exists", async () => {
+		const r = fakeRouter();
+		const proposed: { files?: string[] }[] = [];
+		const delivered: string[][] = [];
+		const tools = createLeadTools({
+			handle: r.handle,
+			machineOf: () => "hetzner",
+			propose: (p) => proposed.push(p),
+			files: {
+				resolve: (paths) =>
+					paths.every((p) => p.startsWith("/att/")) ? paths : "not attached in this chat",
+				deliver: async (_owner, paths) => {
+					delivered.push(paths);
+					return { paths };
+				},
+			},
+		});
+		const args = { project: "ateam", name: "new", prompt: "fix what the screenshot shows" };
+		const outside = await tools.call("propose_task", { ...args, files: ["/Users/me/.ssh/id"] });
+		expect(outside).toEqual({ text: "not attached in this chat", isError: true });
+		expect(proposed).toEqual([]);
+		const ok = await tools.call("propose_task", { ...args, files: ["/att/1/shot.png"] });
+		expect(ok?.isError).toBeFalsy();
+		expect(proposed[0]?.files).toEqual(["/att/1/shot.png"]);
+		// The dialog delivers them when the user creates the task (ipc.ts).
+		expect(delivered).toEqual([]);
+	});
+
+	it("propose_loop is checked like an agent's: one schedule, a known project", async () => {
+		const r = fakeRouter();
+		const proposed: { proposal: { dailyAt?: string } }[] = [];
+		const tools = createLeadTools({
+			handle: r.handle,
+			machineOf: () => null,
+			propose: (p) => proposed.push(p),
+		});
+		const args = { project: "ateam", name: "nightly deps", prompt: "check dependencies" };
+		const none = await tools.call("propose_loop", args);
+		expect(none?.isError).toBe(true);
+		expect(none?.text).toContain("one schedule");
+		const nowhere = await tools.call("propose_loop", { ...args, project: "nope", dailyAt: "9:00" });
+		expect(nowhere?.isError).toBe(true);
+		const ok = await tools.call("propose_loop", { ...args, dailyAt: "9:00" });
+		expect(ok?.text).toContain("New loop dialog");
+		expect(proposed).toHaveLength(1);
+		expect(proposed[0]?.proposal).toMatchObject({ kind: "loop", dailyAt: "09:00" });
 	});
 
 	it("send_message resolves a task by name and routes by its id", async () => {
@@ -94,50 +176,6 @@ describe("lead tools", () => {
 		expect(res).toEqual({ text: "sent", isError: false });
 		const send = r.calls.find((c) => c.method === CH.peersSendFromLead);
 		expect(send?.args[0]).toEqual({ taskId: "t1", body: "rebase" });
-	});
-
-	it("create_task sends attached files to the project's machine before the task exists", async () => {
-		const r = fakeRouter();
-		const delivered: { owner: string; paths: string[] }[] = [];
-		const tools = createLeadTools({
-			handle: r.handle,
-			machineOf: () => "hetzner",
-			files: {
-				resolve: (paths) =>
-					paths.every((p) => p.startsWith("/att/")) ? paths : "not attached in this chat",
-				deliver: async (owner, paths) => {
-					delivered.push({ owner, paths });
-					return { paths: paths.map((p) => `/box${p}`) };
-				},
-			},
-		});
-		const res = await tools.call("create_task", {
-			project: "ateam",
-			name: "new",
-			prompt: "fix what the screenshot shows",
-			files: ["/att/1/shot.png"],
-		});
-		expect(res?.isError).toBeFalsy();
-		expect(res?.text).toContain("working on your prompt. It has 1 attached file.");
-		expect(delivered).toEqual([{ owner: "p1", paths: ["/att/1/shot.png"] }]);
-		const spawn = r.calls.find((c) => c.method === CH.ptySpawnAgent);
-		expect(spawn?.args[0]).toMatchObject({ files: ["/box/att/1/shot.png"] });
-	});
-
-	it("create_task starts nothing when a file isn't attached here or can't reach the box", async () => {
-		const r = fakeRouter();
-		const files = {
-			resolve: (paths: string[]) =>
-				paths.every((p) => p.startsWith("/att/")) ? paths : "not attached in this chat",
-			deliver: async () => ({ error: "big.mov is 40 MB" }),
-		};
-		const tools = createLeadTools({ handle: r.handle, machineOf: () => null, files });
-		const args = { project: "ateam", name: "new", prompt: "x" };
-		const outside = await tools.call("create_task", { ...args, files: ["/Users/me/.ssh/id"] });
-		expect(outside).toEqual({ text: "not attached in this chat", isError: true });
-		const tooBig = await tools.call("create_task", { ...args, files: ["/att/1/big.mov"] });
-		expect(tooBig).toEqual({ text: "big.mov is 40 MB", isError: true });
-		expect(r.calls.some((c) => c.method === CH.tasksCreate)).toBe(false);
 	});
 
 	it("send_message lists attached files under the message, as the task's machine sees them", async () => {
@@ -375,6 +413,26 @@ function makeSession(dir = mkdtempSync(join(tmpdir(), "lead-"))) {
 
 const init = (id = "sess-1") => ({ type: "system", subtype: "init", session_id: id });
 
+/** The control requests the session sent this process, oldest first. */
+const controls = (p: FakeClaude) =>
+	p.written
+		.filter((w) => w.type === "control_request")
+		.map((w) => w.request as Record<string, unknown>);
+
+/** Claude answers the latest control request of this kind, or fails it. */
+function answer(p: FakeClaude, subtype: string, response: unknown, error?: string) {
+	const req = p.written.findLast(
+		(w) => w.type === "control_request" && (w.request as { subtype?: string }).subtype === subtype,
+	);
+	const id = req?.request_id;
+	p.say({
+		type: "control_response",
+		response: error
+			? { subtype: "error", request_id: id, error }
+			: { subtype: "success", request_id: id, response },
+	});
+}
+
 describe("LeadSession", () => {
 	it("starts claude on the first message and renders a turn with a tool call", async () => {
 		const { session, procs, dir } = makeSession();
@@ -601,6 +659,107 @@ describe("LeadSession", () => {
 		expect(fresh.args).toContain("--session-id");
 		expect(fresh.written[0]).toMatchObject({ message: { content: "hello again" } });
 		expect(session.snapshot().items.at(-1)).toMatchObject({ kind: "notice" });
+	});
+
+	it("starts the Lead in Auto mode ahead of the first message, and keeps it for the next conversation", async () => {
+		const { session, procs, events, dir } = makeSession();
+		session.setAuto(true);
+		expect(procs).toHaveLength(0);
+		expect(events).toContainEqual({ type: "auto", auto: true });
+		session.send("hi");
+		await tick();
+		const p = procs[0] as FakeClaude;
+		expect(p.written[0]).toMatchObject({
+			type: "control_request",
+			request: { subtype: "set_permission_mode", mode: "auto" },
+		});
+		expect(p.written[1]).toMatchObject({ type: "user", message: { content: "hi" } });
+		answer(p, "set_permission_mode", { mode: "auto" });
+		await tick();
+		expect(session.snapshot().items.some((i) => i.kind === "notice")).toBe(false);
+
+		session.reset();
+		expect(session.snapshot().auto).toBe(true);
+		expect(makeSession(dir).session.snapshot().auto).toBe(true);
+	});
+
+	it("switches a running Lead, and back to the user's own default mode", async () => {
+		const { session, procs } = makeSession();
+		session.send("hi");
+		const p = procs[0] as FakeClaude;
+		p.say(init());
+		await tick();
+		session.setAuto(true);
+		await tick();
+		expect(controls(p).at(-1)).toEqual({ subtype: "set_permission_mode", mode: "auto" });
+		answer(p, "set_permission_mode", { mode: "auto" });
+
+		session.setAuto(false);
+		await tick();
+		expect(controls(p).at(-1)).toEqual({ subtype: "get_settings" });
+		answer(p, "get_settings", { effective: { permissions: { defaultMode: "acceptEdits" } } });
+		await tick();
+		expect(controls(p).at(-1)).toEqual({ subtype: "set_permission_mode", mode: "acceptEdits" });
+
+		// No default in the user's settings means Claude's own.
+		session.setAuto(true);
+		session.setAuto(false);
+		await tick();
+		answer(p, "get_settings", { effective: {} });
+		await tick();
+		expect(controls(p).at(-1)).toEqual({ subtype: "set_permission_mode", mode: "default" });
+		expect(p.killed).toBe(false);
+	});
+
+	it("leaves Auto on when it is turned back on before the user's default is read", async () => {
+		const { session, procs } = makeSession();
+		session.setAuto(true);
+		session.send("hi");
+		const p = procs[0] as FakeClaude;
+		session.setAuto(false);
+		session.setAuto(true);
+		await tick();
+		answer(p, "get_settings", { effective: { permissions: { defaultMode: "default" } } });
+		await tick();
+		const modes = controls(p).filter((c) => c.subtype === "set_permission_mode");
+		expect(modes.map((c) => c.mode)).toEqual(["auto", "auto"]);
+	});
+
+	it("turns Auto back off and says why when Claude can't run in auto mode", async () => {
+		const { session, procs, events } = makeSession();
+		session.setAuto(true);
+		session.send("hi");
+		const p = procs[0] as FakeClaude;
+		await tick();
+		answer(p, "set_permission_mode", null, "Auto mode is not available for this model");
+		await tick();
+		expect(session.snapshot().auto).toBe(false);
+		expect(events.at(-2)).toEqual({ type: "auto", auto: false });
+		expect(session.snapshot().items.at(-1)).toMatchObject({
+			kind: "notice",
+			tone: "error",
+			text: "Auto mode isn't available: Auto mode is not available for this model",
+		});
+	});
+
+	it("stops the Lead rather than leave it in auto mode with Auto off", async () => {
+		const { session, procs } = makeSession();
+		session.setAuto(true);
+		session.send("long job");
+		const p = procs[0] as FakeClaude;
+		await tick();
+		answer(p, "set_permission_mode", { mode: "auto" });
+		session.setAuto(false);
+		await tick();
+		answer(p, "get_settings", { effective: {} });
+		await tick();
+		answer(p, "set_permission_mode", null, "internal_error");
+		await tick();
+		expect(p.killed).toBe(true);
+		expect(session.snapshot()).toMatchObject({ busy: false, auto: false });
+		expect(session.snapshot().items.at(-1)).toMatchObject({ kind: "notice", tone: "error" });
+		session.send("go on");
+		expect((procs[1] as FakeClaude).written.some((w) => w.type === "control_request")).toBe(false);
 	});
 
 	it("reports a crash mid-turn, and ignores the exit of a process it killed", async () => {

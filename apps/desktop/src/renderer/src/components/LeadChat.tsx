@@ -9,10 +9,14 @@ import {
 	ChevronRight,
 	CircleHelp,
 	CornerDownRight,
+	Maximize2,
 	Paperclip,
+	Plus,
+	Smile,
 	Square,
 	SquarePen,
 	X,
+	Zap,
 } from "lucide-react";
 import {
 	type ClipboardEvent,
@@ -48,13 +52,16 @@ import {
 	toBlocks,
 	unseen,
 } from "../lead-blocks";
+import { recordEmoji, topEmoji } from "../lib/emoji-use";
 import { AgentIcon } from "./AgentIcon";
 import { IconButton } from "./IconButton";
 import { Markdown, TaskLinkContext } from "./Markdown";
 import { PageFrame } from "./PageFrame";
 import { PanelRightFilled } from "./PanelRightFilled";
+import { ProposalStrip } from "./Proposals";
 import { QuestionCard } from "./QuestionCard";
 import { Button } from "./ui/button";
+import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -62,8 +69,15 @@ import {
 	DropdownMenuRadioItem,
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+import {
+	EmojiPicker,
+	EmojiPickerContent,
+	EmojiPickerFooter,
+	EmojiPickerSearch,
+} from "./ui/emoji-picker";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
-const EMPTY: LeadSnapshot = { items: [], draft: "", busy: false };
+const EMPTY: LeadSnapshot = { items: [], draft: "", busy: false, auto: false };
 
 const SUGGESTIONS = [
 	"What's on the board?",
@@ -84,12 +98,15 @@ function apply(s: LeadSnapshot, e: LeadEvent): LeadSnapshot {
 			return { ...s, draft: e.text };
 		case "busy":
 			return { ...s, busy: e.busy };
+		case "auto":
+			return { ...s, auto: e.auto };
 		case "reset":
 			return e.snapshot;
 	}
 }
 
-/** create_task answers "Started task "x" (<uuid>) ..."; the id is the chip's target. */
+/** create_task (the Lead's tool before it proposed instead, still in older
+ *  conversations) answered "Started task "x" (<uuid>) ..."; the id is the chip's target. */
 const TASK_ID = /\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)/;
 
 function findTask(tasks: TaskDTO[], ref: unknown): TaskDTO | undefined {
@@ -132,6 +149,10 @@ function describe(tool: ToolItem, tasks: TaskDTO[]): string {
 			return `Read ${name}`;
 		case "create_task":
 			return `Started ${name}`;
+		case "propose_task":
+			return `Proposed ${name}`;
+		case "propose_loop":
+			return `Proposed the loop ${name}`;
 		case "send_message":
 			return `Messaged ${name}`;
 		case "answer_question":
@@ -512,63 +533,266 @@ function LeadPermission({ item }: { item: Extract<LeadItem, { kind: "permission"
 	);
 }
 
+/** Answering a reply with an emoji, picked from the full set: the emoji is the
+ *  whole answer, sent as soon as it is picked. */
+function EmojiReply({
+	name,
+	disabled,
+	onPick,
+}: {
+	name: string;
+	disabled: boolean;
+	/** Sends it; true once it went. */
+	onPick: (emoji: string) => Promise<boolean>;
+}) {
+	const [open, setOpen] = useState(false);
+	/** Past the quick row, into the full picker (its last button, +). */
+	const [more, setMore] = useState(false);
+	// The quick row is the emoji sent before; with none yet, the full picker.
+	const top = open ? topEmoji() : [];
+	const full = more || top.length === 0;
+	const pick = async (emoji: string) => {
+		setOpen(false);
+		if (await onPick(emoji)) recordEmoji(emoji);
+	};
+	return (
+		<Popover
+			open={open}
+			onOpenChange={(o) => {
+				setOpen(o);
+				if (!o) setMore(false);
+			}}
+		>
+			<PopoverTrigger asChild>
+				<Button
+					variant="ghost"
+					size="icon-xs"
+					disabled={disabled}
+					title="Reply with an emoji"
+					aria-label={`Reply to ${name} with an emoji`}
+				>
+					<Smile className="size-3.5" strokeWidth={1.75} />
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent align="end" collisionPadding={8} className="w-fit p-0">
+				{full ? (
+					<EmojiPicker className="h-[342px]" onEmojiSelect={({ emoji }) => void pick(emoji)}>
+						<EmojiPickerSearch autoFocus />
+						<EmojiPickerContent />
+						<EmojiPickerFooter />
+					</EmojiPicker>
+				) : (
+					<div className="flex items-center gap-0.5 p-1">
+						{top.map((emoji) => (
+							<Button
+								key={emoji}
+								variant="ghost"
+								size="icon-sm"
+								className="text-lg"
+								title={`Reply with ${emoji}`}
+								onClick={() => void pick(emoji)}
+							>
+								{emoji}
+							</Button>
+						))}
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							title="More emoji"
+							aria-label="More emoji"
+							onClick={() => setMore(true)}
+						>
+							<Plus strokeWidth={1.75} />
+						</Button>
+					</div>
+				)}
+			</PopoverContent>
+		</Popover>
+	);
+}
+
+export type LeadProposalItem = Extract<LeadItem, { kind: "proposal" }>;
+
+/** A task or loop the Lead proposed. While it waits, the same strip a task's
+ *  proposals get: open its dialog, or dismiss it. Then what became of it. */
+function LeadProposalCard({
+	item,
+	tasks,
+	onOpen,
+	onOpenTask,
+}: {
+	item: LeadProposalItem;
+	tasks: TaskDTO[];
+	onOpen: (item: LeadProposalItem) => void;
+	onOpenTask: (t: TaskDTO) => void;
+}) {
+	const [error, setError] = useState<string | null>(null);
+	const { kind, name } = item.proposal;
+	if (!item.outcome)
+		return (
+			<div>
+				<ProposalStrip
+					label="Proposed by the Lead"
+					proposals={[{ ...item.proposal, id: item.id, proposedAt: item.at }]}
+					onOpen={() => onOpen(item)}
+					onDismiss={() =>
+						void window.ateamLead
+							.proposal(item.id, "dismissed")
+							.catch((e) => setError(cleanError(e)))
+					}
+				/>
+				{error && <p className="question-error">{error}</p>}
+			</div>
+		);
+	const what = kind === "loop" ? "loop" : "task";
+	return (
+		<div className="lead-notice info">
+			{item.outcome === "created"
+				? item.task
+					? "Created"
+					: `Created the ${what} ${name}`
+				: item.outcome === "dismissed"
+					? `Dismissed the proposed ${what} ${name}`
+					: `Replaced by a newer proposal: ${name}`}
+			{item.task && <TaskChip task={item.task} tasks={tasks} onOpenTask={onOpenTask} />}
+		</div>
+	);
+}
+
 /** A followed task's agent, talking back: its reply, and a box to answer it
- *  here. The card and its head are the stack's (AgentStack). */
+ *  here, in words or with an emoji. The card and its head are the stack's
+ *  (AgentStack). Expanded, the reply opens whole in a dialog with the same
+ *  answer box, so a half-typed answer is in both. */
 function AgentReply({
 	item,
 	hidden,
+	chip,
+	expanded,
+	onExpandedChange,
+	onCut,
 }: {
 	item: AgentItem;
 	/** Another reply of its stack is shown. Kept mounted, so a half-typed answer survives. */
 	hidden: boolean;
+	/** The task's chip, for the dialog's head. */
+	chip: ReactNode;
+	/** Shown whole in a dialog. */
+	expanded: boolean;
+	onExpandedChange: (expanded: boolean) => void;
+	/** Whether the card's height cap cuts this reply off, so expanding shows more. */
+	onCut: (id: string, cut: boolean) => void;
 }) {
 	const [open, setOpen] = useState(false);
 	const [text, setText] = useState("");
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const submit = async (e: FormEvent) => {
-		e.preventDefault();
-		if (!text.trim()) return;
+	const md = useRef<HTMLDivElement>(null);
+	const whole = useRef<HTMLDivElement>(null);
+	/** What had focus before the dialog took it. */
+	const back = useRef<HTMLElement | null>(null);
+
+	// The text's box changes size whenever the reply starts or stops being cut
+	// off: under the cap it is the reply's height, over it the cap's. So
+	// watching its size is enough. A hidden reply keeps what it last reported.
+	useEffect(() => {
+		const el = md.current;
+		if (!el || hidden) return;
+		const watch = new ResizeObserver(() => onCut(item.id, el.scrollHeight > el.clientHeight + 1));
+		watch.observe(el);
+		return () => watch.disconnect();
+	}, [hidden, item.id, onCut]);
+
+	const send = async (body: string) => {
 		setSending(true);
 		setError(null);
 		try {
-			await window.ateamLead.reply(item.task.taskId, text);
-			setText("");
-			setOpen(false);
+			await window.ateamLead.reply(item.task.taskId, body);
+			onExpandedChange(false);
+			return true;
 		} catch (err) {
 			setError(cleanError(err));
+			return false;
 		} finally {
 			setSending(false);
 		}
 	};
+	const submit = async (e: FormEvent) => {
+		e.preventDefault();
+		if (!text.trim()) return;
+		if (await send(text)) {
+			setText("");
+			setOpen(false);
+		}
+	};
+	// Drawn twice, in the card and in the dialog, from the one draft.
+	const answer = (
+		<>
+			<div className="lead-agent-actions">
+				{open ? (
+					<form className="question-reply" onSubmit={submit}>
+						<input
+							// biome-ignore lint/a11y/noAutofocus: opened by the user's own click on Reply.
+							autoFocus
+							value={text}
+							placeholder={`Reply to ${item.task.name}`}
+							aria-label={`Reply to ${item.task.name}`}
+							disabled={sending}
+							onChange={(e) => setText(e.target.value)}
+							onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
+						/>
+						<button type="submit" disabled={sending || !text.trim()}>
+							Send
+						</button>
+					</form>
+				) : (
+					<>
+						<button type="button" className="lead-agent-reply" onClick={() => setOpen(true)}>
+							<CornerDownRight size={12} />
+							Reply
+						</button>
+						<EmojiReply name={item.task.name} disabled={sending} onPick={send} />
+					</>
+				)}
+			</div>
+			{error && <p className="question-error">{error}</p>}
+		</>
+	);
 	return (
 		<div className="lead-agent-body" hidden={hidden}>
-			<div className="md">
+			<div ref={md} className="md">
 				<Markdown text={item.text} />
 			</div>
-			{open ? (
-				<form className="question-reply" onSubmit={submit}>
-					<input
-						// biome-ignore lint/a11y/noAutofocus: opened by the user's own click on Reply.
-						autoFocus
-						value={text}
-						placeholder={`Reply to ${item.task.name}`}
-						aria-label={`Reply to ${item.task.name}`}
-						disabled={sending}
-						onChange={(e) => setText(e.target.value)}
-						onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
-					/>
-					<button type="submit" disabled={sending || !text.trim()}>
-						Send
-					</button>
-				</form>
-			) : (
-				<button type="button" className="lead-agent-reply" onClick={() => setOpen(true)}>
-					<CornerDownRight size={12} />
-					Reply
-				</button>
-			)}
-			{error && <p className="question-error">{error}</p>}
+			{answer}
+			<Dialog open={expanded} onOpenChange={onExpandedChange}>
+				{/* The thread's reading column and prose size; as tall as the reply
+				    needs, up to the window, where the reply scrolls. */}
+				<DialogContent
+					className="flex max-h-[calc(100vh-4rem)] flex-col gap-3 p-5 text-[14px] leading-normal sm:max-w-[776px]"
+					aria-describedby={undefined}
+					// Focus the reply, so the arrow and page keys scroll it.
+					onOpenAutoFocus={(e) => {
+						e.preventDefault();
+						back.current = document.activeElement as HTMLElement | null;
+						whole.current?.focus({ preventScroll: true });
+					}}
+					// Radix hands focus back to a Dialog.Trigger, and this dialog has
+					// none (Expand sits in the stack's head), so focus would drop to
+					// the page. Back to what had it, Expand when that opened it.
+					onCloseAutoFocus={(e) => {
+						e.preventDefault();
+						if (back.current?.isConnected) back.current.focus({ preventScroll: true });
+					}}
+				>
+					<DialogTitle className="lead-agent-head pr-8 text-sm leading-normal font-normal">
+						{chip}
+						<span className="lead-agent-said">replied</span>
+					</DialogTitle>
+					<div ref={whole} className="md lead-reply-whole" tabIndex={-1}>
+						<Markdown text={item.text} />
+					</div>
+					{answer}
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }
@@ -603,6 +827,14 @@ function AgentStack({
 	const cur = shown(view, n);
 	const card = useRef<HTMLDivElement>(null);
 	const countBtn = useRef<HTMLButtonElement>(null);
+	/** The reply open whole in a dialog, by id. */
+	const [expanded, setExpanded] = useState<string | null>(null);
+	/** Which replies the card's height cap cuts off (AgentReply measures). */
+	const [cut, setCut] = useState<Record<string, boolean>>({});
+	const onCut = useCallback(
+		(id: string, c: boolean) => setCut((m) => (m[id] === c ? m : { ...m, [id]: c })),
+		[],
+	);
 	const go = (i: number) => {
 		if (i === cur || i < 0 || i >= n) return;
 		const focused = card.current?.contains(document.activeElement);
@@ -688,10 +920,37 @@ function AgentStack({
 			<div className="lead-agent-head">
 				<TaskChip task={reply.task} tasks={tasks} onOpenTask={onOpenTask} />
 				<span className="lead-agent-said">replied</span>
-				{nav}
+				<div className="lead-agent-tools">
+					{cut[reply.id] && (
+						<IconButton
+							icon={Maximize2}
+							size={13}
+							label="Expand"
+							onClick={() => setExpanded(reply.id)}
+						/>
+					)}
+					{nav}
+				</div>
 			</div>
 			{replies.map((r, i) => (
-				<AgentReply key={r.id} item={r} hidden={i !== cur} />
+				<AgentReply
+					key={r.id}
+					item={r}
+					hidden={i !== cur}
+					chip={
+						<TaskChip
+							task={r.task}
+							tasks={tasks}
+							onOpenTask={(t) => {
+								setExpanded(null);
+								onOpenTask(t);
+							}}
+						/>
+					}
+					expanded={expanded === r.id}
+					onExpandedChange={(open) => setExpanded(open ? r.id : null)}
+					onCut={onCut}
+				/>
 			))}
 		</div>
 	);
@@ -718,15 +977,22 @@ function Thinking() {
 let unsent = "";
 /** The files attached to that draft, kept the same way. */
 let unsentFiles: LeadFile[] = [];
+// Proposals whose dialog already opened by itself: each does once, as it
+// arrives while the chat is on screen (kept across the tab and the sidebar).
+const autoOpened = new Set<string>();
 
 export function LeadChat({
 	tasks,
 	onOpenTask,
+	onOpenProposal,
 	onHide,
 }: {
 	/** Every loaded task, across projects and machines, to name and open the ones the Lead touches. */
 	tasks: TaskDTO[];
 	onOpenTask: (t: TaskDTO) => void;
+	/** Open a proposal's New task or New loop dialog; `auto` when it opens by
+	 *  itself on arriving, which App skips while another dialog is up. */
+	onOpenProposal: (item: LeadProposalItem, auto: boolean) => void;
 	/** Set when the chat is the sidebar on the right: its header is then the
 	 *  slim strip that hides it, not the Lead tab's title. */
 	onHide?: () => void;
@@ -761,9 +1027,21 @@ export function LeadChat({
 	// Follow the conversation only while the user is at the bottom of it.
 	const pinned = useRef(true);
 
+	const openProposal = useRef(onOpenProposal);
+	openProposal.current = onOpenProposal;
+
 	useEffect(() => {
 		let live = true;
-		const off = window.ateamLead.onEvent((e) => setSnap((s) => apply(s, e)));
+		const off = window.ateamLead.onEvent((e) => {
+			setSnap((s) => apply(s, e));
+			// A proposal opens its dialog by itself once, as it arrives here; one
+			// that arrived while the chat was closed waits as its card.
+			if (e.type === "item" && e.item.kind === "proposal" && !e.item.outcome) {
+				if (autoOpened.has(e.item.id)) return;
+				autoOpened.add(e.item.id);
+				openProposal.current(e.item, true);
+			}
+		});
 		void window.ateamLead.snapshot().then((s) => live && setSnap(s));
 		input.current?.focus();
 		return () => {
@@ -981,6 +1259,14 @@ export function LeadChat({
 							</div>
 						) : b.item.kind === "permission" ? (
 							<LeadPermission key={b.item.id} item={b.item} />
+						) : b.item.kind === "proposal" ? (
+							<LeadProposalCard
+								key={b.item.id}
+								item={b.item}
+								tasks={tasks}
+								onOpen={(item) => onOpenProposal(item, false)}
+								onOpenTask={onOpenTask}
+							/>
 						) : b.item.kind === "page" ? (
 							<div key={b.item.id} className="lead-agent">
 								<div className="lead-agent-head">
@@ -1054,6 +1340,20 @@ export function LeadChat({
 						</div>
 					)}
 					<IconButton icon={Paperclip} label="Attach files" size={15} onClick={pickFiles} />
+					{/* The ⚡ a new task gets, for the Lead's own Claude. It applies at once,
+					    mid-turn included, and stays on for the next conversation. */}
+					<button
+						type="button"
+						className={`iconbtn comp-yolo ${snap.auto ? "active" : ""}`}
+						title="Auto mode"
+						aria-label="Auto mode"
+						aria-pressed={snap.auto}
+						onClick={() =>
+							void window.ateamLead.setAuto(!snap.auto).catch((e) => setAttachNote(cleanError(e)))
+						}
+					>
+						<Zap size={15} strokeWidth={1.75} />
+					</button>
 					<textarea
 						ref={input}
 						value={text}

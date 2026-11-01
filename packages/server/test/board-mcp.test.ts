@@ -15,6 +15,7 @@ function fakeBoard() {
 		askUser: unknown[];
 		showPage: unknown[];
 		propose: unknown[];
+		listPeers: unknown[];
 	} = {
 		setStatus: [],
 		setWaiting: [],
@@ -22,6 +23,7 @@ function fakeBoard() {
 		askUser: [],
 		showPage: [],
 		propose: [],
+		listPeers: [],
 	};
 	const board: BoardHandlers = {
 		get: async () => ({ tasks: [{ taskId: "t1" }] }),
@@ -33,7 +35,10 @@ function fakeBoard() {
 			calls.setWaiting.push(req);
 			return { ok: true, reason: `parked ${req.taskId}` };
 		},
-		listPeers: async () => [{ taskId: "t2", name: "other" }],
+		listPeers: async (callerTerminalId, search) => {
+			calls.listPeers.push({ callerTerminalId, search });
+			return [{ taskId: "t2", name: "other" }];
+		},
 		sendMessage: async (req) => {
 			calls.sendMessage.push(req);
 			return { ok: true, reason: `sent to ${req.to}` };
@@ -252,6 +257,19 @@ describe("peer tools", () => {
 		expect(calls.sendMessage).toEqual([{ fromTerminalId: "term-1", to: "t2", body: "hi" }]);
 		const peers = text(await dispatchMcp(call("list_peers"), board, ctx));
 		expect(peers?.content[0]?.text).toContain('"t2"');
+	});
+
+	it("list_peers passes a search through, and drops a blank one", async () => {
+		const { board, calls } = fakeBoard();
+		const ctx = { callerTerminalId: "term-1", callerVerified: true };
+		await dispatchMcp(call("list_peers", { search: "  propose loop " }), board, ctx);
+		await dispatchMcp(call("list_peers", { search: "   " }), board, ctx);
+		await dispatchMcp(call("list_peers"), board, ctx);
+		expect(calls.listPeers).toEqual([
+			{ callerTerminalId: "term-1", search: "propose loop" },
+			{ callerTerminalId: "term-1", search: undefined },
+			{ callerTerminalId: "term-1", search: undefined },
+		]);
 	});
 });
 
