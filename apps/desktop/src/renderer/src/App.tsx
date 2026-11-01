@@ -2278,6 +2278,7 @@ export function App() {
 					) : view === "lead" ? (
 						<LeadChat
 							tasks={allTasks}
+							projects={projects}
 							onOpenTask={openTask}
 							onOpenProposal={openLeadProposal}
 						/>
@@ -2307,6 +2308,7 @@ export function App() {
 					<aside className="lead-side" aria-label="Lead">
 						<LeadChat
 							tasks={allTasks}
+							projects={projects}
 							onOpenTask={openTask}
 							onOpenProposal={openLeadProposal}
 							onHide={() => setLeadSide(false)}
