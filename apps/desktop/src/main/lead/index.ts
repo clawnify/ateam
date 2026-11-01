@@ -1,11 +1,18 @@
 // The Lead chat: one coordinator conversation over every engine the desktop
 // holds. Its agent runs here in main (session.ts) and reaches the board through
 // an MCP server that routes like the renderer does (tools.ts, mcp-http.ts). The
-// tasks the user touches from the chat report back into it (follow.ts).
+// tasks the user touches from the chat report back into it (follow.ts). Tasks
+// and loops the Lead proposes wait in the chat until the user creates one from
+// its dialog or dismisses it.
 import { randomUUID } from "node:crypto";
 import { CH, type TaskDTO } from "@ateam/protocol";
 import { dialog, ipcMain, nativeImage } from "electron";
-import { LEAD_CH, type LeadEvent, type LeadPermissionAnswer } from "../../shared/lead";
+import {
+	LEAD_CH,
+	type LeadEvent,
+	type LeadItem,
+	type LeadPermissionAnswer,
+} from "../../shared/lead";
 import type { Router } from "../backend";
 import { deliverFiles } from "../deliver-files";
 import { LeadAttachments } from "./attachments";
@@ -45,6 +52,20 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 		handle,
 		machineOf: deps.machineOf,
 		onTouch: (task) => follower.follow(task),
+		propose: (p) => {
+			if (!session) return;
+			// The same name again is the Lead revising its proposal: the earlier
+			// card stops offering to open it.
+			for (const it of session.snapshot().items)
+				if (
+					it.kind === "proposal" &&
+					!it.outcome &&
+					it.proposal.kind === p.proposal.kind &&
+					it.proposal.name === p.proposal.name
+				)
+					session.record({ ...it, outcome: "replaced" });
+			session.record({ kind: "proposal", id: randomUUID(), at: Date.now(), ...p });
+		},
 		files: {
 			resolve: (paths) => {
 				const files = attachments.resolve(paths);
@@ -109,6 +130,31 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	ipcMain.handle(LEAD_CH.reset, () => lead.reset());
 	ipcMain.handle(LEAD_CH.permission, (_e, id: string, answer: LeadPermissionAnswer) =>
 		lead.answerPermission(String(id), answer),
+	);
+	// The user created a proposal from its dialog, or dismissed it. A task made
+	// from one is followed, as one the Lead messaged is: its replies come here.
+	ipcMain.handle(
+		LEAD_CH.proposal,
+		async (_e, id: string, outcome: "created" | "dismissed", taskId?: string) => {
+			const item = lead.item(String(id));
+			// Decided already (from another window, or a later one replaced it).
+			if (item?.kind !== "proposal" || item.outcome) return;
+			let task: TaskDTO | null = null;
+			if (outcome === "created" && taskId) {
+				try {
+					task = (await handle(CH.tasksGet, [String(taskId)])) as TaskDTO;
+					follower.follow(task);
+				} catch {
+					/* created on a box that just went away: the outcome still stands */
+				}
+			}
+			const decided: LeadItem = {
+				...item,
+				outcome: outcome === "created" ? "created" : "dismissed",
+				...(task ? { task: refOf(task) } : {}),
+			};
+			lead.record(decided);
+		},
 	);
 
 	// The user talking to a task's agent straight from the chat: delivered as

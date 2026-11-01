@@ -29,6 +29,8 @@ export type { JsonRpcMessage, McpReply, McpToolResult, McpToolServer } from "./h
 export { dispatchMcpTools } from "./hooks/board-mcp";
 // The Lead chat asks before its own agent uses a tool, in the same words.
 export { describeAsk, ruleText } from "./permissions";
+// The Lead chat proposes tasks and loops under the same rules as an agent.
+export { validateProposal } from "./proposals";
 export type { BoxProvider, CreatedServer, CreateServerInput, ProviderOptions } from "./provision";
 export {
 	buildCloudInit,
