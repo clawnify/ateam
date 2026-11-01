@@ -9,6 +9,7 @@
 // issue Harper found stands, which is the grammar check as it works offline.
 
 import { askJev } from "./jev";
+import { looksSecret } from "./secrets";
 
 /**
  * Pinned, separately from the board's: the threshold below is calibrated
@@ -49,18 +50,6 @@ export interface GrammarVerdict {
 	/** Jev's probability that the issue is a real mistake. */
 	p: number;
 	keep: boolean;
-}
-
-/**
- * Whether a draft may hold a credential: a known token prefix, or a long
- * unbroken run of letters and digits such as a key or a hash. Such a draft is
- * not sent; a false alarm only means Harper's list shows unfiltered.
- */
-export function looksSecret(text: string): boolean {
-	if (/\b(sk-|sk_live_|gh[pousr]_|github_pat_|xox[abprs]-|AKIA)[A-Za-z0-9_-]{8,}/.test(text)) {
-		return true;
-	}
-	return (text.match(/[A-Za-z0-9_-]{32,}/g) ?? []).some((t) => /\d/.test(t) && /[A-Za-z]/.test(t));
 }
 
 function question(draft: string, issue: GrammarJudgeIssue) {

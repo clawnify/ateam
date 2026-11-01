@@ -20,7 +20,13 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { AteamSettings, ClientSettings, EngineSettings, SettingsPatch } from "@ateam/protocol";
+import {
+	type AteamSettings,
+	type ClientSettings,
+	DEFAULT_OPENROUTER_TEXT_MODEL,
+	type EngineSettings,
+	type SettingsPatch,
+} from "@ateam/protocol";
 
 /** Bumped when the shape changes incompatibly, so a reader can migrate. */
 export const SETTINGS_VERSION = 1;
@@ -41,6 +47,8 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 		loopsPaused: false,
 		idleSleepMinutes: 60,
 		archiveAfterDays: 30,
+		textModel: "auto",
+		openRouterTextModel: DEFAULT_OPENROUTER_TEXT_MODEL,
 	},
 };
 

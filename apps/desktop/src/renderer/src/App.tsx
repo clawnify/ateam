@@ -66,8 +66,10 @@ import {
 import { motion, Reorder } from "motion/react";
 import {
 	type CSSProperties,
+	type Dispatch,
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
+	type SetStateAction,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -112,7 +114,6 @@ import {
 	type Alias,
 	aliasLabel,
 	type EngineMember,
-	type UnifiedProject,
 	unifyProjects,
 } from "./unify";
 import { useGithubIssues } from "./useGithubIssues";
@@ -467,6 +468,11 @@ export function App() {
 	// The sessions themselves live in the PTY daemon; this is only the choice of
 	// which one to look at, and goes null when a task has none left.
 	const [termByTask, setTermByTask] = useState<Record<string, string | null>>({});
+	// The same choice for each Mission Control tile (see TileTab). Held here and
+	// not in the grid, because the grid is remounted per project and per
+	// Tasks/Loops mode: kept there, going to another project and back forgot the
+	// tab you had clicked, and the tile fell to whichever agent spoke last.
+	const [mcShownByTask, setMcShownByTask] = useState<Record<string, TileTab>>({});
 	const { ui: promptUi, ask, confirm } = usePrompt();
 
 	const run = useCallback(async (fn: () => Promise<void>) => {
@@ -603,8 +609,8 @@ export function App() {
 	// The box a task is being set up on, so the toast can show its steps.
 	const [provisioning, setProvisioning] = useState<string | null>(null);
 
-	// Load every project's tasks so non-selected projects can surface their
-	// attention state (pulsing dot); evtTaskUpdated keeps them fresh after.
+	// Load every project's tasks, not only the selected one's, so the Lead chat
+	// can name and open any of them; evtTaskUpdated keeps them fresh after.
 	useEffect(() => {
 		for (const p of projects) void loadTasks(p.id);
 	}, [projects, loadTasks]);
@@ -616,15 +622,6 @@ export function App() {
 		const p = projects.find((x) => x.id === boundProjectId);
 		if (p) document.title = p.name;
 	}, [boundProjectId, projects]);
-
-	// Highest-priority alert among a non-selected card's tasks (across all its engines).
-	const cardAlert = (card: UnifiedProject): "needs_attention" | "review" | null => {
-		if (card.members.some((m) => m.projectId === activeProjectId)) return null;
-		const list = card.members.flatMap((m) => tasksByProject[m.projectId] ?? []);
-		if (list.some((t) => t.column === "needs_attention")) return "needs_attention";
-		if (list.some((t) => t.column === "review")) return "review";
-		return null;
-	};
 
 	// The project a detached window is pinned to (for its static header).
 	const boundProject = boundProjectId
@@ -1308,8 +1305,9 @@ export function App() {
 	// Delete a task (and its worktree) straight from the sidebar. Confirm first,
 	// then reuse the same remove + force-fallback flow as the task panel menu.
 	// The onTaskRemoved event listener drops the row and clears the selection.
-	// Park a task on an outside party from the sidebar, or end the wait. The
-	// agent's own path is the `set_waiting` board tool; both meet in the engine.
+	// Park a task on an outside party from the open task's ··· menu, or end the
+	// wait. The agent's own path is the `set_waiting` board tool; both meet in
+	// the engine.
 	const toggleWaiting = (t: TaskDTO) =>
 		run(async () => {
 			if (t.waitingUntil != null) {
@@ -1369,6 +1367,7 @@ export function App() {
 	const composeTask = (
 		input: {
 			name: string;
+			nameAuto: boolean;
 			prompt: string;
 			agentId: string;
 			yolo: boolean;
@@ -1469,7 +1468,7 @@ export function App() {
 						throw new Error("Update Ateam on the selected box to start tasks from GitHub issues.");
 					throw error;
 				}
-			} else task = await window.ateam.tasks.create(taskInput);
+			} else task = await window.ateam.tasks.create({ ...taskInput, nameAuto: input.nameAuto });
 			// The task exists: what a proposal asked for is done, even if its agent
 			// then fails to start (that error shows, and the task can be resumed).
 			onCreated?.(task);
@@ -1551,8 +1550,9 @@ export function App() {
 								<FolderPlus size={16} strokeWidth={1.75} />
 							</RailTile>
 						)}
+						{/* Projects carry no status: a dot summing up every task in a repo
+						    never said which one, or what it wanted. */}
 						{unifiedProjects.map((card) => {
-							const alert = cardAlert(card);
 							const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
 							if (!primary) return null;
 							const active = card.members.some((m) => m.projectId === activeProjectId);
@@ -1572,7 +1572,6 @@ export function App() {
 									}
 								>
 									{card.name.charAt(0).toUpperCase()}
-									{alert && <span className={`corner pulse ${alert}`} />}
 								</RailTile>
 							);
 						})}
@@ -1604,11 +1603,9 @@ export function App() {
 										<Icon size={16} strokeWidth={1.75} />
 									)}
 									{rest.length > 0 && <span className="rail-count">{rest.length + 1}</span>}
-									{t.preparing ? (
-										<span className="corner preparing" />
-									) : (
-										t.agentStatus && <span className={`corner ${t.agentStatus}`} />
-									)}
+									{/* No room for the row's status pill, so the one state worth a
+									    dot gets it: a dot on every tile said nothing. */}
+									{t.column === "needs_attention" && <span className="corner needs_attention" />}
 								</RailTile>
 							);
 						})}
@@ -1635,7 +1632,7 @@ export function App() {
 									onClick={() => (task ? toggleTask(task) : goToView("loops"))}
 								>
 									<Repeat size={16} strokeWidth={1.75} />
-									{task?.agentStatus && <span className={`corner ${task.agentStatus}`} />}
+									{task?.column === "needs_attention" && <span className="corner needs_attention" />}
 								</RailTile>
 							);
 						})}
@@ -1675,7 +1672,6 @@ export function App() {
 								{!projectsCollapsed && (
 									<div className="side-list">
 										{unifiedProjects.map((card) => {
-											const alert = cardAlert(card);
 											// Selecting/detaching acts on the local copy if present, else the first.
 											const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
 											if (!primary) return null;
@@ -1695,9 +1691,10 @@ export function App() {
 														onClick={() => selectProject(primary.projectId)}
 														onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
 													>
+														{/* The project's own colour, never a status. */}
 														<span
-															className={`dot ${alert ? `alert ${alert}` : ""}`}
-															style={!alert && card.color ? { background: card.color } : undefined}
+															className="dot"
+															style={card.color ? { background: card.color } : undefined}
 														/>
 														<span className="proj-name" title={primary.project.repoPath}>
 															{card.name}
@@ -1840,7 +1837,6 @@ export function App() {
 														pulse={t.id === pulseId}
 														onClick={() => toggleTask(t)}
 														onDelete={() => deleteTask(t)}
-														onWait={() => toggleWaiting(t)}
 													/>
 												</Reorder.Item>
 											))}
@@ -1857,7 +1853,6 @@ export function App() {
 													pulse={t.id === pulseId}
 													onClick={() => toggleTask(t)}
 													onDelete={() => deleteTask(t)}
-													onWait={() => toggleWaiting(t)}
 												/>
 											</motion.div>
 										))
@@ -2114,6 +2109,7 @@ export function App() {
 							alias={originOf(selectedTask.projectId)}
 							onInstallAgent={installAgentOn}
 							onOpenProposal={(id) => setProposalOpen({ taskId: selectedTask.id, id })}
+							onWait={() => toggleWaiting(selectedTask)}
 							mode={panelMode}
 							onSetMode={(m) => (m === "side" ? collapseFocus() : setPanelMode(m))}
 							collapseLabel={FOCUS_COLLAPSE_LABEL[view]}
@@ -2232,6 +2228,7 @@ export function App() {
 									alias={originOf(selectedTask.projectId)}
 									onInstallAgent={installAgentOn}
 									onOpenProposal={(id) => setProposalOpen({ taskId: selectedTask.id, id })}
+									onWait={() => toggleWaiting(selectedTask)}
 									mode={panelMode}
 									onSetMode={setPanelMode}
 									terminalId={termByTask[selectedTask.id] ?? null}
@@ -2256,6 +2253,8 @@ export function App() {
 							// Tasks/Loops switch: a new mode is a new set of tiles.
 							key={mcGridKey}
 							mode={mcMode}
+							shownByTask={mcShownByTask}
+							setShownByTask={setMcShownByTask}
 							tasks={missionTasks}
 							agents={agents}
 							order={missionOrderIds}
@@ -2554,16 +2553,32 @@ export function App() {
 	);
 }
 
+// The status pill's colour per column: the columns that want your eyes take
+// the status colours, Backlog and Done stay neutral.
+const COLUMN_TONE: Partial<Record<KanbanColumn, string>> = {
+	running: "blue",
+	needs_attention: "amber",
+	review: "green",
+};
+
 /**
- * What the row's trailing slot says once no agent is attached.
- *
- * With a live agent the slot belongs to `agentStatus` (blue working, amber
- * needs-you) — that is the most urgent thing a row can report. The rest of the
- * time the useful question is the state of the WORK, which is exactly what
- * `triage` answers, from the task row alone and with no git/gh calls. Before
- * this, every such task wore the same green "idle" dot, so a task merged last
- * week, one that never started, and one genuinely waiting on you were
- * indistinguishable.
+ * A task's status on its sidebar row: its board column, in the board's own
+ * words. It replaced a coloured dot for the agent's state, which needed a
+ * legend and said nothing at all once the agent was idle.
+ */
+function StatusPill({ column, title }: { column: KanbanColumn; title?: string }) {
+	return (
+		<span className={`pill ${COLUMN_TONE[column] ?? ""}`} title={title}>
+			{COLUMNS.find((c) => c.key === column)?.label}
+		</span>
+	);
+}
+
+/**
+ * What the row's trailing slot says: the state of the WORK, which is exactly
+ * what `triage` answers, from the task row alone and with no git/gh calls. The
+ * row's status pill says where the task stands; this says whether its branch
+ * has a PR, landed, or holds uncommitted work.
  *
  * `active` and `not_started` fall through to null deliberately: "recently
  * touched" and "nothing here yet" are the row's resting state, and a glyph for
@@ -2629,6 +2644,7 @@ function OfflineTaskPanel({
 					<span className="title">{task.name}</span>
 					<IconButton icon={X} label="Close" onClick={onClose} />
 				</div>
+				<TaskSummary task={task} />
 				<BranchLine task={task} />
 			</div>
 			<div className="empty">
@@ -2657,7 +2673,6 @@ function TaskRow({
 	pulse,
 	onClick,
 	onDelete,
-	onWait,
 }: {
 	task: TaskDTO;
 	/** Its box isn't held: the row is its last-seen state, not a live one. */
@@ -2667,14 +2682,13 @@ function TaskRow({
 	pulse: boolean;
 	onClick: () => void;
 	onDelete: () => void;
-	onWait: () => void;
 }) {
 	const Icon = taskIcon(t.name);
 	const tags = tagsFor(t);
 	const glyphs = taskGlyphs(t);
 	// Row and trailing slot are siblings so the trash click can't nest inside the
-	// row button (same pattern as proj-row / proj-open above). The status dot and
-	// delete button share the trailing slot and swap in place on hover.
+	// row button (same pattern as proj-row / proj-open above). The git glyph and
+	// the delete button share the trailing slot and swap in place on hover.
 	return (
 		<div className="tasknode-row">
 			<button
@@ -2691,9 +2705,9 @@ function TaskRow({
 					<Icon className="ticon" size={14} strokeWidth={1.75} />
 				)}
 				<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
-				{/* Hover-only, like the card's. The name already ellipsizes, so it
-				    simply truncates further to make room and the row never changes
-				    height. */}
+				{/* The status stays put; on hover the tags slide in beside it, like
+				    the card's. The name already ellipsizes, so it simply truncates
+				    further to make room and the row never changes height. */}
 				{tags.length > 0 && (
 					<span className="row-tags">
 						{tags.map((tag) => (
@@ -2703,49 +2717,26 @@ function TaskRow({
 						))}
 					</span>
 				)}
+				<StatusPill column={t.column} title={t.triage.reason} />
 			</button>
 			<span className="task-trail">
-				{/* A task is `preparing` before it has any agentStatus, so this is
-				    the one dot it gets — otherwise the trail is empty for the whole
-				    copy and the card looks idle while it is anything but. */}
-				{t.preparing ? (
-					<span className="tstatus preparing" title="Copying dependencies into the worktree…" />
-				) : t.agentStatus === "running" || t.agentStatus === "awaiting_input" ? (
-					// A live agent keeps this slot. `stalled` means it claims to be
-					// running but stopped advancing, so it wears the card's hollow
-					// treatment rather than the pulsing live one.
-					<span
-						className={`tstatus ${t.triage.bucket === "stalled" ? "stalled" : t.agentStatus}`}
-						title={t.triage.reason}
-					/>
-				) : (
-					<TriageGlyph triage={t.triage} />
-				)}
-				{/* Two hover actions share the dot's cell; on a parked task the
-				    hourglass reads lit, so the hover also says "this one is waiting". */}
-				<span className="trail-actions">
-					<IconButton
-						icon={Hourglass}
-						label={t.waitingUntil != null ? "Stop waiting" : "Wait on someone…"}
-						active={t.waitingUntil != null}
-						size={14}
-						onClick={onWait}
-					/>
-					<IconButton
-						icon={Trash2}
-						label="Delete task"
-						variant="danger"
-						size={14}
-						onClick={onDelete}
-					/>
-				</span>
+				<TriageGlyph triage={t.triage} />
+				{/* One action, so it fits beside the status without moving it. Wait
+				    on someone lives in the open task's ··· menu. */}
+				<IconButton
+					icon={Trash2}
+					label="Delete task"
+					variant="danger"
+					size={14}
+					onClick={onDelete}
+				/>
 			</span>
 		</div>
 	);
 }
 
 /** Sidebar row for a loop — mirrors TaskRow, with the loop's task supplying
- *  the status dot. A paused loop renders dimmed. */
+ *  the status pill. A paused loop renders dimmed. */
 function LoopRow({
 	loop,
 	task,
@@ -2768,10 +2759,8 @@ function LoopRow({
 					<Repeat size={14} strokeWidth={1.75} />
 				</span>
 				<span className="tname">{loop.title}</span>
+				{task && <StatusPill column={task.column} title={task.triage.reason} />}
 			</button>
-			<span className="task-trail">
-				{task?.agentStatus && <span className={`tstatus ${task.agentStatus}`} />}
-			</span>
 		</div>
 	);
 }
@@ -3030,6 +3019,20 @@ function BranchLine({ task }: { task: TaskDTO }) {
 	);
 }
 
+/**
+ * Where the open task stands, in a sentence or two the engine writes once its
+ * agent has gone quiet (server/task-summaries.ts). Nothing until the first one,
+ * and nothing from an engine older than v23.
+ */
+function TaskSummary({ task }: { task: TaskDTO }) {
+	if (!task.summary) return null;
+	return (
+		<p className="task-summary" title={task.summary}>
+			{task.summary}
+		</p>
+	);
+}
+
 function TaskPanel({
 	task,
 	agents,
@@ -3037,6 +3040,7 @@ function TaskPanel({
 	alias,
 	onInstallAgent,
 	onOpenProposal,
+	onWait,
 	mode,
 	onSetMode,
 	collapseLabel = "Show beside the board",
@@ -3059,6 +3063,8 @@ function TaskPanel({
 	onInstallAgent: (alias: Alias, agentId: string) => Promise<{ loginCommand?: string }>;
 	/** Open a task or loop this task's agent proposed, in its filled-in dialog. */
 	onOpenProposal: (proposalId: string) => void;
+	/** Park this task on an outside party, or end the wait. */
+	onWait: () => void;
 	mode: "side" | "full";
 	onSetMode: (m: "side" | "full") => void;
 	/** Tooltip for the minimize button — where collapsing takes you. */
@@ -3431,6 +3437,7 @@ function TaskPanel({
 						<IconButton icon={X} label="Close" onClick={onClose} />
 					</span>
 				</div>
+				<TaskSummary task={task} />
 				<BranchLine task={task} />
 			</div>
 
@@ -3685,6 +3692,11 @@ function TaskPanel({
 				<Menu
 					items={[
 						{
+							label: task.waitingUntil != null ? "Stop waiting" : "Wait on someone…",
+							icon: Hourglass,
+							onClick: onWait,
+						},
+						{
 							label: "Remove task & worktree",
 							icon: Trash2,
 							danger: true,
@@ -3848,8 +3860,19 @@ function TaskPanel({
 	);
 }
 
+/**
+ * Which session a Mission Control tile is showing. `pinned` marks a tab the
+ * viewer clicked, which is then kept for as long as that session lives. An
+ * unpinned entry is resolved the moment the tile arrives on the visible page,
+ * and absent (or pointing at a session that has since died) falls back to
+ * activeTerminal.
+ */
+type TileTab = { terminalId: string; pinned: boolean };
+
 function MissionControl({
 	mode,
+	shownByTask,
+	setShownByTask,
 	tasks,
 	agents,
 	order,
@@ -3867,6 +3890,10 @@ function MissionControl({
 	/** Which list `tasks` was drawn from; only the empty state and the New
 	 *  task slot differ. */
 	mode: "tasks" | "loops";
+	/** Each tile's tab, keyed by task. Owned by App so it outlives this instance,
+	 *  which is remounted on every project or mode switch. */
+	shownByTask: Record<string, TileTab>;
+	setShownByTask: Dispatch<SetStateAction<Record<string, TileTab>>>;
 	tasks: TaskDTO[];
 	/** Agent catalog, for naming a session's tab the way the task panel does. */
 	agents: AgentDTO[];
@@ -3897,14 +3924,14 @@ function MissionControl({
 	// between them. Creating and closing sessions stays in the task panel, where
 	// the + and the ✕ live; a tile is a viewport onto work that already exists.
 	const [tiles, setTiles] = useState<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
-	// Which session each tile is showing. `pinned` marks a tab the viewer clicked,
-	// which is then kept for as long as that session lives. An unpinned entry is
-	// resolved the moment the tile arrives on the visible page (see below), and
-	// absent — or pointing at a session that has since died — falls back to
-	// activeTerminal.
-	const [shownByTask, setShownByTask] = useState<
-		Record<string, { terminalId: string; pinned: boolean }>
-	>({});
+	// Only a tab the viewer clicked outlives this grid. The ones it resolved by
+	// itself are re-read when the next grid's tiles arrive, and left in place
+	// they would paint the old tab for a frame before that.
+	useEffect(
+		() => () =>
+			setShownByTask((m) => Object.fromEntries(Object.entries(m).filter(([, t]) => t.pinned))),
+		[setShownByTask],
+	);
 	const tasksRef = useRef(tasks);
 	tasksRef.current = tasks;
 	const tilesRef = useRef(tiles);
@@ -4104,7 +4131,7 @@ function MissionControl({
 			}
 			return next;
 		});
-	}, [onScreen]);
+	}, [onScreen, setShownByTask]);
 
 	// Each tile's changes, for its +N -N and its changes view. Kept per task for
 	// the grid's life, so flipping pages doesn't run git again for tiles already

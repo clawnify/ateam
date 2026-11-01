@@ -159,7 +159,7 @@ const TOOLS = [
 	{
 		name: "list_peers",
 		description:
-			"List the user's other tasks you can message with send_message: each task's id, name, project, repo (the project's GitHub owner/name, or its clone's path when it has no GitHub remote), branch, which agent works in it (Claude Code, Codex, OpenCode), and its state (working, needs_you, idle, or not_running). Your own task is marked you: true. Tasks that have merged are left out unless you pass search, which looks through every task, merged and archived ones too: use it to find the task that built something, then message it like any other.",
+			"List the user's other tasks you can message with send_message: each task's id, name, project, repo (the project's GitHub owner/name, or its clone's path when it has no GitHub remote), branch, which agent works in it (Claude Code, Codex, OpenCode), its state (working, needs_you, idle, or not_running), what it was asked to do (description), and where it stands in a sentence or two (summary, written a few minutes after its agent goes quiet; null until then). Your own task is marked you: true. Tasks that have merged are left out unless you pass search, which looks through every task, merged and archived ones too: use it to find the task that built something, then message it like any other.",
 		inputSchema: {
 			type: "object",
 			properties: {

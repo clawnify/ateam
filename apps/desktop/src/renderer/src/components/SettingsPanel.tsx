@@ -1,11 +1,13 @@
-import type {
-	AgentDTO,
-	AteamSettings,
-	CredentialsResult,
-	MergeStrategy,
-	SettingsPatch,
-	SettingsResult,
-	UpdateStrategy,
+import {
+	type AgentDTO,
+	type AteamSettings,
+	type CredentialsResult,
+	DEFAULT_OPENROUTER_TEXT_MODEL,
+	type MergeStrategy,
+	type SettingsPatch,
+	type SettingsResult,
+	type TextModelChoice,
+	type UpdateStrategy,
 } from "@ateam/protocol";
 import { AlertTriangle, Search } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
@@ -59,6 +61,13 @@ const MERGE_STRATEGIES: { value: MergeStrategy; label: string }[] = [
 const UPDATE_STRATEGIES: { value: UpdateStrategy; label: string }[] = [
 	{ value: "merge", label: "Merge" },
 	{ value: "rebase", label: "Rebase" },
+];
+
+const TEXT_MODEL_OPTIONS: { value: TextModelChoice; label: string }[] = [
+	{ value: "auto", label: "Automatic" },
+	{ value: "openrouter", label: "OpenRouter" },
+	{ value: "claude", label: "Claude Code (Haiku)" },
+	{ value: "off", label: "Off" },
 ];
 
 const IDLE_SLEEP_OPTIONS: { value: number; label: string }[] = [
@@ -276,7 +285,81 @@ const ROWS: Row[] = [
 			/>
 		),
 	},
+	{
+		id: "engine.textModel",
+		section: "ai",
+		title: "Model for titles and summaries",
+		description:
+			"Writes a short title for a task you start without a name, and a sentence or two on where each task stands once its agent has been quiet for a few minutes. Automatic uses OpenRouter when a key is set, otherwise Claude Code (Haiku, on your subscription). With OpenRouter, a task's prompts and its agent's last reply are sent to OpenRouter, with anything that looks like a key or a token removed first.",
+		control: (s, { patch }) => (
+			<select
+				className="settings-select"
+				value={s.engine.textModel ?? "auto"}
+				onChange={(e) => patch({ engine: { textModel: e.target.value as TextModelChoice } })}
+			>
+				{TEXT_MODEL_OPTIONS.map((o) => (
+					<option key={o.value} value={o.value}>
+						{o.label}
+					</option>
+				))}
+			</select>
+		),
+	},
+	{
+		id: "engine.openRouterTextModel",
+		section: "ai",
+		title: "OpenRouter model for titles and summaries",
+		description: "The model that writes them when OpenRouter does, by its id on openrouter.ai.",
+		control: (s, { patch }) => (
+			<TextSetting
+				label="OpenRouter model for titles and summaries"
+				value={s.engine.openRouterTextModel ?? ""}
+				placeholder={DEFAULT_OPENROUTER_TEXT_MODEL}
+				onCommit={(v) => patch({ engine: { openRouterTextModel: v } })}
+			/>
+		),
+	},
 ];
+
+/**
+ * A free-text value, written when you leave the field or press Enter rather
+ * than on every keystroke, so the file never holds half a model id. Escape
+ * puts back what is saved.
+ */
+function TextSetting({
+	label,
+	value,
+	placeholder,
+	onCommit,
+}: {
+	label: string;
+	value: string;
+	placeholder: string;
+	onCommit: (v: string) => void;
+}) {
+	const [draft, setDraft] = useState(value);
+	useEffect(() => setDraft(value), [value]);
+	const commit = () => {
+		const next = draft.trim();
+		if (next !== value) onCommit(next);
+	};
+	return (
+		<input
+			className="settings-input"
+			aria-label={label}
+			placeholder={placeholder}
+			autoComplete="off"
+			spellCheck={false}
+			value={draft}
+			onChange={(e) => setDraft(e.target.value)}
+			onBlur={commit}
+			onKeyDown={(e) => {
+				if (e.key === "Enter") e.currentTarget.blur();
+				if (e.key === "Escape") setDraft(value);
+			}}
+		/>
+	);
+}
 
 /**
  * A secret's row: an empty field to paste into, or, once saved, only its last

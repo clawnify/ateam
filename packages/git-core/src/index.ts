@@ -44,7 +44,7 @@ export type {
 } from "./task";
 export { createTask, fetchBase, removeTask, seedWorktree } from "./task";
 export type { GitClient } from "./types";
-export { slugify } from "./util";
+export { isBranchForName, slugify } from "./util";
 export type { WorktreeRecord } from "./worktree-list";
 export {
 	listGitWorktrees,

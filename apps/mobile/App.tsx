@@ -1620,6 +1620,8 @@ export default function App() {
 					projectId: selectedProjectId,
 					name,
 					agentId: input.agentId,
+					// The engine may replace a name nobody typed with a model title, once.
+					nameAuto: !input.name?.trim(),
 				});
 				await api.pty.spawnAgent({
 					taskId: task.id,

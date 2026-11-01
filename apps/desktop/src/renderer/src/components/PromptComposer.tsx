@@ -91,6 +91,9 @@ export function PromptComposer({
 	onClose: () => void;
 	onCreate: (input: {
 		name: string;
+		/** Nobody typed the name: it is the prompt's first words, so the model's
+		 *  title may replace it once, shortly after launch. */
+		nameAuto: boolean;
 		prompt: string;
 		agentId: string;
 		yolo: boolean;
@@ -256,6 +259,7 @@ export function PromptComposer({
 			name.trim() || titleFromPrompt(prompt) || `task ${new Date().toISOString().slice(0, 10)}`;
 		onCreate({
 			name: finalName,
+			nameAuto: !name.trim(),
 			prompt: prompt.trim(),
 			agentId,
 			yolo,

@@ -8,12 +8,7 @@
  * a sentence, and a re-rank that throws must degrade to the lexical order
  * rather than to an error.
  */
-import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { getAgent } from "@ateam/agents";
-import { shell } from "../sessions";
+import { askAgent } from "../headless";
 import type { RankedSession } from "./types";
 
 /** The model's verdict on one candidate. */
@@ -133,70 +128,3 @@ export async function expandQuery(agentId: string, query: string): Promise<strin
 
 /** Expansion is on the path of a click, and a slow one is worse than none. */
 const EXPAND_TIMEOUT_MS = 20_000;
-
-/** How long the model gets before the search falls back to the lexical order. */
-const TIMEOUT_MS = 45_000;
-
-/** Quote one argument for the login shell. */
-function q(s: string): string {
-	return `'${s.replace(/'/g, `'\\''`)}'`;
-}
-
-/**
- * Run one headless turn on `agentId`. Resolves to "" on any failure — the
- * caller treats an empty reply as "no opinion" and keeps its own ordering.
- *
- * Launched through a LOGIN shell, exactly as an interactive agent session is
- * (see sessions.ts). A GUI app inherits launchd's PATH, not the user's, so a
- * bare spawn of `claude` fails with ENOENT on a Mac whenever the boot-time PATH
- * probe did not land — and the failure would be invisible here, quietly
- * downgrading every AI search to a lexical one.
- */
-export function askAgent(agentId: string, prompt: string, timeoutMs = TIMEOUT_MS): Promise<string> {
-	const agent = getAgent(agentId);
-	if (!agent?.headless) return Promise.resolve("");
-	const { args, prompt: transport, lastMessageFlag } = agent.headless;
-	const dir = lastMessageFlag ? mkdtempSync(join(tmpdir(), "ateam-search-")) : null;
-	const outFile = dir ? join(dir, "answer.txt") : null;
-	const cmdline = [
-		agent.bin,
-		...args,
-		...(lastMessageFlag && outFile ? [lastMessageFlag, q(outFile)] : []),
-		...(transport === "argv" ? [q(prompt)] : []),
-	].join(" ");
-	return new Promise<string>((resolve) => {
-		let done = false;
-		const finish = (text: string) => {
-			if (done) return;
-			done = true;
-			clearTimeout(timer);
-			if (dir) rmSync(dir, { recursive: true, force: true });
-			resolve(text);
-		};
-		const child = spawn(shell, ["-lc", cmdline], { stdio: ["pipe", "pipe", "ignore"] });
-		const timer = setTimeout(() => {
-			child.kill("SIGKILL");
-			finish("");
-		}, timeoutMs);
-		let stdout = "";
-		child.stdout.on("data", (d: Buffer) => {
-			// A runaway reply is a broken call, not an answer worth buffering.
-			if (stdout.length < 200_000) stdout += d.toString();
-		});
-		child.on("error", () => finish(""));
-		child.on("close", (code) => {
-			if (code !== 0) return finish("");
-			if (!outFile) return finish(stdout);
-			try {
-				finish(readFileSync(outFile, "utf8"));
-			} catch {
-				finish(stdout);
-			}
-		});
-		if (transport === "stdin") {
-			child.stdin.end(prompt);
-		} else {
-			child.stdin.end();
-		}
-	});
-}

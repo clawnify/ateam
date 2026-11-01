@@ -394,6 +394,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			name: string;
 			baseBranch?: string;
 			agentId?: string;
+			nameAuto?: boolean;
 		}) => {
 			const row = await createTaskInProject(services, engine.sendTaskUpdated, input);
 			return toTaskDTO(row, services.pendingSeeds.has(row.id));
