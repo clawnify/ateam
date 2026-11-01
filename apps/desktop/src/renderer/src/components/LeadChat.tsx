@@ -2,7 +2,7 @@
 // and reads every task on every engine (main/lead). Native rendering, not a
 // terminal: the user's messages, the Lead's prose, and its board moves folded
 // into one line each, with the tasks it touched as chips that open the task.
-import type { TaskDTO } from "@ateam/protocol";
+import type { ProjectDTO, TaskDTO } from "@ateam/protocol";
 import {
 	ArrowUp,
 	ChevronLeft,
@@ -21,6 +21,7 @@ import {
 import {
 	type ClipboardEvent,
 	type FormEvent,
+	Fragment,
 	type KeyboardEvent,
 	type ReactNode,
 	useCallback,
@@ -52,6 +53,7 @@ import {
 	toBlocks,
 	unseen,
 } from "../lead-blocks";
+import { type DraftRef, expandRefs, splitSent } from "../lead-refs";
 import { recordEmoji, topEmoji } from "../lib/emoji-use";
 import { AgentIcon } from "./AgentIcon";
 import { IconButton } from "./IconButton";
@@ -60,6 +62,7 @@ import { PageFrame } from "./PageFrame";
 import { PanelRightFilled } from "./PanelRightFilled";
 import { ProposalStrip } from "./Proposals";
 import { QuestionCard } from "./QuestionCard";
+import { TaskRefInput } from "./TaskRefInput";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import {
@@ -457,6 +460,21 @@ function TaskLink({
 			{task && <AgentIcon agentId={task.agentId} size={12} />}
 			<span className="lead-chip-name">{label}</span>
 		</button>
+	);
+}
+
+/** The user's own words as sent: plain text, with the tasks they picked by
+ *  typing "@" (sent as task links, lead-refs.ts) drawn as chips. */
+function SentText({
+	text,
+	renderTaskLink,
+}: {
+	text: string;
+	renderTaskLink: (target: string, label: ReactNode) => ReactNode;
+}) {
+	let links = 0;
+	return splitSent(text).map((p) =>
+		"text" in p ? p.text : <Fragment key={links++}>{renderTaskLink(p.target, p.label)}</Fragment>,
 	);
 }
 
@@ -977,18 +995,23 @@ function Thinking() {
 let unsent = "";
 /** The files attached to that draft, kept the same way. */
 let unsentFiles: LeadFile[] = [];
+/** The tasks picked into that draft with "@", kept the same way. */
+let unsentRefs: DraftRef[] = [];
 // Proposals whose dialog already opened by itself: each does once, as it
 // arrives while the chat is on screen (kept across the tab and the sidebar).
 const autoOpened = new Set<string>();
 
 export function LeadChat({
 	tasks,
+	projects,
 	onOpenTask,
 	onOpenProposal,
 	onHide,
 }: {
 	/** Every loaded task, across projects and machines, to name and open the ones the Lead touches. */
 	tasks: TaskDTO[];
+	/** To say which project each task is in when the user picks one with "@". */
+	projects: ProjectDTO[];
 	onOpenTask: (t: TaskDTO) => void;
 	/** Open a proposal's New task or New loop dialog; `auto` when it opens by
 	 *  itself on arriving, which App skips while another dialog is up. */
@@ -1003,6 +1026,15 @@ export function LeadChat({
 		unsent = value;
 		setTextState(value);
 	};
+	const [refs, setRefsState] = useState<DraftRef[]>(() => unsentRefs);
+	const setRefs = (value: DraftRef[]) => {
+		unsentRefs = value;
+		setRefsState(value);
+	};
+	const projectName = useMemo(() => {
+		const names = new Map(projects.map((p) => [p.id, p.name]));
+		return (id: string) => names.get(id);
+	}, [projects]);
 	// The Lead names tasks as links (its prompt says how); each is drawn as a
 	// chip that opens the task.
 	const renderTaskLink = useCallback(
@@ -1097,11 +1129,12 @@ export function LeadChat({
 		pinned.current = true;
 		window.ateamLead
 			.send(
-				body,
+				expandRefs(body, refs),
 				attach.map((f) => f.path),
 			)
 			.catch((e) => setAttachNote(cleanError(e)));
 		setText("");
+		setRefs([]);
 		if (attach.length) setFiles(() => []);
 		setAttachNote(null);
 	};
@@ -1255,7 +1288,7 @@ export function LeadChat({
 										))}
 									</div>
 								) : null}
-								{b.item.text}
+								<SentText text={b.item.text} renderTaskLink={renderTaskLink} />
 							</div>
 						) : b.item.kind === "permission" ? (
 							<LeadPermission key={b.item.id} item={b.item} />
@@ -1354,13 +1387,16 @@ export function LeadChat({
 					>
 						<Zap size={15} strokeWidth={1.75} />
 					</button>
-					<textarea
-						ref={input}
+					<TaskRefInput
 						value={text}
-						rows={1}
-						placeholder="Message the Lead"
-						aria-label="Message the Lead"
-						onChange={(e) => setText(e.target.value)}
+						onChange={setText}
+						refs={refs}
+						onRefsChange={setRefs}
+						tasks={tasks}
+						projectName={projectName}
+						inputRef={input}
+						placeholder="Message the Lead, @ for a task"
+						label="Message the Lead"
 						onKeyDown={onKey}
 						onPaste={onPaste}
 					/>

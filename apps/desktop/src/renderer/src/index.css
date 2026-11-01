@@ -3585,7 +3585,8 @@ input {
 /* A task the Lead names in its prose: the same chip, slimmed to 20px so it sits
    in a 21px line of text, with air above and below so chips on consecutive
    lines (a list of tasks) don't touch each other or the text around them. */
-.md .lead-chip {
+.md .lead-chip,
+.lead-user .lead-chip {
 	padding: 1px 7px;
 	line-height: 16px;
 	margin: 2px 0;
@@ -3613,6 +3614,7 @@ input {
 	padding: 0 20px 16px;
 }
 .lead-box {
+	position: relative;
 	display: flex;
 	flex-wrap: wrap;
 	align-items: flex-end;
@@ -3629,8 +3631,47 @@ input {
 		inset 0 0 0 1px rgba(255, 255, 255, 0.16),
 		0 4px 20px rgba(0, 0, 0, 0.25);
 }
-.lead-box textarea {
+/* The text box and, behind it, the layer that tints the tasks picked with "@"
+   (TaskRefInput): both lay out the same text with the same metrics, so a tint
+   sits exactly under its words. */
+.lead-input {
 	flex: 1;
+	position: relative;
+	display: flex;
+	min-width: 0;
+}
+.lead-input-marks {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+	pointer-events: none;
+	padding: 4px 0;
+	font: inherit;
+	font-size: 14px;
+	line-height: 20px;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+	color: transparent;
+	/* The app's scrollbars take width (the ::-webkit-scrollbar rule), so a long
+	   draft's scrollbar would narrow the textarea and its words would wrap apart
+	   from the tints. Both keep the gutter, scrolling or not. */
+	scrollbar-gutter: stable;
+}
+/* No padding: it would push the text after it out of line with the textarea's.
+   The spread gives the tint its air instead. */
+.lead-input-marks mark {
+	color: transparent;
+	background: rgba(255, 255, 255, 0.1);
+	border-radius: 4px;
+	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1);
+	-webkit-box-decoration-break: clone;
+	box-decoration-break: clone;
+}
+.lead-box textarea {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+	scrollbar-gutter: stable;
 	field-sizing: content;
 	min-height: 28px;
 	max-height: 380px;
@@ -3645,6 +3686,57 @@ input {
 	outline: none;
 }
 .lead-box textarea::placeholder {
+	color: var(--text-dim);
+}
+/* The tasks "@" lists: a card over the thread, as wide as the composer. */
+.lead-refs {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: calc(100% + 6px);
+	z-index: 30;
+	padding: 4px;
+	background: #222228;
+	border-radius: 12px;
+	box-shadow:
+		inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+		0 8px 28px rgba(0, 0, 0, 0.35);
+}
+.lead-refs-title {
+	padding: 4px 8px 4px;
+	font-size: 11px;
+	color: var(--text-dim);
+}
+.lead-refs-list {
+	max-height: 248px;
+	overflow-y: auto;
+}
+.lead-ref {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 8px;
+	border-radius: 8px;
+	font-size: 13px;
+	cursor: pointer;
+}
+.lead-ref.active {
+	background: rgba(255, 255, 255, 0.08);
+}
+.lead-ref-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.lead-ref-meta {
+	flex: none;
+	max-width: 45%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
 	color: var(--text-dim);
 }
 .lead-box.dropping {
