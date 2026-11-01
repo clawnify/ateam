@@ -63,6 +63,22 @@ export interface TaskQuestion {
 	pageId?: string;
 }
 
+/** A task or loop an agent proposed (propose_task / propose_loop); mirrors
+ *  @ateam/protocol's TaskProposalDTO, which documents each field. */
+export interface TaskProposal {
+	id: string;
+	kind: "task" | "loop";
+	name: string;
+	prompt: string;
+	reason?: string;
+	agentId?: string;
+	yolo?: boolean;
+	everyMinutes?: number;
+	dailyAt?: string;
+	followUp?: string;
+	proposedAt: number;
+}
+
 /** The task's page, without its HTML (that lives in task_pages); mirrors
  *  @ateam/protocol's TaskPageDTO. */
 export interface TaskPage {
@@ -173,6 +189,9 @@ export const tasks = sqliteTable(
 		/** The page the agent made for the user (show_page); its HTML is in
 		 *  task_pages, so listing the board never reads it. */
 		page: text("page", { mode: "json" }).$type<TaskPage>(),
+		/** Tasks and loops the agent proposed for the user to start; null or
+		 *  empty when none is pending. Oldest first, a few at most. */
+		proposals: text("proposals", { mode: "json" }).$type<TaskProposal[]>(),
 		lastReplyAt: integer("last_reply_at"),
 		lastEventAt: integer("last_event_at"),
 		isUnread: integer("is_unread", { mode: "boolean" }).default(false),

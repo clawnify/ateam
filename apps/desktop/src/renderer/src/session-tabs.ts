@@ -75,6 +75,49 @@ export function activeTerminal(sessions: SessionDTO[], current: string | null): 
 }
 
 /**
+ * The conversation a task panel brings back by itself for a task that is still
+ * active work: a stranded or reaped tab to restore by id, "latest" for the
+ * newest conversation in the worktree, or null for nothing to bring back.
+ * `live` and `restorable` are oldest-first. `shown` is the tab the panel last
+ * showed for this task, null when it has shown none yet (the task is opening).
+ *
+ * A live agent settles it, and so does a live tab you are on: a shell you are
+ * typing in is never swapped away. The agent you were looking at going to sleep
+ * brings that one back. On opening a task with only shells live, the newest
+ * sleeping agent comes back: the reaper (pty/reap.ts) takes idle agents and
+ * never shells, so such a task used to open on its shell as if the shell were
+ * the task. A tab closed on purpose is not restorable, and an older
+ * conversation does not take its place. With nothing live at all, the newest
+ * sleeping agent, else the latest conversation, as before.
+ */
+export function conversationToResume(
+	live: SessionDTO[],
+	restorable: SessionDTO[],
+	shown: string | null,
+): SessionDTO | "latest" | null {
+	if (live.some((s) => s.agentId !== "shell" || s.terminalId === shown)) return null;
+	const sleeping = restorable.filter((s) => s.agentId !== "shell");
+	const yours = sleeping.find((s) => s.terminalId === shown);
+	if (yours) return yours;
+	const newest = sleeping[sleeping.length - 1] ?? null;
+	if (!live.length) return newest ?? "latest";
+	return shown === null ? newest : null;
+}
+
+/**
+ * The sessions a Mission Control tile shows for a task, or none for no tile.
+ * Mission Control is for watching agents, so a task is a tile only while an
+ * agent is live in it, and its shells ride along as extra tabs. A session whose
+ * agent quit (`stopped` while its PTY lives on as a shell) is neither and gets
+ * no tab. Without the agent rule, a task whose agent was reaped stayed on as a
+ * tile of its leftover shell.
+ */
+export function tileSessions(sessions: SessionDTO[]): SessionDTO[] {
+	const shown = sessions.filter((s) => s.status !== "stopped");
+	return shown.some((s) => s.agentId !== "shell") ? shown : [];
+}
+
+/**
  * What a task shows for what runs in it — the sidebar row, the rail tile and
  * the board card all draw from this. One glyph per live session, oldest first
  * (TaskDTO.agentIds), so two agents and a shell read as three glyphs, not as

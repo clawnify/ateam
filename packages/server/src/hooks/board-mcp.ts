@@ -59,6 +59,20 @@ export interface BoardHandlers {
 		title?: unknown;
 		html?: unknown;
 	}): Promise<{ ok: boolean; reason: string }>;
+	/** File a task or loop for the user to start, on the caller's task
+	 *  (proposals.ts). The fields are the model's, validated there. */
+	propose(req: {
+		callerTerminalId: string;
+		kind: "task" | "loop";
+		name?: unknown;
+		prompt?: unknown;
+		reason?: unknown;
+		agent?: unknown;
+		yolo?: unknown;
+		everyMinutes?: unknown;
+		dailyAt?: unknown;
+		followUp?: unknown;
+	}): Promise<{ ok: boolean; reason: string }>;
 }
 
 /** Per-request context the HTTP layer derives (e.g. the caller's terminal id). */
@@ -82,7 +96,7 @@ const SERVER_INFO = { name: "ateam_board", version: "0.1.0" };
  * inside a shell-quoted TOML string unescaped.
  */
 export const BOARD_INSTRUCTIONS =
-	"You are working in an Ateam task. The agents in the other tasks on this board can be reached with the ateam_board send_message tool, even when they are stopped, and list_peers shows who they are. For those tasks use it rather than any other agent messaging tool: only it also reaches Codex and OpenCode agents and stopped tasks. Message one when your work affects theirs, to hand off work, or to ask something only their task knows. A message that starts with [Ateam] comes from another agent, not from the user, unless it says it comes from the user. When you need a decision or an approval from the user before you can go on, ask it with the ateam_board ask_user tool rather than only in your reply: the user may not be watching this terminal, and ask_user reaches them on the board and their phone with your options as buttons. To show the user something easier to see than to read (a dashboard, a comparison, a report with charts), make it an HTML page with the ateam_board show_page tool.";
+	"You are working in an Ateam task. The agents in the other tasks on this board can be reached with the ateam_board send_message tool, even when they are stopped, and list_peers shows who they are. For those tasks use it rather than any other agent messaging tool: only it also reaches Codex and OpenCode agents and stopped tasks. Message one when your work affects theirs, to hand off work, or to ask something only their task knows. A message that starts with [Ateam] comes from another agent, not from the user, unless it says it comes from the user. When you need a decision or an approval from the user before you can go on, ask it with the ateam_board ask_user tool rather than only in your reply: the user may not be watching this terminal, and ask_user reaches them on the board and their phone with your options as buttons. To show the user something easier to see than to read (a dashboard, a comparison, a report with charts), make it an HTML page with the ateam_board show_page tool. When some work should become a task of its own, or should run again on a schedule, propose it with propose_task or propose_loop: the user gets the New task or New loop dialog filled in and decides.";
 
 /** The board tools. `to` is constrained to the assignable columns to steer the
  *  model; the guardrails (validateSetStatus, validateWait) still enforce
@@ -251,6 +265,81 @@ const TOOLS = [
 	},
 ];
 
+/** The fields propose_task and propose_loop share. */
+const PROPOSAL_FIELDS = {
+	name: {
+		type: "string",
+		description: "A short name for the board card, at most 60 characters.",
+	},
+	prompt: {
+		type: "string",
+		description:
+			"The new agent's first instruction. It cannot see your conversation, so make it self-contained: the goal, the context it needs (files, findings, links) and what done looks like.",
+	},
+	reason: {
+		type: "string",
+		description:
+			"Why you propose it, in a line or two, shown to the user with the dialog. At most 300 characters.",
+	},
+	agent: {
+		type: "string",
+		enum: ["claude", "codex", "opencode"],
+		description: "Which coding agent. Leave it out for the user's default.",
+	},
+	yolo: {
+		type: "boolean",
+		description:
+			"Suggest Auto mode (fewer permission prompts). The dialog shows it as your suggestion; it stays off unless the user switches it on.",
+	},
+} as const;
+
+const PROPOSE_FLOW =
+	"Nothing is created until the user confirms: when they are in this task Ateam opens its dialog filled in with your proposal (otherwise this card waits in Needs You until they open it), and they can edit it before creating it, or dismiss it. You are not told the outcome, so do not wait for it. Several proposals can wait at once; proposing the same name again replaces that one.";
+
+const PROPOSE_TOOLS = [
+	{
+		name: "propose_task",
+		description: `Propose a new task for the user to start: work that deserves its own branch and agent, such as a follow-up you found, a part of this work to split off, or a problem outside your task. ${PROPOSE_FLOW}`,
+		inputSchema: {
+			type: "object",
+			properties: PROPOSAL_FIELDS,
+			required: ["name", "prompt"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "propose_loop",
+		description: `Propose a loop for the user to create: Ateam starts a fresh coding-agent session in one task of this project on a schedule, with the same prompt every run (a nightly dependency check, a daily report, watching something that changes). ${PROPOSE_FLOW} Give exactly one schedule: everyMinutes, or dailyAt.`,
+		inputSchema: {
+			type: "object",
+			properties: {
+				...PROPOSAL_FIELDS,
+				prompt: {
+					type: "string",
+					description:
+						"What every run does. Each run starts with no memory of the last, so make it self-contained.",
+				},
+				everyMinutes: {
+					type: "integer",
+					minimum: 1,
+					description: "Run every so many minutes (60 = hourly).",
+				},
+				dailyAt: {
+					type: "string",
+					description: "Run every day at this time, HH:MM in the user's local time (e.g. '09:00').",
+				},
+				followUp: {
+					type: "string",
+					description:
+						"Optional: a message sent once after each run's first reply, such as a slash command that checks the work.",
+				},
+			},
+			required: ["name", "prompt"],
+			additionalProperties: false,
+		},
+	},
+];
+
 /** What the HTTP layer should send back. `accepted` → 202 no body (notifications). */
 export type McpReply = { kind: "accepted" } | { kind: "json"; body: unknown };
 
@@ -344,7 +433,7 @@ export function dispatchMcp(
 	return dispatchMcpTools(msg, {
 		info: SERVER_INFO,
 		instructions: BOARD_INSTRUCTIONS,
-		tools: TOOLS,
+		tools: [...TOOLS, ...PROPOSE_TOOLS],
 		call: (name, args) => callBoardTool(name, args, board, ctx),
 	});
 }
@@ -393,13 +482,31 @@ async function callBoardTool(
 		name === "list_peers" ||
 		name === "send_message" ||
 		name === "ask_user" ||
-		name === "show_page"
+		name === "show_page" ||
+		name === "propose_task" ||
+		name === "propose_loop"
 	) {
 		if (!ctx.callerTerminalId || !ctx.callerVerified) {
 			return {
-				text: "messaging, ask_user and show_page are only open to an agent Ateam launched in a task (this session has no valid Ateam terminal token; relaunch it from Ateam)",
+				text: "messaging, ask_user, show_page and proposals are only open to an agent Ateam launched in a task (this session has no valid Ateam terminal token; relaunch it from Ateam)",
 				isError: true,
 			};
+		}
+		if (name === "propose_task" || name === "propose_loop") {
+			const res = await board.propose({
+				callerTerminalId: ctx.callerTerminalId,
+				kind: name === "propose_task" ? "task" : "loop",
+				name: args.name,
+				prompt: args.prompt,
+				reason: args.reason,
+				agent: args.agent,
+				yolo: args.yolo,
+				// A task has no schedule, whatever the model sent.
+				...(name === "propose_loop"
+					? { everyMinutes: args.everyMinutes, dailyAt: args.dailyAt, followUp: args.followUp }
+					: {}),
+			});
+			return { text: res.reason, isError: !res.ok };
 		}
 		if (name === "list_peers") {
 			const peers = await board.listPeers(ctx.callerTerminalId);

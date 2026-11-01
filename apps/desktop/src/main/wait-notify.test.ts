@@ -3,7 +3,9 @@ import type { TaskDTO } from "@ateam/protocol";
 
 // The pure half needs no Electron; stub the import so the module loads under bun.
 mock.module("electron", () => ({ Notification: class {} }));
-const { FRESH_MS, plainText, questionNotice, waitNotice } = await import("./wait-notify");
+const { FRESH_MS, plainText, proposalNotice, questionNotice, waitNotice } = await import(
+	"./wait-notify"
+);
 
 const NOW = 1_700_000_000_000;
 
@@ -115,6 +117,34 @@ describe("questionNotice", () => {
 			NOW,
 		);
 		expect(n?.body).toBe("Which layout?");
+	});
+});
+
+describe("proposalNotice", () => {
+	const proposal = (id: string, proposedAt: number) => ({
+		id,
+		kind: "task" as const,
+		name: "Fix the flaky login test",
+		prompt: "x",
+		reason: "It fails one run in five",
+		proposedAt,
+	});
+
+	it("announces the newest proposal once, with its reason", () => {
+		const t = task({ proposals: [proposal("a", NOW - 5000), proposal("b", NOW - 1000)] });
+		expect(proposalNotice(t, new Set(), NOW)).toEqual({
+			key: "t1:p:b",
+			title: "permission rollout",
+			body: "Proposes a task: Fix the flaky login test\nIt fails one run in five",
+		});
+		expect(proposalNotice(t, new Set(["t1:p:b"]), NOW)).toBeNull();
+	});
+
+	it("stays quiet for a stale proposal, and for none", () => {
+		expect(
+			proposalNotice(task({ proposals: [proposal("a", NOW - FRESH_MS - 1)] }), new Set(), NOW),
+		).toBeNull();
+		expect(proposalNotice(task({ proposals: null }), new Set(), NOW)).toBeNull();
 	});
 });
 

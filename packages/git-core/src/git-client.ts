@@ -70,3 +70,15 @@ export async function refExists(git: SimpleGit, ref: string): Promise<boolean> {
 		return false;
 	}
 }
+
+/**
+ * The ref a task's base branch stands for: the pushed `origin/<base>`, or the
+ * local branch in a repository without one (a plain folder made a repo has no
+ * remote), or null when neither exists. Tasks branch off it, and their changes
+ * count against it.
+ */
+export async function baseRef(git: SimpleGit, baseBranch: string): Promise<string | null> {
+	if (await refExists(git, `refs/remotes/origin/${baseBranch}`)) return `origin/${baseBranch}`;
+	if (await refExists(git, `refs/heads/${baseBranch}`)) return baseBranch;
+	return null;
+}

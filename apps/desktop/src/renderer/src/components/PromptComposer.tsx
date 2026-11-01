@@ -1,6 +1,6 @@
 import type { AgentDTO, BoxWake } from "@ateam/protocol";
 import { ArrowUp, Paperclip, Plus, X, Zap } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import type { HostStatus } from "../../../shared/host";
 import { titleFromPrompt } from "../titleFromPrompt";
 import { AgentPicker } from "./AgentPicker";
@@ -46,6 +46,8 @@ export function PromptComposer({
 	initialName = "",
 	initialPrompt = "",
 	initialFiles = [],
+	initialAlias,
+	header,
 	environments = [],
 	envAgents,
 	onAdd,
@@ -66,6 +68,11 @@ export function PromptComposer({
 	initialPrompt?: string;
 	/** Paths to start attached, e.g. files dropped on a project in the sidebar. */
 	initialFiles?: string[];
+	/** Start on this environment, when it can run the task, instead of the last
+	 *  one picked; picking another is remembered as usual. */
+	initialAlias?: string | null;
+	/** Shown above the form, e.g. who proposed this task and why. */
+	header?: ReactNode;
 	/** Where the task can run: this Mac + each ~/.ssh/config box. `alias` null = Local.
 	 *  A box is disabled when the repo can't run there (no GitHub identity to clone).
 	 *  Unused by the session variant, which has no environment to choose. */
@@ -134,6 +141,11 @@ export function PromptComposer({
 	const [alias, setAliasState] = useState<string | null>(() => {
 		// A session runs where its task already is; only a new task gets a choice.
 		if (session) return sessionAlias ?? null;
+		if (
+			initialAlias !== undefined &&
+			environments.some((e) => e.alias === initialAlias && !e.disabled)
+		)
+			return initialAlias;
 		const saved = localStorage.getItem("ateam.runOn");
 		const savedAlias = saved === "__local__" ? null : saved;
 		const usable =
@@ -269,6 +281,7 @@ export function PromptComposer({
 				onKeyDown={onKeys}
 				onPaste={onPaste}
 			>
+				{header}
 				{!session && (
 					<div className="comp-head">
 						<input

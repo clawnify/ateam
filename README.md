@@ -225,8 +225,8 @@ OpenCode, Codex), hook-driven status → kanban columns with merged-PR detection
 (each column lists its most recently active task first),
 Mission Control grid (one tile per task, its sessions as read-only tabs; tiles
 keep their own order, drag to swap them across pages, Sync to take the sidebar's;
-an Auto layout that fits the live terminals each time it opens and never
-re-lays them out while you watch; each tile's +N -N opens its changes and diffs
+an Auto layout that fits the live terminals and refits as they come and go,
+so deleting a task closes its gap; each tile's +N -N opens its changes and diffs
 in place of its terminal),
 collapsible sidebar rail, image drag-drop & paste into
 agent terminals, skills on each agent terminal's toolbar (a menu of every skill
@@ -258,7 +258,10 @@ answered from Ateam (Allow, Always allow, Deny) as well as in the terminal,
 and so are its own questions (AskUserQuestion, one card per question),
 agent pages (HTML an agent makes for you with `show_page`, such as a dashboard
 or a comparison, drawn in a sandboxed frame; a question can carry one whose
-buttons answer it), and signed/notarized builds
+buttons answer it), tasks and loops an agent proposes with `propose_task` and
+`propose_loop` (the New task or New loop dialog opens filled in when you are in
+that task, and its card waits in Needs You until you create or dismiss them),
+and signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
 Electron main process is boot-verified with native modules.
 

@@ -29,11 +29,21 @@ import type { AteamDb } from "./types";
  * (see updateTask). Reads the row only for a write that could move it.
  */
 function holdForUser(db: AteamDb, id: string, patch: Partial<NewTask>): Partial<NewTask> {
-	if (patch.column === undefined && patch.question === undefined && patch.agentStatus === undefined)
+	if (
+		patch.column === undefined &&
+		patch.question === undefined &&
+		patch.proposals === undefined &&
+		patch.agentStatus === undefined
+	)
 		return patch;
 	if (patch.column === "needs_attention" || patch.column === "merged") return patch;
 	const now = db
-		.select({ column: tasks.column, question: tasks.question, agentStatus: tasks.agentStatus })
+		.select({
+			column: tasks.column,
+			question: tasks.question,
+			proposals: tasks.proposals,
+			agentStatus: tasks.agentStatus,
+		})
 		.from(tasks)
 		.where(eq(tasks.id, id))
 		.get();
@@ -41,8 +51,10 @@ function holdForUser(db: AteamDb, id: string, patch: Partial<NewTask>): Partial<
 	const column = patch.column ?? now.column;
 	if (column === "needs_attention" || column === "merged") return patch;
 	const question = patch.question === undefined ? now.question : patch.question;
+	const proposals = patch.proposals === undefined ? now.proposals : patch.proposals;
 	const agentStatus = patch.agentStatus === undefined ? now.agentStatus : patch.agentStatus;
-	const waiting = question != null || agentStatus === "awaiting_input";
+	const waiting =
+		question != null || (proposals?.length ?? 0) > 0 || agentStatus === "awaiting_input";
 	return waiting ? { ...patch, column: "needs_attention" } : patch;
 }
 
@@ -138,7 +150,8 @@ export const repo = {
 	/**
 	 * Patch a task, keeping the board's one rule: a task waiting on the user is
 	 * in Needs You. It waits while it has an open question (ask_user, or a
-	 * permission prompt passed to Ateam) or while its agent sits at a prompt, and
+	 * permission prompt passed to Ateam), a task or loop its agent proposed
+	 * (propose_task, propose_loop), or while its agent sits at a prompt, and
 	 * until then a write that asks for another column lands in needs_attention.
 	 * Only Done overrides it. Kept here because this is the only write to a
 	 * task's column, so no caller can forget it, and the board, the phone, the
