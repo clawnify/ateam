@@ -245,8 +245,10 @@ recommended), idle-task archiving (an open task untouched for 30 days, set in
 Settings, leaves the board, the phone and the agents' board tools but keeps its
 worktree; any activity in it, or Unarchive in Clean up, brings it back), the
 Lead chat (one conversation that reads the board on this Mac and every box,
-briefs you on the latest tasks, starts tasks, messages their agents and brings
-their replies back, with every task it names a chip that opens it; it runs as
+briefs you on the latest tasks, proposes tasks and loops (the New task or New
+loop dialog opens filled in, and nothing starts until you create it), messages
+their agents and brings their replies back, with every task it names a chip
+that opens it; it runs as
 your own Claude Code, with your skills, plugins and MCP servers, and asks for
 its permissions in the chat; it has its own tab, or sits as a sidebar on the
 right beside the board; files you attach or paste there can go to a new task or

@@ -57,6 +57,7 @@ import { IconButton } from "./IconButton";
 import { Markdown, TaskLinkContext } from "./Markdown";
 import { PageFrame } from "./PageFrame";
 import { PanelRightFilled } from "./PanelRightFilled";
+import { ProposalStrip } from "./Proposals";
 import { QuestionCard } from "./QuestionCard";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
@@ -101,7 +102,8 @@ function apply(s: LeadSnapshot, e: LeadEvent): LeadSnapshot {
 	}
 }
 
-/** create_task answers "Started task "x" (<uuid>) ..."; the id is the chip's target. */
+/** create_task (the Lead's tool before it proposed instead, still in older
+ *  conversations) answered "Started task "x" (<uuid>) ..."; the id is the chip's target. */
 const TASK_ID = /\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)/;
 
 function findTask(tasks: TaskDTO[], ref: unknown): TaskDTO | undefined {
@@ -144,6 +146,10 @@ function describe(tool: ToolItem, tasks: TaskDTO[]): string {
 			return `Read ${name}`;
 		case "create_task":
 			return `Started ${name}`;
+		case "propose_task":
+			return `Proposed ${name}`;
+		case "propose_loop":
+			return `Proposed the loop ${name}`;
 		case "send_message":
 			return `Messaged ${name}`;
 		case "answer_question":
@@ -602,6 +608,54 @@ function EmojiReply({
 	);
 }
 
+export type LeadProposalItem = Extract<LeadItem, { kind: "proposal" }>;
+
+/** A task or loop the Lead proposed. While it waits, the same strip a task's
+ *  proposals get: open its dialog, or dismiss it. Then what became of it. */
+function LeadProposalCard({
+	item,
+	tasks,
+	onOpen,
+	onOpenTask,
+}: {
+	item: LeadProposalItem;
+	tasks: TaskDTO[];
+	onOpen: (item: LeadProposalItem) => void;
+	onOpenTask: (t: TaskDTO) => void;
+}) {
+	const [error, setError] = useState<string | null>(null);
+	const { kind, name } = item.proposal;
+	if (!item.outcome)
+		return (
+			<div>
+				<ProposalStrip
+					label="Proposed by the Lead"
+					proposals={[{ ...item.proposal, id: item.id, proposedAt: item.at }]}
+					onOpen={() => onOpen(item)}
+					onDismiss={() =>
+						void window.ateamLead
+							.proposal(item.id, "dismissed")
+							.catch((e) => setError(cleanError(e)))
+					}
+				/>
+				{error && <p className="question-error">{error}</p>}
+			</div>
+		);
+	const what = kind === "loop" ? "loop" : "task";
+	return (
+		<div className="lead-notice info">
+			{item.outcome === "created"
+				? item.task
+					? "Created"
+					: `Created the ${what} ${name}`
+				: item.outcome === "dismissed"
+					? `Dismissed the proposed ${what} ${name}`
+					: `Replaced by a newer proposal: ${name}`}
+			{item.task && <TaskChip task={item.task} tasks={tasks} onOpenTask={onOpenTask} />}
+		</div>
+	);
+}
+
 /** A followed task's agent, talking back: its reply, and a box to answer it
  *  here, in words or with an emoji. The card and its head are the stack's
  *  (AgentStack). Expanded, the reply opens whole in a dialog with the same
@@ -920,15 +974,22 @@ function Thinking() {
 let unsent = "";
 /** The files attached to that draft, kept the same way. */
 let unsentFiles: LeadFile[] = [];
+// Proposals whose dialog already opened by itself: each does once, as it
+// arrives while the chat is on screen (kept across the tab and the sidebar).
+const autoOpened = new Set<string>();
 
 export function LeadChat({
 	tasks,
 	onOpenTask,
+	onOpenProposal,
 	onHide,
 }: {
 	/** Every loaded task, across projects and machines, to name and open the ones the Lead touches. */
 	tasks: TaskDTO[];
 	onOpenTask: (t: TaskDTO) => void;
+	/** Open a proposal's New task or New loop dialog; `auto` when it opens by
+	 *  itself on arriving, which App skips while another dialog is up. */
+	onOpenProposal: (item: LeadProposalItem, auto: boolean) => void;
 	/** Set when the chat is the sidebar on the right: its header is then the
 	 *  slim strip that hides it, not the Lead tab's title. */
 	onHide?: () => void;
@@ -963,9 +1024,21 @@ export function LeadChat({
 	// Follow the conversation only while the user is at the bottom of it.
 	const pinned = useRef(true);
 
+	const openProposal = useRef(onOpenProposal);
+	openProposal.current = onOpenProposal;
+
 	useEffect(() => {
 		let live = true;
-		const off = window.ateamLead.onEvent((e) => setSnap((s) => apply(s, e)));
+		const off = window.ateamLead.onEvent((e) => {
+			setSnap((s) => apply(s, e));
+			// A proposal opens its dialog by itself once, as it arrives here; one
+			// that arrived while the chat was closed waits as its card.
+			if (e.type === "item" && e.item.kind === "proposal" && !e.item.outcome) {
+				if (autoOpened.has(e.item.id)) return;
+				autoOpened.add(e.item.id);
+				openProposal.current(e.item, true);
+			}
+		});
 		void window.ateamLead.snapshot().then((s) => live && setSnap(s));
 		input.current?.focus();
 		return () => {
@@ -1183,6 +1256,14 @@ export function LeadChat({
 							</div>
 						) : b.item.kind === "permission" ? (
 							<LeadPermission key={b.item.id} item={b.item} />
+						) : b.item.kind === "proposal" ? (
+							<LeadProposalCard
+								key={b.item.id}
+								item={b.item}
+								tasks={tasks}
+								onOpen={(item) => onOpenProposal(item, false)}
+								onOpenTask={onOpenTask}
+							/>
 						) : b.item.kind === "page" ? (
 							<div key={b.item.id} className="lead-agent">
 								<div className="lead-agent-head">
