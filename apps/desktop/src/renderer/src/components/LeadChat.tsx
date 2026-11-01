@@ -1395,7 +1395,7 @@ export function LeadChat({
 						tasks={tasks}
 						projectName={projectName}
 						inputRef={input}
-						placeholder="Message the Lead, @ for a task"
+						placeholder="Ask the Lead, @ a task"
 						label="Message the Lead"
 						onKeyDown={onKey}
 						onPaste={onPaste}
