@@ -1,7 +1,8 @@
 // Tasks and loops a task's agent proposed (the propose_task and propose_loop
-// board tools; see proposals.ts in the server). The dialog itself is the
-// ordinary New task or New loop dialog, filled in: App opens it once per
-// proposal while the proposing task is on screen. These are the two pieces
+// board tools; see proposals.ts in the server), or the Lead did (its own tools
+// of the same names, in the Lead chat). The dialog itself is the ordinary New
+// task or New loop dialog, filled in: App opens it once per proposal while the
+// proposing task, or the Lead chat, is on screen. These are the two pieces
 // around it: the strip on the task panel, to open a proposal again after
 // clicking away or drop it, and the note the dialog opens with, saying who
 // proposed it and why. Auto mode is only ever the agent's suggestion here: an
@@ -25,13 +26,15 @@ export function ProposalStrip({
 	proposals,
 	onOpen,
 	onDismiss,
+	label = "Proposed by this task's agent",
 }: {
 	proposals: TaskProposalDTO[];
 	onOpen: (id: string) => void;
 	onDismiss: (id: string) => void;
+	label?: string;
 }) {
 	return (
-		<section className="proposals" aria-label="Proposed by this task's agent">
+		<section className="proposals" aria-label={label}>
 			{proposals.map((p) => (
 				<div className="proposal" key={p.id}>
 					{p.kind === "loop" ? (
@@ -70,11 +73,13 @@ export function ProposalStrip({
 /** The top of a dialog opened from a proposal: whose it is, why, and a way to say no. */
 export function ProposalNote({
 	from,
+	byLead = false,
 	proposal,
 	onDismiss,
 }: {
-	/** The proposing task's name. */
+	/** The proposing task's name, or with `byLead` the project it is for. */
 	from: string;
+	byLead?: boolean;
 	proposal: TaskProposalDTO;
 	onDismiss: () => void;
 }) {
@@ -82,7 +87,8 @@ export function ProposalNote({
 		<div className="proposal-note">
 			<div className="proposal-note-head">
 				<span>
-					{KIND[proposal.kind]}, from the agent in <strong>{from}</strong>
+					{KIND[proposal.kind]}, {byLead ? "from the Lead, in " : "from the agent in "}
+					<strong>{from}</strong>
 				</span>
 				<button
 					type="button"
