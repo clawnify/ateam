@@ -4322,6 +4322,7 @@ function MissionControl({
 					const shown = activeTerminal(sessions, shownByTask[task.id]?.terminalId ?? null);
 					if (!shown) return null; // a task with no live session is not a tile
 					const tabs = sessionTabs(sessions, agents);
+					const agentShown = sessions.some((s) => s.terminalId === shown && s.agentId !== "shell");
 					const diff = diffs[task.id];
 					const changesOpen = task.id in changesOf;
 					const openFile = changesOf[task.id] ?? null;
@@ -4438,9 +4439,14 @@ function MissionControl({
 							{/* Hidden, not unmounted, under the changes view, so the xterm
 							    survives (the task panel does the same). */}
 							<div className="term-wrap" style={{ display: changesOpen ? "none" : "flex" }}>
+								{/* An agent's tile gets the task panel's grammar and skills, but
+								    only the skills already sent there get a button: every pin
+								    would crowd a tile. Adding a skill stays in the panel. */}
 								<TerminalView
 									terminalId={shown}
-									grammar={sessions.some((s) => s.terminalId === shown && s.agentId !== "shell")}
+									grammar={agentShown}
+									skills={agentShown}
+									skillButtons="sent"
 								/>
 							</div>
 							{/* A tile is too narrow for the panel's list-beside-diff, so the
