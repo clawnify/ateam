@@ -216,6 +216,57 @@ describe("PeerMessenger.send", () => {
 		expect(repo.listPendingPeerMessages(db, b.id).length + launched.length).toBeGreaterThan(0);
 	});
 
+	// A task named from its prompt is renamed once by the model; its branch
+	// keeps the first words, so a peer that learned them still reaches it.
+	it("finds a renamed task by the name its branch was made from, never guessing between two", () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const first = (name: string, branch: string) =>
+			repo.createTask(db, {
+				projectId,
+				name,
+				slug: branch,
+				branch,
+				baseBranch: "main",
+				worktreePath: `/tmp/${branch}`,
+			});
+		const renamed = first("Unread dot in collapsed sidebar", "on-sidebar-collapsed-i-am-not");
+		const sent = messenger.send({
+			fromTerminalId: "ta",
+			to: "on sidebar collapsed I am not",
+			body: "x",
+		});
+		expect(sent.ok).toBe(true);
+		expect(repo.listPendingPeerMessages(db, renamed.id).length + launched.length).toBeGreaterThan(
+			0,
+		);
+		// A second task with the same first words got the -2 branch: the old name
+		// now fits both, so it is refused rather than delivered to the wrong one.
+		first("Collapsed sidebar badge", "on-sidebar-collapsed-i-am-not-2");
+		expect(
+			messenger.send({ fromTerminalId: "ta", to: "on sidebar collapsed I am not", body: "x" })
+				.reason,
+		).toContain("matches 2 tasks");
+	});
+
+	it("lets a task that carries a name now win over one whose branch was made from it", () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const current = addTask("fix login");
+		repo.createTask(db, {
+			projectId,
+			name: "Login redirect loop",
+			slug: "fix-login-2",
+			branch: "fix-login-2",
+			baseBranch: "main",
+			worktreePath: "/tmp/fix-login-2",
+		});
+		expect(messenger.send({ fromTerminalId: "ta", to: "fix login", body: "x" }).ok).toBe(true);
+		expect(repo.listPendingPeerMessages(db, current.id).length + launched.length).toBeGreaterThan(
+			0,
+		);
+	});
+
 	it("launches a task whose agent is not running, with the message as the prompt", async () => {
 		const a = addTask("a");
 		addSession(a, "claude", "ta");
@@ -360,7 +411,16 @@ describe("PeerMessenger.listPeers", () => {
 		expect(peers.find((p) => p.taskId === b.id)).toMatchObject({
 			state: "not_running",
 			agent: "codex",
+			summary: null,
 		});
+	});
+
+	it("carries each task's summary once one is written", () => {
+		const a = addTask("a", "claude");
+		repo.updateTask(db, a.id, { summary: "Board loads in 200ms; PR #12 is open." });
+		expect(messenger.listPeers(undefined)[0]?.summary).toBe(
+			"Board loads in 200ms; PR #12 is open.",
+		);
 	});
 });
 

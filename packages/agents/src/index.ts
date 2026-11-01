@@ -16,11 +16,13 @@ export {
 	listAgents,
 	probeAgentBinary,
 } from "./registry";
-export type { TagOptions } from "./tagging";
+export type { LabelOptions, TaskLabels } from "./tagging";
 export {
-	generateTaskTags,
+	generateTaskLabels,
 	MAX_TAGS,
-	parseTagReply,
+	MAX_TITLE_CHARS,
+	parseLabelReply,
 	sanitizeTags,
+	sanitizeTitle,
 	TAG_VOCABULARY,
 } from "./tagging";

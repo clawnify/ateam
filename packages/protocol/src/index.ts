@@ -111,7 +111,12 @@
 // TaskDTO gained `proposals`, optional, so an older engine reads as "nothing
 // proposed", and tasks:clearProposal is a new method; an older engine never has
 // a proposal to clear, so neither needs a gate.
-export const PROTOCOL_VERSION = 22;
+// v23: titles and summaries. tasks:create takes `nameAuto` (an older engine
+// ignores it and keeps the six words), TaskDTO gained `summary`, optional, so an
+// older engine reads as "no summary yet", and settings gained
+// `engine.textModel` / `engine.openRouterTextModel`, which an older engine
+// stores and never reads. Nothing needs a gate.
+export const PROTOCOL_VERSION = 23;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -474,6 +479,10 @@ export interface TaskDTO {
 	 *  created or dismissed, oldest first; null or empty when none. Absent on an
 	 *  engine older than v22. */
 	proposals?: TaskProposalDTO[] | null;
+	/** A sentence or two on what the task is about and where it stands, written
+	 *  a few minutes after its agent goes quiet; null until the first one, and
+	 *  absent on an engine older than v23. */
+	summary?: string | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
 }
@@ -587,7 +596,20 @@ export interface EngineSettings {
 	 * worktree, and any activity in one brings it back. See server/archive.ts.
 	 */
 	archiveAfterDays: number;
+	/**
+	 * What writes the title of a task started without a name, its tags, and the
+	 * summary of where each task stands once its agent goes quiet. `auto`: an
+	 * OpenRouter model when a key is set, otherwise Claude Code (Haiku, headless,
+	 * on the user's own subscription). `openrouter` needs the key; `off` writes
+	 * none of them. See server/text-model.ts.
+	 */
+	textModel: TextModelChoice;
+	/** The OpenRouter model id used whenever OpenRouter writes that text. */
+	openRouterTextModel: string;
 }
+export type TextModelChoice = "auto" | "openrouter" | "claude" | "off";
+/** `engine.openRouterTextModel` out of the box, and whenever it is left empty. */
+export const DEFAULT_OPENROUTER_TEXT_MODEL = "anthropic/claude-haiku-5.5";
 export interface ClientSettings {
 	/** Fetch an update in the background instead of asking first. */
 	autoDownloadUpdates: boolean;
@@ -1218,6 +1240,12 @@ export interface AteamApi {
 			baseBranch?: string;
 			/** The agent chosen in the composer, recorded up front so the card shows it. */
 			agentId?: string;
+			/**
+			 * Nobody typed `name`: the client filled it from the prompt's first words,
+			 * so the model's title may replace it once, shortly after launch. An
+			 * engine older than v23 ignores it and keeps the name.
+			 */
+			nameAuto?: boolean;
 		}): Promise<TaskDTO>;
 		remove(input: { id: string; deleteBranch?: boolean; force?: boolean }): Promise<void>;
 		setColumn(id: string, column: KanbanColumn): Promise<TaskDTO>;

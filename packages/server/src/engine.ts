@@ -40,6 +40,9 @@ import { applyPropose, clearProposal } from "./proposals";
 import { answerQuestion, applyAskUser, CLEAR_QUESTION } from "./questions";
 import { readSettings } from "./settings-file";
 import { createTurnClassifier } from "./turn-classifier";
+import { createSummarizer, SUMMARY_SWEEP_MS } from "./task-summaries";
+import { askConfiguredTextModel, currentTextModel } from "./text-model";
+import { userPromptsFor } from "./session-search";
 import { applySetWaiting, CLEAR_WAIT, isFiredWait, WaitTimers } from "./waits";
 import { WorktreeGuard } from "./worktree-guard";
 import { createWorktreeSweep, type WorktreeSweep } from "./worktree-sweep";
@@ -488,6 +491,14 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	// With an OpenRouter key, Jev may re-file a finished turn the rule filed in
 	// Review (turn-classifier.ts). Without one it never calls out.
 	const turns = createTurnClassifier({ db, notifyTaskUpdated: sendTaskUpdated, log: opts.log });
+	// Where each task stands, written once its agent has gone quiet (see task-summaries.ts).
+	const summaries = createSummarizer({
+		db,
+		notifyTaskUpdated: sendTaskUpdated,
+		hasModel: () => currentTextModel() !== null,
+		ask: (prompt) => askConfiguredTextModel(prompt, { maxTokens: 160, timeoutMs: 30_000 }),
+		userPrompts: userPromptsFor,
+	});
 
 	// Agent status hooks → update session/task, drive the kanban column.
 	hooks.on("hook", (e: HookEvent) => {
@@ -612,6 +623,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 
 	let reapTimer: ReturnType<typeof setInterval> | null = null;
 	let archiveTimer: ReturnType<typeof setInterval> | null = null;
+	let summaryTimer: ReturnType<typeof setInterval> | null = null;
 	// Take open tasks idle past `engine.archiveAfterDays` off every board (see
 	// archive.ts). Read per pass, so a settings edit applies at the next one.
 	const archiveIdle = (): void => {
@@ -711,9 +723,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			}
 			worktreeSweep.start();
 			peers.start();
+			summaryTimer ??= setInterval(() => void summaries.sweep(), SUMMARY_SWEEP_MS);
 		},
 		isWorking() {
-			if (pendingSeeds.size > 0 || mergeQueue.busy()) return true;
+			if (pendingSeeds.size > 0 || mergeQueue.busy() || summaries.busy()) return true;
 			// The row's status says mid-turn; the daemon says the process is still
 			// there (a row can strand at "running" after an exit nobody watched).
 			return repo
@@ -732,6 +745,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			if (archiveTimer) {
 				clearInterval(archiveTimer);
 				archiveTimer = null;
+			}
+			if (summaryTimer) {
+				clearInterval(summaryTimer);
+				summaryTimer = null;
 			}
 			waits.stop();
 			peers.stop();

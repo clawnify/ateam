@@ -263,6 +263,12 @@ or a comparison, drawn in a sandboxed frame; a question can carry one whose
 buttons answer it), tasks and loops an agent proposes with `propose_task` and
 `propose_loop` (the New task or New loop dialog opens filled in when you are in
 that task, and its card waits in Needs You until you create or dismiss them),
+task titles and summaries (a task you start without a name gets a short title
+a few seconds in, once, so other agents never lose track of it; once a task's
+agent has been quiet for a few minutes, a sentence or two on where it stands
+shows under the open task's title and in the Lead's and the agents' board
+tools; written by an OpenRouter model when you add a key in Settings, otherwise
+by Claude Code, or turned off there),
 and signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
 Electron main process is boot-verified with native modules.

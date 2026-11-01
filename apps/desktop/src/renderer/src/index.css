@@ -1032,6 +1032,18 @@ input {
 	font-size: 15px;
 	font-weight: 600;
 }
+/* Where the open task stands (TaskDTO.summary), under its title. Three lines at
+   most; the full text is in the tooltip. */
+.task-summary {
+	margin: 4px 0 6px;
+	font-size: 12.5px;
+	line-height: 1.45;
+	color: var(--text-dim);
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
 /* The open task's branch: the one place it shows, and a click copies it. */
 .branch-line {
 	display: flex;

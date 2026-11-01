@@ -182,6 +182,23 @@ describe("lead tools", () => {
 		expect(view.asked).toBe("Fix the redirect loop");
 	});
 
+	it("puts where a task stands on its board line, cut short, and whole in read_task", async () => {
+		const summary = `Redirect loop fixed and PR #12 open; ${"tests pass on every browser ".repeat(10)}`;
+		const summarized = TASKS.map((t) =>
+			t.id === "t1" ? { ...t, name: "Login redirect loop", summary } : t,
+		);
+		const r = fakeRouter({ [CH.tasksList]: () => summarized, [CH.tasksLastReply]: () => null });
+		const tools = createLeadTools({ handle: r.handle, machineOf: () => null });
+		const board = (await tools.call("get_board", {}))?.text ?? "";
+		const line = board.split("\n").find((l) => l.startsWith("t1 |")) ?? "";
+		expect(line).toContain("now: Redirect loop fixed and PR #12 open;");
+		expect(line.length).toBeLessThan(320);
+		expect(line).toContain("…");
+		// Found by the first words its branch was made from, after the model renamed it.
+		const view = JSON.parse((await tools.call("read_task", { task: "Fix login" }))?.text ?? "");
+		expect(view.summary).toBe(summary);
+	});
+
 	it("shows a pending question and passes the user's answer to it", async () => {
 		const question = {
 			id: "q1",
