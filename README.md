@@ -258,7 +258,10 @@ answered from Ateam (Allow, Always allow, Deny) as well as in the terminal,
 and so are its own questions (AskUserQuestion, one card per question),
 agent pages (HTML an agent makes for you with `show_page`, such as a dashboard
 or a comparison, drawn in a sandboxed frame; a question can carry one whose
-buttons answer it), and signed/notarized builds
+buttons answer it), tasks and loops an agent proposes with `propose_task` and
+`propose_loop` (the New task or New loop dialog opens filled in when you are in
+that task, and its card waits in Needs You until you create or dismiss them),
+and signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
 Electron main process is boot-verified with native modules.
 

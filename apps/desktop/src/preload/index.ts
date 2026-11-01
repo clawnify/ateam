@@ -39,6 +39,7 @@ const api: AteamApi = {
 		markRead: (id) => ipcRenderer.invoke(CH.tasksMarkRead, id),
 		setWaiting: (id, wait) => ipcRenderer.invoke(CH.tasksSetWaiting, id, wait),
 		answerQuestion: (input) => ipcRenderer.invoke(CH.tasksAnswerQuestion, input),
+		clearProposal: (input) => ipcRenderer.invoke(CH.tasksClearProposal, input),
 		cleanupPreview: (projectId) => ipcRenderer.invoke(CH.tasksCleanupPreview, projectId),
 		cleanup: (projectId) => ipcRenderer.invoke(CH.tasksCleanup, projectId),
 		cleanupCandidates: (projectId) => ipcRenderer.invoke(CH.tasksCleanupCandidates, projectId),

@@ -88,6 +88,7 @@ import { Menu } from "./components/Menu";
 import { PageFrame } from "./components/PageFrame";
 import { PanelRightFilled } from "./components/PanelRightFilled";
 import { PromptComposer } from "./components/PromptComposer";
+import { ProposalNote, ProposalStrip, proposalLabel } from "./components/Proposals";
 import { QuestionCard } from "./components/QuestionCard";
 import { RailTile } from "./components/RailTile";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -97,6 +98,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
 import { bestMcLayout, MC_PAGE_SIZE, type McChoice, type McLayout } from "./mc-layout";
+import { panelOnScreen, proposalToOpen } from "./proposal-open";
 import {
 	activeTerminal,
 	conversationToResume,
@@ -413,6 +415,12 @@ export function App() {
 	// like from here, so the archived count on Clean up follows the sweep.
 	const [archivedTick, setArchivedTick] = useState(0);
 	const [composerOpen, setComposerOpen] = useState(false);
+	// A task or loop a task's agent proposed, open in its dialog. Closing the
+	// dialog keeps the proposal (the task panel's strip opens it again); only
+	// creating it or Dismiss clears it.
+	const [proposalOpen, setProposalOpen] = useState<{ taskId: string; id: string } | null>(null);
+	// Proposals already opened by themselves, so each opens unasked only once.
+	const autoOpenedProposals = useRef(new Set<string>());
 	// Free-text task filter driven by the centered search bar in the topbar.
 	// Filters the sidebar list and the board by task name; the selected task
 	// stays open even when it doesn't match, so searching never yanks it away.
@@ -851,6 +859,37 @@ export function App() {
 	// selection, since a click there highlights rather than opens.
 	const mcGridShown = view === "mission" && !(selectedTask && panelMode === "full");
 	const sidebarSelectedId = mcGridShown ? mcHighlightId : selectedTaskId;
+	// The task whose panel is on screen, the one whose agent's proposals may
+	// open by themselves (proposal-open.ts has the rule and its tests).
+	const panelTask =
+		selectedTask && panelOnScreen(view, panelMode, selectedOffline !== null) ? selectedTask : null;
+	const dialogOpen =
+		proposalOpen !== null ||
+		composerOpen ||
+		loopDialog !== null ||
+		cleanupOpen ||
+		newIssueOpen ||
+		promptUi != null;
+	useEffect(() => {
+		const id = proposalToOpen(panelTask, autoOpenedProposals.current, dialogOpen);
+		if (!id || !panelTask) return;
+		autoOpenedProposals.current.add(id);
+		setProposalOpen({ taskId: panelTask.id, id });
+	}, [panelTask, dialogOpen]);
+	const openTaskProposal = (() => {
+		if (!proposalOpen) return null;
+		const task = activeTasks.find((t) => t.id === proposalOpen.taskId);
+		const proposal = task?.proposals?.find((p) => p.id === proposalOpen.id);
+		return task && proposal ? { task, proposal } : null;
+	})();
+	// Created or dismissed from another window, or the task left the board.
+	useEffect(() => {
+		if (proposalOpen && !openTaskProposal) setProposalOpen(null);
+	}, [proposalOpen, openTaskProposal]);
+	const clearProposal = (taskId: string, proposalId: string) =>
+		run(async () => {
+			await window.ateam.tasks.clearProposal({ taskId, proposalId });
+		});
 	// Opening Mission Control, which Auto holds the terminals for until it has
 	// fitted: switching to it, or to
 	// another project's or mode's grid while on it. Coming back from a tile
@@ -1301,17 +1340,20 @@ export function App() {
 	// Create the task and launch the chosen agent with the prompt as its first
 	// instruction. `open` lands it on screen (see landTask); otherwise nothing
 	// on screen moves, and a toast and a pulse on its row say where it went.
-	const composeTask = (input: {
-		name: string;
-		prompt: string;
-		agentId: string;
-		yolo: boolean;
-		files: string[];
-		// Chosen environment: null = this Mac; an alias = that box. A box is connected
-		// and the repo cloned onto it (idempotent) before the task is created there.
-		alias: Alias;
-		open: boolean;
-	}) =>
+	const composeTask = (
+		input: {
+			name: string;
+			prompt: string;
+			agentId: string;
+			yolo: boolean;
+			files: string[];
+			// Chosen environment: null = this Mac; an alias = that box. A box is connected
+			// and the repo cloned onto it (idempotent) before the task is created there.
+			alias: Alias;
+			open: boolean;
+		},
+		onCreated?: () => void,
+	) =>
 		run(async () => {
 			const card = activeCard;
 			if (!card) return;
@@ -1402,6 +1444,9 @@ export function App() {
 					throw error;
 				}
 			} else task = await window.ateam.tasks.create(taskInput);
+			// The task exists: what a proposal asked for is done, even if its agent
+			// then fails to start (that error shows, and the task can be resumed).
+			onCreated?.();
 			setSelectedIssue(null);
 			// The created task's project is a member of the active card, so its tasks
 			// are already unioned into the board once loaded.
@@ -2042,6 +2087,7 @@ export function App() {
 							envAgents={envAgents}
 							alias={originOf(selectedTask.projectId)}
 							onInstallAgent={installAgentOn}
+							onOpenProposal={(id) => setProposalOpen({ taskId: selectedTask.id, id })}
 							mode={panelMode}
 							onSetMode={(m) => (m === "side" ? collapseFocus() : setPanelMode(m))}
 							collapseLabel={FOCUS_COLLAPSE_LABEL[view]}
@@ -2159,6 +2205,7 @@ export function App() {
 									envAgents={envAgents}
 									alias={originOf(selectedTask.projectId)}
 									onInstallAgent={installAgentOn}
+									onOpenProposal={(id) => setProposalOpen({ taskId: selectedTask.id, id })}
 									mode={panelMode}
 									onSetMode={setPanelMode}
 									terminalId={termByTask[selectedTask.id] ?? null}
@@ -2298,6 +2345,69 @@ export function App() {
 					}}
 				/>
 			)}
+			{openTaskProposal &&
+				activeCard &&
+				(() => {
+					const { task, proposal: p } = openTaskProposal;
+					const note = (
+						<ProposalNote
+							from={task.name}
+							proposal={p}
+							onDismiss={() => {
+								setProposalOpen(null);
+								void clearProposal(task.id, p.id);
+							}}
+						/>
+					);
+					return p.kind === "task" ? (
+						<PromptComposer
+							key={p.id}
+							agents={agents}
+							initialName={p.name}
+							initialPrompt={p.prompt}
+							defaultAgentId={p.agentId}
+							// Where the proposing agent runs: what it knows holds there.
+							initialAlias={originOf(task.projectId)}
+							header={note}
+							environments={composerEnvs}
+							envAgents={envAgents}
+							onAdd={addTailscaleBox}
+							onInstall={installBox}
+							onForget={forgetBox}
+							onInstallAgent={installAgentOn}
+							onClose={() => setProposalOpen(null)}
+							onCreate={(input) => {
+								setProposalOpen(null);
+								void composeTask(input, () => void clearProposal(task.id, p.id));
+							}}
+						/>
+					) : (
+						<LoopForm
+							key={p.id}
+							draft={{
+								name: p.name,
+								prompt: p.prompt,
+								followUp: p.followUp,
+								agentId: p.agentId,
+								projectId: task.projectId,
+								everyMinutes: p.everyMinutes,
+								dailyAt: p.dailyAt,
+							}}
+							note={note}
+							members={activeMembers}
+							agents={agents}
+							envProtocol={envProtocol}
+							onInstallAgent={installAgentOn}
+							onCancel={() => setProposalOpen(null)}
+							onSaved={() => {
+								void clearProposal(task.id, p.id);
+								refreshLoops();
+								setLoopsCollapsed(false);
+								setProposalOpen(null);
+							}}
+						/>
+					);
+				})()}
 			{promptUi}
 			{error && (
 				<div className="toast" onClick={() => setError(null)}>
@@ -2699,11 +2809,13 @@ function Board({
 								    was computed on every refresh and shown only to the MCP tool. */}
 									{/* Parked on an outside party: the wait IS why the card is where it
 								    is, so it takes the triage line over until it ends. */}
+									{/* A proposal waiting on you is why it sits in Needs You, so it
+								    says so first. */}
 									<div
 										className={`triage wait-${waitState(t, Date.now())}`}
-										title={waitingLabel(t, Date.now()) ?? t.triage.reason}
+										title={proposalLabel(t) ?? waitingLabel(t, Date.now()) ?? t.triage.reason}
 									>
-										{waitingLabel(t, Date.now()) ?? t.triage.reason}
+										{proposalLabel(t) ?? waitingLabel(t, Date.now()) ?? t.triage.reason}
 									</div>
 									<div className="meta">
 										<WorkSize task={t} files />
@@ -2819,6 +2931,7 @@ function TaskPanel({
 	envAgents,
 	alias,
 	onInstallAgent,
+	onOpenProposal,
 	mode,
 	onSetMode,
 	collapseLabel = "Show beside the board",
@@ -2839,6 +2952,8 @@ function TaskPanel({
 	alias: Alias;
 	/** Install a coding agent's CLI on this task's environment (the picker's flow). */
 	onInstallAgent: (alias: Alias, agentId: string) => Promise<{ loginCommand?: string }>;
+	/** Open a task or loop this task's agent proposed, in its filled-in dialog. */
+	onOpenProposal: (proposalId: string) => void;
 	mode: "side" | "full";
 	onSetMode: (m: "side" | "full") => void;
 	/** Tooltip for the minimize button — where collapsing takes you. */
@@ -3510,6 +3625,17 @@ function TaskPanel({
 				<div className="panel-question">
 					<QuestionCard task={task} folded={questionFolded} onFold={toggleQuestion} />
 				</div>
+			)}
+			{!!task.proposals?.length && (
+				<ProposalStrip
+					proposals={task.proposals}
+					onOpen={onOpenProposal}
+					onDismiss={(proposalId) =>
+						void run(async () => {
+							await window.ateam.tasks.clearProposal({ taskId: task.id, proposalId });
+						})
+					}
+				/>
 			)}
 			<div className={`panel-body${termDocked ? " docked-term" : ""}`}>
 				{/* Keep the terminal mounted (xterm state survives) while the

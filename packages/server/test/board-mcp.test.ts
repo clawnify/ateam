@@ -14,12 +14,14 @@ function fakeBoard() {
 		sendMessage: unknown[];
 		askUser: unknown[];
 		showPage: unknown[];
+		propose: unknown[];
 	} = {
 		setStatus: [],
 		setWaiting: [],
 		sendMessage: [],
 		askUser: [],
 		showPage: [],
+		propose: [],
 	};
 	const board: BoardHandlers = {
 		get: async () => ({ tasks: [{ taskId: "t1" }] }),
@@ -43,6 +45,10 @@ function fakeBoard() {
 		showPage: async (req) => {
 			calls.showPage.push(req);
 			return { ok: true, reason: "shown" };
+		},
+		propose: async (req) => {
+			calls.propose.push(req);
+			return { ok: true, reason: "proposed" };
 		},
 	};
 	return { board, calls };
@@ -90,6 +96,8 @@ describe("dispatchMcp", () => {
 				"send_message",
 				"ask_user",
 				"show_page",
+				"propose_task",
+				"propose_loop",
 			]);
 		}
 	});
@@ -297,5 +305,53 @@ describe("show_page", () => {
 			true,
 		);
 		expect(calls.showPage).toHaveLength(1);
+	});
+});
+
+describe("propose_task and propose_loop", () => {
+	const propose = (name: string, args: unknown) => rpc("tools/call", { name, arguments: args });
+	const verified = { callerTerminalId: "term-1", callerVerified: true };
+
+	it("files a task proposal for the verified caller, dropping any schedule sent with it", async () => {
+		const { board, calls } = fakeBoard();
+		await dispatchMcp(
+			propose("propose_task", { name: "Fix flake", prompt: "Fix it", dailyAt: "09:00" }),
+			board,
+			verified,
+		);
+		expect(calls.propose).toEqual([
+			{
+				callerTerminalId: "term-1",
+				kind: "task",
+				name: "Fix flake",
+				prompt: "Fix it",
+				reason: undefined,
+				agent: undefined,
+				yolo: undefined,
+			},
+		]);
+	});
+
+	it("files a loop proposal with its schedule", async () => {
+		const { board, calls } = fakeBoard();
+		await dispatchMcp(
+			propose("propose_loop", { name: "Deps", prompt: "Check deps", dailyAt: "09:00" }),
+			board,
+			verified,
+		);
+		expect(calls.propose).toEqual([
+			expect.objectContaining({ kind: "loop", dailyAt: "09:00", everyMinutes: undefined }),
+		]);
+	});
+
+	it("is refused to a caller without a valid terminal token", async () => {
+		const { board, calls } = fakeBoard();
+		const r = await dispatchMcp(propose("propose_task", { name: "x", prompt: "y" }), board, {
+			callerTerminalId: "term-1",
+		});
+		expect(r.kind === "json" && (r.body as { result: { isError: boolean } }).result.isError).toBe(
+			true,
+		);
+		expect(calls.propose).toHaveLength(0);
 	});
 });

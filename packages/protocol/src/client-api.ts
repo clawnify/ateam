@@ -128,6 +128,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			markRead: (id) => call<TaskDTO>(CH.tasksMarkRead, [id]),
 			setWaiting: (id, wait) => call<TaskDTO>(CH.tasksSetWaiting, [id, wait]),
 			answerQuestion: (input) => call<TaskDTO>(CH.tasksAnswerQuestion, [input]),
+			clearProposal: (input) => call<TaskDTO>(CH.tasksClearProposal, [input]),
 			cleanupPreview: (projectId) => call<CleanupReport>(CH.tasksCleanupPreview, [projectId]),
 			cleanupCandidates: (projectId) =>
 				call<CleanupCandidate[]>(CH.tasksCleanupCandidates, [projectId]),

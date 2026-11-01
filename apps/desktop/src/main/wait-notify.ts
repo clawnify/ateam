@@ -66,6 +66,29 @@ export function questionNotice(
 const PREVIEW = /\n\n\*\*[^\n]*\*\*\n\n```/;
 
 /**
+ * A task or loop a task's agent just proposed (proposals.ts in the server),
+ * which holds the card in Needs You like a question. Once per proposal and
+ * only while fresh; the newest is at the back. A click opens the task, and
+ * its panel then opens the proposal's dialog.
+ */
+export function proposalNotice(
+	task: TaskDTO,
+	shown: ReadonlySet<string>,
+	now: number,
+): WaitNotice | null {
+	const p = task.proposals?.at(-1);
+	if (!p || now - p.proposedAt > FRESH_MS) return null;
+	const key = `${task.id}:p:${p.id}`;
+	if (shown.has(key)) return null;
+	const what = p.kind === "loop" ? "Proposes a loop" : "Proposes a task";
+	return {
+		key,
+		title: task.name,
+		body: [`${what}: ${p.name}`, p.reason].filter(Boolean).join("\n"),
+	};
+}
+
+/**
  * A question's markdown as the plain text a notification shows. Fence lines,
  * heading marks, `*` emphasis, code ticks and link syntax go; what is inside
  * code (a permission prompt's command, a path) stays as written. Underscores
@@ -104,7 +127,10 @@ export function createWaitNotifier(onClick: (task: TaskDTO) => void): (task: Tas
 	const live = new Set<Notification>();
 	return (task) => {
 		const now = Date.now();
-		const notice = waitNotice(task, shown, now) ?? questionNotice(task, shown, now);
+		const notice =
+			waitNotice(task, shown, now) ??
+			questionNotice(task, shown, now) ??
+			proposalNotice(task, shown, now);
 		if (!notice || !Notification.isSupported()) return;
 		shown.add(notice.key);
 		const n = new Notification({ title: notice.title, body: notice.body });

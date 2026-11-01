@@ -48,6 +48,7 @@ const ENTITY = new Set<string>([
 	CH.tasksMessage, // {taskId} — the user's reply goes to the task's engine
 	CH.peersSendFromLead, // {taskId} — delivered by the engine that owns the task
 	CH.tasksAnswerQuestion, // {taskId} — the question lives on the task's engine
+	CH.tasksClearProposal, // {taskId} — so do the proposals
 	CH.tasksPage, // taskId — main serves the page from the engine that owns the task
 	CH.projectsRemove,
 	CH.projectsRemoteUrl, // projectId — a box's project has a box's remote
