@@ -131,6 +131,7 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	ipcMain.handle(LEAD_CH.permission, (_e, id: string, answer: LeadPermissionAnswer) =>
 		lead.answerPermission(String(id), answer),
 	);
+	ipcMain.handle(LEAD_CH.setAuto, (_e, on: boolean) => lead.setAuto(on === true));
 	// The user created a proposal from its dialog, or dismissed it. A task made
 	// from one is followed, as one the Lead messaged is: its replies come here.
 	ipcMain.handle(
