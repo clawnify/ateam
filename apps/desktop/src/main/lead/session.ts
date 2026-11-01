@@ -11,6 +11,14 @@
 // and waits for our answer (without it, headless Claude denies silently), and a
 // Stop withdraws it with a `control_cancel_request`. Verified on 2.1.312.
 //
+// Auto mode is the ⚡ toggle a task gets, applied to the live process with a
+// `set_permission_mode` control request rather than a restart, so it takes
+// effect mid-turn and keeps the conversation running. Sent ahead of the first
+// message, it holds from that turn's start (init reports "auto"). Off goes back
+// to the user's own default mode, read with `get_settings`
+// (`effective.permissions.defaultMode`, absent means "default"). Verified on
+// 2.1.316: an unavailable auto mode answers with an error (`auto_mode_*`).
+//
 // The process starts on the first message, not at app launch, and is resumed by
 // session id after a restart. What the chat shows is our own transcript
 // (transcript.jsonl), not Claude's: it is what the renderer draws, and it
@@ -64,7 +72,12 @@ export interface LeadSessionOptions {
 
 interface LeadState {
 	sessionId?: string;
+	/** Auto mode; a preference, so a new conversation keeps it. */
+	auto?: boolean;
 }
+
+/** Claude's answer to one of our control requests. */
+type ControlResult = { ok: true; response: unknown } | { ok: false; error: string };
 
 /** Quote one argument for the login shell. */
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -107,6 +120,8 @@ export class LeadSession {
 	private stderr = "";
 	/** Permission prompts the agent is waiting on, by Claude's request id. */
 	private asking = new Map<string, { input: Record<string, unknown>; suggestions: unknown[] }>();
+	/** Our control requests waiting on Claude's answer, by request id. */
+	private controls = new Map<string, (r: ControlResult) => void>();
 	private readonly transcript: string;
 	private readonly statePath: string;
 
@@ -119,7 +134,12 @@ export class LeadSession {
 	}
 
 	snapshot(): LeadSnapshot {
-		return { items: [...this.items.values()], draft: this.draft, busy: this.busy };
+		return {
+			items: [...this.items.values()],
+			draft: this.draft,
+			busy: this.busy,
+			auto: this.state.auto === true,
+		};
 	}
 
 	/** `files` are attachments already in the Lead's folder (attachments.ts). */
@@ -163,9 +183,19 @@ export class LeadSession {
 		this.items.clear();
 		this.draft = "";
 		this.busy = false;
-		this.state = {};
+		this.state.sessionId = undefined;
 		this.saveState();
 		this.opts.emit({ type: "reset", snapshot: this.snapshot() });
+	}
+
+	/** Auto mode on or off. Kept for the next start, and applied to a running
+	 *  Lead at once, mid-turn included. */
+	setAuto(on: boolean): void {
+		if (on === (this.state.auto === true)) return;
+		this.state.auto = on;
+		this.saveState();
+		this.opts.emit({ type: "auto", auto: on });
+		if (this.proc) void this.applyAuto(on);
 	}
 
 	dispose(): void {
@@ -271,6 +301,62 @@ export class LeadSession {
 		});
 		proc.on("error", (e) => this.onExit(proc, null, e.message));
 		proc.on("exit", (code) => this.onExit(proc, code));
+		// Ahead of the message the caller writes next, so its turn starts in auto.
+		if (this.state.auto) void this.applyAuto(true);
+	}
+
+	/** Put the running Lead in auto mode, or back in the user's own default. */
+	private async applyAuto(on: boolean): Promise<void> {
+		const proc = this.proc;
+		// Superseded: the toggle moved again, or this process went (the next one
+		// starts the way the toggle says by then).
+		const stale = () => this.proc !== proc || (this.state.auto === true) !== on;
+		let mode = "auto";
+		if (!on) {
+			const settings = await this.control({ subtype: "get_settings" });
+			if (stale()) return;
+			const own = settings.ok
+				? (settings.response as { effective?: { permissions?: { defaultMode?: unknown } } })
+						?.effective?.permissions?.defaultMode
+				: undefined;
+			mode = typeof own === "string" ? own : "default";
+		}
+		const res = await this.control({ subtype: "set_permission_mode", mode });
+		if (res.ok || stale()) return;
+		if (on) {
+			this.state.auto = false;
+			this.saveState();
+			this.opts.emit({ type: "auto", auto: false });
+			this.notice(`Auto mode isn't available: ${res.error}`, "error");
+			return;
+		}
+		// Still in auto with the toggle off: end this process, so the next message
+		// resumes the conversation in the user's own mode.
+		this.kill();
+		this.setBusy(false);
+		this.notice(
+			`The Lead stopped, because Auto mode couldn't be turned off: ${res.error}`,
+			"error",
+		);
+	}
+
+	/** Ask Claude something and wait for its answer. Written to this process
+	 *  only: unlike a message, it is never replayed into a fresh one. */
+	private control(request: Record<string, unknown>): Promise<ControlResult> {
+		const stdin = this.proc?.stdin;
+		if (!stdin) return Promise.resolve({ ok: false, error: "The Lead isn't running." });
+		const id = randomUUID();
+		return new Promise((resolve) => {
+			this.controls.set(id, resolve);
+			stdin.write(`${JSON.stringify({ type: "control_request", request_id: id, request })}\n`);
+		});
+	}
+
+	/** The process went: nothing it was asked will be answered. */
+	private failControls(): void {
+		const waiting = [...this.controls.values()];
+		this.controls.clear();
+		for (const done of waiting) done({ ok: false, error: "The Lead stopped." });
 	}
 
 	private write(line: string): void {
@@ -284,6 +370,7 @@ export class LeadSession {
 		this.proc = null;
 		proc?.kill("SIGTERM");
 		this.cancelAsking();
+		this.failControls();
 	}
 
 	/** The process that asked is gone: its prompts can no longer be answered. */
@@ -301,12 +388,13 @@ export class LeadSession {
 		if (this.proc !== proc) return;
 		this.proc = null;
 		this.cancelAsking();
+		this.failControls();
 		// A resume whose conversation is gone (Claude's store was cleared, or the
 		// id was never written because the first start died): start fresh once,
 		// replaying what was sent, rather than leave the chat dead.
 		if (this.resuming && !this.sawInit && this.sentBeforeInit.length > 0) {
 			const replay = this.sentBeforeInit;
-			this.state = {};
+			this.state.sessionId = undefined;
 			this.saveState();
 			this.notice("Couldn't reopen the last conversation, so this is a new one.", "info");
 			this.ensureProcess();
@@ -369,6 +457,19 @@ export class LeadSession {
 			case "control_cancel_request":
 				this.cancelAsk(String(m.request_id ?? ""));
 				return;
+			case "control_response": {
+				const r = (m.response ?? {}) as Record<string, unknown>;
+				const id = String(r.request_id ?? "");
+				const done = this.controls.get(id);
+				if (!done) return;
+				this.controls.delete(id);
+				done(
+					r.subtype === "success"
+						? { ok: true, response: r.response }
+						: { ok: false, error: String(r.error ?? "no reason given") },
+				);
+				return;
+			}
 			case "stream_event": {
 				const ev = m.event as { type?: string; delta?: { type?: string; text?: string } };
 				if (ev?.type === "message_start") this.setDraft("");

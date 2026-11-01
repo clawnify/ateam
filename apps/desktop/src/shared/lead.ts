@@ -19,6 +19,8 @@ export const LEAD_CH = {
 	answer: "lead:answer",
 	/** The user answers the Lead's own permission prompt (its agent wants a tool). */
 	permission: "lead:permission",
+	/** Turn Auto mode on or off: Claude's own auto mode, as the ⚡ toggle gives a task. */
+	setAuto: "lead:setAuto",
 	/** Attach files from this Mac (paths, or null for the picker) to the next message. */
 	attach: "lead:attach",
 	/** Attach a file that has no path here: a pasted screenshot, an image dragged from a page. */
@@ -112,6 +114,9 @@ export interface LeadSnapshot {
 	draft: string;
 	/** A turn is running. */
 	busy: boolean;
+	/** Auto mode is on: Claude's auto mode, where a classifier approves what is
+	 *  safe, in place of the user's own default mode. Kept across conversations. */
+	auto: boolean;
 }
 
 /** What main pushes as the conversation moves. `item` adds or replaces by id. */
@@ -119,6 +124,7 @@ export type LeadEvent =
 	| { type: "item"; item: LeadItem }
 	| { type: "draft"; text: string }
 	| { type: "busy"; busy: boolean }
+	| { type: "auto"; auto: boolean }
 	| { type: "reset"; snapshot: LeadSnapshot };
 
 /** window.ateamLead. */
@@ -138,5 +144,6 @@ export interface AteamLead {
 		answer: string | string[] | null;
 	}): Promise<void>;
 	permission(id: string, answer: LeadPermissionAnswer): Promise<void>;
+	setAuto(on: boolean): Promise<void>;
 	onEvent(cb: (e: LeadEvent) => void): () => void;
 }

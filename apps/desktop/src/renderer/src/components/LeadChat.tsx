@@ -13,6 +13,7 @@ import {
 	Square,
 	SquarePen,
 	X,
+	Zap,
 } from "lucide-react";
 import {
 	type ClipboardEvent,
@@ -63,7 +64,7 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 
-const EMPTY: LeadSnapshot = { items: [], draft: "", busy: false };
+const EMPTY: LeadSnapshot = { items: [], draft: "", busy: false, auto: false };
 
 const SUGGESTIONS = [
 	"What's on the board?",
@@ -84,6 +85,8 @@ function apply(s: LeadSnapshot, e: LeadEvent): LeadSnapshot {
 			return { ...s, draft: e.text };
 		case "busy":
 			return { ...s, busy: e.busy };
+		case "auto":
+			return { ...s, auto: e.auto };
 		case "reset":
 			return e.snapshot;
 	}
@@ -1054,6 +1057,20 @@ export function LeadChat({
 						</div>
 					)}
 					<IconButton icon={Paperclip} label="Attach files" size={15} onClick={pickFiles} />
+					{/* The ⚡ a new task gets, for the Lead's own Claude. It applies at once,
+					    mid-turn included, and stays on for the next conversation. */}
+					<button
+						type="button"
+						className={`iconbtn comp-yolo ${snap.auto ? "active" : ""}`}
+						title="Auto mode"
+						aria-label="Auto mode"
+						aria-pressed={snap.auto}
+						onClick={() =>
+							void window.ateamLead.setAuto(!snap.auto).catch((e) => setAttachNote(cleanError(e)))
+						}
+					>
+						<Zap size={15} strokeWidth={1.75} />
+					</button>
 					<textarea
 						ref={input}
 						value={text}

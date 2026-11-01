@@ -375,6 +375,26 @@ function makeSession(dir = mkdtempSync(join(tmpdir(), "lead-"))) {
 
 const init = (id = "sess-1") => ({ type: "system", subtype: "init", session_id: id });
 
+/** The control requests the session sent this process, oldest first. */
+const controls = (p: FakeClaude) =>
+	p.written
+		.filter((w) => w.type === "control_request")
+		.map((w) => w.request as Record<string, unknown>);
+
+/** Claude answers the latest control request of this kind, or fails it. */
+function answer(p: FakeClaude, subtype: string, response: unknown, error?: string) {
+	const req = p.written.findLast(
+		(w) => w.type === "control_request" && (w.request as { subtype?: string }).subtype === subtype,
+	);
+	const id = req?.request_id;
+	p.say({
+		type: "control_response",
+		response: error
+			? { subtype: "error", request_id: id, error }
+			: { subtype: "success", request_id: id, response },
+	});
+}
+
 describe("LeadSession", () => {
 	it("starts claude on the first message and renders a turn with a tool call", async () => {
 		const { session, procs, dir } = makeSession();
@@ -601,6 +621,107 @@ describe("LeadSession", () => {
 		expect(fresh.args).toContain("--session-id");
 		expect(fresh.written[0]).toMatchObject({ message: { content: "hello again" } });
 		expect(session.snapshot().items.at(-1)).toMatchObject({ kind: "notice" });
+	});
+
+	it("starts the Lead in Auto mode ahead of the first message, and keeps it for the next conversation", async () => {
+		const { session, procs, events, dir } = makeSession();
+		session.setAuto(true);
+		expect(procs).toHaveLength(0);
+		expect(events).toContainEqual({ type: "auto", auto: true });
+		session.send("hi");
+		await tick();
+		const p = procs[0] as FakeClaude;
+		expect(p.written[0]).toMatchObject({
+			type: "control_request",
+			request: { subtype: "set_permission_mode", mode: "auto" },
+		});
+		expect(p.written[1]).toMatchObject({ type: "user", message: { content: "hi" } });
+		answer(p, "set_permission_mode", { mode: "auto" });
+		await tick();
+		expect(session.snapshot().items.some((i) => i.kind === "notice")).toBe(false);
+
+		session.reset();
+		expect(session.snapshot().auto).toBe(true);
+		expect(makeSession(dir).session.snapshot().auto).toBe(true);
+	});
+
+	it("switches a running Lead, and back to the user's own default mode", async () => {
+		const { session, procs } = makeSession();
+		session.send("hi");
+		const p = procs[0] as FakeClaude;
+		p.say(init());
+		await tick();
+		session.setAuto(true);
+		await tick();
+		expect(controls(p).at(-1)).toEqual({ subtype: "set_permission_mode", mode: "auto" });
+		answer(p, "set_permission_mode", { mode: "auto" });
+
+		session.setAuto(false);
+		await tick();
+		expect(controls(p).at(-1)).toEqual({ subtype: "get_settings" });
+		answer(p, "get_settings", { effective: { permissions: { defaultMode: "acceptEdits" } } });
+		await tick();
+		expect(controls(p).at(-1)).toEqual({ subtype: "set_permission_mode", mode: "acceptEdits" });
+
+		// No default in the user's settings means Claude's own.
+		session.setAuto(true);
+		session.setAuto(false);
+		await tick();
+		answer(p, "get_settings", { effective: {} });
+		await tick();
+		expect(controls(p).at(-1)).toEqual({ subtype: "set_permission_mode", mode: "default" });
+		expect(p.killed).toBe(false);
+	});
+
+	it("leaves Auto on when it is turned back on before the user's default is read", async () => {
+		const { session, procs } = makeSession();
+		session.setAuto(true);
+		session.send("hi");
+		const p = procs[0] as FakeClaude;
+		session.setAuto(false);
+		session.setAuto(true);
+		await tick();
+		answer(p, "get_settings", { effective: { permissions: { defaultMode: "default" } } });
+		await tick();
+		const modes = controls(p).filter((c) => c.subtype === "set_permission_mode");
+		expect(modes.map((c) => c.mode)).toEqual(["auto", "auto"]);
+	});
+
+	it("turns Auto back off and says why when Claude can't run in auto mode", async () => {
+		const { session, procs, events } = makeSession();
+		session.setAuto(true);
+		session.send("hi");
+		const p = procs[0] as FakeClaude;
+		await tick();
+		answer(p, "set_permission_mode", null, "Auto mode is not available for this model");
+		await tick();
+		expect(session.snapshot().auto).toBe(false);
+		expect(events.at(-2)).toEqual({ type: "auto", auto: false });
+		expect(session.snapshot().items.at(-1)).toMatchObject({
+			kind: "notice",
+			tone: "error",
+			text: "Auto mode isn't available: Auto mode is not available for this model",
+		});
+	});
+
+	it("stops the Lead rather than leave it in auto mode with Auto off", async () => {
+		const { session, procs } = makeSession();
+		session.setAuto(true);
+		session.send("long job");
+		const p = procs[0] as FakeClaude;
+		await tick();
+		answer(p, "set_permission_mode", { mode: "auto" });
+		session.setAuto(false);
+		await tick();
+		answer(p, "get_settings", { effective: {} });
+		await tick();
+		answer(p, "set_permission_mode", null, "internal_error");
+		await tick();
+		expect(p.killed).toBe(true);
+		expect(session.snapshot()).toMatchObject({ busy: false, auto: false });
+		expect(session.snapshot().items.at(-1)).toMatchObject({ kind: "notice", tone: "error" });
+		session.send("go on");
+		expect((procs[1] as FakeClaude).written.some((w) => w.type === "control_request")).toBe(false);
 	});
 
 	it("reports a crash mid-turn, and ignores the exit of a process it killed", async () => {

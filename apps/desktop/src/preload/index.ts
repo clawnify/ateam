@@ -226,6 +226,7 @@ const lead: AteamLead = {
 	reply: (taskId, text) => ipcRenderer.invoke(LEAD_CH.reply, taskId, text),
 	answer: (input) => ipcRenderer.invoke(LEAD_CH.answer, input),
 	permission: (id, answer) => ipcRenderer.invoke(LEAD_CH.permission, id, answer),
+	setAuto: (on) => ipcRenderer.invoke(LEAD_CH.setAuto, on),
 	onEvent: (cb: (e: LeadEvent) => void) => {
 		const handler = (_: unknown, e: LeadEvent) => cb(e);
 		ipcRenderer.on(LEAD_CH.evtEvent, handler);

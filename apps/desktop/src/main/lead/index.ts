@@ -110,6 +110,7 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	ipcMain.handle(LEAD_CH.permission, (_e, id: string, answer: LeadPermissionAnswer) =>
 		lead.answerPermission(String(id), answer),
 	);
+	ipcMain.handle(LEAD_CH.setAuto, (_e, on: boolean) => lead.setAuto(on === true));
 
 	// The user talking to a task's agent straight from the chat: delivered as
 	// from the user, shown in the thread, and the task followed for its reply.
