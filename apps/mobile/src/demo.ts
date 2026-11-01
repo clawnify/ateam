@@ -15,6 +15,11 @@ import {
 	type ClientTransport,
 	createRpcClient,
 	type DirListingDTO,
+	LEAD_CH,
+	LEAD_EVENT,
+	type LeadEvent,
+	type LeadItem,
+	leadClient,
 	PROTOCOL_VERSION,
 	type ProjectDTO,
 	type PtySnapshot,
@@ -137,6 +142,65 @@ const LISTING: DirListingDTO = {
 	],
 };
 
+// The Lead chat's canned conversation: the board briefing a reviewer would ask
+// for, with the tasks as chips. A message gets a fixed answer, since nothing
+// here can think.
+const LEAD_ITEMS: LeadItem[] = [
+	{ kind: "user", id: "lead-u1", text: "Which tasks need me?", at: T0 - 60_000 },
+	{
+		kind: "tool",
+		id: "lead-t1",
+		name: "get_board",
+		input: { filter: "all" },
+		result: "id | name | column | state | agent | updated\n\nateam\n4 tasks",
+		at: T0 - 58_000,
+	},
+	{
+		kind: "assistant",
+		id: "lead-a1",
+		text: "One waits on you: [the onboarding copy](task:onboarding-copy) is at a prompt in its terminal.\n\n- Working: [the dark-mode toggle](task:dark-mode) and [the Stripe webhooks](task:stripe-webhooks)\n- In review: [the flaky checkout test](task:flaky-test), PR #128",
+		at: T0 - 55_000,
+	},
+];
+
+function demoLead(push: (e: LeadEvent) => void) {
+	const items = [...LEAD_ITEMS];
+	let auto = false;
+	const put = (item: LeadItem) => {
+		items.push(item);
+		push({ type: "item", item });
+	};
+	return {
+		handles: (method: string) => method.startsWith("lead:"),
+		handle(method: string, args: unknown[]): unknown {
+			if (method === LEAD_CH.snapshot) return { items, draft: "", busy: false, auto };
+			if (method === LEAD_CH.setAuto) {
+				auto = args[0] === true;
+				push({ type: "auto", auto });
+				return undefined;
+			}
+			if (method !== LEAD_CH.send) return undefined;
+			put({
+				kind: "user",
+				id: `lead-u${items.length}`,
+				text: String(args[0] ?? ""),
+				at: Date.now(),
+			});
+			push({ type: "busy", busy: true });
+			setTimeout(() => {
+				put({
+					kind: "assistant",
+					id: `lead-a${items.length}`,
+					text: "This is the demo board, so I can't act on it. On your own box I read the board, message its agents for you and pass on your answers.",
+					at: Date.now(),
+				});
+				push({ type: "busy", busy: false });
+			}, 700);
+			return undefined;
+		},
+	};
+}
+
 /** Map an RPC method to its canned result. Unmapped methods resolve to undefined —
  *  the mobile UI only calls the handful covered here. */
 function handle(method: string, args: unknown[]): unknown {
@@ -187,9 +251,12 @@ function handle(method: string, args: unknown[]): unknown {
 /** A Connection whose api is served entirely from the canned data above. */
 export function demoConnection(): Connection {
 	let onFrame: ((f: ServerFrame) => void) | null = null;
+	const lead = demoLead((payload) => onFrame?.({ t: "evt", event: LEAD_EVENT, payload }));
 	const transport: ClientTransport = {
 		send: (frame) => {
-			const result = handle(frame.method, frame.args);
+			const result = lead.handles(frame.method)
+				? lead.handle(frame.method, frame.args)
+				: handle(frame.method, frame.args);
 			// Resolve on a later tick so it behaves like a real async round-trip.
 			setTimeout(() => onFrame?.({ t: "res", id: frame.id, ok: true, result }), 0);
 		},
@@ -214,6 +281,7 @@ export function demoConnection(): Connection {
 			repos: async () => [],
 			clone: async () => PROJECT,
 		},
+		lead: leadClient(rpc),
 		ping: async () => true,
 		close: () => {
 			onFrame = null;

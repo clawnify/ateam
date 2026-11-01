@@ -51,6 +51,7 @@ export function BoxesScreen({
 	onAdd,
 	onDisconnect,
 	onDemo,
+	onBoxTerminal,
 }: {
 	/** The nav bar's left slot: back to the board when connected, else the logo. */
 	leading: ReactNode;
@@ -78,6 +79,8 @@ export function BoxesScreen({
 	onAdd: () => void;
 	onDisconnect: () => void;
 	onDemo: () => void;
+	/** Open the connected box's own terminal (outside every project). */
+	onBoxTerminal: () => void;
 }) {
 	return (
 		<View style={styles.root}>
@@ -122,6 +125,7 @@ export function BoxesScreen({
 								onPress={() => onConnect(box)}
 								onEdit={() => onEdit(box)}
 								onRemove={() => onRemove(box)}
+								onTerminal={key === liveKey ? onBoxTerminal : undefined}
 							/>
 						);
 					})}
@@ -172,6 +176,7 @@ function BoxCard({
 	onPress,
 	onEdit,
 	onRemove,
+	onTerminal,
 }: {
 	box: SavedBox;
 	live: boolean;
@@ -187,6 +192,8 @@ function BoxCard({
 	onPress: () => void;
 	onEdit: () => void;
 	onRemove: () => void;
+	/** The connected box's terminal; only on its card. */
+	onTerminal?: () => void;
 }) {
 	const x = useRef(new Animated.Value(0)).current;
 	// Where the card rests (0 closed, -ACTIONS_WIDTH open), so a drag starts from there.
@@ -316,6 +323,17 @@ function BoxCard({
 								{failure && !tray ? failure : subtitle}
 							</Text>
 						</View>
+						{onTerminal ? (
+							<Pressable
+								style={styles.terminalBtn}
+								onPress={onTerminal}
+								hitSlop={8}
+								accessibilityRole="button"
+								accessibilityLabel="Box terminal"
+							>
+								<Feather name="terminal" size={16} color={C.ink} />
+							</Pressable>
+						) : null}
 						{live ? (
 							<Feather name="check" size={17} color={C.ink} />
 						) : reaching ? (
@@ -440,6 +458,14 @@ const styles = StyleSheet.create({
 		borderWidth: 1,
 		borderColor: C.line,
 		borderRadius: 12,
+	},
+	terminalBtn: {
+		width: 34,
+		height: 34,
+		borderRadius: 8,
+		backgroundColor: C.sunken,
+		alignItems: "center",
+		justifyContent: "center",
 	},
 	cardText: { flex: 1, gap: 3 },
 	cardTitle: { color: C.ink, fontSize: 15, fontWeight: "600" },

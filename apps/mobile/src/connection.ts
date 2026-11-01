@@ -10,6 +10,8 @@ import {
 	buildAteamApi,
 	CH,
 	createRpcClient,
+	type LeadClient,
+	leadClient,
 	type NativeClientApi,
 	PROTOCOL_VERSION,
 	type ProjectDTO,
@@ -67,6 +69,9 @@ export interface Connection {
 		 *  already cloned there is just registered. */
 		clone(cloneUrl: string): Promise<ProjectDTO>;
 	};
+	/** The box's own Lead chat, run by its engine. A box before v24 answers every
+	 *  call "Unknown method": gate on boxSupports("lead", info.protocolVersion). */
+	lead: LeadClient;
 	/** Close the socket; the daemon and its live sessions live on. */
 	close(): void;
 }
@@ -142,6 +147,7 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 			clone: (cloneUrl: string) =>
 				rpc.call(CH.projectsClone, [{ cloneUrl }]) as Promise<ProjectDTO>,
 		},
+		lead: leadClient(rpc),
 		ping: () =>
 			withTimeout(serverHandshake(rpc), PING_TIMEOUT_MS).then(
 				() => true,

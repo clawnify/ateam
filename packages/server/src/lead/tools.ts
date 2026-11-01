@@ -1,8 +1,9 @@
-// The Lead's tools: the board across every engine the desktop holds, and the
-// moves a coordinator makes on it (propose a task or a loop, message a task,
-// read what one said, pass on an answer). Everything goes through the aggregate
-// router, so a task on a box is reached exactly like one on this Mac. Pure
-// apart from `deps`, so it is testable with a fake router.
+// The Lead's tools: the board, and the moves a coordinator makes on it (propose
+// a task or a loop, message a task, read what one said, pass on an answer). On
+// the desktop everything goes through the aggregate router, so a task on a box
+// is reached exactly like one on this Mac; a box's own Lead (the phone's) goes
+// through that box's dispatcher. Pure apart from `deps`, so it is testable with
+// a fake router.
 //
 // The Lead never starts a task or a loop itself: it proposes one, and the user
 // creates it from the New task or New loop dialog, filled in (the same rule as
@@ -11,22 +12,27 @@
 // Lead acts on text it read from tasks and the web.
 import { isBranchForName } from "@ateam/git-core";
 import {
+	byLatestActivity,
 	CH,
+	type LeadProposal,
 	type ProjectDTO,
 	projectRepo,
+	relativeAge,
 	type TaskDTO,
 	type TaskLastReplyDTO,
 	type TaskProposalDTO,
 	type TaskQuestionDTO,
 } from "@ateam/protocol";
-import { type McpToolResult, type McpToolServer, validateProposal } from "@ateam/server";
-import type { LeadProposal } from "../../shared/lead";
-import { byLatestActivity, relativeAge } from "../../shared/recency";
+import type { McpToolResult, McpToolServer } from "../hooks/board-mcp";
+import { validateProposal } from "../proposals";
+import type { LeadPlace } from "./session";
 
 export interface LeadToolDeps {
-	/** Route one engine call (the aggregate router's handle). */
+	/** Where the Lead runs, for the words its tools use (default: the Mac). */
+	place?: LeadPlace;
+	/** Route one engine call (the aggregate router's handle, or a box's dispatcher). */
 	handle(method: string, args: unknown[]): Promise<unknown>;
-	/** The box an entity lives on, or null for this Mac. */
+	/** The box an entity lives on, or null for the machine the Lead runs on. */
 	machineOf(id: string): string | null;
 	/** A task the Lead messaged or answered: its replies come back to the chat. */
 	onTouch?(task: TaskDTO): void;
@@ -47,56 +53,87 @@ export interface LeadToolDeps {
 	};
 }
 
-const FILES_PARAM = {
-	type: "array",
-	items: { type: "string" },
-	description:
-		"Paths from the user's Attached files in this chat, to hand to the agent. Only files attached here can be sent; a task on a box gets its own copy.",
+/** The words that change with where the Lead runs. A box's Lead sees that box
+ *  alone, and its chat (on the phone) shows a proposal as a card, no dialog. */
+const WORDS = {
+	mac: {
+		here: "this Mac",
+		board: "on this Mac and every connected box",
+		where: "on this Mac or on a box",
+		copy: "; a task on a box gets its own copy",
+		flow: "Ateam opens its dialog filled in with your proposal (or, when they are busy elsewhere, a card in this chat opens it), and they can edit it before creating it, or dismiss it.",
+		decide: (what: string) =>
+			`The user gets the ${what} dialog filled in with it, can edit it, and creates or dismisses it.`,
+		decideOn: "which they do from that task in Ateam",
+		createsFrom: "a filled-in dialog",
+		shownOn: "with the dialog",
+		shownBy: "The dialog",
+	},
+	box: {
+		here: "this box",
+		board: "on this box",
+		where: "on this box",
+		copy: "",
+		flow: "the user sees your proposal as a card in this chat and decides whether to start it.",
+		decide: (_what: string) =>
+			"The user sees it as a card in this chat and decides whether to start it.",
+		decideOn: "which they do in Ateam",
+		createsFrom: "a card in this chat",
+		shownOn: "on its card",
+		shownBy: "Its card",
+	},
 } as const;
+
+type Words = (typeof WORDS)[LeadPlace];
+
+const filesParam = (w: Words) =>
+	({
+		type: "array",
+		items: { type: "string" },
+		description: `Paths from the user's Attached files in this chat, to hand to the agent. Only files attached here can be sent${w.copy}.`,
+	}) as const;
 
 /** The MCP server name; Claude Code prefixes each tool with mcp__<name>__. */
 export const LEAD_MCP_NAME = "ateam_lead";
 
 /** The fields propose_task and propose_loop share (an agent's, plus the project). */
-const PROPOSAL_FIELDS = {
-	project: {
-		type: "string",
-		description: "The project's id from get_board (or its exact name when only one matches).",
-	},
-	name: {
-		type: "string",
-		description: "A short name for the board card, at most 60 characters.",
-	},
-	prompt: {
-		type: "string",
-		description:
-			"The new agent's first instruction. It cannot see this chat, so make it self-contained: the goal, the context the user gave you, and what done looks like.",
-	},
-	reason: {
-		type: "string",
-		description:
-			"Why you propose it, in a line or two, shown to the user with the dialog. At most 300 characters.",
-	},
-	agent: {
-		type: "string",
-		enum: ["claude", "codex", "opencode"],
-		description: "Which coding agent. Leave it out for the user's default.",
-	},
-	yolo: {
-		type: "boolean",
-		description:
-			"Suggest Auto mode (fewer permission prompts), only when the user asked for it. The dialog shows it as your suggestion; it stays off unless the user switches it on.",
-	},
-} as const;
+const proposalFields = (w: Words) =>
+	({
+		project: {
+			type: "string",
+			description: "The project's id from get_board (or its exact name when only one matches).",
+		},
+		name: {
+			type: "string",
+			description: "A short name for the board card, at most 60 characters.",
+		},
+		prompt: {
+			type: "string",
+			description:
+				"The new agent's first instruction. It cannot see this chat, so make it self-contained: the goal, the context the user gave you, and what done looks like.",
+		},
+		reason: {
+			type: "string",
+			description: `Why you propose it, in a line or two, shown to the user ${w.shownOn}. At most 300 characters.`,
+		},
+		agent: {
+			type: "string",
+			enum: ["claude", "codex", "opencode"],
+			description: "Which coding agent. Leave it out for the user's default.",
+		},
+		yolo: {
+			type: "boolean",
+			description: `Suggest Auto mode (fewer permission prompts), only when the user asked for it. ${w.shownBy} shows it as your suggestion; it stays off unless the user switches it on.`,
+		},
+	}) as const;
 
-const PROPOSE_FLOW =
-	"Nothing is created until the user confirms: Ateam opens its dialog filled in with your proposal (or, when they are busy elsewhere, a card in this chat opens it), and they can edit it before creating it, or dismiss it. You never create one yourself, even when the user asks you to: proposing is how you do it. You are not told the outcome, so do not wait for it, and do not say it started. Proposing the same name again replaces the earlier one.";
+const proposeFlow = (w: Words) =>
+	`Nothing is created until the user confirms: ${w.flow} You never create one yourself, even when the user asks you to: proposing is how you do it. You are not told the outcome, so do not wait for it, and do not say it started. Proposing the same name again replaces the earlier one.`;
 
-const TOOLS = [
+const toolsFor = (w: Words) => [
 	{
 		name: "get_board",
-		description:
-			"List the tasks on this Mac and every connected box, grouped under each project's name, the repo it is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its machine and its id; one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus where it stands now (a summary written a few minutes after its agent goes quiet) and what it waits for or asks the user. Filter to what you need: all (the default) is every task still in play, merged ones left out; needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project, merged ones included (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.",
+		description: `List the tasks ${w.board}, grouped under each project's name, the repo it is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its machine and its id; one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus where it stands now (a summary written a few minutes after its agent goes quiet) and what it waits for or asks the user. Filter to what you need: all (the default) is every task still in play, merged ones left out; needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project, merged ones included (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.`,
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -121,21 +158,21 @@ const TOOLS = [
 	},
 	{
 		name: "propose_task",
-		description: `Propose a new task: a coding agent in its own git branch and worktree of a project. Any work in a project's code is a task, finding out why something in it behaves as it does included. ${PROPOSE_FLOW}`,
+		description: `Propose a new task: a coding agent in its own git branch and worktree of a project. Any work in a project's code is a task, finding out why something in it behaves as it does included. ${proposeFlow(w)}`,
 		inputSchema: {
 			type: "object",
-			properties: { ...PROPOSAL_FIELDS, files: FILES_PARAM },
+			properties: { ...proposalFields(w), files: filesParam(w) },
 			required: ["project", "name", "prompt"],
 			additionalProperties: false,
 		},
 	},
 	{
 		name: "propose_loop",
-		description: `Propose a loop: Ateam starts a fresh coding-agent session in one task of the project on a schedule, with the same prompt every run (a nightly dependency check, a daily report, watching something that changes). ${PROPOSE_FLOW} Give exactly one schedule: everyMinutes, or dailyAt.`,
+		description: `Propose a loop: Ateam starts a fresh coding-agent session in one task of the project on a schedule, with the same prompt every run (a nightly dependency check, a daily report, watching something that changes). ${proposeFlow(w)} Give exactly one schedule: everyMinutes, or dailyAt.`,
 		inputSchema: {
 			type: "object",
 			properties: {
-				...PROPOSAL_FIELDS,
+				...proposalFields(w),
 				prompt: {
 					type: "string",
 					description:
@@ -172,7 +209,7 @@ const TOOLS = [
 					type: "string",
 					description: "What to tell the agent, at most 8000 characters.",
 				},
-				files: FILES_PARAM,
+				files: filesParam(w),
 			},
 			required: ["task", "message"],
 			additionalProperties: false,
@@ -209,11 +246,11 @@ const TOOLS = [
 			additionalProperties: false,
 		},
 	},
-] as const;
+];
 
 /** Sent on initialize; Claude Code puts it in the system prompt. */
-export const LEAD_INSTRUCTIONS =
-	"These tools drive the user's Ateam board: every task is a coding agent working in its own git worktree, on this Mac or on a box. Use get_board first, propose_task or propose_loop for new work (the user creates it from a filled-in dialog), send_message to steer a task's agent, and read_task to see what a task last said. A task with a question is waiting on the user: tell them, and pass their answer on with answer_question. A task that proposes a new task or loop is waiting for the user to create or dismiss it, which they do from that task in Ateam: tell them rather than proposing it again yourself.";
+const instructionsFor = (w: Words) =>
+	`These tools drive the user's Ateam board: every task is a coding agent working in its own git worktree, ${w.where}. Use get_board first, propose_task or propose_loop for new work (the user creates it from ${w.createsFrom}), send_message to steer a task's agent, and read_task to see what a task last said. A task with a question is waiting on the user: tell them, and pass their answer on with answer_question. A task that proposes a new task or loop is waiting for the user to create or dismiss it, ${w.decideOn}: tell them rather than proposing it again yourself.`;
 
 /** Where an agent is, in the words the Lead uses (same scale as list_peers). */
 function agentState(t: TaskDTO): string {
@@ -230,8 +267,6 @@ function agentState(t: TaskDTO): string {
 			return "not_running";
 	}
 }
-
-const machineLabel = (alias: string | null) => alias ?? "this Mac";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const firstLine = (text: string) =>
@@ -277,6 +312,8 @@ function explain(e: unknown, what: string): string {
 }
 
 export function createLeadTools(deps: LeadToolDeps): McpToolServer {
+	const w = WORDS[deps.place ?? "mac"];
+	const machineLabel = (alias: string | null) => alias ?? w.here;
 	const call = async <T>(method: string, args: unknown[]) => (await deps.handle(method, args)) as T;
 
 	async function board(): Promise<{ project: ProjectDTO; tasks: TaskDTO[] | null }[]> {
@@ -454,7 +491,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		});
 		const what = kind === "task" ? "New task" : "New loop";
 		return {
-			text: `Proposed "${proposal.name}" in ${project.name}. The user gets the ${what} dialog filled in with it, can edit it, and creates or dismisses it. Nothing starts until they do, and you are not told either way: say in a line what you proposed and why, do not say it started, and do not wait for it.`,
+			text: `Proposed "${proposal.name}" in ${project.name}. ${w.decide(what)} Nothing starts until they do, and you are not told either way: say in a line what you proposed and why, do not say it started, and do not wait for it.`,
 		};
 	}
 
@@ -530,8 +567,8 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 
 	return {
 		info: { name: LEAD_MCP_NAME, version: "0.1.0" },
-		instructions: LEAD_INSTRUCTIONS,
-		tools: TOOLS,
+		instructions: instructionsFor(w),
+		tools: toolsFor(w),
 		async call(name, args) {
 			switch (name) {
 				case "get_board":
@@ -554,4 +591,4 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 }
 
 /** The tool names as Claude Code sees them, for --allowedTools. */
-export const LEAD_TOOL_NAMES = TOOLS.map((t) => `mcp__${LEAD_MCP_NAME}__${t.name}`);
+export const LEAD_TOOL_NAMES = toolsFor(WORDS.mac).map((t) => `mcp__${LEAD_MCP_NAME}__${t.name}`);

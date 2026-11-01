@@ -1,12 +1,12 @@
 // The Lead's MCP endpoint: Streamable HTTP on loopback, tools only, the same
-// request/response shape the engine's board server speaks (hook-server.ts). It
-// lives in desktop main rather than on an engine because only main holds every
-// engine at once. A random token per app run is the only key: the Lead's agent
-// gets it in its --mcp-config, and nothing else on the machine has it.
+// request/response shape the engine's board server speaks (hook-server.ts). One
+// per Lead: the desktop's over every engine it holds, a box's over that box. A
+// random token per run is the only key: the Lead's agent gets it in its
+// --mcp-config, and nothing else on the machine has it.
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { dispatchMcpTools, type JsonRpcMessage, type McpToolServer } from "@ateam/server";
+import { dispatchMcpTools, type JsonRpcMessage, type McpToolServer } from "../hooks/board-mcp";
 
 export interface LeadMcpServer {
 	url: string;

@@ -9,6 +9,7 @@ import { parseBoxes, type SavedBox } from "./boxes";
 const KEY = "ateam.connection";
 const BOXES_KEY = "ateam.boxes";
 const PROJECT_KEY = "ateam.selectedProject";
+const COMPOSER_TARGET_KEY = "ateam.composerTarget";
 const PREVIEW_PORT_KEY = "ateam.previewPort";
 
 export interface SavedConnection {
@@ -55,6 +56,26 @@ export async function saveSelectedProject(id: string): Promise<void> {
 		await AsyncStorage.setItem(PROJECT_KEY, id);
 	} catch {
 		/* best-effort — a failed persist just falls back to the first project */
+	}
+}
+
+/** Where the board's composer sends: a new task, or the box's Lead chat. */
+export type ComposerTarget = "task" | "lead";
+
+/** The composer's last choice; a task when none was saved. */
+export async function loadComposerTarget(): Promise<ComposerTarget> {
+	try {
+		return (await AsyncStorage.getItem(COMPOSER_TARGET_KEY)) === "lead" ? "lead" : "task";
+	} catch {
+		return "task";
+	}
+}
+
+export async function saveComposerTarget(target: ComposerTarget): Promise<void> {
+	try {
+		await AsyncStorage.setItem(COMPOSER_TARGET_KEY, target);
+	} catch {
+		/* best-effort: it starts on Task next time */
 	}
 }
 

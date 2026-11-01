@@ -8,6 +8,7 @@ import Feather from "@expo/vector-icons/Feather";
 import { useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AgentIcon } from "./AgentIcon";
+import type { ScrollFadeProps } from "./scroll-fade";
 import { sortTasks, type TaskSort } from "./task-order";
 import { tagsFor, taskIconName } from "./task-tags";
 import { C, CONTENT_MAX } from "./theme";
@@ -104,6 +105,7 @@ export function HomeScreen({
 	onOpenTask,
 	onOpenLoops,
 	onNewLoop,
+	scrollProps,
 }: {
 	projects: ProjectDTO[];
 	selectedProjectId: string | null;
@@ -116,6 +118,8 @@ export function HomeScreen({
 	onOpenTask: (task: TaskDTO) => void;
 	onOpenLoops: () => void;
 	onNewLoop: () => void;
+	/** The list's scrolling, for what floats over it (scroll-fade.ts). */
+	scrollProps?: ScrollFadeProps;
 }) {
 	const [sort, setSort] = useState<TaskSort>("updated");
 	const [projectsOpen, setProjectsOpen] = useState(true);
@@ -133,7 +137,7 @@ export function HomeScreen({
 	const taskById = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
 
 	return (
-		<ScrollView style={styles.root} contentContainerStyle={styles.content}>
+		<ScrollView style={styles.root} contentContainerStyle={styles.content} {...scrollProps}>
 			<View style={styles.column}>
 				<View style={styles.sectionHead}>
 					<Pressable style={styles.sectionToggle} onPress={() => setProjectsOpen((o) => !o)}>

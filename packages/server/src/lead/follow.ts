@@ -11,8 +11,13 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CH, type TaskDTO, type TaskLastReplyDTO } from "@ateam/protocol";
-import type { LeadItem, LeadTaskRef } from "../../shared/lead";
+import {
+	CH,
+	type LeadItem,
+	type LeadTaskRef,
+	type TaskDTO,
+	type TaskLastReplyDTO,
+} from "@ateam/protocol";
 
 /** The most recently touched tasks; older ones stop reporting back. */
 export const MAX_FOLLOWED = 50;

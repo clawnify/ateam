@@ -26,7 +26,8 @@ import type { Dispatcher } from "./dispatcher";
 import { createDispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
 import { createEngine } from "./engine";
-import { serveRpc } from "./rpc";
+import { engineLead } from "./lead/engine-lead";
+import { type RpcExtension, serveRpc } from "./rpc";
 import { readSettings } from "./settings-file";
 import { detectSleepDriver, type SleepControl, startSleepControl } from "./sleep";
 import { socketServerTransport } from "./transport/socket";
@@ -48,6 +49,8 @@ const SELF = process.argv[1] ? realpathSync(process.argv[1]) : "";
 
 // Set once a provider that can put this box to sleep is found (see maybeStartIdleSleep).
 let sleepControl: SleepControl | null = null;
+// Served beside the dispatcher on every connection, once the engine is up.
+let extensions: RpcExtension[] = [];
 
 async function runDaemon(): Promise<void> {
 	// Single-instance guard: if a daemon already serves SOCK, bow out — do NOT
@@ -72,6 +75,16 @@ async function runDaemon(): Promise<void> {
 	});
 	engine.startLoops();
 	const dispatcher = createDispatcher(engine);
+	// This box's own Lead chat, for the phone (lead/engine-lead.ts). Only here:
+	// the desktop's in-process engine has the desktop's Lead instead.
+	extensions = [
+		engineLead({
+			engine,
+			dispatcher,
+			dir: join(DATA_DIR, "lead"),
+			log: (line) => console.log(line),
+		}),
+	];
 
 	const dir = dirname(SOCK);
 	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -135,7 +148,7 @@ function serveClient(
 	transport: Parameters<typeof serveRpc>[2],
 ): void {
 	sleepControl?.touch();
-	serveRpc(engine, dispatcher, transport);
+	serveRpc(engine, dispatcher, transport, extensions);
 }
 
 /**

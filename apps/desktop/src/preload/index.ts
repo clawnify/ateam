@@ -1,7 +1,10 @@
 import {
 	type AteamApi,
+	type AteamLead,
 	CH,
 	type KanbanColumn,
+	LEAD_CH,
+	type LeadEvent,
 	type LoopDTO,
 	type MergeStrategy,
 	type PtyDataEvent,
@@ -17,7 +20,6 @@ import {
 	type HostStatus,
 	type InstallLogEvent,
 } from "../shared/host";
-import { type AteamLead, LEAD_CH, type LeadEvent } from "../shared/lead";
 
 const api: AteamApi = {
 	projects: {

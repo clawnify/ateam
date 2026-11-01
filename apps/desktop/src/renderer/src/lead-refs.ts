@@ -3,7 +3,7 @@
 // token becomes the link the Lead itself writes, [name](task:<id>): the Lead
 // gets the exact task, and the thread draws it as a chip like the Lead's own.
 // Pure, so it is tested without a DOM.
-import { TASK_LINK_SCHEME } from "../../shared/lead";
+import { TASK_LINK_SCHEME } from "@ateam/protocol";
 
 export const REF_TRIGGER = "@";
 

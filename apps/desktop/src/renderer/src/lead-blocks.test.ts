@@ -1,15 +1,6 @@
 import { expect, test } from "bun:test";
-import type { LeadItem } from "../../shared/lead";
-import {
-	arrived,
-	FOLLOWING,
-	firstLine,
-	goTo,
-	type StackView,
-	shown,
-	toBlocks,
-	unseen,
-} from "./lead-blocks";
+import { type LeadItem, toLeadBlocks } from "@ateam/protocol";
+import { arrived, FOLLOWING, firstLine, goTo, type StackView, shown, unseen } from "./lead-blocks";
 
 const task = (name: string) => ({ taskId: name, name, agentId: "claude" });
 const agent = (id: string, from = "fix login"): LeadItem => ({
@@ -31,7 +22,7 @@ const page = (id: string): LeadItem => ({
 });
 
 const shape = (items: LeadItem[]) =>
-	toBlocks(items).map((b) =>
+	toLeadBlocks(items).map((b) =>
 		b.kind === "agents"
 			? `agents:${b.id}:${b.replies.map((r) => r.id).join(",")}`
 			: b.kind === "tools"
@@ -68,8 +59,8 @@ test("tool calls still fold as before", () => {
 });
 
 test("a stack keeps its first reply's id as more join it", () => {
-	const before = toBlocks([user("u"), agent("a")]);
-	const after = toBlocks([user("u"), agent("a"), agent("b")]);
+	const before = toLeadBlocks([user("u"), agent("a")]);
+	const after = toLeadBlocks([user("u"), agent("a"), agent("b")]);
 	expect(before[1]?.kind === "agents" && before[1].id).toBe("a");
 	expect(after[1]?.kind === "agents" && after[1].id).toBe("a");
 });

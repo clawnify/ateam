@@ -15,6 +15,7 @@ import type {
 } from "@ateam/protocol";
 import {
 	boxSupports,
+	byLatestActivity,
 	describeMergeResult,
 	FEATURE_MIN_VERSION,
 	PROTOCOL_VERSION,
@@ -76,7 +77,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { byLatestActivity } from "../../shared/recency";
 import { SessionGlyphs, SessionIcon } from "./components/AgentIcon";
 import { ChangesList, DiffStat } from "./components/Changes";
 import { CleanupDialog } from "./components/CleanupDialog";
