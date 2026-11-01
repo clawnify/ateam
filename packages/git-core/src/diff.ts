@@ -2,7 +2,7 @@ import { copyFile, mkdir, mkdtemp, open, rm, stat, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SimpleGit } from "simple-git";
-import { gitFor, safeRaw } from "./git-client";
+import { baseRef, gitFor, safeRaw } from "./git-client";
 
 export interface DiffFile {
 	path: string;
@@ -77,13 +77,14 @@ async function countNewFile(absPath: string): Promise<{ additions: number; binar
 
 export interface DiffInput {
 	worktreePath: string;
-	/** When provided, includes committed changes vs `origin/<base>` merge-base. */
+	/** When provided, includes committed changes vs the base's merge-base (see `baseRef`). */
 	baseBranch?: string;
 }
 
 /**
- * Paths whose committed changes are already on `origin/<base>`: merging HEAD
- * into base right now would leave each of them exactly as base has it.
+ * Paths whose committed changes are already on `base` (a ref from `baseRef`):
+ * merging HEAD into base right now would leave each of them exactly as base
+ * has it.
  *
  * The merge-base diff can't see this. A squash or rebase merge lands the
  * branch's changes as NEW commits, so the branch tip never becomes an ancestor
@@ -95,18 +96,17 @@ export interface DiffInput {
  * `merge-tree --write-tree` (git >= 2.38) merges in memory: no index, no
  * working tree, no lock an agent could trip over. A conflicted path counts as
  * still contributing, so it keeps the merge-base numbers it had before this
- * existed. Returns null when git can't answer (older git, no `origin/<base>`),
- * and callers then keep the merge-base numbers for everything.
+ * existed. Returns null when git can't answer (older git), and callers then
+ * keep the merge-base numbers for everything.
  *
  * `head` is the commit asked about: HEAD, or a snapshot of the working tree
  * (see `withWorktreeSnapshot`), whose `git` must then be the snapshot's.
  */
 async function landedPaths(
 	git: SimpleGit,
-	baseBranch: string,
+	base: string,
 	head = "HEAD",
 ): Promise<Set<string> | null> {
-	const base = `origin/${baseBranch}`;
 	const nameOnly = (raw: string) => raw.split("\n").filter(Boolean);
 	const committed = nameOnly(
 		await safeRaw(git, ["diff", "--name-only", "--merge-base", base, head]),
@@ -201,7 +201,7 @@ const SNAPSHOT_MAX_UNTRACKED_BYTES = 1024 * 1024;
 async function withWorktreeSnapshot<T>(
 	worktreePath: string,
 	git: SimpleGit,
-	baseBranch: string,
+	base: string,
 	fn: (snapshot: { git: SimpleGit; commit: string } | null) => Promise<T>,
 ): Promise<T> {
 	// NUL-separated: the paths go back to git verbatim, never C-quoted.
@@ -209,15 +209,9 @@ async function withWorktreeSnapshot<T>(
 	const [tracked, untracked, onBase] = await Promise.all([
 		safeRaw(git, ["diff", "--name-only", "-z", "--no-renames", "HEAD"]).then(paths),
 		safeRaw(git, ["ls-files", "-z", "--others", "--exclude-standard"]).then(paths),
-		safeRaw(git, [
-			"diff",
-			"--name-only",
-			"-z",
-			"--no-renames",
-			"--merge-base",
-			"HEAD",
-			`origin/${baseBranch}`,
-		]).then((raw) => new Set(paths(raw))),
+		safeRaw(git, ["diff", "--name-only", "-z", "--no-renames", "--merge-base", "HEAD", base]).then(
+			(raw) => new Set(paths(raw)),
+		),
 	]);
 	const small = await Promise.all(
 		untracked
@@ -289,7 +283,7 @@ async function withWorktreeSnapshot<T>(
 }
 
 /**
- * What already landed on `origin/<base>`, asked twice:
+ * What already landed on `base` (a ref from `baseRef`), asked twice:
  * - `committed`: paths whose committed changes landed. Count only the edits on
  *   top of HEAD.
  * - `whole`: paths whose committed AND uncommitted state landed. Nothing left
@@ -299,12 +293,12 @@ async function withWorktreeSnapshot<T>(
 async function landedSets(
 	worktreePath: string,
 	git: SimpleGit,
-	baseBranch: string,
+	base: string,
 ): Promise<{ committed: Set<string> | null; whole: Set<string> | null }> {
 	const [committed, whole] = await Promise.all([
-		landedPaths(git, baseBranch),
-		withWorktreeSnapshot(worktreePath, git, baseBranch, (snapshot) =>
-			snapshot ? landedPaths(snapshot.git, baseBranch, snapshot.commit) : Promise.resolve(null),
+		landedPaths(git, base),
+		withWorktreeSnapshot(worktreePath, git, base, (snapshot) =>
+			snapshot ? landedPaths(snapshot.git, base, snapshot.commit) : Promise.resolve(null),
 		),
 	]);
 	return { committed, whole };
@@ -314,33 +308,32 @@ async function landedSets(
  * The combined set of changed files for the diff viewer: everything the branch
  * still contributes to its base, committed or not, plus untracked files.
  *
- * With a base, `diff --merge-base origin/<base>` compares the merge-base with
- * the WORKING TREE, so one pass already covers committed, staged and unstaged
- * edits. Files whose commits already landed (see `landedPaths`) count only
- * the work done on top of HEAD since, and files whose uncommitted state
- * landed too (see `withWorktreeSnapshot`) don't count at all. Without a base,
- * or when `origin/<base>` is missing, it falls back to staged plus unstaged
- * changes. Nothing is written to the worktree or its repo.
+ * With a base, `diff --merge-base <base>` compares the merge-base with the
+ * WORKING TREE, so one pass already covers committed, staged and unstaged
+ * edits. The base is `origin/<base>`, or the local branch in a repository with
+ * no remote (see `baseRef`). Files whose commits already landed (see
+ * `landedPaths`) count only the work done on top of HEAD since, and files
+ * whose uncommitted state landed too (see `withWorktreeSnapshot`) don't count
+ * at all. Without a base, or when neither ref exists, it falls back to staged
+ * plus unstaged changes. Nothing is written to the worktree or its repo.
  */
 export async function diff(input: DiffInput): Promise<DiffResult> {
 	const git = gitFor(input.worktreePath);
 	const files = new Map<string, DiffFile>();
 
+	const base = input.baseBranch ? await baseRef(git, input.baseBranch) : null;
 	let againstBase = false;
-	if (input.baseBranch) {
+	if (base) {
 		try {
-			parseNumstatInto(
-				await git.raw(["diff", "--numstat", "--merge-base", `origin/${input.baseBranch}`]),
-				files,
-			);
+			parseNumstatInto(await git.raw(["diff", "--numstat", "--merge-base", base]), files);
 			againstBase = true;
 		} catch {
-			/* no origin/<base> to compare with: fall through to local changes */
+			/* no merge-base with it: fall through to local changes */
 		}
 	}
 	let whole: Set<string> | null = null;
-	if (againstBase && input.baseBranch) {
-		const landed = await landedSets(input.worktreePath, git, input.baseBranch);
+	if (againstBase && base) {
+		const landed = await landedSets(input.worktreePath, git, base);
 		whole = landed.whole;
 		for (const path of whole ?? []) files.delete(path);
 		const committed = [...(landed.committed ?? [])].filter((path) => !whole?.has(path));
@@ -394,15 +387,14 @@ export async function fileDiff(input: FileDiffInput): Promise<string> {
 	const git = gitFor(input.worktreePath);
 	// A file that already landed on base shows only what changed since HEAD,
 	// or nothing once its uncommitted state landed too, matching the counts
-	// `diff` reports for it.
-	const landed = input.baseBranch
-		? await landedSets(input.worktreePath, git, input.baseBranch)
-		: null;
+	// `diff` reports for it. With no base, HEAD is what `diff` counts against.
+	const base = input.baseBranch ? await baseRef(git, input.baseBranch) : null;
+	const landed = base ? await landedSets(input.worktreePath, git, base) : null;
 	if (landed?.whole?.has(input.file)) return "";
 	const patch =
-		input.baseBranch && !landed?.committed?.has(input.file)
-			? await safeRaw(git, ["diff", "--merge-base", `origin/${input.baseBranch}`, "--", input.file])
-			: await safeRaw(git, ["diff", ...(landed?.committed ? ["HEAD"] : []), "--", input.file]);
+		base && !landed?.committed?.has(input.file)
+			? await safeRaw(git, ["diff", "--merge-base", base, "--", input.file])
+			: await safeRaw(git, ["diff", "HEAD", "--", input.file]);
 	if (patch) return patch;
 
 	// `git diff` is silent on an untracked file (an agent's freshly created
