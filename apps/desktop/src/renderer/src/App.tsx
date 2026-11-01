@@ -1367,6 +1367,7 @@ export function App() {
 	const composeTask = (
 		input: {
 			name: string;
+			nameAuto: boolean;
 			prompt: string;
 			agentId: string;
 			yolo: boolean;
@@ -1467,7 +1468,7 @@ export function App() {
 						throw new Error("Update Ateam on the selected box to start tasks from GitHub issues.");
 					throw error;
 				}
-			} else task = await window.ateam.tasks.create(taskInput);
+			} else task = await window.ateam.tasks.create({ ...taskInput, nameAuto: input.nameAuto });
 			// The task exists: what a proposal asked for is done, even if its agent
 			// then fails to start (that error shows, and the task can be resumed).
 			onCreated?.(task);
@@ -2643,6 +2644,7 @@ function OfflineTaskPanel({
 					<span className="title">{task.name}</span>
 					<IconButton icon={X} label="Close" onClick={onClose} />
 				</div>
+				<TaskSummary task={task} />
 				<BranchLine task={task} />
 			</div>
 			<div className="empty">
@@ -3014,6 +3016,20 @@ function BranchLine({ task }: { task: TaskDTO }) {
 				</span>
 			)}
 		</div>
+	);
+}
+
+/**
+ * Where the open task stands, in a sentence or two the engine writes once its
+ * agent has gone quiet (server/task-summaries.ts). Nothing until the first one,
+ * and nothing from an engine older than v23.
+ */
+function TaskSummary({ task }: { task: TaskDTO }) {
+	if (!task.summary) return null;
+	return (
+		<p className="task-summary" title={task.summary}>
+			{task.summary}
+		</p>
 	);
 }
 
@@ -3421,6 +3437,7 @@ function TaskPanel({
 						<IconButton icon={X} label="Close" onClick={onClose} />
 					</span>
 				</div>
+				<TaskSummary task={task} />
 				<BranchLine task={task} />
 			</div>
 

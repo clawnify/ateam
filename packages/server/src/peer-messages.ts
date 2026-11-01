@@ -36,6 +36,7 @@
 import { getAgent } from "@ateam/agents";
 import type { AgentSession, AteamDb, PeerMessage, Project, Task } from "@ateam/db";
 import { repo } from "@ateam/db";
+import { isBranchForName } from "@ateam/git-core";
 import { projectRepo } from "@ateam/protocol";
 
 /** Turns two tasks may trade inside HOP_WINDOW_MS before a human has to step in. */
@@ -167,6 +168,8 @@ export interface PeerView {
 	state: string;
 	column: string;
 	description: string | null;
+	/** Where the task stands, in a sentence or two (task-summaries.ts); null until one is written. */
+	summary: string | null;
 	/** Only a search lists archived tasks. */
 	archived?: true;
 	you?: true;
@@ -297,6 +300,7 @@ export class PeerMessenger {
 						: "idle",
 			column: task.column,
 			description: task.description ? task.description.slice(0, 280) : null,
+			summary: task.summary ?? null,
 			...(task.archivedAt != null ? { archived: true as const } : {}),
 			...(task.id === callerTaskId ? { you: true as const } : {}),
 		};
@@ -538,19 +542,28 @@ export class PeerMessenger {
 		this.waiters.delete(terminalId);
 	}
 
-	/** An id, or else an exact (case-insensitive) task name or branch. */
+	/**
+	 * An id, or else an exact (case-insensitive) task name or branch, or else a
+	 * name the task's branch was made from: a task named from its prompt's first
+	 * words is renamed once by the model (task-labels.ts), and a peer that learned
+	 * the first name still reaches it, since the branch keeps those words.
+	 */
 	private resolveTask(to: string): Task | string {
 		const { db } = this.deps;
 		if (!to) return "say who to send it to: a task id from list_peers";
 		const byId = repo.getTask(db, to);
 		if (byId) return byId;
 		const want = to.toLowerCase();
-		const matches = repo
+		const all = repo
 			.listProjects(db)
 			// Archived too: a task named outright is still reachable, and the
 			// delivery's activity brings it back.
-			.flatMap((p) => repo.listTasks(db, p.id, { includeArchived: true }))
-			.filter((t) => t.name.toLowerCase() === want || t.branch.toLowerCase() === want);
+			.flatMap((p) => repo.listTasks(db, p.id, { includeArchived: true }));
+		const exact = all.filter(
+			(t) => t.name.toLowerCase() === want || t.branch.toLowerCase() === want,
+		);
+		// A name a task no longer carries only counts when no task carries it now.
+		const matches = exact.length > 0 ? exact : all.filter((t) => isBranchForName(t.branch, to));
 		if (matches.length === 1 && matches[0]) return matches[0];
 		if (matches.length > 1)
 			return `"${to}" matches ${matches.length} tasks; use a task id from list_peers`;

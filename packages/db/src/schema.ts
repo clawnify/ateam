@@ -132,6 +132,13 @@ export const tasks = sqliteTable(
 			.notNull()
 			.references(() => projects.id, { onDelete: "cascade" }),
 		name: text("name").notNull(),
+		/**
+		 * The name is the prompt's first words, filled in because nobody typed one,
+		 * so the model's title may replace it once (task-labels.ts in the server).
+		 * Cleared at that one attempt, whatever it returns: a name other agents may
+		 * have learned is never changed after that.
+		 */
+		nameAuto: integer("name_auto", { mode: "boolean" }).notNull().default(false),
 		description: text("description"),
 		issueUrl: text("issue_url"),
 		slug: text("slug").notNull(),
@@ -183,6 +190,13 @@ export const tasks = sqliteTable(
 		 *  can read what a task said without opening its terminal. Capped at
 		 *  LAST_REPLY_MAX in the engine; null until a turn has ended. */
 		lastReply: text("last_reply"),
+		/** A sentence or two on what the task is about and where it stands,
+		 *  written once its agent has gone quiet (task-summaries.ts in the
+		 *  server); null until the first one. */
+		summary: text("summary"),
+		/** The `lastEventAt` the summary covers. Activity after it makes the
+		 *  summary stale, so the next quiet spell writes a new one. */
+		summaryAsOf: integer("summary_as_of"),
 		/** What the agent asked the user (ask_user) and waits on; null when
 		 *  nothing is pending. One at a time: a new ask replaces it. */
 		question: text("question", { mode: "json" }).$type<TaskQuestion>(),

@@ -226,7 +226,8 @@ ssh my-ateam-box "bash -lc 'ateam'"
 
 > **Settings, and which machine's you are editing.** Settings live in
 > `~/.ateam/settings.json` on every machine, hand-editable. The **engine**
-> half (default agent, merge and update strategy, branch deletion) is read by
+> half (default agent, merge and update strategy, branch deletion, the model
+> for titles and summaries) is read by
 > whichever engine runs the work, so a box reads its own file. With **Sync
 > settings to boxes** on (the default) this Mac's engine settings are the source
 > of truth and are pushed to a box as it connects and whenever they change, so a

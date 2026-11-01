@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import {
-	GRAMMAR_JEV_MODEL,
-	type GrammarJudgeIssue,
-	judgeGrammar,
-	looksSecret,
-} from "../src/grammar-jev";
+import { GRAMMAR_JEV_MODEL, type GrammarJudgeIssue, judgeGrammar } from "../src/grammar-jev";
+import { looksSecret } from "../src/secrets";
 
 /** An issue on the first occurrence of `word` in `draft`. */
 const issue = (draft: string, word: string): GrammarJudgeIssue => {

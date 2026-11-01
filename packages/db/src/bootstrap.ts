@@ -27,6 +27,7 @@ export function bootstrap(db: SqliteExecutor): void {
 			id TEXT PRIMARY KEY,
 			project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
 			name TEXT NOT NULL,
+			name_auto INTEGER NOT NULL DEFAULT 0,
 			description TEXT,
 			slug TEXT NOT NULL,
 			branch TEXT NOT NULL,
@@ -50,6 +51,8 @@ export function bootstrap(db: SqliteExecutor): void {
 			restored_at INTEGER,
 			last_reply TEXT,
 			last_reply_at INTEGER,
+			summary TEXT,
+			summary_as_of INTEGER,
 			question TEXT,
 			page TEXT,
 			proposals TEXT,
@@ -196,6 +199,11 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE tasks ADD COLUMN question TEXT",
 		"ALTER TABLE tasks ADD COLUMN page TEXT",
 		"ALTER TABLE tasks ADD COLUMN proposals TEXT",
+		// Every row that predates it carries a name someone chose or the six words
+		// already shown for months: either way, not one to rename now.
+		"ALTER TABLE tasks ADD COLUMN name_auto INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE tasks ADD COLUMN summary TEXT",
+		"ALTER TABLE tasks ADD COLUMN summary_as_of INTEGER",
 		"ALTER TABLE loops ADD COLUMN kind TEXT NOT NULL DEFAULT 'builtin'",
 		"ALTER TABLE loops ADD COLUMN template_id TEXT",
 		"ALTER TABLE loops ADD COLUMN name TEXT",

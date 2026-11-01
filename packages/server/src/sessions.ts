@@ -4,13 +4,7 @@
 // dispatcher's tasksCreate / ptySpawnAgent handlers.
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import {
-	agentCommand,
-	generateTaskTags,
-	getAgent,
-	latestSessionInDir,
-	probeAgentBinary,
-} from "@ateam/agents";
+import { agentCommand, getAgent, latestSessionInDir, probeAgentBinary } from "@ateam/agents";
 import { repo, type Task } from "@ateam/db";
 import { createTask as gitCreateTask, seedWorktree } from "@ateam/git-core";
 import {
@@ -23,11 +17,16 @@ import {
 	peerToken,
 } from "./agent-setup";
 import { latestCodexThreadInDir } from "./codex-threads";
+import { shell } from "./headless";
 import { refreshLoginPath } from "./login-env";
 import type { Services } from "./services";
+import { labelTask } from "./task-labels";
+import { askConfiguredTextModel } from "./text-model";
 import { clearWaiting, isFiredWait } from "./waits";
 
-export const shell = process.env.SHELL || "/bin/zsh";
+// Defined beside the headless runner, which needs it too; re-exported for the
+// callers that already import it from here.
+export { shell };
 
 export interface SpawnAgentInput {
 	taskId: string;
@@ -71,6 +70,8 @@ export async function createTaskInProject(
 		 * nothing to guess.
 		 */
 		agentId?: string;
+		/** Nobody typed `name`, so the model's title may replace it once (task-labels.ts). */
+		nameAuto?: boolean;
 	},
 	issue?: { url: string; description: string },
 ): Promise<Task> {
@@ -90,6 +91,8 @@ export async function createTaskInProject(
 		baseBranch: created.baseBranch,
 		worktreePath: created.worktreePath,
 		agentId: input.agentId ?? null,
+		// An issue's task is named after the issue: a name someone chose.
+		nameAuto: Boolean(input.nameAuto) && !issue,
 		issueUrl: issue?.url ?? null,
 		description: issue?.description ?? null,
 	});
@@ -363,36 +366,13 @@ async function launchAgent(
 		agentId: agent.id,
 	});
 	notifyTaskUpdated(task.id);
-	void tagTaskInBackground(services, notifyTaskUpdated, task.id);
+	void labelTask(
+		{
+			db: services.db,
+			notifyTaskUpdated,
+			ask: (prompt) => askConfiguredTextModel(prompt, { maxTokens: 120, timeoutMs: 30_000 }),
+		},
+		task.id,
+	);
 	return { terminalId };
-}
-
-/**
- * Label the task from its prompt, after the agent is already running.
- *
- * Deliberately fire-and-forget: the call takes a few seconds, and nothing the
- * user is waiting on depends on it, so the card simply gains chips shortly
- * after it appears. Only the first launch tags (later prompts are follow-ups,
- * and a re-tag would fight a label the model already settled on), and a null
- * result leaves `tags` unset so the client keeps its keyword fallback.
- */
-async function tagTaskInBackground(
-	services: Services,
-	notifyTaskUpdated: (taskId: string) => void,
-	taskId: string,
-): Promise<void> {
-	const task = repo.getTask(services.db, taskId);
-	if (!task?.description || task.tags) return;
-	// Seed the vocabulary with what this project already uses, so the model
-	// reuses an existing label instead of coining a near-synonym.
-	const known = new Set<string>();
-	for (const t of repo.listTasks(services.db, task.projectId, { includeArchived: true })) {
-		for (const tag of t.tags ?? []) known.add(tag);
-	}
-	const tags = await generateTaskTags(task.description, { knownTags: [...known] });
-	if (!tags) return;
-	// Re-read: the task may have been deleted while the model was thinking.
-	if (!repo.getTask(services.db, taskId)) return;
-	repo.updateTask(services.db, taskId, { tags });
-	notifyTaskUpdated(taskId);
 }

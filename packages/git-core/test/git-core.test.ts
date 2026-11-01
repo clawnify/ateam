@@ -13,6 +13,7 @@ import {
 	diff,
 	fileDiff,
 	initRepository,
+	isBranchForName,
 	parseGithubRepo,
 	parseWorktreeList,
 	push,
@@ -883,6 +884,22 @@ describe("path safety", () => {
 	it("slugify neutralizes traversal characters", () => {
 		expect(slugify("../../evil")).toBe("evil");
 		expect(slugify("Add Auth!!")).toBe("add-auth");
+	});
+
+	// A task named from its prompt is renamed once; peers holding the first name
+	// find it through the branch, and a repeated name must stay ambiguous.
+	it("isBranchForName matches the name's slug and its repeat suffixes only", () => {
+		expect(isBranchForName("on-sidebar-collapsed-i-am-not", "on sidebar collapsed I am not")).toBe(
+			true,
+		);
+		expect(
+			isBranchForName("on-sidebar-collapsed-i-am-not-2", "on sidebar collapsed I am not"),
+		).toBe(true);
+		expect(
+			isBranchForName("on-sidebar-collapsed-i-am-not-v2", "on sidebar collapsed I am not"),
+		).toBe(false);
+		expect(isBranchForName("on-sidebar-collapsed", "on sidebar collapsed I am not")).toBe(false);
+		expect(isBranchForName("anything", "!!!")).toBe(false);
 	});
 });
 

@@ -14,10 +14,11 @@
  */
 import { repo, type Task } from "@ateam/db";
 import type { SessionHitDTO } from "@ateam/protocol";
+import { askAgent } from "../headless";
 import type { Services } from "../services";
 import { readSettings } from "../settings-file";
 import { type RankInput, rank } from "./rank";
-import { askAgent, buildPrompt, expandQuery, parseVerdicts } from "./rerank";
+import { buildPrompt, expandQuery, parseVerdicts } from "./rerank";
 import { claudeSource } from "./sources/claude";
 import { codexSource } from "./sources/codex";
 import { opencodeSource } from "./sources/opencode";
@@ -58,6 +59,16 @@ async function buildIndex(worktrees: string[]): Promise<SessionDigest[]> {
 		}),
 	);
 	return lists.flat();
+}
+
+/**
+ * What the user said in every session that ran in `worktree`, oldest session
+ * first: the same cleaned prompts search reads, for a task's summary
+ * (task-summaries.ts). Whichever agent the sessions belong to.
+ */
+export async function userPromptsFor(worktree: string): Promise<string[]> {
+	const digests = await buildIndex([worktree]);
+	return digests.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0)).flatMap((d) => d.prompts);
 }
 
 export interface SessionSearchInput {
