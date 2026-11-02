@@ -226,6 +226,7 @@ const lead: AteamLead = {
 	interrupt: () => ipcRenderer.invoke(LEAD_CH.interrupt),
 	reset: () => ipcRenderer.invoke(LEAD_CH.reset),
 	reply: (taskId, text) => ipcRenderer.invoke(LEAD_CH.reply, taskId, text),
+	react: (id, emoji) => ipcRenderer.invoke(LEAD_CH.react, id, emoji),
 	answer: (input) => ipcRenderer.invoke(LEAD_CH.answer, input),
 	permission: (id, answer) => ipcRenderer.invoke(LEAD_CH.permission, id, answer),
 	setAuto: (on) => ipcRenderer.invoke(LEAD_CH.setAuto, on),

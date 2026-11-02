@@ -18,6 +18,9 @@ export const LEAD_CH = {
 	reset: "lead:reset",
 	/** The user replies to a task's agent from the chat (not through the Lead model). */
 	reply: "lead:reply",
+	/** The user answers a task's reply with an emoji: sent to its agent like a
+	 *  reply, shown on the reply's card instead of as a message of its own. */
+	react: "lead:react",
 	/** The user answers a task's question from the chat; the task is then followed. */
 	answer: "lead:answer",
 	/** The user answers the Lead's own permission prompt (its agent wants a tool). */
@@ -110,7 +113,15 @@ export type LeadItem =
 	| { kind: "user"; id: string; text: string; at: number; to?: LeadTaskRef; files?: LeadFile[] }
 	/** A followed task's agent finished a turn: its reply, shown to the user only
 	 *  (never fed to the Lead's model, so following costs nothing). */
-	| { kind: "agent"; id: string; task: LeadTaskRef; text: string; at: number }
+	| {
+			kind: "agent";
+			id: string;
+			task: LeadTaskRef;
+			text: string;
+			at: number;
+			/** The emoji the user answered it with (react), drawn on its card. */
+			reaction?: string;
+	  }
 	/** A followed task's agent showed the user a page (show_page): drawn in the
 	 *  thread from the task, so a page replaced since says so. */
 	| { kind: "page"; id: string; task: LeadTaskRef; pageId: string; title: string; at: number }
@@ -226,6 +237,8 @@ export interface AteamLead {
 	interrupt(): Promise<void>;
 	reset(): Promise<void>;
 	reply(taskId: string, text: string): Promise<void>;
+	/** `id`: the agent reply (a `kind: "agent"` item) the emoji answers. */
+	react(id: string, emoji: string): Promise<void>;
 	answer(input: {
 		taskId: string;
 		questionId: string;
