@@ -164,9 +164,10 @@ export function ProjectBrowser({
 			if (access === "read") {
 				Alert.alert(
 					`This box can't push to ${repo}`,
-					"Its GitHub token can read it but not push to it, so tasks here can't open a pull request or merge.",
+					"git on this box can read it but not push to it, so tasks here can't open a pull request or merge.",
 					[
 						{ text: "Cancel", style: "cancel" },
+						...(onOpenGithub ? [{ text: "Fix GitHub access", onPress: onOpenGithub }] : []),
 						{ text: "Clone anyway", onPress: () => void clone(cloneUrl) },
 					],
 				);

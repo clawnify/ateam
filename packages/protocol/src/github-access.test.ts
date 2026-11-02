@@ -12,6 +12,7 @@ import {
 	githubTokenWouldHelp,
 	mostCommonOwner,
 	OTHER_HELPER_REPO_HINT,
+	OTHER_HELPER_REPO_NOTE,
 	pastedTokenLabel,
 	repoVerdictHint,
 } from "./github-access";
@@ -85,6 +86,21 @@ describe("repoVerdictHint", () => {
 	});
 	it("says the results are another helper's when a provider signs git in", () => {
 		expect(repoVerdictHint({ ...base, git: "other" }, none)).toBe(OTHER_HELPER_REPO_HINT);
+	});
+	it("says it briefly when the warning above already explains a provider's broad helper", () => {
+		const broad = {
+			...base,
+			git: "other" as const,
+			gitCredential: {
+				kind: "oauth" as const,
+				hint: "9876",
+				login: "o",
+				rejected: false,
+				expiresAt: null,
+			},
+		};
+		expect(githubAccessProblem(broad)).toContain("9876");
+		expect(repoVerdictHint(broad, none)).toBe(OTHER_HELPER_REPO_NOTE);
 	});
 });
 

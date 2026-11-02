@@ -1582,7 +1582,7 @@ export function App() {
 							access === "read" &&
 							!(await confirm(
 								`${boxLabel} can't push to ${repoName}`,
-								`Its GitHub token can read ${repoName} but not push to it, so tasks there can't open a pull request or merge. Set the project up there anyway?`,
+								`git on ${boxLabel} can read ${repoName} but not push to it, so tasks there can't open a pull request or merge. Set the project up there anyway?`,
 							))
 						) {
 							reopenComposer(input);
