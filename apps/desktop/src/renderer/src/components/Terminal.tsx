@@ -75,7 +75,7 @@ export function TerminalView({
 	const skillsRef = useRef(skills);
 	skillsRef.current = skills;
 	const applyFixRef = useRef<(result: string) => void>(() => {});
-	const insertSkillRef = useRef<(command: string) => boolean>(() => false);
+	const insertSkillRef = useRef<(command: string) => void>(() => {});
 
 	useEffect(() => {
 		const el = ref.current;
@@ -322,18 +322,15 @@ export function TerminalView({
 			else term.input(d);
 			injecting = false;
 		};
-		// Turn the draft `from` into `to` in the agent's input. False when it
-		// can't be done safely, before anything is typed.
-		const rewrite = async (from: string, to: string): Promise<boolean> => {
-			const { backspaces, tail } = retype(from, to);
-			// Without bracketed paste a newline would reach the agent as Enter.
-			if (tail.includes("\n") && !term.modes.bracketedPasteMode) return false;
+		// Press `keys`, then type `tail`.
+		const edit = async (keys: string[], tail: string) => {
 			fixing = true;
 			setIssues([]);
-			for (let i = 0; i < backspaces && !disposed; i++) {
-				inject("\x7f");
+			for (const key of keys) {
+				if (disposed) break;
+				inject(key);
 				// One key per write, paced like key repeat: an agent that reads a
-				// burst of backspaces as one chunk may take it as text, not keys.
+				// burst of keys as one chunk may take it as text, not keys.
 				await new Promise((r) => setTimeout(r, 12));
 			}
 			if (!disposed && tail) inject(tail, tail.includes("\n"));
@@ -341,6 +338,14 @@ export function TerminalView({
 			for (const d of heldKeys) forward(d);
 			heldKeys = [];
 			term.focus();
+		};
+		// Turn the draft `from` into `to` in the agent's input. False when it
+		// can't be done safely, before anything is typed.
+		const rewrite = async (from: string, to: string): Promise<boolean> => {
+			const { backspaces, tail } = retype(from, to);
+			// Without bracketed paste a newline would reach the agent as Enter.
+			if (tail.includes("\n") && !term.modes.bracketedPasteMode) return false;
+			await edit(Array(backspaces).fill("\x7f"), tail);
 			return true;
 		};
 		applyFixRef.current = (result) => {
@@ -353,17 +358,24 @@ export function TerminalView({
 		// login test". Every agent wants the command first (Codex accepts `$name`
 		// anywhere, but first works there too) and, with nothing after it, a
 		// trailing space: an open `/` or `$` menu would take the user's Enter.
-		// Never presses Enter itself. With the draft unknown (arrows, history)
-		// nothing is typed: a command dropped mid-text would not run.
+		// Never presses Enter itself.
 		insertSkillRef.current = (command) => {
+			if (fixing) return;
 			const from = draft.draft;
-			if (from === null) return false;
-			if (fixing) return true;
+			if (from === null) {
+				// Lost track of the draft (arrows, history, Tab, Esc, a deletion we
+				// can't follow): put the command at the start of the caret's line.
+				// Ctrl+A is "start of line" in Claude Code, Codex and OpenCode alike,
+				// so an empty or one-line draft comes out as above. In a longer one
+				// the command lands mid-text: Codex runs `$name` anywhere, and the
+				// others' model still reads `/name` there.
+				void edit(["\x01"], `${command} `);
+				return;
+			}
 			const rest = from.trimStart();
 			void rewrite(from, rest ? `${command} ${rest}` : `${command} `).then((ok) => {
 				if (!ok) term.focus();
 			});
-			return true;
 		};
 
 		// Resize handling. Layout toggles fire several ResizeObserver callbacks
