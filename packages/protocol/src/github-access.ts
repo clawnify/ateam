@@ -133,13 +133,19 @@ export function githubAccessProblem(a: GithubAccessDTO): string | null {
 	if (a.gh && a.git === "none") {
 		return "git can't sign in to GitHub here, so pushing fails. Connect the token again to fix it.";
 	}
-	if (a.git === "other" && a.gitCredential && isBroadCredential(a.gitCredential.kind)) {
-		return `git on this box signs in through another credential helper, likely your provider's, with a full-access token ending ${a.gitCredential.hint}. Agents can fetch it, so disconnect it at the provider to leave only a scoped token.`;
-	}
+	const helper = otherHelperWarning(a);
+	if (helper) return helper;
 	if (!a.gh) {
 		return "gh isn't signed in, so Ateam can't open pull requests or merge from this box. Connect a token.";
 	}
 	return null;
+}
+
+/** The warning for a provider's git helper handing out a broad token, when it does. */
+function otherHelperWarning(a: GithubAccessDTO): string | null {
+	return a.git === "other" && a.gitCredential && isBroadCredential(a.gitCredential.kind)
+		? `git on this box signs in through another credential helper, likely your provider's, with a full-access token ending ${a.gitCredential.hint}. Agents can fetch it, so disconnect it at the provider to leave only a scoped token.`
+		: null;
 }
 
 /**
@@ -191,13 +197,23 @@ export const FINE_GRAINED_REPO_HINT =
 export const OTHER_HELPER_REPO_HINT =
 	"git on this box signs in with another credential helper's token, so these results are for that token, not the one gh uses. To have git use this box's own token, disconnect that helper at your provider, then connect the token again.";
 
+/** The same, when the warning above the list already explains the other helper. */
+export const OTHER_HELPER_REPO_NOTE =
+	"These results are for that helper's token, not the one gh uses.";
+
 /** What to say under the per-repository verdicts when some can't push, if anything. */
 export function repoVerdictHint(
 	a: GithubAccessDTO,
 	checks: readonly RepoAccessDTO[],
 ): string | null {
 	if (!checks.some((c) => c.access === "none" || c.access === "read")) return null;
-	if (a.git === "other") return OTHER_HELPER_REPO_HINT;
+	if (a.git === "other") {
+		// Said once: the short note when the warning above already explains the helper.
+		const helper = otherHelperWarning(a);
+		return helper && githubAccessProblem(a) === helper
+			? OTHER_HELPER_REPO_NOTE
+			: OTHER_HELPER_REPO_HINT;
+	}
 	return a.gh?.kind === "fine-grained" ? FINE_GRAINED_REPO_HINT : null;
 }
 

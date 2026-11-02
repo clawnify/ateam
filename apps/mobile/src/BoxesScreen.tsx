@@ -307,14 +307,21 @@ function BoxCard({
 						accessibilityRole="button"
 						accessibilityLabel={`${title}, ${subtitle}${state ? `, ${state}` : ""}`}
 						accessibilityHint={live ? "Returns to the board" : "Connects to this box"}
+						// The card is one VoiceOver element, so the buttons inside it are its
+						// actions too, or VoiceOver couldn't reach them.
 						accessibilityActions={[
 							{ name: "activate" },
+							...(onGithub ? [{ name: "github", label: "GitHub on this box" }] : []),
+							...(onTerminal ? [{ name: "terminal", label: "Box terminal" }] : []),
 							{ name: "edit", label: "Edit" },
 							{ name: "remove", label: "Remove from this list" },
 						]}
 						onAccessibilityAction={(e) => {
-							if (e.nativeEvent.actionName === "edit") onEdit();
-							else if (e.nativeEvent.actionName === "remove") onRemove();
+							const action = e.nativeEvent.actionName;
+							if (action === "edit") onEdit();
+							else if (action === "remove") onRemove();
+							else if (action === "github") onGithub?.();
+							else if (action === "terminal") onTerminal?.();
 							else if (!disabled) onPress();
 						}}
 					>

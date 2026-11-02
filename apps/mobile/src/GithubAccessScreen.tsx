@@ -157,7 +157,11 @@ export function GithubAccessScreen({
 							<Text style={styles.problem}>
 								Couldn't read GitHub access on {boxLabel}: {loaded.message}
 							</Text>
-							<Pressable style={styles.secondary} onPress={() => void load()}>
+							<Pressable
+								style={styles.secondary}
+								onPress={() => void load()}
+								accessibilityRole="button"
+							>
 								<Text style={styles.secondaryText}>Try again</Text>
 							</Pressable>
 						</>
@@ -218,6 +222,8 @@ export function GithubAccessScreen({
 							onPress={() =>
 								void Linking.openURL("https://github.com/settings/personal-access-tokens")
 							}
+							accessibilityRole="link"
+							accessibilityHint="Opens your tokens on GitHub"
 						>
 							<Text style={styles.note}>
 								{hint} <Text style={styles.link}>Your tokens on GitHub</Text>
@@ -228,7 +234,11 @@ export function GithubAccessScreen({
 					) : null}
 
 					{!showForm && access.ghInstalled && access.gh?.source !== "env" ? (
-						<Pressable style={styles.secondary} onPress={() => setFormOpen(true)}>
+						<Pressable
+							style={styles.secondary}
+							onPress={() => setFormOpen(true)}
+							accessibilityRole="button"
+						>
 							<Text style={styles.secondaryText}>Use a different token</Text>
 						</Pressable>
 					) : null}
@@ -308,6 +318,7 @@ export function GithubAccessScreen({
 									}}
 									disabled={busy}
 									hitSlop={8}
+									accessibilityRole="button"
 								>
 									<Text style={styles.note}>Keep the current token</Text>
 								</Pressable>
