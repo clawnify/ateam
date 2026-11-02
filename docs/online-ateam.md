@@ -386,7 +386,13 @@ navbar; the back arrow is the first key in the shortcut bar.
 The speech bubble at the navbar's right corner opens the **Lead**, the chat that reads
 the board and steers its agents. On the phone it runs on the box itself (a **v24 box**;
 an older one offers **Update box** there), so it works with your Mac off. It sees that
-box's tasks only, and it is a different conversation from the Lead on your Mac. The
+box's tasks only, and it is a different conversation from the Lead on your Mac. A dot
+on the bubble says it has something for you: white for a reply since you last looked,
+amber while it waits for your answer before it can go on. When it proposes a task or a
+loop, the card's **Start it** or **Set it up** opens the New task sheet or the New loop
+form filled in from the proposal; nothing starts until you confirm, and Auto mode stays
+off. The Lead's agent stops after 10 minutes without a turn, so the first message after
+that takes a few seconds while it picks the conversation back up. The
 composer under Home and Board has a **Task | Lead** switch above it: on Task, sending
 starts a task, as before; on Lead, it asks the Lead and opens the chat. The paperclip
 attaches photos or files from Files (up to 10 MB each) to either. The box's own

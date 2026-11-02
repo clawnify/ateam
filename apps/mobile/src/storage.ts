@@ -171,3 +171,25 @@ export async function saveDismissedSkew(host: string, version: number): Promise<
 		/* best-effort — the banner just shows again next launch */
 	}
 }
+
+// When the box's Lead chat was last on screen, per box: the newest item's time
+// then (the box's clock). The dot on the Lead button is for anything newer.
+const leadSeenKey = (box: string) => `ateam.leadSeen.${box}`;
+
+/** null when nothing was kept for this box yet. */
+export async function loadLeadSeen(box: string): Promise<number | null> {
+	try {
+		const v = await AsyncStorage.getItem(leadSeenKey(box));
+		return v === null || !Number.isFinite(Number(v)) ? null : Number(v);
+	} catch {
+		return null;
+	}
+}
+
+export async function saveLeadSeen(box: string, at: number): Promise<void> {
+	try {
+		await AsyncStorage.setItem(leadSeenKey(box), String(at));
+	} catch {
+		/* best-effort: the dot may show for something already read, next launch */
+	}
+}
