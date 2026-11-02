@@ -29,13 +29,18 @@ describe("the first contact with a box", () => {
 });
 
 describe("ssh's reason for failing, in words", () => {
-	test("an unknown host key, in batch mode, with or without strict checking", () => {
-		for (const out of [
-			"Host key verification failed.\n",
-			"No ED25519 host key is known for github.com and you have requested strict checking.\nHost key verification failed.\n",
-		]) {
-			expect(describeSshFailure(out)).toContain("doesn't know this box's host key");
-		}
+	test("an unknown host key, in batch mode", () => {
+		expect(describeSshFailure("Host key verification failed.\n")).toContain(
+			"Connect once from a terminal",
+		);
+	});
+
+	test("an unknown host key under StrictHostKeyChecking yes, which a terminal refuses too", () => {
+		const out =
+			"No ED25519 host key is known for github.com and you have requested strict checking.\nHost key verification failed.\n";
+		const said = describeSshFailure(out);
+		expect(said).toContain("StrictHostKeyChecking yes");
+		expect(said).not.toContain("terminal");
 	});
 
 	test("a host key that changed is told apart from an unknown one", () => {

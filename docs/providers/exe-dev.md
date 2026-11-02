@@ -31,8 +31,11 @@ prompt for `~/.ssh/id_rsa`.
 
 ```bash
 ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519_exe
-ssh -i ~/.ssh/id_ed25519_exe exe.dev     # sign up with this key
+ssh -i ~/.ssh/id_ed25519_exe -o IdentitiesOnly=yes exe.dev     # sign up with this key
 ```
+
+`IdentitiesOnly` matters here: without it, `ssh` offers any keys in your agent before
+the one named with `-i`, and exe.dev can end up signing up one of those instead.
 
 Then add the second block below, so every `ssh` to exe.dev uses it.
 
