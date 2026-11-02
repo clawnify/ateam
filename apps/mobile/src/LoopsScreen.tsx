@@ -172,12 +172,33 @@ export function LoopsScreen({
 
 // ── Create / edit form ──
 
+/** A loop the box's Lead proposed: the New loop form opens filled in from it.
+ *  `dailyAt` ("09:00") is saved as a daily schedule in this phone's time zone,
+ *  as the desktop saves it. Auto mode stays off; `yolo` is only shown as the
+ *  Lead's suggestion. */
+export interface LoopDraft {
+	name: string;
+	prompt: string;
+	agentId?: string;
+	followUp?: string;
+	everyMinutes?: number;
+	dailyAt?: string;
+	yolo?: boolean;
+}
+
+/** "09:00" as a 5-field cron that runs every day at that time. */
+export const dailyCron = (hhmm: string): string => {
+	const [h = "9", m = "0"] = hhmm.split(":");
+	return `${Number(m)} ${Number(h)} * * *`;
+};
+
 export function LoopForm({
 	api,
 	agents,
 	projectId,
 	boxProtocol,
 	editing,
+	draft,
 	onClose,
 	onSaved,
 }: {
@@ -188,20 +209,33 @@ export function LoopForm({
 	 *  the flag and still launch permission-prompted, wedging an unattended run). */
 	boxProtocol: number;
 	editing: LoopDTO | null;
+	/** A new loop filled in from the Lead's proposal (ignored when editing). */
+	draft?: LoopDraft | null;
 	onClose: () => void;
 	onSaved: (loops: LoopDTO[]) => void;
 }) {
+	const from = editing ? null : (draft ?? null);
 	const pickable = agents.length
 		? agents
 		: [{ id: "claude", label: "Claude Code", available: true } as AgentDTO];
-	const [name, setName] = useState(editing?.title ?? "");
-	const [prompt, setPrompt] = useState(editing?.prompt ?? "");
-	const [followUp, setFollowUp] = useState(editing?.followUp ?? "");
+	const [name, setName] = useState(editing?.title ?? from?.name ?? "");
+	const [prompt, setPrompt] = useState(editing?.prompt ?? from?.prompt ?? "");
+	const [followUp, setFollowUp] = useState(editing?.followUp ?? from?.followUp ?? "");
 	const [agentId, setAgentId] = useState(
-		editing?.agentId ?? pickable.find((a) => a.available)?.id ?? pickable[0]?.id ?? "claude",
+		editing?.agentId ??
+			(from?.agentId && pickable.some((a) => a.id === from.agentId && a.available)
+				? from.agentId
+				: undefined) ??
+			pickable.find((a) => a.available)?.id ??
+			pickable[0]?.id ??
+			"claude",
 	);
 	const [everyMin, setEveryMin] = useState(
-		editing?.intervalMs ? String(Math.round(editing.intervalMs / 60_000)) : "60",
+		editing?.intervalMs
+			? String(Math.round(editing.intervalMs / 60_000))
+			: from?.everyMinutes
+				? String(from.everyMinutes)
+				: "60",
 	);
 	const [yolo, setYolo] = useState(editing?.yolo ?? false);
 	const autoSupported = boxSupports("loopAutoMode", boxProtocol);
@@ -212,8 +246,12 @@ export function LoopForm({
 	// A calendar ("daily 09:00") is set on the desktop: shown read-only here, and
 	// a save sends no interval, which would silently turn it into one.
 	const onCalendar = !!editing?.cron;
+	// The Lead's daily proposal: a calendar too, set from here this once.
+	const daily = from?.dailyAt && /^\d{1,2}:\d{2}$/.test(from.dailyAt) ? from.dailyAt : null;
 	const ready =
-		prompt.trim().length > 0 && (onCalendar || Number(everyMin) >= 1) && (editing || projectId);
+		prompt.trim().length > 0 &&
+		(onCalendar || daily !== null || Number(everyMin) >= 1) &&
+		(editing || projectId);
 
 	const save = async () => {
 		if (!ready) return;
@@ -238,7 +276,7 @@ export function LoopForm({
 						templateId: "agent-session",
 						name: name.trim() || "Loop",
 						projectId: projectId ?? undefined,
-						intervalMs,
+						...(daily ? { cron: dailyCron(daily), timeZone: LOCAL_TZ } : { intervalMs }),
 						config,
 						enabled: true,
 					});
@@ -324,6 +362,9 @@ export function LoopForm({
 								<Text style={styles.help}>
 									Auto runs the agent in its automatic mode, the composer's Auto mode. Off, an
 									unattended run can stall on its first permission ask.
+									{from?.yolo
+										? " The Lead suggested it; it stays off unless you switch it on."
+										: ""}
 								</Text>
 							</>
 						) : null}
@@ -350,6 +391,14 @@ export function LoopForm({
 								<Text style={styles.label}>SCHEDULE</Text>
 								<Text style={styles.meta}>
 									{loopScheduleLabel(editing, LOCAL_TZ)}. Change it on the desktop.
+								</Text>
+							</>
+						) : daily ? (
+							<>
+								<Text style={styles.label}>SCHEDULE</Text>
+								<Text style={styles.meta}>
+									Every day at {daily}, your time, as the Lead proposed. Change it on the desktop
+									once it's saved.
 								</Text>
 							</>
 						) : (

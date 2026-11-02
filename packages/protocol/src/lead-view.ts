@@ -36,6 +36,10 @@ export function applyLeadEvent(s: LeadSnapshot, e: LeadEvent): LeadSnapshot {
 	switch (e.type) {
 		case "item": {
 			const at = s.items.findIndex((i) => i.id === e.item.id);
+			// A client holding only the tail (`more`) gets updates to items it never
+			// loaded too (a proposal's outcome); one older than all it has belongs
+			// to history it pages in later, not at the bottom of the thread.
+			if (at < 0 && s.more && s.items[0] && e.item.at < s.items[0].at) return s;
 			if (at < 0) return { ...s, items: [...s.items, e.item] };
 			const items = s.items.slice();
 			items[at] = e.item;

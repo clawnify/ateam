@@ -65,10 +65,11 @@ import { type Connection, connect } from "./src/connection";
 import { demoConnection } from "./src/demo";
 import { HomeScreen } from "./src/HomeScreen";
 import { LeadScreen } from "./src/LeadScreen";
-import { LoopForm, LoopsScreen } from "./src/LoopsScreen";
+import { type LoopDraft, LoopForm, LoopsScreen } from "./src/LoopsScreen";
 import { MissionScreen } from "./src/MissionScreen";
 import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
+import { type ProposalItem, ProposalSheet } from "./src/ProposalSheet";
 import { ProviderIcon } from "./src/ProviderIcon";
 import { useScrollFade } from "./src/scroll-fade";
 import {
@@ -605,6 +606,7 @@ function Shell({
 	boxVersion,
 	leadOpen,
 	onLead,
+	onStartProposal,
 }: {
 	connColor: string;
 	projects: ProjectDTO[];
@@ -670,6 +672,8 @@ function Shell({
 	/** The Lead chat covers the tabs (the button in the header's right corner). */
 	leadOpen: boolean;
 	onLead: (open: boolean) => void;
+	/** "Start it" on one of the Lead's proposals. */
+	onStartProposal: (item: ProposalItem) => void;
 }) {
 	const shown = tasks.filter((t) => t.projectId === selectedProjectId);
 	// Mission Control tiles: this project's tasks that have (or had) an agent, in
@@ -866,6 +870,7 @@ function Shell({
 					onOpenTask={onOpenTask}
 					onUpdateBox={onUpdateBox}
 					updating={updating}
+					onStartProposal={onStartProposal}
 				/>
 			)}
 			{showTab && tab === "loops" && (
@@ -921,7 +926,13 @@ export default function App() {
 	const [tab, setTab] = useState<Tab>("home");
 	const [loops, setLoops] = useState<LoopDTO[]>([]);
 	// The loop form modal: null closed, `editing` null for a new loop.
-	const [loopForm, setLoopForm] = useState<{ editing: LoopDTO | null } | null>(null);
+	const [loopForm, setLoopForm] = useState<{
+		editing: LoopDTO | null;
+		/** Opened from one of the Lead's proposals: filled in, and marked created on save. */
+		proposal?: { id: string; projectId: string; draft: LoopDraft };
+	} | null>(null);
+	// A task the Lead proposed, open in its New task sheet.
+	const [proposalSheet, setProposalSheet] = useState<ProposalItem | null>(null);
 	const [host, setHost] = useState("");
 	const [port, setPort] = useState("8787");
 	// Waking a sleeping box through its provider before connecting (packages/protocol/src/wake.ts).
@@ -1888,16 +1899,68 @@ export default function App() {
 				boxVersion={skew ?? PROTOCOL_VERSION}
 				leadOpen={leadOpen}
 				onLead={setLeadOpen}
+				onStartProposal={(item) => {
+					if (item.proposal.kind === "task") return setProposalSheet(item);
+					const p = item.proposal;
+					setLoopForm({
+						editing: null,
+						proposal: {
+							id: item.id,
+							projectId: item.projectId,
+							draft: {
+								name: p.name,
+								prompt: p.prompt,
+								agentId: p.agentId,
+								followUp: p.followUp,
+								everyMinutes: p.everyMinutes,
+								dailyAt: p.dailyAt,
+								yolo: p.yolo,
+							},
+						},
+					});
+				}}
 			/>
+			{proposalSheet && conn.current && (
+				<ProposalSheet
+					item={proposalSheet}
+					agents={agents}
+					onClose={() => setProposalSheet(null)}
+					onStart={async (input) => {
+						const c = conn.current;
+						if (!c) throw new Error("Not connected to the box.");
+						const task = await c.api.tasks.create({
+							projectId: input.projectId,
+							name: input.name,
+							agentId: input.agentId,
+						});
+						await c.api.pty.spawnAgent({
+							taskId: task.id,
+							agentId: input.agentId,
+							yolo: input.yolo,
+							prompt: input.prompt,
+							...(input.files.length ? { files: input.files } : {}),
+						});
+						void c.lead.proposalCreated(proposalSheet.id, task.id).catch(() => {});
+						setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [task, ...prev]));
+						setProposalSheet(null);
+						selectProject(input.projectId);
+						// The task's terminal covers the chat; closing it comes back to the Lead.
+						setOpenTask(task);
+					}}
+				/>
+			)}
 			{loopForm && conn.current && (
 				<LoopForm
 					api={conn.current.api}
 					agents={agents}
-					projectId={selectedProjectId}
+					projectId={loopForm.proposal?.projectId ?? selectedProjectId}
 					boxProtocol={skew ?? PROTOCOL_VERSION}
 					editing={loopForm.editing}
+					draft={loopForm.proposal?.draft}
 					onClose={() => setLoopForm(null)}
 					onSaved={(next) => {
+						const from = loopForm.proposal;
+						if (from) void conn.current?.lead.proposalCreated(from.id).catch(() => {});
 						setLoopForm(null);
 						setLoops(Array.isArray(next) ? next : loops);
 					}}

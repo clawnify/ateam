@@ -92,6 +92,10 @@ export interface LeadSessionOptions {
 	/** How to start `claude` with these args (default: through the login shell,
 	 *  like every agent the engine launches, so a Finder-launched app finds it). */
 	spawnClaude?: (args: string[], cwd: string) => ChildProcess;
+	/** Stop the agent after this long with no turn and no prompt waiting; the
+	 *  next message resumes the same conversation (--resume). A box's Lead sets
+	 *  it: a resident claude is memory a small box's agents need. Absent: never. */
+	idleStopMs?: number;
 }
 
 interface LeadState {
@@ -148,6 +152,7 @@ export class LeadSession {
 	private controls = new Map<string, (r: ControlResult) => void>();
 	private readonly transcript: string;
 	private readonly statePath: string;
+	private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(private opts: LeadSessionOptions) {
 		mkdirSync(opts.dir, { recursive: true });
@@ -157,13 +162,28 @@ export class LeadSession {
 		this.load();
 	}
 
-	snapshot(): LeadSnapshot {
+	/** The conversation; with `tail`, only its last `tail` items (`more` says
+	 *  older ones exist, for older()). A phone loads a tail: the whole of a long
+	 *  conversation is a lot to send over a phone's connection. */
+	snapshot(tail?: number): LeadSnapshot {
+		const all = [...this.items.values()];
+		const items = tail === undefined ? all : tail <= 0 ? [] : all.slice(-Math.floor(tail));
 		return {
-			items: [...this.items.values()],
+			items,
 			draft: this.draft,
 			busy: this.busy,
 			auto: this.state.auto === true,
+			...(items.length < all.length ? { more: true } : {}),
 		};
+	}
+
+	/** Up to `limit` items recorded before `beforeId`, oldest first. */
+	older(beforeId: string, limit: number): { items: LeadItem[]; more: boolean } {
+		const all = [...this.items.values()];
+		const at = all.findIndex((it) => it.id === beforeId);
+		if (at <= 0) return { items: [], more: false };
+		const start = Math.max(0, at - Math.max(1, Math.floor(limit)));
+		return { items: all.slice(start, at), more: start > 0 };
 	}
 
 	/** `files` are attachments already in the Lead's folder (attachments.ts). */
@@ -187,6 +207,7 @@ export class LeadSession {
 				: `Attached files:\n${list}`
 			: body;
 		const line = `${JSON.stringify({ type: "user", message: { role: "user", content } })}\n`;
+		this.clearIdle();
 		this.ensureProcess();
 		this.write(line);
 	}
@@ -224,6 +245,26 @@ export class LeadSession {
 
 	dispose(): void {
 		this.kill();
+	}
+
+	/** After a turn: stop the agent if nothing happens for idleStopMs. A prompt
+	 *  still waiting on the user keeps it (the turn isn't over); the next turn's
+	 *  end arms it again. */
+	private armIdle(): void {
+		this.clearIdle();
+		const ms = this.opts.idleStopMs;
+		if (!ms || !this.proc) return;
+		this.idleTimer = setTimeout(() => {
+			this.idleTimer = null;
+			if (this.busy || this.asking.size > 0 || this.controls.size > 0) return;
+			this.kill();
+		}, ms);
+		this.idleTimer.unref?.();
+	}
+
+	private clearIdle(): void {
+		if (this.idleTimer) clearTimeout(this.idleTimer);
+		this.idleTimer = null;
 	}
 
 	/** The user answered a permission prompt. Throws when it no longer waits
@@ -395,6 +436,7 @@ export class LeadSession {
 
 	/** Ours to end: dropping `proc` first means its exit is never reported. */
 	private kill(): void {
+		this.clearIdle();
 		const proc = this.proc;
 		this.proc = null;
 		proc?.kill("SIGTERM");
@@ -544,6 +586,7 @@ export class LeadSession {
 					this.notice(`The turn failed: ${errors || String(m.subtype)}`, "error");
 				}
 				this.interrupted = false;
+				this.armIdle();
 				return;
 			}
 		}

@@ -26,7 +26,7 @@ import {
 	toLeadBlocks,
 } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Alert,
@@ -64,6 +64,9 @@ const SUGGESTIONS = [
 let draftText = "";
 let draftFiles: PickedFile[] = [];
 
+/** Items per load: the last page first, then older pages as the thread scrolls back. */
+const PAGE = 100;
+
 const cleanError = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 function ago(at: number): string {
@@ -78,6 +81,8 @@ interface Ctx {
 	tasks: TaskDTO[];
 	openTask: (ref: string) => void;
 	knowsTask: (ref: string) => boolean;
+	/** Open a proposal's New task sheet or New loop form, filled in. */
+	startProposal?: (item: Extract<LeadItem, { kind: "proposal" }>) => void;
 }
 
 function TaskChip({ task, ctx }: { task: LeadTaskRef; ctx: Ctx }) {
@@ -357,9 +362,15 @@ function Proposal({
 				</View>
 			) : (
 				<View style={styles.buttons}>
-					<Text style={[styles.cardMeta, styles.flex]}>
-						Starting a proposal from the phone isn't there yet.
-					</Text>
+					{ctx.startProposal && (
+						<Pressable
+							style={styles.primary}
+							onPress={() => ctx.startProposal?.(item)}
+							accessibilityRole="button"
+						>
+							<Text style={styles.primaryText}>{p.kind === "loop" ? "Set it up" : "Start it"}</Text>
+						</Pressable>
+					)}
 					<Pressable style={styles.secondary} onPress={() => void onDismiss(item.id)}>
 						<Text style={styles.secondaryText}>Dismiss</Text>
 					</Pressable>
@@ -503,6 +514,7 @@ export function LeadScreen({
 	onOpenTask,
 	onUpdateBox,
 	updating,
+	onStartProposal,
 }: {
 	lead: LeadClient | null;
 	/** The box serves its own Lead (protocol v24+). */
@@ -513,10 +525,13 @@ export function LeadScreen({
 	onOpenTask: (task: TaskDTO) => void;
 	onUpdateBox: () => void;
 	updating: boolean;
+	/** "Start it" on a proposal card: the app opens its sheet or form. */
+	onStartProposal?: (item: Extract<LeadItem, { kind: "proposal" }>) => void;
 }) {
 	const [snap, setSnap] = useState<LeadSnapshot | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [reload, setReload] = useState(0);
+	const loadingOlder = useRef(false);
 	const [text, setTextState] = useState(draftText);
 	const [files, setFilesState] = useState<PickedFile[]>(draftFiles);
 	const [attaching, setAttaching] = useState(false);
@@ -539,7 +554,9 @@ export function LeadScreen({
 		// Listening first: the box starts pushing on our first call, and anything
 		// pushed before the snapshot's reply is already in it.
 		const off = lead.onEvent((e) => setSnap((s) => (s ? applyLeadEvent(s, e) : s)));
-		lead.snapshot().then(
+		// The last page only: a long conversation is a lot to send to a phone, and
+		// older pages come in as the thread scrolls back (loadOlder).
+		lead.snapshot({ tail: PAGE }).then(
 			(s) => live && setSnap(s),
 			(e) => live && setLoadError(cleanError(e)),
 		);
@@ -557,10 +574,38 @@ export function LeadScreen({
 		[tasks, onOpenTask],
 	);
 	const ctx = useMemo<Ctx>(
-		() => ({ tasks, openTask, knowsTask: (ref) => findLeadTask(tasks, ref) != null }),
-		[tasks, openTask],
+		() => ({
+			tasks,
+			openTask,
+			knowsTask: (ref) => findLeadTask(tasks, ref) != null,
+			startProposal: onStartProposal,
+		}),
+		[tasks, openTask, onStartProposal],
 	);
 	const blocks = useMemo(() => (snap ? toLeadBlocks(snap.items) : []), [snap]);
+	// Scrolled back to the oldest item held: the page before it, if the box has one.
+	const loadOlder = useCallback(async () => {
+		const first = snap?.items[0];
+		if (!lead || !snap?.more || !first || loadingOlder.current) return;
+		loadingOlder.current = true;
+		try {
+			const page = await lead.older(first.id, PAGE);
+			setSnap((s) => {
+				if (!s) return s;
+				const have = new Set(s.items.map((i) => i.id));
+				return {
+					...s,
+					items: [...page.items.filter((i) => !have.has(i.id)), ...s.items],
+					more: page.more,
+				};
+			});
+		} catch {
+			// Stop asking; what is loaded stays.
+			setSnap((s) => (s ? { ...s, more: false } : s));
+		} finally {
+			loadingOlder.current = false;
+		}
+	}, [lead, snap]);
 	// Newest first: the list is inverted so it opens at the bottom and stays there.
 	const rows = useMemo(() => [...blocks].reverse(), [blocks]);
 	const asking = useMemo(
@@ -691,6 +736,17 @@ export function LeadScreen({
 						) : null
 					}
 					contentContainerStyle={styles.thread}
+					// The end of an inverted list is its top: the oldest item held.
+					onEndReached={() => void loadOlder()}
+					onEndReachedThreshold={0.5}
+					ListFooterComponent={
+						snap.more ? (
+							<View style={[styles.row, styles.thinking]}>
+								<ActivityIndicator size="small" color={C.muted} />
+								<Text style={styles.cardMeta}>Loading earlier messages…</Text>
+							</View>
+						) : null
+					}
 					keyboardShouldPersistTaps="handled"
 					keyboardDismissMode="interactive"
 				/>
@@ -811,7 +867,6 @@ const styles = StyleSheet.create({
 	},
 	suggestionText: { color: C.ink, fontSize: 14 },
 	gap: { gap: 8 },
-	flex: { flex: 1 },
 	chip: {
 		flexDirection: "row",
 		alignItems: "center",

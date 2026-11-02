@@ -4,9 +4,11 @@
 // served beside the dispatcher on the engine's RPC (LEAD_RPC, LEAD_EVENT).
 //
 // It costs nothing until used: the core starts on the first call (its MCP
-// listener, its transcript), and its agent on the first message. A box whose
-// Lead was used before starts the core with the engine, so the tasks the user
-// followed from the chat keep reporting back while no phone is connected.
+// listener, its transcript), and its agent on the first message. The agent is
+// stopped again after LEAD_IDLE_STOP_MS without a turn, so a box doesn't carry
+// a resident claude for a question asked days ago. A box whose Lead was used
+// before starts the core with the engine, so the tasks the user followed from
+// the chat keep reporting back while no phone is connected.
 //
 // The desktop's own engine never serves this: the desktop's Lead already covers
 // every engine, and cli.ts is the only place that adds it.
@@ -16,6 +18,10 @@ import type { Dispatcher } from "../dispatcher";
 import type { Engine } from "../engine";
 import type { RpcExtension } from "../rpc";
 import { type Lead, type LeadDeps, startLead } from "./index";
+
+/** How long a box's Lead sits idle before its claude is stopped. A message
+ *  after that starts it again on the same conversation (a few seconds). */
+export const LEAD_IDLE_STOP_MS = 10 * 60 * 1000;
 
 /** The largest file the phone can attach (decoded), the desktop's cap for a box. */
 export const MAX_LEAD_ATTACH_BYTES = 10 * 1024 * 1024;
@@ -30,6 +36,8 @@ export interface EngineLeadOptions {
 	log?: (line: string) => void;
 	/** Tests: how to start `claude`. */
 	spawnClaude?: LeadDeps["spawnClaude"];
+	/** Tests: the idle stop (default LEAD_IDLE_STOP_MS). */
+	idleStopMs?: number;
 }
 
 export function engineLead(opts: EngineLeadOptions): RpcExtension & { dispose(): void } {
@@ -50,6 +58,9 @@ export function engineLead(opts: EngineLeadOptions): RpcExtension & { dispose():
 				for (const l of listeners) l(e);
 			},
 			...(opts.spawnClaude ? { spawnClaude: opts.spawnClaude } : {}),
+			// A resident claude is memory the box's agents need: stop it when idle,
+			// and the next message resumes the conversation.
+			idleStopMs: opts.idleStopMs ?? LEAD_IDLE_STOP_MS,
 		}).then(
 			(l) => {
 				stopTasks = opts.engine.on("taskUpdated", (task) => l.onTaskUpdated(task));
@@ -83,8 +94,15 @@ export function engineLead(opts: EngineLeadOptions): RpcExtension & { dispose():
 		async handle(method, args) {
 			const l = await lead();
 			switch (method) {
-				case LEAD_CH.snapshot:
-					return l.snapshot();
+				case LEAD_CH.snapshot: {
+					// A phone asks for the tail of a long conversation, not all of it.
+					const tail = (args[0] as { tail?: unknown } | undefined)?.tail;
+					return l.snapshot(typeof tail === "number" && tail >= 0 ? tail : undefined);
+				}
+				case LEAD_CH.older: {
+					const limit = typeof args[1] === "number" && args[1] > 0 ? Math.min(args[1], 500) : 100;
+					return l.older(str(args[0], "The item"), limit);
+				}
 				case LEAD_CH.send: {
 					const paths = Array.isArray(args[1]) ? args[1].map(String) : [];
 					return l.send(str(args[0] ?? "", "The message"), paths);
