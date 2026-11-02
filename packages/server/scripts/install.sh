@@ -649,7 +649,7 @@ fi
 if [ -n "$GH_BIN" ] && "$GH_BIN" auth status >/dev/null 2>&1; then
 	mark ok "GitHub signed in ($("$GH_BIN" api user -q .login 2>/dev/null))"
 else
-	mark no 'GitHub: connect it from Ateam (the set-up checklist, or GitHub on the box in Settings or on the phone)'
+	mark no 'GitHub: connect it from Ateam (Settings → Boxes, the set-up checklist, or the box card on the phone)'
 	info '     with a fine-grained token for this box'"'"'s repos. Or here: gh auth login (reaches every repo you can)'
 fi
 

@@ -89,7 +89,7 @@ a token without it on a private repo), and Workflows left off, since an agent th
 can edit `.github/workflows` can reach the repo's Actions secrets.
 
 Connect it from Ateam rather than a terminal: the checklist after setting a box up,
-**Settings → Git → GitHub on your boxes** on the desktop, or the GitHub button on the
+**Settings → Boxes** on the desktop, or the GitHub button on the
 box's card on the phone. **Create a token on GitHub** opens GitHub's form with the
 name, 90 days and those permissions filled in, and you pick the repositories. Paste
 the token back into Ateam and the box checks it with GitHub, hands it to `gh` on

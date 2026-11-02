@@ -94,7 +94,7 @@ git config --global init.defaultBranch main
 ```
 
 Connect GitHub from Ateam once the engine is running: the checklist after setting a
-box up, **Settings → Git → GitHub on your boxes** on the desktop, or the GitHub button
+box up, **Settings → Boxes** on the desktop, or the GitHub button
 on the box's card on the phone. You paste a [fine-grained
 token](providers/README.md#github-credentials) into Ateam, which hands it to the box's
 `gh` and shows which of the box's projects it can push to. `gh auth login` in a
