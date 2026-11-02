@@ -46,8 +46,10 @@ import {
 	boxWakeOf,
 	buildCloudInit,
 	type ConnectionDTO,
+	describeSshFailure,
 	type Engine,
 	endpointUrl,
+	firstContactFlags,
 	forgetConnection,
 	type HostTransport,
 	hetznerProvider,
@@ -878,6 +880,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	}
 
 	async function install(dest: string, opts?: { wsAddr?: string }): Promise<HostStatus> {
+		// `dest` reaches ssh as an argument, where a leading "-" would make it an option.
+		if (dest.startsWith("-")) throw new Error(`"${dest}" is not an ssh destination`);
 		// Already set up and held — installing again would just re-run the (idempotent)
 		// script for no reason; hand back its status.
 		const existing = backends.get(dest);
@@ -913,12 +917,23 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 				WS_DEFAULT_PORT +
 				'}" bash -s -- --service';
 
+		// The output's tail, to read ssh's own reason from if the setup fails.
+		let output = "";
 		const result = await sshExec(dest, `bash -lc '${pipeline}'`, {
-			onData: (chunk) =>
-				broadcast(HOST_CH.evtInstallLog, { dest, chunk } satisfies InstallLogEvent),
+			// Setting a box up is often the first contact with it: see firstContactFlags.
+			sshFlags: await firstContactFlags(dest),
+			onData: (chunk) => {
+				output = (output + chunk).slice(-8192);
+				broadcast(HOST_CH.evtInstallLog, { dest, chunk } satisfies InstallLogEvent);
+			},
 		});
 		if (result.code !== 0) {
-			throw new Error(`Setup of "${dest}" failed — ssh exited ${result.code ?? "on a signal"}.`);
+			const why = result.code === 255 ? describeSshFailure(output) : null;
+			throw new Error(
+				why
+					? `Setup of "${dest}" failed: ${why}`
+					: `Setup of "${dest}" failed: ssh exited ${result.code ?? "on a signal"}.`,
+			);
 		}
 
 		// We just reached the box over SSH, so its transport is ssh — seed that row so
