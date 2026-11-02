@@ -48,3 +48,19 @@ describe("PtyClient connect", () => {
 		c.disconnect();
 	});
 });
+
+describe("PtyClient input", () => {
+	test("lastInput is the latest keystroke in any terminal; terminal reports don't count", async () => {
+		const c = new PtyClient(import.meta.path, await slowDaemon(0, ["a", "b"]), "/usr/bin/false");
+		await c.connect();
+		expect(c.lastInput()).toBeNull();
+		c.write("a", "\x1b[I"); // a focus report, not someone typing
+		expect(c.lastInput()).toBeNull();
+		const before = Date.now();
+		c.write("a", "ls\r");
+		c.write("b", "x");
+		expect(c.lastInput()).toBeGreaterThanOrEqual(before);
+		expect(c.lastInput()).toBe(Math.max(c.lastInputAt("a") ?? 0, c.lastInputAt("b") ?? 0));
+		c.disconnect();
+	});
+});

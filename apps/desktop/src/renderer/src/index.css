@@ -3999,23 +3999,29 @@ input {
 	flex-wrap: wrap;
 	gap: 6px;
 }
+/* Send stays level with the last line as the answer grows (ReplyField). */
 .question-reply {
 	display: flex;
+	align-items: flex-end;
 	gap: 6px;
 }
-.question-reply input {
+.question-reply textarea {
 	flex: 1;
 	min-width: 0;
+	field-sizing: content;
+	max-height: 160px;
+	resize: none;
 	padding: 5px 10px;
 	font: inherit;
 	font-size: 13px;
+	line-height: 18px;
 	color: var(--text);
 	background: var(--bg);
 	border: 1px solid var(--border);
 	border-radius: 7px;
 	outline: none;
 }
-.question-reply input:focus {
+.question-reply textarea:focus {
 	border-color: #4a4a56;
 }
 .question-error {
@@ -4326,10 +4332,108 @@ input {
 .lead-agent-body[hidden] {
 	display: none;
 }
+/* A task's thread (ThreadView): the entries before its last reply fold to a
+   line each, then that reply is open with what came after it. */
+.lead-thread-entries {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.lead-fold {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 -8px;
+	padding: 3px 8px;
+	font: inherit;
+	font-size: 13px;
+	text-align: left;
+	color: var(--text-dim);
+	background: transparent;
+	border: none;
+	border-radius: 7px;
+}
+.lead-fold:hover {
+	color: var(--text);
+	background: rgba(255, 255, 255, 0.04);
+}
+.lead-fold-dot {
+	flex-shrink: 0;
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: #55555f;
+}
+.lead-fold-line {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.lead-fold-react {
+	font-size: 13px;
+	line-height: 1;
+}
+.lead-fold-at {
+	flex-shrink: 0;
+	font-size: 11px;
+	color: #6f6f7a;
+	font-variant-numeric: tabular-nums;
+}
+.lead-fold-group {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.lead-earlier {
+	font-size: 12px;
+}
+.lead-thread-sep {
+	height: 1px;
+	margin: 2px 0;
+	background: rgba(255, 255, 255, 0.06);
+}
+/* What the user sent the task, inside its thread. */
+.lead-you {
+	align-self: flex-end;
+	max-width: 80%;
+	padding: 4px 10px;
+	font-size: 13px;
+	border-radius: 10px;
+	background: rgba(255, 255, 255, 0.06);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.lead-you.folded {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+	overflow: hidden;
+	color: var(--text-dim);
+	background: rgba(255, 255, 255, 0.04);
+}
+/* A reply in the Expand dialog, with the emoji it was answered with. Two in a
+   row get a rule between them, or they read as one. */
+.lead-reply-whole.lead-thread-entries {
+	gap: 12px;
+}
+.lead-whole-reply {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.lead-whole-reply + .lead-whole-reply {
+	padding-top: 12px;
+	border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.lead-whole-reply > .lead-fold-react {
+	font-size: 15px;
+}
 /* A long reply scrolls inside the card, so the card keeps about the same
    height while paging through a stack: the arrows above and Reply below stay
    on screen. */
-.lead-agent-body > .md {
+.lead-reply-capped {
 	max-height: min(320px, 50vh);
 	overflow-y: auto;
 }
@@ -4374,11 +4478,6 @@ input {
 	border-radius: 50%;
 	background: var(--text);
 	pointer-events: none;
-}
-.lead-user-to {
-	margin-bottom: 2px;
-	font-size: 11px;
-	color: var(--text-dim);
 }
 .lead-notice .lead-chip {
 	margin-left: 8px;

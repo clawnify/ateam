@@ -594,8 +594,8 @@ export interface EngineSettings {
 	 */
 	loopsPaused: boolean;
 	/**
-	 * Let the box sleep once no agent has been working for this many minutes; 0
-	 * never does. Only an engine on a provider that can put its box to sleep reads
+	 * Let the box sleep once nobody has used it for this many minutes (an agent
+	 * working, typing in a terminal, its Lead chat); 0 never does. Only an engine on a provider that can put its box to sleep reads
 	 * it (packages/server/src/sleep), so a Mac or a plain VPS ignores it. A sleeping
 	 * box keeps its sessions, and the next connection wakes it.
 	 */
