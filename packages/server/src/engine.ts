@@ -270,7 +270,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		markPtyReady = r;
 	});
 	const hooks = new HookServer();
-	const hookPort = await hooks.start(repo.getSettings(db).hookPort ?? undefined);
+	const hookPort = await hooks.start(repo.getSettings(db).hookPort ?? undefined, {
+		log: opts.log,
+	});
 	const notifyScriptPath = await ensureNotifyScript(dataDir);
 	await ensureGhShim(dataDir);
 	const peerSecret = await ensurePeerSecret(dataDir);
