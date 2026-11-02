@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { GitCoreError } from "./errors";
 import { gitFor, refExists } from "./git-client";
@@ -106,6 +106,18 @@ function excludeEntryFor(repoPath: string, worktreesRoot: string): string | null
 }
 
 /**
+ * The repo's shared git dir, from `rev-parse --git-common-dir`'s output. Empty output
+ * (a git that stalled under a full disk printed nothing, and exited 0) falls back to
+ * the repo's own `.git`, and a relative answer is taken against the repo: joined as
+ * it came, either would land the exclude file in whatever directory the process runs.
+ */
+export function commonDirFrom(output: string, repoPath: string): string {
+	const dir = output.trim();
+	if (!dir) return resolve(repoPath, ".git");
+	return isAbsolute(dir) ? dir : resolve(repoPath, dir);
+}
+
+/**
  * Append the worktrees dir to the repo's local exclude file
  * (`.git/info/exclude`) so co-located worktrees never show up in the project's
  * own `git status`. Local-only — does not modify the tracked `.gitignore` or
@@ -122,7 +134,10 @@ export async function ensureWorktreesIgnored(
 	const git = gitFor(repoPath);
 	let commonDir: string;
 	try {
-		commonDir = (await git.raw(["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim();
+		commonDir = commonDirFrom(
+			await git.raw(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+			repoPath,
+		);
 	} catch {
 		commonDir = resolve(repoPath, ".git");
 	}

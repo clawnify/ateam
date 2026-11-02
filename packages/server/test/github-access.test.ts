@@ -96,6 +96,13 @@ function machine(opts: {
 }
 
 describe("githubAccessStatus", () => {
+	it("names the box by its hostname, for its token's name", async () => {
+		const { deps } = machine({ ghMissing: true, gitToken: null });
+		expect((await githubAccessStatus(deps)).hostname).toBeUndefined();
+		const named = await githubAccessStatus({ ...deps, hostname: () => "ateam-verify" });
+		expect(named.hostname).toBe("ateam-verify");
+	});
+
 	it("says gh is missing when the box has no gh", async () => {
 		const { deps } = machine({ ghMissing: true, gitToken: null });
 		const s = await githubAccessStatus(deps);

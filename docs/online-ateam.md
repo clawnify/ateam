@@ -134,6 +134,14 @@ protocol v7+) tells the daemon to run this same installer over itself. A box old
 than v7 has no such command, so it needs one update over SSH first, after which the
 phone can drive every later one.
 
+On the desktop, **Settings → Boxes** compares each box's engine with the app: by
+protocol first, then by the release the engine names (engines from 0.1.80 on; an
+older one counts as behind). A box a release behind gets **Update**, and an amber
+dot on the Settings button, its Boxes section and its row in Run on. So does a box
+whose GitHub token has under two weeks left or was refused. On connect the app
+updates an SSH box by itself only when its protocol is behind, never for a release
+alone, since an update restarts the engine and agents running there can stop.
+
 Re-run the same command to upgrade. It stops the daemon still running the old dist,
 then checks that the process answering afterwards is a different one, so an upgrade
 can no longer report success while the previous version keeps serving. Live agents

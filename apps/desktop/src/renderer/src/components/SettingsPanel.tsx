@@ -468,7 +468,14 @@ function Switch({
 	);
 }
 
-export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
+export function SettingsPanel({
+	agents,
+	boxesNeedYou = false,
+}: {
+	agents: AgentDTO[];
+	/** A connected box needs the user (useBoxesNeedingYou): Boxes gets a dot. */
+	boxesNeedYou?: boolean;
+}) {
 	const [result, setResult] = useState<SettingsResult | null>(null);
 	const [credentials, setCredentials] = useState<CredentialsResult | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -585,6 +592,9 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 						onClick={() => pick(s.id)}
 					>
 						{s.label}
+						{s.id === "boxes" && boxesNeedYou ? (
+							<span className="settings-nav-dot" role="img" aria-label="a box needs you" />
+						) : null}
 					</button>
 				))}
 			</nav>

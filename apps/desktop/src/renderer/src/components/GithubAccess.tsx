@@ -9,16 +9,24 @@ import {
 	githubAccessUrgent,
 	githubHelperWarning,
 	githubTokenWouldHelp,
-	mostCommonOwner,
 	pastedTokenLabel,
 	type RepoAccessDTO,
 	repoAccessLabel,
 	repoVerdictHint,
+	TOKEN_FORM_HINT,
+	TOKEN_OWNER_RESET_HINT,
+	tokenBoxName,
+	tokenOwnerChoices,
+	tokenOwnerNote,
 } from "@ateam/protocol";
 import { ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { NativeSelect } from "./ui/native-select";
+
+/** The token picker's "Other…" entry ("" is Ateam's guess). No GitHub login has a "…". */
+const OTHER_OWNER = "other…";
 
 // A box's GitHub access, and connecting a token to it without opening its terminal:
 // who the box signs in as and with what kind of token, whether that token reaches
@@ -61,6 +69,13 @@ export function GithubAccess({
 	const [token, setToken] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// Who the token is for: "" follows Ateam's guess, OTHER_OWNER takes otherOwner.
+	const [ownerPick, setOwnerPick] = useState("");
+	const [otherOwner, setOtherOwner] = useState("");
+	// Owners for that choice beyond this box's own repositories: the user's other
+	// projects, and a login another box reported, for a box whose gh isn't signed in.
+	const [seenOwners, setSeenOwners] = useState<string[]>([]);
+	const [otherLogin, setOtherLogin] = useState<string | null>(null);
 	const reposKey = repos?.join("\n") ?? "";
 	// The latest callback, without making every render reload the access.
 	const onAccessRef = useRef(onAccess);
@@ -95,6 +110,21 @@ export function GithubAccess({
 	useEffect(() => {
 		void load();
 	}, [load]);
+
+	useEffect(() => {
+		let live = true;
+		void Promise.all([
+			window.ateam.projects.list().catch(() => []),
+			window.ateamHost.boxGithub().catch(() => ({})),
+		]).then(([projects, github]) => {
+			if (!live) return;
+			setSeenOwners(projects.flatMap((p) => (p.githubOwner ? [p.githubOwner] : [])));
+			setOtherLogin(Object.values(github).find((a) => a.gh?.login)?.gh?.login ?? null);
+		});
+		return () => {
+			live = false;
+		};
+	}, []);
 
 	const connect = async () => {
 		const clean = cleanGithubToken(token);
@@ -153,7 +183,19 @@ export function GithubAccess({
 	const helperWarning = githubHelperWarning(access);
 	const showForm = formOpen || githubTokenWouldHelp(access);
 	const repoNames = checks?.map((c) => c.repo) ?? repos ?? [];
-	const owner = mostCommonOwner(repoNames) ?? access.gh?.login ?? null;
+	const personal = access.gh?.login ?? otherLogin;
+	const choices = tokenOwnerChoices({ boxRepos: repoNames, personal, seen: seenOwners });
+	const owner =
+		ownerPick === ""
+			? choices.guess
+			: ownerPick === OTHER_OWNER
+				? otherOwner.trim() || null
+				: ownerPick;
+	// Said once the box's repositories are known, not while they load.
+	const ownerNote =
+		checks !== null || repos !== undefined
+			? tokenOwnerNote({ boxRepos: repoNames, owner, personal })
+			: null;
 	const hint = repoVerdictHint(access, checks ?? []);
 
 	return (
@@ -215,20 +257,56 @@ export function GithubAccess({
 					<div className="gh-access-step">
 						<span className="gh-access-step-n">1</span>
 						<div className="gh-access-step-body">
+							<div className="gh-access-owner">
+								<span className="gh-access-muted">Token for</span>
+								<NativeSelect
+									size="sm"
+									value={ownerPick}
+									onChange={(e) => setOwnerPick(e.target.value)}
+									aria-label="Who the token is for"
+								>
+									{choices.options.length === 0 ? (
+										<option value="">the account signed in to GitHub</option>
+									) : (
+										choices.options.map((o) => (
+											<option key={o} value={o === choices.guess ? "" : o}>
+												{o === personal ? `${o} (you)` : o}
+											</option>
+										))
+									)}
+									<option value={OTHER_OWNER}>Other…</option>
+								</NativeSelect>
+								{ownerPick === OTHER_OWNER ? (
+									<Input
+										className="gh-access-owner-input"
+										value={otherOwner}
+										onChange={(e) => setOtherOwner(e.target.value)}
+										placeholder="user or organization"
+										aria-label="Owner on GitHub"
+										autoFocus
+										spellCheck={false}
+									/>
+								) : null}
+							</div>
+							{ownerNote ? (
+								<span className={repoNames.length > 0 ? "gh-access-warn" : "gh-access-muted"}>
+									{ownerNote}
+								</span>
+							) : null}
 							<Button
 								size="sm"
 								variant="outline"
 								onClick={() =>
-									void window.ateamHost.openGithub(fineGrainedTokenUrl({ box: label, owner }))
+									void window.ateamHost.openGithub(
+										fineGrainedTokenUrl({ box: tokenBoxName(label, access.hostname), owner }),
+									)
 								}
 							>
 								Create a token on GitHub
 								<ExternalLink size={12} />
 							</Button>
-							<span className="gh-access-muted">
-								Ateam fills in the name, 90 days and its permissions. Choose the repositories this
-								box works on, then Generate token and copy it.
-							</span>
+							<span className="gh-access-muted">{TOKEN_FORM_HINT}</span>
+							<span className="gh-access-muted">{TOKEN_OWNER_RESET_HINT}</span>
 						</div>
 					</div>
 					<div className="gh-access-step">
