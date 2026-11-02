@@ -3008,6 +3008,143 @@ input {
 	justify-content: flex-end;
 }
 
+/* ---- A box's GitHub access (GithubAccess.tsx): who it signs in as, per-repo push ---- */
+.gh-access {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	font-size: 13px;
+	color: var(--text);
+	min-width: 0;
+}
+.gh-access-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+.gh-access-summary {
+	min-width: 0;
+}
+.gh-access-muted {
+	font-size: 12px;
+	color: var(--text-dim);
+	line-height: 1.45;
+}
+.gh-access-muted code {
+	font-family: ui-monospace, Menlo, monospace;
+	color: var(--text);
+}
+.gh-access-problem {
+	font-size: 12px;
+	color: var(--amber);
+	line-height: 1.45;
+}
+.gh-access-repos {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+.gh-access-repo {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	font-size: 12px;
+}
+.gh-access-repo-name {
+	font-family: ui-monospace, Menlo, monospace;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.gh-access-repo-verdict {
+	flex-shrink: 0;
+	color: var(--text-dim);
+}
+.gh-access-repo.push .gh-access-repo-verdict {
+	color: var(--text);
+}
+.gh-access-repo.read .gh-access-repo-verdict {
+	color: var(--amber);
+}
+.gh-access-repo.none .gh-access-repo-verdict {
+	color: var(--red);
+}
+.gh-access-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--text);
+	font: inherit;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	cursor: pointer;
+}
+.gh-access-form {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-elev);
+}
+.gh-access-step {
+	display: flex;
+	gap: 10px;
+	align-items: flex-start;
+}
+.gh-access-step-n {
+	flex-shrink: 0;
+	width: 18px;
+	height: 18px;
+	margin-top: 4px;
+	border-radius: 50%;
+	border: 1px solid var(--border);
+	font-size: 11px;
+	line-height: 16px;
+	text-align: center;
+	color: var(--text-dim);
+}
+.gh-access-step-body {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 6px;
+	min-width: 0;
+	flex: 1;
+}
+.gh-access-paste {
+	flex-direction: row;
+	align-items: center;
+}
+.gh-access-pasted {
+	/* Under the field, past the step number. */
+	padding-left: 28px;
+	margin-top: -4px;
+}
+.gh-access-box {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.gh-access-box + .gh-access-box {
+	padding-top: 14px;
+	border-top: 1px solid var(--border);
+}
+.gh-access-box-name {
+	margin: 0;
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--text-dim);
+}
+
 /* ---- Settings: section nav on the left, rows on the right, search across all ---- */
 .settings {
 	display: flex;

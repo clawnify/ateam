@@ -91,8 +91,15 @@ open PRs as this user. Without an identity, every commit fails:
 git config --global user.name  "you"
 git config --global user.email "you@example.com"
 git config --global init.defaultBranch main
-gh auth login          # device-code flow — works fine over SSH
 ```
+
+Connect GitHub from Ateam once the engine is running: the checklist after setting a
+box up, **Settings → Git → GitHub on your boxes** on the desktop, or the GitHub button
+on the box's card on the phone. You paste a [fine-grained
+token](providers/README.md#github-credentials) into Ateam, which hands it to the box's
+`gh` and shows which of the box's projects it can push to. `gh auth login` in a
+terminal still works, but it gives the box's agents a token that reaches every repo
+your account can.
 
 **Install the agent CLIs you want** (e.g. `claude`) and log into each one once, in an
 interactive SSH session. The daemon only offers agents that are installed and on its
@@ -353,6 +360,11 @@ you find a folder:
 The first row needs a **v9 box**. An older one still works, it just shows the
 paste-a-URL door instead of the picker and skips the create-a-repo offer, because it
 would accept the request and silently not do it.
+
+On a **v25 box** a tap first checks that the box's GitHub access can push to the
+repo. One it can't see stops with **Fix GitHub access**, and one it can only read
+asks before cloning, since tasks there could never open a pull request. A box with
+no repos to list offers **Connect GitHub** instead of the box terminal.
 
 Its terminal is a real login shell on the box too, so re-logging into `claude` when a
 session expires and `gh auth refresh` also work from the app. On the phone, tap the

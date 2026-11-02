@@ -31,6 +31,7 @@ import {
 	removeTask as gitRemoveTask,
 	initRepository,
 	listRemoteRepos,
+	parseGithubRepo,
 	push,
 	registerProject,
 	updateFromBase,
@@ -60,6 +61,7 @@ import { openBrowserView } from "./browser";
 import { credentialStatus, credentialsPath, updateCredentials } from "./credentials-file";
 import { createEditorHost, installCodeServer } from "./editor";
 import type { Engine } from "./engine";
+import { checkRepoAccess, connectGithubToken, githubAccessStatus } from "./github-access";
 import { GithubIssues } from "./github-issues";
 import { createIssueTask } from "./issue-tasks";
 import { refreshLoginPath } from "./login-env";
@@ -324,7 +326,21 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			const name = basename(input.cloneUrl).replace(/\.git$/, "") || "repo";
 			const dest = join(homedir(), name);
 			if (!existsSync(dest)) {
-				await cloneRepo(input.cloneUrl, dest);
+				try {
+					await cloneRepo(input.cloneUrl, dest);
+				} catch (err) {
+					// "is git/gh installed and authenticated?" covers every cause. When the
+					// cause is this box's GitHub access not reaching the repo, say that.
+					const gh = parseGithubRepo(input.cloneUrl);
+					const repoName = gh ? `${gh.owner}/${gh.name}` : null;
+					const [verdict] = repoName ? await checkRepoAccess([repoName]).catch(() => []) : [];
+					if (verdict?.access === "none") {
+						throw new Error(
+							`This box's GitHub access can't see ${repoName}. Connect GitHub on this box with a token that includes it.`,
+						);
+					}
+					throw err;
+				}
 			}
 			const info = await registerProject(dest);
 			const row = repo.upsertProject(db, {
@@ -906,6 +922,20 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			updateCredentials(patch);
 			return { openRouter: credentialStatus(), path: credentialsPath() };
 		},
+		// GitHub access on this machine (github-access.ts). The token arrives here
+		// once, for connect, and never travels back.
+		[CH.githubAccessStatus]: async () => githubAccessStatus(),
+		[CH.githubAccessConnect]: async (token: unknown) => connectGithubToken(token),
+		[CH.githubAccessCheck]: async (repos?: unknown[] | null) =>
+			checkRepoAccess(
+				Array.isArray(repos)
+					? repos
+					: repo
+							.listProjects(db)
+							.flatMap((p) =>
+								p.githubOwner && p.githubName ? [`${p.githubOwner}/${p.githubName}`] : [],
+							),
+			),
 
 		// ---- pty ----
 		[CH.ptySpawnAgent]: async (input: SpawnAgentInput) =>

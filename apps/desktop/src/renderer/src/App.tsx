@@ -8,6 +8,7 @@ import type {
 	KanbanColumn,
 	LoopDTO,
 	ProjectDTO,
+	RepoAccess,
 	SessionDTO,
 	SessionHitDTO,
 	TaskDTO,
@@ -82,6 +83,7 @@ import { ChangesList, DiffStat } from "./components/Changes";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { ConnectSteps } from "./components/ConnectSteps";
 import { FileDiffView } from "./components/FileDiffView";
+import { GithubAccess } from "./components/GithubAccess";
 import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
 import { IconButton } from "./components/IconButton";
 import { LeadChat, type LeadProposalItem } from "./components/LeadChat";
@@ -96,6 +98,8 @@ import { RailTile } from "./components/RailTile";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
+import { Button } from "./components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
@@ -231,6 +235,20 @@ const FOCUS_COLLAPSE_LABEL: Record<View, string> = {
 	loops: "Back to Loops",
 	settings: "Back to Settings",
 };
+
+/** A task as the New Task composer asks for it. */
+interface ComposeInput {
+	name: string;
+	nameAuto: boolean;
+	prompt: string;
+	agentId: string;
+	yolo: boolean;
+	files: string[];
+	// Chosen environment: null = this Mac; an alias = that box. A box is connected
+	// and the repo cloned onto it (idempotent) before the task is created there.
+	alias: Alias;
+	open: boolean;
+}
 
 export function App() {
 	// Non-null in a detached window: this window is pinned to one project and
@@ -416,6 +434,16 @@ export function App() {
 	// like from here, so the archived count on Clean up follows the sweep.
 	const [archivedTick, setArchivedTick] = useState(0);
 	const [composerOpen, setComposerOpen] = useState(false);
+	// A composer reopened with a task that didn't start, filled in as it was asked.
+	const [composerSeed, setComposerSeed] = useState<ComposeInput | null>(null);
+	// A Run on a box that stopped because the box's GitHub access can't see the repo:
+	// which box and repo, and the task as asked, so Try again loses nothing typed.
+	const [githubFix, setGithubFix] = useState<{
+		alias: string;
+		label: string;
+		repo: string;
+		input: ComposeInput;
+	} | null>(null);
 	// A task or loop a task's agent proposed, open in its dialog. Closing the
 	// dialog keeps the proposal (the task panel's strip opens it again); only
 	// creating it or Dismiss clears it.
@@ -1364,21 +1392,26 @@ export function App() {
 	// Create the task and launch the chosen agent with the prompt as its first
 	// instruction. `open` lands it on screen (see landTask); otherwise nothing
 	// on screen moves, and a toast and a pulse on its row say where it went.
-	const composeTask = (
-		input: {
-			name: string;
-			nameAuto: boolean;
-			prompt: string;
-			agentId: string;
-			yolo: boolean;
-			files: string[];
-			// Chosen environment: null = this Mac; an alias = that box. A box is connected
-			// and the repo cloned onto it (idempotent) before the task is created there.
-			alias: Alias;
-			open: boolean;
-		},
-		onCreated?: (task: TaskDTO) => void,
-	) =>
+	// Before a repo is cloned onto a box: can the box's GitHub access push to it? A box
+	// that can't see the repo fails the clone with a generic error, and one that can
+	// only read it clones fine and fails at the first push, after the agent's work.
+	const boxRepoAccess = async (alias: string, repo: string): Promise<RepoAccess> => {
+		try {
+			// Run on connects (and wakes) the box anyway; the check needs it held.
+			await window.ateamHost.connect(alias, { wake: true });
+			const [verdict] = await window.ateamHost.checkGithub(alias, [repo]);
+			return verdict?.access ?? "unknown";
+		} catch {
+			return "unknown"; // an older box, or no answer: the clone says what's wrong
+		}
+	};
+	// Back to the composer with a task that didn't start, filled in as it was asked.
+	const reopenComposer = (input: ComposeInput) => {
+		setComposerSeed(input);
+		setComposerOpen(true);
+	};
+
+	const composeTask = (input: ComposeInput, onCreated?: (task: TaskDTO) => void) =>
 		run(async () => {
 			const card = activeCard;
 			if (!card) return;
@@ -1389,6 +1422,7 @@ export function App() {
 			setComposerOpen(false);
 			setComposerIssue(null);
 			setComposerFiles([]);
+			setComposerSeed(null);
 			if (sourceIssue) {
 				const existing = activeTasks.find(
 					(task) => task.issueUrl?.toLowerCase() === sourceIssue.url.toLowerCase(),
@@ -1435,12 +1469,29 @@ export function App() {
 						setError("This repo has no git remote to clone onto a box.");
 						return;
 					}
-					setInfo(
-						`Setting up ${card.name} on ${composerEnvs.find((e) => e.alias === input.alias)?.label ?? input.alias}…`,
-					);
+					const boxLabel = composerEnvs.find((e) => e.alias === input.alias)?.label ?? input.alias;
+					const repoName =
+						card.githubOwner && card.githubName ? `${card.githubOwner}/${card.githubName}` : null;
+					setInfo(`Setting up ${card.name} on ${boxLabel}…`);
 					setProvisioning(input.alias);
 					let proj: ProjectDTO;
 					try {
+						const access = repoName ? await boxRepoAccess(input.alias, repoName) : "unknown";
+						if (repoName && access === "none") {
+							setGithubFix({ alias: input.alias, label: boxLabel, repo: repoName, input });
+							return;
+						}
+						if (
+							repoName &&
+							access === "read" &&
+							!(await confirm(
+								`${boxLabel} can't push to ${repoName}`,
+								`Its GitHub token can read ${repoName} but not push to it, so tasks there can't open a pull request or merge. Set the project up there anyway?`,
+							))
+						) {
+							reopenComposer(input);
+							return;
+						}
 						proj = await window.ateamHost.provision(input.alias, { cloneUrl: activeRepoRemote });
 					} finally {
 						setInfo(null);
@@ -2342,13 +2393,18 @@ export function App() {
 			{composerOpen && activeCard && (
 				<PromptComposer
 					agents={agents}
-					initialName={composerIssue?.title}
-					initialPrompt={
-						composerIssue
-							? `${composerIssue.title}\n\n${composerIssue.url}\n\n${composerIssue.body}`
-							: undefined
+					initialName={
+						composerSeed ? (composerSeed.nameAuto ? "" : composerSeed.name) : composerIssue?.title
 					}
-					initialFiles={composerFiles}
+					initialPrompt={
+						composerSeed
+							? composerSeed.prompt
+							: composerIssue
+								? `${composerIssue.title}\n\n${composerIssue.url}\n\n${composerIssue.body}`
+								: undefined
+					}
+					initialFiles={composerSeed?.files ?? composerFiles}
+					initialAlias={composerSeed?.alias}
 					environments={composerEnvs}
 					envAgents={envAgents}
 					onAdd={addTailscaleBox}
@@ -2359,9 +2415,63 @@ export function App() {
 						setComposerOpen(false);
 						setComposerIssue(null);
 						setComposerFiles([]);
+						setComposerSeed(null);
 					}}
 					onCreate={composeTask}
 				/>
+			)}
+			{githubFix && (
+				<Dialog
+					open
+					onOpenChange={(open) => {
+						// Closing puts the task back in the composer rather than dropping it.
+						if (open) return;
+						const fix = githubFix;
+						setGithubFix(null);
+						reopenComposer(fix.input);
+					}}
+				>
+					<DialogContent
+						className="flex max-h-[calc(100vh-4rem)] flex-col gap-3 overflow-y-auto p-5 sm:max-w-[560px]"
+						aria-describedby={undefined}
+					>
+						<DialogTitle className="pr-8 text-sm font-medium">
+							{githubFix.label} can't see {githubFix.repo}
+						</DialogTitle>
+						<p className="gh-access-muted">
+							Its GitHub access doesn't include this repository, so cloning it there would fail.
+							Connect a token that includes it, then try again.
+						</p>
+						<GithubAccess
+							alias={githubFix.alias}
+							label={githubFix.label}
+							repos={[githubFix.repo]}
+						/>
+						<div className="flex justify-end gap-2">
+							<Button
+								size="sm"
+								variant="ghost"
+								onClick={() => {
+									const fix = githubFix;
+									setGithubFix(null);
+									reopenComposer(fix.input);
+								}}
+							>
+								Back to the task
+							</Button>
+							<Button
+								size="sm"
+								onClick={() => {
+									const fix = githubFix;
+									setGithubFix(null);
+									composeTask(fix.input);
+								}}
+							>
+								Try again
+							</Button>
+						</div>
+					</DialogContent>
+				</Dialog>
 			)}
 			{loopDialog && activeCard && (loopDialog.editId === null || editingLoop) && (
 				<LoopForm

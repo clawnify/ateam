@@ -82,6 +82,17 @@ with Contents, Pull requests and Issues set to read and write, and Workflows lef
 off, since an agent that can edit `.github/workflows` can reach the repo's Actions
 secrets.
 
+Connect it from Ateam rather than a terminal: the checklist after setting a box up,
+**Settings → Git → GitHub on your boxes** on the desktop, or the GitHub button on the
+box's card on the phone. **Create a token on GitHub** opens GitHub's form with the
+name, 90 days and those permissions filled in, and you pick the repositories. Paste
+the token back into Ateam and the box checks it with GitHub, hands it to `gh` on
+stdin and points git at it, unless a provider's credential helper already signs git
+in (boxd's does). Then Ateam lists, per project, whether the box can push, only read,
+or not see it. It warns about a token that reaches more than it should (`gh auth
+login`'s, a classic one, a provider's), and checks the box can push to a repo before
+cloning it there. The token never travels back from the box.
+
 ## Adding a provider
 
 Open a PR with two files — `docs/providers/<id>.md` using the template below, and

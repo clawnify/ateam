@@ -582,7 +582,7 @@ export function EnvironmentPicker({
 								<BoxReadinessChecklist
 									alias={installedAlias}
 									agents={installedAgents}
-									title="Box set up — finish these in the box’s terminal:"
+									title="Box set up. A few things left:"
 									onDone={close}
 								/>
 							)

@@ -152,7 +152,8 @@ export function CreateBoxDialog({
 							<BoxReadinessChecklist
 								alias={readyAlias}
 								agents={readyAgents}
-								title="Box created — finish these in the box’s terminal:"
+								label={name.trim() || readyAlias}
+								title="Box created. A few things left:"
 								onDone={() => onDone(readyAlias)}
 							/>
 						) : !busy ? (
