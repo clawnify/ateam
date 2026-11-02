@@ -163,7 +163,8 @@ export function useLeadAuto(lead: LeadClient | undefined, active: boolean): [boo
 			if (e.type === "auto") setAuto(e.auto);
 			else if (e.type === "reset") setAuto(e.snapshot.auto);
 		});
-		lead.snapshot().then(
+		// The state only (Auto, busy): no items to send.
+		lead.snapshot({ tail: 0 }).then(
 			(s) => live && setAuto(s.auto),
 			() => {},
 		);

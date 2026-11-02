@@ -1,8 +1,10 @@
 // Top-level tabs in the header, where the project dropdown used to sit: a pill
-// nav in the classic iOS style. A dark rounded track; the active tab is a white
-// pill with its icon and label, the others show their icon only.
+// nav in the classic iOS style. A rounded track, Liquid Glass on iOS 26 and dark
+// before it (GlassPill); the active tab is a white pill with its icon and label,
+// the others show their icon only.
 import Feather from "@expo/vector-icons/Feather";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text } from "react-native";
+import { GlassPill } from "./GlassPill";
 import { C } from "./theme";
 
 export type Tab = "home" | "board" | "mission" | "loops";
@@ -19,7 +21,7 @@ const INK_ON_WHITE = "#15151a";
 /** `tab` null: none is active (the Lead covers them). */
 export function TabStrip({ tab, onChange }: { tab: Tab | null; onChange: (t: Tab) => void }) {
 	return (
-		<View style={styles.track}>
+		<GlassPill style={styles.track}>
 			{TABS.map((t) => {
 				const active = t.key === tab;
 				return (
@@ -41,7 +43,7 @@ export function TabStrip({ tab, onChange }: { tab: Tab | null; onChange: (t: Tab
 					</Pressable>
 				);
 			})}
-		</View>
+		</GlassPill>
 	);
 }
 

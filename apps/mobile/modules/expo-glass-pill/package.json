@@ -1,0 +1,7 @@
+{
+  "name": "expo-glass-pill",
+  "version": "1.0.0",
+  "description": "A capsule of Liquid Glass for the floating pills (Ateam mobile)",
+  "main": "src/index.ts",
+  "private": true
+}
