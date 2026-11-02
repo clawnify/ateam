@@ -101,8 +101,10 @@ const PREFERRED_RETRY_MS = 5_000;
 const PREFERRED_RETRY_EVERY_MS = 250;
 /**
  * Where a new hook port is picked: below both macOS's ephemeral range
- * (49152-65535) and Linux's default one (32768-60999), so no outgoing
- * connection is handed the port while the app is down.
+ * (49152-65535) and Linux's default one (32768-60999), so another program's
+ * listen(0) on 127.0.0.1 is never handed the port while the app is down.
+ * (On macOS that is the only kind of use that blocks this bind: an outgoing
+ * connection or a 0.0.0.0 listener on the same port does not.)
  */
 export const FRESH_PORT_MIN = 20_000;
 export const FRESH_PORT_MAX = 32_767;
@@ -453,8 +455,7 @@ export class HookServer extends EventEmitter {
 		}
 
 		// A new port (first run, or the saved one stayed busy) comes from below
-		// every OS's ephemeral range, so an outgoing connection made while the app
-		// is down cannot take it before the next launch. listen(0) is the last resort.
+		// the ephemeral ranges (see FRESH_PORT_MIN). listen(0) is the last resort.
 		if (!hasPreferred || preferredErr) {
 			let err: NodeJS.ErrnoException | null = new Error("not tried");
 			for (let i = 0; err && i < FRESH_PORT_PICKS; i++) {
