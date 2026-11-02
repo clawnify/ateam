@@ -1302,13 +1302,6 @@ input {
 	font-size: 10px;
 	font-variant-numeric: tabular-nums;
 }
-.skill-hint {
-	padding-left: 4px;
-	color: var(--text-dim);
-	font-size: 11px;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
 
 /* A row in the Skills menu: the command and what it does, with a pin toggle
    that shows on hover (always, once pinned). */
