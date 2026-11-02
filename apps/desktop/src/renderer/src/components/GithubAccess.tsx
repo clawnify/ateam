@@ -6,6 +6,7 @@ import {
 	type GithubAccessDTO,
 	githubAccessProblem,
 	githubAccessSummary,
+	githubAccessUrgent,
 	githubTokenWouldHelp,
 	mostCommonOwner,
 	pastedTokenLabel,
@@ -163,7 +164,11 @@ export function GithubAccess({
 					</Button>
 				) : null}
 			</div>
-			{problem ? <div className="gh-access-problem">{problem}</div> : null}
+			{problem ? (
+				<div className={`gh-access-problem${githubAccessUrgent(access) ? " urgent" : ""}`}>
+					{problem}
+				</div>
+			) : null}
 			{access.unverified ? <div className="gh-access-muted">{access.unverified}</div> : null}
 
 			{checks && checks.length > 0 ? (

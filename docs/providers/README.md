@@ -97,7 +97,9 @@ stdin and points git at it, unless a provider's credential helper already signs 
 in (boxd's does). Then Ateam lists, per project, whether the box can push, only read,
 or not see it. It warns about a token that reaches more than it should (`gh auth
 login`'s, a classic one, a provider's), and checks the box can push to a repo before
-cloning it there. The token never travels back from the box.
+cloning it there. The token never travels back from the box. Two weeks before it
+expires, the box's GitHub section says so and opens the form for its replacement, so
+a box doesn't stop pushing mid-task on the day it lapses.
 
 ## Adding a provider
 

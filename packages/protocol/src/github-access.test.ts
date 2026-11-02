@@ -7,6 +7,7 @@ import {
 	type GithubAccessDTO,
 	githubAccessProblem,
 	githubAccessSummary,
+	githubAccessUrgent,
 	githubCredentialKind,
 	githubRepoFromUrl,
 	githubTokenWouldHelp,
@@ -210,6 +211,51 @@ describe("githubAccessProblem", () => {
 		});
 		expect(problem).toContain("9876");
 		expect(problem).toContain("provider");
+	});
+});
+
+describe("token expiry", () => {
+	const now = Date.parse("2026-11-02T00:00:00Z");
+	const day = 86_400_000;
+	const expiring = (days: number) => ({ ...base, gh: { ...fine, expiresAt: now + days * day } });
+
+	it("warns, and opens the form, when the token has under two weeks left", () => {
+		expect(githubAccessProblem(expiring(5), now)).toBe(
+			"This box's token expires in 5 days. Connect a new one before then, or tasks here can't push or open pull requests.",
+		);
+		expect(githubTokenWouldHelp(expiring(5), now)).toBe(true);
+		expect(githubAccessUrgent(expiring(5), now)).toBe(false);
+	});
+
+	it("says nothing while the token has a while to go", () => {
+		expect(githubAccessProblem(expiring(40), now)).toBeNull();
+		expect(githubTokenWouldHelp(expiring(40), now)).toBe(false);
+	});
+
+	it("says what already stopped once the token has expired", () => {
+		expect(githubAccessProblem(expiring(-3), now)).toBe(
+			"This box's token expired 3 days ago, so tasks here can't push or open pull requests. Connect a new one.",
+		);
+	});
+
+	it("names only pull requests when another helper signs git in", () => {
+		expect(githubAccessProblem({ ...expiring(5), git: "other" }, now)).toBe(
+			"This box's token expires in 5 days. Connect a new one before then, or Ateam can't open pull requests or merge from this box.",
+		);
+	});
+
+	it("sends a GH_TOKEN that's expiring back to where it's set", () => {
+		const env = { ...base, gh: { ...fine, source: "env" as const, expiresAt: now + 5 * day } };
+		expect(githubAccessProblem(env, now)).toBe(
+			"The token in GH_TOKEN, set in the engine's environment, expires in 5 days. Replace it there: a token connected from Ateam would be ignored.",
+		);
+		expect(githubTokenWouldHelp(env, now)).toBe(false);
+	});
+
+	it("is urgent once the token has expired or GitHub refuses it", () => {
+		expect(githubAccessUrgent(expiring(-1), now)).toBe(true);
+		expect(githubAccessUrgent({ ...base, gh: { ...fine, rejected: true } }, now)).toBe(true);
+		expect(githubAccessUrgent(base, now)).toBe(false);
 	});
 });
 
