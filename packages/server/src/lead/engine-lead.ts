@@ -32,9 +32,21 @@ export interface EngineLeadOptions {
 	spawnClaude?: LeadDeps["spawnClaude"];
 }
 
-export function engineLead(opts: EngineLeadOptions): RpcExtension & { dispose(): void } {
+/** What keeps a box awake for its Lead (sleep/control.ts). */
+export interface LeadActivity {
+	/** Mid-turn, and not waiting on the user's answer to a permission prompt. */
+	working: boolean;
+	/** When someone last did something in the chat (reading it doesn't count), or null. */
+	lastUsedAt: number | null;
+}
+
+export function engineLead(
+	opts: EngineLeadOptions,
+): RpcExtension & { activity(): LeadActivity; dispose(): void } {
 	const listeners = new Set<(e: LeadEvent) => void>();
 	let started: Promise<Lead> | null = null;
+	let current: Lead | null = null;
+	let lastUsedAt: number | null = null;
 	let stopTasks: (() => void) | null = null;
 
 	const lead = (): Promise<Lead> => {
@@ -52,6 +64,7 @@ export function engineLead(opts: EngineLeadOptions): RpcExtension & { dispose():
 			...(opts.spawnClaude ? { spawnClaude: opts.spawnClaude } : {}),
 		}).then(
 			(l) => {
+				current = l;
 				stopTasks = opts.engine.on("taskUpdated", (task) => l.onTaskUpdated(task));
 				return l;
 			},
@@ -81,6 +94,9 @@ export function engineLead(opts: EngineLeadOptions): RpcExtension & { dispose():
 			return () => listeners.delete(l);
 		},
 		async handle(method, args) {
+			// Every call but a snapshot is the user doing something in the chat
+			// (the phone reads a snapshot on its own when it opens the chat).
+			if (method !== LEAD_CH.snapshot) lastUsedAt = Date.now();
 			const l = await lead();
 			switch (method) {
 				case LEAD_CH.snapshot:
@@ -129,6 +145,7 @@ export function engineLead(opts: EngineLeadOptions): RpcExtension & { dispose():
 					throw new Error(`Unknown method: ${method}`);
 			}
 		},
+		activity: () => ({ working: current?.working() ?? false, lastUsedAt }),
 		dispose() {
 			stopTasks?.();
 			void started?.then((l) => l.dispose()).catch(() => {});

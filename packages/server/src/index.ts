@@ -40,7 +40,12 @@ export { serveRpc } from "./rpc";
 export type { Services } from "./services";
 export { socketClientTransport, socketServerTransport } from "./transport/socket";
 export type { SshClient, SshExecOptions, SshExecResult, SshOptions } from "./transport/ssh";
-export { sshClientTransport, sshExec } from "./transport/ssh";
+export {
+	describeSshFailure,
+	firstContactFlags,
+	sshClientTransport,
+	sshExec,
+} from "./transport/ssh";
 export { streamClientTransport, streamServerTransport } from "./transport/stream";
 export { wsServerTransport } from "./transport/ws";
 export {

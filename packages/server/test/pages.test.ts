@@ -36,6 +36,7 @@ describe("show_page", () => {
 		).toBe(true);
 		const first = repo.getTask(db, task.id) as Task;
 		expect(first.page).toMatchObject({ title: "Failing tests" });
+		expect(first.page?.fromQuestion).toBeUndefined();
 		expect(first.isUnread).toBe(true);
 		expect(first.column).toBe(task.column);
 		expect(repo.getTaskPageHtml(db, task.id)).toBe("<h1>40</h1>");
@@ -74,6 +75,7 @@ describe("ask_user with a page", () => {
 		const t = repo.getTask(db, task.id) as Task;
 		expect(t.question?.pageId).toBe(t.page?.id);
 		expect(t.page?.title).toBe("Which schema?");
+		expect(t.page?.fromQuestion).toBe(true);
 	});
 
 	it("files neither when the page is refused", () => {

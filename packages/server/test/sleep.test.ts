@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { boxdMachineName, boxdSleepDriver, loopWakeScript, RELEASE_S } from "../src/sleep/boxd";
 import {
+	HELD_NOTE_MS,
 	IDLE_CHECK_MS,
 	type IdleClock,
 	idleTick,
 	LOOP_SOON_MS,
+	type SleepControlDeps,
 	type SleepDriver,
 	sleepMode,
 	startSleepControl,
@@ -31,9 +33,10 @@ function idleAfter(
 ): { clock: IdleClock; idleAt: number | null } {
 	let c = clock;
 	for (let m = 1; m <= minutes; m++) {
+		const now = clock.lastCheckAt + m * IDLE_CHECK_MS;
 		const step = idleTick(c, {
-			now: clock.lastCheckAt + m * IDLE_CHECK_MS,
-			working: opts.working?.(m) ?? false,
+			now,
+			seen: opts.working?.(m) ? [{ why: "agent", at: now }] : [],
 			idleMs: opts.idleMs ?? HOUR,
 		});
 		c = step.clock;
@@ -43,7 +46,7 @@ function idleAfter(
 }
 
 describe("idleTick", () => {
-	const start: IdleClock = { lastActiveAt: 0, lastCheckAt: 0 };
+	const start: IdleClock = { lastActiveAt: 0, why: "start", lastCheckAt: 0 };
 
 	it("reads idle an hour after the last agent work", () => {
 		expect(idleAfter(start, 120).idleAt).toBe(60);
@@ -60,11 +63,40 @@ describe("idleTick", () => {
 		const before = idleAfter(start, 59).clock;
 		const woke = idleTick(before, {
 			now: before.lastCheckAt + 10 * HOUR,
-			working: false,
+			seen: [],
 			idleMs: HOUR,
 		});
 		expect(woke.idle).toBe(false);
+		expect(woke.clock.why).toBe("wake");
 		expect(idleAfter(woke.clock, 120).idleAt).toBe(60);
+	});
+
+	it("input counts from the moment it happened, not from the check that saw it", () => {
+		// Typed 30.5 minutes in: idle an hour after that, read on the check at 91.
+		let c = start;
+		let idleAt: number | null = null;
+		for (let m = 1; m <= 120 && idleAt === null; m++) {
+			const step = idleTick(c, {
+				now: m * IDLE_CHECK_MS,
+				seen: m >= 31 ? [{ why: "input", at: 30.5 * IDLE_CHECK_MS }] : [],
+				idleMs: HOUR,
+			});
+			c = step.clock;
+			if (step.idle) idleAt = m;
+		}
+		expect(idleAt).toBe(91);
+		expect(c).toMatchObject({ why: "input", lastActiveAt: 30.5 * IDLE_CHECK_MS });
+	});
+
+	it("input older than the window it would extend changes nothing", () => {
+		const woke = idleTick(start, { now: 10 * HOUR, seen: [], idleMs: HOUR });
+		// The last keystroke was before the box slept: the wake's window stands.
+		const step = idleTick(woke.clock, {
+			now: 10 * HOUR + IDLE_CHECK_MS,
+			seen: [{ why: "input", at: HOUR }],
+			idleMs: HOUR,
+		});
+		expect(step.clock).toMatchObject({ why: "wake", lastActiveAt: 10 * HOUR });
 	});
 
 	it("turning the setting on starts the hour then, not in the past", () => {
@@ -181,8 +213,7 @@ describe("sleep control on boxd", () => {
 		// read as a wake, so only the attach itself can say someone is here.
 		h.advance(10_000);
 		box.touch();
-		// touch() starts a check without waiting for it; let it finish, or the next
-		// check would be skipped as overlapping and its gap read as a wake.
+		// touch() starts a check without waiting for it; let it finish.
 		await new Promise((r) => setTimeout(r, 0));
 		expect(h.calls.at(-1)).toBe("boxd machine config set auto-hibernate.timeout 0");
 		const held = h.calls.length;
@@ -382,5 +413,174 @@ describe("startSleepControl", () => {
 		}
 		expect(calls).toEqual(["hold", `armWake ${3 * HOUR}`, "release"]);
 		control.stop();
+	});
+});
+
+describe("what keeps a box awake", () => {
+	// The night of 2026-11-02 (UTC): the engine started at 23:51.
+	const T0 = Date.UTC(2026, 10, 1, 23, 51);
+	const at = (minute: number) => new Date(T0 + minute * MIN).toISOString().replace(".000Z", "Z");
+
+	/** A box under sleep control with a recording driver; calls read "hold@<minute>". */
+	async function box(opts: { release?: () => Promise<void>; idleMinutes?: number } = {}) {
+		let t = T0;
+		const minute = () => (t - T0) / MIN;
+		let working = false;
+		let typedAt: number | null = null;
+		const lead = { working: false, lastUsedAt: null as number | null };
+		const calls: string[] = [];
+		const logs: string[] = [];
+		const driver: SleepDriver = {
+			where: "test box",
+			canWakeForLoops: true,
+			hold: async () => {
+				calls.push(`hold@${minute()}`);
+			},
+			release: async () => {
+				await opts.release?.();
+				calls.push(`release@${minute()}`);
+			},
+			armWake: async () => {},
+		};
+		const deps: SleepControlDeps = {
+			working: () => working,
+			lastInputAt: () => typedAt,
+			lead: () => ({ ...lead }),
+			nextLoopAt: () => null,
+			idleMinutes: () => opts.idleMinutes ?? 60,
+			log: (line) => logs.push(line),
+			now: () => t,
+		};
+		const control = await startSleepControl(driver, deps);
+		const b = {
+			calls,
+			logs,
+			lead,
+			control,
+			minute,
+			setWorking: (w: boolean) => {
+				working = w;
+			},
+			/** Someone types into a terminal at `m` minutes in (now, by default). */
+			type: (m = minute()) => {
+				typedAt = T0 + m * MIN;
+			},
+			/** Run the once-a-minute check up to `to`, doing `each(m)` before each one. */
+			async until(to: number, each?: (m: number) => void) {
+				while (minute() < to) {
+					t += IDLE_CHECK_MS;
+					each?.(minute());
+					await control.tick();
+				}
+			},
+			/** Frozen, as a sleeping box is: no checks run. */
+			sleep(minutes: number) {
+				t += minutes * MIN;
+			},
+			advance(ms: number) {
+				t += ms;
+			},
+		};
+		return b;
+	}
+
+	const settle = () => new Promise((r) => setTimeout(r, 0));
+
+	it("a client reconnecting every 15 minutes to a held box with no work: released after the window", async () => {
+		const b = await box();
+		await b.until(60, (m) => {
+			if (m % 15 === 0) b.control.touch(); // the desktop, on each maintenance wake of a sleeping Mac
+		});
+		await settle();
+		// Before: each reconnect bought another hour, and the box never slept.
+		expect(b.calls).toEqual(["hold@0", "release@60"]);
+		// Once asleep the desktop doesn't dial it (host.ts reconnect asks the provider
+		// first), so nothing comes back until someone uses it.
+		expect(b.logs.join("\n")).not.toContain("connected");
+		b.control.stop();
+	});
+
+	it("typing in a box shell keeps it up for the window after the last keystroke", async () => {
+		const b = await box();
+		await b.until(50);
+		b.type(50.25); // between two checks
+		await b.until(200);
+		expect(b.calls).toEqual(["hold@0", "release@111"]);
+		b.control.stop();
+	});
+
+	it("a Lead turn holds the box, and so does using its chat", async () => {
+		const b = await box();
+		await b.until(70, (m) => {
+			b.lead.working = m <= 70; // mid-turn until minute 70
+		});
+		b.lead.working = false;
+		await b.until(200);
+		expect(b.calls).toEqual(["hold@0", "release@130"]);
+
+		// Asleep, woken, then a message in the chat at minute 20 of the new window.
+		const c = await box();
+		await c.until(20);
+		c.lead.lastUsedAt = T0 + 20 * MIN;
+		await c.until(200);
+		expect(c.calls).toEqual(["hold@0", "release@80"]);
+		b.control.stop();
+		c.control.stop();
+	});
+
+	it("a box woken by a phone or the desktop gets a fresh window", async () => {
+		const b = await box();
+		await b.until(60);
+		expect(b.calls).toEqual(["hold@0", "release@60"]);
+		b.sleep(7 * 60); // asleep until morning
+		b.control.touch(); // the phone's connection, right after its wake
+		await settle();
+		expect(b.calls).toEqual(["hold@0", "release@60", "hold@480"]);
+		// The connection reads as the reason, or the wake does: either way a fresh window.
+		await b.until(600);
+		expect(b.calls).toEqual(["hold@0", "release@60", "hold@480", "release@540"]);
+		b.control.stop();
+	});
+
+	it("a client connecting to a released box holds it, even while the release is under way", async () => {
+		let finish: () => void = () => {};
+		let releases = 0;
+		const b = await box({
+			release: () =>
+				// The first release is slow (boxd's CLI takes seconds); the next is not.
+				++releases === 1 ? new Promise<void>((r) => (finish = r)) : Promise.resolve(),
+		});
+		await b.until(59);
+		b.advance(IDLE_CHECK_MS);
+		const releasing = b.control.tick();
+		await settle();
+		b.control.touch(); // someone opens the app as the box is being let go
+		finish();
+		await releasing;
+		await settle();
+		expect(b.calls).toEqual(["hold@0", "release@60", "hold@60"]);
+		await b.until(200);
+		expect(b.calls).toEqual(["hold@0", "release@60", "hold@60", "release@120"]);
+		b.control.stop();
+	});
+
+	it("logs each hold and release with its time and why, and what keeps a held box up once an hour", async () => {
+		const b = await box();
+		await b.until(10);
+		b.type();
+		await b.until(70);
+		b.sleep(5 * 60);
+		await b.until(380);
+		b.setWorking(true);
+		await b.until(380 + 150);
+		expect(b.logs).toEqual([
+			`[ateam] ${at(0)} holding test box awake: the engine started at ${at(0)}`,
+			`[ateam] ${at(60)} still holding test box awake: typing in a terminal at ${at(10)}`,
+			`[ateam] ${at(70)} letting test box sleep: nothing for 60 min since typing in a terminal at ${at(10)}`,
+			`[ateam] ${at(371)} holding test box awake: the box woke at ${at(371)}`,
+			`[ateam] ${at(371 + HELD_NOTE_MS / MIN)} still holding test box awake: agent work at ${at(371 + HELD_NOTE_MS / MIN)}`,
+			`[ateam] ${at(371 + (2 * HELD_NOTE_MS) / MIN)} still holding test box awake: agent work at ${at(371 + (2 * HELD_NOTE_MS) / MIN)}`,
+		]);
+		b.control.stop();
 	});
 });

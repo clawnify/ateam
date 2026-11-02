@@ -26,7 +26,6 @@ import {
 import {
 	ArrowDownToLine,
 	ArrowUp,
-	ArrowUpDown,
 	Brush,
 	Check,
 	ChevronDown,
@@ -74,7 +73,9 @@ import {
 	type SetStateAction,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
+	useReducer,
 	useRef,
 	useState,
 } from "react";
@@ -96,6 +97,7 @@ import { ProposalNote, ProposalStrip, proposalLabel } from "./components/Proposa
 import { QuestionCard } from "./components/QuestionCard";
 import { RailTile } from "./components/RailTile";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { SidebarViewMenu } from "./components/SidebarViewMenu";
 import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
 import { Button } from "./components/ui/button";
@@ -112,6 +114,16 @@ import {
 	taskGlyphs,
 	tileSessions,
 } from "./session-tabs";
+import {
+	groupTasks,
+	parseView,
+	passesFilters,
+	type SidebarView,
+	STATUS_RANK,
+	spliceOrder,
+	type TaskSortMode,
+	toggled,
+} from "./sidebar-view";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
 import {
@@ -129,9 +141,6 @@ const COLUMNS: { key: KanbanColumn; label: string }[] = [
 	{ key: "review", label: "Review" },
 	{ key: "merged", label: "Done" },
 ];
-
-// ---- sidebar task ordering ----
-type TaskSortMode = "next" | "status" | "updated" | "custom";
 
 // The topbar's Mission Control layout buttons, in the order they sit.
 const MC_LAYOUTS = [
@@ -163,15 +172,6 @@ const FLIP_HOLD_MS = 500;
 
 // Whether a drag carries files from Finder (not a tile, not dragged text).
 const draggingFiles = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
-
-// Status order: what needs the user's eyes first.
-const STATUS_RANK: Record<KanbanColumn, number> = {
-	review: 0,
-	needs_attention: 1,
-	running: 2,
-	todo: 3,
-	merged: 4,
-};
 
 const springy = { type: "spring", stiffness: 550, damping: 42 } as const;
 
@@ -428,6 +428,15 @@ export function App() {
 		() => (localStorage.getItem("ateam.taskSort") as TaskSortMode) || "updated",
 	);
 	const [customOrder, setCustomOrder] = useState<string[]>([]);
+	// The TASKS list's grouping and filters (sidebar-view.ts), app-wide like the
+	// ordering above. Only the sidebar reads it; Mission Control never does.
+	const [sideView, setSideViewState] = useState<SidebarView>(() =>
+		parseView(localStorage.getItem("ateam.sidebarView")),
+	);
+	const setSideView = (v: SidebarView) => {
+		setSideViewState(v);
+		localStorage.setItem("ateam.sidebarView", JSON.stringify(v));
+	};
 	const [cleanupOpen, setCleanupOpen] = useState(false);
 	const [archivedCount, setArchivedCount] = useState(0);
 	// Bumped whenever a card leaves a board, which is also what an archive looks
@@ -868,6 +877,35 @@ export function App() {
 			stale = true;
 		};
 	}, [activeProjectId, archivedTick]);
+	// With the Archived filter on, the sidebar lists the project's archived tasks
+	// too, from every machine it is on, re-listed whenever a card leaves a board
+	// (an archive is a removal). Each machine fills in on its own, so one that
+	// never answers (asleep, older than v18) only leaves its own out.
+	const [archivedByProject, setArchivedByProject] = useState<Record<string, TaskDTO[]>>({});
+	// biome-ignore lint/correctness/useExhaustiveDependencies: archivedTick is the trigger, as above.
+	useEffect(() => {
+		if (!sideView.showArchived) return;
+		let stale = false;
+		for (const id of searchProjectIds) {
+			void window.ateam.tasks
+				.listArchived(id)
+				.catch(() => [])
+				.then((list) => {
+					if (!stale) setArchivedByProject((m) => ({ ...m, [id]: list }));
+				});
+		}
+		return () => {
+			stale = true;
+		};
+	}, [sideView.showArchived, searchProjectIds, archivedTick]);
+	// A task brought back is on the board again, and that copy wins.
+	const archivedShown = useMemo(() => {
+		if (!sideView.showArchived) return [];
+		const live = new Set(activeTasks.map((t) => t.id));
+		return searchProjectIds
+			.flatMap((id) => archivedByProject[id] ?? [])
+			.filter((t) => !live.has(t.id));
+	}, [sideView.showArchived, searchProjectIds, archivedByProject, activeTasks]);
 	const linkedIssues = new Set(
 		activeTasks.flatMap((task) => (task.issueUrl ? [task.issueUrl.toLowerCase()] : [])),
 	);
@@ -878,7 +916,12 @@ export function App() {
 		!selectedTaskId && selectedIssue
 			? (backlogIssues.find((issue) => issue.url === selectedIssue.url) ?? null)
 			: null;
-	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
+	// An archived row opens once it is brought back; until the board's copy of it
+	// arrives, the archived one stands in.
+	const selectedTask =
+		activeTasks.find((t) => t.id === selectedTaskId) ??
+		archivedShown.find((t) => t.id === selectedTaskId) ??
+		null;
 	// Its box isn't held, so it has no terminal or worktree to show: the panel says
 	// so and wakes it instead of mounting a TaskPanel whose every call is refused.
 	const selectedOffline = selectedTask ? offlineAliasOf(selectedTask) : null;
@@ -988,10 +1031,11 @@ export function App() {
 		for (const l of loops) if (l.taskId) ids.add(l.taskId);
 		return ids;
 	}, [loops]);
-	// Sidebar list shows all non-loop tasks, including merged/done ones.
+	// Sidebar list shows all non-loop tasks, including merged/done ones, and the
+	// archived ones while the Archived filter is on.
 	const sidebarTasks = useMemo(
-		() => activeTasks.filter((t) => !loopTaskIds.has(t.id)),
-		[activeTasks, loopTaskIds],
+		() => [...activeTasks, ...archivedShown].filter((t) => !loopTaskIds.has(t.id)),
+		[activeTasks, archivedShown, loopTaskIds],
 	);
 
 	// Sidebar ordering: by status (Review → Needs You → In Progress → Backlog),
@@ -1032,12 +1076,33 @@ export function App() {
 		}
 		return list;
 	}, [sidebarTasks, taskSort, customOrder]);
+	// The view menu's filters and grouping, applied on top of the ordering, so
+	// the order holds inside each group.
+	const machineOf = useCallback((t: TaskDTO) => originOf(t.projectId), [originOf]);
+	const sidebarGroups = useMemo(
+		() =>
+			groupTasks(
+				orderedSidebarTasks.filter((t) => passesFilters(t, sideView, machineOf)),
+				sideView.grouping,
+				{
+					machineOf,
+					statusLabel: (c) => COLUMNS.find((col) => col.key === c)?.label ?? c,
+					now: Date.now(),
+				},
+			),
+		[orderedSidebarTasks, sideView, machineOf],
+	);
+	// The order Mission Control's Sync takes: the list as displayed, group by
+	// group, then what the filters hide. Archived tasks never have a tile.
 	// Stable identity, so the Mission Control order memoized on it doesn't
 	// recompute on every App render.
-	const sidebarOrderIds = useMemo(
-		() => orderedSidebarTasks.map((t) => t.id),
-		[orderedSidebarTasks],
-	);
+	const sidebarOrderIds = useMemo(() => {
+		const shown = sidebarGroups.flatMap((g) => g.tasks);
+		const seen = new Set(shown.map((t) => t.id));
+		return [...shown, ...orderedSidebarTasks.filter((t) => !seen.has(t.id))]
+			.filter((t) => t.archivedAt == null)
+			.map((t) => t.id);
+	}, [sidebarGroups, orderedSidebarTasks]);
 	// Mission Control's own tile order, per project, independent of the
 	// sidebar's: status changes reorder the list, never the tiles. It records
 	// the tiles as Mission Control last laid them out; the first visit seeds it
@@ -1123,9 +1188,23 @@ export function App() {
 	// Sidebar and board both honor the tag filter; Mission Control and the
 	// selected task deliberately don't (a live agent tile / open panel shouldn't
 	// vanish).
-	const visibleSidebarTasks = useMemo(
-		() => orderedSidebarTasks.filter(matchesQuery),
-		[orderedSidebarTasks, matchesQuery],
+	const shownGroups = useMemo(
+		() =>
+			sidebarGroups
+				.map((g) => ({ ...g, tasks: g.tasks.filter(matchesQuery) }))
+				.filter((g) => g.tasks.length > 0),
+		[sidebarGroups, matchesQuery],
+	);
+	const visibleSidebarTasks = useMemo(() => shownGroups.flatMap((g) => g.tasks), [shownGroups]);
+	// The machines this project is on, for the Machine filter.
+	const sidebarMachines = useMemo(
+		() =>
+			activeMembers.length > 0
+				? activeMembers.map((m) => m.alias)
+				: activeProjectId
+					? [originOf(activeProjectId)]
+					: [],
+		[activeMembers, activeProjectId, originOf],
 	);
 	const filteredBoardTasks = useMemo(
 		() => activeTasks.filter(matchesQuery),
@@ -1217,6 +1296,23 @@ export function App() {
 			return;
 		}
 		openTask(t);
+	};
+	// A sidebar row or rail tile. An archived one is brought back as it opens: the
+	// engine sends a removal for every write to an archived task (a git-status
+	// refresh is enough), and a removal closes the open panel.
+	const openRow = (t: TaskDTO) => {
+		if (t.archivedAt == null) return toggleTask(t);
+		void window.ateam.tasks.setArchived(t.id, false).then(openTask, (e) =>
+			setError(`Couldn't bring back ${t.name}: ${e instanceof Error ? e.message : String(e)}`),
+		);
+	};
+	// Mark all as read: every unread task the list shows, folded groups too.
+	// Straight to the engine, since an archived task isn't on the board markRead
+	// looks it up on.
+	const markAllRead = () => {
+		for (const t of visibleSidebarTasks) {
+			if (t.isUnread) void window.ateam.tasks.markRead(t.id).catch(() => {});
+		}
 	};
 	// A session-search hit opens the task it ran in, and the exact terminal it
 	// ran in when that tab is still alive — the point of the search is to land
@@ -1646,7 +1742,7 @@ export function App() {
 									label={t.name}
 									active={t.id === sidebarSelectedId}
 									className={t.id === pulseId ? "just-started" : undefined}
-									onClick={() => toggleTask(t)}
+									onClick={() => openRow(t)}
 								>
 									{glyph ? (
 										<SessionIcon agentId={glyph} size={16} />
@@ -1825,33 +1921,16 @@ export function App() {
 									<span>Tasks</span>
 								</button>
 								<span style={{ display: "flex", gap: 2 }}>
-									<Menu
-										icon={ArrowUpDown}
-										label="Order tasks"
-										// The section header's icon buttons are 24px (.section-head .iconbtn).
-										className="size-6"
-										items={[
-											{
-												label: "What's next",
-												icon: taskSort === "next" ? Check : undefined,
-												onClick: () => setTaskSort("next"),
-											},
-											{
-												label: "By status",
-												icon: taskSort === "status" ? Check : undefined,
-												onClick: () => setTaskSort("status"),
-											},
-											{
-												label: "Last updated first",
-												icon: taskSort === "updated" ? Check : undefined,
-												onClick: () => setTaskSort("updated"),
-											},
-											{
-												label: "Custom (drag to reorder)",
-												icon: taskSort === "custom" ? Check : undefined,
-												onClick: () => setTaskSort("custom"),
-											},
-										]}
+									<SidebarViewMenu
+										view={sideView}
+										onView={setSideView}
+										sort={taskSort}
+										onSort={setTaskSort}
+										statuses={COLUMNS}
+										machines={sidebarMachines}
+										groupKeys={sideView.grouping === "none" ? [] : shownGroups.map((g) => g.key)}
+										unread={visibleSidebarTasks.filter((t) => t.isUnread).length}
+										onMarkAllRead={markAllRead}
 									/>
 									<IconButton
 										icon={Plus}
@@ -1867,46 +1946,84 @@ export function App() {
 										<div className="tree-empty">Select a project</div>
 									) : visibleSidebarTasks.length === 0 ? (
 										<div className="tree-empty">
-											{tagFilter ? "No matching tasks" : "No active tasks"}
+											{sidebarTasks.length === 0
+												? "No active tasks"
+												: tagFilter
+													? "No matching tasks"
+													: "No tasks match the filters"}
 										</div>
-									) : taskSort === "custom" && !tagFilter ? (
-										// Custom order: drag rows up/down; Motion animates the shuffle.
-										// Disabled while a tag filter is on — reordering a filtered subset
-										// would drop the hidden tasks from the saved order.
-										<Reorder.Group
-											as="div"
-											axis="y"
-											values={orderedSidebarTasks.map((t) => t.id)}
-											onReorder={reorderTasks}
-										>
-											{orderedSidebarTasks.map((t) => (
-												<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
-													<TaskRow
-														task={t}
-														offline={offlineAliasOf(t) !== null}
-														selected={t.id === sidebarSelectedId}
-														pulse={t.id === pulseId}
-														onClick={() => toggleTask(t)}
-														onDelete={() => deleteTask(t)}
-													/>
-												</Reorder.Item>
-											))}
-										</Reorder.Group>
 									) : (
-										// Sorted modes: layout animation glides rows to their new spot
-										// when a status change or update reorders them.
-										visibleSidebarTasks.map((t) => (
-											<motion.div key={t.id} layout transition={springy}>
+										shownGroups.map((g) => {
+											const grouped = sideView.grouping !== "none";
+											const folded = grouped && sideView.collapsed.includes(g.key);
+											const row = (t: TaskDTO) => (
 												<TaskRow
 													task={t}
 													offline={offlineAliasOf(t) !== null}
 													selected={t.id === sidebarSelectedId}
 													pulse={t.id === pulseId}
-													onClick={() => toggleTask(t)}
+													onClick={() => openRow(t)}
 													onDelete={() => deleteTask(t)}
 												/>
-											</motion.div>
-										))
+											);
+											return (
+												<div key={g.key}>
+													{grouped && (
+														<button
+															type="button"
+															className="task-group-head"
+															aria-expanded={!folded}
+															onClick={() =>
+																setSideView({
+																	...sideView,
+																	collapsed: toggled(sideView.collapsed, g.key),
+																})
+															}
+														>
+															{folded ? (
+																<ChevronRight size={12} strokeWidth={2} />
+															) : (
+																<ChevronDown size={12} strokeWidth={2} />
+															)}
+															<span>{g.label}</span>
+														</button>
+													)}
+													{folded ? null : taskSort === "custom" ? (
+														// Custom order: drag rows up/down inside the group; Motion
+														// animates the shuffle. A drag only trades the group's own
+														// slots, so tasks in other groups, or hidden by a filter, keep
+														// their place in the saved order.
+														<Reorder.Group
+															as="div"
+															axis="y"
+															values={g.tasks.map((t) => t.id)}
+															onReorder={(ids) =>
+																reorderTasks(
+																	spliceOrder(
+																		orderedSidebarTasks.map((t) => t.id),
+																		ids,
+																	),
+																)
+															}
+														>
+															{g.tasks.map((t) => (
+																<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
+																	{row(t)}
+																</Reorder.Item>
+															))}
+														</Reorder.Group>
+													) : (
+														// Sorted modes: layout animation glides rows to their new spot
+														// when a status change or update reorders them.
+														g.tasks.map((t) => (
+															<motion.div key={t.id} layout transition={springy}>
+																{row(t)}
+															</motion.div>
+														))
+													)}
+												</div>
+											);
+										})
 									)}
 								</div>
 							)}
@@ -2827,7 +2944,14 @@ function TaskRow({
 						))}
 					</span>
 				)}
-				<StatusPill column={t.column} title={t.triage.reason} />
+				{/* Listed under the Archived filter: it says so in the status's spot. */}
+				{t.archivedAt != null ? (
+					<span className="pill" title="Archived. Opening it brings it back to the board.">
+						archived
+					</span>
+				) : (
+					<StatusPill column={t.column} title={t.triage.reason} />
+				)}
 			</button>
 			<span className="task-trail">
 				<TriageGlyph triage={t.triage} />
@@ -3142,6 +3266,48 @@ function TaskSummary({ task }: { task: TaskDTO }) {
 		</p>
 	);
 }
+
+// Whether the user opened (true) or closed (false) each page in the task panel,
+// by page id. A page nobody chose for opens by itself if show_page made it, and
+// not if it came with a question (TaskPageDTO.fromQuestion). Not the panel's
+// state: the panel remounts on every side/full switch. Kept across restarts
+// because a task keeps its page forever; past the cap the oldest choices fall
+// off, and those pages go back to their default.
+// shortcut: this Mac's localStorage; move it onto the task row once another
+// client (the phone) shows pages and should agree on what was closed.
+const PAGE_CHOICES_KEY = "ateam.pageChoices";
+const PAGE_CHOICES_MAX = 200;
+const pageChoices = new Map<string, boolean>(
+	(() => {
+		try {
+			const v: unknown = JSON.parse(localStorage.getItem(PAGE_CHOICES_KEY) ?? "[]");
+			return Array.isArray(v)
+				? v.filter(
+						(e): e is [string, boolean] =>
+							Array.isArray(e) && typeof e[0] === "string" && typeof e[1] === "boolean",
+					)
+				: [];
+		} catch {
+			return [];
+		}
+	})(),
+);
+const choosePage = (pageId: string, open: boolean) => {
+	pageChoices.delete(pageId); // re-inserted last: the newest choice is the last to go
+	pageChoices.set(pageId, open);
+	for (const old of pageChoices.keys()) {
+		if (pageChoices.size <= PAGE_CHOICES_MAX) break;
+		pageChoices.delete(old);
+	}
+	try {
+		localStorage.setItem(PAGE_CHOICES_KEY, JSON.stringify([...pageChoices]));
+	} catch {
+		/* full or unavailable: the choice still holds until the app quits */
+	}
+};
+// Narrower than this, the panel body has no room for the page beside the
+// terminal, and the page fills it instead (the 480px side panel always does).
+const PAGE_SPLIT_MIN = 880;
 
 function TaskPanel({
 	task,
@@ -3500,6 +3666,46 @@ function TaskPanel({
 	// beside it (both open at once). Only when the toggle wants it.
 	const mainViewOpen = editorOpen || browserOpen || changesOpen;
 	const termDocked = termSide && mainViewOpen;
+
+	// The agent's page, unless the open question's card draws it. A show_page
+	// page is open unless closed: beside the terminal when the body is wide
+	// enough, over it when not. The editor, browser and changes views cover it.
+	// Not open, it is a bar above the terminal's toolbar. A question's page,
+	// once the question has ended, only ever opens from the bar.
+	const page = task.page && task.question?.pageId !== task.page.id ? task.page : null;
+	const [, rerender] = useReducer((n: number) => n + 1, 0);
+	const pageShown = !!page && (pageChoices.get(page.id) ?? !page.fromQuestion) && !mainViewOpen;
+	const bodyRef = useRef<HTMLDivElement>(null);
+	const [bodyWide, setBodyWide] = useState(false);
+	useLayoutEffect(() => {
+		const el = bodyRef.current;
+		if (!el) return;
+		// Measured now as well: the observer's first report lands after the paint.
+		const check = () => setBodyWide(el.clientWidth >= PAGE_SPLIT_MIN);
+		check();
+		const ro = new ResizeObserver(check);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+	const pageFills = pageShown && !bodyWide;
+	const openPage = () => {
+		if (!page) return;
+		choosePage(page.id, true);
+		setEditorOpen(false);
+		setBrowserOpen(false);
+		setChangesOpen(false);
+		rerender();
+	};
+	const closePage = () => {
+		if (!page) return;
+		choosePage(page.id, false);
+		rerender();
+	};
+	const pageBar = page && !pageShown && (
+		<div className="panel-page">
+			<PageFrame taskId={task.id} pageId={page.id} title={page.title} onOpen={openPage} />
+		</div>
+	);
 
 	// Closing a tab kills its PTY — tabs are exactly the live sessions, so there
 	// is no "closed but still running" state to explain. Confirm first when the
@@ -3864,13 +4070,13 @@ function TaskPanel({
 					}
 				/>
 			)}
-			<div className={`panel-body${termDocked ? " docked-term" : ""}`}>
+			<div className={`panel-body${termDocked ? " docked-term" : ""}`} ref={bodyRef}>
 				{/* Keep the terminal mounted (xterm state survives) while the
 				    changes view is open — just hide it, or dock it beside the
 				    view when the sidebar toggle is on. */}
 				<div
 					className="term-wrap"
-					style={{ display: termDocked || !mainViewOpen ? "flex" : "none" }}
+					style={{ display: (termDocked || !mainViewOpen) && !pageFills ? "flex" : "none" }}
 				>
 					{terminalId ? (
 						<TerminalView
@@ -3884,15 +4090,19 @@ function TaskPanel({
 									await window.ateam.tasks.setColumn(task.id, "merged");
 								})
 							}
+							aboveToolbar={pageBar}
 						/>
 					) : (
-						<div className="term term-empty">
-							<button type="button" onClick={resumeLast}>
-								<History size={13} />
-								Resume last conversation
-							</button>
-							<span className="muted">or open a tab with + to start a terminal</span>
-						</div>
+						<>
+							<div className="term term-empty">
+								<button type="button" onClick={resumeLast}>
+									<History size={13} />
+									Resume last conversation
+								</button>
+								<span className="muted">or open a tab with + to start a terminal</span>
+							</div>
+							{pageBar}
+						</>
 					)}
 				</div>
 
@@ -3959,13 +4169,13 @@ function TaskPanel({
 						</div>
 					</div>
 				)}
-			</div>
 
-			{task.page && task.question?.pageId !== task.page.id && (
-				<div className="panel-page">
-					<PageFrame taskId={task.id} pageId={task.page.id} title={task.page.title} collapsed />
-				</div>
-			)}
+				{page && pageShown && (
+					<div className={`page-pane${pageFills ? " fills" : ""}`}>
+						<PageFrame taskId={task.id} pageId={page.id} title={page.title} onClose={closePage} />
+					</div>
+				)}
+			</div>
 		</section>
 	);
 }

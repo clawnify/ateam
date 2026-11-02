@@ -12,6 +12,7 @@ import { type FormEvent, useState } from "react";
 import { AgentIcon } from "./AgentIcon";
 import { Markdown } from "./Markdown";
 import { PageFrame } from "./PageFrame";
+import { ReplyField } from "./ReplyField";
 
 /** An IPC rejection carries Electron's prefix before the engine's own words. */
 const cleanError = (e: unknown) =>
@@ -300,7 +301,7 @@ export function QuestionCard({
 			)}
 			{q.allowText && q.select !== "many" && (
 				<form className="question-reply" onSubmit={submit}>
-					<input
+					<ReplyField
 						value={text}
 						placeholder={q.options.length ? "Or type an answer" : "Type your answer"}
 						aria-label="Your answer"

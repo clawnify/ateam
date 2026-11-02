@@ -85,6 +85,7 @@ export interface TaskPage {
 	id: string;
 	title: string;
 	at: number;
+	fromQuestion?: boolean;
 }
 
 export interface QuestionChoice {
