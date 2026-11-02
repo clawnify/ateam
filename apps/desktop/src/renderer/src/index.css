@@ -498,6 +498,25 @@ input {
 	font-size: 12px;
 	padding: 4px 14px 8px 22px;
 }
+/* A group inside TASKS (the view menu's Grouping): quieter than the section
+   header above it, and clicking it folds the group. */
+.task-group-head {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	width: 100%;
+	padding: 6px 8px 3px 14px;
+	font-size: 11px;
+	text-align: left;
+	color: var(--text-dim);
+	background: transparent;
+	border: none;
+	border-radius: 0;
+}
+.task-group-head:hover {
+	background: transparent;
+	color: var(--text);
+}
 
 .main {
 	display: flex;
