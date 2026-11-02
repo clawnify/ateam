@@ -84,6 +84,23 @@ describe("planDelivery", () => {
 			"restart",
 		);
 	});
+
+	// A message that arrived mid-turn waits for the Stop, and that Stop is what
+	// re-arms Claude's listener, a few ms later. Counting the grace from the
+	// message alone killed an agent whose turn outlasted it and relaunched it
+	// beside a client's own restore: two processes on one conversation.
+	it("gives the listener its grace from the end of a turn the message waited out", () => {
+		const claude = { agentId: "claude", status: "idle", hasListener: false };
+		const waitedOut = { live: claude, oldestPendingAt: NOW - 142_000 };
+		expect(planDelivery(facts({ ...waitedOut, lastEventAt: NOW }))).toBe("wait");
+		expect(planDelivery(facts({ ...waitedOut, lastEventAt: NOW - LISTENER_GRACE_MS + 1 }))).toBe(
+			"wait",
+		);
+		// No listener came for a whole grace after the turn: an older launch.
+		expect(planDelivery(facts({ ...waitedOut, lastEventAt: NOW - LISTENER_GRACE_MS }))).toBe(
+			"restart",
+		);
+	});
 });
 
 describe("nextHop", () => {
