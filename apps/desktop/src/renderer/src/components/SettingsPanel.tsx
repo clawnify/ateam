@@ -11,6 +11,7 @@ import {
 } from "@ateam/protocol";
 import { AlertTriangle, Search } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { GithubBoxesButton } from "./GithubAccess";
 
 /**
  * The settings page: a section list on the left, rows of title + description +
@@ -262,6 +263,14 @@ const ROWS: Row[] = [
 				onChange={(v) => patch({ engine: { deleteRemoteBranchOnMerge: v } })}
 			/>
 		),
+	},
+	{
+		id: "boxes.github",
+		section: "git",
+		title: "GitHub on your boxes",
+		description:
+			"Which GitHub account and token each connected box uses, and which of its projects it can push to. Paste a new token here instead of in the box's terminal.",
+		control: () => <GithubBoxesButton />,
 	},
 	{
 		id: "credentials.openRouter",

@@ -3,7 +3,15 @@
 // window.ateam (the engine surface itself), mirroring how @ateam/server keeps
 // connection management off AteamApi. Imports only @ateam/protocol (dependency-
 // free), so both the node (main/preload) and web (renderer) tsconfigs resolve it.
-import type { BoxWake, ConnectionDTO, ConnectStep, ProjectDTO, SystemInfo } from "@ateam/protocol";
+import type {
+	BoxWake,
+	ConnectionDTO,
+	ConnectStep,
+	GithubAccessDTO,
+	ProjectDTO,
+	RepoAccessDTO,
+	SystemInfo,
+} from "@ateam/protocol";
 
 /** One grammar issue as the judge needs it (mirrors @ateam/server's GrammarJudgeIssue). */
 export interface GrammarJudgeIssue {
@@ -39,6 +47,12 @@ export const HOST_CH = {
 	installAgent: "host:installAgent",
 	/** Probe a connected box's task-readiness (gh installed/signed-in, git identity). */
 	boxReadiness: "host:boxReadiness",
+	/** A connected box's GitHub access, handing it a token, and its per-repo access. */
+	githubAccess: "host:githubAccess",
+	connectGithub: "host:connectGithub",
+	checkGithub: "host:checkGithub",
+	/** Open a github.com page in the user's own browser. */
+	openGithub: "host:openGithub",
 	/** Read/write the encrypted provider credentials (token + Tailscale auth key). */
 	secretsStatus: "host:secretsStatus",
 	saveSecrets: "host:saveSecrets",
@@ -201,6 +215,16 @@ export interface AteamHost {
 	/** Probe a connected box's task-readiness (also derives the git identity once the
 	 *  box is signed into GitHub). */
 	boxReadiness(alias: string): Promise<BoxReadiness>;
+	/** A connected box's GitHub access: what its gh and git sign in with (v25 engines). */
+	githubAccess(alias: string): Promise<GithubAccessDTO>;
+	/** Hand a connected box a GitHub token; answers its new access. Rejects with a
+	 *  sentence the user can act on (a bad paste, a refused token). */
+	connectGithub(alias: string, token: string): Promise<GithubAccessDTO>;
+	/** Per repo (`owner/name`), whether a connected box can push, only read, or not see
+	 *  it. None given = the box's own projects. */
+	checkGithub(alias: string, repos?: string[]): Promise<RepoAccessDTO[]>;
+	/** Open a github.com page in the user's own browser, where they're signed in. */
+	openGithub(url: string): Promise<void>;
 	/** Which provisioning secrets are already saved (booleans, never the values). */
 	secretsStatus(): Promise<SecretsStatus>;
 	/** Persist provider credentials (encrypted at rest). Empty string clears one. */

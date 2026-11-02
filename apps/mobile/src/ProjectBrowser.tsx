@@ -9,8 +9,8 @@
 // which is the one state that can never be merged with its copies on other engines.
 // So cloning is a first-class door, and "new" offers to create the GitHub repo too.
 
-import type { DirListingDTO, ProjectDTO, RemoteRepoDTO } from "@ateam/protocol";
-import { boxSupports } from "@ateam/protocol";
+import type { DirListingDTO, ProjectDTO, RemoteRepoDTO, RepoAccess } from "@ateam/protocol";
+import { boxSupports, githubRepoFromUrl } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -44,17 +44,22 @@ export function ProjectBrowser({
 	onClose,
 	onRegistered,
 	onOpenTerminal,
+	onOpenGithub,
 }: {
 	conn: Connection;
 	onClose: () => void;
 	onRegistered: (project: ProjectDTO) => void;
-	/** Leave for the box terminal, where gh gets signed in. */
+	/** Leave for the box terminal, where an older box's gh gets signed in. */
 	onOpenTerminal?: () => void;
+	/** Open the box's GitHub access, where a token is connected (v25 boxes). */
+	onOpenGithub?: () => void;
 }) {
 	const api = conn.api;
 	// A pre-v9 box has no repo list and silently ignores `createRemote`, so those two
 	// doors are replaced by ones that work on any box rather than shown half-broken.
 	const canGithub = boxSupports("githubProjects", conn.info.protocolVersion);
+	// A v25 box says per repo whether it can push, and connects GitHub without a terminal.
+	const canCheckAccess = boxSupports("githubAccess", conn.info.protocolVersion);
 
 	const [mode, setMode] = useState<Mode>("menu");
 	const [listing, setListing] = useState<DirListingDTO | null>(null);
@@ -115,7 +120,7 @@ export function ProjectBrowser({
 
 	// Clone it onto the box and register it in one call. Idempotent: a repo already
 	// cloned there is just registered, so tapping the same row twice is harmless.
-	const cloneRepo = useCallback(
+	const clone = useCallback(
 		async (cloneUrl: string) => {
 			setBusyPath(cloneUrl);
 			setError(null);
@@ -128,6 +133,48 @@ export function ProjectBrowser({
 			}
 		},
 		[conn, onRegistered],
+	);
+
+	// First, can this box push to it? One it can't see would fail the clone with a
+	// generic error, and one it can only read clones fine and fails at the first push,
+	// after the agent's work. An older box, or no answer, just clones.
+	const cloneRepo = useCallback(
+		async (cloneUrl: string) => {
+			const repo = githubRepoFromUrl(cloneUrl);
+			if (!repo || !canCheckAccess) return clone(cloneUrl);
+			setBusyPath(cloneUrl);
+			let access: RepoAccess = "unknown";
+			try {
+				access = (await api.githubAccess.check([repo]))[0]?.access ?? "unknown";
+			} catch {
+				// unknown: the clone says what's wrong
+			}
+			setBusyPath(null);
+			if (access === "none") {
+				Alert.alert(
+					`This box can't see ${repo}`,
+					"Its GitHub access doesn't include this repository, so cloning it would fail.",
+					[
+						{ text: "Cancel", style: "cancel" },
+						...(onOpenGithub ? [{ text: "Fix GitHub access", onPress: onOpenGithub }] : []),
+					],
+				);
+				return;
+			}
+			if (access === "read") {
+				Alert.alert(
+					`This box can't push to ${repo}`,
+					"Its GitHub token can read it but not push to it, so tasks here can't open a pull request or merge.",
+					[
+						{ text: "Cancel", style: "cancel" },
+						{ text: "Clone anyway", onPress: () => void clone(cloneUrl) },
+					],
+				);
+				return;
+			}
+			return clone(cloneUrl);
+		},
+		[api, canCheckAccess, clone, onOpenGithub],
 	);
 
 	const cloneByUrl = useCallback(() => {
@@ -251,8 +298,14 @@ export function ProjectBrowser({
 									<Text style={styles.empty}>
 										{repos?.length ? "no match" : "no repos — is gh signed in on this box?"}
 									</Text>
-									{/* A first visit lands here before gh is signed in, which happens in a terminal. */}
-									{!repos?.length && onOpenTerminal ? (
+									{/* A first visit lands here before GitHub is connected: from the app on a
+									    v25 box, in the box terminal on an older one. */}
+									{!repos?.length && canCheckAccess && onOpenGithub ? (
+										<Pressable style={styles.terminalBtn} onPress={onOpenGithub} hitSlop={8}>
+											<Feather name="github" size={14} color={C.ink} />
+											<Text style={styles.terminalBtnText}>Connect GitHub</Text>
+										</Pressable>
+									) : !repos?.length && onOpenTerminal ? (
 										<Pressable style={styles.terminalBtn} onPress={onOpenTerminal} hitSlop={8}>
 											<Feather name="terminal" size={14} color={C.ink} />
 											<Text style={styles.terminalBtnText}>Open Box terminal</Text>

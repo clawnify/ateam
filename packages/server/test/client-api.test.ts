@@ -96,3 +96,23 @@ describe("buildAteamApi over a live serveRpc/dispatcher (the client's view)", ()
 		expect(await api.utils.attachClipboardImage("t1")).toEqual({ mode: "none" });
 	});
 });
+
+describe("githubAccess over the wire (v25)", () => {
+	it("routes check and connect to the engine, and a bad paste comes back as a sentence", async () => {
+		const db = createTestDb();
+		const engine = makeEngine(db);
+		const c2s = new PassThrough();
+		const s2c = new PassThrough();
+		serveRpc(engine, createDispatcher(engine), streamServerTransport(c2s, s2c));
+		const api = buildAteamApi(createRpcClient(streamClientTransport(s2c, c2s)), native);
+
+		// Nothing here reaches GitHub: names that aren't owner/name are never probed,
+		// and a project with no GitHub identity is not one of the box's repos to check.
+		repo.upsertProject(db, { repoPath: "/r/a", name: "A" });
+		expect(await api.githubAccess.check(["../etc", "not a repo"])).toEqual([]);
+		expect(await api.githubAccess.check()).toEqual([]);
+		await expect(api.githubAccess.connect("my token")).rejects.toThrow(
+			"doesn't look like a GitHub token",
+		);
+	});
+});
