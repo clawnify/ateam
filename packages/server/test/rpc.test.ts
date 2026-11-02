@@ -47,6 +47,7 @@ function makeEngine(db: AteamDb): Engine {
 			return () => ee.off(event, cb);
 		},
 		sendTaskUpdated: (id: string) => ee.emit("taskUpdated", { id }),
+		sendTaskRemoved: (id: string) => ee.emit("taskRemoved", id),
 		sendLoopsUpdated: () => ee.emit("loopsUpdated", []),
 		ptyReady: () => Promise.resolve(),
 	} as unknown as Engine;
@@ -101,6 +102,19 @@ describe("serveRpc + createRpcClient over an in-memory transport", () => {
 		expect(moved.column).toBe("review");
 		// The setColumn handler's sendTaskUpdated must reach the client as an event.
 		expect(events.map((e) => e.id)).toContain(task.id);
+	});
+
+	it("tells the client a task is gone when it is removed", async () => {
+		const engine = makeEngine(createTestDb());
+		const { server, client } = makePair();
+		serveRpc(engine, createDispatcher(engine), server);
+		const rpc = createRpcClient(client);
+
+		const removed: unknown[] = [];
+		rpc.on("taskRemoved", (p) => removed.push(p));
+		// What a delete, a cleanup and an idle archive all emit on the engine.
+		engine.sendTaskRemoved("t-1");
+		expect(removed).toEqual(["t-1"]);
 	});
 
 	it("stops delivering events after dispose", async () => {
