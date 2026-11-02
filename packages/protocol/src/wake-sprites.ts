@@ -46,6 +46,24 @@ export function holdCommand(): string[] {
 	];
 }
 
+/** The stdout in an exec answer. Sprites' HTTP exec now answers with its WebSocket exec
+ *  frames back to back: 0x01 before each stdout chunk, 0x02 before each stderr chunk, and
+ *  0x03 plus one exit-code byte at the end (measured 2026-11-02, sprite-version 0.0.4). It
+ *  answered with bare stdout before, so text ahead of any tag is read as stdout. The frames
+ *  carry no length, so a tag byte inside the output would split it: fine for the hold,
+ *  which prints three digits, not for arbitrary output. */
+function execStdout(body: string): string {
+	let out = "";
+	let stream = 1; // until a tag says otherwise: a bare answer is all stdout
+	for (let i = 0; i < body.length; i++) {
+		const tag = body.charCodeAt(i);
+		if (tag === 3) break; // the exit code follows, and nothing after it is output
+		if (tag === 1 || tag === 2) stream = tag;
+		else if (stream === 1) out += body[i];
+	}
+	return out;
+}
+
 function withTimeout<T>(p: Promise<T>, what: string): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		const timer = setTimeout(
@@ -94,7 +112,7 @@ export function createSpritesClient(token: string, opts: { fetch?: typeof fetch 
 			if (denied) throw denied;
 			if (resp.status === 404) throw new SpritesError(`Sprites has no Sprite named ${sprite}`, 404);
 			if (!resp.ok) throw new SpritesError(`Sprites wake failed (HTTP ${resp.status})`, resp.status);
-			const held = (await resp.text()).trim();
+			const held = execStdout(await resp.text()).trim();
 			if (held !== "200" && held !== "201") {
 				throw new SpritesError(`${sprite} woke, but its hold didn't take (${held || "no answer"})`, null);
 			}

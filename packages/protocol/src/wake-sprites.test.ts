@@ -61,6 +61,31 @@ describe("createSpritesClient", () => {
 		);
 	});
 
+	// Sprites' exec answers in its stream frames (since late Oct 2026): 0x01 before stdout,
+	// 0x02 before stderr, 0x03 and the exit code at the end. These are real answers, recorded.
+	test("a framed answer is read for its stdout: the hold took", async () => {
+		const fake = fakeSprites(() => new Response("\x01200\x03\x00", { status: 200 }));
+		await createSpritesClient("t", { fetch: fake.doFetch }).wake("ateam-box");
+	});
+
+	test("stderr and the exit code in a framed answer are not read as the status", async () => {
+		const fake = fakeSprites(() => new Response("\x0120\x02warn\x010\x03\x00", { status: 200 }));
+		await createSpritesClient("t", { fetch: fake.doFetch }).wake("ateam-box");
+	});
+
+	test("a framed answer that lost its first tag on the way still reads as the status", async () => {
+		const fake = fakeSprites(() => new Response("200\x03\x00", { status: 200 }));
+		await createSpritesClient("t", { fetch: fake.doFetch }).wake("ateam-box");
+	});
+
+	test("a framed refusal is still an error, named by its status", async () => {
+		// curl prints 000 and exits 7 when the Sprite's API socket isn't there.
+		const fake = fakeSprites(() => new Response("\x01000\x03\x07", { status: 200 }));
+		await expect(createSpritesClient("t", { fetch: fake.doFetch }).wake("ateam-box")).rejects.toThrow(
+			"its hold didn't take (000)",
+		);
+	});
+
 	test("check lists Sprites with the token and nothing else", async () => {
 		const fake = fakeSprites(() => new Response('{"sprites":[]}', { status: 200 }));
 		await createSpritesClient("t", { fetch: fake.doFetch }).check();
