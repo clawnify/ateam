@@ -7,6 +7,7 @@ import {
 	githubAccessProblem,
 	githubAccessSummary,
 	githubAccessUrgent,
+	githubHelperWarning,
 	githubTokenWouldHelp,
 	mostCommonOwner,
 	pastedTokenLabel,
@@ -149,6 +150,7 @@ export function GithubAccess({
 
 	const access = loaded.access;
 	const problem = githubAccessProblem(access);
+	const helperWarning = githubHelperWarning(access);
 	const showForm = formOpen || githubTokenWouldHelp(access);
 	const repoNames = checks?.map((c) => c.repo) ?? repos ?? [];
 	const owner = mostCommonOwner(repoNames) ?? access.gh?.login ?? null;
@@ -169,6 +171,7 @@ export function GithubAccess({
 					{problem}
 				</div>
 			) : null}
+			{helperWarning ? <div className="gh-access-problem">{helperWarning}</div> : null}
 			{access.unverified ? <div className="gh-access-muted">{access.unverified}</div> : null}
 
 			{checks && checks.length > 0 ? (

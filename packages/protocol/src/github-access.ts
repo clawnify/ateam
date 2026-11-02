@@ -178,6 +178,17 @@ function otherHelperWarning(a: GithubAccessDTO): string | null {
 }
 
 /**
+ * A provider helper's full-access token, said under the main problem when another one
+ * holds that line. It is a different credential from the one this panel manages, so
+ * nothing wrong with gh's token (its expiry, say) takes its risk off the screen. Null
+ * when there is no such helper or its warning already is the main problem.
+ */
+export function githubHelperWarning(a: GithubAccessDTO, now: number = Date.now()): string | null {
+	const helper = otherHelperWarning(a);
+	return helper && githubAccessProblem(a, now) !== helper ? helper : null;
+}
+
+/**
  * Whether pasting a token would fix what's wrong, so a client opens its Connect
  * form unasked. Not when the fix is elsewhere: a box without gh needs an update,
  * GH_TOKEN in the engine's environment would ignore the token, and a provider's
@@ -252,11 +263,9 @@ export function repoVerdictHint(
 ): string | null {
 	if (!checks.some((c) => c.access === "none" || c.access === "read")) return null;
 	if (a.git === "other") {
-		// Said once: the short note when the warning above already explains the helper.
-		const helper = otherHelperWarning(a);
-		return helper && githubAccessProblem(a) === helper
-			? OTHER_HELPER_REPO_NOTE
-			: OTHER_HELPER_REPO_HINT;
+		// Said once: the short note when a warning above explains the helper, which one
+		// always does for a full-access helper (githubAccessProblem or githubHelperWarning).
+		return otherHelperWarning(a) ? OTHER_HELPER_REPO_NOTE : OTHER_HELPER_REPO_HINT;
 	}
 	return a.gh?.kind === "fine-grained" ? FINE_GRAINED_REPO_HINT : null;
 }

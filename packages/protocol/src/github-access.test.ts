@@ -9,6 +9,7 @@ import {
 	githubAccessSummary,
 	githubAccessUrgent,
 	githubCredentialKind,
+	githubHelperWarning,
 	githubRepoFromUrl,
 	githubTokenWouldHelp,
 	mostCommonOwner,
@@ -101,6 +102,7 @@ describe("repoVerdictHint", () => {
 			},
 		};
 		expect(githubAccessProblem(broad)).toContain("9876");
+		expect(githubHelperWarning(broad)).toBeNull();
 		expect(repoVerdictHint(broad, none)).toBe(OTHER_HELPER_REPO_NOTE);
 	});
 });
@@ -241,6 +243,25 @@ describe("token expiry", () => {
 	it("names only pull requests when another helper signs git in", () => {
 		expect(githubAccessProblem({ ...expiring(5), git: "other" }, now)).toBe(
 			"This box's token expires in 5 days. Connect a new one before then, or Ateam can't open pull requests or merge from this box.",
+		);
+	});
+
+	it("keeps a provider helper's full-access token in view under the expiry warning", () => {
+		const helper = {
+			...expiring(5),
+			git: "other" as const,
+			gitCredential: {
+				kind: "oauth" as const,
+				hint: "9876",
+				login: "o",
+				rejected: false,
+				expiresAt: null,
+			},
+		};
+		expect(githubAccessProblem(helper, now)).toContain("expires in 5 days");
+		expect(githubHelperWarning(helper, now)).toContain("full-access token ending 9876");
+		expect(repoVerdictHint(helper, [{ repo: "acme/app", access: "read" }])).toBe(
+			OTHER_HELPER_REPO_NOTE,
 		);
 	});
 
