@@ -71,7 +71,13 @@ import { createSizeArbiter } from "./pty/size-arbiter";
 import { ENGINE_RELEASE } from "./release";
 import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
 import { searchSessions } from "./session-search";
-import { createTaskInProject, type SpawnAgentInput, shell, spawnAgentInTask } from "./sessions";
+import {
+	createTaskInProject,
+	resumeInFlight,
+	type SpawnAgentInput,
+	shell,
+	spawnAgentInTask,
+} from "./sessions";
 import { readSettings, settingsPath, updateSettings } from "./settings-file";
 import { linkSkill, listSkills } from "./skills";
 import { applySetWaiting, clearWaiting } from "./waits";
@@ -981,6 +987,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			// hand back the tab it is living in rather than erroring or opening a
 			// second terminal onto the same conversation.
 			if (dead.agentSessionId) {
+				// Including a launch still on its way up (the peer messenger handing
+				// this agent a message): it has no live terminal yet, and it may
+				// already have stamped this tab `restored`, which the check below
+				// would refuse. Join it (sessions.ts, resumeInFlight).
+				const coming = resumeInFlight(services, dead.agentSessionId);
+				if (coming) return coming;
 				const open = repo
 					.listSessionsByTask(db, task.id)
 					.find((s) => s.agentSessionId === dead.agentSessionId && services.pty.has(s.terminalId));
