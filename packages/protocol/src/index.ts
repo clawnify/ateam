@@ -127,7 +127,11 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // whether the box can push, only read, or not see it. New methods only: a v24
 // engine answers "Unknown method", and clients send the user to the box terminal
 // instead (FEATURE_MIN_VERSION.githubAccess).
-export const PROTOCOL_VERSION = 25;
+// v26: browser:install runs install-browser.sh on the box once the user said
+// yes, so the Browser button offers the install instead of a command to paste.
+// A new method only: a v25 engine answers "Unknown method", and the desktop
+// shows the command from that engine's own BROWSER_NOT_INSTALLED_ERROR.
+export const PROTOCOL_VERSION = 26;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -1119,6 +1123,7 @@ export const CH = {
 	editorOpenUrl: "editor:openUrl",
 	editorInstall: "editor:install",
 	browserView: "browser:view",
+	browserInstall: "browser:install",
 	browserViewUrl: "browser:viewUrl",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
@@ -1213,6 +1218,14 @@ export const DEFAULT_BROWSER_VIEW_PORT = 6080;
  * An error crosses IPC as its message only, so the text is the contract.
  */
 export const TASK_REMOVING_ERROR = "This task is being deleted";
+
+/**
+ * What browser:view throws on a box where install-browser.sh never ran. The
+ * desktop matches it to offer browser:install. Every engine since the Browser
+ * panel opens its message with this text, so it also matches an engine too old
+ * to install.
+ */
+export const BROWSER_NOT_INSTALLED_ERROR = "This box has no browser yet";
 
 /** Where the engine's embedded editor (code-server) answers, on ITS machine. */
 export interface EditorEndpointDTO {
@@ -1353,10 +1366,17 @@ export interface AteamApi {
 		/**
 		 * Resolve the URL of the browser on this task's box: its Chrome's desktop in
 		 * noVNC, connected and signed in, for THIS client to load. Rejects with the
-		 * reason for a task on this Mac (its browser is your own Chrome) and for a
-		 * box with no browser installed.
+		 * reason for a task on this Mac (its browser is your own Chrome) and, with
+		 * BROWSER_NOT_INSTALLED_ERROR, for a box with no browser installed.
 		 */
 		view(taskId: string): Promise<{ url: string }>;
+		/**
+		 * Install the browser on the task's box (install-browser.sh: apt packages,
+		 * Chrome, TaskWindow, noVNC). Call only after the user said yes to a
+		 * BROWSER_NOT_INSTALLED_ERROR. Takes minutes; resolves when installed, and a
+		 * following view() opens it.
+		 */
+		install(taskId: string): Promise<void>;
 	};
 	skills: {
 		/**
