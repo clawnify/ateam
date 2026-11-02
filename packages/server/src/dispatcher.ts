@@ -57,7 +57,7 @@ import {
 	type TaskWait,
 	type UpdateLoopInput,
 } from "@ateam/protocol";
-import { openBrowserView } from "./browser";
+import { installBrowser, openBrowserView } from "./browser";
 import { credentialStatus, credentialsPath, updateCredentials } from "./credentials-file";
 import { createEditorHost, installCodeServer } from "./editor";
 import type { Engine } from "./engine";
@@ -812,6 +812,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.browserView]: async (taskId: string) => {
 			requireTask(services, taskId);
 			return openBrowserView(services.userDataDir);
+		},
+		// Consent-gated like editor:install: clients call this only after the user
+		// said yes to BROWSER_NOT_INSTALLED_ERROR. Minutes long (apt, Chrome).
+		[CH.browserInstall]: async (taskId: string) => {
+			requireTask(services, taskId);
+			await installBrowser(services.userDataDir);
 		},
 
 		// ---- fs / util: server-side, remote-native (browse + attach on the
