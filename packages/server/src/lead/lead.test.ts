@@ -5,7 +5,8 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { CH, type LeadEvent } from "@ateam/protocol";
+import { CH, type LeadEvent, type TaskDTO } from "@ateam/protocol";
+import { startLead } from "./index";
 import { LeadSession } from "./session";
 import { createLeadTools } from "./tools";
 
@@ -796,5 +797,71 @@ describe("LeadSession", () => {
 		q.emit("exit", 0);
 		await tick();
 		expect(session.snapshot().items).toHaveLength(0);
+	});
+});
+
+// ---- answering a task's agent from the chat ---------------------------------
+
+describe("answering a task's reply", () => {
+	async function setup() {
+		const task = { ...TASKS[0], lastReplyAt: 1, page: null, question: null } as unknown as TaskDTO;
+		const router = fakeRouter({
+			[CH.tasksGet]: () => task,
+			[CH.tasksMessage]: () => ({ ok: true, reason: "" }),
+			[CH.tasksLastReply]: () => ({ text: "Merged it.", at: 2 }),
+		});
+		const lead = await startLead({
+			place: "mac",
+			dir: mkdtempSync(join(tmpdir(), "lead-")),
+			handle: router.handle,
+			machineOf: () => null,
+			deliver: async (_owner, paths) => ({ paths }),
+			emit: () => {},
+		});
+		// Messaged from the chat, so followed: its next reply lands in the thread.
+		await lead.reply("t1", "merge it");
+		lead.onTaskUpdated({ ...task, lastReplyAt: 2 });
+		await tick();
+		const reply = lead.snapshot().items.at(-1);
+		if (reply?.kind !== "agent") throw new Error("no reply in the thread");
+		const sent = () =>
+			router.calls.filter((c) => c.method === CH.tasksMessage).map((c) => c.args[0]);
+		return { lead, reply, sent };
+	}
+
+	it("puts words in the thread as the user's message to the task", async () => {
+		const { lead, sent } = await setup();
+		expect(sent()).toEqual([{ taskId: "t1", body: "merge it" }]);
+		expect(lead.snapshot().items[0]).toMatchObject({
+			kind: "user",
+			text: "merge it",
+			to: { taskId: "t1" },
+		});
+		lead.dispose();
+	});
+
+	it("sends an emoji to the task and shows it on the reply, not as a message", async () => {
+		const { lead, reply, sent } = await setup();
+		const before = lead.snapshot().items.length;
+		await lead.react(reply.id, "👍");
+		expect(sent().at(-1)).toEqual({ taskId: "t1", body: "👍" });
+		expect(lead.snapshot().items).toHaveLength(before);
+		expect(lead.snapshot().items.at(-1)).toEqual({ ...reply, reaction: "👍" });
+
+		// Another emoji goes too, and takes the first one's place.
+		await lead.react(reply.id, "🎉");
+		expect(sent().at(-1)).toEqual({ taskId: "t1", body: "🎉" });
+		expect(lead.snapshot().items).toHaveLength(before);
+		expect(lead.snapshot().items.at(-1)).toMatchObject({ id: reply.id, reaction: "🎉" });
+		lead.dispose();
+	});
+
+	it("refuses an emoji for anything but a reply in the chat", async () => {
+		const { lead, sent } = await setup();
+		const user = lead.snapshot().items[0];
+		await expect(lead.react("gone", "👍")).rejects.toThrow("no longer in the chat");
+		await expect(lead.react(user?.id ?? "", "👍")).rejects.toThrow("no longer in the chat");
+		expect(sent()).toHaveLength(1);
+		lead.dispose();
 	});
 });

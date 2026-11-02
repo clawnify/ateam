@@ -64,6 +64,9 @@ export interface Lead {
 	proposal(id: string, outcome: "created" | "dismissed", taskId?: string): Promise<void>;
 	/** The user talks to a task's agent straight from the chat. */
 	reply(taskId: string, text: string): Promise<void>;
+	/** The user answers an agent's reply (`id`, an agent item) with an emoji:
+	 *  sent like a reply, and drawn on that reply's card. */
+	react(id: string, emoji: string): Promise<void>;
 	/** The user answers (or with null dismisses) a task's question from the chat. */
 	answer(input: {
 		taskId: string;
@@ -124,6 +127,19 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	});
 	const lead = session;
 
+	/** The user's words to a task's agent, delivered as from the user, and the
+	 *  task followed for its reply. */
+	const message = async (taskId: string, body: string): Promise<TaskDTO> => {
+		const task = (await handle(CH.tasksGet, [taskId])) as TaskDTO;
+		const res = (await handle(CH.tasksMessage, [{ taskId, body }])) as {
+			ok: boolean;
+			reason: string;
+		};
+		if (!res.ok) fail(res.reason);
+		follower.follow(task);
+		return task;
+	};
+
 	return {
 		attachments,
 		snapshot: () => lead.snapshot(),
@@ -159,19 +175,23 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 			};
 			lead.record(decided);
 		},
-		// Delivered as from the user, shown in the thread, and the task followed
-		// for its reply.
+		// Shown in the thread as the user's message.
 		async reply(taskId, text) {
 			const body = String(text).trim();
 			if (!body) return;
-			const task = (await handle(CH.tasksGet, [taskId])) as TaskDTO;
-			const res = (await handle(CH.tasksMessage, [{ taskId, body }])) as {
-				ok: boolean;
-				reason: string;
-			};
-			if (!res.ok) fail(res.reason);
-			follower.follow(task);
+			const task = await message(taskId, body);
 			lead.record({ kind: "user", id: randomUUID(), text: body, at: Date.now(), to: refOf(task) });
+		},
+		// Shown on the reply it answers, in place of a message of its own. A
+		// second emoji is sent too, and takes the first one's place.
+		async react(id, emoji) {
+			const body = String(emoji).trim();
+			if (!body) return;
+			const item = lead.item(String(id));
+			if (item?.kind !== "agent") throw new Error("That reply is no longer in the chat.");
+			await message(item.task.taskId, body);
+			// Not into a new conversation started while it was on its way.
+			if (lead.item(item.id)) lead.record({ ...item, reaction: body });
 		},
 		async answer(input) {
 			const before = (await handle(CH.tasksGet, [input.taskId])) as TaskDTO;
