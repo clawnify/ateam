@@ -71,6 +71,8 @@ export const HOST_CH = {
 	/** Which of the grammar check's issues to show (see AteamHost.judgeGrammar). */
 	judgeGrammar: "host:judgeGrammar",
 	evtConnectionsChanged: "evt:host:connections",
+	/** A box's GitHub access changed (Host.githubStatuses): only what reads it listens. */
+	evtGithubChanged: "evt:host:github",
 	/** Streamed installer output (stdout+stderr) during host:install. */
 	evtInstallLog: "evt:host:install-log",
 	/** Staged progress while creating a box (host:createBox). */
@@ -261,6 +263,8 @@ export interface AteamHost {
 	judgeGrammar(draft: string, issues: GrammarJudgeIssue[]): Promise<boolean[] | null>;
 	/** Fires with the full connected set whenever an engine is added or removed. */
 	onConnectionsChanged(cb: (connected: HostStatus[]) => void): () => void;
+	/** Fires when a box's GitHub access changes (boxGithub), not on every read of it. */
+	onGithubChanged(cb: () => void): () => void;
 	/** Subscribe to installer output during install()/createBox(); returns an unsubscribe. */
 	onInstallLog(cb: (e: InstallLogEvent) => void): () => void;
 	/** Subscribe to box-creation stage narration; returns an unsubscribe. */

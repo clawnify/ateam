@@ -322,9 +322,9 @@ describe("tokenOwnerChoices", () => {
 });
 
 describe("tokenOwnerNote", () => {
-	it("says whose account a token for a box without projects is for", () => {
+	it("says whose account a token for a box without GitHub repositories is for", () => {
 		expect(tokenOwnerNote({ boxRepos: [], owner: "octo", personal: "octo" })).toBe(
-			"This box has no projects yet, so the token is for your personal account (octo). Pick an organization if this box will work on its repositories.",
+			"This box has no GitHub repositories yet, so the token is for your personal account (octo). Pick an organization if this box will work on its repositories.",
 		);
 		expect(tokenOwnerNote({ boxRepos: [], owner: null, personal: null })).toContain(
 			"the account signed in to GitHub",

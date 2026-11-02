@@ -62,7 +62,12 @@ export function BoxesSettings() {
 
 	useEffect(() => {
 		void load();
-		return window.ateamHost.onConnectionsChanged(() => void load());
+		const offConnections = window.ateamHost.onConnectionsChanged(() => void load());
+		const offGithub = window.ateamHost.onGithubChanged(() => void load());
+		return () => {
+			offConnections();
+			offGithub();
+		};
 	}, [load]);
 
 	const act = async (alias: string, label: string, work: () => Promise<string | null>) => {

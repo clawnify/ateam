@@ -288,7 +288,7 @@ export function tokenOwnerNote(opts: {
 		// An owner other than the personal account was picked on purpose.
 		if (owner && !(personal && sameOwner(owner, personal))) return null;
 		const whose = owner ? `your personal account (${owner})` : "the account signed in to GitHub";
-		return `This box has no projects yet, so the token is for ${whose}. Pick an organization if this box will work on its repositories.`;
+		return `This box has no GitHub repositories yet, so the token is for ${whose}. Pick an organization if this box will work on its repositories.`;
 	}
 	if (!owner) return null;
 	const outside = boxRepos.filter((repo) => !sameOwner(repo.split("/")[0] ?? "", owner));

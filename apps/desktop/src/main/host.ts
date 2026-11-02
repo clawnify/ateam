@@ -1183,11 +1183,16 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	}
 	// The GitHub access each box last reported. Read once when it connects, and again
 	// whenever its panel reads it or a token is connected there, so a token close to
-	// expiring, or refused, marks the box without its panel open.
+	// expiring, or refused, marks the box without its panel open. A change has its own
+	// event: "connections changed" would make the board reload every engine's
+	// projects, once per box, each time Settings → Boxes reads them.
 	const githubStatus = new Map<string, GithubAccessDTO>();
 	function rememberGithub(alias: string, access: GithubAccessDTO): GithubAccessDTO {
+		const before = githubStatus.get(alias);
 		githubStatus.set(alias, access);
-		broadcastConnections();
+		if (!before || JSON.stringify(before) !== JSON.stringify(access)) {
+			broadcast(HOST_CH.evtGithubChanged);
+		}
 		return access;
 	}
 	async function refreshGithub(alias: string): Promise<void> {

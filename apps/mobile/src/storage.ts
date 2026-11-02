@@ -4,6 +4,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { parseBoxes, type SavedBox } from "./boxes";
+import { type GithubSeen, NO_GITHUB_SEEN, parseGithubSeen } from "./github-seen";
 
 // The one connection kept before the Boxes list existed: read once, to migrate it.
 const KEY = "ateam.connection";
@@ -11,6 +12,7 @@ const BOXES_KEY = "ateam.boxes";
 const PROJECT_KEY = "ateam.selectedProject";
 const COMPOSER_TARGET_KEY = "ateam.composerTarget";
 const PREVIEW_PORT_KEY = "ateam.previewPort";
+const GITHUB_SEEN_KEY = "ateam.githubSeen";
 
 export interface SavedConnection {
 	host: string;
@@ -191,5 +193,22 @@ export async function saveLeadSeen(box: string, at: number): Promise<void> {
 		await AsyncStorage.setItem(leadSeenKey(box), String(at));
 	} catch {
 		/* best-effort: the dot may show for something already read, next launch */
+	}
+}
+
+/** The GitHub accounts the phone has seen on any box (src/github-seen.ts). */
+export async function loadGithubSeen(): Promise<GithubSeen> {
+	try {
+		return parseGithubSeen(await AsyncStorage.getItem(GITHUB_SEEN_KEY));
+	} catch {
+		return NO_GITHUB_SEEN;
+	}
+}
+
+export async function saveGithubSeen(seen: GithubSeen): Promise<void> {
+	try {
+		await AsyncStorage.setItem(GITHUB_SEEN_KEY, JSON.stringify(seen));
+	} catch {
+		/* best-effort: a box that shows no accounts just offers fewer to pick */
 	}
 }

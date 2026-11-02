@@ -41,6 +41,8 @@ import {
 	TextInput,
 	View,
 } from "react-native";
+import { type GithubSeen, rememberGithubSeen, sameGithubSeen } from "./github-seen";
+import { loadGithubSeen, saveGithubSeen } from "./storage";
 import { C, CONTENT_MAX } from "./theme";
 
 /** The token owner choice's "Other…" entry ("" is Ateam's guess). No GitHub login has a "…". */
@@ -79,6 +81,8 @@ export function GithubAccessScreen({
 	// Who the token is for: "" follows Ateam's guess, OTHER_OWNER takes otherOwner.
 	const [ownerPick, setOwnerPick] = useState("");
 	const [otherOwner, setOtherOwner] = useState("");
+	// The GitHub accounts the phone has seen on any box: null until read from storage.
+	const [seen, setSeen] = useState<GithubSeen | null>(null);
 
 	const load = useCallback(async () => {
 		setLoaded({ state: "loading" });
@@ -101,6 +105,27 @@ export function GithubAccessScreen({
 	useEffect(() => {
 		if (supported) void load();
 	}, [supported, load]);
+
+	useEffect(() => {
+		let live = true;
+		void loadGithubSeen().then((s) => {
+			if (live) setSeen(s);
+		});
+		return () => {
+			live = false;
+		};
+	}, []);
+
+	// What this box shows joins what the phone has seen, once storage has been read,
+	// so a fast first read can't write over names kept from other boxes.
+	useEffect(() => {
+		if (!seen || loaded.state !== "ready" || checks === null) return;
+		const owners = checks.flatMap((c) => c.repo.split("/")[0] || []);
+		const next = rememberGithubSeen(seen, loaded.access.gh?.login ?? null, owners);
+		if (sameGithubSeen(seen, next)) return;
+		setSeen(next);
+		void saveGithubSeen(next);
+	}, [seen, loaded, checks]);
 
 	const connect = async () => {
 		const clean = cleanGithubToken(token);
@@ -188,8 +213,12 @@ export function GithubAccessScreen({
 	const helperWarning = githubHelperWarning(access);
 	const showForm = formOpen || githubTokenWouldHelp(access);
 	const repoNames = checks?.map((c) => c.repo) ?? [];
-	const personal = access.gh?.login ?? null;
-	const choices = tokenOwnerChoices({ boxRepos: repoNames, personal });
+	const personal = access.gh?.login ?? seen?.logins[0] ?? null;
+	const choices = tokenOwnerChoices({
+		boxRepos: repoNames,
+		personal,
+		seen: [...(seen?.owners ?? []), ...(seen?.logins ?? [])],
+	});
 	const owner =
 		ownerPick === ""
 			? choices.guess
@@ -318,6 +347,8 @@ export function GithubAccessScreen({
 											placeholderTextColor={C.faint}
 											autoCapitalize="none"
 											autoCorrect={false}
+											autoComplete="off"
+											textContentType="none"
 											autoFocus
 											accessibilityLabel="Owner on GitHub"
 										/>
