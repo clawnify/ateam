@@ -75,12 +75,16 @@ export function ProposalNote({
 	from,
 	byLead = false,
 	proposal,
+	waiting = 0,
 	onDismiss,
 }: {
 	/** The proposing task's name, or with `byLead` the project it is for. */
 	from: string;
 	byLead?: boolean;
 	proposal: TaskProposalDTO;
+	/** The task's other proposals. They do not open after this one; the note
+	 *  says where they wait (proposal-open.ts, shownWhileOpen). */
+	waiting?: number;
 	onDismiss: () => void;
 }) {
 	return (
@@ -104,6 +108,13 @@ export function ProposalNote({
 				<p className="proposal-auto">
 					<Zap size={12} strokeWidth={1.75} />
 					Suggests Auto mode. It stays off until you turn it on below.
+				</p>
+			)}
+			{waiting > 0 && (
+				<p className="proposal-more">
+					{waiting === 1
+						? "1 more proposal from this agent waits above the task's terminal."
+						: `${waiting} more proposals from this agent wait above the task's terminal.`}
 				</p>
 			)}
 		</div>
