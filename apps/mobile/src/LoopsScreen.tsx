@@ -54,6 +54,7 @@ export function LoopsScreen({
 	onCreate,
 	onEdit,
 	onChanged,
+	topInset = 0,
 }: {
 	api: AteamApi;
 	loops: LoopDTO[];
@@ -62,6 +63,8 @@ export function LoopsScreen({
 	onCreate: () => void;
 	onEdit: (loop: LoopDTO) => void;
 	onChanged: (loops: LoopDTO[]) => void;
+	/** The floating top bar's height: the list scrolls under it and starts below it. */
+	topInset?: number;
 }) {
 	const [busy, setBusy] = useState<string | null>(null);
 	const [now, setNow] = useState(Date.now());
@@ -94,7 +97,11 @@ export function LoopsScreen({
 	const sorted = [...loops].sort((a, b) => Number(b.enabled) - Number(a.enabled));
 
 	return (
-		<ScrollView style={styles.root} contentContainerStyle={styles.content}>
+		<ScrollView
+			style={styles.root}
+			contentContainerStyle={[styles.content, { paddingTop: topInset + 12 }]}
+			scrollIndicatorInsets={{ top: topInset }}
+		>
 			<View style={styles.column}>
 				<View style={styles.head}>
 					<Text style={styles.title}>Loops</Text>

@@ -66,6 +66,7 @@ import { demoConnection } from "./src/demo";
 import { HomeScreen } from "./src/HomeScreen";
 import { LeadScreen } from "./src/LeadScreen";
 import { type LoopDraft, LoopForm, LoopsScreen } from "./src/LoopsScreen";
+import type { LeadBadge } from "./src/lead-badge";
 import { MissionScreen } from "./src/MissionScreen";
 import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
@@ -88,7 +89,9 @@ import {
 } from "./src/storage";
 import { type Tab, TabStrip } from "./src/TabStrip";
 import { TerminalScreen } from "./src/TerminalScreen";
+import { STATUS_BAR, TopFade } from "./src/TopFade";
 import { sortTasks } from "./src/task-order";
+import { useLeadBadge } from "./src/useLeadBadge";
 import { onReminderTap, syncReminders } from "./src/wait-notifications";
 import type { ReminderData } from "./src/wait-reminders";
 
@@ -558,6 +561,10 @@ function PreviewModal({
 	);
 }
 
+// The floating top bar's height before it has measured itself (status bar,
+// the tabs pill and its padding), so the first frame doesn't jump.
+const TOP_INSET_GUESS = STATUS_BAR + 54;
+
 // ── Shell — status dot (left) · tab pill (center) · one of Home / Board / Mission
 // Control / Loops below, or the open task's terminal in their place ──
 
@@ -606,6 +613,7 @@ function Shell({
 	boxVersion,
 	leadOpen,
 	onLead,
+	leadBadge,
 	onStartProposal,
 }: {
 	connColor: string;
@@ -672,6 +680,8 @@ function Shell({
 	/** The Lead chat covers the tabs (the button in the header's right corner). */
 	leadOpen: boolean;
 	onLead: (open: boolean) => void;
+	/** The dot on the Lead button (src/lead-badge.ts). */
+	leadBadge: LeadBadge;
 	/** "Start it" on one of the Lead's proposals. */
 	onStartProposal: (item: ProposalItem) => void;
 }) {
@@ -691,81 +701,104 @@ function Shell({
 	// The composer's Task | Lead switch floats over these lists: it fades while
 	// one scrolls and returns when it stops.
 	const { faded, scrollProps } = useScrollFade();
+	// The top bar floats too: these lists scroll beneath it and fade out under
+	// it (TopFade), padded by its height so they start below it. Terminals, the
+	// Lead and Mission's pages start below it instead.
+	const [topInset, setTopInset] = useState(TOP_INSET_GUESS);
+	const listUnder = showTab && (tab === "board" || tab === "home" || tab === "loops");
 	return (
 		<KeyboardAvoidingView
-			style={styles.root}
+			style={styles.shellRoot}
 			behavior={Platform.OS === "ios" ? "padding" : undefined}
 		>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
-			<View style={styles.boardHeader}>
-				<Pressable style={styles.statusHit} onPress={onOpenConnection} hitSlop={10}>
-					<View style={[styles.statusDot, { backgroundColor: connColor }]} />
-				</Pressable>
-				<View style={styles.headerCenter}>
-					<TabStrip
-						tab={leadOpen ? null : tab}
-						onChange={(t) => {
-							// A tab tap from the full terminal (or the Lead) leaves it, like the desktop.
-							onCloseTask();
-							onBoxTerminal(false);
-							onLead(false);
-							onTab(t);
-						}}
-					/>
-				</View>
-				{/* The Lead, box-wide like the desktop's right sidebar, so it sits apart
+			<View style={styles.topBar} onLayout={(e) => setTopInset(e.nativeEvent.layout.height)}>
+				{/* Only behind a list: elsewhere the bar has nothing under it to fade. */}
+				{listUnder && <TopFade height={topInset} />}
+				<View style={styles.boardHeader}>
+					<Pressable style={styles.statusHit} onPress={onOpenConnection} hitSlop={10}>
+						<View style={[styles.statusDot, { backgroundColor: connColor }]} />
+					</Pressable>
+					<View style={styles.headerCenter}>
+						<TabStrip
+							tab={leadOpen ? null : tab}
+							onChange={(t) => {
+								// A tab tap from the full terminal (or the Lead) leaves it, like the desktop.
+								onCloseTask();
+								onBoxTerminal(false);
+								onLead(false);
+								onTab(t);
+							}}
+						/>
+					</View>
+					{/* The Lead, box-wide like the desktop's right sidebar, so it sits apart
 				    from the project's tabs. As wide as the status dot's slot, so the tabs
 				    stay centered. The box terminal is on this box's card in Boxes. */}
-				<Pressable
-					style={styles.cornerHit}
-					onPress={() => {
-						// From a task opened out of the chat, back to the chat.
-						const back = openTask !== null || boxTerminalOpen;
-						onCloseTask();
-						onBoxTerminal(false);
-						onLead(back || !leadOpen);
-					}}
-					hitSlop={10}
-					accessibilityRole="button"
-					accessibilityLabel="Lead chat"
-					accessibilityState={{ selected: showLead }}
-				>
-					<Feather name="message-circle" size={19} color={showLead ? C.ink : C.muted} />
-				</Pressable>
-			</View>
+					<Pressable
+						style={styles.cornerHit}
+						onPress={() => {
+							// From a task opened out of the chat, back to the chat.
+							const back = openTask !== null || boxTerminalOpen;
+							onCloseTask();
+							onBoxTerminal(false);
+							onLead(back || !leadOpen);
+						}}
+						hitSlop={10}
+						accessibilityRole="button"
+						accessibilityLabel={
+							leadBadge === "waiting"
+								? "Lead chat, waiting on you"
+								: leadBadge === "new"
+									? "Lead chat, new messages"
+									: "Lead chat"
+						}
+						accessibilityState={{ selected: showLead }}
+					>
+						<View>
+							<Feather name="message-circle" size={19} color={showLead ? C.ink : C.muted} />
+							{leadBadge && (
+								<View
+									style={[styles.leadDot, leadBadge === "waiting" && { backgroundColor: C.amber }]}
+								/>
+							)}
+						</View>
+					</Pressable>
+				</View>
 
-			{/* The board still works on a skewed box, so this states the risk and offers
+				{/* The board still works on a skewed box, so this states the risk and offers
 			    the one fix, rather than blocking the way the handshake used to. A box
 			    AHEAD of the app can't be fixed from here: updating it would only take it
 			    further away, so that case just explains itself. */}
-			{skew !== null && (
-				<View style={styles.skewBar}>
-					<Text style={styles.skewText}>
-						{skew < PROTOCOL_VERSION
-							? boxAtLatest
-								? `This box is on the latest Ateam release (v${skew}). This app is ahead of it; the next release clears this.`
-								: `This box runs an older Ateam (v${skew}). It works, but newer features will misbehave.`
-							: `This box runs a newer Ateam (v${skew}). Update this app from TestFlight.`}
-					</Text>
-					{skew < PROTOCOL_VERSION && !boxAtLatest && (
-						<Pressable
-							style={[styles.skewBtn, updating && styles.skewBtnBusy]}
-							onPress={onUpdateBox}
-							disabled={updating}
-						>
-							<Text style={styles.skewBtnText}>{updating ? "Updating…" : "Update box"}</Text>
+				{skew !== null && (
+					<View style={styles.skewBar}>
+						<Text style={styles.skewText}>
+							{skew < PROTOCOL_VERSION
+								? boxAtLatest
+									? `This box is on the latest Ateam release (v${skew}). This app is ahead of it; the next release clears this.`
+									: `This box runs an older Ateam (v${skew}). It works, but newer features will misbehave.`
+								: `This box runs a newer Ateam (v${skew}). Update this app from TestFlight.`}
+						</Text>
+						{skew < PROTOCOL_VERSION && !boxAtLatest && (
+							<Pressable
+								style={[styles.skewBtn, updating && styles.skewBtnBusy]}
+								onPress={onUpdateBox}
+								disabled={updating}
+							>
+								<Text style={styles.skewBtnText}>{updating ? "Updating…" : "Update box"}</Text>
+							</Pressable>
+						)}
+						<Pressable onPress={onDismissSkew} hitSlop={10} accessibilityLabel="Dismiss">
+							<Feather name="x" size={16} color={C.amber} />
 						</Pressable>
-					)}
-					<Pressable onPress={onDismissSkew} hitSlop={10} accessibilityLabel="Dismiss">
-						<Feather name="x" size={16} color={C.amber} />
-					</Pressable>
-				</View>
-			)}
-			{skew !== null && updateError && (
-				<View style={styles.skewErrorBar}>
-					<Text style={styles.skewErrorText}>{updateError}</Text>
-				</View>
-			)}
+					</View>
+				)}
+				{skew !== null && updateError && (
+					<View style={styles.skewErrorBar}>
+						<Text style={styles.skewErrorText}>{updateError}</Text>
+					</View>
+				)}
+			</View>
+			{!listUnder && <View style={{ height: topInset }} />}
 
 			{/* Through a drop an open terminal keeps its place, and reattaches (a new
 			    connGen remounts it) once the box answers again. */}
@@ -807,7 +840,7 @@ function Shell({
 			{showTab && tab === "board" && (
 				<ScrollView
 					style={styles.board}
-					contentContainerStyle={styles.boardContent}
+					contentContainerStyle={[styles.boardContent, { paddingTop: topInset + 16 }]}
 					showsVerticalScrollIndicator={false}
 					keyboardShouldPersistTaps="handled"
 					{...scrollProps}
@@ -856,6 +889,7 @@ function Shell({
 					onOpenLoops={() => onTab("loops")}
 					onNewLoop={onNewLoop}
 					scrollProps={scrollProps}
+					topInset={topInset}
 				/>
 			)}
 			{showTab && tab === "mission" && (
@@ -882,6 +916,7 @@ function Shell({
 					onCreate={onNewLoop}
 					onEdit={onEditLoop}
 					onChanged={onLoopsChanged}
+					topInset={topInset}
 				/>
 			)}
 
@@ -1720,6 +1755,16 @@ export default function App() {
 		[selectedProjectId],
 	);
 
+	// The dot on the header's Lead button (src/lead-badge.ts): the box's Lead has
+	// something for the user while its chat isn't on screen.
+	const leadBadge = useLeadBadge(
+		connected && conn.current && boxSupports("lead", skew ?? PROTOCOL_VERSION)
+			? conn.current.lead
+			: null,
+		connected && target.current ? boxKey(target.current) : null,
+		view === "board" && leadOpen && !openTask && !boxTerminalOpen && !browserOpen,
+	);
+
 	// The project browser is a full-screen view-swap (NOT a nested modal — presenting
 	// a modal while the dropdown modal dismisses deadlocks iOS and freezes the app).
 	if (browserOpen && conn.current) {
@@ -1899,6 +1944,7 @@ export default function App() {
 				boxVersion={skew ?? PROTOCOL_VERSION}
 				leadOpen={leadOpen}
 				onLead={setLeadOpen}
+				leadBadge={leadBadge}
 				onStartProposal={(item) => {
 					if (item.proposal.kind === "task") return setProposalSheet(item);
 					const p = item.proposal;
@@ -1980,6 +2026,9 @@ export default function App() {
 
 const styles = StyleSheet.create({
 	root: { flex: 1, backgroundColor: C.bg, paddingTop: 60 },
+	// The board's shell: no top padding, the floating top bar holds the status bar's.
+	shellRoot: { flex: 1, backgroundColor: C.bg },
+	topBar: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, paddingTop: STATUS_BAR },
 
 	// logo mark (icon.svg redrawn) — connection screen only
 	logo: {
@@ -2009,6 +2058,19 @@ const styles = StyleSheet.create({
 	statusDot: { width: 12, height: 12, borderRadius: 6 },
 	headerCenter: { flex: 1, alignItems: "center" },
 	cornerHit: { width: 44, alignItems: "flex-end", justifyContent: "center" },
+	// On the bubble's top-right shoulder, ringed in the header's colour so it
+	// reads apart from the outline.
+	leadDot: {
+		position: "absolute",
+		top: -2,
+		right: -3,
+		width: 9,
+		height: 9,
+		borderRadius: 5,
+		backgroundColor: C.ink,
+		borderWidth: 2,
+		borderColor: C.bg,
+	},
 	projPill: {
 		flexDirection: "row",
 		alignItems: "center",

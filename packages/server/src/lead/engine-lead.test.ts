@@ -115,12 +115,15 @@ describe("a box's own Lead over the engine's RPC", () => {
 		// The desktop's own calls never subscribe it.
 		expect(await desktop.call(CH.projectsList)).toEqual([]);
 
-		const snap = (await phone.call(LEAD_CH.snapshot)) as LeadSnapshot;
+		// A read (the phone does one on every connect) starts nothing: once
+		// started, a Lead's folder makes the engine start it at every boot.
+		const snap = (await phone.call(LEAD_CH.snapshot, { tail: 20 })) as LeadSnapshot;
 		expect(snap).toEqual({ items: [], draft: "", busy: false, auto: false });
-		expect(existsSync(dir)).toBe(true);
+		expect(existsSync(dir)).toBe(false);
 		expect(procs).toHaveLength(0);
 
 		await phone.call(LEAD_CH.send, "brief me");
+		expect(existsSync(dir)).toBe(true);
 		const p = procs[0] as FakeClaude;
 		// The box's words, not the Mac's.
 		const prompt = p.args[p.args.indexOf("--append-system-prompt") + 1] ?? "";

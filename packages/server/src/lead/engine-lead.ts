@@ -3,8 +3,9 @@
 // runs one too: the same core (index.ts) over this engine's dispatcher alone,
 // served beside the dispatcher on the engine's RPC (LEAD_RPC, LEAD_EVENT).
 //
-// It costs nothing until used: the core starts on the first call (its MCP
-// listener, its transcript), and its agent on the first message. The agent is
+// It costs nothing until used: the core starts on the first call that does
+// something (reading a never-used Lead answers empty), with its MCP listener and
+// transcript, and its agent on the first message. The agent is
 // stopped again after LEAD_IDLE_STOP_MS without a turn, so a box doesn't carry
 // a resident claude for a question asked days ago. A box whose Lead was used
 // before starts the core with the engine, so the tasks the user followed from
@@ -13,7 +14,7 @@
 // The desktop's own engine never serves this: the desktop's Lead already covers
 // every engine, and cli.ts is the only place that adds it.
 import { existsSync } from "node:fs";
-import { LEAD_CH, LEAD_EVENT, LEAD_RPC, type LeadEvent } from "@ateam/protocol";
+import { LEAD_CH, LEAD_EVENT, LEAD_RPC, type LeadEvent, type LeadSnapshot } from "@ateam/protocol";
 import type { Dispatcher } from "../dispatcher";
 import type { Engine } from "../engine";
 import type { RpcExtension } from "../rpc";
@@ -92,6 +93,11 @@ export function engineLead(opts: EngineLeadOptions): RpcExtension & { dispose():
 			return () => listeners.delete(l);
 		},
 		async handle(method, args) {
+			// Reading a Lead that was never used answers empty rather than start it:
+			// starting makes its folder, and from then on the engine starts it at
+			// boot. The phone reads it on every connect, for the dot on its button.
+			if (method === LEAD_CH.snapshot && !started && !existsSync(opts.dir))
+				return { items: [], draft: "", busy: false, auto: false } satisfies LeadSnapshot;
 			const l = await lead();
 			switch (method) {
 				case LEAD_CH.snapshot: {
