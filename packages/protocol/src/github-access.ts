@@ -206,6 +206,15 @@ export function githubTokenWouldHelp(a: GithubAccessDTO, now: number = Date.now(
 }
 
 /**
+ * gh's token wants replacing, soon or now: GitHub refuses it, or it has under
+ * TOKEN_EXPIRY_WARNING_DAYS left. What marks a box as needing you (its dots in
+ * Settings) without its GitHub panel open.
+ */
+export function githubTokenNeedsRenewal(a: GithubAccessDTO, now: number = Date.now()): boolean {
+	return a.gh != null && (a.gh.rejected || expiresSoon(a, now));
+}
+
+/**
  * Whether the problem stops the box working with GitHub right now (no gh, a token
  * GitHub refuses or that has expired), so clients show it in red rather than amber.
  */

@@ -170,6 +170,7 @@ export function bootstrap(db: SqliteExecutor): void {
 				host_alias TEXT PRIMARY KEY,
 				transport TEXT NOT NULL DEFAULT 'ssh',
 				server_version TEXT,
+				engine_release TEXT,
 				agents_available TEXT,
 				last_seen INTEGER,
 				hidden INTEGER NOT NULL DEFAULT 0,
@@ -221,6 +222,7 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE hosts ADD COLUMN wake TEXT",
 		// Null for every box that predates it: no board seen yet to keep.
 		"ALTER TABLE hosts ADD COLUMN snapshot TEXT",
+		"ALTER TABLE hosts ADD COLUMN engine_release TEXT",
 		// Both null for every session that predates them, which reads correctly:
 		// no known conversation to resume, and no claim about how it ended — so
 		// history is never mistaken for tabs that were open at shutdown.

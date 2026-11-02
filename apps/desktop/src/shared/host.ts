@@ -37,6 +37,10 @@ export const HOST_CH = {
 	failures: "host:failures",
 	/** Whether this build can upgrade a box at all (see AteamHost.canUpdateBoxes). */
 	canUpdateBoxes: "host:canUpdateBoxes",
+	/** This app's release ("0.1.80"), to compare a box's engine with. */
+	appRelease: "host:appRelease",
+	/** The GitHub access each box last reported (Host.githubStatuses). */
+	boxGithub: "host:boxGithub",
 	/** Clone+register a repo onto a specific box (connect it first). */
 	provision: "host:provision",
 	/** Install the ateam engine on a reachable SSH box, then connect to it. */
@@ -203,6 +207,10 @@ export interface AteamHost {
 	 * asks this before offering one. Same invariant as the auto-heal in connect().
 	 */
 	canUpdateBoxes(): Promise<boolean>;
+	/** This app's release ("0.1.80"): what a box's engine is compared with (SystemInfo.release). */
+	appRelease(): Promise<string>;
+	/** The GitHub access each box last reported, by alias, without reaching a box. */
+	boxGithub(): Promise<Record<string, GithubAccessDTO>>;
 	/** Connect the box if needed, then clone+register a repo ON it from its remote URL
 	 *  (so a task can run there). Returns the box's project row for that repo. */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;

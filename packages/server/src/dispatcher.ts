@@ -68,6 +68,7 @@ import { refreshLoginPath } from "./login-env";
 import { nextCronRun } from "./loops/runner";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { createSizeArbiter } from "./pty/size-arbiter";
+import { ENGINE_RELEASE } from "./release";
 import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
 import { searchSessions } from "./session-search";
 import { createTaskInProject, type SpawnAgentInput, shell, spawnAgentInTask } from "./sessions";
@@ -736,6 +737,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			return {
 				protocolVersion: PROTOCOL_VERSION,
 				agents: agents.filter((a) => a.available).map((a) => a.id),
+				release: ENGINE_RELEASE,
 			};
 		},
 
