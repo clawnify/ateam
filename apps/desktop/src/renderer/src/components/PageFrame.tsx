@@ -1,7 +1,8 @@
 // An agent's page (show_page, or ask_user's `page`), drawn in a sandboxed
 // frame served by main (main/pages.ts, which says what the page may and may not
-// do). Inline it fits its content up to a cap; Expand shows it over the window,
-// in a second frame drawn outside the chat or panel it sits in.
+// do). Inline it fits its content up to a cap; as a pane (the task panel) it
+// fills its box; Expand shows it over the window, in a second frame drawn
+// outside the chat or panel it sits in.
 //
 // The page reaches this window by postMessage alone: its height, and for a
 // question's page an answer (ateam.answer). Answers come only through the
@@ -84,19 +85,24 @@ export function PageFrame({
 	pageId,
 	title,
 	maxHeight = 480,
-	collapsed,
+	onOpen,
+	onClose,
 	onAnswer,
 }: {
 	taskId: string;
 	pageId: string;
 	title: string;
 	maxHeight?: number;
-	/** Only the title bar, opening the page over the window (the task panel,
-	 *  where the terminal keeps the room). */
-	collapsed?: boolean;
+	/** Only the title bar, and the whole bar calls this (the task panel, which
+	 *  then shows the page as its pane). */
+	onOpen?: () => void;
+	/** A pane: the page fills its box, and its header gets a Close that calls this. */
+	onClose?: () => void;
 	/** A question's page: what its buttons answer goes here. */
 	onAnswer?: (value: Answer) => void;
 }) {
+	const collapsed = !!onOpen;
+	const pane = !!onClose;
 	const [expanded, setExpanded] = useState(false);
 
 	useEffect(() => {
@@ -114,14 +120,14 @@ export function PageFrame({
 		: undefined;
 
 	return (
-		<div className={`page${collapsed ? " collapsed" : ""}`}>
+		<div className={`page${collapsed ? " collapsed" : ""}${pane ? " pane" : ""}`}>
 			{collapsed ? (
 				// Only the bar is showing, so the whole bar opens the page.
 				<button
 					type="button"
 					className="page-head page-open"
 					aria-label={`Open ${title}`}
-					onClick={() => setExpanded(true)}
+					onClick={onOpen}
 				>
 					<FileText size={12} className="page-icon" />
 					<span className="page-title">{title}</span>
@@ -140,6 +146,17 @@ export function PageFrame({
 					>
 						<Maximize2 size={12} />
 					</button>
+					{pane && (
+						<button
+							type="button"
+							className="iconbtn"
+							title="Close"
+							aria-label={`Close ${title}`}
+							onClick={onClose}
+						>
+							<X size={13} />
+						</button>
+					)}
 				</div>
 			)}
 			{/* Stays while expanded: taking it out would change the height of
@@ -150,6 +167,7 @@ export function PageFrame({
 					taskId={taskId}
 					pageId={pageId}
 					title={title}
+					fill={pane}
 					maxHeight={maxHeight}
 					onAnswer={answer}
 				/>
