@@ -3200,6 +3200,23 @@ input {
 	flex-direction: row;
 	align-items: center;
 }
+/* Who the token is for, settled before GitHub's form opens: changing the owner
+   there resets the expiry and permissions the link filled in. */
+.gh-access-owner {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.gh-access-owner-input {
+	width: 200px;
+	height: 32px;
+}
+.gh-access-warn {
+	font-size: 12px;
+	color: var(--amber);
+	line-height: 1.45;
+}
 .gh-access-pasted {
 	/* Under the field, past the step number. */
 	padding-left: 28px;
