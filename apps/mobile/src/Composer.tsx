@@ -35,6 +35,7 @@ import {
 	type PickedFile,
 	useLeadAuto,
 } from "./attach";
+import { GLASS, GlassPill } from "./GlassPill";
 import { type ComposerTarget, loadComposerTarget, saveComposerTarget } from "./storage";
 import { useKeyboardVisible } from "./useKeyboardVisible";
 
@@ -228,32 +229,39 @@ export function Composer({
 			{lead ? (
 				<Animated.View
 					pointerEvents={switchFaded ? "none" : "box-none"}
-					style={[styles.floatBand, { opacity: switchOpacity }]}
+					// On glass the pill dissolves its glass and only its contents fade
+					// (GlassPill says why).
+					style={[styles.floatBand, !GLASS && { opacity: switchOpacity }]}
 				>
-					<View style={styles.switch} accessibilityRole="tablist">
-						{(["task", "lead"] as const).map((t) => {
-							const on = (t === "lead") === toLead;
-							return (
-								<Pressable
-									key={t}
-									style={[styles.switchSeg, on && styles.switchSegOn]}
-									onPress={() => setTarget(t)}
-									hitSlop={4}
-									accessibilityRole="tab"
-									accessibilityState={{ selected: on }}
-								>
-									<Feather
-										name={t === "lead" ? "message-circle" : "plus-square"}
-										size={13}
-										color={on ? INK_ON_WHITE : C.muted}
-									/>
-									<Text style={[styles.switchText, on && styles.switchTextOn]}>
-										{t === "lead" ? "Lead" : "Task"}
-									</Text>
-								</Pressable>
-							);
-						})}
-					</View>
+					<GlassPill style={styles.switch} hidden={switchFaded}>
+						<Animated.View
+							style={[styles.switchRow, GLASS && { opacity: switchOpacity }]}
+							accessibilityRole="tablist"
+						>
+							{(["task", "lead"] as const).map((t) => {
+								const on = (t === "lead") === toLead;
+								return (
+									<Pressable
+										key={t}
+										style={[styles.switchSeg, on && styles.switchSegOn]}
+										onPress={() => setTarget(t)}
+										hitSlop={4}
+										accessibilityRole="tab"
+										accessibilityState={{ selected: on }}
+									>
+										<Feather
+											name={t === "lead" ? "message-circle" : "plus-square"}
+											size={13}
+											color={on ? INK_ON_WHITE : C.muted}
+										/>
+										<Text style={[styles.switchText, on && styles.switchTextOn]}>
+											{t === "lead" ? "Lead" : "Task"}
+										</Text>
+									</Pressable>
+								);
+							})}
+						</Animated.View>
+					</GlassPill>
 				</Animated.View>
 			) : null}
 			<View style={[styles.wrap, keyboardUp && styles.wrapKeyboard]}>
@@ -413,20 +421,20 @@ const styles = StyleSheet.create({
 	inner: { width: "100%", maxWidth: CONTENT_MAX, alignSelf: "center" },
 	floatRoot: { marginTop: -FLOAT },
 	floatBand: { height: FLOAT, alignItems: "center", justifyContent: "center" },
-	// Task | Lead: the header's tab pill, small, floating over the content.
+	// Task | Lead: the header's tab pill, small, floating over the content. On
+	// glass, GlassPill drops the fill, rim and shadow.
 	switch: {
-		flexDirection: "row",
 		backgroundColor: C.sunken,
 		borderRadius: 999,
 		borderWidth: StyleSheet.hairlineWidth,
 		borderColor: C.line,
 		padding: 3,
-		gap: 2,
 		shadowColor: "#000",
 		shadowOpacity: 0.45,
 		shadowRadius: 12,
 		shadowOffset: { width: 0, height: 4 },
 	},
+	switchRow: { flexDirection: "row", gap: 2 },
 	strip: { marginBottom: 8 },
 	iconBtn: { width: 30, height: 30, alignItems: "center", justifyContent: "center" },
 	note: { color: "#f87171", fontSize: 12.5, marginBottom: 6 },

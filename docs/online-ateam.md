@@ -94,7 +94,7 @@ git config --global init.defaultBranch main
 ```
 
 Connect GitHub from Ateam once the engine is running: the checklist after setting a
-box up, **Settings → Git → GitHub on your boxes** on the desktop, or the GitHub button
+box up, **Settings → Boxes** on the desktop, or the GitHub button
 on the box's card on the phone. You paste a [fine-grained
 token](providers/README.md#github-credentials) into Ateam, which hands it to the box's
 `gh` and shows which of the box's projects it can push to. `gh auth login` in a
@@ -133,6 +133,14 @@ A box can also update itself: the phone's **Update box** button (and any client 
 protocol v7+) tells the daemon to run this same installer over itself. A box older
 than v7 has no such command, so it needs one update over SSH first, after which the
 phone can drive every later one.
+
+On the desktop, **Settings → Boxes** compares each box's engine with the app: by
+protocol first, then by the release the engine names (engines from 0.1.80 on; an
+older one counts as behind). A box a release behind gets **Update**, and an amber
+dot on the Settings button, its Boxes section and its row in Run on. So does a box
+whose GitHub token has under two weeks left or was refused. On connect the app
+updates an SSH box by itself only when its protocol is behind, never for a release
+alone, since an update restarts the engine and agents running there can stop.
 
 Re-run the same command to upgrade. It stops the daemon still running the old dist,
 then checks that the process answering afterwards is a different one, so an upgrade
@@ -386,7 +394,13 @@ navbar; the back arrow is the first key in the shortcut bar.
 The speech bubble at the navbar's right corner opens the **Lead**, the chat that reads
 the board and steers its agents. On the phone it runs on the box itself (a **v24 box**;
 an older one offers **Update box** there), so it works with your Mac off. It sees that
-box's tasks only, and it is a different conversation from the Lead on your Mac. The
+box's tasks only, and it is a different conversation from the Lead on your Mac. A dot
+on the bubble says it has something for you: white for a reply since you last looked,
+amber while it waits for your answer before it can go on. When it proposes a task or a
+loop, the card's **Start it** or **Set it up** opens the New task sheet or the New loop
+form filled in from the proposal; nothing starts until you confirm, and Auto mode stays
+off. The Lead's agent stops after 10 minutes without a turn, so the first message after
+that takes a few seconds while it picks the conversation back up. The
 composer under Home and Board has a **Task | Lead** switch above it: on Task, sending
 starts a task, as before; on Lead, it asks the Lead and opens the chat. The paperclip
 attaches photos or files from Files (up to 10 MB each) to either. The box's own

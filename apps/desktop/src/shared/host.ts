@@ -37,6 +37,10 @@ export const HOST_CH = {
 	failures: "host:failures",
 	/** Whether this build can upgrade a box at all (see AteamHost.canUpdateBoxes). */
 	canUpdateBoxes: "host:canUpdateBoxes",
+	/** This app's release ("0.1.80"), to compare a box's engine with. */
+	appRelease: "host:appRelease",
+	/** The GitHub access each box last reported (Host.githubStatuses). */
+	boxGithub: "host:boxGithub",
 	/** Clone+register a repo onto a specific box (connect it first). */
 	provision: "host:provision",
 	/** Install the ateam engine on a reachable SSH box, then connect to it. */
@@ -47,6 +51,8 @@ export const HOST_CH = {
 	installAgent: "host:installAgent",
 	/** Probe a connected box's task-readiness (gh installed/signed-in, git identity). */
 	boxReadiness: "host:boxReadiness",
+	/** Update a box's engine (SSH install, or the engine's own update over Tailscale). */
+	updateBox: "host:updateBox",
 	/** A connected box's GitHub access, handing it a token, and its per-repo access. */
 	githubAccess: "host:githubAccess",
 	connectGithub: "host:connectGithub",
@@ -65,6 +71,8 @@ export const HOST_CH = {
 	/** Which of the grammar check's issues to show (see AteamHost.judgeGrammar). */
 	judgeGrammar: "host:judgeGrammar",
 	evtConnectionsChanged: "evt:host:connections",
+	/** A box's GitHub access changed (Host.githubStatuses): only what reads it listens. */
+	evtGithubChanged: "evt:host:github",
 	/** Streamed installer output (stdout+stderr) during host:install. */
 	evtInstallLog: "evt:host:install-log",
 	/** Staged progress while creating a box (host:createBox). */
@@ -72,6 +80,9 @@ export const HOST_CH = {
 	/** The steps of waking and reaching a box (see ConnectProgressEvent). */
 	evtConnectProgress: "evt:host:connect-progress",
 } as const;
+
+/** How a box update went: installed over SSH, or started by the box's own engine. */
+export type BoxUpdateResult = { via: "ssh" } | { via: "self"; started: boolean; logPath: string };
 
 /** One chunk of installer output, tagged with the destination it came from. */
 export interface InstallLogEvent {
@@ -198,6 +209,10 @@ export interface AteamHost {
 	 * asks this before offering one. Same invariant as the auto-heal in connect().
 	 */
 	canUpdateBoxes(): Promise<boolean>;
+	/** This app's release ("0.1.80"): what a box's engine is compared with (SystemInfo.release). */
+	appRelease(): Promise<string>;
+	/** The GitHub access each box last reported, by alias, without reaching a box. */
+	boxGithub(): Promise<Record<string, GithubAccessDTO>>;
 	/** Connect the box if needed, then clone+register a repo ON it from its remote URL
 	 *  (so a task can run there). Returns the box's project row for that repo. */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;
@@ -215,6 +230,9 @@ export interface AteamHost {
 	/** Probe a connected box's task-readiness (also derives the git identity once the
 	 *  box is signed into GitHub). */
 	boxReadiness(alias: string): Promise<BoxReadiness>;
+	/** Bring a box's engine up to date. Over SSH it finishes when the box is back on
+	 *  this app's release; a Tailscale box updates itself and reconnects shortly. */
+	updateBox(alias: string): Promise<BoxUpdateResult>;
 	/** A connected box's GitHub access: what its gh and git sign in with (v25 engines). */
 	githubAccess(alias: string): Promise<GithubAccessDTO>;
 	/** Hand a connected box a GitHub token; answers its new access. Rejects with a
@@ -245,6 +263,8 @@ export interface AteamHost {
 	judgeGrammar(draft: string, issues: GrammarJudgeIssue[]): Promise<boolean[] | null>;
 	/** Fires with the full connected set whenever an engine is added or removed. */
 	onConnectionsChanged(cb: (connected: HostStatus[]) => void): () => void;
+	/** Fires when a box's GitHub access changes (boxGithub), not on every read of it. */
+	onGithubChanged(cb: () => void): () => void;
 	/** Subscribe to installer output during install()/createBox(); returns an unsubscribe. */
 	onInstallLog(cb: (e: InstallLogEvent) => void): () => void;
 	/** Subscribe to box-creation stage narration; returns an unsubscribe. */

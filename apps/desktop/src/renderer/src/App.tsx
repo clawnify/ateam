@@ -34,6 +34,7 @@ import {
 	CircleAlert,
 	Columns2,
 	Copy,
+	EllipsisVertical,
 	ExternalLink,
 	FolderPlus,
 	GitBranch,
@@ -140,6 +141,7 @@ import {
 	type EngineMember,
 	unifyProjects,
 } from "./unify";
+import { useBoxesNeedingYou } from "./useBoxesNeedingYou";
 import { useGithubIssues } from "./useGithubIssues";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
@@ -304,6 +306,8 @@ export function App() {
 	const [newIssueOpen, setNewIssueOpen] = useState(false);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [view, setView] = useState<View>("board");
+	const needingBoxes = useBoxesNeedingYou();
+	const boxesNeedYou = needingBoxes.size > 0;
 	// Layout is per project: one project may run twice the terminals of another.
 	// Read during render, not synced in an effect, so switching projects never
 	// paints a frame of the previous project's layout (which would also flick
@@ -820,9 +824,11 @@ export function App() {
 				// Can THIS app update THIS box: a dev build can't update any box, and no
 				// build can update one reachable only over its Tailscale endpoint.
 				updatable: canUpdateBoxes && c.transport !== "ws",
+				needsYou: needingBoxes.has(c.alias),
 			})),
 		];
 	}, [
+		needingBoxes,
 		connections,
 		canRemote,
 		hasLocalMember,
@@ -1546,7 +1552,7 @@ export function App() {
 							access === "read" &&
 							!(await confirm(
 								`${boxLabel} can't push to ${repoName}`,
-								`Its GitHub token can read ${repoName} but not push to it, so tasks there can't open a pull request or merge. Set the project up there anyway?`,
+								`git on ${boxLabel} can read ${repoName} but not push to it, so tasks there can't open a pull request or merge. Set the project up there anyway?`,
 							))
 						) {
 							reopenComposer(input);
@@ -1637,6 +1643,7 @@ export function App() {
 							label="Settings"
 							shortcut="⌘,"
 							active={view === "settings"}
+							attention={boxesNeedYou ? "a box needs you" : undefined}
 							onClick={() => goToView("settings")}
 						/>
 					)}
@@ -1844,6 +1851,9 @@ export function App() {
 													<span className="proj-open">
 														<Menu
 															label={`Actions for ${card.name}`}
+															// 24px, not 28: taller than the row, it poked out of the
+															// list's last row and gave the list a scrollbar.
+															className="size-6"
 															items={[
 																{
 																	label: "Open in new window",
@@ -2398,7 +2408,7 @@ export function App() {
 							onNewTask={activeProjectId ? newTask : undefined}
 						/>
 					) : view === "settings" ? (
-						<SettingsPanel agents={agents} />
+						<SettingsPanel agents={agents} boxesNeedYou={boxesNeedYou} />
 					) : view === "lead" ? (
 						<LeadChat
 							tasks={allTasks}
@@ -2870,9 +2880,10 @@ function TaskRow({
 	const Icon = taskIcon(t.name);
 	const tags = tagsFor(t);
 	const glyphs = taskGlyphs(t);
-	// Row and trailing slot are siblings so the trash click can't nest inside the
-	// row button (same pattern as proj-row / proj-open above). The git glyph and
-	// the delete button share the trailing slot and swap in place on hover.
+	// The row is a grid (icon | name | git glyph | status) that the row button
+	// shares as a subgrid. The menu is the button's sibling, so its click can't
+	// nest inside the row button, and it sits in the glyph's column: glyph at
+	// rest, menu on hover, swapped in place just left of the status.
 	return (
 		<div className="tasknode-row">
 			<button
@@ -2888,19 +2899,18 @@ function TaskRow({
 				) : (
 					<Icon className="ticon" size={14} strokeWidth={1.75} />
 				)}
-				<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
 				{/* The status stays put; on hover the tags slide in beside it, like
-				    the card's. The name already ellipsizes, so it simply truncates
-				    further to make room and the row never changes height. */}
-				{tags.length > 0 && (
-					<span className="row-tags">
-						{tags.map((tag) => (
-							<span className="pill" key={tag}>
-								{tag}
-							</span>
-						))}
-					</span>
-				)}
+				    the card's. They share one line with the name, so the name only
+				    gives up the room the tags that fit really take. */}
+				<span className="tmain">
+					<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
+					{tags.map((tag) => (
+						<span className="pill row-tag" key={tag}>
+							{tag}
+						</span>
+					))}
+				</span>
+				<TriageGlyph triage={t.triage} />
 				{/* Listed under the Archived filter: it says so in the status's spot. */}
 				{t.archivedAt != null ? (
 					<span className="pill" title="Archived. Opening it brings it back to the board.">
@@ -2910,16 +2920,14 @@ function TaskRow({
 					<StatusPill column={t.column} title={t.triage.reason} />
 				)}
 			</button>
-			<span className="task-trail">
-				<TriageGlyph triage={t.triage} />
-				{/* One action, so it fits beside the status without moving it. Wait
-				    on someone lives in the open task's ··· menu. */}
-				<IconButton
-					icon={Trash2}
-					label="Delete task"
-					variant="danger"
-					size={14}
-					onClick={onDelete}
+			{/* Vertical, so it's narrow enough to swap in beside the status without
+			    moving it. Wait on someone lives in the open task's ··· menu. */}
+			<span className="row-menu">
+				<Menu
+					label={`Actions for ${t.name}`}
+					icon={EllipsisVertical}
+					className="size-5 [&_svg:not([class*='size-'])]:size-3.5"
+					items={[{ label: "Delete task…", icon: Trash2, danger: true, onClick: onDelete }]}
 				/>
 			</span>
 		</div>

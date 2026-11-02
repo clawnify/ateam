@@ -35,6 +35,9 @@ export const LEAD_CH = {
 	thumb: "lead:thumb",
 	/** The user created or dismissed a task or loop the Lead proposed. */
 	proposal: "lead:proposal",
+	/** Items recorded before one the client has: a phone loads a conversation's
+	 *  tail first (snapshot's `tail`) and older pages as it scrolls back. */
+	older: "lead:older",
 	evtEvent: "evt:lead:event",
 } as const;
 
@@ -53,6 +56,7 @@ export const LEAD_RPC = [
 	LEAD_CH.setAuto,
 	LEAD_CH.attachBytes,
 	LEAD_CH.proposal,
+	LEAD_CH.older,
 ] as const;
 
 /** The engine's push event for its Lead, with a LeadEvent payload. Sent only
@@ -191,6 +195,9 @@ export interface LeadSnapshot {
 	/** Auto mode is on: Claude's auto mode, where a classifier approves what is
 	 *  safe, in place of the user's own default mode. Kept across conversations. */
 	auto: boolean;
+	/** Older items exist than `items` holds (a snapshot asked with a tail);
+	 *  `lead:older` pages them in. Absent: `items` is the whole conversation. */
+	more?: boolean;
 }
 
 /** What main pushes as the conversation moves. `item` adds or replaces by id. */
@@ -205,7 +212,12 @@ export type LeadEvent =
  *  engine's RPC (leadClient in client-api.ts). The desktop's window.ateamLead
  *  minus what needs a path on the Lead's machine: files arrive as bytes. */
 export interface LeadClient {
-	snapshot(): Promise<LeadSnapshot>;
+	/** `tail`: only the last that many items (`more` says older ones exist). A
+	 *  box before this answers the whole conversation, which reads the same. */
+	snapshot(opts?: { tail?: number }): Promise<LeadSnapshot>;
+	/** Up to `limit` items before `beforeId`, oldest first. A box before this
+	 *  rejects it, but it only ever sends whole conversations, so it isn't asked. */
+	older(beforeId: string, limit: number): Promise<{ items: LeadItem[]; more: boolean }>;
 	/** `files`: paths `attachBytes` returned. */
 	send(text: string, files?: string[]): Promise<void>;
 	/** A file from this device, base64, at most 10 MB decoded. */
@@ -222,6 +234,9 @@ export interface LeadClient {
 	/** Auto mode on or off for the box's Lead (Claude's own auto mode). */
 	setAuto(on: boolean): Promise<void>;
 	dismissProposal(id: string): Promise<void>;
+	/** A proposal was created from its sheet or form on this device: the card
+	 *  says so, and a task (`taskId`) is followed for its replies. */
+	proposalCreated(id: string, taskId?: string): Promise<void>;
 	/** Events start once any call above has been made on this connection. */
 	onEvent(cb: (e: LeadEvent) => void): () => void;
 }

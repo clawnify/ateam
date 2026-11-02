@@ -89,15 +89,22 @@ a token without it on a private repo), and Workflows left off, since an agent th
 can edit `.github/workflows` can reach the repo's Actions secrets.
 
 Connect it from Ateam rather than a terminal: the checklist after setting a box up,
-**Settings → Git → GitHub on your boxes** on the desktop, or the GitHub button on the
-box's card on the phone. **Create a token on GitHub** opens GitHub's form with the
-name, 90 days and those permissions filled in, and you pick the repositories. Paste
+**Settings → Boxes** on the desktop, or the GitHub button on the
+box's card on the phone. **Token for** says who the token is for, preset to the owner
+of most of the box's repositories (else your own account); pick it there, since
+changing Resource owner on GitHub's form resets the 90 days and clears the
+permissions. **Create a token on GitHub** then opens the form with the name, owner, 90
+days and those permissions filled in. Under Repository access, choose **Only select
+repositories** and pick the box's: GitHub starts on Public repositories, which leaves
+the token read-only. Paste
 the token back into Ateam and the box checks it with GitHub, hands it to `gh` on
 stdin and points git at it, unless a provider's credential helper already signs git
 in (boxd's does). Then Ateam lists, per project, whether the box can push, only read,
 or not see it. It warns about a token that reaches more than it should (`gh auth
 login`'s, a classic one, a provider's), and checks the box can push to a repo before
-cloning it there. The token never travels back from the box.
+cloning it there. The token never travels back from the box. Two weeks before it
+expires, the box's GitHub section says so and opens the form for its replacement, so
+a box doesn't stop pushing mid-task on the day it lapses.
 
 ## Adding a provider
 
