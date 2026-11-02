@@ -195,6 +195,10 @@ export interface TaskPageDTO {
 	id: string;
 	title: string;
 	at: number;
+	/** Came with an ask_user question (its `page`), not from show_page: the
+	 *  question's card draws it, and once the question ends it is history, so
+	 *  the task panel never opens it by itself. Absent from engines before it. */
+	fromQuestion?: boolean;
 }
 
 /** tasks:page: the task's page with its HTML, as the agent wrote it. */
@@ -590,8 +594,8 @@ export interface EngineSettings {
 	 */
 	loopsPaused: boolean;
 	/**
-	 * Let the box sleep once no agent has been working for this many minutes; 0
-	 * never does. Only an engine on a provider that can put its box to sleep reads
+	 * Let the box sleep once nobody has used it for this many minutes (an agent
+	 * working, typing in a terminal, its Lead chat); 0 never does. Only an engine on a provider that can put its box to sleep reads
 	 * it (packages/server/src/sleep), so a Mac or a plain VPS ignores it. A sleeping
 	 * box keeps its sessions, and the next connection wakes it.
 	 */

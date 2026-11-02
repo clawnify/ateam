@@ -77,14 +77,13 @@ async function runDaemon(): Promise<void> {
 	const dispatcher = createDispatcher(engine);
 	// This box's own Lead chat, for the phone (lead/engine-lead.ts). Only here:
 	// the desktop's in-process engine has the desktop's Lead instead.
-	extensions = [
-		engineLead({
-			engine,
-			dispatcher,
-			dir: join(DATA_DIR, "lead"),
-			log: (line) => console.log(line),
-		}),
-	];
+	const lead = engineLead({
+		engine,
+		dispatcher,
+		dir: join(DATA_DIR, "lead"),
+		log: (line) => console.log(line),
+	});
+	extensions = [lead];
 
 	const dir = dirname(SOCK);
 	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -133,14 +132,14 @@ async function runDaemon(): Promise<void> {
 	});
 
 	maybeStartWsListener(engine, dispatcher);
-	void maybeStartIdleSleep(engine);
+	void maybeStartIdleSleep(engine, lead);
 }
 
 /**
- * Serve one client, on either transport. Attaching counts as work for the sleep
- * control: an idle connection is not traffic a provider sees, so a box a client
- * just woke would otherwise fall asleep under it. Every transport goes through
- * here, so none can forget that.
+ * Serve one client, on either transport. Attaching to a released box holds it
+ * (sleep/control.ts): an idle connection is not traffic a provider sees, so a
+ * box a client just woke would otherwise fall asleep under it. Every transport
+ * goes through here, so none can forget that.
  */
 function serveClient(
 	engine: Engine,
@@ -153,17 +152,22 @@ function serveClient(
 
 /**
  * On a provider that can put this box to sleep (see sleep/index.ts), let it sleep
- * once no agent has worked for `idleSleepMinutes`, and wake it for loop ticks
- * and pending waits.
+ * once nobody has used it for `idleSleepMinutes` (an agent working, typing in a
+ * terminal, the Lead chat), and wake it for loop ticks and pending waits.
  * Anywhere else no driver answers and this does nothing.
  */
-async function maybeStartIdleSleep(engine: Engine): Promise<void> {
+async function maybeStartIdleSleep(
+	engine: Engine,
+	lead: ReturnType<typeof engineLead>,
+): Promise<void> {
 	const log = (line: string) => console.log(line);
 	const driver = await detectSleepDriver(log);
 	if (!driver) return;
 	log(`[ateam] on ${driver.where}: letting it sleep when idle`);
 	sleepControl = await startSleepControl(driver, {
 		working: () => engine.isWorking(),
+		lastInputAt: () => engine.lastInputAt(),
+		lead: () => lead.activity(),
 		nextLoopAt: () => {
 			// A pending wait wakes the box too, and pausing loops does not hold it:
 			// it is a reminder the user asked for, not a scheduled job. Only where the
