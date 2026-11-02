@@ -134,6 +134,7 @@ import {
 	type EngineMember,
 	unifyProjects,
 } from "./unify";
+import { useBoxesNeedingYou } from "./useBoxesNeedingYou";
 import { useGithubIssues } from "./useGithubIssues";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
@@ -297,6 +298,8 @@ export function App() {
 	const [newIssueOpen, setNewIssueOpen] = useState(false);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [view, setView] = useState<View>("board");
+	const needingBoxes = useBoxesNeedingYou();
+	const boxesNeedYou = needingBoxes.size > 0;
 	// Layout is per project: one project may run twice the terminals of another.
 	// Read during render, not synced in an effect, so switching projects never
 	// paints a frame of the previous project's layout (which would also flick
@@ -846,9 +849,11 @@ export function App() {
 				// Can THIS app update THIS box: a dev build can't update any box, and no
 				// build can update one reachable only over its Tailscale endpoint.
 				updatable: canUpdateBoxes && c.transport !== "ws",
+				needsYou: needingBoxes.has(c.alias),
 			})),
 		];
 	}, [
+		needingBoxes,
 		connections,
 		canRemote,
 		hasLocalMember,
@@ -1680,6 +1685,7 @@ export function App() {
 							label="Settings"
 							shortcut="⌘,"
 							active={view === "settings"}
+							attention={boxesNeedYou ? "a box needs you" : undefined}
 							onClick={() => goToView("settings")}
 						/>
 					)}
@@ -2451,7 +2457,7 @@ export function App() {
 							onNewTask={activeProjectId ? newTask : undefined}
 						/>
 					) : view === "settings" ? (
-						<SettingsPanel agents={agents} />
+						<SettingsPanel agents={agents} boxesNeedYou={boxesNeedYou} />
 					) : view === "lead" ? (
 						<LeadChat
 							tasks={allTasks}

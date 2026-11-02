@@ -36,6 +36,7 @@ export interface ConnectionRecord {
 	hostAlias: string;
 	transport?: HostTransport;
 	serverVersion?: string | null;
+	engineRelease?: string | null;
 	agentsAvailable?: string[] | null;
 	/** null clears it: the box no longer has a provider to wake it. */
 	wake?: BoxWake | null;
@@ -308,6 +309,7 @@ export function listConnections(db: AteamDb, configPath?: string): ConnectionDTO
 			transport: "ssh",
 			hostName: canonical.hostName,
 			serverVersion: rec?.serverVersion ?? null,
+			engineRelease: rec?.engineRelease ?? null,
 			agentsAvailable: rec?.agentsAvailable ?? null,
 			lastSeen: rec?.lastSeen ?? null,
 			inSshConfig: true,
@@ -321,6 +323,7 @@ export function listConnections(db: AteamDb, configPath?: string): ConnectionDTO
 			transport: rec.transport as HostTransport,
 			hostName: null,
 			serverVersion: rec.serverVersion,
+			engineRelease: rec.engineRelease,
 			agentsAvailable: rec.agentsAvailable,
 			lastSeen: rec.lastSeen,
 			inSshConfig: false,
@@ -350,6 +353,7 @@ export function recordConnection(db: AteamDb, rec: ConnectionRecord): Host {
 	};
 	if (rec.transport !== undefined) patch.transport = rec.transport;
 	if (rec.serverVersion !== undefined) patch.serverVersion = rec.serverVersion;
+	if (rec.engineRelease !== undefined) patch.engineRelease = rec.engineRelease;
 	if (rec.agentsAvailable !== undefined) patch.agentsAvailable = rec.agentsAvailable;
 	if (rec.wake !== undefined) patch.wake = rec.wake;
 	return repo.upsertHost(db, patch);

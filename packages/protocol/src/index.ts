@@ -932,6 +932,10 @@ export interface SystemInfo {
 	protocolVersion: number;
 	/** Ids of agents installed + available on the engine's machine. */
 	agents: string[];
+	/** The Ateam release the engine was built from ("0.1.80"). Absent from engines
+	 *  before it was reported, null from one run from source. A release can change
+	 *  the engine without a protocol bump, so clients compare this to offer updates. */
+	release?: string | null;
 }
 
 /** What `system:update` reports back before the engine goes down to be replaced. */
@@ -989,6 +993,8 @@ export interface ConnectionDTO {
 	transport: HostTransport;
 	hostName: string | null;
 	serverVersion: string | null;
+	/** The engine's release when last reached (SystemInfo.release); null if it didn't say. */
+	engineRelease?: string | null;
 	agentsAvailable: string[] | null;
 	lastSeen: number | null;
 	/** Present in ~/.ssh/config right now (vs a saved record since removed from it). */
