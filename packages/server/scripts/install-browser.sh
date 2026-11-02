@@ -78,7 +78,9 @@ command -v curl >/dev/null || die "curl is required"
 # The node the engine runs on, which install.sh pinned in its launcher and whose
 # npm it already used; TaskWindow only needs >= 18. The login PATH's node can be
 # a distro build without npm (a Sprite's /usr/bin/node), so it is only the fallback.
-NODE="$(sed -n 's/^exec \([^ ]*\) .*/\1/p' "$BIN_DIR/ateam" 2>/dev/null | head -1)"
+# A box install.sh never ran on has no launcher: sed then fails, and without the
+# `|| true` pipefail would end the script here, silently, before the die below.
+NODE="$(sed -n 's/^exec \([^ ]*\) .*/\1/p' "$BIN_DIR/ateam" 2>/dev/null | head -1 || true)"
 [ -x "$NODE" ] || NODE="$(bash -lc 'command -v node' 2>/dev/null || true)"
 [ -n "$NODE" ] || die "no node on the login PATH: run install.sh first"
 NODE="$(readlink -f "$NODE")"
@@ -259,7 +261,7 @@ if [ "$SVC_MGR" = systemd ]; then
 	# re-run never closes the browser under an agent. A new TaskWindow is worth a
 	# restart, and so is noVNC: it holds no state (a viewer reconnects), and a
 	# running one would keep listening where an older run put it.
-	# shellcheck disable=SC2086
+	# shellcheck disable=SC2046,SC2086
 	sudo systemctl enable --now $(printf '%s.service ' $SERVICES) >/dev/null 2>&1
 	sudo systemctl restart ateam-novnc.service
 	if [ -n "$VIEW_ADDR" ]; then sudo systemctl restart ateam-novnc-tailnet.service; fi
