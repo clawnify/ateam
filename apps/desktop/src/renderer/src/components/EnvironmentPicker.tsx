@@ -72,6 +72,9 @@ export type EnvOption = {
 	 *  ws box (no SSH to run the installer over). Gates the update button, so we
 	 *  never offer an action that would run for a minute and change nothing. */
 	updatable?: boolean;
+	/** A release behind this app, or a GitHub token close to expiring or refused
+	 *  (useBoxesNeedingYou). Settings → Boxes shows which, with the fix. */
+	needsYou?: boolean;
 };
 
 export function EnvironmentPicker({
@@ -365,8 +368,20 @@ export function EnvironmentPicker({
 										selected={active}
 										icon={env.alias === null ? <Laptop /> : <Server />}
 										title={env.label}
-										tone={env.error ? "error" : env.skew !== undefined ? "warn" : undefined}
-										subTitle={env.error ?? skewTitle}
+										tone={
+											env.error
+												? "error"
+												: env.skew !== undefined || env.needsYou
+													? "warn"
+													: undefined
+										}
+										subTitle={
+											env.error ??
+											skewTitle ??
+											(env.needsYou
+												? "This box's engine is behind this app's release, or its GitHub token is close to expiring or was refused. Settings → Boxes shows which, and the fix."
+												: undefined)
+										}
 										sub={
 											env.error ??
 											(env.skew !== undefined
@@ -379,15 +394,17 @@ export function EnvironmentPicker({
 													: `update this app (box is v${env.skew})`
 												: env.disabled && env.alias !== null
 													? "repo needs a git remote to run here"
-													: env.asleep
-														? "asleep, wakes when you use it"
-														: env.needsSetup
-															? "not set up — click to install the engine"
-															: env.transport === "ws"
-																? env.wake
-																	? `${env.alias} · ${providerById(env.wake.id)?.label ?? env.wake.id}`
-																	: "Tailscale"
-																: undefined)
+													: env.needsYou
+														? "needs you, see Settings"
+														: env.asleep
+															? "asleep, wakes when you use it"
+															: env.needsSetup
+																? "not set up — click to install the engine"
+																: env.transport === "ws"
+																	? env.wake
+																		? `${env.alias} · ${providerById(env.wake.id)?.label ?? env.wake.id}`
+																		: "Tailscale"
+																	: undefined)
 										}
 									/>
 									{/* A row that only STATES the box is behind leaves the user nowhere to

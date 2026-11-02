@@ -37,6 +37,10 @@ export const HOST_CH = {
 	failures: "host:failures",
 	/** Whether this build can upgrade a box at all (see AteamHost.canUpdateBoxes). */
 	canUpdateBoxes: "host:canUpdateBoxes",
+	/** This app's release ("0.1.80"), to compare a box's engine with. */
+	appRelease: "host:appRelease",
+	/** The GitHub access each box last reported (Host.githubStatuses). */
+	boxGithub: "host:boxGithub",
 	/** Clone+register a repo onto a specific box (connect it first). */
 	provision: "host:provision",
 	/** Install the ateam engine on a reachable SSH box, then connect to it. */
@@ -67,6 +71,8 @@ export const HOST_CH = {
 	/** Which of the grammar check's issues to show (see AteamHost.judgeGrammar). */
 	judgeGrammar: "host:judgeGrammar",
 	evtConnectionsChanged: "evt:host:connections",
+	/** A box's GitHub access changed (Host.githubStatuses): only what reads it listens. */
+	evtGithubChanged: "evt:host:github",
 	/** Streamed installer output (stdout+stderr) during host:install. */
 	evtInstallLog: "evt:host:install-log",
 	/** Staged progress while creating a box (host:createBox). */
@@ -203,6 +209,10 @@ export interface AteamHost {
 	 * asks this before offering one. Same invariant as the auto-heal in connect().
 	 */
 	canUpdateBoxes(): Promise<boolean>;
+	/** This app's release ("0.1.80"): what a box's engine is compared with (SystemInfo.release). */
+	appRelease(): Promise<string>;
+	/** The GitHub access each box last reported, by alias, without reaching a box. */
+	boxGithub(): Promise<Record<string, GithubAccessDTO>>;
 	/** Connect the box if needed, then clone+register a repo ON it from its remote URL
 	 *  (so a task can run there). Returns the box's project row for that repo. */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;
@@ -253,6 +263,8 @@ export interface AteamHost {
 	judgeGrammar(draft: string, issues: GrammarJudgeIssue[]): Promise<boolean[] | null>;
 	/** Fires with the full connected set whenever an engine is added or removed. */
 	onConnectionsChanged(cb: (connected: HostStatus[]) => void): () => void;
+	/** Fires when a box's GitHub access changes (boxGithub), not on every read of it. */
+	onGithubChanged(cb: () => void): () => void;
 	/** Subscribe to installer output during install()/createBox(); returns an unsubscribe. */
 	onInstallLog(cb: (e: InstallLogEvent) => void): () => void;
 	/** Subscribe to box-creation stage narration; returns an unsubscribe. */
