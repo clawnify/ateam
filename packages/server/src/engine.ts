@@ -113,6 +113,11 @@ export interface Engine {
 	 * or finished with its turn is not work. What keeps a box awake.
 	 */
 	isWorking(): boolean;
+	/**
+	 * When someone last typed into any of this engine's terminals, or null. Keeps
+	 * a box awake for a person in a shell, where no agent works.
+	 */
+	lastInputAt(): number | null;
 	/** Detach the client and stop hooks/loops — never kills PTY sessions. */
 	stop(): void;
 	/** Stop just the hook server (used by the headless smoke check). */
@@ -734,6 +739,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				.listOpenSessions(db)
 				.some((s) => s.status === "running" && s.agentId !== "shell" && pty.has(s.terminalId));
 		},
+		lastInputAt: () => pty.lastInput(),
 		stop() {
 			pty.disconnect();
 			hooks.stop();

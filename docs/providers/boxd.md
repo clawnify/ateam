@@ -182,8 +182,8 @@ for JSON-RPC, laggier for PTY output).
 
 ## Sleep and wake
 
-The engine manages a boxd box's sleep itself: once no agent has
-worked for `engine.idleSleepMinutes` (Settings → General, default 60, 0 never),
+The engine manages a boxd box's sleep itself: once nobody has used the box
+for `engine.idleSleepMinutes` (Settings → General, default 60, 0 never),
 it lets boxd hibernate the box, and it wakes the box for the next loop tick or
 task reminder (a wait coming due). The
 box keeps every process and session; it bills disk only while asleep, against
@@ -219,10 +219,16 @@ instead:
   a new machine, but when on it suspends a held box under a working agent, and a
   released one would suspend instead of hibernating, which is not the state loops
   were measured waking from.
-- **Hold** (`auto-hibernate.timeout 0`) while an agent is working, for the idle
-  window after, and for a fresh window whenever a client attaches. An idle
-  connection is not traffic boxd counts, so without this a box woken to start a
-  task would fall asleep under you.
+- **Hold** (`auto-hibernate.timeout 0`) while the box is in use, and for the idle
+  window after. In use means an agent working, someone typing in one of its
+  terminals (a box shell counts), or its Lead chat: mid-turn, or someone writing
+  in it. A box that wakes gets a fresh window, and so does a client connecting to
+  a released box: an idle connection is not traffic boxd counts, so without this
+  a box woken to start a task would fall asleep under you. A client connecting to
+  a box that is already held changes nothing, because the desktop reconnects on
+  its own: a Mac asleep with its lid shut wakes for maintenance every 15 minutes
+  or so, and when each reconnect restarted the window, a box with no work stayed
+  up all night (2026-11-02).
 - **Release** (`idle.ignore-outbound on`, `auto-hibernate.timeout 60`) once idle.
   Ignoring outbound is what lets a box with `tailscaled`, a worktree sweep and git
   fetches go quiet at all; only a connection opened to the box keeps it up.
@@ -232,6 +238,15 @@ instead:
   whose image has no `run` (one created 2026-08-04 had none; one created
   2026-10-21 did) stays held while it has a live loop, because a loop that
   silently never runs is worse than a box that stays up.
+
+`~/.ateam/daemon.log` on the box says when the engine held or released it and
+why, and once an hour what keeps a held box up:
+
+```
+[ateam] 2026-11-02T00:20:41Z still holding boxd machine mybox awake: agent work at 2026-11-02T00:20:41Z
+[ateam] 2026-11-02T01:21:00Z letting boxd machine mybox sleep: nothing for 60 min since typing in a terminal at 2026-11-02T00:20:13Z
+[ateam] 2026-11-02T07:02:10Z holding boxd machine mybox awake: the box woke at 2026-11-02T07:02:10Z
+```
 
 What wakes a sleeping box: connecting from the desktop (picking it, or starting a
 task there), `boxd machine wake <vm>`, a loop tick, or a wait coming due. The desktop leaves a box it
