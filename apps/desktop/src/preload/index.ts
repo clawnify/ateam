@@ -212,6 +212,11 @@ const host: AteamHost = {
 		ipcRenderer.on(HOST_CH.evtConnectionsChanged, handler);
 		return () => ipcRenderer.off(HOST_CH.evtConnectionsChanged, handler);
 	},
+	onGithubChanged: (cb: () => void) => {
+		const handler = () => cb();
+		ipcRenderer.on(HOST_CH.evtGithubChanged, handler);
+		return () => ipcRenderer.off(HOST_CH.evtGithubChanged, handler);
+	},
 	onInstallLog: (cb: (e: InstallLogEvent) => void) => {
 		const handler = (_: unknown, e: InstallLogEvent) => cb(e);
 		ipcRenderer.on(HOST_CH.evtInstallLog, handler);
