@@ -122,7 +122,7 @@ const ROWS: Row[] = [
 		section: "general",
 		title: "Let idle boxes sleep",
 		description:
-			"Let a box sleep once no agent has been working on it for this long, on providers where Ateam can. A sleeping box keeps its sessions, and connecting to it or starting a task wakes it in a few seconds. This Mac and always-on servers are not affected.",
+			"Let a box sleep once nobody has used it for this long (no agent working, no typing in its terminals, no Lead chat), on providers where Ateam can. A sleeping box keeps its sessions, and connecting to it or starting a task wakes it in a few seconds. This Mac and always-on servers are not affected.",
 		control: (s, { patch }) => {
 			// A box whose engine predates this setting doesn't report it; it would
 			// default to an hour like every other engine.

@@ -285,6 +285,13 @@ export class PtyClient extends EventEmitter {
 		return this.inputAt.get(terminalId) ?? null;
 	}
 
+	/** When a viewer last typed into any terminal, this run: what keeps a box awake for a shell. */
+	lastInput(): number | null {
+		let last: number | null = null;
+		for (const at of this.inputAt.values()) if (last === null || at > last) last = at;
+		return last;
+	}
+
 	resize(terminalId: string, cols: number, rows: number): void {
 		this.send({ t: "resize", terminalId, cols, rows });
 	}

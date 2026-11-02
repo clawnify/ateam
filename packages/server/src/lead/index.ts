@@ -49,6 +49,8 @@ export interface LeadDeps {
 export interface Lead {
 	readonly attachments: LeadAttachments;
 	snapshot(): LeadSnapshot;
+	/** Mid-turn, and not waiting on the user to answer a permission prompt. */
+	working(): boolean;
 	/** The user's message; `paths` are files attached in this chat. Starts the
 	 *  agent on first use. */
 	send(text: string, paths?: string[]): void;
@@ -143,6 +145,7 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	return {
 		attachments,
 		snapshot: () => lead.snapshot(),
+		working: () => lead.working(),
 		send(text, paths) {
 			const files = paths?.length ? attachments.resolve(paths.map(String)) : [];
 			if (typeof files === "string") fail(files);

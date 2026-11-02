@@ -166,6 +166,12 @@ export class LeadSession {
 		};
 	}
 
+	/** Mid-turn and not waiting on the user's answer to a permission prompt: what
+	 *  keeps a box awake for it, as a task's agent waiting on one doesn't. */
+	working(): boolean {
+		return this.busy && this.asking.size === 0;
+	}
+
 	/** `files` are attachments already in the Lead's folder (attachments.ts). */
 	send(text: string, files: LeadFile[] = []): void {
 		const body = text.trim();

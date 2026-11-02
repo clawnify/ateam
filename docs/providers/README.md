@@ -50,7 +50,12 @@ provider, and adding one is a file per seam:
 | The phone, and the desktop for a box added by its Tailscale address, wake a box before connecting | `packages/protocol/src/providers.ts` and `packages/protocol/src/wake.ts` | a definition declaring the inputs a wake needs (an account key, a machine name), and an adapter that wakes with them |
 
 When to sleep is the engine's call for every provider (`sleep/control.ts`): only
-it can tell an agent mid-turn from one waiting on you. The phone's definition is
+it can tell an agent mid-turn from one waiting on you. It holds a box while it is
+in use (an agent working, someone typing in one of its terminals, its Lead chat)
+and for the idle window after, and gives a fresh window to a box that wakes and
+to a client connecting to a box it has released. A client connecting to a box
+it still holds doesn't count: the desktop reconnects on its own, and each
+reconnect used to keep a box with no work awake for another window. The phone's definition is
 data, so the connection screen asks for exactly what a provider declares and says
 nothing about the others. The adapter is code because no two providers wake a box
 the same way: boxd exchanges a key for a token and speaks gRPC-web, most others
