@@ -195,6 +195,10 @@ export interface TaskPageDTO {
 	id: string;
 	title: string;
 	at: number;
+	/** Came with an ask_user question (its `page`), not from show_page: the
+	 *  question's card draws it, and once the question ends it is history, so
+	 *  the task panel never opens it by itself. Absent from engines before it. */
+	fromQuestion?: boolean;
 }
 
 /** tasks:page: the task's page with its HTML, as the agent wrote it. */

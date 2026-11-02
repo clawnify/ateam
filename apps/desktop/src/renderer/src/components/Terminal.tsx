@@ -2,7 +2,7 @@ import type { AttachDelivery } from "@ateam/protocol";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { FileUp, ImageUp, Plus } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { checkGrammar } from "../grammar/check";
 import { DraftTracker, retype } from "../grammar/draft";
 import type { GrammarIssue } from "../grammar/filter";
@@ -50,6 +50,7 @@ export function TerminalView({
 	onAddSkill,
 	showDone,
 	onDone,
+	aboveToolbar,
 }: {
 	terminalId: string;
 	/** Grammar-check the prompt as it's typed. For agent sessions, not a shell. */
@@ -64,6 +65,8 @@ export function TerminalView({
 	showDone?: boolean;
 	/** Called when Done is clicked — the parent owns the status change. */
 	onDone?: () => void;
+	/** Drawn between the terminal and its toolbar (the task's page bar). */
+	aboveToolbar?: ReactNode;
 }) {
 	const ref = useRef<HTMLDivElement>(null);
 	const termRef = useRef<Terminal | null>(null);
@@ -492,6 +495,7 @@ export function TerminalView({
 			<div className="term-area">
 				<div className="term" ref={ref} />
 			</div>
+			{aboveToolbar}
 			<div className="term-toolbar">
 				<Menu
 					icon={Plus}
