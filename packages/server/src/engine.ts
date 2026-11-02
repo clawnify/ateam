@@ -6,6 +6,7 @@
 // notifications) drive the exact same engine.
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDb, repo, type SessionExitReason } from "@ateam/db";
@@ -59,6 +60,22 @@ export interface EngineOptions {
 	sockPath?: string;
 	log?: (line: string) => void;
 }
+
+/**
+ * How long one connection attempt may take before Node gives up on that address
+ * and tries the next. Node's default is 250ms, and it ABORTS the attempt rather
+ * than racing the next one beside it (Chromium and curl keep it going). On a slow
+ * link every attempt outlives 250ms, so every new connection fails: on
+ * 2026-11-02, with ~460ms to Cloudflare and no IPv6 route, Electron 34's fetch
+ * to OpenRouter failed 8 of 8 with ETIMEDOUT at ~510ms (v4 cut off, v6
+ * unreachable, twice), and Node's passed 8 of 8 at 1s or more. Against a host
+ * ~380ms away with OpenRouter's two-v4/two-v6 lookup, Electron 34 fails every
+ * connect at 250ms and makes every one at 2.5s. Titles, summaries and Jev all
+ * died that way, and a title gets one attempt. The cost of a longer
+ * wait is paid only when an address hangs outright, and then by a call that
+ * runs in the background.
+ */
+const CONNECT_ATTEMPT_MS = 2_500;
 
 /** Abstract engine events — the transport-neutral superset of what used to be
  *  `win.webContents.send(...)` calls. */
@@ -170,6 +187,9 @@ export function mapEventToUnread(eventType: string, ownedByLoop: boolean): boole
 
 export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	const { dataDir, daemonPath, execPath } = opts;
+	// Process-wide, and the engine is the process: the desktop main and a box's
+	// `ateam daemon` both start here, before anything below opens a connection.
+	setDefaultAutoSelectFamilyAttemptTimeout(CONNECT_ATTEMPT_MS);
 	const emitter = new EventEmitter();
 	// Captured before any session of this run can exist, so the reconcile below
 	// can tell "stranded by a previous run" from "spawning right now".
