@@ -3,7 +3,7 @@
 // --stdio` (which relays to the daemon); its stdout/stdin carry newline-JSON
 // frames, stderr is inherited so ssh/auth errors surface. This is the transport
 // a desktop/mobile client wraps in createRpcClient to drive a remote engine.
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import type { ClientTransport } from "@ateam/protocol";
 import { streamClientTransport } from "./stream";
 
@@ -86,4 +86,63 @@ export function sshExec(
 		child.on("error", reject);
 		child.on("close", (code) => resolve({ code }));
 	});
+}
+
+// What ssh does with a host key it has never seen is StrictHostKeyChecking. Its
+// default, "ask", needs a terminal, and sshExec has none (batch mode, stdin
+// closed), so a first contact fails with "Host key verification failed".
+const ACCEPT_NEW = ["-o", "StrictHostKeyChecking=accept-new"];
+
+/** `ssh -G <dest>`: the options ssh would use for `dest`, one per line; "" when ssh can't say. */
+function sshConfigOf(dest: string): Promise<string> {
+	return new Promise((resolve) => {
+		execFile("ssh", ["-G", "--", dest], { timeout: 5_000 }, (err, stdout) =>
+			resolve(err ? "" : stdout),
+		);
+	});
+}
+
+/**
+ * Flags for a first contact the user asked for, such as setting a box up.
+ * accept-new trusts a host key ssh has never seen, which is what typing "yes" at
+ * the prompt does, and still refuses one that has changed. A `-o` on the command
+ * line overrides the user's ssh config, so this applies only while ssh would ask
+ * (its default, as `ssh -G` reports it): a value the user chose, such as `yes`,
+ * is left alone.
+ */
+export async function firstContactFlags(
+	dest: string,
+	readConfig: (dest: string) => Promise<string> = sshConfigOf,
+): Promise<string[]> {
+	return /^stricthostkeychecking ask$/m.test(await readConfig(dest)) ? [...ACCEPT_NEW] : [];
+}
+
+/**
+ * ssh's own reason for failing (exit 255), in words, read from what sshExec
+ * streamed: ssh writes it to stderr next to the remote command's output. Null
+ * when no reason is in there, so the caller keeps its generic message. The
+ * patterns are OpenSSH's messages, as test/ssh-first-contact.test.ts records them.
+ */
+export function describeSshFailure(output: string): string | null {
+	// Checked before the unknown-key case: ssh ends this one with the same last line.
+	if (output.includes("REMOTE HOST IDENTIFICATION HAS CHANGED")) {
+		return "The box's host key has changed since this Mac last connected, so ssh refused it. If the box was rebuilt, remove its old key from ~/.ssh/known_hosts (the log names the line), then try again.";
+	}
+	if (output.includes("Host key verification failed")) {
+		return "ssh doesn't know this box's host key and wasn't allowed to accept a new one. Connect once from a terminal to check and accept it, then try again.";
+	}
+	if (/Permission denied \([\w,-]+\)/.test(output)) {
+		return "The box didn't accept a key ssh could use without asking. A key with a passphrase only works here once it's loaded into ssh-agent, and a provider may need a key of its own, named by an IdentityFile in ~/.ssh/config.";
+	}
+	if (output.includes("ssh: Could not resolve hostname")) {
+		return "ssh couldn't find a box by that name. Check the spelling, or that it matches a Host in ~/.ssh/config.";
+	}
+	if (
+		/ssh: connect to host .+: (Connection refused|Operation timed out|Connection timed out)/.test(
+			output,
+		)
+	) {
+		return "Nothing answered on the box's SSH port. Check that the box is running and the address is right.";
+	}
+	return null;
 }
