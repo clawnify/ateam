@@ -47,6 +47,8 @@ export const HOST_CH = {
 	installAgent: "host:installAgent",
 	/** Probe a connected box's task-readiness (gh installed/signed-in, git identity). */
 	boxReadiness: "host:boxReadiness",
+	/** Update a box's engine (SSH install, or the engine's own update over Tailscale). */
+	updateBox: "host:updateBox",
 	/** A connected box's GitHub access, handing it a token, and its per-repo access. */
 	githubAccess: "host:githubAccess",
 	connectGithub: "host:connectGithub",
@@ -72,6 +74,9 @@ export const HOST_CH = {
 	/** The steps of waking and reaching a box (see ConnectProgressEvent). */
 	evtConnectProgress: "evt:host:connect-progress",
 } as const;
+
+/** How a box update went: installed over SSH, or started by the box's own engine. */
+export type BoxUpdateResult = { via: "ssh" } | { via: "self"; started: boolean; logPath: string };
 
 /** One chunk of installer output, tagged with the destination it came from. */
 export interface InstallLogEvent {
@@ -215,6 +220,9 @@ export interface AteamHost {
 	/** Probe a connected box's task-readiness (also derives the git identity once the
 	 *  box is signed into GitHub). */
 	boxReadiness(alias: string): Promise<BoxReadiness>;
+	/** Bring a box's engine up to date. Over SSH it finishes when the box is back on
+	 *  this app's release; a Tailscale box updates itself and reconnects shortly. */
+	updateBox(alias: string): Promise<BoxUpdateResult>;
 	/** A connected box's GitHub access: what its gh and git sign in with (v25 engines). */
 	githubAccess(alias: string): Promise<GithubAccessDTO>;
 	/** Hand a connected box a GitHub token; answers its new access. Rejects with a

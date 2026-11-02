@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { getAgent } from "@ateam/agents";
 import {
 	beginStep,
+	type BoxUpdateStarted,
 	type BrowserViewDTO,
 	browserViewUrl,
 	CH,
@@ -69,6 +70,7 @@ import { app, ipcMain, shell } from "electron";
 import WebSocket from "ws";
 import {
 	type BoxReadiness,
+	type BoxUpdateResult,
 	type ConnectOptions,
 	type ConnectProgressEvent,
 	type CreateBoxSpec,
@@ -195,6 +197,9 @@ export interface Host {
 	installAgent(alias: string, agentId: string): Promise<InstallAgentResult>;
 	/** Probe a connected box's task-readiness (and self-heal git identity once signed in). */
 	boxReadiness(alias: string): Promise<BoxReadiness>;
+	/** Bring a box's engine up to date: over SSH to this app's release, or, for a
+	 *  Tailscale box, by asking its engine to update itself (what the phone does). */
+	updateBox(alias: string): Promise<BoxUpdateResult>;
 	/** A connected box's GitHub access (githubAccess:status): what gh and git sign in with. */
 	githubAccess(alias: string): Promise<GithubAccessDTO>;
 	/** Hand a connected box a GitHub token; answers its new access. The token never comes back. */
@@ -1153,6 +1158,21 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		if (!backend) throw new Error(`Not connected to "${alias}".`);
 		return backend;
 	}
+	// SSH boxes reinstall this app's own release (install(), pinned, the same path
+	// a connect heals with). A Tailscale box has no SSH to install over, so its
+	// engine updates itself to the latest release and comes back on its own: the
+	// connection drops and the usual reconnect picks the new version up.
+	async function updateBox(alias: string): Promise<BoxUpdateResult> {
+		if (resolveTransport(db, alias) !== "ws") {
+			if (!canUpdateBoxes()) {
+				throw new Error("Only a released build of Ateam updates boxes over SSH.");
+			}
+			await install(alias);
+			return { via: "ssh" };
+		}
+		const started = (await heldBox(alias).handle(CH.systemUpdate, [])) as BoxUpdateStarted;
+		return { via: "self", ...started };
+	}
 	async function githubAccess(alias: string): Promise<GithubAccessDTO> {
 		return (await heldBox(alias).handle(CH.githubAccessStatus, [])) as GithubAccessDTO;
 	}
@@ -1301,6 +1321,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		createBox,
 		installAgent,
 		boxReadiness,
+		updateBox,
 		githubAccess,
 		connectGithub,
 		checkGithub,
@@ -1336,6 +1357,7 @@ export function registerHostIpc(host: Host): void {
 		host.installAgent(alias, agentId),
 	);
 	ipcMain.handle(HOST_CH.boxReadiness, (_e, alias: string) => host.boxReadiness(alias));
+	ipcMain.handle(HOST_CH.updateBox, (_e, alias: string) => host.updateBox(alias));
 	ipcMain.handle(HOST_CH.githubAccess, (_e, alias: string) => host.githubAccess(alias));
 	ipcMain.handle(HOST_CH.connectGithub, (_e, alias: string, token: string) =>
 		host.connectGithub(alias, token),
