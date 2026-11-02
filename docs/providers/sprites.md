@@ -6,8 +6,9 @@
 hardware-isolated, 8 vCPUs, a 100 GB disk that survives every sleep, and billed by
 actual CPU and memory use while running. A Sprite pauses on its own a few seconds
 after nothing is using it, and paused time isn't billed. An agent working inside
-doesn't count as use, so the engine holds the Sprite awake while agents work and
-lets it pause once they've been idle a while. See [Sleeping](#sleeping).
+doesn't count as use, so the engine holds the Sprite awake while it is in use (an
+agent working, typing in a terminal, the Lead chat) and lets it pause once nobody
+has used it for a while. See [Sleeping](#sleeping).
 
 **Verified against** Ateam v0.1.66 (setup), and the sleep and wake engine from the
 release after it · sprite CLI 2026-10-20-hotfix.1 · 2026-10-24
@@ -179,7 +180,7 @@ Sprite's name and a Sprites API token: create one at
 string. Before connecting, the phone asks Sprites to wake the Sprite and hold it
 for five minutes, then keeps trying the Sprite for up to three: a Sprite reported
 awake can take a while longer to answer. Once the phone attaches, the engine holds
-it as for any client.
+it for a fresh idle window, as for any client connecting to a box it had let go.
 It wakes on Connect, on opening the app, and on coming back to it. While a dropped
 connection retries, it wakes again whenever the last wake is over a minute old, so
 a Sprite that paused again before the phone got through is not left asleep. A
@@ -235,8 +236,10 @@ What we measured on one Sprite, with the engine installed as above:
 
 So without a hold, an agent is paused mid-turn seconds after you detach. The engine
 holds the Sprite with a task (`ateam-engine`, on the Sprite's own API socket) while
-an agent works or a client connects, renews it every few minutes, and deletes it
-once no agent has worked for the idle window (**Settings**, an hour by default). Fly
+it is in use, renews it every few minutes, and deletes it once nobody has used it
+for the idle window (**Settings**, an hour by default). In use, and what restarts
+the window, are the same on every provider: see
+[Sleep and wake](README.md#sleep-and-wake). Fly
 pauses the Sprite as soon as nothing else is going on.
 
 A connected desktop keeps a Sprite awake by itself: Fly counts its SSH connection as

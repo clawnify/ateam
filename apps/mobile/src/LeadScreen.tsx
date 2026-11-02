@@ -408,16 +408,23 @@ function UserMessage({ item, ctx }: { item: Extract<LeadItem, { kind: "user" }>;
 
 function Block({ block, ctx, lead }: { block: LeadBlock; ctx: Ctx; lead: LeadClient }) {
 	if (block.kind === "tools") return <Tools tools={block.tools} ctx={ctx} />;
-	if (block.kind === "agents")
+	// Tasks talking back: each entry as it came, a card per reply. (The desktop
+	// draws a thread per task; the phone doesn't yet.)
+	if (block.kind === "threads")
 		return (
 			<View style={styles.gap}>
-				{block.replies.map((r) => (
-					<AgentReply key={r.id} item={r} ctx={ctx} onReply={lead.reply} />
+				{block.items.map((item) => (
+					<Item key={item.id} item={item} ctx={ctx} lead={lead} />
 				))}
 			</View>
 		);
-	const item = block.item;
+	return <Item item={block.item} ctx={ctx} lead={lead} />;
+}
+
+function Item({ item, ctx, lead }: { item: LeadItem; ctx: Ctx; lead: LeadClient }) {
 	switch (item.kind) {
+		case "agent":
+			return <AgentReply item={item} ctx={ctx} onReply={lead.reply} />;
 		case "user":
 			return <UserMessage item={item} ctx={ctx} />;
 		case "assistant":
