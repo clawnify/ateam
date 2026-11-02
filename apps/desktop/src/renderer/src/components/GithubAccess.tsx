@@ -6,6 +6,7 @@ import {
 	type GithubAccessDTO,
 	githubAccessProblem,
 	githubAccessSummary,
+	githubAccessUrgent,
 	githubTokenWouldHelp,
 	mostCommonOwner,
 	pastedTokenLabel,
@@ -16,7 +17,6 @@ import {
 import { ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
-import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { Input } from "./ui/input";
 
 // A box's GitHub access, and connecting a token to it without opening its terminal:
@@ -164,7 +164,11 @@ export function GithubAccess({
 					</Button>
 				) : null}
 			</div>
-			{problem ? <div className="gh-access-problem">{problem}</div> : null}
+			{problem ? (
+				<div className={`gh-access-problem${githubAccessUrgent(access) ? " urgent" : ""}`}>
+					{problem}
+				</div>
+			) : null}
 			{access.unverified ? <div className="gh-access-muted">{access.unverified}</div> : null}
 
 			{checks && checks.length > 0 ? (
@@ -280,60 +284,5 @@ export function GithubAccess({
 				</div>
 			) : null}
 		</div>
-	);
-}
-
-/**
- * Settings' way in: every connected box's GitHub access in one dialog, for the
- * visits that come after setting a box up (a token that expired, a repository to
- * add, a full-access login to swap for a scoped token).
- */
-export function GithubBoxesButton() {
-	const [open, setOpen] = useState(false);
-	const [boxes, setBoxes] = useState<string[] | null>(null);
-	useEffect(() => {
-		if (!open) return;
-		let cancelled = false;
-		setBoxes(null);
-		window.ateamHost
-			.connected()
-			.then((held) => {
-				if (!cancelled) setBoxes(held.flatMap((s) => (s.alias ? [s.alias] : [])));
-			})
-			.catch(() => {
-				if (!cancelled) setBoxes([]);
-			});
-		return () => {
-			cancelled = true;
-		};
-	}, [open]);
-	return (
-		<>
-			<Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-				Manage
-			</Button>
-			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogContent
-					className="flex max-h-[calc(100vh-4rem)] flex-col gap-4 overflow-y-auto p-5 sm:max-w-[560px]"
-					aria-describedby={undefined}
-				>
-					<DialogTitle className="pr-8 text-sm font-medium">GitHub on your boxes</DialogTitle>
-					{boxes === null ? (
-						<div className="gh-access-muted">Loading…</div>
-					) : boxes.length === 0 ? (
-						<div className="gh-access-muted">
-							No box is connected right now. Boxes show here while they're connected.
-						</div>
-					) : (
-						boxes.map((alias) => (
-							<section key={alias} className="gh-access-box">
-								<h4 className="gh-access-box-name">{alias}</h4>
-								<GithubAccess alias={alias} label={alias} />
-							</section>
-						))
-					)}
-				</DialogContent>
-			</Dialog>
-		</>
 	);
 }

@@ -193,6 +193,7 @@ const host: AteamHost = {
 	createBox: (spec) => ipcRenderer.invoke(HOST_CH.createBox, spec),
 	installAgent: (alias, agentId) => ipcRenderer.invoke(HOST_CH.installAgent, alias, agentId),
 	boxReadiness: (alias) => ipcRenderer.invoke(HOST_CH.boxReadiness, alias),
+	updateBox: (alias) => ipcRenderer.invoke(HOST_CH.updateBox, alias),
 	githubAccess: (alias) => ipcRenderer.invoke(HOST_CH.githubAccess, alias),
 	connectGithub: (alias, token) => ipcRenderer.invoke(HOST_CH.connectGithub, alias, token),
 	checkGithub: (alias, repos) => ipcRenderer.invoke(HOST_CH.checkGithub, alias, repos),
