@@ -447,6 +447,8 @@ export const hosts = sqliteTable(
 		/** How to open it: "ssh" (an ssh_config alias) or "ws" (a host:port endpoint). */
 		transport: text("transport").notNull().default("ssh"),
 		serverVersion: text("server_version"),
+		/** The engine's release when last reached (`system:hello`'s release), if it said. */
+		engineRelease: text("engine_release"),
 		agentsAvailable: text("agents_available", { mode: "json" }).$type<string[]>(),
 		lastSeen: integer("last_seen"),
 		/** User removed it from the connections list. An ssh_config alias can't be

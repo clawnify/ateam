@@ -120,7 +120,51 @@ export async function createTaskInProject(
 	return row;
 }
 
-/** Launch a coding agent in a task's worktree and record the session. */
+/**
+ * Resumes under way, by the conversation they bring back, per engine. Two
+ * callers can decide to resume the same conversation in the same instant: the
+ * peer messenger relaunching an agent to hand it a message, and a client
+ * auto-restoring the tab that agent just left (or two windows, or the desktop
+ * and the phone). Each one checks for a live terminal first, but a launch
+ * spends its first ~200ms in probes before it spawns one, so both checks pass
+ * and two agent processes end up writing one transcript and one worktree.
+ * Keyed per engine (a WeakMap on its services) rather than on the Services
+ * type, the same way the phone keys its own in-flight launches.
+ */
+const resuming = new WeakMap<Services, Map<string, Promise<{ terminalId: string }>>>();
+
+/** A resume that carries work found its conversation already coming back. */
+export class ResumeInFlightError extends Error {
+	constructor(conversationId: string) {
+		super(
+			`conversation ${conversationId} is already being resumed; what was meant for it waits for that tab`,
+		);
+		this.name = "ResumeInFlightError";
+	}
+}
+
+/** The launch already bringing this conversation back, if one is under way. */
+export function resumeInFlight(
+	services: Services,
+	conversationId: string,
+): Promise<{ terminalId: string }> | undefined {
+	return resuming.get(services)?.get(conversationId);
+}
+
+/**
+ * Launch a coding agent in a task's worktree and record the session.
+ *
+ * A resume of a conversation that is already being resumed does not launch a
+ * second agent onto it. Without work of its own (a restored tab) it joins that
+ * launch and gets the same tab back. With work (a prompt or files) it is
+ * refused with ResumeInFlightError rather than silently dropping the work: the
+ * peer messenger leaves its messages pending, and the new tab's listener takes
+ * them once it is up. Registered before anything is awaited, which is the
+ * whole point.
+ *
+ * Only a resume by id is covered. `resume: true` learns its conversation from
+ * a scan, after an await, so it has no key to register under in time.
+ */
 export function spawnAgentInTask(
 	services: Services,
 	notifyTaskUpdated: (taskId: string) => void,
@@ -128,9 +172,29 @@ export function spawnAgentInTask(
 ): Promise<{ terminalId: string }> {
 	// Tracked, so deleting the task waits for a launch already under way instead
 	// of racing it (see worktree-guard.ts).
-	return services.worktreeGuard.launch(input.taskId, () =>
-		launchAgent(services, notifyTaskUpdated, input),
-	);
+	const launch = () =>
+		services.worktreeGuard.launch(input.taskId, () =>
+			launchAgent(services, notifyTaskUpdated, input),
+		);
+	const conversationId = input.resumeSessionId;
+	if (!conversationId) return launch();
+	let inFlight = resuming.get(services);
+	if (!inFlight) {
+		inFlight = new Map();
+		resuming.set(services, inFlight);
+	}
+	const existing = inFlight.get(conversationId);
+	if (existing) {
+		const carriesWork = Boolean(input.prompt?.trim() || input.files?.length);
+		return carriesWork ? Promise.reject(new ResumeInFlightError(conversationId)) : existing;
+	}
+	const started = launch();
+	inFlight.set(conversationId, started);
+	const settle = () => {
+		if (inFlight.get(conversationId) === started) inFlight.delete(conversationId);
+	};
+	started.then(settle, settle);
+	return started;
 }
 
 async function launchAgent(

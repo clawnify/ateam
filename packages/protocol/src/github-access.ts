@@ -52,6 +52,9 @@ export interface GithubAccessDTO {
 	gitCredential: GithubCredentialDTO | null;
 	/** Why GitHub could not be asked (offline, say). Logins and refusals are then unknown. */
 	unverified: string | null;
+	/** The box's own hostname, to name its token by when a client knows the box only
+	 *  by an address (tokenBoxName). Absent from engines before it was reported. */
+	hostname?: string;
 }
 
 /** Whether a credential can push to a repository, only read it, or not see it at all. */
@@ -178,6 +181,17 @@ function otherHelperWarning(a: GithubAccessDTO): string | null {
 }
 
 /**
+ * A provider helper's full-access token, said under the main problem when another one
+ * holds that line. It is a different credential from the one this panel manages, so
+ * nothing wrong with gh's token (its expiry, say) takes its risk off the screen. Null
+ * when there is no such helper or its warning already is the main problem.
+ */
+export function githubHelperWarning(a: GithubAccessDTO, now: number = Date.now()): string | null {
+	const helper = otherHelperWarning(a);
+	return helper && githubAccessProblem(a, now) !== helper ? helper : null;
+}
+
+/**
  * Whether pasting a token would fix what's wrong, so a client opens its Connect
  * form unasked. Not when the fix is elsewhere: a box without gh needs an update,
  * GH_TOKEN in the engine's environment would ignore the token, and a provider's
@@ -192,6 +206,15 @@ export function githubTokenWouldHelp(a: GithubAccessDTO, now: number = Date.now(
 		isBroadCredential(a.gh.kind) ||
 		a.git === "none"
 	);
+}
+
+/**
+ * gh's token wants replacing, soon or now: GitHub refuses it, or it has under
+ * TOKEN_EXPIRY_WARNING_DAYS left. What marks a box as needing you (its dots in
+ * Settings) without its GitHub panel open.
+ */
+export function githubTokenNeedsRenewal(a: GithubAccessDTO, now: number = Date.now()): boolean {
+	return a.gh != null && (a.gh.rejected || expiresSoon(a, now));
 }
 
 /**
@@ -213,6 +236,86 @@ export function mostCommonOwner(repos: readonly string[]): string | null {
 	let best: string | null = null;
 	for (const [owner, n] of counts) if (!best || n > (counts.get(best) ?? 0)) best = owner;
 	return best;
+}
+
+/**
+ * Who a box's token is for. A fine-grained token reaches one resource owner's
+ * repositories, and changing Resource owner on GitHub's form rebuilds it, dropping
+ * the 90 days and permissions Ateam filled in, so Ateam settles the owner before the
+ * link opens. The guess is the owner most of the box's repositories belong to, else
+ * the personal account, else none (GitHub then uses whoever is signed in there). The
+ * options put the guess first, then the personal account, then every other owner
+ * known: the box's own, then the ones seen on the user's other repositories.
+ */
+export function tokenOwnerChoices(opts: {
+	/** The box's repositories, as `owner/name`. */
+	boxRepos: readonly string[];
+	/** The personal account: the box's gh login, else one seen on another box. */
+	personal: string | null;
+	/** Owners seen on the user's other repositories, any order, repeats fine. */
+	seen?: readonly string[];
+}): { guess: string | null; options: string[] } {
+	const guess = mostCommonOwner(opts.boxRepos) ?? opts.personal;
+	const options: string[] = [];
+	const add = (owner: string | null | undefined) => {
+		if (owner && !options.some((o) => sameOwner(o, owner))) options.push(owner);
+	};
+	add(guess);
+	add(opts.personal);
+	for (const repo of opts.boxRepos) add(repo.split("/")[0]);
+	for (const owner of [...(opts.seen ?? [])].sort((a, b) => a.localeCompare(b))) add(owner);
+	return { guess, options };
+}
+
+/** GitHub logins and org names are case-insensitive. */
+function sameOwner(a: string, b: string): boolean {
+	return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * What the owner picked for a box's token means, said beside the choice: on a box
+ * with no repositories yet, whose account the token is for; when the box's
+ * repositories span several owners, which ones it won't be able to push to, since a
+ * token reaches one owner only. Null when there is nothing to add.
+ */
+export function tokenOwnerNote(opts: {
+	boxRepos: readonly string[];
+	owner: string | null;
+	personal: string | null;
+}): string | null {
+	const { boxRepos, owner, personal } = opts;
+	if (boxRepos.length === 0) {
+		// An owner other than the personal account was picked on purpose.
+		if (owner && !(personal && sameOwner(owner, personal))) return null;
+		const whose = owner ? `your personal account (${owner})` : "the account signed in to GitHub";
+		return `This box has no GitHub repositories yet, so the token is for ${whose}. Pick an organization if this box will work on its repositories.`;
+	}
+	if (!owner) return null;
+	const outside = boxRepos.filter((repo) => !sameOwner(repo.split("/")[0] ?? "", owner));
+	if (outside.length === 0) return null;
+	const more = outside.length > 2 ? ` and ${outside.length - 2} more` : "";
+	return `This token reaches ${owner}'s repositories only, so the box can't push to ${outside.slice(0, 2).join(", ")}${more}.`;
+}
+
+/** Under "Create a token on GitHub": what the link fills in, and the one choice it can't make. */
+export const TOKEN_FORM_HINT =
+	"Ateam fills in the name, owner, 90 days and permissions. Under Repository access, choose Only select repositories and pick the ones this box works on, then Generate token and copy it.";
+
+/** GitHub rebuilds its form when the owner changes, dropping what the link filled in. */
+export const TOKEN_OWNER_RESET_HINT =
+	"Changing Resource owner on GitHub resets Expiration to 30 days and clears the permissions, so pick the owner here instead.";
+
+/**
+ * What to call a box in its token's name and description: its label, unless that is
+ * only an address (an IP, or host:port, as a box reached over Tailscale is saved),
+ * when the box's own hostname says more.
+ */
+export function tokenBoxName(label: string, hostname?: string | null): string {
+	const address =
+		/:\d+$/.test(label) || // host:port, and an IPv6 address ending in digits
+		/^\d{1,3}(\.\d{1,3}){3}$/.test(label) || // IPv4
+		/^\[?[0-9a-f]*:[0-9a-f:.]*\]?$/i.test(label); // IPv6, which always has a colon
+	return address && hostname ? hostname : label;
 }
 
 /**
@@ -252,11 +355,9 @@ export function repoVerdictHint(
 ): string | null {
 	if (!checks.some((c) => c.access === "none" || c.access === "read")) return null;
 	if (a.git === "other") {
-		// Said once: the short note when the warning above already explains the helper.
-		const helper = otherHelperWarning(a);
-		return helper && githubAccessProblem(a) === helper
-			? OTHER_HELPER_REPO_NOTE
-			: OTHER_HELPER_REPO_HINT;
+		// Said once: the short note when a warning above explains the helper, which one
+		// always does for a full-access helper (githubAccessProblem or githubHelperWarning).
+		return otherHelperWarning(a) ? OTHER_HELPER_REPO_NOTE : OTHER_HELPER_REPO_HINT;
 	}
 	return a.gh?.kind === "fine-grained" ? FINE_GRAINED_REPO_HINT : null;
 }

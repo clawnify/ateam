@@ -17,12 +17,17 @@ import {
 	githubAccessProblem,
 	githubAccessSummary,
 	githubAccessUrgent,
+	githubHelperWarning,
 	githubTokenWouldHelp,
-	mostCommonOwner,
 	pastedTokenLabel,
 	type RepoAccessDTO,
 	repoAccessLabel,
 	repoVerdictHint,
+	TOKEN_FORM_HINT,
+	TOKEN_OWNER_RESET_HINT,
+	tokenBoxName,
+	tokenOwnerChoices,
+	tokenOwnerNote,
 } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useCallback, useEffect, useState } from "react";
@@ -36,7 +41,12 @@ import {
 	TextInput,
 	View,
 } from "react-native";
+import { type GithubSeen, rememberGithubSeen, sameGithubSeen } from "./github-seen";
+import { loadGithubSeen, saveGithubSeen } from "./storage";
 import { C, CONTENT_MAX } from "./theme";
+
+/** The token owner choice's "Other…" entry ("" is Ateam's guess). No GitHub login has a "…". */
+const OTHER_OWNER = "other…";
 
 type Loaded =
 	| { state: "loading" }
@@ -68,6 +78,11 @@ export function GithubAccessScreen({
 	const [token, setToken] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// Who the token is for: "" follows Ateam's guess, OTHER_OWNER takes otherOwner.
+	const [ownerPick, setOwnerPick] = useState("");
+	const [otherOwner, setOtherOwner] = useState("");
+	// The GitHub accounts the phone has seen on any box: null until read from storage.
+	const [seen, setSeen] = useState<GithubSeen | null>(null);
 
 	const load = useCallback(async () => {
 		setLoaded({ state: "loading" });
@@ -90,6 +105,27 @@ export function GithubAccessScreen({
 	useEffect(() => {
 		if (supported) void load();
 	}, [supported, load]);
+
+	useEffect(() => {
+		let live = true;
+		void loadGithubSeen().then((s) => {
+			if (live) setSeen(s);
+		});
+		return () => {
+			live = false;
+		};
+	}, []);
+
+	// What this box shows joins what the phone has seen, once storage has been read,
+	// so a fast first read can't write over names kept from other boxes.
+	useEffect(() => {
+		if (!seen || loaded.state !== "ready" || checks === null) return;
+		const owners = checks.flatMap((c) => c.repo.split("/")[0] || []);
+		const next = rememberGithubSeen(seen, loaded.access.gh?.login ?? null, owners);
+		if (sameGithubSeen(seen, next)) return;
+		setSeen(next);
+		void saveGithubSeen(next);
+	}, [seen, loaded, checks]);
 
 	const connect = async () => {
 		const clean = cleanGithubToken(token);
@@ -174,8 +210,33 @@ export function GithubAccessScreen({
 
 	const access = loaded.access;
 	const problem = githubAccessProblem(access);
+	const helperWarning = githubHelperWarning(access);
 	const showForm = formOpen || githubTokenWouldHelp(access);
-	const owner = mostCommonOwner(checks?.map((c) => c.repo) ?? []) ?? access.gh?.login ?? null;
+	const repoNames = checks?.map((c) => c.repo) ?? [];
+	const personal = access.gh?.login ?? seen?.logins[0] ?? null;
+	const choices = tokenOwnerChoices({
+		boxRepos: repoNames,
+		personal,
+		seen: [...(seen?.owners ?? []), ...(seen?.logins ?? [])],
+	});
+	const owner =
+		ownerPick === ""
+			? choices.guess
+			: ownerPick === OTHER_OWNER
+				? otherOwner.trim() || null
+				: ownerPick;
+	// Said once the box's repositories are known, not while they load.
+	const ownerNote =
+		checks !== null ? tokenOwnerNote({ boxRepos: repoNames, owner, personal }) : null;
+	const ownerOptions: { value: string; label: string }[] = [
+		...(choices.options.length === 0
+			? [{ value: "", label: "the account signed in to GitHub" }]
+			: choices.options.map((o) => ({
+					value: o === choices.guess ? "" : o,
+					label: o === personal ? `${o} (you)` : o,
+				}))),
+		{ value: OTHER_OWNER, label: "Other…" },
+	];
 	const pasted = pastedTokenLabel(token);
 	const hint = repoVerdictHint(access, checks ?? []);
 
@@ -195,6 +256,7 @@ export function GithubAccessScreen({
 							{problem}
 						</Text>
 					) : null}
+					{helperWarning ? <Text style={styles.problem}>{helperWarning}</Text> : null}
 					{access.unverified ? <Text style={styles.note}>{access.unverified}</Text> : null}
 
 					{checks && checks.length > 0 ? (
@@ -253,20 +315,66 @@ export function GithubAccessScreen({
 							<View style={styles.step}>
 								<Text style={styles.stepN}>1</Text>
 								<View style={styles.stepBody}>
+									<View
+										style={styles.owners}
+										accessibilityRole="radiogroup"
+										accessibilityLabel="Token for"
+									>
+										<Text style={styles.ownersLabel}>Token for</Text>
+										{ownerOptions.map((o) => {
+											const on = o.value === ownerPick;
+											return (
+												<Pressable
+													key={o.value}
+													style={[styles.owner, on && styles.ownerOn]}
+													onPress={() => setOwnerPick(o.value)}
+													accessibilityRole="radio"
+													accessibilityState={{ checked: on }}
+												>
+													<Text style={[styles.ownerText, on && styles.ownerTextOn]}>
+														{o.label}
+													</Text>
+												</Pressable>
+											);
+										})}
+									</View>
+									{ownerPick === OTHER_OWNER ? (
+										<TextInput
+											style={styles.input}
+											value={otherOwner}
+											onChangeText={setOtherOwner}
+											placeholder="user or organization"
+											placeholderTextColor={C.faint}
+											autoCapitalize="none"
+											autoCorrect={false}
+											autoComplete="off"
+											textContentType="none"
+											autoFocus
+											accessibilityLabel="Owner on GitHub"
+										/>
+									) : null}
+									{ownerNote ? (
+										<Text style={repoNames.length > 0 ? styles.problem : styles.note}>
+											{ownerNote}
+										</Text>
+									) : null}
 									<Pressable
 										style={styles.secondary}
 										onPress={() =>
-											void Linking.openURL(fineGrainedTokenUrl({ box: boxLabel, owner }))
+											void Linking.openURL(
+												fineGrainedTokenUrl({
+													box: tokenBoxName(boxLabel, access.hostname),
+													owner,
+												}),
+											)
 										}
 										accessibilityRole="link"
 									>
 										<Text style={styles.secondaryText}>Create a token on GitHub</Text>
 										<Feather name="external-link" size={13} color={C.ink} />
 									</Pressable>
-									<Text style={styles.note}>
-										Ateam fills in the name, 90 days and its permissions. Choose the repositories
-										this box works on, then Generate token and copy it.
-									</Text>
+									<Text style={styles.note}>{TOKEN_FORM_HINT}</Text>
+									<Text style={styles.note}>{TOKEN_OWNER_RESET_HINT}</Text>
 								</View>
 							</View>
 							<View style={styles.step}>
@@ -424,5 +532,17 @@ const styles = StyleSheet.create({
 		borderColor: C.line,
 	},
 	secondaryText: { color: C.ink, fontSize: 13, fontWeight: "600" },
+	owners: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
+	ownersLabel: { color: C.muted, fontSize: 13, marginRight: 2 },
+	owner: {
+		paddingHorizontal: 10,
+		paddingVertical: 5,
+		borderRadius: 999,
+		borderWidth: 1,
+		borderColor: C.line,
+	},
+	ownerOn: { borderColor: C.ink },
+	ownerText: { color: C.muted, fontSize: 13 },
+	ownerTextOn: { color: C.ink },
 	disabled: { opacity: 0.5 },
 });

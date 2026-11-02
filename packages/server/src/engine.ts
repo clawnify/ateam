@@ -392,7 +392,11 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		},
 		launch: async (task, prompt) => {
 			// The conversation the task last had, resumed by id when known; a task
-			// that never had an agent gets a fresh one on the default.
+			// that never had an agent gets a fresh one on the default. If a client
+			// is already bringing that conversation back (it saw the agent stop),
+			// this is refused (ResumeInFlightError): the batch stays pending, and
+			// the new tab's listener takes it once it is up (the sweep, for an
+			// agent without one).
 			const last = repo.listSessionsByTask(db, task.id).find((s) => s.agentId !== "shell");
 			const agentId =
 				last?.agentId ?? task.agentId ?? readSettings().settings.engine.defaultAgentId;
