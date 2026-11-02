@@ -16,6 +16,8 @@ import {
 	type GithubAccessDTO,
 	githubAccessProblem,
 	githubAccessSummary,
+	githubAccessUrgent,
+	githubHelperWarning,
 	githubTokenWouldHelp,
 	mostCommonOwner,
 	pastedTokenLabel,
@@ -173,6 +175,7 @@ export function GithubAccessScreen({
 
 	const access = loaded.access;
 	const problem = githubAccessProblem(access);
+	const helperWarning = githubHelperWarning(access);
 	const showForm = formOpen || githubTokenWouldHelp(access);
 	const owner = mostCommonOwner(checks?.map((c) => c.repo) ?? []) ?? access.gh?.login ?? null;
 	const pasted = pastedTokenLabel(token);
@@ -189,7 +192,12 @@ export function GithubAccessScreen({
 				<View style={styles.column}>
 					<Text style={styles.box}>{boxLabel}</Text>
 					<Text style={styles.body}>{githubAccessSummary(access)}</Text>
-					{problem ? <Text style={styles.problem}>{problem}</Text> : null}
+					{problem ? (
+						<Text style={[styles.problem, githubAccessUrgent(access) && styles.problemUrgent]}>
+							{problem}
+						</Text>
+					) : null}
+					{helperWarning ? <Text style={styles.problem}>{helperWarning}</Text> : null}
 					{access.unverified ? <Text style={styles.note}>{access.unverified}</Text> : null}
 
 					{checks && checks.length > 0 ? (
@@ -356,6 +364,7 @@ const styles = StyleSheet.create({
 	box: { color: C.faint, fontSize: 12 },
 	body: { color: C.ink, fontSize: 15, lineHeight: 21 },
 	problem: { color: C.amber, fontSize: 13, lineHeight: 19 },
+	problemUrgent: { color: C.red },
 	note: { color: C.muted, fontSize: 12, lineHeight: 17 },
 	link: { color: C.ink, textDecorationLine: "underline" },
 	label: { color: C.faint, fontSize: 12, paddingBottom: 2 },

@@ -111,15 +111,44 @@ export function githubAccessSummary(a: GithubAccessDTO, now: number = Date.now()
 }
 
 /**
+ * How close to its expiry a box's token starts asking to be replaced. A fine-grained
+ * token lasts 90 days by default here, and the day it lapses every push on the box
+ * fails, mid-task, so the warning comes early enough to act on.
+ */
+export const TOKEN_EXPIRY_WARNING_DAYS = 14;
+const DAY_MS = 86_400_000;
+
+/** The token is close enough to its expiry to warn about, or past it. */
+function expiresSoon(a: GithubAccessDTO, now: number): boolean {
+	const at = a.gh?.expiresAt;
+	return at != null && at - now < TOKEN_EXPIRY_WARNING_DAYS * DAY_MS;
+}
+
+/**
  * The one thing wrong with a box's GitHub access, worst first, or null when nothing
  * is. Every client shows this same sentence above its Connect form.
  */
-export function githubAccessProblem(a: GithubAccessDTO): string | null {
+export function githubAccessProblem(a: GithubAccessDTO, now: number = Date.now()): string | null {
 	if (!a.ghInstalled) {
 		return "This box has no GitHub CLI (gh). Update the box to install it.";
 	}
 	if (a.gh?.rejected) {
 		return "GitHub refused this box's token: it expired or was revoked. Connect a new one.";
+	}
+	const expiresAt = a.gh?.expiresAt;
+	if (expiresAt != null && expiresSoon(a, now)) {
+		const when = expiryPhrase(expiresAt, now);
+		if (a.gh?.source === "env") {
+			return `The token in GH_TOKEN, set in the engine's environment, ${when}. Replace it there: a token connected from Ateam would be ignored.`;
+		}
+		// With another credential helper signing git in, gh's token only carries PRs.
+		const breaks =
+			a.git === "gh"
+				? "tasks here can't push or open pull requests"
+				: "Ateam can't open pull requests or merge from this box";
+		return expiresAt <= now
+			? `This box's token ${when}, so ${breaks}. Connect a new one.`
+			: `This box's token ${when}. Connect a new one before then, or ${breaks}.`;
 	}
 	if (!a.gh && a.git !== "other") {
 		return "Connect GitHub so this box can clone, push and open pull requests.";
@@ -149,14 +178,40 @@ function otherHelperWarning(a: GithubAccessDTO): string | null {
 }
 
 /**
+ * A provider helper's full-access token, said under the main problem when another one
+ * holds that line. It is a different credential from the one this panel manages, so
+ * nothing wrong with gh's token (its expiry, say) takes its risk off the screen. Null
+ * when there is no such helper or its warning already is the main problem.
+ */
+export function githubHelperWarning(a: GithubAccessDTO, now: number = Date.now()): string | null {
+	const helper = otherHelperWarning(a);
+	return helper && githubAccessProblem(a, now) !== helper ? helper : null;
+}
+
+/**
  * Whether pasting a token would fix what's wrong, so a client opens its Connect
  * form unasked. Not when the fix is elsewhere: a box without gh needs an update,
  * GH_TOKEN in the engine's environment would ignore the token, and a provider's
  * git helper is disconnected at the provider.
  */
-export function githubTokenWouldHelp(a: GithubAccessDTO): boolean {
+export function githubTokenWouldHelp(a: GithubAccessDTO, now: number = Date.now()): boolean {
 	if (!a.ghInstalled || a.gh?.source === "env") return false;
-	return !a.gh || a.gh.rejected || isBroadCredential(a.gh.kind) || a.git === "none";
+	return (
+		!a.gh ||
+		a.gh.rejected ||
+		expiresSoon(a, now) ||
+		isBroadCredential(a.gh.kind) ||
+		a.git === "none"
+	);
+}
+
+/**
+ * Whether the problem stops the box working with GitHub right now (no gh, a token
+ * GitHub refuses or that has expired), so clients show it in red rather than amber.
+ */
+export function githubAccessUrgent(a: GithubAccessDTO, now: number = Date.now()): boolean {
+	const at = a.gh?.expiresAt;
+	return !a.ghInstalled || a.gh?.rejected === true || (at != null && at <= now);
 }
 
 /** The owner most of these `owner/name` repositories belong to: who a new token is for. */
@@ -208,11 +263,9 @@ export function repoVerdictHint(
 ): string | null {
 	if (!checks.some((c) => c.access === "none" || c.access === "read")) return null;
 	if (a.git === "other") {
-		// Said once: the short note when the warning above already explains the helper.
-		const helper = otherHelperWarning(a);
-		return helper && githubAccessProblem(a) === helper
-			? OTHER_HELPER_REPO_NOTE
-			: OTHER_HELPER_REPO_HINT;
+		// Said once: the short note when a warning above explains the helper, which one
+		// always does for a full-access helper (githubAccessProblem or githubHelperWarning).
+		return otherHelperWarning(a) ? OTHER_HELPER_REPO_NOTE : OTHER_HELPER_REPO_HINT;
 	}
 	return a.gh?.kind === "fine-grained" ? FINE_GRAINED_REPO_HINT : null;
 }
