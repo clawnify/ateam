@@ -25,9 +25,11 @@ import {
 	type EngineSettings,
 	failActive,
 	filled,
+	type GithubAccessDTO,
 	PROTOCOL_VERSION,
 	type ProjectDTO,
 	providerById,
+	type RepoAccessDTO,
 	type RpcClient,
 	relabelActive,
 	type SettingsResult,
@@ -46,8 +48,10 @@ import {
 	boxWakeOf,
 	buildCloudInit,
 	type ConnectionDTO,
+	describeSshFailure,
 	type Engine,
 	endpointUrl,
+	firstContactFlags,
 	forgetConnection,
 	type HostTransport,
 	hetznerProvider,
@@ -61,7 +65,7 @@ import {
 	sshClientTransport,
 	sshExec,
 } from "@ateam/server";
-import { app, ipcMain } from "electron";
+import { app, ipcMain, shell } from "electron";
 import WebSocket from "ws";
 import {
 	type BoxReadiness,
@@ -191,6 +195,12 @@ export interface Host {
 	installAgent(alias: string, agentId: string): Promise<InstallAgentResult>;
 	/** Probe a connected box's task-readiness (and self-heal git identity once signed in). */
 	boxReadiness(alias: string): Promise<BoxReadiness>;
+	/** A connected box's GitHub access (githubAccess:status): what gh and git sign in with. */
+	githubAccess(alias: string): Promise<GithubAccessDTO>;
+	/** Hand a connected box a GitHub token; answers its new access. The token never comes back. */
+	connectGithub(alias: string, token: string): Promise<GithubAccessDTO>;
+	/** Per repo, whether a connected box can push, only read, or not see it (none = its projects). */
+	checkGithub(alias: string, repos?: string[]): Promise<RepoAccessDTO[]>;
 	/** Which provisioning secrets are saved (booleans, never the values). */
 	secretsStatus(): SecretsStatus;
 	/** Persist provider credentials (encrypted). Returns the new saved-status. */
@@ -878,6 +888,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	}
 
 	async function install(dest: string, opts?: { wsAddr?: string }): Promise<HostStatus> {
+		// `dest` reaches ssh as an argument, where a leading "-" would make it an option.
+		if (dest.startsWith("-")) throw new Error(`"${dest}" is not an ssh destination`);
 		// Already set up and held — installing again would just re-run the (idempotent)
 		// script for no reason; hand back its status.
 		const existing = backends.get(dest);
@@ -913,12 +925,23 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 				WS_DEFAULT_PORT +
 				'}" bash -s -- --service';
 
+		// The output's tail, to read ssh's own reason from if the setup fails.
+		let output = "";
 		const result = await sshExec(dest, `bash -lc '${pipeline}'`, {
-			onData: (chunk) =>
-				broadcast(HOST_CH.evtInstallLog, { dest, chunk } satisfies InstallLogEvent),
+			// Setting a box up is often the first contact with it: see firstContactFlags.
+			sshFlags: await firstContactFlags(dest),
+			onData: (chunk) => {
+				output = (output + chunk).slice(-8192);
+				broadcast(HOST_CH.evtInstallLog, { dest, chunk } satisfies InstallLogEvent);
+			},
 		});
 		if (result.code !== 0) {
-			throw new Error(`Setup of "${dest}" failed — ssh exited ${result.code ?? "on a signal"}.`);
+			const why = result.code === 255 ? describeSshFailure(output) : null;
+			throw new Error(
+				why
+					? `Setup of "${dest}" failed: ${why}`
+					: `Setup of "${dest}" failed: ssh exited ${result.code ?? "on a signal"}.`,
+			);
 		}
 
 		// We just reached the box over SSH, so its transport is ssh — seed that row so
@@ -1122,6 +1145,24 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		};
 	}
 
+	// GitHub access is the box's own (github-access.ts on the engine), so these go
+	// straight to that box's engine rather than through the aggregate. They need the
+	// box held: the caller connects (and wakes) it first, as Run on does.
+	function heldBox(alias: string): Backend {
+		const backend = backends.get(alias);
+		if (!backend) throw new Error(`Not connected to "${alias}".`);
+		return backend;
+	}
+	async function githubAccess(alias: string): Promise<GithubAccessDTO> {
+		return (await heldBox(alias).handle(CH.githubAccessStatus, [])) as GithubAccessDTO;
+	}
+	async function connectGithub(alias: string, token: string): Promise<GithubAccessDTO> {
+		return (await heldBox(alias).handle(CH.githubAccessConnect, [token])) as GithubAccessDTO;
+	}
+	async function checkGithub(alias: string, repos?: string[]): Promise<RepoAccessDTO[]> {
+		return (await heldBox(alias).handle(CH.githubAccessCheck, [repos ?? null])) as RepoAccessDTO[];
+	}
+
 	async function provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO> {
 		// Provisioning targets a SPECIFIC engine — the aggregate routes by learned id,
 		// but there's no id on the box yet, so call that backend's clone directly.
@@ -1260,6 +1301,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		createBox,
 		installAgent,
 		boxReadiness,
+		githubAccess,
+		connectGithub,
+		checkGithub,
 		secretsStatus,
 		saveSecrets,
 		providerOptions,
@@ -1292,6 +1336,22 @@ export function registerHostIpc(host: Host): void {
 		host.installAgent(alias, agentId),
 	);
 	ipcMain.handle(HOST_CH.boxReadiness, (_e, alias: string) => host.boxReadiness(alias));
+	ipcMain.handle(HOST_CH.githubAccess, (_e, alias: string) => host.githubAccess(alias));
+	ipcMain.handle(HOST_CH.connectGithub, (_e, alias: string, token: string) =>
+		host.connectGithub(alias, token),
+	);
+	ipcMain.handle(HOST_CH.checkGithub, (_e, alias: string, repos?: string[]) =>
+		host.checkGithub(alias, repos),
+	);
+	// The user's own browser, where they are signed in to GitHub (an Electron window
+	// is not). github.com pages only: the renderer never gets a general opener.
+	ipcMain.handle(HOST_CH.openGithub, async (_e, url: string) => {
+		const parsed = new URL(url);
+		if (parsed.protocol !== "https:" || parsed.hostname !== "github.com") {
+			throw new Error("Only github.com pages open from here.");
+		}
+		await shell.openExternal(parsed.toString());
+	});
 	ipcMain.handle(HOST_CH.secretsStatus, () => host.secretsStatus());
 	ipcMain.handle(
 		HOST_CH.saveSecrets,

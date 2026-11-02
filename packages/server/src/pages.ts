@@ -42,8 +42,14 @@ export function savePage(
 	title: string,
 	html: string,
 	now = Date.now(),
+	fromQuestion = false,
 ): TaskPage {
-	const page: TaskPage = { id: randomUUID(), title, at: now };
+	const page: TaskPage = {
+		id: randomUUID(),
+		title,
+		at: now,
+		...(fromQuestion ? { fromQuestion } : {}),
+	};
 	repo.setTaskPage(db, taskId, page, html);
 	return page;
 }

@@ -5,13 +5,14 @@
 import {
 	applyLeadEvent,
 	findLeadTask,
-	type LeadAgentItem,
 	type LeadAttachResult,
 	type LeadFile,
 	type LeadItem,
 	type LeadPermissionAnswer,
 	type LeadSnapshot,
 	type LeadTaskRef,
+	type LeadThread,
+	type LeadThreadEntry,
 	type LeadToolItem,
 	leadToolResult,
 	leadToolStep,
@@ -22,6 +23,7 @@ import {
 	toLeadBlocks,
 } from "@ateam/protocol";
 import {
+	ArrowDown,
 	ArrowUp,
 	ChevronLeft,
 	ChevronRight,
@@ -50,7 +52,16 @@ import {
 	useState,
 } from "react";
 import { flushSync } from "react-dom";
-import { arrived, FOLLOWING, firstLine, goTo, type StackView, shown, unseen } from "../lead-blocks";
+import {
+	arrived,
+	FOLLOWING,
+	firstLine,
+	goTo,
+	openFrom,
+	type StackView,
+	shown,
+	unseen,
+} from "../lead-blocks";
 import { type DraftRef, expandRefs, splitSent } from "../lead-refs";
 import { recordEmoji, topEmoji } from "../lib/emoji-use";
 import { AgentIcon } from "./AgentIcon";
@@ -60,6 +71,7 @@ import { PageFrame } from "./PageFrame";
 import { PanelRightFilled } from "./PanelRightFilled";
 import { ProposalStrip } from "./Proposals";
 import { QuestionCard } from "./QuestionCard";
+import { ReplyField } from "./ReplyField";
 import { TaskRefInput } from "./TaskRefInput";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
@@ -526,48 +538,102 @@ function LeadProposalCard({
 	);
 }
 
-/** A followed task's agent, talking back: its reply, and a box to answer it
- *  here, in words or with an emoji. The card and its head are the stack's
- *  (AgentStack). Expanded, the reply opens whole in a dialog with the same
- *  answer box, so a half-typed answer is in both. */
-function AgentReply({
-	item,
+/** Hours and minutes, on a folded entry. */
+const clock = (at: number) =>
+	new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/** An entry folded to a line, in words: a reply's first line, a page's title. */
+function entryLine(e: LeadThreadEntry): string {
+	if (e.kind === "agent") return firstLine(e.text);
+	if (e.kind === "page") return `Made a page, "${e.title}"`;
+	return e.text;
+}
+
+/** What the card's head says the task did, from its latest entry of its own. */
+function threadVerb(t: LeadThread): string {
+	const own = t.entries.findLast((e) => e.kind === "agent" || e.kind === "page");
+	return own?.kind === "page" ? "made a page" : own ? "replied" : "";
+}
+
+/** A followed task talking back, as a thread: its replies, the user's answers
+ *  to it, its pages and notices, in order. The last reply is open, and what
+ *  came after it; earlier ones fold to a line each and open in place. One box
+ *  answers it, in words or with an emoji (on the last reply). The card and its
+ *  head are the stack's (ThreadStack). Expanded, the whole thread opens in a
+ *  dialog with the same answer box, so a half-typed answer is in both. */
+function ThreadView({
+	thread,
 	hidden,
 	chip,
 	expanded,
 	onExpandedChange,
 	onCut,
+	atBottom,
+	onContinue,
 }: {
-	item: LeadAgentItem;
-	/** Another reply of its stack is shown. Kept mounted, so a half-typed answer survives. */
+	thread: LeadThread;
+	/** Another thread of its stack is shown. Kept mounted, so a half-typed answer survives. */
 	hidden: boolean;
 	/** The task's chip, for the dialog's head. */
 	chip: ReactNode;
 	/** Shown whole in a dialog. */
 	expanded: boolean;
 	onExpandedChange: (expanded: boolean) => void;
-	/** Whether the card's height cap cuts this reply off, so expanding shows more. */
-	onCut: (id: string, cut: boolean) => void;
+	/** Whether the card's height cap cuts the open reply off, so expanding shows more. */
+	onCut: (key: string, cut: boolean) => void;
+	/** Whether the user is following the bottom of the chat. */
+	atBottom: () => boolean;
+	/** Go to the card further down where this thread goes on. */
+	onContinue: (block: string, key: string) => void;
 }) {
+	const { entries, earlier, task } = thread;
 	const [open, setOpen] = useState(false);
 	const [text, setText] = useState("");
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	/** Folded entries the user opened. */
+	const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+	const [showEarlier, setShowEarlier] = useState(false);
 	const md = useRef<HTMLDivElement>(null);
 	const whole = useRef<HTMLDivElement>(null);
 	/** What had focus before the dialog took it. */
 	const back = useRef<HTMLElement | null>(null);
+	const from = openFrom(entries.map((e) => e.kind));
+	const lastReply = entries.findLast((e) => e.kind === "agent");
 
-	// The text's box changes size whenever the reply starts or stops being cut
+	// A new reply folds the one before it. Scrolled up reading that one, it
+	// stays open instead, so the text doesn't fold away under the user.
+	const [count, setCount] = useState(entries.length);
+	if (count !== entries.length) {
+		setCount(entries.length);
+		if (entries.length > count && !atBottom()) {
+			const was = openFrom(entries.slice(0, count).map((e) => e.kind));
+			const keep = entries.slice(was, count).map((e) => e.id);
+			setOpened((o) => new Set([...o, ...keep]));
+		}
+	}
+	const toggle = (id: string) =>
+		setOpened((o) => {
+			const next = new Set(o);
+			if (!next.delete(id)) next.add(id);
+			return next;
+		});
+
+	// The open reply's box changes size whenever it starts or stops being cut
 	// off: under the cap it is the reply's height, over it the cap's. So
-	// watching its size is enough. A hidden reply keeps what it last reported.
+	// watching its size is enough. A hidden thread keeps what it last reported.
 	useEffect(() => {
 		const el = md.current;
-		if (!el || hidden) return;
-		const watch = new ResizeObserver(() => onCut(item.id, el.scrollHeight > el.clientHeight + 1));
+		if (!el || hidden) {
+			if (!el) onCut(thread.key, false);
+			return;
+		}
+		const watch = new ResizeObserver(() =>
+			onCut(thread.key, el.scrollHeight > el.clientHeight + 1),
+		);
 		watch.observe(el);
 		return () => watch.disconnect();
-	}, [hidden, item.id, onCut]);
+	}, [hidden, thread.key, onCut]);
 
 	const send = async (go: () => Promise<void>) => {
 		setSending(true);
@@ -586,66 +652,149 @@ function AgentReply({
 	const submit = async (e: FormEvent) => {
 		e.preventDefault();
 		if (!text.trim()) return;
-		if (await send(() => window.ateamLead.reply(item.task.taskId, text))) {
+		if (await send(() => window.ateamLead.reply(task.taskId, text))) {
 			setText("");
 			setOpen(false);
 		}
 	};
-	// Drawn twice, in the card and in the dialog, from the one draft.
-	const answer = (
-		<>
-			<div className="lead-agent-actions">
-				{open ? (
-					<form className="question-reply" onSubmit={submit}>
-						<input
-							// biome-ignore lint/a11y/noAutofocus: opened by the user's own click on Reply.
-							autoFocus
-							value={text}
-							placeholder={`Reply to ${item.task.name}`}
-							aria-label={`Reply to ${item.task.name}`}
-							disabled={sending}
-							onChange={(e) => setText(e.target.value)}
-							onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
-						/>
-						<button type="submit" disabled={sending || !text.trim()}>
-							Send
-						</button>
-					</form>
-				) : (
-					<>
-						<button type="button" className="lead-agent-reply" onClick={() => setOpen(true)}>
-							<CornerDownRight size={12} />
-							Reply
-						</button>
-						<EmojiReply
-							name={item.task.name}
-							reaction={item.reaction}
-							disabled={sending}
-							onPick={(emoji) => send(() => window.ateamLead.react(item.id, emoji))}
-						/>
-					</>
-				)}
+
+	/** One entry: `folded` before the open point, `cap` on the open reply. */
+	const entry = (e: LeadThreadEntry, folded: boolean, cap: boolean) => {
+		if (e.kind === "user")
+			return (
+				<div key={e.id} className={folded ? "lead-you folded" : "lead-you"}>
+					{e.text}
+				</div>
+			);
+		if (e.kind === "notice")
+			return (
+				<p key={e.id} className="lead-notice info">
+					{e.text}
+				</p>
+			);
+		const body =
+			e.kind === "agent" ? (
+				<div ref={cap ? md : undefined} className={cap ? "md lead-reply-capped" : "md"}>
+					<Markdown text={e.text} />
+				</div>
+			) : (
+				<PageFrame taskId={e.task.taskId} pageId={e.pageId} title={e.title} />
+			);
+		if (!folded) return <Fragment key={e.id}>{body}</Fragment>;
+		const isOpen = opened.has(e.id);
+		const reaction = e.kind === "agent" ? e.reaction : undefined;
+		return (
+			<div key={e.id} className="lead-fold-group">
+				<button
+					type="button"
+					className="lead-fold"
+					aria-expanded={isOpen}
+					title={isOpen ? "Fold" : "Show all of it"}
+					onClick={() => toggle(e.id)}
+				>
+					<span className="lead-fold-dot" />
+					<span className="lead-fold-line">{isOpen ? "" : entryLine(e)}</span>
+					{reaction && <span className="lead-fold-react">{reaction}</span>}
+					<span className="lead-fold-at">{clock(e.at)}</span>
+				</button>
+				{isOpen && body}
 			</div>
-			{error && <p className="question-error">{error}</p>}
-		</>
-	);
+		);
+	};
+	const before = entries.slice(0, from);
+	const after = entries.slice(from);
+	const above = before.length > 0 || earlier.length > 0;
+
+	// Drawn twice, in the card and in the dialog, from the one draft. Once the
+	// thread goes on further down, its answer box is there; this one says so.
+	const answer =
+		thread.continuedIn && !open ? (
+			<div className="lead-agent-actions">
+				<button
+					type="button"
+					className="lead-agent-reply"
+					onClick={() => {
+						onExpandedChange(false);
+						if (thread.continuedIn) onContinue(thread.continuedIn, thread.key);
+					}}
+				>
+					<ArrowDown size={12} />
+					Continues below
+				</button>
+			</div>
+		) : (
+			<>
+				<div className="lead-agent-actions">
+					{open ? (
+						<form className="question-reply" onSubmit={submit}>
+							<ReplyField
+								autoFocus
+								value={text}
+								placeholder={`Reply to ${task.name}`}
+								aria-label={`Reply to ${task.name}`}
+								disabled={sending}
+								onChange={(e) => setText(e.target.value)}
+								onEscape={() => setOpen(false)}
+							/>
+							<button type="submit" disabled={sending || !text.trim()}>
+								Send
+							</button>
+						</form>
+					) : (
+						<>
+							<button type="button" className="lead-agent-reply" onClick={() => setOpen(true)}>
+								<CornerDownRight size={12} />
+								Reply
+							</button>
+							{lastReply && (
+								<EmojiReply
+									name={task.name}
+									reaction={lastReply.reaction}
+									disabled={sending}
+									onPick={(emoji) => send(() => window.ateamLead.react(lastReply.id, emoji))}
+								/>
+							)}
+						</>
+					)}
+				</div>
+				{error && <p className="question-error">{error}</p>}
+			</>
+		);
 	return (
 		<div className="lead-agent-body" hidden={hidden}>
-			<div ref={md} className="md">
-				<Markdown text={item.text} />
+			<div className="lead-thread-entries">
+				{earlier.length > 0 && (
+					<button
+						type="button"
+						className="lead-fold lead-earlier"
+						aria-expanded={showEarlier}
+						onClick={() => setShowEarlier((s) => !s)}
+					>
+						<span className="lead-fold-dot" />
+						<span className="lead-fold-line">
+							{showEarlier ? "Hide earlier" : `${earlier.length} earlier in this thread`}
+						</span>
+					</button>
+				)}
+				{showEarlier && earlier.map((e) => entry(e, true, false))}
+				{before.map((e) => entry(e, true, false))}
+				{above && <div className="lead-thread-sep" />}
+				{after.map((e) => entry(e, false, e === entries[from] && e.kind === "agent"))}
 			</div>
 			{answer}
 			<Dialog open={expanded} onOpenChange={onExpandedChange}>
-				{/* The thread's reading column and prose size; as tall as the reply
-				    needs, up to the window, where the reply scrolls. */}
+				{/* The thread's reading column and prose size; as tall as the thread
+				    needs, up to the window, where it scrolls. */}
 				<DialogContent
 					className="flex max-h-[calc(100vh-4rem)] flex-col gap-3 p-5 text-[14px] leading-normal sm:max-w-[776px]"
 					aria-describedby={undefined}
-					// Focus the reply, so the arrow and page keys scroll it.
+					// Focus the thread, so the arrow and page keys scroll it.
 					onOpenAutoFocus={(e) => {
 						e.preventDefault();
 						back.current = document.activeElement as HTMLElement | null;
 						whole.current?.focus({ preventScroll: true });
+						// The newest is what the user came for.
+						if (whole.current) whole.current.scrollTop = whole.current.scrollHeight;
 					}}
 					// Radix hands focus back to a Dialog.Trigger, and this dialog has
 					// none (Expand sits in the stack's head), so focus would drop to
@@ -657,10 +806,12 @@ function AgentReply({
 				>
 					<DialogTitle className="lead-agent-head pr-8 text-sm leading-normal font-normal">
 						{chip}
-						<span className="lead-agent-said">replied</span>
+						<span className="lead-agent-said">{threadVerb(thread)}</span>
 					</DialogTitle>
-					<div ref={whole} className="md lead-reply-whole" tabIndex={-1}>
-						<Markdown text={item.text} />
+					<div ref={whole} className="lead-reply-whole lead-thread-entries" tabIndex={-1}>
+						{[...earlier, ...entries].map((e) => (
+							<ThreadWhole key={e.id} entry={e} />
+						))}
 					</div>
 					{answer}
 				</DialogContent>
@@ -669,68 +820,105 @@ function AgentReply({
 	);
 }
 
-/** Replies that came in one after another: one card showing one at a time, the
- *  newest first (the rules are in lead-blocks.ts). The arrows and ←/→ step
- *  through them, and the "2 of 5" count lists them all to jump to one. The
- *  head stays mounted while the reply below it changes, so a focused arrow
- *  keeps focus and the next press goes on stepping. */
-function AgentStack({
-	replies,
+/** An entry in the whole thread (the Expand dialog): every one open. */
+function ThreadWhole({ entry: e }: { entry: LeadThreadEntry }) {
+	if (e.kind === "user") return <div className="lead-you">{e.text}</div>;
+	if (e.kind === "notice") return <p className="lead-notice info">{e.text}</p>;
+	if (e.kind === "page")
+		return <PageFrame taskId={e.task.taskId} pageId={e.pageId} title={e.title} />;
+	return (
+		<div className="lead-whole-reply">
+			<div className="md">
+				<Markdown text={e.text} />
+			</div>
+			{e.reaction && <span className="lead-fold-react">{e.reaction}</span>}
+		</div>
+	);
+}
+
+/** Tasks that talked one after another: one card showing one task's thread at
+ *  a time, the one that spoke last first (the rules are in lead-blocks.ts).
+ *  The arrows and ←/→ step through the tasks, and the "2 of 5" count lists
+ *  them all to jump to one. The head stays mounted while the thread below it
+ *  changes, so a focused arrow keeps focus and the next press goes on stepping. */
+function ThreadStack({
+	id,
+	threads,
+	total,
 	tasks,
 	onOpenTask,
 	atBottom,
 	onPaged,
+	jump,
+	onContinue,
 }: {
-	replies: LeadAgentItem[];
+	/** The block's id, which "Continues below" in an earlier card points to. */
+	id: string;
+	/** Newest talker last. */
+	threads: LeadThread[];
+	/** How many entries have landed in the stack, across its threads. */
+	total: number;
 	tasks: TaskDTO[];
 	onOpenTask: (t: TaskDTO) => void;
 	/** Whether the user is following the bottom of the chat. */
 	atBottom: () => boolean;
-	/** The user switched replies: the card, to keep its top in view. */
+	/** The user switched threads: the card, to keep its top in view. */
 	onPaged: (card: HTMLElement) => void;
+	/** "Continues below" was clicked for a thread in this stack: show it. */
+	jump: { block: string; key: string; n: number } | null;
+	onContinue: (block: string, key: string) => void;
 }) {
-	const n = replies.length;
+	const keys = threads.map((t) => t.key);
+	const n = keys.length;
 	const [view, setView] = useState<StackView>(FOLLOWING);
-	const [count, setCount] = useState(n);
-	if (count !== n) {
-		setCount(n);
-		setView((v) => arrived(v, count, n, atBottom()));
+	const [prev, setPrev] = useState({ keys, total });
+	if (prev.total !== total) {
+		setPrev({ keys, total });
+		setView((v) => arrived(v, prev.keys, prev.total, total, atBottom()));
 	}
-	const cur = shown(view, n);
+	const cur = shown(view, keys);
 	const card = useRef<HTMLDivElement>(null);
 	const countBtn = useRef<HTMLButtonElement>(null);
-	/** The reply open whole in a dialog, by id. */
+	/** The thread open whole in a dialog, by key. */
 	const [expanded, setExpanded] = useState<string | null>(null);
-	/** Which replies the card's height cap cuts off (AgentReply measures). */
+	/** Which threads' open reply the card's height cap cuts off (ThreadView measures). */
 	const [cut, setCut] = useState<Record<string, boolean>>({});
 	const onCut = useCallback(
-		(id: string, c: boolean) => setCut((m) => (m[id] === c ? m : { ...m, [id]: c })),
+		(key: string, c: boolean) => setCut((m) => (m[key] === c ? m : { ...m, [key]: c })),
 		[],
 	);
+	const jumped = useRef(0);
+	useEffect(() => {
+		if (!jump || jump.block !== id || jump.n === jumped.current) return;
+		jumped.current = jump.n;
+		const i = keys.indexOf(jump.key);
+		if (i >= 0) setView((v) => goTo(v, i, keys, total));
+	}, [jump, id, keys, total]);
 	const go = (i: number) => {
 		if (i === cur || i < 0 || i >= n) return;
 		const focused = card.current?.contains(document.activeElement);
-		// Committed now, so the card is measured showing the reply it switched to.
-		flushSync(() => setView((v) => goTo(v, i, n)));
-		// At the first or last reply the arrow that stepped there disables itself
-		// and drops focus; the count takes it, so ←/→ go on working.
+		// Committed now, so the card is measured showing the thread it switched to.
+		flushSync(() => setView((v) => goTo(v, i, keys, total)));
+		// At the first or last thread the arrow that stepped there disables
+		// itself and drops focus; the count takes it, so ←/→ go on working.
 		const a = document.activeElement as HTMLButtonElement | null;
 		if (focused && (a?.disabled || !card.current?.contains(a)))
 			countBtn.current?.focus({ preventScroll: true });
 		if (card.current) onPaged(card.current);
 	};
-	const reply = replies[cur];
-	const prev = replies[cur - 1];
-	const next = replies[cur + 1];
-	const fresh = unseen(view, n);
-	if (!reply) return null;
+	const thread = threads[cur];
+	const prevT = threads[cur - 1];
+	const nextT = threads[cur + 1];
+	const fresh = unseen(view, keys, total);
+	if (!thread) return null;
+	const replies = (t: LeadThread) => t.entries.filter((e) => e.kind === "agent").length;
 	const nav = n > 1 && (
 		<div className="lead-stack-nav">
 			<IconButton
 				icon={ChevronLeft}
 				size={14}
-				label={prev ? `Previous: ${prev.task.name}` : "Previous"}
-				disabled={!prev}
+				label={prevT ? `Previous: ${prevT.task.name}` : "Previous"}
+				disabled={!prevT}
 				onClick={() => go(cur - 1)}
 			/>
 			<DropdownMenu modal={false}>
@@ -740,25 +928,32 @@ function AgentStack({
 						variant="ghost"
 						size="xs"
 						className="tabular-nums"
-						title="All replies"
-						aria-label={`Reply ${cur + 1} of ${n}, list all`}
+						title="All tasks that replied"
+						aria-label={`Task ${cur + 1} of ${n}, list all`}
 					>
 						{cur + 1} of {n}
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end" collisionPadding={8} className="w-[320px]">
 					<DropdownMenuRadioGroup value={String(cur)} onValueChange={(v) => go(Number(v))}>
-						{replies.map((r, i) => (
-							<DropdownMenuRadioItem key={r.id} value={String(i)}>
-								<AgentIcon agentId={r.task.agentId} size={12} />
-								<span className="flex min-w-0 flex-col">
-									<span className="truncate">{r.task.name}</span>
-									<span className="truncate text-xs text-muted-foreground">
-										{firstLine(r.text)}
+						{threads.map((t, i) => {
+							const last = t.entries[t.entries.length - 1];
+							const r = replies(t);
+							return (
+								<DropdownMenuRadioItem key={t.key} value={String(i)}>
+									<AgentIcon agentId={t.task.agentId} size={12} />
+									<span className="flex min-w-0 flex-col">
+										<span className="truncate">
+											{t.task.name}
+											{r > 1 && <span className="text-muted-foreground"> · {r} replies</span>}
+										</span>
+										<span className="truncate text-xs text-muted-foreground">
+											{last ? entryLine(last) : ""}
+										</span>
 									</span>
-								</span>
-							</DropdownMenuRadioItem>
-						))}
+								</DropdownMenuRadioItem>
+							);
+						})}
 					</DropdownMenuRadioGroup>
 				</DropdownMenuContent>
 			</DropdownMenu>
@@ -766,61 +961,68 @@ function AgentStack({
 				<IconButton
 					icon={ChevronRight}
 					size={14}
-					label={next ? `Next: ${next.task.name}${fresh ? " (new)" : ""}` : "Next"}
-					disabled={!next}
+					label={nextT ? `Next: ${nextT.task.name}${fresh ? " (new)" : ""}` : "Next"}
+					disabled={!nextT}
 					onClick={() => go(cur + 1)}
 				/>
 				{fresh && <span className="lead-stack-dot" />}
 			</span>
 		</div>
 	);
+	// Expand shows more than the card does: a reply the cap cuts, or entries
+	// folded above it.
+	const more =
+		cut[thread.key] || thread.earlier.length > 0 || openFrom(thread.entries.map((e) => e.kind)) > 0;
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: ←/→ step through the replies from anywhere in the card, not from one control
+		// biome-ignore lint/a11y/noStaticElementInteractions: ←/→ step through the threads from anywhere in the card, not from one control
 		<div
 			ref={card}
 			className="lead-agent"
+			data-block={id}
 			onKeyDown={(e) => {
 				// Not while typing an answer, and not from the list (a portal, outside the card).
 				const t = e.target as HTMLElement;
 				if (n < 2 || t.closest("input, textarea") || !e.currentTarget.contains(t)) return;
-				if (e.key === "ArrowLeft" && prev) go(cur - 1);
-				else if (e.key === "ArrowRight" && next) go(cur + 1);
+				if (e.key === "ArrowLeft" && prevT) go(cur - 1);
+				else if (e.key === "ArrowRight" && nextT) go(cur + 1);
 				else return;
 				e.preventDefault();
 			}}
 		>
 			<div className="lead-agent-head">
-				<TaskChip task={reply.task} tasks={tasks} onOpenTask={onOpenTask} />
-				<span className="lead-agent-said">replied</span>
+				<TaskChip task={thread.task} tasks={tasks} onOpenTask={onOpenTask} />
+				<span className="lead-agent-said">{threadVerb(thread)}</span>
 				<div className="lead-agent-tools">
-					{cut[reply.id] && (
+					{more && (
 						<IconButton
 							icon={Maximize2}
 							size={13}
 							label="Expand"
-							onClick={() => setExpanded(reply.id)}
+							onClick={() => setExpanded(thread.key)}
 						/>
 					)}
 					{nav}
 				</div>
 			</div>
-			{replies.map((r, i) => (
-				<AgentReply
-					key={r.id}
-					item={r}
+			{threads.map((t, i) => (
+				<ThreadView
+					key={t.key}
+					thread={t}
 					hidden={i !== cur}
+					atBottom={atBottom}
+					onContinue={onContinue}
 					chip={
 						<TaskChip
-							task={r.task}
+							task={t.task}
 							tasks={tasks}
-							onOpenTask={(t) => {
+							onOpenTask={(task) => {
 								setExpanded(null);
-								onOpenTask(t);
+								onOpenTask(task);
 							}}
 						/>
 					}
-					expanded={expanded === r.id}
-					onExpandedChange={(open) => setExpanded(open ? r.id : null)}
+					expanded={expanded === t.key}
+					onExpandedChange={(open) => setExpanded(open ? t.key : null)}
 					onCut={onCut}
 				/>
 			))}
@@ -962,6 +1164,14 @@ export function LeadChat({
 		const above = card.getBoundingClientRect().top - el.getBoundingClientRect().top;
 		if (above < 0) el.scrollTop += above - 8;
 		pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+	}, []);
+	// "Continues below" on a thread: its later card comes into view, showing
+	// that task's thread (`n` makes a second click on the same one count).
+	const [jump, setJump] = useState<{ block: string; key: string; n: number } | null>(null);
+	const onContinue = useCallback((block: string, key: string) => {
+		const card = thread.current?.querySelector<HTMLElement>(`[data-block="${CSS.escape(block)}"]`);
+		card?.scrollIntoView({ block: "start", behavior: "smooth" });
+		setJump((j) => ({ block, key, n: (j?.n ?? 0) + 1 }));
 	}, []);
 
 	const blocks = useMemo(() => toLeadBlocks(snap.items), [snap.items]);
@@ -1123,18 +1333,21 @@ export function LeadChat({
 					{blocks.map((b) =>
 						b.kind === "tools" ? (
 							<ToolGroup key={b.id} tools={b.tools} tasks={tasks} onOpenTask={onOpenTask} />
-						) : b.kind === "agents" ? (
-							<AgentStack
+						) : b.kind === "threads" ? (
+							<ThreadStack
 								key={b.id}
-								replies={b.replies}
+								id={b.id}
+								threads={b.threads}
+								total={b.items.length}
 								tasks={tasks}
 								onOpenTask={onOpenTask}
 								atBottom={atBottom}
 								onPaged={keepInView}
+								jump={jump}
+								onContinue={onContinue}
 							/>
 						) : b.item.kind === "user" ? (
 							<div key={b.item.id} className="lead-user">
-								{b.item.to && <div className="lead-user-to">to {b.item.to.name}</div>}
 								{b.item.files?.length ? (
 									<div className="lead-files">
 										{b.item.files.map((f) => (
@@ -1154,18 +1367,6 @@ export function LeadChat({
 								onOpen={(item) => onOpenProposal(item, false)}
 								onOpenTask={onOpenTask}
 							/>
-						) : b.item.kind === "page" ? (
-							<div key={b.item.id} className="lead-agent">
-								<div className="lead-agent-head">
-									<TaskChip task={b.item.task} tasks={tasks} onOpenTask={onOpenTask} />
-									<span className="lead-agent-said">made a page</span>
-								</div>
-								<PageFrame
-									taskId={b.item.task.taskId}
-									pageId={b.item.pageId}
-									title={b.item.title}
-								/>
-							</div>
 						) : b.item.kind === "assistant" ? (
 							<div key={b.item.id} className="md">
 								<TaskLinkContext value={renderTaskLink}>

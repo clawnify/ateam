@@ -54,6 +54,8 @@ export interface Lead {
 	snapshot(tail?: number): LeadSnapshot;
 	/** Up to `limit` items before `beforeId`, oldest first. */
 	older(beforeId: string, limit: number): { items: LeadItem[]; more: boolean };
+	/** Mid-turn, and not waiting on the user to answer a permission prompt. */
+	working(): boolean;
 	/** The user's message; `paths` are files attached in this chat. Starts the
 	 *  agent on first use. */
 	send(text: string, paths?: string[]): void;
@@ -150,6 +152,7 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 		attachments,
 		snapshot: (tail) => lead.snapshot(tail),
 		older: (beforeId, limit) => lead.older(String(beforeId), limit),
+		working: () => lead.working(),
 		send(text, paths) {
 			const files = paths?.length ? attachments.resolve(paths.map(String)) : [];
 			if (typeof files === "string") fail(files);

@@ -52,6 +52,7 @@ export function BoxesScreen({
 	onDisconnect,
 	onDemo,
 	onBoxTerminal,
+	onGithub,
 }: {
 	/** The nav bar's left slot: back to the board when connected, else the logo. */
 	leading: ReactNode;
@@ -81,6 +82,8 @@ export function BoxesScreen({
 	onDemo: () => void;
 	/** Open the connected box's own terminal (outside every project). */
 	onBoxTerminal: () => void;
+	/** Open the connected box's GitHub access (sign-in, token, which repos it can push to). */
+	onGithub: () => void;
 }) {
 	return (
 		<View style={styles.root}>
@@ -126,6 +129,7 @@ export function BoxesScreen({
 								onEdit={() => onEdit(box)}
 								onRemove={() => onRemove(box)}
 								onTerminal={key === liveKey ? onBoxTerminal : undefined}
+								onGithub={key === liveKey ? onGithub : undefined}
 							/>
 						);
 					})}
@@ -177,6 +181,7 @@ function BoxCard({
 	onEdit,
 	onRemove,
 	onTerminal,
+	onGithub,
 }: {
 	box: SavedBox;
 	live: boolean;
@@ -194,6 +199,8 @@ function BoxCard({
 	onRemove: () => void;
 	/** The connected box's terminal; only on its card. */
 	onTerminal?: () => void;
+	/** Only on the connected box's card, like the terminal. */
+	onGithub?: () => void;
 }) {
 	const x = useRef(new Animated.Value(0)).current;
 	// Where the card rests (0 closed, -ACTIONS_WIDTH open), so a drag starts from there.
@@ -300,14 +307,21 @@ function BoxCard({
 						accessibilityRole="button"
 						accessibilityLabel={`${title}, ${subtitle}${state ? `, ${state}` : ""}`}
 						accessibilityHint={live ? "Returns to the board" : "Connects to this box"}
+						// The card is one VoiceOver element, so the buttons inside it are its
+						// actions too, or VoiceOver couldn't reach them.
 						accessibilityActions={[
 							{ name: "activate" },
+							...(onGithub ? [{ name: "github", label: "GitHub on this box" }] : []),
+							...(onTerminal ? [{ name: "terminal", label: "Box terminal" }] : []),
 							{ name: "edit", label: "Edit" },
 							{ name: "remove", label: "Remove from this list" },
 						]}
 						onAccessibilityAction={(e) => {
-							if (e.nativeEvent.actionName === "edit") onEdit();
-							else if (e.nativeEvent.actionName === "remove") onRemove();
+							const action = e.nativeEvent.actionName;
+							if (action === "edit") onEdit();
+							else if (action === "remove") onRemove();
+							else if (action === "github") onGithub?.();
+							else if (action === "terminal") onTerminal?.();
 							else if (!disabled) onPress();
 						}}
 					>
@@ -323,6 +337,17 @@ function BoxCard({
 								{failure && !tray ? failure : subtitle}
 							</Text>
 						</View>
+						{onGithub ? (
+							<Pressable
+								style={styles.terminalBtn}
+								onPress={onGithub}
+								hitSlop={8}
+								accessibilityRole="button"
+								accessibilityLabel="GitHub on this box"
+							>
+								<Feather name="github" size={16} color={C.ink} />
+							</Pressable>
+						) : null}
 						{onTerminal ? (
 							<Pressable
 								style={styles.terminalBtn}

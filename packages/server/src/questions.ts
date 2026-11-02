@@ -144,7 +144,7 @@ export function applyAskUser(
 	if (req.page != null) {
 		const page = validatePage({ html: req.page }, titleFrom(verdict.question.text));
 		if (!page.ok) return page;
-		pageId = savePage(db, task.id, page.title, page.html, now).id;
+		pageId = savePage(db, task.id, page.title, page.html, now, true).id;
 	}
 	repo.updateTask(db, task.id, {
 		question: {

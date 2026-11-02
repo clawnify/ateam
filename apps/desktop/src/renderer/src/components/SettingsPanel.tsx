@@ -11,6 +11,7 @@ import {
 } from "@ateam/protocol";
 import { AlertTriangle, Search } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { GithubBoxesButton } from "./GithubAccess";
 
 /**
  * The settings page: a section list on the left, rows of title + description +
@@ -122,7 +123,7 @@ const ROWS: Row[] = [
 		section: "general",
 		title: "Let idle boxes sleep",
 		description:
-			"Let a box sleep once no agent has been working on it for this long, on providers where Ateam can. A sleeping box keeps its sessions, and connecting to it or starting a task wakes it in a few seconds. This Mac and always-on servers are not affected.",
+			"Let a box sleep once nobody has used it for this long (no agent working, no typing in its terminals, no Lead chat), on providers where Ateam can. A sleeping box keeps its sessions, and connecting to it or starting a task wakes it in a few seconds. This Mac and always-on servers are not affected.",
 		control: (s, { patch }) => {
 			// A box whose engine predates this setting doesn't report it; it would
 			// default to an hour like every other engine.
@@ -262,6 +263,14 @@ const ROWS: Row[] = [
 				onChange={(v) => patch({ engine: { deleteRemoteBranchOnMerge: v } })}
 			/>
 		),
+	},
+	{
+		id: "boxes.github",
+		section: "git",
+		title: "GitHub on your boxes",
+		description:
+			"Which GitHub account and token each connected box uses, and which of its projects it can push to. Paste a new token here instead of in the box's terminal.",
+		control: () => <GithubBoxesButton />,
 	},
 	{
 		id: "credentials.openRouter",

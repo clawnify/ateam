@@ -182,8 +182,8 @@ for JSON-RPC, laggier for PTY output).
 
 ## Sleep and wake
 
-The engine manages a boxd box's sleep itself: once no agent has
-worked for `engine.idleSleepMinutes` (Settings → General, default 60, 0 never),
+The engine manages a boxd box's sleep itself: once nobody has used the box
+for `engine.idleSleepMinutes` (Settings → General, default 60, 0 never),
 it lets boxd hibernate the box, and it wakes the box for the next loop tick or
 task reminder (a wait coming due). The
 box keeps every process and session; it bills disk only while asleep, against
@@ -208,6 +208,11 @@ boxes on 2026-10-21:
 | `auto-suspend.timeout 60` with the hibernate timer off (2026-10-25) | Suspended (`standby`) 70s after the last connection: a hold that only stops hibernation doesn't stop this |
 | Both timers off, the engine's hold (2026-10-25) | Still running 3.5 minutes after the last connection |
 | Suspend off, hibernate 60s, the engine's release (2026-10-25) | Hibernated 76s after the last connection |
+| The engine's idle window at 2 minutes, a client reconnecting every 30s to the held box, no work (2026-11-02) | Released when the window ran out, 22s after the last reconnect; hibernated within 70s of that |
+| A client connecting by SSH 20s after it hibernated (2026-11-02) | Woke and answered in about 1s; the connection held it for a fresh window (too short a sleep to read as a wake) |
+| Typing in the box shell every 50s for 4 minutes (2026-11-02) | Held throughout; released at the first check 2 minutes after the last keystroke (2m49s) |
+| The Lead chat used every 50s for 4 minutes (2026-11-02) | Held throughout; released at the first check 2 minutes after the last use (2m14s) |
+| Woken through boxd's API after 3 minutes asleep, nothing connecting (2026-11-02) | The engine read it as a wake and held it for a fresh window |
 
 When to sleep is decided by the engine for every provider
 (`packages/server/src/sleep/control.ts`); this is how its boxd driver
@@ -219,10 +224,16 @@ instead:
   a new machine, but when on it suspends a held box under a working agent, and a
   released one would suspend instead of hibernating, which is not the state loops
   were measured waking from.
-- **Hold** (`auto-hibernate.timeout 0`) while an agent is working, for the idle
-  window after, and for a fresh window whenever a client attaches. An idle
-  connection is not traffic boxd counts, so without this a box woken to start a
-  task would fall asleep under you.
+- **Hold** (`auto-hibernate.timeout 0`) while the box is in use, and for the idle
+  window after. In use means an agent working, someone typing in one of its
+  terminals (a box shell counts), or its Lead chat: mid-turn, or someone writing
+  in it. A box that wakes gets a fresh window, and so does a client connecting to
+  a released box: an idle connection is not traffic boxd counts, so without this
+  a box woken to start a task would fall asleep under you. A client connecting to
+  a box that is already held changes nothing, because the desktop reconnects on
+  its own: a Mac asleep with its lid shut wakes for maintenance every 15 minutes
+  or so, and when each reconnect restarted the window, a box with no work stayed
+  up all night (2026-11-02).
 - **Release** (`idle.ignore-outbound on`, `auto-hibernate.timeout 60`) once idle.
   Ignoring outbound is what lets a box with `tailscaled`, a worktree sweep and git
   fetches go quiet at all; only a connection opened to the box keeps it up.
@@ -232,6 +243,17 @@ instead:
   whose image has no `run` (one created 2026-08-04 had none; one created
   2026-10-21 did) stays held while it has a live loop, because a loop that
   silently never runs is worse than a box that stays up.
+
+The engine's log says when it held or released the box and why, and once an
+hour what keeps a held box up. Read it with `journalctl -u ateam` on the box when
+the engine runs as the installer's service, or in `~/.ateam/daemon.log` when
+`ateam attach` started it:
+
+```
+[ateam] 2026-11-02T00:20:41Z still holding boxd machine mybox awake: agent work at 2026-11-02T00:20:41Z
+[ateam] 2026-11-02T01:21:00Z letting boxd machine mybox sleep: nothing for 60 min since typing in a terminal at 2026-11-02T00:20:13Z
+[ateam] 2026-11-02T07:02:10Z holding boxd machine mybox awake: the box woke at 2026-11-02T07:02:10Z
+```
 
 What wakes a sleeping box: connecting from the desktop (picking it, or starting a
 task there), `boxd machine wake <vm>`, a loop tick, or a wait coming due. The desktop leaves a box it

@@ -69,6 +69,13 @@ const api: AteamApi = {
 		get: () => ipcRenderer.invoke(CH.credentialsGet),
 		update: (patch) => ipcRenderer.invoke(CH.credentialsUpdate, patch),
 	},
+	// The engine the aggregate routes to. Box UIs use window.ateamHost's per-alias
+	// githubAccess/connectGithub/checkGithub instead, which name their box.
+	githubAccess: {
+		status: () => ipcRenderer.invoke(CH.githubAccessStatus),
+		connect: (token) => ipcRenderer.invoke(CH.githubAccessConnect, token),
+		check: (repos) => ipcRenderer.invoke(CH.githubAccessCheck, repos ?? null),
+	},
 	editor: {
 		open: (taskId) => ipcRenderer.invoke(CH.editorOpenUrl, taskId),
 		install: (taskId) => ipcRenderer.invoke(CH.editorInstall, taskId),
@@ -186,6 +193,10 @@ const host: AteamHost = {
 	createBox: (spec) => ipcRenderer.invoke(HOST_CH.createBox, spec),
 	installAgent: (alias, agentId) => ipcRenderer.invoke(HOST_CH.installAgent, alias, agentId),
 	boxReadiness: (alias) => ipcRenderer.invoke(HOST_CH.boxReadiness, alias),
+	githubAccess: (alias) => ipcRenderer.invoke(HOST_CH.githubAccess, alias),
+	connectGithub: (alias, token) => ipcRenderer.invoke(HOST_CH.connectGithub, alias, token),
+	checkGithub: (alias, repos) => ipcRenderer.invoke(HOST_CH.checkGithub, alias, repos),
+	openGithub: (url) => ipcRenderer.invoke(HOST_CH.openGithub, url),
 	secretsStatus: () => ipcRenderer.invoke(HOST_CH.secretsStatus),
 	saveSecrets: (patch) => ipcRenderer.invoke(HOST_CH.saveSecrets, patch),
 	providerOptions: (token) => ipcRenderer.invoke(HOST_CH.providerOptions, token),

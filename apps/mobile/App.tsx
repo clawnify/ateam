@@ -58,11 +58,12 @@ import { AgentIcon } from "./src/AgentIcon";
 import { filesToBox } from "./src/attach";
 import { BoxesScreen } from "./src/BoxesScreen";
 import { BoxTerminalScreen } from "./src/BoxTerminalScreen";
-import { boxKey, removeBox, type SavedBox, touchBox } from "./src/boxes";
+import { boxKey, boxTitle, removeBox, type SavedBox, touchBox } from "./src/boxes";
 import { Composer, type ComposerSubmit } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
 import { type Connection, connect } from "./src/connection";
 import { demoConnection } from "./src/demo";
+import { GithubAccessScreen } from "./src/GithubAccessScreen";
 import { HomeScreen } from "./src/HomeScreen";
 import { LeadScreen } from "./src/LeadScreen";
 import { type LoopDraft, LoopForm, LoopsScreen } from "./src/LoopsScreen";
@@ -1037,6 +1038,9 @@ export default function App() {
 	}, [leadSent]);
 	const [openTaskFocus, setOpenTaskFocus] = useState(false);
 	const [boxTerminalOpen, setBoxTerminalOpen] = useState(false);
+	// The connected box's GitHub access (GithubAccessScreen), full screen over whatever
+	// opened it: the Boxes list or the project browser, which it returns to.
+	const [githubOpen, setGithubOpen] = useState(false);
 	const [leadOpen, setLeadOpen] = useState(false);
 	// The box version whose banner was dismissed; the banner comes back when the
 	// box reports a different one. Persisted per box.
@@ -1287,6 +1291,7 @@ export default function App() {
 						setTab("home");
 						setOpenTask(null);
 						setBoxTerminalOpen(false);
+						setGithubOpen(false);
 						setLeadOpen(false);
 					}
 				}
@@ -1538,6 +1543,7 @@ export default function App() {
 		target.current = null; // demo never reattaches
 		setOpenTask(null);
 		setBoxTerminalOpen(false);
+		setGithubOpen(false);
 		setLeadOpen(false);
 		if (retryTimer.current) {
 			clearTimeout(retryTimer.current);
@@ -1681,6 +1687,7 @@ export default function App() {
 		target.current = null; // intent: stay disconnected — no auto-reattach
 		setOpenTask(null);
 		setBoxTerminalOpen(false);
+		setGithubOpen(false);
 		setLeadOpen(false);
 		if (retryTimer.current) {
 			clearTimeout(retryTimer.current);
@@ -1762,8 +1769,21 @@ export default function App() {
 			? conn.current.lead
 			: null,
 		connected && target.current ? boxKey(target.current) : null,
-		view === "board" && leadOpen && !openTask && !boxTerminalOpen && !browserOpen,
+		view === "board" && leadOpen && !openTask && !boxTerminalOpen && !browserOpen && !githubOpen,
 	);
+
+	if (githubOpen && conn.current) {
+		return (
+			<GithubAccessScreen
+				api={conn.current.api}
+				boxLabel={target.current ? boxTitle(target.current) : "this box"}
+				supported={boxSupports("githubAccess", conn.current.info.protocolVersion)}
+				onClose={() => setGithubOpen(false)}
+				onUpdateBox={updateBox}
+				updating={updatingBox}
+			/>
+		);
+	}
 
 	// The project browser is a full-screen view-swap (NOT a nested modal — presenting
 	// a modal while the dropdown modal dismisses deadlocks iOS and freezes the app).
@@ -1782,6 +1802,7 @@ export default function App() {
 					setOpenTask(null);
 					setBoxTerminalOpen(true);
 				}}
+				onOpenGithub={() => setGithubOpen(true)}
 			/>
 		);
 	}
@@ -1827,6 +1848,7 @@ export default function App() {
 						setOpenTask(null);
 						setBoxTerminalOpen(true);
 					}}
+					onGithub={() => setGithubOpen(true)}
 				/>
 			);
 		}

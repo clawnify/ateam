@@ -176,6 +176,42 @@ describe("a box's own Lead over the engine's RPC", () => {
 		ext.dispose();
 	});
 
+	it("tells sleep control when the chat is in use, but not when it is only read", async () => {
+		const { procs, ext } = setup();
+		const phone = connect(ext);
+		await phone.call(LEAD_CH.snapshot); // the phone opening the chat
+		expect(ext.activity()).toEqual({ working: false, lastUsedAt: null });
+
+		const before = Date.now();
+		await phone.call(LEAD_CH.send, "clean up the branches");
+		const used = ext.activity();
+		expect(used.working).toBe(true);
+		expect(used.lastUsedAt).toBeGreaterThanOrEqual(before);
+
+		// Waiting on the user's answer is not work, as for a task's agent.
+		const p = procs[0] as FakeClaude;
+		p.say(
+			{ type: "system", subtype: "init", session_id: "s1" },
+			{
+				type: "control_request",
+				request_id: "r1",
+				request: {
+					subtype: "can_use_tool",
+					tool_name: "Bash",
+					input: { command: "git branch -D x" },
+				},
+			},
+		);
+		await tick();
+		expect(ext.activity().working).toBe(false);
+		await phone.call(LEAD_CH.permission, "r1", "allow");
+		expect(ext.activity().working).toBe(true);
+		p.say({ type: "result", subtype: "success" });
+		await tick();
+		expect(ext.activity().working).toBe(false);
+		ext.dispose();
+	});
+
 	it("refuses what the network must not get through", async () => {
 		const { ext } = setup();
 		const phone = connect(ext);

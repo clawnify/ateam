@@ -19,6 +19,7 @@ import type {
 	CredentialsResult,
 	DiffResultDTO,
 	DirListingDTO,
+	GithubAccessDTO,
 	GithubIssueDTO,
 	GithubIssuesDTO,
 	GitStatusSnapshot,
@@ -32,6 +33,7 @@ import type {
 	PtyDataEvent,
 	PtyExitEvent,
 	PtySnapshot,
+	RepoAccessDTO,
 	SessionDTO,
 	SessionHitDTO,
 	SettingsResult,
@@ -195,6 +197,11 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		credentials: {
 			get: () => call<CredentialsResult>(CH.credentialsGet, []),
 			update: (patch) => call<CredentialsResult>(CH.credentialsUpdate, [patch]),
+		},
+		githubAccess: {
+			status: () => call<GithubAccessDTO>(CH.githubAccessStatus, []),
+			connect: (token) => call<GithubAccessDTO>(CH.githubAccessConnect, [token]),
+			check: (repos) => call<RepoAccessDTO[]>(CH.githubAccessCheck, [repos]),
 		},
 		editor: {
 			open:
