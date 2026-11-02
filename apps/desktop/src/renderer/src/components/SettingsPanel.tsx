@@ -11,6 +11,7 @@ import {
 } from "@ateam/protocol";
 import { AlertTriangle, Search } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { BoxesSettings } from "./BoxesSettings";
 
 /**
  * The settings page: a section list on the left, rows of title + description +
@@ -28,10 +29,11 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
  * offered: a setting nothing acts on is a lie, however tidy the row.
  */
 
-type SectionId = "general" | "agents" | "git" | "ai";
+type SectionId = "general" | "boxes" | "agents" | "git" | "ai";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
 	{ id: "general", label: "General" },
+	{ id: "boxes", label: "Boxes" },
 	{ id: "agents", label: "Agents" },
 	{ id: "git", label: "Git" },
 	{ id: "ai", label: "AI" },
@@ -264,6 +266,16 @@ const ROWS: Row[] = [
 		),
 	},
 	{
+		// The Boxes section is its own page (BoxesSettings): this row is what search
+		// finds it by, and its description is the page's introduction.
+		id: "boxes.list",
+		section: "boxes",
+		title: "Boxes",
+		description:
+			"Every box you've used: whether it's connected, its engine version, and the GitHub account and token it uses. Connect, update or forget a box here, and paste a new GitHub token instead of using the box's terminal.",
+		control: () => null,
+	},
+	{
 		id: "credentials.openRouter",
 		section: "ai",
 		title: "OpenRouter API key",
@@ -456,7 +468,14 @@ function Switch({
 	);
 }
 
-export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
+export function SettingsPanel({
+	agents,
+	boxesNeedYou = false,
+}: {
+	agents: AgentDTO[];
+	/** A connected box needs the user (useBoxesNeedingYou): Boxes gets a dot. */
+	boxesNeedYou?: boolean;
+}) {
 	const [result, setResult] = useState<SettingsResult | null>(null);
 	const [credentials, setCredentials] = useState<CredentialsResult | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -573,6 +592,9 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 						onClick={() => pick(s.id)}
 					>
 						{s.label}
+						{s.id === "boxes" && boxesNeedYou ? (
+							<span className="settings-nav-dot" role="img" aria-label="a box needs you" />
+						) : null}
 					</button>
 				))}
 			</nav>
@@ -597,6 +619,15 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 				) : (
 					shown.map((section) => {
 						const rows = section.rows;
+						if (section.id === "boxes") {
+							return (
+								<section key={section.id} className="settings-section">
+									<h3>{section.label}</h3>
+									<p className="settings-section-intro">{rows[0]?.description}</p>
+									<BoxesSettings />
+								</section>
+							);
+						}
 						return (
 							<section key={section.id} className="settings-section">
 								<h3>{section.label}</h3>
@@ -617,7 +648,7 @@ export function SettingsPanel({ agents }: { agents: AgentDTO[] }) {
 						);
 					})
 				)}
-				{result && shown.some((sec) => sec.id !== "ai") && (
+				{result && shown.some((sec) => sec.id !== "ai" && sec.id !== "boxes") && (
 					<p className="settings-foot">
 						Stored in <code>{result.path}</code>
 						{result.machine === undefined

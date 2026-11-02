@@ -43,12 +43,17 @@ export interface LeadDeps {
 	emit(e: LeadEvent): void;
 	/** How to start `claude` (tests); default: through the login shell. */
 	spawnClaude?: LeadSessionOptions["spawnClaude"];
+	/** Stop the agent after this long idle (a box's Lead); see LeadSessionOptions. */
+	idleStopMs?: number;
 }
 
 /** What a host's transport calls. A refusal throws with words for the user. */
 export interface Lead {
 	readonly attachments: LeadAttachments;
-	snapshot(): LeadSnapshot;
+	/** `tail`: only the last that many items (a phone's first load). */
+	snapshot(tail?: number): LeadSnapshot;
+	/** Up to `limit` items before `beforeId`, oldest first. */
+	older(beforeId: string, limit: number): { items: LeadItem[]; more: boolean };
 	/** Mid-turn, and not waiting on the user to answer a permission prompt. */
 	working(): boolean;
 	/** The user's message; `paths` are files attached in this chat. Starts the
@@ -126,6 +131,7 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 		allowedTools: LEAD_TOOL_NAMES,
 		emit: deps.emit,
 		...(deps.spawnClaude ? { spawnClaude: deps.spawnClaude } : {}),
+		...(deps.idleStopMs ? { idleStopMs: deps.idleStopMs } : {}),
 	});
 	const lead = session;
 
@@ -144,7 +150,8 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 
 	return {
 		attachments,
-		snapshot: () => lead.snapshot(),
+		snapshot: (tail) => lead.snapshot(tail),
+		older: (beforeId, limit) => lead.older(String(beforeId), limit),
 		working: () => lead.working(),
 		send(text, paths) {
 			const files = paths?.length ? attachments.resolve(paths.map(String)) : [];

@@ -3,6 +3,8 @@
 // renderer, the Electron main process, and the (future) headless @ateam/server
 // over SSH — shares one definition without pulling in node/electron/db internals.
 
+import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
+
 /**
  * Wire-contract version. A client checks it on connect (via `system:hello`) and
  * refuses/warns on mismatch, so a version-skewed remote fails cleanly at the
@@ -119,7 +121,13 @@
 // v24: a box's own Lead, for the phone. The engine answers LEAD_RPC (lead.ts)
 // and pushes LEAD_EVENT to a connection that called one. New methods only; the
 // phone hides its Lead below this version (FEATURE_MIN_VERSION.lead).
-export const PROTOCOL_VERSION = 24;
+// v25: GitHub access (github-access.ts). githubAccess:status says which GitHub
+// credential the box's gh and git use and what kind it is, githubAccess:connect
+// hands gh a token without a terminal, and githubAccess:check says per repo
+// whether the box can push, only read, or not see it. New methods only: a v24
+// engine answers "Unknown method", and clients send the user to the box terminal
+// instead (FEATURE_MIN_VERSION.githubAccess).
+export const PROTOCOL_VERSION = 25;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -275,6 +283,9 @@ export const FEATURE_MIN_VERSION = {
 	/** v24 added the box's own Lead chat (LEAD_RPC). An older box answers every
 	 *  call "Unknown method", so the phone offers to update the box instead. */
 	lead: 24,
+	/** v25 added githubAccess:*. An older box answers "Unknown method", so clients
+	 *  point at its terminal (gh auth login) and at Update box instead. */
+	githubAccess: 25,
 } as const;
 
 export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
@@ -917,6 +928,10 @@ export interface SystemInfo {
 	protocolVersion: number;
 	/** Ids of agents installed + available on the engine's machine. */
 	agents: string[];
+	/** The Ateam release the engine was built from ("0.1.80"). Absent from engines
+	 *  before it was reported, null from one run from source. A release can change
+	 *  the engine without a protocol bump, so clients compare this to offer updates. */
+	release?: string | null;
 }
 
 /** What `system:update` reports back before the engine goes down to be replaced. */
@@ -974,6 +989,8 @@ export interface ConnectionDTO {
 	transport: HostTransport;
 	hostName: string | null;
 	serverVersion: string | null;
+	/** The engine's release when last reached (SystemInfo.release); null if it didn't say. */
+	engineRelease?: string | null;
 	agentsAvailable: string[] | null;
 	lastSeen: number | null;
 	/** Present in ~/.ssh/config right now (vs a saved record since removed from it). */
@@ -1101,6 +1118,9 @@ export const CH = {
 	settingsUpdate: "settings:update",
 	credentialsGet: "credentials:get",
 	credentialsUpdate: "credentials:update",
+	githubAccessStatus: "githubAccess:status",
+	githubAccessConnect: "githubAccess:connect",
+	githubAccessCheck: "githubAccess:check",
 	editorOpen: "editor:open",
 	editorOpenUrl: "editor:openUrl",
 	editorInstall: "editor:install",
@@ -1452,6 +1472,21 @@ export interface AteamApi {
 		/** Store or remove a key; answers like `get`. */
 		update(patch: CredentialsPatch): Promise<CredentialsResult>;
 	};
+	/** GitHub access on the engine's machine (v25). The token never travels back. */
+	githubAccess: {
+		/** Which credential gh and git use there, its kind and whose it is. */
+		status(): Promise<GithubAccessDTO>;
+		/**
+		 * Check a token with GitHub, hand it to gh on stdin, let git use it, and
+		 * answer the new status. Rejects with a sentence a person can act on.
+		 */
+		connect(token: string): Promise<GithubAccessDTO>;
+		/**
+		 * Per repository (`owner/name`): can this machine push, only read, or not see
+		 * it? With none given, the engine's own projects.
+		 */
+		check(repos?: string[]): Promise<RepoAccessDTO[]>;
+	};
 	utils: {
 		/**
 		 * Absolute filesystem path for a File from a drop or paste (Electron
@@ -1526,6 +1561,8 @@ export {
 	WOKEN_RETRY_GAP_MS,
 	waitingLabel,
 } from "./connect-steps";
+// GitHub access on a box (v25): its DTOs and the wording both clients share.
+export * from "./github-access";
 // The Lead chat: its items and events, the desktop's IPC channels and the
 // engine's RPC for a box's own Lead (v24).
 export * from "./lead";

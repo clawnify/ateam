@@ -642,14 +642,15 @@ fi
 if [ -n "$(git config --global user.name || true)" ] && [ -n "$(git config --global user.email || true)" ]; then
 	mark ok "git identity ($(git config --global user.name) <$(git config --global user.email)>)"
 else
-	mark no 'git identity — set automatically once you `gh auth login`, or by hand:'
+	mark no 'git identity: sets itself once GitHub is connected, or by hand:'
 	info '     git config --global user.name "you"; git config --global user.email "you@example.com"'
 fi
 
 if [ -n "$GH_BIN" ] && "$GH_BIN" auth status >/dev/null 2>&1; then
 	mark ok "GitHub signed in ($("$GH_BIN" api user -q .login 2>/dev/null))"
 else
-	mark no 'GitHub — sign in so the box can clone your repos:  gh auth login'
+	mark no 'GitHub: connect it from Ateam (Settings → Boxes, the set-up checklist, or the box card on the phone)'
+	info '     with a fine-grained token for this box'"'"'s repos. Or here: gh auth login (reaches every repo you can)'
 fi
 
 AGENTS=""

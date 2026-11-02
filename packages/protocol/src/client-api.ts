@@ -19,6 +19,7 @@ import type {
 	CredentialsResult,
 	DiffResultDTO,
 	DirListingDTO,
+	GithubAccessDTO,
 	GithubIssueDTO,
 	GithubIssuesDTO,
 	GitStatusSnapshot,
@@ -32,6 +33,7 @@ import type {
 	PtyDataEvent,
 	PtyExitEvent,
 	PtySnapshot,
+	RepoAccessDTO,
 	SessionDTO,
 	SessionHitDTO,
 	SettingsResult,
@@ -49,6 +51,7 @@ import {
 	type LeadClient,
 	type LeadEvent,
 	type LeadFile,
+	type LeadItem,
 	type LeadSnapshot,
 } from "./lead";
 import type { RpcClient } from "./rpc";
@@ -89,7 +92,12 @@ export function requestBoxUpdate(rpc: RpcClient): Promise<BoxUpdateStarted> {
 export function leadClient(rpc: RpcClient): LeadClient {
 	const call = (method: string, ...args: unknown[]) => rpc.call(method, args);
 	return {
-		snapshot: () => call(LEAD_CH.snapshot) as Promise<LeadSnapshot>,
+		snapshot: (opts) =>
+			(opts?.tail !== undefined
+				? call(LEAD_CH.snapshot, { tail: opts.tail })
+				: call(LEAD_CH.snapshot)) as Promise<LeadSnapshot>,
+		older: (beforeId, limit) =>
+			call(LEAD_CH.older, beforeId, limit) as Promise<{ items: LeadItem[]; more: boolean }>,
 		send: async (text, files) => void (await call(LEAD_CH.send, text, files ?? [])),
 		attachBytes: (name, base64) => call(LEAD_CH.attachBytes, name, base64) as Promise<LeadFile>,
 		interrupt: async () => void (await call(LEAD_CH.interrupt)),
@@ -99,6 +107,8 @@ export function leadClient(rpc: RpcClient): LeadClient {
 		permission: async (id, answer) => void (await call(LEAD_CH.permission, id, answer)),
 		setAuto: async (on) => void (await call(LEAD_CH.setAuto, on)),
 		dismissProposal: async (id) => void (await call(LEAD_CH.proposal, id, "dismissed")),
+		proposalCreated: async (id, taskId) =>
+			void (await call(LEAD_CH.proposal, id, "created", ...(taskId ? [taskId] : []))),
 		onEvent: (cb) => rpc.on(LEAD_EVENT, (e) => cb(e as LeadEvent)),
 	};
 }
@@ -187,6 +197,11 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		credentials: {
 			get: () => call<CredentialsResult>(CH.credentialsGet, []),
 			update: (patch) => call<CredentialsResult>(CH.credentialsUpdate, [patch]),
+		},
+		githubAccess: {
+			status: () => call<GithubAccessDTO>(CH.githubAccessStatus, []),
+			connect: (token) => call<GithubAccessDTO>(CH.githubAccessConnect, [token]),
+			check: (repos) => call<RepoAccessDTO[]>(CH.githubAccessCheck, [repos]),
 		},
 		editor: {
 			open:

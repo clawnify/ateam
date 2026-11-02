@@ -106,6 +106,7 @@ export function HomeScreen({
 	onOpenLoops,
 	onNewLoop,
 	scrollProps,
+	topInset = 0,
 }: {
 	projects: ProjectDTO[];
 	selectedProjectId: string | null;
@@ -120,6 +121,8 @@ export function HomeScreen({
 	onNewLoop: () => void;
 	/** The list's scrolling, for what floats over it (scroll-fade.ts). */
 	scrollProps?: ScrollFadeProps;
+	/** The floating top bar's height: the list scrolls under it and starts below it. */
+	topInset?: number;
 }) {
 	const [sort, setSort] = useState<TaskSort>("updated");
 	const [projectsOpen, setProjectsOpen] = useState(true);
@@ -137,7 +140,12 @@ export function HomeScreen({
 	const taskById = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
 
 	return (
-		<ScrollView style={styles.root} contentContainerStyle={styles.content} {...scrollProps}>
+		<ScrollView
+			style={styles.root}
+			contentContainerStyle={[styles.content, { paddingTop: topInset + 6 }]}
+			scrollIndicatorInsets={{ top: topInset }}
+			{...scrollProps}
+		>
 			<View style={styles.column}>
 				<View style={styles.sectionHead}>
 					<Pressable style={styles.sectionToggle} onPress={() => setProjectsOpen((o) => !o)}>

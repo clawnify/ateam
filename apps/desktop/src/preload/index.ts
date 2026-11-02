@@ -69,6 +69,13 @@ const api: AteamApi = {
 		get: () => ipcRenderer.invoke(CH.credentialsGet),
 		update: (patch) => ipcRenderer.invoke(CH.credentialsUpdate, patch),
 	},
+	// The engine the aggregate routes to. Box UIs use window.ateamHost's per-alias
+	// githubAccess/connectGithub/checkGithub instead, which name their box.
+	githubAccess: {
+		status: () => ipcRenderer.invoke(CH.githubAccessStatus),
+		connect: (token) => ipcRenderer.invoke(CH.githubAccessConnect, token),
+		check: (repos) => ipcRenderer.invoke(CH.githubAccessCheck, repos ?? null),
+	},
 	editor: {
 		open: (taskId) => ipcRenderer.invoke(CH.editorOpenUrl, taskId),
 		install: (taskId) => ipcRenderer.invoke(CH.editorInstall, taskId),
@@ -181,11 +188,18 @@ const host: AteamHost = {
 	origins: () => ipcRenderer.invoke(HOST_CH.origins),
 	failures: () => ipcRenderer.invoke(HOST_CH.failures),
 	canUpdateBoxes: () => ipcRenderer.invoke(HOST_CH.canUpdateBoxes),
+	appRelease: () => ipcRenderer.invoke(HOST_CH.appRelease),
+	boxGithub: () => ipcRenderer.invoke(HOST_CH.boxGithub),
 	provision: (alias, input) => ipcRenderer.invoke(HOST_CH.provision, alias, input),
 	install: (dest, opts) => ipcRenderer.invoke(HOST_CH.install, dest, opts),
 	createBox: (spec) => ipcRenderer.invoke(HOST_CH.createBox, spec),
 	installAgent: (alias, agentId) => ipcRenderer.invoke(HOST_CH.installAgent, alias, agentId),
 	boxReadiness: (alias) => ipcRenderer.invoke(HOST_CH.boxReadiness, alias),
+	updateBox: (alias) => ipcRenderer.invoke(HOST_CH.updateBox, alias),
+	githubAccess: (alias) => ipcRenderer.invoke(HOST_CH.githubAccess, alias),
+	connectGithub: (alias, token) => ipcRenderer.invoke(HOST_CH.connectGithub, alias, token),
+	checkGithub: (alias, repos) => ipcRenderer.invoke(HOST_CH.checkGithub, alias, repos),
+	openGithub: (url) => ipcRenderer.invoke(HOST_CH.openGithub, url),
 	secretsStatus: () => ipcRenderer.invoke(HOST_CH.secretsStatus),
 	saveSecrets: (patch) => ipcRenderer.invoke(HOST_CH.saveSecrets, patch),
 	providerOptions: (token) => ipcRenderer.invoke(HOST_CH.providerOptions, token),
@@ -197,6 +211,11 @@ const host: AteamHost = {
 		const handler = (_: unknown, connected: HostStatus[]) => cb(connected);
 		ipcRenderer.on(HOST_CH.evtConnectionsChanged, handler);
 		return () => ipcRenderer.off(HOST_CH.evtConnectionsChanged, handler);
+	},
+	onGithubChanged: (cb: () => void) => {
+		const handler = () => cb();
+		ipcRenderer.on(HOST_CH.evtGithubChanged, handler);
+		return () => ipcRenderer.off(HOST_CH.evtGithubChanged, handler);
 	},
 	onInstallLog: (cb: (e: InstallLogEvent) => void) => {
 		const handler = (_: unknown, e: InstallLogEvent) => cb(e);
