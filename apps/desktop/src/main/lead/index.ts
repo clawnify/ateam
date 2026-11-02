@@ -86,6 +86,9 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 			lead.proposal(String(id), outcome, taskId),
 	);
 	ipcMain.handle(LEAD_CH.reply, (_e, taskId: string, text: string) => lead.reply(taskId, text));
+	ipcMain.handle(LEAD_CH.react, (_e, id: string, emoji: string) =>
+		lead.react(String(id), String(emoji)),
+	);
 	ipcMain.handle(
 		LEAD_CH.answer,
 		(_e, input: { taskId: string; questionId: string; answer: string | string[] | null }) =>
