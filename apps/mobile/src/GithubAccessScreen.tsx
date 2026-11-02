@@ -17,6 +17,7 @@ import {
 	githubAccessProblem,
 	githubAccessSummary,
 	githubAccessUrgent,
+	githubHelperWarning,
 	githubTokenWouldHelp,
 	mostCommonOwner,
 	pastedTokenLabel,
@@ -174,6 +175,7 @@ export function GithubAccessScreen({
 
 	const access = loaded.access;
 	const problem = githubAccessProblem(access);
+	const helperWarning = githubHelperWarning(access);
 	const showForm = formOpen || githubTokenWouldHelp(access);
 	const owner = mostCommonOwner(checks?.map((c) => c.repo) ?? []) ?? access.gh?.login ?? null;
 	const pasted = pastedTokenLabel(token);
@@ -195,6 +197,7 @@ export function GithubAccessScreen({
 							{problem}
 						</Text>
 					) : null}
+					{helperWarning ? <Text style={styles.problem}>{helperWarning}</Text> : null}
 					{access.unverified ? <Text style={styles.note}>{access.unverified}</Text> : null}
 
 					{checks && checks.length > 0 ? (
