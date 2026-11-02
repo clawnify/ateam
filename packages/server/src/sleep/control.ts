@@ -33,9 +33,10 @@
 // timer that came due while asleep fires the moment the box wakes.
 //
 // Every hold and release is logged with its time and its reason, and a held box
-// says once an hour what last kept it up, so a night can be read back from
-// ~/.ateam/daemon.log. Connections are not logged one by one: hooks and MCP
-// servers connect too.
+// says once an hour what last kept it up, so a night can be read back from the
+// engine's log: `journalctl -u ateam` under the installer's service,
+// ~/.ateam/daemon.log for an engine `ateam attach` started. Connections are not
+// logged one by one.
 
 /** How often the idle clock is checked. */
 export const IDLE_CHECK_MS = 60_000;
