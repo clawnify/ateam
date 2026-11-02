@@ -128,6 +128,11 @@ export function describeSshFailure(output: string): string | null {
 	if (output.includes("REMOTE HOST IDENTIFICATION HAS CHANGED")) {
 		return "The box's host key has changed since this Mac last connected, so ssh refused it. If the box was rebuilt, remove its old key from ~/.ssh/known_hosts (the log names the line), then try again.";
 	}
+	// StrictHostKeyChecking yes in the user's ssh config: ssh never adds a new key,
+	// so a terminal would refuse this box too, and the key has to be added by hand.
+	if (/No \S+ host key is known for/.test(output)) {
+		return "Your ssh config only connects to hosts already in known_hosts (StrictHostKeyChecking yes), so ssh refused this new box. Add its key there yourself, then try again.";
+	}
 	if (output.includes("Host key verification failed")) {
 		return "ssh doesn't know this box's host key and wasn't allowed to accept a new one. Connect once from a terminal to check and accept it, then try again.";
 	}
