@@ -6,7 +6,20 @@ import { randomUUID } from "node:crypto";
 import { errorMessage } from "@ateam/git-core";
 import type { ClientFrame, ServerFrame } from "@ateam/protocol";
 import type { Dispatcher } from "./dispatcher";
-import type { Engine } from "./engine";
+import type { Engine, EngineEventMap } from "./engine";
+
+/**
+ * The engine events every client is sent, keyed by the engine's own event map:
+ * an event added there doesn't compile here until it's forwarded. A hand-kept
+ * list once left taskRemoved off, so no client ever heard a box drop a task.
+ */
+const FORWARDED: Record<keyof EngineEventMap, true> = {
+	taskUpdated: true,
+	taskRemoved: true,
+	loopsUpdated: true,
+	ptyData: true,
+	ptyExit: true,
+};
 
 /** The server's view of a bidirectional, whole-frame message channel. */
 export interface ServerTransport {
@@ -43,12 +56,9 @@ export function serveRpc(
 ): () => void {
 	const forward = (event: string) => (payload: unknown) =>
 		transport.send({ t: "evt", event, payload });
-	const unsubscribe = [
-		engine.on("taskUpdated", forward("taskUpdated")),
-		engine.on("loopsUpdated", forward("loopsUpdated")),
-		engine.on("ptyData", forward("ptyData")),
-		engine.on("ptyExit", forward("ptyExit")),
-	];
+	const unsubscribe = (Object.keys(FORWARDED) as (keyof EngineEventMap)[]).map((event) =>
+		engine.on(event, forward(event)),
+	);
 	// One id per connection: the dispatcher tells viewers of the same terminal
 	// apart by it (whose size the PTY follows), and forgets them when they go.
 	const client = randomUUID();

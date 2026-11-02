@@ -262,7 +262,10 @@ ssh my-ateam-box "bash -lc 'ateam'"
 ### Optional: a browser for the box's agents
 
 Browser MCP tools usually drive the Chrome on your laptop, and that only works
-when the agent runs on the laptop too. A box gets a Chrome of its own instead:
+when the agent runs on the laptop too. A box gets a Chrome of its own instead.
+In the desktop app, click the globe button on a task on the box: on a box with
+no browser yet, Ateam asks, then installs it there. Or run the installer on the
+box yourself:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install-browser.sh | bash
