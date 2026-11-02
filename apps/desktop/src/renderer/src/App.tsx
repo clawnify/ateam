@@ -72,7 +72,9 @@ import {
 	type SetStateAction,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
+	useReducer,
 	useRef,
 	useState,
 } from "react";
@@ -3155,6 +3157,48 @@ function TaskSummary({ task }: { task: TaskDTO }) {
 	);
 }
 
+// Whether the user opened (true) or closed (false) each page in the task panel,
+// by page id. A page nobody chose for opens by itself if show_page made it, and
+// not if it came with a question (TaskPageDTO.fromQuestion). Not the panel's
+// state: the panel remounts on every side/full switch. Kept across restarts
+// because a task keeps its page forever; past the cap the oldest choices fall
+// off, and those pages go back to their default.
+// shortcut: this Mac's localStorage; move it onto the task row once another
+// client (the phone) shows pages and should agree on what was closed.
+const PAGE_CHOICES_KEY = "ateam.pageChoices";
+const PAGE_CHOICES_MAX = 200;
+const pageChoices = new Map<string, boolean>(
+	(() => {
+		try {
+			const v: unknown = JSON.parse(localStorage.getItem(PAGE_CHOICES_KEY) ?? "[]");
+			return Array.isArray(v)
+				? v.filter(
+						(e): e is [string, boolean] =>
+							Array.isArray(e) && typeof e[0] === "string" && typeof e[1] === "boolean",
+					)
+				: [];
+		} catch {
+			return [];
+		}
+	})(),
+);
+const choosePage = (pageId: string, open: boolean) => {
+	pageChoices.delete(pageId); // re-inserted last: the newest choice is the last to go
+	pageChoices.set(pageId, open);
+	for (const old of pageChoices.keys()) {
+		if (pageChoices.size <= PAGE_CHOICES_MAX) break;
+		pageChoices.delete(old);
+	}
+	try {
+		localStorage.setItem(PAGE_CHOICES_KEY, JSON.stringify([...pageChoices]));
+	} catch {
+		/* full or unavailable: the choice still holds until the app quits */
+	}
+};
+// Narrower than this, the panel body has no room for the page beside the
+// terminal, and the page fills it instead (the 480px side panel always does).
+const PAGE_SPLIT_MIN = 880;
+
 function TaskPanel({
 	task,
 	agents,
@@ -3512,6 +3556,46 @@ function TaskPanel({
 	// beside it (both open at once). Only when the toggle wants it.
 	const mainViewOpen = editorOpen || browserOpen || changesOpen;
 	const termDocked = termSide && mainViewOpen;
+
+	// The agent's page, unless the open question's card draws it. A show_page
+	// page is open unless closed: beside the terminal when the body is wide
+	// enough, over it when not. The editor, browser and changes views cover it.
+	// Not open, it is a bar above the terminal's toolbar. A question's page,
+	// once the question has ended, only ever opens from the bar.
+	const page = task.page && task.question?.pageId !== task.page.id ? task.page : null;
+	const [, rerender] = useReducer((n: number) => n + 1, 0);
+	const pageShown = !!page && (pageChoices.get(page.id) ?? !page.fromQuestion) && !mainViewOpen;
+	const bodyRef = useRef<HTMLDivElement>(null);
+	const [bodyWide, setBodyWide] = useState(false);
+	useLayoutEffect(() => {
+		const el = bodyRef.current;
+		if (!el) return;
+		// Measured now as well: the observer's first report lands after the paint.
+		const check = () => setBodyWide(el.clientWidth >= PAGE_SPLIT_MIN);
+		check();
+		const ro = new ResizeObserver(check);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+	const pageFills = pageShown && !bodyWide;
+	const openPage = () => {
+		if (!page) return;
+		choosePage(page.id, true);
+		setEditorOpen(false);
+		setBrowserOpen(false);
+		setChangesOpen(false);
+		rerender();
+	};
+	const closePage = () => {
+		if (!page) return;
+		choosePage(page.id, false);
+		rerender();
+	};
+	const pageBar = page && !pageShown && (
+		<div className="panel-page">
+			<PageFrame taskId={task.id} pageId={page.id} title={page.title} onOpen={openPage} />
+		</div>
+	);
 
 	// Closing a tab kills its PTY — tabs are exactly the live sessions, so there
 	// is no "closed but still running" state to explain. Confirm first when the
@@ -3876,13 +3960,13 @@ function TaskPanel({
 					}
 				/>
 			)}
-			<div className={`panel-body${termDocked ? " docked-term" : ""}`}>
+			<div className={`panel-body${termDocked ? " docked-term" : ""}`} ref={bodyRef}>
 				{/* Keep the terminal mounted (xterm state survives) while the
 				    changes view is open — just hide it, or dock it beside the
 				    view when the sidebar toggle is on. */}
 				<div
 					className="term-wrap"
-					style={{ display: termDocked || !mainViewOpen ? "flex" : "none" }}
+					style={{ display: (termDocked || !mainViewOpen) && !pageFills ? "flex" : "none" }}
 				>
 					{terminalId ? (
 						<TerminalView
@@ -3896,15 +3980,19 @@ function TaskPanel({
 									await window.ateam.tasks.setColumn(task.id, "merged");
 								})
 							}
+							aboveToolbar={pageBar}
 						/>
 					) : (
-						<div className="term term-empty">
-							<button type="button" onClick={resumeLast}>
-								<History size={13} />
-								Resume last conversation
-							</button>
-							<span className="muted">or open a tab with + to start a terminal</span>
-						</div>
+						<>
+							<div className="term term-empty">
+								<button type="button" onClick={resumeLast}>
+									<History size={13} />
+									Resume last conversation
+								</button>
+								<span className="muted">or open a tab with + to start a terminal</span>
+							</div>
+							{pageBar}
+						</>
 					)}
 				</div>
 
@@ -3971,13 +4059,13 @@ function TaskPanel({
 						</div>
 					</div>
 				)}
-			</div>
 
-			{task.page && task.question?.pageId !== task.page.id && (
-				<div className="panel-page">
-					<PageFrame taskId={task.id} pageId={task.page.id} title={task.page.title} collapsed />
-				</div>
-			)}
+				{page && pageShown && (
+					<div className={`page-pane${pageFills ? " fills" : ""}`}>
+						<PageFrame taskId={task.id} pageId={page.id} title={page.title} onClose={closePage} />
+					</div>
+				)}
+			</div>
 		</section>
 	);
 }
