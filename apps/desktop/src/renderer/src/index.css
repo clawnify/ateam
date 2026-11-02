@@ -281,6 +281,31 @@ input {
 .rail-tile .corner.needs_attention {
 	background: var(--amber);
 }
+/* A box needs you (a release behind, or a GitHub token close to expiring or
+   refused): the same amber, on the Settings button, its Boxes section and the
+   box's card. */
+.iconbtn.has-attention {
+	position: relative;
+}
+.iconbtn .iconbtn-dot {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--amber);
+}
+.settings-nav-dot,
+.box-card-dot {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	margin-left: 6px;
+	border-radius: 50%;
+	background: var(--amber);
+	vertical-align: middle;
+}
 .rail-divider {
 	width: 24px;
 	height: 1px;

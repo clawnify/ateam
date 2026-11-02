@@ -2,7 +2,14 @@
 // desktop already knows without connecting (its connection records and the
 // engines it holds). Nothing here reaches a box, so listing never wakes one.
 
-import { type ConnectionDTO, providerById, wakeMachineName } from "@ateam/protocol";
+import {
+	type ConnectionDTO,
+	FEATURE_MIN_VERSION,
+	type GithubAccessDTO,
+	githubTokenNeedsRenewal,
+	providerById,
+	wakeMachineName,
+} from "@ateam/protocol";
 import type { HostStatus } from "../../shared/host";
 
 export interface BoxRow {
@@ -16,8 +23,12 @@ export interface BoxRow {
 	state: "connected" | "asleep" | "offline";
 	/** The engine's protocol version: the live one when held, the last seen otherwise. */
 	version: number | null;
-	/** Against this app's protocol. */
+	/** The release the engine was built from, live or last seen; null when it didn't say. */
+	release: string | null;
+	/** Against this app: its protocol first, then its release. */
 	engine: "current" | "behind" | "ahead" | "unknown";
+	/** It speaks the protocol GitHub access needs, so its GitHub panel works. */
+	githubReady: boolean;
 	lastSeen: number | null;
 	/** Why the app's own last attempt to connect failed, if it did. */
 	failure: string | null;
@@ -34,15 +45,16 @@ export function boxRows(
 	connections: readonly ConnectionDTO[],
 	held: readonly HostStatus[],
 	failures: Readonly<Record<string, string>>,
-	protocol: number,
+	app: { protocol: number; release: string },
 ): BoxRow[] {
-	const live = new Map(held.flatMap((h) => (h.alias ? [[h.alias, h.info.protocolVersion]] : [])));
+	const live = new Map(held.flatMap((h) => (h.alias ? [[h.alias, h.info] as const] : [])));
 	return connections
 		.filter((c) => c.known)
 		.map((c): BoxRow => {
-			const liveVersion = live.get(c.alias);
+			const info = live.get(c.alias);
 			const seen = Number(c.serverVersion);
-			const version = liveVersion ?? (Number.isFinite(seen) && seen > 0 ? seen : null);
+			const version = info?.protocolVersion ?? (Number.isFinite(seen) && seen > 0 ? seen : null);
+			const release = (info ? info.release : c.engineRelease) ?? null;
 			const provider = c.wake ? providerById(c.wake.id)?.label : undefined;
 			const reach = c.transport === "ws" ? `Tailscale ${c.alias}` : `SSH ${c.hostName ?? c.alias}`;
 			return {
@@ -50,16 +62,11 @@ export function boxRows(
 				title: wakeMachineName(c.wake) ?? c.alias,
 				detail: provider ? `${provider} · ${reach}` : reach,
 				transport: c.transport === "ws" ? "ws" : "ssh",
-				state: liveVersion !== undefined ? "connected" : c.asleep ? "asleep" : "offline",
+				state: info ? "connected" : c.asleep ? "asleep" : "offline",
 				version,
-				engine:
-					version == null
-						? "unknown"
-						: version < protocol
-							? "behind"
-							: version > protocol
-								? "ahead"
-								: "current",
+				release,
+				engine: engineAgainst(version, release, app),
+				githubReady: version != null && version >= FEATURE_MIN_VERSION.githubAccess,
 				lastSeen: c.lastSeen,
 				failure: failures[c.alias] ?? null,
 			};
@@ -67,15 +74,61 @@ export function boxRows(
 		.sort((a, b) => ORDER[a.state] - ORDER[b.state] || (b.lastSeen ?? 0) - (a.lastSeen ?? 0));
 }
 
+/**
+ * A box's engine against this app. The protocol decides first. On the same protocol
+ * the release does, since a release can change the engine without bumping it. An
+ * engine that names no release predates reporting one, so it's older than this app.
+ */
+function engineAgainst(
+	version: number | null,
+	release: string | null,
+	app: { protocol: number; release: string },
+): BoxRow["engine"] {
+	if (version == null) return "unknown";
+	if (version !== app.protocol) return version < app.protocol ? "behind" : "ahead";
+	if (release == null) return "behind";
+	const order = compareReleases(release, app.release);
+	return order < 0 ? "behind" : order > 0 ? "ahead" : "current";
+}
+
+/** Orders two releases ("0.1.79" before "0.1.80"): negative, zero or positive. */
+export function compareReleases(a: string, b: string): number {
+	const pa = a.split(".").map((n) => Number.parseInt(n, 10) || 0);
+	const pb = b.split(".").map((n) => Number.parseInt(n, 10) || 0);
+	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+		const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+		if (d !== 0) return d;
+	}
+	return 0;
+}
+
+/**
+ * The connected boxes that need you: an engine behind this app (its Update fixes
+ * that), or a GitHub token close to expiring or refused. Connected ones only, so a
+ * box not reached in months can't hold a dot up for good.
+ */
+export function boxesNeedingYou(
+	rows: readonly BoxRow[],
+	github: Readonly<Record<string, GithubAccessDTO>>,
+	now: number,
+): Set<string> {
+	const needs = (r: BoxRow) => {
+		const access = github[r.alias];
+		return r.engine === "behind" || (access != null && githubTokenNeedsRenewal(access, now));
+	};
+	return new Set(rows.filter((r) => r.state === "connected" && needs(r)).map((r) => r.alias));
+}
+
 /** The engine half of a row's status line. */
 export function engineLabel(row: BoxRow): string {
+	const name = row.release ?? `v${row.version}`;
 	switch (row.engine) {
 		case "current":
-			return `engine v${row.version}, up to date`;
+			return `engine ${name}, up to date`;
 		case "behind":
-			return `engine v${row.version}, update available`;
+			return `engine ${name}, update available`;
 		case "ahead":
-			return `engine v${row.version}, newer than this app`;
+			return `engine ${name}, newer than this app`;
 		default:
 			return "engine version unknown";
 	}

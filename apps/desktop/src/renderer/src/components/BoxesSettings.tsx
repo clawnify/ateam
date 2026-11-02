@@ -1,7 +1,12 @@
-import { type ConnectionDTO, PROTOCOL_VERSION, relativeAge } from "@ateam/protocol";
+import {
+	type ConnectionDTO,
+	type GithubAccessDTO,
+	PROTOCOL_VERSION,
+	relativeAge,
+} from "@ateam/protocol";
 import { useCallback, useEffect, useState } from "react";
 import type { HostStatus } from "../../../shared/host";
-import { type BoxRow, boxRows, engineLabel } from "../boxes-settings";
+import { type BoxRow, boxesNeedingYou, boxRows, engineLabel } from "../boxes-settings";
 import { GithubAccess } from "./GithubAccess";
 import { Button } from "./ui/button";
 import { usePrompt } from "./usePrompt";
@@ -31,22 +36,28 @@ export function BoxesSettings() {
 	const [held, setHeld] = useState<HostStatus[]>([]);
 	const [failures, setFailures] = useState<Record<string, string>>({});
 	const [canUpdateSsh, setCanUpdateSsh] = useState(false);
+	const [appRelease, setAppRelease] = useState("");
+	const [github, setGithub] = useState<Record<string, GithubAccessDTO>>({});
 	// alias → what's running on it right now ("Connecting…"), and the last outcome.
 	const [busy, setBusy] = useState<Record<string, string>>({});
 	const [notes, setNotes] = useState<Record<string, { text: string; error: boolean }>>({});
 	const { ui: promptUi, confirm } = usePrompt();
 
 	const load = useCallback(async () => {
-		const [list, connected, failed, updatable] = await Promise.all([
+		const [list, connected, failed, updatable, release, githubByBox] = await Promise.all([
 			window.ateamHost.list(),
 			window.ateamHost.connected(),
 			window.ateamHost.failures(),
 			window.ateamHost.canUpdateBoxes(),
+			window.ateamHost.appRelease(),
+			window.ateamHost.boxGithub(),
 		]);
 		setConnections(list);
 		setHeld(connected);
 		setFailures(failed);
 		setCanUpdateSsh(updatable);
+		setAppRelease(release);
+		setGithub(githubByBox);
 	}, []);
 
 	useEffect(() => {
@@ -102,7 +113,10 @@ export function BoxesSettings() {
 	};
 
 	if (connections === null) return <div className="gh-access-muted">Loading boxes…</div>;
-	const rows = boxRows(connections, held, failures, PROTOCOL_VERSION);
+	const rows = boxRows(connections, held, failures, {
+		protocol: PROTOCOL_VERSION,
+		release: appRelease,
+	});
 	if (rows.length === 0) {
 		return (
 			<div className="gh-access-muted">
@@ -111,6 +125,7 @@ export function BoxesSettings() {
 		);
 	}
 	const now = Date.now();
+	const needing = boxesNeedingYou(rows, github, now);
 
 	return (
 		<div className="boxes-settings">
@@ -125,7 +140,12 @@ export function BoxesSettings() {
 					<section key={row.alias} className="box-card" aria-label={row.title}>
 						<div className="box-card-head">
 							<div className="box-card-text">
-								<div className="box-card-title">{row.title}</div>
+								<div className="box-card-title">
+									{row.title}
+									{needing.has(row.alias) ? (
+										<span className="box-card-dot" role="img" aria-label="needs you" />
+									) : null}
+								</div>
 								<div className="box-card-detail">{row.detail}</div>
 								<div className="box-card-status">
 									<span className={`box-card-state ${row.state}`}>{statusLine(row, now)}</span>
@@ -168,7 +188,7 @@ export function BoxesSettings() {
 								<div className="gh-access-muted">
 									Connect to see which GitHub account and token it uses.
 								</div>
-							) : row.engine === "behind" ? (
+							) : !row.githubReady ? (
 								<div className="gh-access-muted">
 									Update the box to manage its GitHub access from here.
 								</div>

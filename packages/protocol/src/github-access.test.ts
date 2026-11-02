@@ -11,6 +11,7 @@ import {
 	githubCredentialKind,
 	githubHelperWarning,
 	githubRepoFromUrl,
+	githubTokenNeedsRenewal,
 	githubTokenWouldHelp,
 	mostCommonOwner,
 	OTHER_HELPER_REPO_HINT,
@@ -271,6 +272,14 @@ describe("token expiry", () => {
 			"The token in GH_TOKEN, set in the engine's environment, expires in 5 days. Replace it there: a token connected from Ateam would be ignored.",
 		);
 		expect(githubTokenWouldHelp(env, now)).toBe(false);
+	});
+
+	it("wants renewing in its last two weeks, once expired, and once refused", () => {
+		expect(githubTokenNeedsRenewal(expiring(5), now)).toBe(true);
+		expect(githubTokenNeedsRenewal(expiring(-1), now)).toBe(true);
+		expect(githubTokenNeedsRenewal(expiring(40), now)).toBe(false);
+		expect(githubTokenNeedsRenewal({ ...base, gh: { ...fine, rejected: true } }, now)).toBe(true);
+		expect(githubTokenNeedsRenewal({ ...base, gh: null }, now)).toBe(false);
 	});
 
 	it("is urgent once the token has expired or GitHub refuses it", () => {

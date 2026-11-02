@@ -14,7 +14,7 @@
 // flattens both to the dist root.
 //
 // Output: dist/{cli.js, daemon.js, package.json}. Run: `bun run build`.
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +23,13 @@ const dist = join(serverRoot, "dist");
 // native — installed on the box; the last two are `ws`'s OPTIONAL native speedups
 // (it try/catch-requires them and falls back to pure JS), so leave them unbundled.
 const EXTERNAL = ["better-sqlite3", "node-pty", "bufferutil", "utf-8-validate"];
+
+// The release this engine belongs to: the desktop app's version, which the release
+// flow bumps in the commit it tags (CI builds the box tarball from that tag). The
+// engine reports it in system:hello (src/release.ts).
+const release: string = JSON.parse(
+	readFileSync(join(serverRoot, "..", "..", "apps", "desktop", "package.json"), "utf8"),
+).version;
 
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
@@ -34,6 +41,7 @@ for (const entry of ["src/cli.ts", "src/pty/daemon.ts"]) {
 		target: "node",
 		format: "cjs",
 		external: EXTERNAL,
+		define: { ATEAM_RELEASE: JSON.stringify(release) },
 	});
 	if (!res.success) {
 		for (const log of res.logs) console.error(log);
@@ -48,7 +56,7 @@ writeFileSync(
 	`${JSON.stringify(
 		{
 			name: "ateam-server-dist",
-			version: "0.0.0",
+			version: release,
 			private: true,
 			bin: { ateam: "./cli.js" },
 			dependencies: {
@@ -67,4 +75,4 @@ writeFileSync(
 	)}\n`,
 );
 
-console.log(`built ateam dist → ${dist}`);
+console.log(`built ateam ${release} dist → ${dist}`);
