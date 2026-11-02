@@ -392,13 +392,17 @@ function LeadPermission({ item }: { item: Extract<LeadItem, { kind: "permission"
 }
 
 /** Answering a reply with an emoji, picked from the full set: the emoji is the
- *  whole answer, sent as soon as it is picked. */
+ *  whole answer, sent as soon as it is picked. Once sent it stands in for the
+ *  icon, and picking another sends that one in its place. */
 function EmojiReply({
 	name,
+	reaction,
 	disabled,
 	onPick,
 }: {
 	name: string;
+	/** The emoji the reply was answered with, if it was. */
+	reaction?: string;
 	disabled: boolean;
 	/** Sends it; true once it went. */
 	onPick: (emoji: string) => Promise<boolean>;
@@ -425,11 +429,16 @@ function EmojiReply({
 				<Button
 					variant="ghost"
 					size="icon-xs"
+					className={reaction ? "text-[15px]" : undefined}
 					disabled={disabled}
-					title="Reply with an emoji"
-					aria-label={`Reply to ${name} with an emoji`}
+					title={reaction ? `You answered ${reaction}` : "Reply with an emoji"}
+					aria-label={
+						reaction
+							? `You answered ${name} with ${reaction}, answer with another emoji`
+							: `Reply to ${name} with an emoji`
+					}
 				>
-					<Smile className="size-3.5" strokeWidth={1.75} />
+					{reaction ?? <Smile className="size-3.5" strokeWidth={1.75} />}
 				</Button>
 			</PopoverTrigger>
 			<PopoverContent align="end" collisionPadding={8} className="w-fit p-0">
@@ -560,11 +569,11 @@ function AgentReply({
 		return () => watch.disconnect();
 	}, [hidden, item.id, onCut]);
 
-	const send = async (body: string) => {
+	const send = async (go: () => Promise<void>) => {
 		setSending(true);
 		setError(null);
 		try {
-			await window.ateamLead.reply(item.task.taskId, body);
+			await go();
 			onExpandedChange(false);
 			return true;
 		} catch (err) {
@@ -577,7 +586,7 @@ function AgentReply({
 	const submit = async (e: FormEvent) => {
 		e.preventDefault();
 		if (!text.trim()) return;
-		if (await send(text)) {
+		if (await send(() => window.ateamLead.reply(item.task.taskId, text))) {
 			setText("");
 			setOpen(false);
 		}
@@ -608,7 +617,12 @@ function AgentReply({
 							<CornerDownRight size={12} />
 							Reply
 						</button>
-						<EmojiReply name={item.task.name} disabled={sending} onPick={send} />
+						<EmojiReply
+							name={item.task.name}
+							reaction={item.reaction}
+							disabled={sending}
+							onPick={(emoji) => send(() => window.ateamLead.react(item.id, emoji))}
+						/>
 					</>
 				)}
 			</div>
