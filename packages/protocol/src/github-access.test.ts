@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	broadTokenRevokeNote,
 	cleanGithubToken,
+	FINE_GRAINED_REPO_HINT,
 	fineGrainedTokenUrl,
 	type GithubAccessDTO,
 	githubAccessProblem,
@@ -10,7 +11,9 @@ import {
 	githubRepoFromUrl,
 	githubTokenWouldHelp,
 	mostCommonOwner,
+	OTHER_HELPER_REPO_HINT,
 	pastedTokenLabel,
+	repoVerdictHint,
 } from "./github-access";
 
 const fine = {
@@ -49,6 +52,7 @@ describe("fineGrainedTokenUrl", () => {
 		expect(p.get("pull_requests")).toBe("write");
 		expect(p.get("issues")).toBe("write");
 		expect(p.get("metadata")).toBe("read");
+		expect(p.get("statuses")).toBe("read");
 		expect(p.has("workflows")).toBe(false);
 		expect(p.has("administration")).toBe(false);
 	});
@@ -68,6 +72,19 @@ describe("cleanGithubToken", () => {
 		expect(cleanGithubToken("ateam box")).toBeNull();
 		expect(cleanGithubToken(`github_pat_${"a".repeat(10)} ${"a".repeat(20)}`)).toBeNull();
 		expect(cleanGithubToken(`ghr_${"a".repeat(36)}`)).toBeNull();
+	});
+});
+
+describe("repoVerdictHint", () => {
+	const none = [{ repo: "acme/app", access: "none" as const }];
+	it("says nothing when every repository can push", () => {
+		expect(repoVerdictHint(base, [{ repo: "acme/app", access: "push" }])).toBeNull();
+	});
+	it("points at the token's repository list when git uses the fine-grained token", () => {
+		expect(repoVerdictHint(base, none)).toBe(FINE_GRAINED_REPO_HINT);
+	});
+	it("says the results are another helper's when a provider signs git in", () => {
+		expect(repoVerdictHint({ ...base, git: "other" }, none)).toBe(OTHER_HELPER_REPO_HINT);
 	});
 });
 

@@ -78,9 +78,10 @@ and Sprites, 2026-10-25):
 
 The default on any box is the first: a [fine-grained
 token](sprites.md#github-credentials) limited to the org and repos the box works on,
-with Contents, Pull requests and Issues set to read and write, and Workflows left
-off, since an agent that can edit `.github/workflows` can reach the repo's Actions
-secrets.
+with Contents, Pull requests and Issues set to read and write, Commit statuses set to
+read (the merge queue waits on CI, and CI that reports commit statuses is hidden from
+a token without it on a private repo), and Workflows left off, since an agent that
+can edit `.github/workflows` can reach the repo's Actions secrets.
 
 Connect it from Ateam rather than a terminal: the checklist after setting a box up,
 **Settings → Git → GitHub on your boxes** on the desktop, or the GitHub button on the

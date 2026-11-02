@@ -11,6 +11,7 @@ import {
 	pastedTokenLabel,
 	type RepoAccessDTO,
 	repoAccessLabel,
+	repoVerdictHint,
 } from "@ateam/protocol";
 import { ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -54,6 +55,7 @@ export function GithubAccess({
 }) {
 	const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
 	const [checks, setChecks] = useState<RepoAccessDTO[] | null>(null);
+	const [checking, setChecking] = useState(false);
 	const [formOpen, setFormOpen] = useState(false);
 	const [token, setToken] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -65,10 +67,13 @@ export function GithubAccess({
 
 	const recheck = useCallback(async () => {
 		const list = reposKey ? reposKey.split("\n") : undefined;
+		setChecking(true);
 		try {
 			setChecks(await window.ateamHost.checkGithub(alias, list));
 		} catch {
 			setChecks(null); // the access line above still stands on its own
+		} finally {
+			setChecking(false);
 		}
 	}, [alias, reposKey]);
 
@@ -147,7 +152,7 @@ export function GithubAccess({
 	const showForm = formOpen || githubTokenWouldHelp(access);
 	const repoNames = checks?.map((c) => c.repo) ?? repos ?? [];
 	const owner = mostCommonOwner(repoNames) ?? access.gh?.login ?? null;
-	const scopedToken = access.gh?.kind === "fine-grained";
+	const hint = repoVerdictHint(access, checks ?? []);
 
 	return (
 		<div className="gh-access">
@@ -172,19 +177,29 @@ export function GithubAccess({
 					))}
 				</ul>
 			) : null}
-			{scopedToken && checks?.some((c) => c.access === "none" || c.access === "read") ? (
+			{checking && !checks ? (
+				<div className="gh-access-muted">Checking which projects it can push to…</div>
+			) : null}
+			{hint ? (
 				<div className="gh-access-muted">
-					{FINE_GRAINED_REPO_HINT}{" "}
-					<button
-						type="button"
-						className="gh-access-link"
-						onClick={() =>
-							void window.ateamHost.openGithub("https://github.com/settings/personal-access-tokens")
-						}
-					>
-						Your tokens on GitHub
-						<ExternalLink size={11} />
-					</button>
+					{hint}
+					{hint === FINE_GRAINED_REPO_HINT ? (
+						<>
+							{" "}
+							<button
+								type="button"
+								className="gh-access-link"
+								onClick={() =>
+									void window.ateamHost.openGithub(
+										"https://github.com/settings/personal-access-tokens",
+									)
+								}
+							>
+								Your tokens on GitHub
+								<ExternalLink size={11} />
+							</button>
+						</>
+					) : null}
 				</div>
 			) : null}
 

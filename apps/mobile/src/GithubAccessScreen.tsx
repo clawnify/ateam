@@ -21,6 +21,7 @@ import {
 	pastedTokenLabel,
 	type RepoAccessDTO,
 	repoAccessLabel,
+	repoVerdictHint,
 } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useCallback, useEffect, useState } from "react";
@@ -61,6 +62,7 @@ export function GithubAccessScreen({
 }) {
 	const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
 	const [checks, setChecks] = useState<RepoAccessDTO[] | null>(null);
+	const [checking, setChecking] = useState(false);
 	const [formOpen, setFormOpen] = useState(false);
 	const [token, setToken] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -74,10 +76,13 @@ export function GithubAccessScreen({
 			setLoaded({ state: "error", message: e instanceof Error ? e.message : String(e) });
 			return;
 		}
+		setChecking(true);
 		try {
 			setChecks(await api.githubAccess.check());
 		} catch {
 			setChecks(null); // the access line still stands on its own
+		} finally {
+			setChecking(false);
 		}
 	}, [api]);
 
@@ -167,6 +172,7 @@ export function GithubAccessScreen({
 	const showForm = formOpen || githubTokenWouldHelp(access);
 	const owner = mostCommonOwner(checks?.map((c) => c.repo) ?? []) ?? access.gh?.login ?? null;
 	const pasted = pastedTokenLabel(token);
+	const hint = repoVerdictHint(access, checks ?? []);
 
 	return (
 		<View style={styles.root}>
@@ -204,17 +210,21 @@ export function GithubAccessScreen({
 							))}
 						</View>
 					) : null}
-					{access.gh?.kind === "fine-grained" &&
-					checks?.some((c) => c.access === "none" || c.access === "read") ? (
+					{checking && !checks ? (
+						<Text style={styles.note}>Checking which projects it can push to…</Text>
+					) : null}
+					{hint === FINE_GRAINED_REPO_HINT ? (
 						<Pressable
 							onPress={() =>
 								void Linking.openURL("https://github.com/settings/personal-access-tokens")
 							}
 						>
 							<Text style={styles.note}>
-								{FINE_GRAINED_REPO_HINT} <Text style={styles.link}>Your tokens on GitHub</Text>
+								{hint} <Text style={styles.link}>Your tokens on GitHub</Text>
 							</Text>
 						</Pressable>
+					) : hint ? (
+						<Text style={styles.note}>{hint}</Text>
 					) : null}
 
 					{!showForm && access.ghInstalled && access.gh?.source !== "env" ? (

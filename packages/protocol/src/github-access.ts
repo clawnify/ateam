@@ -185,6 +185,23 @@ export const FINE_GRAINED_REPO_HINT =
 	"A fine-grained token covers one account or organization. Add a repository to it on GitHub if it belongs to that owner, with Contents set to read and write. A repository of another owner needs a token of its own, on another box. A token for an organization may also wait on an owner's approval.";
 
 /**
+ * The per-repository verdicts are for the token git sends, so when another credential
+ * helper (a provider's) signs git in, they say nothing about the token gh holds.
+ */
+export const OTHER_HELPER_REPO_HINT =
+	"git on this box signs in with another credential helper's token, so these results are for that token, not the one gh uses. To have git use this box's own token, disconnect that helper at your provider, then connect the token again.";
+
+/** What to say under the per-repository verdicts when some can't push, if anything. */
+export function repoVerdictHint(
+	a: GithubAccessDTO,
+	checks: readonly RepoAccessDTO[],
+): string | null {
+	if (!checks.some((c) => c.access === "none" || c.access === "read")) return null;
+	if (a.git === "other") return OTHER_HELPER_REPO_HINT;
+	return a.gh?.kind === "fine-grained" ? FINE_GRAINED_REPO_HINT : null;
+}
+
+/**
  * What still holds after a broad token is replaced: the box forgets it, GitHub
  * doesn't. Null unless the box's gh token is a broad one.
  */
@@ -204,11 +221,17 @@ function expiryPhrase(expiresAt: number, now: number): string {
 	return `expired ${-days} day${days === -1 ? "" : "s"} ago`;
 }
 
-/** What Ateam does on a box, and nothing else: the fine-grained permissions it asks for. */
+/**
+ * What Ateam does on a box, and nothing else: the fine-grained permissions it asks
+ * for. Commit statuses is read-only and there for the merge queue, which holds a
+ * merge until CI passes: CI that reports commit statuses (rather than GitHub
+ * Actions' check runs) is hidden on a private repository without it.
+ */
 export const FINE_GRAINED_PERMISSIONS = {
 	contents: "write",
 	pull_requests: "write",
 	issues: "write",
+	statuses: "read",
 	metadata: "read",
 } as const;
 

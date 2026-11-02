@@ -51,12 +51,12 @@ Agents run here, and `gh auth login` hands them a token that never expires and
 reaches every repo your account can, in plain text in `~/.config/gh/hosts.yml` (a
 Sprite has no keyring) and in every checkpoint taken after it.
 
-1. Create the token. This link pre-fills a 90-day expiry and the three permissions
+1. Create the token. This link pre-fills a 90-day expiry and the permissions
    Ateam uses; put your org in `target_name` (or drop it for personal repos), then
    pick the repositories:
 
    ```
-   https://github.com/settings/personal-access-tokens/new?name=ateam%20box&target_name=<your-org>&expires_in=90&contents=write&pull_requests=write&issues=write&metadata=read
+   https://github.com/settings/personal-access-tokens/new?name=ateam%20box&target_name=<your-org>&expires_in=90&contents=write&pull_requests=write&issues=write&statuses=read&metadata=read
    ```
 
    | Permission | What Ateam does with it |
@@ -64,6 +64,7 @@ Sprite has no keyring) and in every checkpoint taken after it.
    | Contents: read and write | clone, push, merge a PR |
    | Pull requests: read and write | `gh pr view`, `gh pr create`, `gh pr merge` |
    | Issues: read and write | list a project's issues, file one |
+   | Commit statuses: read | see CI that reports statuses, so the merge queue waits for it |
 
    Leave Workflows off: an agent that can edit `.github/workflows` can reach the
    repo's Actions secrets. Fine-grained tokens can't call the Checks API, which Ateam
