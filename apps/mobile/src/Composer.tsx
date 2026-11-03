@@ -6,7 +6,9 @@
 // the Lead's own controls. The switch remembers the last choice; a box without
 // its own Lead (before v24) shows no switch.
 // Long-press send to start it and stay on the board instead (a snackbar above
-// the composer then offers the way in).
+// the composer then offers the way in). When the project is on more than one
+// box, a Run on line under the field picks the box the task starts on, as the
+// desktop's Run on does.
 // Auto mode = the agent's automatic mode (yolo); Agent mode = the tool's own multi-agent
 // board (`claude agents`) in that worktree. The paperclip attaches photos or
 // files, held here and uploaded on send to where the message goes (attach.tsx).
@@ -75,6 +77,13 @@ export interface ComposerSubmit {
 /** The floating switch's band, laid over the bottom of the content above. */
 const FLOAT = 48;
 
+/** Which box a new task starts on, when its project is on more than one. */
+export interface RunOn {
+	options: { key: string; label: string; live: boolean }[];
+	value: string;
+	onChange: (key: string) => void;
+}
+
 export function Composer({
 	agents,
 	busy,
@@ -85,6 +94,7 @@ export function Composer({
 	snack,
 	onOpenSnack,
 	onDismissSnack,
+	runOn,
 }: {
 	agents: AgentDTO[];
 	busy: boolean;
@@ -99,6 +109,8 @@ export function Composer({
 	snack: string | null;
 	onOpenSnack: () => void;
 	onDismissSnack: () => void;
+	/** The Run on choice; absent when the project is on one box. */
+	runOn?: RunOn;
 }) {
 	// Prefer an installed agent; fall back to claude so the picker is never empty
 	// even when the box's availability probe came back empty (non-login daemon).
@@ -198,6 +210,35 @@ export function Composer({
 	// Long-press send: choose between opening the new task and staying here. A tap
 	// still opens it, as it always has.
 	const sendRef = useRef<View>(null);
+	const runOnRef = useRef<View>(null);
+	const chooseRunOn = () => {
+		if (!runOn) return;
+		// A box that isn't answering still starts the task: it is woken first.
+		const labels = runOn.options.map((o) => (o.live ? o.label : `${o.label} (asleep)`));
+		const pick = (i: number) => {
+			const o = runOn.options[i];
+			if (o) runOn.onChange(o.key);
+		};
+		if (Platform.OS === "ios") {
+			const anchor = runOnRef.current ? findNodeHandle(runOnRef.current) : null;
+			ActionSheetIOS.showActionSheetWithOptions(
+				{
+					title: "Run on",
+					options: [...labels, "Cancel"],
+					cancelButtonIndex: labels.length,
+					anchor: anchor ?? undefined,
+				},
+				pick,
+			);
+			return;
+		}
+		Alert.alert("Run on", undefined, [
+			...labels.map((text, i) => ({ text, onPress: () => pick(i) })),
+			{ text: "Cancel", style: "cancel" as const },
+		]);
+	};
+	const runOnLabel = runOn?.options.find((o) => o.key === runOn.value)?.label;
+
 	const chooseLanding = () => {
 		if (!canSubmit) return;
 		const options = toLead
@@ -298,6 +339,25 @@ export function Composer({
 						multiline={toLead || !agentMode}
 						editable={toLead || !busy}
 					/>
+					{/* On its own line: a box's name (often its address) doesn't fit beside the tools. */}
+					{!toLead && runOn && runOnLabel ? (
+						<Pressable
+							ref={runOnRef}
+							style={styles.runOn}
+							onPress={chooseRunOn}
+							hitSlop={4}
+							accessibilityRole="button"
+							accessibilityLabel={`Run on ${runOnLabel}`}
+							accessibilityHint="Picks the box this task starts on"
+						>
+							<Feather name="server" size={12} color={C.muted} />
+							<Text style={styles.runOnLabel}>Run on</Text>
+							<Text style={styles.runOnBox} numberOfLines={1}>
+								{runOnLabel}
+							</Text>
+							<Text style={styles.caret}>▾</Text>
+						</Pressable>
+					) : null}
 					<View style={styles.row}>
 						<Pressable
 							style={[styles.iconBtn, !canAttach && styles.sendOff]}
@@ -526,6 +586,18 @@ const styles = StyleSheet.create({
 		justifyContent: "center",
 	},
 	chipOn: { borderColor: C.ink, backgroundColor: "rgba(230,230,234,0.12)" },
+	runOn: {
+		flexDirection: "row",
+		alignItems: "center",
+		alignSelf: "flex-start",
+		gap: 6,
+		paddingHorizontal: 4,
+		paddingTop: 8,
+		paddingBottom: 2,
+		maxWidth: "100%",
+	},
+	runOnLabel: { color: C.muted, fontSize: 12, fontWeight: "600" },
+	runOnBox: { flexShrink: 1, color: C.ink, fontSize: 12, fontWeight: "600" },
 	chipText: { color: C.muted, fontSize: 12, fontWeight: "600" },
 	chipTextOn: { color: C.ink },
 	mode: {

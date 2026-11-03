@@ -2,7 +2,7 @@
 // One entry per address, kept until the user deletes it. Persisted by src/storage.ts.
 //
 // Pure TS, no React Native imports, so it runs under bun test.
-import { providerById, wakeMachineName } from "@ateam/protocol";
+import { type ConnectStep, providerById, wakeMachineName } from "@ateam/protocol";
 import type { SavedConnection } from "./storage";
 
 export interface SavedBox extends SavedConnection {
@@ -71,4 +71,73 @@ export function parseBoxes(rawList: string | null, rawLast: string | null): Save
 	}
 	const last = parse(rawLast);
 	return isConnection(last) ? [{ ...last, lastUsedAt: 0 }] : [];
+}
+
+/** Where the phone's link to one box stands. The board itself is in src/fleet.ts. */
+export interface BoxLink {
+	state: "live" | "connecting" | "down";
+	/** The attempt under way, or the last one, was someone asking for the box (a tap,
+	 *  opening something on it), so it wakes it; else a try in the background. */
+	asked: boolean;
+	/** What reaching it went through, kept after a failure so the failed step shows. */
+	steps: ConnectStep[];
+	/** Why the last attempt failed (or that its connection dropped), kept while it is
+	 *  tried again and cleared once it answers. */
+	error: string | null;
+	/** The last attempt didn't wake it and it has a provider: down because it sleeps,
+	 *  most likely, which is the normal state of a box and not a failure. */
+	asleep: boolean;
+	/** Why the last wake failed, until a wake or a connect succeeds. */
+	wakeError: string | null;
+	/** The box's protocol version once it has answered. */
+	version: number | null;
+	/** Bumps on every connect: keys its open terminal so it remounts onto the fresh link. */
+	gen: number;
+}
+
+export const NEW_LINK: BoxLink = {
+	state: "down",
+	asked: false,
+	steps: [],
+	error: null,
+	asleep: false,
+	wakeError: null,
+	version: null,
+	gen: 0,
+};
+
+/** Why a box's tasks are out of date right now: it sleeps, or it isn't answering;
+ *  null while it is up, or before the first try has said either. */
+export function awayOf(link: BoxLink | undefined): "asleep" | "offline" | null {
+	if (!link || link.state === "live") return null;
+	if (link.asleep) return "asleep";
+	return link.error ? "offline" : null;
+}
+
+/** The box whose Lead the phone talks to: the one picked in Boxes while it is
+ *  still on the list, else the box used last. */
+export function leadBoxOf(boxes: SavedBox[], picked: string | null): string | null {
+	if (picked && boxes.some((b) => boxKey(b) === picked)) return picked;
+	return boxes[0] ? boxKey(boxes[0]) : null;
+}
+
+/** The box a new task runs on, out of the boxes its project is on: the one picked
+ *  last when the project is on it, else the Lead's box (the phone's home, as Local
+ *  is the desktop's), else the first that answers, else the first. */
+export function pickRunOn(
+	on: string[],
+	picked: string | null,
+	lead: string | null,
+	isLive: (key: string) => boolean,
+): string | null {
+	if (picked && on.includes(picked)) return picked;
+	if (lead && on.includes(lead)) return lead;
+	return on.find(isLive) ?? on[0] ?? null;
+}
+
+/** `keys` with the Lead's box first, the rest in their order: the home box leads,
+ *  as Local does in the desktop's lists. */
+export function leadFirst(keys: string[], lead: string | null): string[] {
+	if (!lead || !keys.includes(lead)) return keys;
+	return [lead, ...keys.filter((k) => k !== lead)];
 }

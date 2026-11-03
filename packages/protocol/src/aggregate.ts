@@ -11,13 +11,18 @@
 // randomUUID (packages/db schema.ts), a flat `id → backend` registry routes safely —
 // no per-engine id namespacing needed.
 //
-// This module is pure (no Electron) and, for now, UNWIRED — host.ts keeps its
-// single-active path until this is proven and flag-gated in. It is the load-bearing
-// slice: hold N backends, route every call correctly, merge the board.
-import { CH } from "@ateam/protocol";
-import type { CallContext } from "@ateam/server";
-import type { Backend } from "./backend";
+// Pure, so both clients that hold several engines share it: the desktop's main
+// process (main/host.ts: the Mac plus its boxes) and the phone (apps/mobile
+// src/fleet.ts: every saved box). One routing table, so a channel added here
+// routes the same on both.
+import { CH } from "./channels";
 import { withTimeout } from "./timeout";
+
+/** One engine the aggregate can route to: a live one, or a box's last-seen board. */
+export interface AggregateBackend<C = unknown> {
+	readonly kind: "local" | "remote";
+	handle(method: string, args: unknown[], ctx?: C): unknown;
+}
 
 /** Collection reads with no entity key — merge the results across every backend. */
 const MERGE = new Set<string>([CH.projectsList, CH.agentsList, CH.loopsList]);
@@ -104,7 +109,7 @@ export function candidateId(args: unknown[]): string | undefined {
 
 /** Register every id a result carries (project/task `id`, session `terminalId`) as
  *  owned by the backend that produced it, so later calls route back to it. */
-function learn(reg: Map<string, Backend>, backend: Backend, result: unknown): void {
+function learn<B>(reg: Map<string, B>, backend: B, result: unknown): void {
 	const add = (v: unknown): void => {
 		if (v && typeof v === "object") {
 			const o = v as Record<string, unknown>;
@@ -139,9 +144,9 @@ function merge(results: unknown[]): unknown[] {
 	return out;
 }
 
-export interface Aggregate {
+export interface Aggregate<B = AggregateBackend, C = unknown> {
 	/** Route/merge one request across the held backends (drop-in for Router.handle). */
-	handle(method: string, args: unknown[], ctx?: CallContext): Promise<unknown>;
+	handle(method: string, args: unknown[], ctx?: C): Promise<unknown>;
 	/** Invoke a method ON the engine that owns `ownerId` (fallback when unknown) —
 	 *  for calls whose own args carry no routable id (e.g. util:writeImageBytes
 	 *  must land on the engine whose agent will read the file). */
@@ -149,11 +154,15 @@ export interface Aggregate {
 	/** Whether `ownerId` lives on a box or the local engine ("local" when unknown). */
 	ownerKindOf(ownerId: string): "local" | "remote";
 	/** The learned id→backend map (which environment owns each entity). Read-only use. */
-	readonly ownerOf: ReadonlyMap<string, Backend>;
+	readonly ownerOf: ReadonlyMap<string, B>;
 	/** Point every id `from` owns at `to`: the same box, now served another way
 	 *  (its offline board giving way to the live engine, or the reverse). The
 	 *  caller swaps the backend in the list; this keeps routing what's on screen. */
-	rehome(from: Backend, to: Backend): void;
+	rehome(from: B, to: B): void;
+	/** Register the ids a result carries as `owner`'s, as a routed call's result is.
+	 *  For what arrives outside a call: a pushed event about a task no read has
+	 *  returned yet (one an agent or a loop just started on that engine). */
+	learn(owner: B, result: unknown): void;
 }
 
 /**
@@ -161,15 +170,15 @@ export interface Aggregate {
  * writeImageBytes, handshake) to `fallback` — the local engine by convention.
  * `backends` should include `fallback`.
  */
-export function createAggregate(
-	backends: readonly Backend[],
-	fallback: Backend,
+export function createAggregate<B extends AggregateBackend<C>, C = unknown>(
+	backends: readonly B[],
+	fallback: B,
 	opts: { mergeTimeoutMs?: number } = {},
-): Aggregate {
-	const reg = new Map<string, Backend>();
+): Aggregate<B, C> {
+	const reg = new Map<string, B>();
 	const mergeTimeoutMs = opts.mergeTimeoutMs ?? MERGE_TIMEOUT_MS;
 
-	async function handle(method: string, args: unknown[], ctx?: CallContext): Promise<unknown> {
+	async function handle(method: string, args: unknown[], ctx?: C): Promise<unknown> {
 		if (MERGE.has(method)) {
 			const results = await Promise.all(
 				backends.map(async (b) => {
@@ -216,5 +225,6 @@ export function createAggregate(
 		rehome(from, to) {
 			for (const [id, b] of reg) if (b === from) reg.set(id, to);
 		},
+		learn: (owner, result) => learn(reg, owner, result),
 	};
 }

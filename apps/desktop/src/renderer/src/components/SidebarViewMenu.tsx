@@ -1,4 +1,4 @@
-import type { KanbanColumn } from "@ateam/protocol";
+import { type Alias, aliasLabel, type KanbanColumn } from "@ateam/protocol";
 import { ListFilter } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
@@ -10,7 +10,6 @@ import {
 	type TaskSortMode,
 	toggled,
 } from "../sidebar-view";
-import { type Alias, aliasLabel } from "../unify";
 import { Button } from "./ui/button";
 import {
 	DropdownMenu,

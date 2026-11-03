@@ -268,6 +268,7 @@ export function demoConnection(): Connection {
 	const rpc = createRpcClient(transport);
 	return {
 		api: buildAteamApi(rpc, mobileNative),
+		rpc,
 		info: INFO,
 		// The canned engine answers as this exact build, so it is never skewed and has
 		// nothing to update itself to. Both members exist to satisfy Connection: demo

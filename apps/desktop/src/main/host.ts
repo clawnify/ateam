@@ -10,15 +10,18 @@
 import { join } from "node:path";
 import { getAgent } from "@ateam/agents";
 import {
-	beginStep,
+	type Aggregate,
+	asSnapshot,
 	type BoxUpdateStarted,
 	type BrowserViewDTO,
+	beginStep,
 	browserViewUrl,
 	CH,
 	type ClientTransport,
 	type ConnectStep,
 	type CredentialsPatch,
 	type CredentialsResult,
+	createAggregate,
 	createRpcClient,
 	DEFAULT_EDITOR_PORT,
 	type EditorEndpointDTO,
@@ -33,15 +36,18 @@ import {
 	providerById,
 	type RepoAccessDTO,
 	type RpcClient,
+	reconnectDelay,
 	relabelActive,
 	type SettingsResult,
 	type SystemInfo,
+	takeSnapshot,
 	tolerantRpc,
 	type WakeAdapter,
 	WOKEN_CONNECT_MS,
 	WOKEN_RETRY_GAP_MS,
 	waitingLabel,
 	wakeAdapter,
+	withTimeout,
 	wsClientTransport,
 } from "@ateam/protocol";
 import {
@@ -85,7 +91,6 @@ import {
 	type SecretsStatus,
 	type WakeStatus,
 } from "../shared/host";
-import { type Aggregate, createAggregate } from "./aggregate";
 import {
 	type Backend,
 	type BackendEvent,
@@ -101,8 +106,7 @@ import {
 	writeSshConfigEntry,
 } from "./box-setup";
 import { boxForwardFlags, browserLocalPort, editorLocalPort } from "./box-tunnel";
-import { asSnapshot, offlineBackend, reconnectDelay, takeSnapshot } from "./offline";
-import { withTimeout } from "./timeout";
+import { offlineBackend } from "./offline";
 
 // The one pre-quoted remote command (ssh space-joins remote args, so `bash -lc`
 // must arrive as a single element): a login shell (agent-CLI PATH) execing the
@@ -275,7 +279,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// learned id→engine registry survives), disconnecting rebuilds a fresh one (so a
 	// gone engine's ids stop routing). Both share the same array reference.
 	const backendList: Backend[] = [local];
-	let agg: Aggregate = createAggregate(backendList, local);
+	let agg: Aggregate<Backend> = createAggregate(backendList, local);
 
 	function bindEvents(backend: Backend): () => void {
 		const offs = FORWARDED.map(({ event, channel }) =>

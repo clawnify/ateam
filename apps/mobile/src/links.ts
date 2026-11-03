@@ -1,0 +1,415 @@
+// The phone's links to its boxes: one WebSocket per saved box, reached, kept and
+// retried here, so the board (src/fleet.ts) has every box on it at once. Pure TS,
+// with everything it touches passed in, so these rules run under bun test:
+//
+//   - A box is reached in the background and never woken: dialling a sleeping box
+//     over the tailnet leaves it asleep, and its board as last seen stands in.
+//   - Only someone asking for a box wakes it: a card, opening one of its tasks,
+//     starting a task there, its terminal, the Lead on it. A box someone waits on
+//     is retried sooner, and woken again once the last wake is stale (REWAKE_MS).
+//   - A socket that drops puts the box's last-seen board up, and is tried again.
+//   - A box that isn't up keeps its last failure while it's tried again, so what
+//     shows it as away (boxes.ts awayOf) doesn't flicker with every try.
+//   - Paused (the demo), nothing is reached, and a connect that lands is closed.
+import {
+	type BoxSnapshot,
+	beginStep,
+	type ConnectStep,
+	failActive,
+	providerById,
+	reconnectDelay,
+	relabelActive,
+	WOKEN_CONNECT_MS,
+	WOKEN_RETRY_GAP_MS,
+	waitingLabel,
+} from "@ateam/protocol";
+import { type BoxLink, boxKey, NEW_LINK } from "./boxes";
+import type { Connection } from "./connection";
+import type { Fleet } from "./fleet";
+import type { SavedConnection } from "./storage";
+
+// How old the last wake can get before a retry for a box someone waits on wakes it
+// again. Under the shortest hold a provider's wake gives (Sprites: 5 min,
+// packages/protocol/src/wake-sprites.ts).
+export const REWAKE_MS = 60_000;
+// A box someone waits on is retried 1 s after a failure, doubling up to this.
+export const WAITED_RETRY_CAP_MS = 15_000;
+/** What a box that dropped says until a try says more. */
+export const CONNECTION_LOST = "The connection dropped.";
+
+/** Time, as the links see it. Passed in so a test can run it by hand. */
+export interface Clock {
+	now(): number;
+	/** Run `fn` once after `ms`; returns a cancel. */
+	after(ms: number, fn: () => void): () => void;
+	/** Run `fn` every `ms`; returns a stop. */
+	every(ms: number, fn: () => void): () => void;
+	sleep(ms: number): Promise<void>;
+}
+
+export const realClock: Clock = {
+	now: () => Date.now(),
+	after: (ms, fn) => {
+		const t = setTimeout(fn, ms);
+		return () => clearTimeout(t);
+	},
+	every: (ms, fn) => {
+		const t = setInterval(fn, ms);
+		return () => clearInterval(t);
+	},
+	sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+};
+
+/** How to wake one box through its provider. */
+export interface Waker {
+	/** The provider's name, for the steps ("Waking the box through Sprites"). */
+	label: string;
+	/** Wake the box; "running" when it was up already. */
+	ensureAwake(): Promise<string>;
+}
+
+export interface LinkDeps {
+	fleet: Pick<Fleet, "attach" | "detach" | "remove">;
+	/** Open a box's socket (src/connection.ts); `onClose` fires when it drops on its own. */
+	dial(url: string, onClose: () => void): Promise<Connection>;
+	/** The saved boxes, in list order. A key not among them is off the list. */
+	boxes(): SavedConnection[];
+	/** Whether the privacy disclosure was accepted: nothing is dialled before it is. */
+	consented(): boolean;
+	/** Show the disclosure; `then` runs once it's accepted. */
+	askConsent(then: () => void): void;
+	/** How to wake this box; null when it can't be (no provider, no key saved). */
+	wakerFor(box: SavedConnection): Promise<Waker | null>;
+	/** Someone waits on this box now: its task open, its terminal, the Lead on it, an update. */
+	waitedOn(key: string): boolean;
+	/** The box's board as last seen, kept now, to stand in while it's away. */
+	lastBoard(key: string): BoxSnapshot | null;
+	labelOf(key: string): string;
+	/** A box from the form answered: put it on the list, in place of `replaces`. */
+	save(box: SavedConnection, replaces: string | null | undefined): void;
+	/** Before the box shows as connected: read what its banner needs. */
+	prepare?(key: string, conn: Connection): Promise<void>;
+	/** After it does: the app's own work for a fresh connection. `connect` waits for it. */
+	onConnected(key: string, conn: Connection): Promise<void> | void;
+	/** Where every link stands, after each change. */
+	onLinks(links: Record<string, BoxLink>): void;
+	clock?: Clock;
+}
+
+export interface LinkOpts {
+	/** Someone wants this box now: wake it first if it sleeps. Never a try in the background. */
+	wake?: boolean;
+	/** From the form: put the box on the list once it answers. */
+	save?: boolean;
+	/** The saved box the form was editing, replaced by this one. */
+	replaces?: string | null;
+	/** The provider it is being woken through, while it is (the form's note). */
+	onWaking?: (label: string | null) => void;
+}
+
+export interface Links {
+	/** The one connect path. Resolves whether the box is live after it. */
+	connect(box: SavedConnection, opts?: LinkOpts): Promise<boolean>;
+	/** Reach a box the app should hold but doesn't, and try again later if it fails. */
+	reconnect(key: string, wakeNow?: boolean): Promise<void>;
+	/** Something on this box was opened: reach it now, waking it if it sleeps. */
+	ensure(key: string | null): void;
+	/** Try the box again later: a connect someone asked for failed. */
+	retry(key: string): void;
+	/** Every saved box, in the background, none of them woken. */
+	holdAll(): void;
+	/** Back in the foreground: probe each socket, and try every box that isn't up. */
+	foreground(): void;
+	/** Stop waiting for a box that's being woken. */
+	cancel(key: string): void;
+	/** Off the list: no more tries, its socket closed, off the board. */
+	forget(key: string): void;
+	/** Reach nothing (the demo): every socket closed, every try stopped. */
+	pause(): void;
+	resume(): void;
+	/** A connection made elsewhere (the demo's), live from now. */
+	adopt(key: string, conn: Connection): void;
+	conn(key: string): Connection | undefined;
+	liveKeys(): string[];
+	get(key: string): BoxLink;
+}
+
+export function createLinks(deps: LinkDeps): Links {
+	const clock = deps.clock ?? realClock;
+	const conns = new Map<string, Connection>();
+	const attempting = new Set<string>();
+	const backoff = new Map<string, number>();
+	const timers = new Map<string, () => void>();
+	const lastWakeAt = new Map<string, number>();
+	// Set by Cancel on a card's tray: the wait for that woken box stops at its next try.
+	const cancelled = new Set<string>();
+	let state: Record<string, BoxLink> = {};
+	let paused = false;
+
+	const boxOf = (key: string): SavedConnection | null =>
+		deps.boxes().find((b) => boxKey(b) === key) ?? null;
+	const set = (key: string, f: (link: BoxLink) => BoxLink): void => {
+		state = { ...state, [key]: f(state[key] ?? NEW_LINK) };
+		deps.onLinks(state);
+	};
+	const clearTimer = (key: string): void => {
+		timers.get(key)?.();
+		timers.delete(key);
+	};
+
+	// Soon, then at a steady pace (reconnectDelay). One someone waits on: sooner.
+	function retry(key: string): void {
+		if (paused || conns.has(key) || timers.has(key) || !boxOf(key)) return;
+		const n = backoff.get(key) ?? 0;
+		backoff.set(key, n + 1);
+		const delay = deps.waitedOn(key)
+			? Math.min(WAITED_RETRY_CAP_MS, 1_000 * 2 ** n)
+			: reconnectDelay(n);
+		timers.set(
+			key,
+			clock.after(delay, () => {
+				timers.delete(key);
+				void reconnect(key);
+			}),
+		);
+	}
+
+	// The first try after a drop skips the wake (a network flip shouldn't wait on the
+	// provider); a retry for a box someone waits on wakes it whenever the last wake is
+	// stale. Retries stop while the app is in the background (iOS suspends it), so
+	// this can't keep a box up on its own.
+	async function reconnect(key: string, wakeNow = false): Promise<void> {
+		const box = boxOf(key);
+		if (!box || paused || !deps.consented() || conns.has(key)) return;
+		const stale = clock.now() - (lastWakeAt.get(key) ?? 0) >= REWAKE_MS;
+		const wake = wakeNow || (deps.waitedOn(key) && (backoff.get(key) ?? 0) > 0 && stale);
+		if (await connect(box, { wake })) return;
+		retry(key);
+	}
+
+	// A box's socket is gone: its last-seen board takes its place. A socket refused
+	// mid-connect closes before the connect has a Connection to give: not a drop.
+	function drop(key: string, c: Connection | undefined, again = true): void {
+		if (!c || conns.get(key) !== c) return;
+		c.close(); // stops its keepalive; the socket itself is gone already
+		conns.delete(key);
+		const snap = deps.lastBoard(key);
+		deps.fleet.detach(key, snap ? { snapshot: snap, label: deps.labelOf(key) } : null);
+		set(key, (l) => ({ ...l, state: "down", error: CONNECTION_LOST, asleep: false }));
+		backoff.set(key, 0);
+		if (again) void reconnect(key);
+	}
+
+	async function connect(box: SavedConnection, opts: LinkOpts = {}): Promise<boolean> {
+		const key = boxKey(box);
+		// Nothing leaves the phone until the disclosure has been accepted. Guarding
+		// HERE covers every route in: a card, the form, the launch, the reattach.
+		if (!deps.consented()) {
+			deps.askConsent(() => void connect(box, opts));
+			return false;
+		}
+		if (paused) return false;
+		if (conns.has(key)) {
+			// Live already: an edit that kept its address only changes what is saved.
+			if (opts.save) deps.save(box, opts.replaces);
+			return true;
+		}
+		// A second try while one runs only if it wakes: the first may not.
+		if (attempting.has(key) && !opts.wake) return false;
+		clearTimer(key);
+		// Someone asked: what comes after it starts from the short end again.
+		if (opts.wake) backoff.set(key, 0);
+		attempting.add(key);
+		cancelled.delete(key);
+		// The last failure stays until this try ends: the box is still away meanwhile.
+		set(key, (l) => ({ ...l, state: "connecting", asked: opts.wake === true, steps: [] }));
+		const step = (f: (steps: ConnectStep[]) => ConnectStep[]) =>
+			set(key, (l) => ({ ...l, steps: f(l.steps) }));
+		let stopTick: (() => void) | null = null;
+		const wakeable = providerById(box.provider?.id) !== undefined;
+		let waker: Waker | null = null;
+		let wakeError: string | null = null;
+		let woke = false;
+		try {
+			waker = opts.wake ? await deps.wakerFor(box) : null;
+			if (waker) {
+				const label = waker.label;
+				opts.onWaking?.(label);
+				step((s) => beginStep(s, `Waking the box through ${label}`));
+				lastWakeAt.set(key, clock.now());
+				try {
+					// "running": it was up already, so there is nothing to wait for.
+					woke = (await waker.ensureAwake()) !== "running";
+					set(key, (l) => ({ ...l, wakeError: null }));
+				} catch (err) {
+					// Still try the box: it may be up, and a key problem must not cost a
+					// connection that would have worked.
+					wakeError = err instanceof Error ? err.message : String(err);
+					const said = `Waking it through ${label} failed: ${wakeError}`;
+					set(key, (l) => ({ ...l, wakeError: said }));
+					step(failActive);
+				} finally {
+					opts.onWaking?.(null);
+				}
+			}
+			step((s) => beginStep(s, "Reaching Ateam on the box"));
+			// A woken box refuses or ignores the socket until its network and engine are
+			// up, which on a Sprite can take minutes after the wake returns. So it gets
+			// tries until WOKEN_CONNECT_MS; a box nobody woke gets the one.
+			const started = clock.now();
+			const deadline = started + (woke ? WOKEN_CONNECT_MS : 0);
+			let c: Connection;
+			for (;;) {
+				try {
+					// onClose: it dropped on its own (network flip, box restart, NAT reap).
+					c = await deps.dial(`ws://${box.host}:${box.port || "8787"}`, () => drop(key, c));
+					break;
+				} catch (err) {
+					if (cancelled.has(key)) throw new Error("Cancelled");
+					if (clock.now() >= deadline) throw err;
+					if (!stopTick) {
+						const relabel = () =>
+							step((s) => relabelActive(s, waitingLabel(clock.now() - started)));
+						relabel();
+						stopTick = clock.every(1_000, relabel);
+					}
+					await clock.sleep(WOKEN_RETRY_GAP_MS);
+					if (cancelled.has(key)) throw new Error("Cancelled");
+				}
+			}
+			// Another try got there first, or the box was removed (or the demo started)
+			// while this one ran.
+			if (conns.has(key)) {
+				c.close();
+				return true;
+			}
+			if (paused || (!opts.save && !boxOf(key))) {
+				c.close();
+				return false;
+			}
+			if (opts.save) deps.save(box, opts.replaces);
+			conns.set(key, c);
+			deps.fleet.attach(key, c.rpc);
+			backoff.set(key, 0);
+			await deps.prepare?.(key, c);
+			const version = c.info.protocolVersion;
+			set(key, (l) => ({
+				state: "live",
+				asked: false,
+				steps: [],
+				error: null,
+				asleep: false,
+				wakeError: null,
+				version,
+				gen: l.gen + 1,
+			}));
+			await deps.onConnected(key, c);
+			return true;
+		} catch (err) {
+			if (paused || conns.has(key)) return conns.has(key);
+			step(failActive);
+			const msg = err instanceof Error ? err.message : String(err);
+			const said = wakeError
+				? `${msg}. Waking it through ${waker?.label} failed too: ${wakeError}`
+				: msg;
+			const gaveUp = cancelled.has(key);
+			set(key, (l) => ({
+				...l,
+				state: "down",
+				error: said,
+				// Not answering when nobody woke it is what a box that sleeps does.
+				asleep: wakeable && waker === null && !gaveUp,
+			}));
+			return false;
+		} finally {
+			stopTick?.();
+			attempting.delete(key);
+		}
+	}
+
+	function holdAll(): void {
+		if (!deps.consented()) {
+			deps.askConsent(holdAll);
+			return;
+		}
+		for (const box of deps.boxes()) {
+			const key = boxKey(box);
+			if (conns.has(key)) continue;
+			backoff.set(key, 0);
+			void reconnect(key);
+		}
+	}
+
+	return {
+		connect,
+		reconnect,
+		retry,
+		holdAll,
+		ensure(key) {
+			if (!key || paused || conns.has(key) || !boxOf(key)) return;
+			backoff.set(key, 0);
+			void reconnect(key, true);
+		},
+		// The sockets iOS suspended in the background are usually dead with no close
+		// event, so each is probed and only redialled if the probe fails. Only a box
+		// someone waits on is woken.
+		foreground() {
+			if (paused) return;
+			for (const box of deps.boxes()) {
+				const key = boxKey(box);
+				if (attempting.has(key)) continue;
+				const c = conns.get(key);
+				void (async () => {
+					if (c) {
+						if (await c.ping()) return;
+						drop(key, c, false);
+					}
+					backoff.set(key, 0);
+					void reconnect(key, deps.waitedOn(key));
+				})();
+			}
+		},
+		cancel(key) {
+			cancelled.add(key);
+		},
+		forget(key) {
+			clearTimer(key);
+			backoff.delete(key);
+			lastWakeAt.delete(key);
+			cancelled.add(key);
+			const c = conns.get(key);
+			conns.delete(key);
+			c?.close();
+			deps.fleet.remove(key);
+			if (key in state) {
+				const { [key]: _gone, ...rest } = state;
+				state = rest;
+				deps.onLinks(state);
+			}
+		},
+		pause() {
+			paused = true;
+			for (const stop of timers.values()) stop();
+			timers.clear();
+			for (const [key, c] of conns) {
+				c.close();
+				deps.fleet.remove(key);
+			}
+			conns.clear();
+			state = {};
+			deps.onLinks(state);
+		},
+		resume() {
+			paused = false;
+			holdAll();
+		},
+		adopt(key, conn) {
+			conns.set(key, conn);
+			deps.fleet.attach(key, conn.rpc);
+			set(key, () => ({ ...NEW_LINK, state: "live", version: conn.info.protocolVersion, gen: 1 }));
+		},
+		conn: (key) => conns.get(key),
+		liveKeys: () => [...conns.keys()],
+		get: (key) => state[key] ?? NEW_LINK,
+	};
+}
