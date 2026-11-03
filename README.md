@@ -273,8 +273,9 @@ that task, and its card waits in Needs You until you create or dismiss them),
 task titles and summaries (a task you start without a name gets a short title
 a few seconds in, once, so other agents never lose track of it; once a task's
 agent has been quiet for a few minutes, a sentence or two on where it stands
-shows under the open task's title and in the Lead's and the agents' board
-tools; written by an OpenRouter model when you add a key in Settings, otherwise
+shows under the open task's title, beside its full title when the pointer
+rests on its sidebar row or board card for two seconds, and in the Lead's and
+the agents' board tools; written by an OpenRouter model when you add a key in Settings, otherwise
 by Claude Code, or turned off there),
 and signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
