@@ -37,7 +37,9 @@ class FakeClaude extends EventEmitter {
 	say(...lines: unknown[]) {
 		for (const l of lines) this.stdout.write(`${JSON.stringify(l)}\n`);
 	}
+	killed = false;
 	kill() {
+		this.killed = true;
 		return true;
 	}
 }
@@ -88,12 +90,13 @@ function connect(ext: ReturnType<typeof engineLead>) {
 	return { call, sent, events };
 }
 
-function setup() {
+function setup(idleStopMs?: number) {
 	const dir = join(mkdtempSync(join(tmpdir(), "box-lead-")), "lead");
 	const procs: FakeClaude[] = [];
 	const ext = engineLead({
 		...fakeEngine(),
 		dir,
+		...(idleStopMs ? { idleStopMs } : {}),
 		spawnClaude: (args) => {
 			const p = new FakeClaude(args);
 			procs.push(p);
@@ -112,12 +115,15 @@ describe("a box's own Lead over the engine's RPC", () => {
 		// The desktop's own calls never subscribe it.
 		expect(await desktop.call(CH.projectsList)).toEqual([]);
 
-		const snap = (await phone.call(LEAD_CH.snapshot)) as LeadSnapshot;
+		// A read (the phone does one on every connect) starts nothing: once
+		// started, a Lead's folder makes the engine start it at every boot.
+		const snap = (await phone.call(LEAD_CH.snapshot, { tail: 20 })) as LeadSnapshot;
 		expect(snap).toEqual({ items: [], draft: "", busy: false, auto: false });
-		expect(existsSync(dir)).toBe(true);
+		expect(existsSync(dir)).toBe(false);
 		expect(procs).toHaveLength(0);
 
 		await phone.call(LEAD_CH.send, "brief me");
+		expect(existsSync(dir)).toBe(true);
 		const p = procs[0] as FakeClaude;
 		// The box's words, not the Mac's.
 		const prompt = p.args[p.args.indexOf("--append-system-prompt") + 1] ?? "";
@@ -170,6 +176,42 @@ describe("a box's own Lead over the engine's RPC", () => {
 		ext.dispose();
 	});
 
+	it("tells sleep control when the chat is in use, but not when it is only read", async () => {
+		const { procs, ext } = setup();
+		const phone = connect(ext);
+		await phone.call(LEAD_CH.snapshot); // the phone opening the chat
+		expect(ext.activity()).toEqual({ working: false, lastUsedAt: null });
+
+		const before = Date.now();
+		await phone.call(LEAD_CH.send, "clean up the branches");
+		const used = ext.activity();
+		expect(used.working).toBe(true);
+		expect(used.lastUsedAt).toBeGreaterThanOrEqual(before);
+
+		// Waiting on the user's answer is not work, as for a task's agent.
+		const p = procs[0] as FakeClaude;
+		p.say(
+			{ type: "system", subtype: "init", session_id: "s1" },
+			{
+				type: "control_request",
+				request_id: "r1",
+				request: {
+					subtype: "can_use_tool",
+					tool_name: "Bash",
+					input: { command: "git branch -D x" },
+				},
+			},
+		);
+		await tick();
+		expect(ext.activity().working).toBe(false);
+		await phone.call(LEAD_CH.permission, "r1", "allow");
+		expect(ext.activity().working).toBe(true);
+		p.say({ type: "result", subtype: "success" });
+		await tick();
+		expect(ext.activity().working).toBe(false);
+		ext.dispose();
+	});
+
 	it("refuses what the network must not get through", async () => {
 		const { ext } = setup();
 		const phone = connect(ext);
@@ -182,6 +224,62 @@ describe("a box's own Lead over the engine's RPC", () => {
 		await expect(phone.call(LEAD_CH.permission, "x", "yes please")).rejects.toThrow(
 			"Unknown answer",
 		);
+		ext.dispose();
+	});
+});
+
+describe("a box's Lead stays light", () => {
+	it("stops its claude when idle, and the next message resumes the same conversation", async () => {
+		const { procs, ext } = setup(30);
+		const phone = connect(ext);
+		await phone.call(LEAD_CH.send, "first");
+		const first = procs[0] as FakeClaude;
+		first.say(
+			{ type: "system", subtype: "init", session_id: "s-idle" },
+			{ type: "assistant", message: { content: [{ type: "text", text: "ok" }] } },
+			{ type: "result", subtype: "success" },
+		);
+		await new Promise((r) => setTimeout(r, 80));
+		expect(first.killed).toBe(true);
+		await phone.call(LEAD_CH.send, "second");
+		const second = procs[1] as FakeClaude;
+		expect(second.args).toContain("--resume");
+		expect(second.args[second.args.indexOf("--resume") + 1]).toBe("s-idle");
+		ext.dispose();
+	});
+
+	it("never stops it mid-turn", async () => {
+		const { procs, ext } = setup(20);
+		const phone = connect(ext);
+		await phone.call(LEAD_CH.send, "a long one");
+		(procs[0] as FakeClaude).say({ type: "system", subtype: "init", session_id: "s-busy" });
+		await new Promise((r) => setTimeout(r, 60));
+		expect((procs[0] as FakeClaude).killed).toBe(false);
+		ext.dispose();
+	});
+
+	it("sends a phone the tail of a long conversation, and older pages on request", async () => {
+		const { ext } = setup();
+		const phone = connect(ext);
+		for (const text of ["one", "two", "three"]) await phone.call(LEAD_CH.send, text);
+		const whole = (await phone.call(LEAD_CH.snapshot)) as LeadSnapshot;
+		expect(whole.items.map((i) => (i.kind === "user" ? i.text : i.kind))).toEqual([
+			"one",
+			"two",
+			"three",
+		]);
+		expect(whole.more).toBeUndefined();
+		const tail = (await phone.call(LEAD_CH.snapshot, { tail: 2 })) as LeadSnapshot;
+		expect(tail.items).toHaveLength(2);
+		expect(tail.more).toBe(true);
+		const page = (await phone.call(LEAD_CH.older, tail.items[0]?.id, 10)) as {
+			items: { id: string }[];
+			more: boolean;
+		};
+		expect(page.items.map((i) => i.id)).toEqual([whole.items[0]?.id ?? ""]);
+		expect(page.more).toBe(false);
+		// The state alone, for a composer that only needs Auto and busy.
+		expect(((await phone.call(LEAD_CH.snapshot, { tail: 0 })) as LeadSnapshot).items).toEqual([]);
 		ext.dispose();
 	});
 });

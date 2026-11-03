@@ -272,7 +272,9 @@ export function PromptComposer({
 	const onKeys = (e: React.KeyboardEvent) => {
 		if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
 			e.preventDefault();
-			submit(!e.shiftKey);
+			// A held ⌘↩ repeats. Only a fresh press creates: the repeat must not
+			// land in whatever dialog opens in this one's place.
+			if (!e.repeat) submit(!e.shiftKey);
 		}
 		if (e.key === "Escape") onClose();
 	};

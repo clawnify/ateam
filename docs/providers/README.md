@@ -50,7 +50,12 @@ provider, and adding one is a file per seam:
 | The phone, and the desktop for a box added by its Tailscale address, wake a box before connecting | `packages/protocol/src/providers.ts` and `packages/protocol/src/wake.ts` | a definition declaring the inputs a wake needs (an account key, a machine name), and an adapter that wakes with them |
 
 When to sleep is the engine's call for every provider (`sleep/control.ts`): only
-it can tell an agent mid-turn from one waiting on you. The phone's definition is
+it can tell an agent mid-turn from one waiting on you. It holds a box while it is
+in use (an agent working, someone typing in one of its terminals, its Lead chat)
+and for the idle window after, and gives a fresh window to a box that wakes and
+to a client connecting to a box it has released. A client connecting to a box
+it still holds doesn't count: the desktop reconnects on its own, and each
+reconnect used to keep a box with no work awake for another window. The phone's definition is
 data, so the connection screen asks for exactly what a provider declares and says
 nothing about the others. The adapter is code because no two providers wake a box
 the same way: boxd exchanges a key for a token and speaks gRPC-web, most others
@@ -78,9 +83,28 @@ and Sprites, 2026-10-25):
 
 The default on any box is the first: a [fine-grained
 token](sprites.md#github-credentials) limited to the org and repos the box works on,
-with Contents, Pull requests and Issues set to read and write, and Workflows left
-off, since an agent that can edit `.github/workflows` can reach the repo's Actions
-secrets.
+with Contents, Pull requests and Issues set to read and write, Commit statuses set to
+read (the merge queue waits on CI, and CI that reports commit statuses is hidden from
+a token without it on a private repo), and Workflows left off, since an agent that
+can edit `.github/workflows` can reach the repo's Actions secrets.
+
+Connect it from Ateam rather than a terminal: the checklist after setting a box up,
+**Settings → Boxes** on the desktop, or the GitHub button on the
+box's card on the phone. **Token for** says who the token is for, preset to the owner
+of most of the box's repositories (else your own account); pick it there, since
+changing Resource owner on GitHub's form resets the 90 days and clears the
+permissions. **Create a token on GitHub** then opens the form with the name, owner, 90
+days and those permissions filled in. Under Repository access, choose **Only select
+repositories** and pick the box's: GitHub starts on Public repositories, which leaves
+the token read-only. Paste
+the token back into Ateam and the box checks it with GitHub, hands it to `gh` on
+stdin and points git at it, unless a provider's credential helper already signs git
+in (boxd's does). Then Ateam lists, per project, whether the box can push, only read,
+or not see it. It warns about a token that reaches more than it should (`gh auth
+login`'s, a classic one, a provider's), and checks the box can push to a repo before
+cloning it there. The token never travels back from the box. Two weeks before it
+expires, the box's GitHub section says so and opens the form for its replacement, so
+a box doesn't stop pushing mid-task on the day it lapses.
 
 ## Adding a provider
 

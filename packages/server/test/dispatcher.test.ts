@@ -14,6 +14,7 @@ import { createTestDb } from "../../db/test/helpers/test-db";
 import { makeTempRepoPair } from "../../git-core/test/helpers/temp-repo";
 import { createDispatcher } from "../src/dispatcher";
 import type { Engine } from "../src/engine";
+import { ResumeInFlightError, spawnAgentInTask } from "../src/sessions";
 import { WorktreeGuard } from "../src/worktree-guard";
 
 // A minimal fake Engine: a real in-memory db for the DB-backed handlers, stubs
@@ -447,6 +448,123 @@ describe("createDispatcher", () => {
 		expect(
 			await d.handle(CH.ptyRestoreSession, [{ taskId: task.id, terminalId: "term-dead" }]),
 		).toEqual({ terminalId: "term-back" });
+	});
+
+	// Two launchers deciding at once to bring one conversation back: the peer
+	// messenger relaunching the agent it just stopped to hand it a message, and
+	// the panel auto-restoring the tab that agent left. A launch spends its first
+	// ~200ms in probes before its terminal is live, so a check for a live
+	// terminal lets both through, and two agents end up on one transcript.
+	describe("one conversation comes back once", () => {
+		// Every launch is held in its first probe until `release`.
+		async function racing() {
+			const dir = await mkdtemp(join(tmpdir(), "ateam-race-"));
+			const db = createTestDb();
+			const { engine, spawned } = makeEngine(db);
+			let release!: () => void;
+			const gate = new Promise<void>((r) => {
+				release = r;
+			});
+			(engine.services as unknown as { probeAgent: () => Promise<BinaryPresence> }).probeAgent =
+				async () => {
+					await gate;
+					return "present";
+				};
+			const d = createDispatcher(engine);
+			const project = repo.upsertProject(db, { repoPath: dir, name: "R", defaultBranch: "main" });
+			const task = repo.createTask(db, {
+				projectId: project!.id,
+				name: "race",
+				slug: "race",
+				branch: "race",
+				baseBranch: "main",
+				worktreePath: dir,
+			});
+			const reaped = repo.createSession(db, {
+				taskId: task.id,
+				agentId: "claude",
+				terminalId: "term-reaped",
+				agentSessionId: "conv-9",
+				cwd: dir,
+			});
+			repo.updateSession(db, reaped.id, { exitedAt: 1, exitReason: "reaped" });
+			const openSessions = () =>
+				repo
+					.listSessionsByTask(db, task.id)
+					.filter((s) => s.exitedAt == null)
+					.map((s) => s.terminalId);
+			const message = () =>
+				spawnAgentInTask(engine.services, () => {}, {
+					taskId: task.id,
+					agentId: "claude",
+					resumeSessionId: "conv-9",
+					prompt: "[Ateam] Message from another agent.",
+				});
+			const restore = () =>
+				d.handle(CH.ptyRestoreSession, [
+					{ taskId: task.id, terminalId: "term-reaped" },
+				]) as Promise<{
+					terminalId: string;
+				}>;
+			// Release first: a failing test must not leave launches held open.
+			const cleanup = () => {
+				release();
+				return rm(dir, { recursive: true, force: true });
+			};
+			return { db, reaped, spawned, release, openSessions, message, restore, cleanup };
+		}
+
+		it("a restore joins the message launch already bringing it back", async () => {
+			const r = await racing();
+			try {
+				const launched = r.message();
+				// The launch writes its session row before its terminal is up, and
+				// that write retires the tab it picks up. A restore landing then
+				// must still join it, not refuse a tab that "is not restorable".
+				repo.updateSession(r.db, r.reaped.id, { exitReason: "restored" });
+				const restored = r.restore();
+				r.release();
+				const [a, b] = await Promise.all([launched, restored]);
+				expect(b).toEqual(a);
+				expect(r.spawned).toHaveLength(1);
+				expect(r.openSessions()).toEqual([a.terminalId]);
+			} finally {
+				await r.cleanup();
+			}
+		});
+
+		it("two restores of one tab at once open one terminal", async () => {
+			const r = await racing();
+			try {
+				const first = r.restore();
+				const second = r.restore();
+				r.release();
+				const [a, b] = await Promise.all([first, second]);
+				expect(b).toEqual(a);
+				expect(r.spawned).toHaveLength(1);
+				expect(r.openSessions()).toEqual([a.terminalId]);
+			} finally {
+				await r.cleanup();
+			}
+		});
+
+		it("a message launch leaves its work to a restore already under way", async () => {
+			const r = await racing();
+			try {
+				const restored = r.restore();
+				// Let the restore get past its checks and into its launch.
+				await Bun.sleep(0);
+				// Refused rather than joined: the restore carries no prompt, so
+				// joining would drop the message. It stays pending for the new tab.
+				await expect(r.message()).rejects.toBeInstanceOf(ResumeInFlightError);
+				r.release();
+				const back = await restored;
+				expect(r.spawned).toHaveLength(1);
+				expect(r.openSessions()).toEqual([back.terminalId]);
+			} finally {
+				await r.cleanup();
+			}
+		});
 	});
 
 	// `restored` is a one-way door: the strip lists `stranded`/`reaped` and

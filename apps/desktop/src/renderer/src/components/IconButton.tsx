@@ -23,6 +23,9 @@ interface IconButtonProps {
 	active?: boolean;
 	disabled?: boolean;
 	size?: number;
+	/** Something behind the button needs the user: an amber corner dot, with this said
+	 *  after the label in the tooltip and to screen readers ("a box needs you"). */
+	attention?: string;
 }
 
 /**
@@ -38,20 +41,23 @@ export function IconButton({
 	active,
 	disabled,
 	size = 16,
+	attention,
 }: IconButtonProps) {
+	const name = attention ? `${label}: ${attention}` : label;
 	return (
 		// Native title tooltips: they can't overflow the window edge or create
 		// scrollbars the way absolutely-positioned CSS tooltips can.
 		<button
 			type="button"
-			className={`iconbtn ${variant}${active ? " active" : ""}`}
+			className={`iconbtn ${variant}${active ? " active" : ""}${attention ? " has-attention" : ""}`}
 			onClick={onClick}
 			disabled={disabled}
-			aria-label={label}
+			aria-label={name}
 			aria-pressed={active}
-			title={shortcut ? `${label} (${shortcut})` : label}
+			title={shortcut ? `${name} (${shortcut})` : name}
 		>
 			<Icon size={size} strokeWidth={1.75} />
+			{attention ? <span className="iconbtn-dot" aria-hidden="true" /> : null}
 		</button>
 	);
 }

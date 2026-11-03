@@ -11,7 +11,8 @@ to manage and no sleep code in Ateam: an agent left working alone keeps working.
 2026-10-30. Run end to end: creating the box, the install, the desktop's handshake
 and `-L` forwards, a box left alone, and [iOS](#ios): the VM joined a tailnet with
 `tailscale up` and Ateam Go connected over it. **Not run:** exe.dev's Tailscale
-integration, which is written from its docs.
+integration, which is written from its docs, and signing up with a key of its own
+(added 2026-11-02), which is written from exe.dev's FAQ.
 
 ## Create a box
 
@@ -22,6 +23,21 @@ you through signing up and choosing a plan.
 ssh exe.dev                  # sign up, pick a plan
 ssh exe.dev new --name=mybox
 ```
+
+Ateam connects with `BatchMode=yes`, so it can't prompt for a passphrase. If your
+default key has one, give exe.dev a key of its own and sign up with that: `ssh`
+offers your default keys in turn, so a plain `ssh exe.dev` can stop at a passphrase
+prompt for `~/.ssh/id_rsa`.
+
+```bash
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519_exe
+ssh -i ~/.ssh/id_ed25519_exe -o IdentitiesOnly=yes exe.dev     # sign up with this key
+```
+
+`IdentitiesOnly` matters here: without it, `ssh` offers any keys in your agent before
+the one named with `-i`, and exe.dev can end up signing up one of those instead.
+
+Then add the second block below, so every `ssh` to exe.dev uses it.
 
 Pick at least the 4 vCPU / 8 GB capacity ($35/mo) for more than one or two agents
 at a time: every VM shares the pool, and so does every agent on it. Change it with

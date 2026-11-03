@@ -4,30 +4,102 @@
 // for the Lead's tool calls. Pure; types only from the contract.
 
 import type { TaskDTO } from "./index";
-import type { LeadEvent, LeadItem, LeadSnapshot } from "./lead";
+import type { LeadEvent, LeadItem, LeadSnapshot, LeadTaskRef } from "./lead";
 
 export type LeadToolItem = Extract<LeadItem, { kind: "tool" }>;
 export type LeadAgentItem = Extract<LeadItem, { kind: "agent" }>;
+export type LeadPageItem = Extract<LeadItem, { kind: "page" }>;
+
+/** What a task's thread holds: the task's replies and pages, what the user
+ *  sent it from the chat (a reply, an answer to its question), and notices
+ *  about it (stopped at a prompt). */
+export type LeadThreadEntry =
+	| LeadAgentItem
+	| LeadPageItem
+	| (Extract<LeadItem, { kind: "user" }> & { to: LeadTaskRef })
+	| (Extract<LeadItem, { kind: "notice" }> & { task: LeadTaskRef });
+
+/** One task's conversation with the user, as one card shows it. */
+export interface LeadThread {
+	/** The task's id. */
+	key: string;
+	/** The task, as its latest entry names it. */
+	task: LeadTaskRef;
+	/** This card's entries, oldest first. */
+	entries: LeadThreadEntry[];
+	/** The same task's entries in earlier cards of this conversation, oldest first. */
+	earlier: LeadThreadEntry[];
+	/** The id of the later block where this thread goes on, once there is one. */
+	continuedIn: string | null;
+}
+
 export type LeadBlock =
-	| { kind: "item"; item: LeadItem }
+	| { kind: "item"; item: Exclude<LeadItem, { kind: "tool" | "agent" | "page" }> }
 	| { kind: "tools"; id: string; tools: LeadToolItem[] }
-	| { kind: "agents"; id: string; replies: LeadAgentItem[] };
+	/** Tasks talking back, one after another: a thread per task, ordered by
+	 *  each one's latest entry (the last is the newest). `items` is every entry
+	 *  in the order it arrived. */
+	| { kind: "threads"; id: string; items: LeadThreadEntry[]; threads: LeadThread[] };
+
+/** The task an item belongs to, when it goes in that task's thread. */
+function threadTask(item: LeadItem): LeadTaskRef | undefined {
+	switch (item.kind) {
+		case "agent":
+		case "page":
+			return item.task;
+		case "user":
+			return item.to;
+		case "notice":
+			return item.task;
+		default:
+			return undefined;
+	}
+}
 
 /** Consecutive tool calls read as one step, so they fold into one row.
- *  Consecutive agent replies fold into one card. Anything else in between (the
- *  user's message, the Lead's, a page, a notice) starts a new block. A block's
- *  id is its first item's, which never changes as more join it. */
+ *  Consecutive task items (replies, pages, the user's answers to them) fold
+ *  into one card, a thread per task. Anything else in between (the user's
+ *  message to the Lead, the Lead's) starts a new block, and a task that talks
+ *  again after it gets a new thread there: nothing already drawn moves. That
+ *  thread carries the task's earlier entries, and the earlier thread points
+ *  to it. A block's id is its first item's, which never changes as more join it. */
 export function toLeadBlocks(items: LeadItem[]): LeadBlock[] {
 	const out: LeadBlock[] = [];
+	/** Each task's entries so far in the conversation. */
+	const history = new Map<string, LeadThreadEntry[]>();
+	/** Each task's latest thread, to point at the one that continues it. */
+	const latest = new Map<string, LeadThread>();
 	for (const item of items) {
 		const last = out[out.length - 1];
-		if (item.kind === "tool") {
+		const task = threadTask(item);
+		if (task) {
+			const entry = item as LeadThreadEntry;
+			let block = last?.kind === "threads" ? last : undefined;
+			if (!block) {
+				block = { kind: "threads", id: item.id, items: [], threads: [] };
+				out.push(block);
+			}
+			block.items.push(entry);
+			const key = task.taskId;
+			const seen = history.get(key) ?? [];
+			let thread = block.threads.find((t) => t.key === key);
+			if (thread) block.threads.splice(block.threads.indexOf(thread), 1);
+			else {
+				const before = latest.get(key);
+				if (before) before.continuedIn = block.id;
+				thread = { key, task, entries: [], earlier: seen.slice(), continuedIn: null };
+				latest.set(key, thread);
+			}
+			// The newest talker goes last, where the card opens.
+			block.threads.push(thread);
+			thread.task = task;
+			thread.entries.push(entry);
+			seen.push(entry);
+			history.set(key, seen);
+		} else if (item.kind === "tool") {
 			if (last?.kind === "tools") last.tools.push(item);
 			else out.push({ kind: "tools", id: item.id, tools: [item] });
-		} else if (item.kind === "agent") {
-			if (last?.kind === "agents") last.replies.push(item);
-			else out.push({ kind: "agents", id: item.id, replies: [item] });
-		} else out.push({ kind: "item", item });
+		} else if (item.kind !== "agent" && item.kind !== "page") out.push({ kind: "item", item });
 	}
 	return out;
 }
@@ -36,6 +108,10 @@ export function applyLeadEvent(s: LeadSnapshot, e: LeadEvent): LeadSnapshot {
 	switch (e.type) {
 		case "item": {
 			const at = s.items.findIndex((i) => i.id === e.item.id);
+			// A client holding only the tail (`more`) gets updates to items it never
+			// loaded too (a proposal's outcome); one older than all it has belongs
+			// to history it pages in later, not at the bottom of the thread.
+			if (at < 0 && s.more && s.items[0] && e.item.at < s.items[0].at) return s;
 			if (at < 0) return { ...s, items: [...s.items, e.item] };
 			const items = s.items.slice();
 			items[at] = e.item;

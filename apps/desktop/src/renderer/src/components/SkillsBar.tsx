@@ -72,8 +72,8 @@ export function SkillsBar({
 	/** Which skills get a button: the pinned ones, or the ones already sent in
 	 *  this session, pinned or not (a Mission Control tile, too narrow for every pin). */
 	buttons?: "pinned" | "sent";
-	/** Type `command` into the agent's input. False: the draft is unknown, nothing typed. */
-	onInsert: (command: string) => boolean;
+	/** Type `command` into the agent's input. */
+	onInsert: (command: string) => void;
 	/** Link a new skill (this Mac only). Absent: no "Add skill…" item. */
 	onAddSkill?: () => Promise<void>;
 }) {
@@ -81,8 +81,6 @@ export function SkillsBar({
 	const [failed, setFailed] = useState(false);
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
-	const [hint, setHint] = useState(false);
-	const hintTimer = useRef(0);
 	const pinned = usePins();
 
 	const refresh = useCallback(async () => {
@@ -101,7 +99,6 @@ export function SkillsBar({
 		void loadPins();
 		void refresh();
 	}, [refresh]);
-	useEffect(() => () => clearTimeout(hintTimer.current), []);
 	// A prompt just went out, possibly a skill: recount this session's uses. The
 	// first run is the mount, which the effect above already covers.
 	const seenSubmits = useRef(submits);
@@ -144,10 +141,7 @@ export function SkillsBar({
 
 	const insert = (s: SkillDTO) => {
 		setOpen(false);
-		if (onInsert(s.command)) return;
-		setHint(true);
-		clearTimeout(hintTimer.current);
-		hintTimer.current = window.setTimeout(() => setHint(false), 4000);
+		onInsert(s.command);
 	};
 	const togglePin = (name: string) =>
 		void savePins(
@@ -274,7 +268,6 @@ export function SkillsBar({
 						{s.sessionUses > 0 && <span className="skill-chip-sent">{s.sessionUses}×</span>}
 					</Button>
 				))}
-				{hint && <span className="skill-hint">Clear the prompt or send it, then click again</span>}
 			</span>
 		</>
 	);

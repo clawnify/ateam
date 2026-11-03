@@ -3,6 +3,8 @@
 // renderer, the Electron main process, and the (future) headless @ateam/server
 // over SSH — shares one definition without pulling in node/electron/db internals.
 
+import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
+
 /**
  * Wire-contract version. A client checks it on connect (via `system:hello`) and
  * refuses/warns on mismatch, so a version-skewed remote fails cleanly at the
@@ -119,7 +121,17 @@
 // v24: a box's own Lead, for the phone. The engine answers LEAD_RPC (lead.ts)
 // and pushes LEAD_EVENT to a connection that called one. New methods only; the
 // phone hides its Lead below this version (FEATURE_MIN_VERSION.lead).
-export const PROTOCOL_VERSION = 24;
+// v25: GitHub access (github-access.ts). githubAccess:status says which GitHub
+// credential the box's gh and git use and what kind it is, githubAccess:connect
+// hands gh a token without a terminal, and githubAccess:check says per repo
+// whether the box can push, only read, or not see it. New methods only: a v24
+// engine answers "Unknown method", and clients send the user to the box terminal
+// instead (FEATURE_MIN_VERSION.githubAccess).
+// v26: browser:install runs install-browser.sh on the box once the user said
+// yes, so the Browser button offers the install instead of a command to paste.
+// A new method only: a v25 engine answers "Unknown method", and the desktop
+// shows the command from that engine's own BROWSER_NOT_INSTALLED_ERROR.
+export const PROTOCOL_VERSION = 26;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -195,6 +207,10 @@ export interface TaskPageDTO {
 	id: string;
 	title: string;
 	at: number;
+	/** Came with an ask_user question (its `page`), not from show_page: the
+	 *  question's card draws it, and once the question ends it is history, so
+	 *  the task panel never opens it by itself. Absent from engines before it. */
+	fromQuestion?: boolean;
 }
 
 /** tasks:page: the task's page with its HTML, as the agent wrote it. */
@@ -271,6 +287,9 @@ export const FEATURE_MIN_VERSION = {
 	/** v24 added the box's own Lead chat (LEAD_RPC). An older box answers every
 	 *  call "Unknown method", so the phone offers to update the box instead. */
 	lead: 24,
+	/** v25 added githubAccess:*. An older box answers "Unknown method", so clients
+	 *  point at its terminal (gh auth login) and at Update box instead. */
+	githubAccess: 25,
 } as const;
 
 export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
@@ -590,8 +609,8 @@ export interface EngineSettings {
 	 */
 	loopsPaused: boolean;
 	/**
-	 * Let the box sleep once no agent has been working for this many minutes; 0
-	 * never does. Only an engine on a provider that can put its box to sleep reads
+	 * Let the box sleep once nobody has used it for this many minutes (an agent
+	 * working, typing in a terminal, its Lead chat); 0 never does. Only an engine on a provider that can put its box to sleep reads
 	 * it (packages/server/src/sleep), so a Mac or a plain VPS ignores it. A sleeping
 	 * box keeps its sessions, and the next connection wakes it.
 	 */
@@ -913,6 +932,10 @@ export interface SystemInfo {
 	protocolVersion: number;
 	/** Ids of agents installed + available on the engine's machine. */
 	agents: string[];
+	/** The Ateam release the engine was built from ("0.1.80"). Absent from engines
+	 *  before it was reported, null from one run from source. A release can change
+	 *  the engine without a protocol bump, so clients compare this to offer updates. */
+	release?: string | null;
 }
 
 /** What `system:update` reports back before the engine goes down to be replaced. */
@@ -970,6 +993,8 @@ export interface ConnectionDTO {
 	transport: HostTransport;
 	hostName: string | null;
 	serverVersion: string | null;
+	/** The engine's release when last reached (SystemInfo.release); null if it didn't say. */
+	engineRelease?: string | null;
 	agentsAvailable: string[] | null;
 	lastSeen: number | null;
 	/** Present in ~/.ssh/config right now (vs a saved record since removed from it). */
@@ -1097,10 +1122,14 @@ export const CH = {
 	settingsUpdate: "settings:update",
 	credentialsGet: "credentials:get",
 	credentialsUpdate: "credentials:update",
+	githubAccessStatus: "githubAccess:status",
+	githubAccessConnect: "githubAccess:connect",
+	githubAccessCheck: "githubAccess:check",
 	editorOpen: "editor:open",
 	editorOpenUrl: "editor:openUrl",
 	editorInstall: "editor:install",
 	browserView: "browser:view",
+	browserInstall: "browser:install",
 	browserViewUrl: "browser:viewUrl",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",
@@ -1195,6 +1224,14 @@ export const DEFAULT_BROWSER_VIEW_PORT = 6080;
  * An error crosses IPC as its message only, so the text is the contract.
  */
 export const TASK_REMOVING_ERROR = "This task is being deleted";
+
+/**
+ * What browser:view throws on a box where install-browser.sh never ran. The
+ * desktop matches it to offer browser:install. Every engine since the Browser
+ * panel opens its message with this text, so it also matches an engine too old
+ * to install.
+ */
+export const BROWSER_NOT_INSTALLED_ERROR = "This box has no browser yet";
 
 /** Where the engine's embedded editor (code-server) answers, on ITS machine. */
 export interface EditorEndpointDTO {
@@ -1335,10 +1372,17 @@ export interface AteamApi {
 		/**
 		 * Resolve the URL of the browser on this task's box: its Chrome's desktop in
 		 * noVNC, connected and signed in, for THIS client to load. Rejects with the
-		 * reason for a task on this Mac (its browser is your own Chrome) and for a
-		 * box with no browser installed.
+		 * reason for a task on this Mac (its browser is your own Chrome) and, with
+		 * BROWSER_NOT_INSTALLED_ERROR, for a box with no browser installed.
 		 */
 		view(taskId: string): Promise<{ url: string }>;
+		/**
+		 * Install the browser on the task's box (install-browser.sh: apt packages,
+		 * Chrome, TaskWindow, noVNC). Call only after the user said yes to a
+		 * BROWSER_NOT_INSTALLED_ERROR. Takes minutes; resolves when installed, and a
+		 * following view() opens it.
+		 */
+		install(taskId: string): Promise<void>;
 	};
 	skills: {
 		/**
@@ -1448,6 +1492,21 @@ export interface AteamApi {
 		/** Store or remove a key; answers like `get`. */
 		update(patch: CredentialsPatch): Promise<CredentialsResult>;
 	};
+	/** GitHub access on the engine's machine (v25). The token never travels back. */
+	githubAccess: {
+		/** Which credential gh and git use there, its kind and whose it is. */
+		status(): Promise<GithubAccessDTO>;
+		/**
+		 * Check a token with GitHub, hand it to gh on stdin, let git use it, and
+		 * answer the new status. Rejects with a sentence a person can act on.
+		 */
+		connect(token: string): Promise<GithubAccessDTO>;
+		/**
+		 * Per repository (`owner/name`): can this machine push, only read, or not see
+		 * it? With none given, the engine's own projects.
+		 */
+		check(repos?: string[]): Promise<RepoAccessDTO[]>;
+	};
 	utils: {
 		/**
 		 * Absolute filesystem path for a File from a drop or paste (Electron
@@ -1522,6 +1581,8 @@ export {
 	WOKEN_RETRY_GAP_MS,
 	waitingLabel,
 } from "./connect-steps";
+// GitHub access on a box (v25): its DTOs and the wording both clients share.
+export * from "./github-access";
 // The Lead chat: its items and events, the desktop's IPC channels and the
 // engine's RPC for a box's own Lead (v24).
 export * from "./lead";

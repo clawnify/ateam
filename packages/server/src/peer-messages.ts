@@ -51,7 +51,8 @@ const MAX_WAKES = 2;
 /** A human typed this recently: never restart under their hands. */
 export const INPUT_QUIET_MS = 60 * 1000;
 /** How long a live Claude/OpenCode agent gets to take a message through its own
- *  listener before it is treated like one that has none (an older launch). */
+ *  listener before it is treated like one that has none (an older launch),
+ *  counted from the message or the end of its last turn, whichever is later. */
 export const LISTENER_GRACE_MS = 2 * 60 * 1000;
 /** How often pending messages are looked at again. */
 const SWEEP_MS = 30 * 1000;
@@ -114,8 +115,16 @@ export function planDelivery(f: DeliveryFacts): DeliveryPlan {
 		if (f.lastEventAt == null || f.lastInputAt > f.lastEventAt) return "wait";
 	}
 	// A harness that listens is expected to register; give it a moment so a
-	// message sent between two turns is not delivered by a restart instead.
-	if (LISTENS.has(f.live.agentId) && f.now - f.oldestPendingAt < LISTENER_GRACE_MS) return "wait";
+	// message is not delivered by a restart instead. The moment runs from the
+	// later of the message and the turn's end: Claude's listener is re-armed by
+	// the very Stop that brings us here, a few ms after it, so a message that
+	// waited out a long turn would otherwise find the grace already spent and
+	// kill an agent that was about to take it live.
+	if (
+		LISTENS.has(f.live.agentId) &&
+		f.now - Math.max(f.oldestPendingAt, f.lastEventAt ?? 0) < LISTENER_GRACE_MS
+	)
+		return "wait";
 	return "restart";
 }
 

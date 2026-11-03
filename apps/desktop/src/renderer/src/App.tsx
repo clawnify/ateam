@@ -8,12 +8,14 @@ import type {
 	KanbanColumn,
 	LoopDTO,
 	ProjectDTO,
+	RepoAccess,
 	SessionDTO,
 	SessionHitDTO,
 	TaskDTO,
 	TaskTriage,
 } from "@ateam/protocol";
 import {
+	BROWSER_NOT_INSTALLED_ERROR,
 	boxSupports,
 	byLatestActivity,
 	describeMergeResult,
@@ -25,7 +27,6 @@ import {
 import {
 	ArrowDownToLine,
 	ArrowUp,
-	ArrowUpDown,
 	Brush,
 	Check,
 	ChevronDown,
@@ -34,6 +35,7 @@ import {
 	CircleAlert,
 	Columns2,
 	Copy,
+	EllipsisVertical,
 	ExternalLink,
 	FolderPlus,
 	GitBranch,
@@ -73,7 +75,9 @@ import {
 	type SetStateAction,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
+	useReducer,
 	useRef,
 	useState,
 } from "react";
@@ -82,6 +86,7 @@ import { ChangesList, DiffStat } from "./components/Changes";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { ConnectSteps } from "./components/ConnectSteps";
 import { FileDiffView } from "./components/FileDiffView";
+import { GithubAccess } from "./components/GithubAccess";
 import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
 import { IconButton } from "./components/IconButton";
 import { LeadChat, type LeadProposalItem } from "./components/LeadChat";
@@ -94,13 +99,24 @@ import { ProposalNote, ProposalStrip, proposalLabel } from "./components/Proposa
 import { QuestionCard } from "./components/QuestionCard";
 import { RailTile } from "./components/RailTile";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { SidebarViewMenu } from "./components/SidebarViewMenu";
 import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
+import { Button } from "./components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
-import { bestMcLayout, MC_PAGE_SIZE, type McChoice, type McLayout } from "./mc-layout";
-import { panelOnScreen, proposalToOpen } from "./proposal-open";
+import {
+	bestMcShape,
+	MC_PAGE_SIZE,
+	type McArea,
+	type McChoice,
+	type McLayout,
+	mcCapacity,
+	mcShapeGrid,
+} from "./mc-layout";
+import { panelOnScreen, proposalToOpen, shownWhileOpen } from "./proposal-open";
 import {
 	activeTerminal,
 	conversationToResume,
@@ -108,6 +124,16 @@ import {
 	taskGlyphs,
 	tileSessions,
 } from "./session-tabs";
+import {
+	groupTasks,
+	parseView,
+	passesFilters,
+	type SidebarView,
+	STATUS_RANK,
+	spliceOrder,
+	type TaskSortMode,
+	toggled,
+} from "./sidebar-view";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
 import {
@@ -116,6 +142,7 @@ import {
 	type EngineMember,
 	unifyProjects,
 } from "./unify";
+import { useBoxesNeedingYou } from "./useBoxesNeedingYou";
 import { useGithubIssues } from "./useGithubIssues";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
@@ -126,9 +153,6 @@ const COLUMNS: { key: KanbanColumn; label: string }[] = [
 	{ key: "merged", label: "Done" },
 ];
 
-// ---- sidebar task ordering ----
-type TaskSortMode = "next" | "status" | "updated" | "custom";
-
 // The topbar's Mission Control layout buttons, in the order they sit.
 const MC_LAYOUTS = [
 	["grid", LayoutGrid, "Grid"],
@@ -137,7 +161,6 @@ const MC_LAYOUTS = [
 	["split", Columns2, "Split"],
 	["stack", Rows2, "Stack"],
 ] as const;
-const mcLayoutLabel = (l: McLayout) => MC_LAYOUTS.find(([mode]) => mode === l)?.[2] ?? l;
 
 // A saved layout, or null when unset or naming one that no longer exists.
 function storedMcLayout(key: string): McLayout | null {
@@ -156,18 +179,11 @@ const MC_TILE_MIME = "application/x-ateam-tile";
 // How long a dragged tile is held over the grid's top or bottom edge before
 // the page flips.
 const FLIP_HOLD_MS = 500;
+// How long the grid's size must hold still before Auto refits to it.
+const MC_RESIZE_SETTLE_MS = 200;
 
 // Whether a drag carries files from Finder (not a tile, not dragged text).
 const draggingFiles = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
-
-// Status order: what needs the user's eyes first.
-const STATUS_RANK: Record<KanbanColumn, number> = {
-	review: 0,
-	needs_attention: 1,
-	running: 2,
-	todo: 3,
-	merged: 4,
-};
 
 const springy = { type: "spring", stiffness: 550, damping: 42 } as const;
 
@@ -232,6 +248,20 @@ const FOCUS_COLLAPSE_LABEL: Record<View, string> = {
 	settings: "Back to Settings",
 };
 
+/** A task as the New Task composer asks for it. */
+interface ComposeInput {
+	name: string;
+	nameAuto: boolean;
+	prompt: string;
+	agentId: string;
+	yolo: boolean;
+	files: string[];
+	// Chosen environment: null = this Mac; an alias = that box. A box is connected
+	// and the repo cloned onto it (idempotent) before the task is created there.
+	alias: Alias;
+	open: boolean;
+}
+
 export function App() {
 	// Non-null in a detached window: this window is pinned to one project and
 	// hides the project switcher; null in the main multi-project dashboard.
@@ -277,6 +307,8 @@ export function App() {
 	const [newIssueOpen, setNewIssueOpen] = useState(false);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [view, setView] = useState<View>("board");
+	const needingBoxes = useBoxesNeedingYou();
+	const boxesNeedYou = needingBoxes.size > 0;
 	// Layout is per project: one project may run twice the terminals of another.
 	// Read during render, not synced in an effect, so switching projects never
 	// paints a frame of the previous project's layout (which would also flick
@@ -292,34 +324,6 @@ export function App() {
 		if (!activeProjectId) return;
 		localStorage.setItem(`ateam.mcLayout.${activeProjectId}`, l);
 		setMcLayoutSet((m) => ({ ...m, [activeProjectId]: l }));
-	};
-	// The layout Auto last fitted for the project, kept so the grid reopens in it
-	// (the 3x2's sidebar rail included) until the fresh count says otherwise.
-	const [mcFitSet, setMcFitSet] = useState<Record<string, McLayout>>({});
-	const mcFit =
-		(activeProjectId &&
-			(mcFitSet[activeProjectId] ?? storedMcLayout(`ateam.mcFit.${activeProjectId}`))) ||
-		"grid";
-	const mcLayout: McLayout = mcChoice === "auto" ? mcFit : mcChoice;
-	// Auto fits the grid to its live tiles when Mission Control opens and again
-	// each time a tile arrives or leaves while it is up: deleting a task or
-	// starting one is a change you made and expect the layout to follow. A refit
-	// resizes every terminal (each agent redraws) and re-pages the tiles, so a
-	// grid that must hold still is what the fixed layouts are for. Opening sets
-	// the fit pending, which holds the terminals unmounted until the grid
-	// reports its tile count (see reorderMission).
-	const [mcFitPending, setMcFitPending] = useState(false);
-	// How many tiles the open grid has; null until it reports, after opening.
-	const [mcTileCount, setMcTileCount] = useState<number | null>(null);
-	// Fit to this many tiles. A grid with none yet stays pending, so the first
-	// tiles to arrive are what it fits.
-	const fitMission = (tiles: number) => {
-		if (!activeProjectId || tiles === 0) return;
-		setMcFitPending(false);
-		const l = bestMcLayout(tiles);
-		if (l === mcFit) return;
-		localStorage.setItem(`ateam.mcFit.${activeProjectId}`, l);
-		setMcFitSet((m) => ({ ...m, [activeProjectId]: l }));
 	};
 	// Bumped by the Sync button: Mission Control re-sorts its tiles to the
 	// sidebar's order once, then holds still again (see mcOrder).
@@ -410,12 +414,31 @@ export function App() {
 		() => (localStorage.getItem("ateam.taskSort") as TaskSortMode) || "updated",
 	);
 	const [customOrder, setCustomOrder] = useState<string[]>([]);
+	// The TASKS list's grouping and filters (sidebar-view.ts), app-wide like the
+	// ordering above. Only the sidebar reads it; Mission Control never does.
+	const [sideView, setSideViewState] = useState<SidebarView>(() =>
+		parseView(localStorage.getItem("ateam.sidebarView")),
+	);
+	const setSideView = (v: SidebarView) => {
+		setSideViewState(v);
+		localStorage.setItem("ateam.sidebarView", JSON.stringify(v));
+	};
 	const [cleanupOpen, setCleanupOpen] = useState(false);
 	const [archivedCount, setArchivedCount] = useState(0);
 	// Bumped whenever a card leaves a board, which is also what an archive looks
 	// like from here, so the archived count on Clean up follows the sweep.
 	const [archivedTick, setArchivedTick] = useState(0);
 	const [composerOpen, setComposerOpen] = useState(false);
+	// A composer reopened with a task that didn't start, filled in as it was asked.
+	const [composerSeed, setComposerSeed] = useState<ComposeInput | null>(null);
+	// A Run on a box that stopped because the box's GitHub access can't see the repo:
+	// which box and repo, and the task as asked, so Try again loses nothing typed.
+	const [githubFix, setGithubFix] = useState<{
+		alias: string;
+		label: string;
+		repo: string;
+		input: ComposeInput;
+	} | null>(null);
 	// A task or loop a task's agent proposed, open in its dialog. Closing the
 	// dialog keeps the proposal (the task panel's strip opens it again); only
 	// creating it or Dismiss clears it.
@@ -479,7 +502,12 @@ export function App() {
 		try {
 			await fn();
 		} catch (e) {
-			const msg = e instanceof Error ? e.message : String(e);
+			// Electron wraps a main-process error in "Error invoking remote method
+			// '<channel>': Error: …"; the channel name means nothing to the user.
+			const msg = (e instanceof Error ? e.message : String(e)).replace(
+				/^Error invoking remote method '[^']+': (Error: )?/,
+				"",
+			);
 			// The engine refusing to launch into a task mid-delete: expected when
 			// the delete's own kill makes the open panel auto-resume its agent.
 			if (msg.includes(TASK_REMOVING_ERROR)) return;
@@ -802,9 +830,11 @@ export function App() {
 				// Can THIS app update THIS box: a dev build can't update any box, and no
 				// build can update one reachable only over its Tailscale endpoint.
 				updatable: canUpdateBoxes && c.transport !== "ws",
+				needsYou: needingBoxes.has(c.alias),
 			})),
 		];
 	}, [
+		needingBoxes,
 		connections,
 		canRemote,
 		hasLocalMember,
@@ -840,6 +870,35 @@ export function App() {
 			stale = true;
 		};
 	}, [activeProjectId, archivedTick]);
+	// With the Archived filter on, the sidebar lists the project's archived tasks
+	// too, from every machine it is on, re-listed whenever a card leaves a board
+	// (an archive is a removal). Each machine fills in on its own, so one that
+	// never answers (asleep, older than v18) only leaves its own out.
+	const [archivedByProject, setArchivedByProject] = useState<Record<string, TaskDTO[]>>({});
+	// biome-ignore lint/correctness/useExhaustiveDependencies: archivedTick is the trigger, as above.
+	useEffect(() => {
+		if (!sideView.showArchived) return;
+		let stale = false;
+		for (const id of searchProjectIds) {
+			void window.ateam.tasks
+				.listArchived(id)
+				.catch(() => [])
+				.then((list) => {
+					if (!stale) setArchivedByProject((m) => ({ ...m, [id]: list }));
+				});
+		}
+		return () => {
+			stale = true;
+		};
+	}, [sideView.showArchived, searchProjectIds, archivedTick]);
+	// A task brought back is on the board again, and that copy wins.
+	const archivedShown = useMemo(() => {
+		if (!sideView.showArchived) return [];
+		const live = new Set(activeTasks.map((t) => t.id));
+		return searchProjectIds
+			.flatMap((id) => archivedByProject[id] ?? [])
+			.filter((t) => !live.has(t.id));
+	}, [sideView.showArchived, searchProjectIds, archivedByProject, activeTasks]);
 	const linkedIssues = new Set(
 		activeTasks.flatMap((task) => (task.issueUrl ? [task.issueUrl.toLowerCase()] : [])),
 	);
@@ -850,7 +909,12 @@ export function App() {
 		!selectedTaskId && selectedIssue
 			? (backlogIssues.find((issue) => issue.url === selectedIssue.url) ?? null)
 			: null;
-	const selectedTask = activeTasks.find((t) => t.id === selectedTaskId) ?? null;
+	// An archived row opens once it is brought back; until the board's copy of it
+	// arrives, the archived one stands in.
+	const selectedTask =
+		activeTasks.find((t) => t.id === selectedTaskId) ??
+		archivedShown.find((t) => t.id === selectedTaskId) ??
+		null;
 	// Its box isn't held, so it has no terminal or worktree to show: the panel says
 	// so and wakes it instead of mounting a TaskPanel whose every call is refused.
 	const selectedOffline = selectedTask ? offlineAliasOf(selectedTask) : null;
@@ -871,6 +935,14 @@ export function App() {
 		cleanupOpen ||
 		newIssueOpen ||
 		promptUi != null;
+	// Declared before the effect below so it runs first in a commit: while one of
+	// a task's proposals is open, its others count as shown, so none of them
+	// takes the dialog's place the moment it closes (shownWhileOpen).
+	useEffect(() => {
+		if (!proposalOpen) return;
+		const task = activeTasks.find((t) => t.id === proposalOpen.taskId);
+		for (const id of shownWhileOpen(task)) autoOpenedProposals.current.add(id);
+	}, [proposalOpen, activeTasks]);
 	useEffect(() => {
 		const id = proposalToOpen(panelTask, autoOpenedProposals.current, dialogOpen);
 		if (!id || !panelTask) return;
@@ -913,25 +985,12 @@ export function App() {
 		}
 		setLeadProposal(item);
 	};
-	// Opening Mission Control, which Auto holds the terminals for until it has
-	// fitted: switching to it, or to
-	// another project's or mode's grid while on it. Coming back from a tile
-	// expanded full width is not an opening (the view never changed), even
-	// though the grid remounts. Settled during render, like the rail.
+	// Which grid Mission Control shows: the project's (or repo card's) tasks
+	// or loops. A new key is a new set of tiles.
 	const mcGridKey = `${activeCard?.key ?? activeProjectId}:${mcMode}`;
-	const mcOpenKey = view === "mission" ? mcGridKey : null;
-	const [mcOpenSeen, setMcOpenSeen] = useState(mcOpenKey);
-	if (mcOpenSeen !== mcOpenKey) {
-		setMcOpenSeen(mcOpenKey);
-		setMcTileCount(null);
-		if (mcOpenKey) setMcFitPending(true);
-	}
-	// The Auto button: on the grid it fits what is there now (no tile report is
-	// coming to do it); from anywhere else the opening does it.
+	// The Auto button. The grid fits itself (see MissionControl).
 	const chooseAutoLayout = () => {
 		setMcLayout("auto");
-		if (mcGridShown && mcTileCount) fitMission(mcTileCount);
-		else setMcFitPending(true);
 		goToView("mission");
 	};
 	// Loops of the active repo card (whichever engine holds them), and the task
@@ -960,10 +1019,11 @@ export function App() {
 		for (const l of loops) if (l.taskId) ids.add(l.taskId);
 		return ids;
 	}, [loops]);
-	// Sidebar list shows all non-loop tasks, including merged/done ones.
+	// Sidebar list shows all non-loop tasks, including merged/done ones, and the
+	// archived ones while the Archived filter is on.
 	const sidebarTasks = useMemo(
-		() => activeTasks.filter((t) => !loopTaskIds.has(t.id)),
-		[activeTasks, loopTaskIds],
+		() => [...activeTasks, ...archivedShown].filter((t) => !loopTaskIds.has(t.id)),
+		[activeTasks, archivedShown, loopTaskIds],
 	);
 
 	// Sidebar ordering: by status (Review → Needs You → In Progress → Backlog),
@@ -1004,12 +1064,33 @@ export function App() {
 		}
 		return list;
 	}, [sidebarTasks, taskSort, customOrder]);
+	// The view menu's filters and grouping, applied on top of the ordering, so
+	// the order holds inside each group.
+	const machineOf = useCallback((t: TaskDTO) => originOf(t.projectId), [originOf]);
+	const sidebarGroups = useMemo(
+		() =>
+			groupTasks(
+				orderedSidebarTasks.filter((t) => passesFilters(t, sideView, machineOf)),
+				sideView.grouping,
+				{
+					machineOf,
+					statusLabel: (c) => COLUMNS.find((col) => col.key === c)?.label ?? c,
+					now: Date.now(),
+				},
+			),
+		[orderedSidebarTasks, sideView, machineOf],
+	);
+	// The order Mission Control's Sync takes: the list as displayed, group by
+	// group, then what the filters hide. Archived tasks never have a tile.
 	// Stable identity, so the Mission Control order memoized on it doesn't
 	// recompute on every App render.
-	const sidebarOrderIds = useMemo(
-		() => orderedSidebarTasks.map((t) => t.id),
-		[orderedSidebarTasks],
-	);
+	const sidebarOrderIds = useMemo(() => {
+		const shown = sidebarGroups.flatMap((g) => g.tasks);
+		const seen = new Set(shown.map((t) => t.id));
+		return [...shown, ...orderedSidebarTasks.filter((t) => !seen.has(t.id))]
+			.filter((t) => t.archivedAt == null)
+			.map((t) => t.id);
+	}, [sidebarGroups, orderedSidebarTasks]);
 	// Mission Control's own tile order, per project, independent of the
 	// sidebar's: status changes reorder the list, never the tiles. It records
 	// the tiles as Mission Control last laid them out; the first visit seeds it
@@ -1057,11 +1138,7 @@ export function App() {
 	};
 	// Mission Control reports the tiles' order whenever it changes; they lead
 	// the saved order and everything else keeps its relative place behind them.
-	// The report is also the grid's tile count, which Auto fits to: the opening
-	// waits on it, and every later arrival or departure refits.
 	const reorderMission = (tileIds: string[]) => {
-		setMcTileCount(tileIds.length);
-		if (mcChoice === "auto") fitMission(tileIds.length);
 		const onTiles = new Set(tileIds);
 		const next = [...tileIds, ...mcOrder.filter((id) => !onTiles.has(id))];
 		if (next.length === mcOrder.length && next.every((id, i) => id === mcOrder[i])) return;
@@ -1095,9 +1172,23 @@ export function App() {
 	// Sidebar and board both honor the tag filter; Mission Control and the
 	// selected task deliberately don't (a live agent tile / open panel shouldn't
 	// vanish).
-	const visibleSidebarTasks = useMemo(
-		() => orderedSidebarTasks.filter(matchesQuery),
-		[orderedSidebarTasks, matchesQuery],
+	const shownGroups = useMemo(
+		() =>
+			sidebarGroups
+				.map((g) => ({ ...g, tasks: g.tasks.filter(matchesQuery) }))
+				.filter((g) => g.tasks.length > 0),
+		[sidebarGroups, matchesQuery],
+	);
+	const visibleSidebarTasks = useMemo(() => shownGroups.flatMap((g) => g.tasks), [shownGroups]);
+	// The machines this project is on, for the Machine filter.
+	const sidebarMachines = useMemo(
+		() =>
+			activeMembers.length > 0
+				? activeMembers.map((m) => m.alias)
+				: activeProjectId
+					? [originOf(activeProjectId)]
+					: [],
+		[activeMembers, activeProjectId, originOf],
 	);
 	const filteredBoardTasks = useMemo(
 		() => activeTasks.filter(matchesQuery),
@@ -1189,6 +1280,23 @@ export function App() {
 			return;
 		}
 		openTask(t);
+	};
+	// A sidebar row or rail tile. An archived one is brought back as it opens: the
+	// engine sends a removal for every write to an archived task (a git-status
+	// refresh is enough), and a removal closes the open panel.
+	const openRow = (t: TaskDTO) => {
+		if (t.archivedAt == null) return toggleTask(t);
+		void window.ateam.tasks.setArchived(t.id, false).then(openTask, (e) =>
+			setError(`Couldn't bring back ${t.name}: ${e instanceof Error ? e.message : String(e)}`),
+		);
+	};
+	// Mark all as read: every unread task the list shows, folded groups too.
+	// Straight to the engine, since an archived task isn't on the board markRead
+	// looks it up on.
+	const markAllRead = () => {
+		for (const t of visibleSidebarTasks) {
+			if (t.isUnread) void window.ateam.tasks.markRead(t.id).catch(() => {});
+		}
 	};
 	// A session-search hit opens the task it ran in, and the exact terminal it
 	// ran in when that tab is still alive — the point of the search is to land
@@ -1364,21 +1472,26 @@ export function App() {
 	// Create the task and launch the chosen agent with the prompt as its first
 	// instruction. `open` lands it on screen (see landTask); otherwise nothing
 	// on screen moves, and a toast and a pulse on its row say where it went.
-	const composeTask = (
-		input: {
-			name: string;
-			nameAuto: boolean;
-			prompt: string;
-			agentId: string;
-			yolo: boolean;
-			files: string[];
-			// Chosen environment: null = this Mac; an alias = that box. A box is connected
-			// and the repo cloned onto it (idempotent) before the task is created there.
-			alias: Alias;
-			open: boolean;
-		},
-		onCreated?: (task: TaskDTO) => void,
-	) =>
+	// Before a repo is cloned onto a box: can the box's GitHub access push to it? A box
+	// that can't see the repo fails the clone with a generic error, and one that can
+	// only read it clones fine and fails at the first push, after the agent's work.
+	const boxRepoAccess = async (alias: string, repo: string): Promise<RepoAccess> => {
+		try {
+			// Run on connects (and wakes) the box anyway; the check needs it held.
+			await window.ateamHost.connect(alias, { wake: true });
+			const [verdict] = await window.ateamHost.checkGithub(alias, [repo]);
+			return verdict?.access ?? "unknown";
+		} catch {
+			return "unknown"; // an older box, or no answer: the clone says what's wrong
+		}
+	};
+	// Back to the composer with a task that didn't start, filled in as it was asked.
+	const reopenComposer = (input: ComposeInput) => {
+		setComposerSeed(input);
+		setComposerOpen(true);
+	};
+
+	const composeTask = (input: ComposeInput, onCreated?: (task: TaskDTO) => void) =>
 		run(async () => {
 			const card = activeCard;
 			if (!card) return;
@@ -1389,6 +1502,7 @@ export function App() {
 			setComposerOpen(false);
 			setComposerIssue(null);
 			setComposerFiles([]);
+			setComposerSeed(null);
 			if (sourceIssue) {
 				const existing = activeTasks.find(
 					(task) => task.issueUrl?.toLowerCase() === sourceIssue.url.toLowerCase(),
@@ -1435,12 +1549,29 @@ export function App() {
 						setError("This repo has no git remote to clone onto a box.");
 						return;
 					}
-					setInfo(
-						`Setting up ${card.name} on ${composerEnvs.find((e) => e.alias === input.alias)?.label ?? input.alias}…`,
-					);
+					const boxLabel = composerEnvs.find((e) => e.alias === input.alias)?.label ?? input.alias;
+					const repoName =
+						card.githubOwner && card.githubName ? `${card.githubOwner}/${card.githubName}` : null;
+					setInfo(`Setting up ${card.name} on ${boxLabel}…`);
 					setProvisioning(input.alias);
 					let proj: ProjectDTO;
 					try {
+						const access = repoName ? await boxRepoAccess(input.alias, repoName) : "unknown";
+						if (repoName && access === "none") {
+							setGithubFix({ alias: input.alias, label: boxLabel, repo: repoName, input });
+							return;
+						}
+						if (
+							repoName &&
+							access === "read" &&
+							!(await confirm(
+								`${boxLabel} can't push to ${repoName}`,
+								`git on ${boxLabel} can read ${repoName} but not push to it, so tasks there can't open a pull request or merge. Set the project up there anyway?`,
+							))
+						) {
+							reopenComposer(input);
+							return;
+						}
 						proj = await window.ateamHost.provision(input.alias, { cloneUrl: activeRepoRemote });
 					} finally {
 						setInfo(null);
@@ -1526,6 +1657,7 @@ export function App() {
 							label="Settings"
 							shortcut="⌘,"
 							active={view === "settings"}
+							attention={boxesNeedYou ? "a box needs you" : undefined}
 							onClick={() => goToView("settings")}
 						/>
 					)}
@@ -1595,7 +1727,7 @@ export function App() {
 									label={t.name}
 									active={t.id === sidebarSelectedId}
 									className={t.id === pulseId ? "just-started" : undefined}
-									onClick={() => toggleTask(t)}
+									onClick={() => openRow(t)}
 								>
 									{glyph ? (
 										<SessionIcon agentId={glyph} size={16} />
@@ -1733,6 +1865,9 @@ export function App() {
 													<span className="proj-open">
 														<Menu
 															label={`Actions for ${card.name}`}
+															// 24px, not 28: taller than the row, it poked out of the
+															// list's last row and gave the list a scrollbar.
+															className="size-6"
 															items={[
 																{
 																	label: "Open in new window",
@@ -1774,33 +1909,16 @@ export function App() {
 									<span>Tasks</span>
 								</button>
 								<span style={{ display: "flex", gap: 2 }}>
-									<Menu
-										icon={ArrowUpDown}
-										label="Order tasks"
-										// The section header's icon buttons are 24px (.section-head .iconbtn).
-										className="size-6"
-										items={[
-											{
-												label: "What's next",
-												icon: taskSort === "next" ? Check : undefined,
-												onClick: () => setTaskSort("next"),
-											},
-											{
-												label: "By status",
-												icon: taskSort === "status" ? Check : undefined,
-												onClick: () => setTaskSort("status"),
-											},
-											{
-												label: "Last updated first",
-												icon: taskSort === "updated" ? Check : undefined,
-												onClick: () => setTaskSort("updated"),
-											},
-											{
-												label: "Custom (drag to reorder)",
-												icon: taskSort === "custom" ? Check : undefined,
-												onClick: () => setTaskSort("custom"),
-											},
-										]}
+									<SidebarViewMenu
+										view={sideView}
+										onView={setSideView}
+										sort={taskSort}
+										onSort={setTaskSort}
+										statuses={COLUMNS}
+										machines={sidebarMachines}
+										groupKeys={sideView.grouping === "none" ? [] : shownGroups.map((g) => g.key)}
+										unread={visibleSidebarTasks.filter((t) => t.isUnread).length}
+										onMarkAllRead={markAllRead}
 									/>
 									<IconButton
 										icon={Plus}
@@ -1816,46 +1934,84 @@ export function App() {
 										<div className="tree-empty">Select a project</div>
 									) : visibleSidebarTasks.length === 0 ? (
 										<div className="tree-empty">
-											{tagFilter ? "No matching tasks" : "No active tasks"}
+											{sidebarTasks.length === 0
+												? "No active tasks"
+												: tagFilter
+													? "No matching tasks"
+													: "No tasks match the filters"}
 										</div>
-									) : taskSort === "custom" && !tagFilter ? (
-										// Custom order: drag rows up/down; Motion animates the shuffle.
-										// Disabled while a tag filter is on — reordering a filtered subset
-										// would drop the hidden tasks from the saved order.
-										<Reorder.Group
-											as="div"
-											axis="y"
-											values={orderedSidebarTasks.map((t) => t.id)}
-											onReorder={reorderTasks}
-										>
-											{orderedSidebarTasks.map((t) => (
-												<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
-													<TaskRow
-														task={t}
-														offline={offlineAliasOf(t) !== null}
-														selected={t.id === sidebarSelectedId}
-														pulse={t.id === pulseId}
-														onClick={() => toggleTask(t)}
-														onDelete={() => deleteTask(t)}
-													/>
-												</Reorder.Item>
-											))}
-										</Reorder.Group>
 									) : (
-										// Sorted modes: layout animation glides rows to their new spot
-										// when a status change or update reorders them.
-										visibleSidebarTasks.map((t) => (
-											<motion.div key={t.id} layout transition={springy}>
+										shownGroups.map((g) => {
+											const grouped = sideView.grouping !== "none";
+											const folded = grouped && sideView.collapsed.includes(g.key);
+											const row = (t: TaskDTO) => (
 												<TaskRow
 													task={t}
 													offline={offlineAliasOf(t) !== null}
 													selected={t.id === sidebarSelectedId}
 													pulse={t.id === pulseId}
-													onClick={() => toggleTask(t)}
+													onClick={() => openRow(t)}
 													onDelete={() => deleteTask(t)}
 												/>
-											</motion.div>
-										))
+											);
+											return (
+												<div key={g.key}>
+													{grouped && (
+														<button
+															type="button"
+															className="task-group-head"
+															aria-expanded={!folded}
+															onClick={() =>
+																setSideView({
+																	...sideView,
+																	collapsed: toggled(sideView.collapsed, g.key),
+																})
+															}
+														>
+															{folded ? (
+																<ChevronRight size={12} strokeWidth={2} />
+															) : (
+																<ChevronDown size={12} strokeWidth={2} />
+															)}
+															<span>{g.label}</span>
+														</button>
+													)}
+													{folded ? null : taskSort === "custom" ? (
+														// Custom order: drag rows up/down inside the group; Motion
+														// animates the shuffle. A drag only trades the group's own
+														// slots, so tasks in other groups, or hidden by a filter, keep
+														// their place in the saved order.
+														<Reorder.Group
+															as="div"
+															axis="y"
+															values={g.tasks.map((t) => t.id)}
+															onReorder={(ids) =>
+																reorderTasks(
+																	spliceOrder(
+																		orderedSidebarTasks.map((t) => t.id),
+																		ids,
+																	),
+																)
+															}
+														>
+															{g.tasks.map((t) => (
+																<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
+																	{row(t)}
+																</Reorder.Item>
+															))}
+														</Reorder.Group>
+													) : (
+														// Sorted modes: layout animation glides rows to their new spot
+														// when a status change or update reorders them.
+														g.tasks.map((t) => (
+															<motion.div key={t.id} layout transition={springy}>
+																{row(t)}
+															</motion.div>
+														))
+													)}
+												</div>
+											);
+										})
 									)}
 								</div>
 							)}
@@ -2001,18 +2157,12 @@ export function App() {
 						    picking a layout opens the grid in it. Lit like a tab: only on
 						    Mission Control (a task focused over it included), so from the
 						    Board none of them reads as current. Under Auto only Auto is
-						    lit; its tooltip names the layout it fitted. */}
+						    lit. */}
 						<div className="mclayout" role="group" aria-label="Mission Control layout">
 							<button
 								type="button"
 								className={`navbtn icon ${view === "mission" && mcChoice === "auto" ? "active" : ""}`}
-								title={
-									view !== "mission" || mcChoice !== "auto"
-										? "Mission Control: Auto layout (fits the live terminals as they come and go)"
-										: mcFitPending
-											? "Mission Control: Auto layout (fits the terminals once one is live)"
-											: `Mission Control: Auto layout (${mcLayoutLabel(mcLayout)} for the live terminals)`
-								}
+								title="Mission Control: Auto layout (fits the live terminals to the space, with no empty slot)"
 								aria-label="Mission Control: Auto layout"
 								aria-pressed={view === "mission" && mcChoice === "auto"}
 								onClick={chooseAutoLayout}
@@ -2258,8 +2408,7 @@ export function App() {
 							tasks={missionTasks}
 							agents={agents}
 							order={missionOrderIds}
-							layout={mcLayout}
-							holdForFit={mcFitPending && mcChoice === "auto"}
+							layout={mcChoice}
 							syncSeq={mcSyncSeq}
 							onExpand={openFromMission}
 							highlightId={mcHighlightId}
@@ -2273,7 +2422,7 @@ export function App() {
 							onNewTask={activeProjectId ? newTask : undefined}
 						/>
 					) : view === "settings" ? (
-						<SettingsPanel agents={agents} />
+						<SettingsPanel agents={agents} boxesNeedYou={boxesNeedYou} />
 					) : view === "lead" ? (
 						<LeadChat
 							tasks={allTasks}
@@ -2342,13 +2491,18 @@ export function App() {
 			{composerOpen && activeCard && (
 				<PromptComposer
 					agents={agents}
-					initialName={composerIssue?.title}
-					initialPrompt={
-						composerIssue
-							? `${composerIssue.title}\n\n${composerIssue.url}\n\n${composerIssue.body}`
-							: undefined
+					initialName={
+						composerSeed ? (composerSeed.nameAuto ? "" : composerSeed.name) : composerIssue?.title
 					}
-					initialFiles={composerFiles}
+					initialPrompt={
+						composerSeed
+							? composerSeed.prompt
+							: composerIssue
+								? `${composerIssue.title}\n\n${composerIssue.url}\n\n${composerIssue.body}`
+								: undefined
+					}
+					initialFiles={composerSeed?.files ?? composerFiles}
+					initialAlias={composerSeed?.alias}
 					environments={composerEnvs}
 					envAgents={envAgents}
 					onAdd={addTailscaleBox}
@@ -2359,9 +2513,63 @@ export function App() {
 						setComposerOpen(false);
 						setComposerIssue(null);
 						setComposerFiles([]);
+						setComposerSeed(null);
 					}}
 					onCreate={composeTask}
 				/>
+			)}
+			{githubFix && (
+				<Dialog
+					open
+					onOpenChange={(open) => {
+						// Closing puts the task back in the composer rather than dropping it.
+						if (open) return;
+						const fix = githubFix;
+						setGithubFix(null);
+						reopenComposer(fix.input);
+					}}
+				>
+					<DialogContent
+						className="flex max-h-[calc(100vh-4rem)] flex-col gap-3 overflow-y-auto p-5 sm:max-w-[560px]"
+						aria-describedby={undefined}
+					>
+						<DialogTitle className="pr-8 text-sm font-medium">
+							{githubFix.label} can't see {githubFix.repo}
+						</DialogTitle>
+						<p className="gh-access-muted">
+							Its GitHub access doesn't include this repository, so cloning it there would fail.
+							Connect a token that includes it, then try again.
+						</p>
+						<GithubAccess
+							alias={githubFix.alias}
+							label={githubFix.label}
+							repos={[githubFix.repo]}
+						/>
+						<div className="flex justify-end gap-2">
+							<Button
+								size="sm"
+								variant="ghost"
+								onClick={() => {
+									const fix = githubFix;
+									setGithubFix(null);
+									reopenComposer(fix.input);
+								}}
+							>
+								Back to the task
+							</Button>
+							<Button
+								size="sm"
+								onClick={() => {
+									const fix = githubFix;
+									setGithubFix(null);
+									composeTask(fix.input);
+								}}
+							>
+								Try again
+							</Button>
+						</div>
+					</DialogContent>
+				</Dialog>
 			)}
 			{loopDialog && activeCard && (loopDialog.editId === null || editingLoop) && (
 				<LoopForm
@@ -2389,6 +2597,7 @@ export function App() {
 						<ProposalNote
 							from={task.name}
 							proposal={p}
+							waiting={(task.proposals?.length ?? 1) - 1}
 							onDismiss={() => {
 								setProposalOpen(null);
 								void clearProposal(task.id, p.id);
@@ -2686,9 +2895,10 @@ function TaskRow({
 	const Icon = taskIcon(t.name);
 	const tags = tagsFor(t);
 	const glyphs = taskGlyphs(t);
-	// Row and trailing slot are siblings so the trash click can't nest inside the
-	// row button (same pattern as proj-row / proj-open above). The git glyph and
-	// the delete button share the trailing slot and swap in place on hover.
+	// The row is a grid (icon | name | git glyph | status) that the row button
+	// shares as a subgrid. The menu is the button's sibling, so its click can't
+	// nest inside the row button, and it sits in the glyph's column: glyph at
+	// rest, menu on hover, swapped in place just left of the status.
 	return (
 		<div className="tasknode-row">
 			<button
@@ -2704,31 +2914,35 @@ function TaskRow({
 				) : (
 					<Icon className="ticon" size={14} strokeWidth={1.75} />
 				)}
-				<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
 				{/* The status stays put; on hover the tags slide in beside it, like
-				    the card's. The name already ellipsizes, so it simply truncates
-				    further to make room and the row never changes height. */}
-				{tags.length > 0 && (
-					<span className="row-tags">
-						{tags.map((tag) => (
-							<span className="pill" key={tag}>
-								{tag}
-							</span>
-						))}
-					</span>
-				)}
-				<StatusPill column={t.column} title={t.triage.reason} />
-			</button>
-			<span className="task-trail">
+				    the card's. They share one line with the name, so the name only
+				    gives up the room the tags that fit really take. */}
+				<span className="tmain">
+					<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
+					{tags.map((tag) => (
+						<span className="pill row-tag" key={tag}>
+							{tag}
+						</span>
+					))}
+				</span>
 				<TriageGlyph triage={t.triage} />
-				{/* One action, so it fits beside the status without moving it. Wait
-				    on someone lives in the open task's ··· menu. */}
-				<IconButton
-					icon={Trash2}
-					label="Delete task"
-					variant="danger"
-					size={14}
-					onClick={onDelete}
+				{/* Listed under the Archived filter: it says so in the status's spot. */}
+				{t.archivedAt != null ? (
+					<span className="pill" title="Archived. Opening it brings it back to the board.">
+						archived
+					</span>
+				) : (
+					<StatusPill column={t.column} title={t.triage.reason} />
+				)}
+			</button>
+			{/* Vertical, so it's narrow enough to swap in beside the status without
+			    moving it. Wait on someone lives in the open task's ··· menu. */}
+			<span className="row-menu">
+				<Menu
+					label={`Actions for ${t.name}`}
+					icon={EllipsisVertical}
+					className="size-5 [&_svg:not([class*='size-'])]:size-3.5"
+					items={[{ label: "Delete task…", icon: Trash2, danger: true, onClick: onDelete }]}
 				/>
 			</span>
 		</div>
@@ -3033,6 +3247,48 @@ function TaskSummary({ task }: { task: TaskDTO }) {
 	);
 }
 
+// Whether the user opened (true) or closed (false) each page in the task panel,
+// by page id. A page nobody chose for opens by itself if show_page made it, and
+// not if it came with a question (TaskPageDTO.fromQuestion). Not the panel's
+// state: the panel remounts on every side/full switch. Kept across restarts
+// because a task keeps its page forever; past the cap the oldest choices fall
+// off, and those pages go back to their default.
+// shortcut: this Mac's localStorage; move it onto the task row once another
+// client (the phone) shows pages and should agree on what was closed.
+const PAGE_CHOICES_KEY = "ateam.pageChoices";
+const PAGE_CHOICES_MAX = 200;
+const pageChoices = new Map<string, boolean>(
+	(() => {
+		try {
+			const v: unknown = JSON.parse(localStorage.getItem(PAGE_CHOICES_KEY) ?? "[]");
+			return Array.isArray(v)
+				? v.filter(
+						(e): e is [string, boolean] =>
+							Array.isArray(e) && typeof e[0] === "string" && typeof e[1] === "boolean",
+					)
+				: [];
+		} catch {
+			return [];
+		}
+	})(),
+);
+const choosePage = (pageId: string, open: boolean) => {
+	pageChoices.delete(pageId); // re-inserted last: the newest choice is the last to go
+	pageChoices.set(pageId, open);
+	for (const old of pageChoices.keys()) {
+		if (pageChoices.size <= PAGE_CHOICES_MAX) break;
+		pageChoices.delete(old);
+	}
+	try {
+		localStorage.setItem(PAGE_CHOICES_KEY, JSON.stringify([...pageChoices]));
+	} catch {
+		/* full or unavailable: the choice still holds until the app quits */
+	}
+};
+// Narrower than this, the panel body has no room for the page beside the
+// terminal, and the page fills it instead (the 480px side panel always does).
+const PAGE_SPLIT_MIN = 880;
+
 function TaskPanel({
 	task,
 	agents,
@@ -3115,6 +3371,13 @@ function TaskPanel({
 	const [browserSrc, setBrowserSrc] = useState<string | null>(null);
 	const [browserOpen, setBrowserOpen] = useState(false);
 	const [browserBusy, setBrowserBusy] = useState<string | null>(null);
+	// The task on screen now. This panel is reused across tasks, not remounted,
+	// and a browser open can outlive a switch (an install takes minutes): its
+	// result must not land in the next task's panel.
+	const shownTaskId = useRef(task.id);
+	useEffect(() => {
+		shownTaskId.current = task.id;
+	}, [task.id]);
 	// Dock the agent terminal as a right sidebar while the editor or the changes
 	// view owns the main area — the agent keeps working in view instead of
 	// vanishing behind it. Default on; the left-sidebar variant was left out.
@@ -3391,6 +3654,46 @@ function TaskPanel({
 	const mainViewOpen = editorOpen || browserOpen || changesOpen;
 	const termDocked = termSide && mainViewOpen;
 
+	// The agent's page, unless the open question's card draws it. A show_page
+	// page is open unless closed: beside the terminal when the body is wide
+	// enough, over it when not. The editor, browser and changes views cover it.
+	// Not open, it is a bar above the terminal's toolbar. A question's page,
+	// once the question has ended, only ever opens from the bar.
+	const page = task.page && task.question?.pageId !== task.page.id ? task.page : null;
+	const [, rerender] = useReducer((n: number) => n + 1, 0);
+	const pageShown = !!page && (pageChoices.get(page.id) ?? !page.fromQuestion) && !mainViewOpen;
+	const bodyRef = useRef<HTMLDivElement>(null);
+	const [bodyWide, setBodyWide] = useState(false);
+	useLayoutEffect(() => {
+		const el = bodyRef.current;
+		if (!el) return;
+		// Measured now as well: the observer's first report lands after the paint.
+		const check = () => setBodyWide(el.clientWidth >= PAGE_SPLIT_MIN);
+		check();
+		const ro = new ResizeObserver(check);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+	const pageFills = pageShown && !bodyWide;
+	const openPage = () => {
+		if (!page) return;
+		choosePage(page.id, true);
+		setEditorOpen(false);
+		setBrowserOpen(false);
+		setChangesOpen(false);
+		rerender();
+	};
+	const closePage = () => {
+		if (!page) return;
+		choosePage(page.id, false);
+		rerender();
+	};
+	const pageBar = page && !pageShown && (
+		<div className="panel-page">
+			<PageFrame taskId={task.id} pageId={page.id} title={page.title} onOpen={openPage} />
+		</div>
+	);
+
 	// Closing a tab kills its PTY — tabs are exactly the live sessions, so there
 	// is no "closed but still running" state to explain. Confirm first when the
 	// agent is mid-turn or holding a permission prompt, where a stray click would
@@ -3627,16 +3930,46 @@ function TaskPanel({
 								// A loaded view stays connected (noVNC reconnects on its own),
 								// so only the first open asks the box.
 								if (browserSrc) return;
+								// After each await, touch the panel only if it still shows
+								// this task. An error still reaches the toast either way.
+								const forTask = task.id;
+								const stillShown = () => shownTaskId.current === forTask;
 								setBrowserBusy("Opening the browser…");
 								try {
-									setBrowserSrc((await window.ateam.browser.view(task.id)).url);
+									let view: { url: string };
+									try {
+										view = await window.ateam.browser.view(task.id);
+									} catch (e) {
+										// A box without the browser: offer it, as the editor does.
+										// Nothing is installed without a yes.
+										if (!String(e).includes(BROWSER_NOT_INSTALLED_ERROR)) throw e;
+										const ok = await confirm(
+											`Install a browser on "${alias}"?`,
+											`The agents on "${alias}" get a Chrome of their own, which you can watch and take over in this panel. Ateam installs Chrome, a virtual desktop and noVNC there with apt, so the box needs passwordless sudo and x86_64 Debian or Ubuntu. It takes a few minutes.`,
+										);
+										if (!ok) {
+											if (stillShown()) setBrowserOpen(false);
+											return;
+										}
+										if (stillShown())
+											setBrowserBusy(
+												`Installing the browser on "${alias}". This takes a few minutes…`,
+											);
+										await window.ateam.browser.install(task.id).catch((err) => {
+											// A box from before browser:install: its own not-installed
+											// message carries the command to run there instead.
+											throw /Unknown method/.test(String(err)) ? e : err;
+										});
+										view = await window.ateam.browser.view(task.id);
+									}
+									if (stillShown()) setBrowserSrc(view.url);
 								} catch (e) {
-									setBrowserOpen(false);
+									if (stillShown()) setBrowserOpen(false);
 									if (/Unknown method/.test(String(e)))
 										throw new Error(`Update Ateam on "${alias}" to open its browser here.`);
 									throw e;
 								} finally {
-									setBrowserBusy(null);
+									if (stillShown()) setBrowserBusy(null);
 								}
 							});
 						}}
@@ -3754,13 +4087,13 @@ function TaskPanel({
 					}
 				/>
 			)}
-			<div className={`panel-body${termDocked ? " docked-term" : ""}`}>
+			<div className={`panel-body${termDocked ? " docked-term" : ""}`} ref={bodyRef}>
 				{/* Keep the terminal mounted (xterm state survives) while the
 				    changes view is open — just hide it, or dock it beside the
 				    view when the sidebar toggle is on. */}
 				<div
 					className="term-wrap"
-					style={{ display: termDocked || !mainViewOpen ? "flex" : "none" }}
+					style={{ display: (termDocked || !mainViewOpen) && !pageFills ? "flex" : "none" }}
 				>
 					{terminalId ? (
 						<TerminalView
@@ -3774,15 +4107,19 @@ function TaskPanel({
 									await window.ateam.tasks.setColumn(task.id, "merged");
 								})
 							}
+							aboveToolbar={pageBar}
 						/>
 					) : (
-						<div className="term term-empty">
-							<button type="button" onClick={resumeLast}>
-								<History size={13} />
-								Resume last conversation
-							</button>
-							<span className="muted">or open a tab with + to start a terminal</span>
-						</div>
+						<>
+							<div className="term term-empty">
+								<button type="button" onClick={resumeLast}>
+									<History size={13} />
+									Resume last conversation
+								</button>
+								<span className="muted">or open a tab with + to start a terminal</span>
+							</div>
+							{pageBar}
+						</>
 					)}
 				</div>
 
@@ -3849,13 +4186,13 @@ function TaskPanel({
 						</div>
 					</div>
 				)}
-			</div>
 
-			{task.page && task.question?.pageId !== task.page.id && (
-				<div className="panel-page">
-					<PageFrame taskId={task.id} pageId={task.page.id} title={task.page.title} collapsed />
-				</div>
-			)}
+				{page && pageShown && (
+					<div className={`page-pane${pageFills ? " fills" : ""}`}>
+						<PageFrame taskId={task.id} pageId={page.id} title={page.title} onClose={closePage} />
+					</div>
+				)}
+			</div>
 		</section>
 	);
 }
@@ -3877,7 +4214,6 @@ function MissionControl({
 	agents,
 	order,
 	layout,
-	holdForFit,
 	syncSeq,
 	onExpand,
 	highlightId,
@@ -3899,10 +4235,8 @@ function MissionControl({
 	agents: AgentDTO[];
 	/** The rank tiles take on mount and on Sync; read at no other time. */
 	order: string[];
-	layout: McLayout;
-	/** Auto is about to fit `layout` to the tile count this grid reports, so no
-	 *  terminal should mount at a size it is about to leave. */
-	holdForFit: boolean;
+	/** A fixed layout, or "auto": each page shaped to the grid's own size. */
+	layout: McChoice;
 	/** Bumped by the Sync button: re-sort the tiles to `order` once. */
 	syncSeq: number;
 	onExpand: (task: TaskDTO, terminalId: string) => void;
@@ -3937,11 +4271,45 @@ function MissionControl({
 	const tilesRef = useRef(tiles);
 	tilesRef.current = tiles;
 
+	// Auto shapes each page to the grid's size, so the grid measures itself:
+	// once before the first paint, so no terminal mounts at a size Auto is
+	// about to leave, then each time a resize settles. Mid-resize the tiles
+	// just stretch, as they always have; the shape and the page size move once
+	// the size holds still, because a refit redraws every agent and can
+	// re-page the tiles. Measured under any layout, so picking Auto fits at once.
+	const wrapRef = useRef<HTMLDivElement>(null);
+	const [fit, setFit] = useState<{ area: McArea; capacity: number } | null>(null);
+	useLayoutEffect(() => {
+		const el = wrapRef.current;
+		if (!el) return;
+		const measure = () => {
+			const area = { width: el.clientWidth, height: el.clientHeight };
+			if (area.width === 0 || area.height === 0) return;
+			setFit((f) =>
+				f && f.area.width === area.width && f.area.height === area.height
+					? f
+					: { area, capacity: mcCapacity(area, f?.capacity) },
+			);
+		};
+		measure();
+		let timer = 0;
+		const observer = new ResizeObserver(() => {
+			window.clearTimeout(timer);
+			timer = window.setTimeout(measure, MC_RESIZE_SETTLE_MS);
+		});
+		observer.observe(el);
+		return () => {
+			observer.disconnect();
+			window.clearTimeout(timer);
+		};
+	}, []);
+
 	// Pages instead of a scroll area: each layout shows a fixed number of tiles
-	// at once, and the rest live on further pages. "In view" is then a crisp
-	// set — exactly what the reorder-skip below needs.
+	// at once (Auto, as many as its grid fits), and the rest live on further
+	// pages. "In view" is then a crisp set — exactly what the reorder-skip
+	// below needs.
 	const [page, setPage] = useState(0);
-	const pageSize = MC_PAGE_SIZE[layout];
+	const pageSize = layout === "auto" ? (fit?.capacity ?? 1) : MC_PAGE_SIZE[layout];
 	const pageCount = Math.max(1, Math.ceil(tiles.length / pageSize));
 	// Clamp in-render (sessions can die, the layout can change page size) so a
 	// stale page never shows an empty grid, then sync the state.
@@ -4275,37 +4643,55 @@ function MissionControl({
 			</button>
 		) : null;
 
+	// Every return is inside the same .mc-wrap, so the element Auto measures
+	// stays put from the first fetch to the last tile.
 	if (tiles.length === 0) {
-		if (!loaded) return <div className="mc" data-layout={layout} />;
+		if (!loaded)
+			return (
+				<div className="mc-wrap" ref={wrapRef}>
+					<div className="mc" data-layout={layout} />
+				</div>
+			);
 		// mc-none: centered in the whole area, not in the layout's first cell.
 		return (
-			<div className="mc mc-none" data-layout={layout}>
-				{mode === "loops" ? (
-					<div className="empty">
-						No loop sessions running.
-						<br />A loop shows up here while its session is live.
-					</div>
-				) : (
-					<div className="empty">
-						No live agents yet.
-						<br />
-						Start a task to watch its agent work here.
-						{newTaskButton && (
-							<>
-								<br />
-								{newTaskButton}
-							</>
-						)}
-					</div>
-				)}
+			<div className="mc-wrap" ref={wrapRef}>
+				<div className="mc mc-none" data-layout={layout}>
+					{mode === "loops" ? (
+						<div className="empty">
+							No loop sessions running.
+							<br />A loop shows up here while its session is live.
+						</div>
+					) : (
+						<div className="empty">
+							No live agents yet.
+							<br />
+							Start a task to watch its agent work here.
+							{newTaskButton && (
+								<>
+									<br />
+									{newTaskButton}
+								</>
+							)}
+						</div>
+					)}
+				</div>
 			</div>
 		);
 	}
-	// The tiles are counted; the layout to show them in lands next render.
-	if (holdForFit) return <div className="mc" data-layout={layout} />;
+	// Auto without a size yet: hold the terminals until it has one.
+	if (layout === "auto" && !fit)
+		return (
+			<div className="mc-wrap" ref={wrapRef}>
+				<div className="mc" data-layout={layout} />
+			</div>
+		);
+	// Auto's page: lines of tiles that fill the grid, every tile a cell and
+	// every cell a tile. The last page is shaped for the tiles it has.
+	const autoGrid =
+		layout === "auto" && fit ? mcShapeGrid(bestMcShape(visible.length, fit.area)) : null;
 
 	return (
-		<div className="mc-wrap">
+		<div className="mc-wrap" ref={wrapRef}>
 			{/* Keyed by page: flipping remounts the grid, and TerminalView replays
 			    its ring-buffer snapshot on mount, so a page flip is a clean swap.
 			    The slide follows the flip direction, a "perfect scroll" to the
@@ -4314,11 +4700,12 @@ function MissionControl({
 				key={clampedPage}
 				className="mc"
 				data-layout={layout}
+				style={autoGrid?.container}
 				initial={dirRef.current === 0 ? false : { y: dirRef.current * 32, opacity: 0.3 }}
 				animate={{ y: 0, opacity: 1 }}
 				transition={springy}
 			>
-				{visible.map(({ task, sessions }) => {
+				{visible.map(({ task, sessions }, i) => {
 					const shown = activeTerminal(sessions, shownByTask[task.id]?.terminalId ?? null);
 					if (!shown) return null; // a task with no live session is not a tile
 					const tabs = sessionTabs(sessions, agents);
@@ -4344,6 +4731,7 @@ function MissionControl({
 							// only: `layout` alone would scale a terminal mid-flight when the
 							// page holds a different number of tiles than it did before.
 							layout="position"
+							style={autoGrid?.tiles[i]}
 							initial={{ opacity: 0 }}
 							animate={{ opacity: 1 }}
 							transition={{ layout: springy, opacity: { duration: 0.22 } }}
@@ -4476,8 +4864,9 @@ function MissionControl({
 				})}
 				{/* A page with room left (only ever the last one) offers a new task
 				    in its first open slot; the tile that task grows takes the slot,
-				    and the offer moves on to the next one, gliding like the tiles. */}
-				{newTaskButton && visible.length < pageSize && (
+				    and the offer moves on to the next one, gliding like the tiles.
+				    Auto leaves no open slot: its tiles fill the page. */}
+				{newTaskButton && !autoGrid && visible.length < pageSize && (
 					<motion.div
 						key="mc-slot"
 						className="mc-slot"
