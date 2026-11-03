@@ -69,7 +69,8 @@ export type FollowUpResolver = (terminalId: string, eventType: string) => string
 
 /**
  * The peer inbox behind `/inbox/wait` (see peer-messages.ts): token checks and
- * the long-poll a listener holds open.
+ * the long-poll a listener holds open. `/inbox/user/*` is the Claude mod's: the
+ * user's own words, leased until it acks them.
  */
 export interface PeerInboxHandlers {
 	verify(terminalId: string, token: string): boolean;
@@ -82,6 +83,16 @@ export interface PeerInboxHandlers {
 		>;
 		cancel: () => void;
 	};
+	waitUser(terminalId: string): {
+		result: Promise<
+			| { kind: "message"; deliveryId: string; text: string }
+			| { kind: "timeout" }
+			| { kind: "superseded" }
+			| { kind: "gone" }
+		>;
+		cancel: () => void;
+	};
+	ackUser(terminalId: string, deliveryId: string, entered: boolean): boolean;
 }
 
 /** Claude Code's PermissionRequest hook, held open until someone decides
@@ -315,6 +326,43 @@ export class HookServer extends EventEmitter {
 						}
 					});
 					return;
+				}
+
+				// The Claude mod (agent-setup): the user's own words for this
+				// terminal, which it submits as the user's prompt. Same answers as
+				// /inbox/wait, the 200 a JSON { deliveryId, text } it then acks with
+				// POST /inbox/user/ack?deliveryId=&entered=1|0 (204, or 404 for a
+				// lease this terminal does not hold).
+				if (url.pathname === "/inbox/user/wait" || url.pathname === "/inbox/user/ack") {
+					const terminalId = url.searchParams.get("terminalId") ?? "";
+					const token = (req.headers["x-ateam-terminal-token"] as string | undefined) ?? "";
+					if (!this.inbox) return json(503, { error: "inbox not ready" });
+					if (!terminalId || !token || !this.inbox.verify(terminalId, token)) {
+						res.writeHead(401);
+						res.end();
+						return;
+					}
+					if (req.method === "POST" && url.pathname === "/inbox/user/ack") {
+						const deliveryId = url.searchParams.get("deliveryId") ?? "";
+						const entered = url.searchParams.get("entered") === "1";
+						res.writeHead(this.inbox.ackUser(terminalId, deliveryId, entered) ? 204 : 404);
+						res.end();
+						return;
+					}
+					if (req.method === "GET" && url.pathname === "/inbox/user/wait") {
+						const { result, cancel } = this.inbox.waitUser(terminalId);
+						res.on("close", cancel);
+						result.then((o) => {
+							if (res.writableEnded || res.destroyed) return;
+							if (o.kind === "message") {
+								json(200, { deliveryId: o.deliveryId, text: o.text });
+							} else {
+								res.writeHead(o.kind === "timeout" ? 204 : o.kind === "superseded" ? 409 : 410);
+								res.end();
+							}
+						});
+						return;
+					}
 				}
 
 				// Board tools as plain GET (debug / non-MCP clients). The MCP

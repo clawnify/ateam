@@ -66,6 +66,28 @@ async function runInbox(env: Record<string, string> = {}) {
 	return { code, stderr: await new Response(proc.stderr).text() };
 }
 
+describe("Ateam's Claude mod", () => {
+	test("is written beside the hooks, a plugin whose module submits as the user", async () => {
+		const mod = join(dir, "hooks", "claude-mod");
+		const manifest = JSON.parse(await readFile(join(mod, ".claude-plugin", "plugin.json"), "utf8"));
+		expect(manifest.name).toBe("ateam-inbox");
+		const hooks = JSON.parse(await readFile(join(mod, "hooks", "hooks.json"), "utf8"));
+		expect(hooks.modules).toEqual(["./register.js"]);
+		const module = await readFile(join(mod, "hooks", "register.js"), "utf8");
+		expect(module).toContain("asUser: true");
+		expect(module).toContain("/inbox/user");
+	});
+
+	// Every running Claude task watches this folder and reloads the mod on a change.
+	test("an unchanged rewrite leaves the files alone", async () => {
+		const file = join(dir, "hooks", "claude-mod", "hooks", "register.js");
+		const before = (await stat(file)).mtimeMs;
+		await new Promise((r) => setTimeout(r, 20));
+		await ensureNotifyScript(dir);
+		expect((await stat(file)).mtimeMs).toBe(before);
+	});
+});
+
 describe("inbox.sh (Claude's asyncRewake listener)", () => {
 	test("a message wakes the agent: exit 2 with the text on stderr", async () => {
 		answers = [{ status: 200, body: "[Ateam] Message from ...\n\nrebase on main" }];
