@@ -116,7 +116,7 @@ import {
 	mcCapacity,
 	mcShapeGrid,
 } from "./mc-layout";
-import { panelOnScreen, proposalToOpen } from "./proposal-open";
+import { panelOnScreen, proposalToOpen, shownWhileOpen } from "./proposal-open";
 import {
 	activeTerminal,
 	conversationToResume,
@@ -935,6 +935,14 @@ export function App() {
 		cleanupOpen ||
 		newIssueOpen ||
 		promptUi != null;
+	// Declared before the effect below so it runs first in a commit: while one of
+	// a task's proposals is open, its others count as shown, so none of them
+	// takes the dialog's place the moment it closes (shownWhileOpen).
+	useEffect(() => {
+		if (!proposalOpen) return;
+		const task = activeTasks.find((t) => t.id === proposalOpen.taskId);
+		for (const id of shownWhileOpen(task)) autoOpenedProposals.current.add(id);
+	}, [proposalOpen, activeTasks]);
 	useEffect(() => {
 		const id = proposalToOpen(panelTask, autoOpenedProposals.current, dialogOpen);
 		if (!id || !panelTask) return;
@@ -2589,6 +2597,7 @@ export function App() {
 						<ProposalNote
 							from={task.name}
 							proposal={p}
+							waiting={(task.proposals?.length ?? 1) - 1}
 							onDismiss={() => {
 								setProposalOpen(null);
 								void clearProposal(task.id, p.id);
