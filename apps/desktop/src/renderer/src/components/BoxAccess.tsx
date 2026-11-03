@@ -89,7 +89,7 @@ export function BoxAccess({
 	const lock = async () => {
 		const ok = await confirm(
 			`Lock ${title} to your devices?`,
-			"Only devices paired with it can use it over the network from then on, starting with this Mac. Every other device, a phone included, needs a pairing code first. Connections over SSH aren't affected.",
+			"Only devices paired with it can use it over the network from then on, starting with this Mac. Every other device needs a pairing code first, and a phone needs Ateam Go 1.4 or later to use one. Connections over SSH aren't affected.",
 		);
 		if (!ok) return;
 		await run(async () => setStatus(await window.ateamHost.pairingLock(alias)));

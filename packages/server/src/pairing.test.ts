@@ -186,6 +186,16 @@ describe("a connection to a box's network port", () => {
 		});
 	});
 
+	it("gives no codes on an open box, so nothing can pair before the owner locks it", async () => {
+		const box = fakeEngine();
+		const guard = guardIn();
+		const c = connect(box, guard);
+		await expect(c.call(CH.pairingInvite)).rejects.toThrow("Lock the box first");
+		// Over SSH it may: that is the owner.
+		const ssh = connect(box, guard, true);
+		expect(await ssh.call(CH.pairingInvite)).toMatchObject({ code: expect.any(String) });
+	});
+
 	it("over SSH, is never gated", async () => {
 		const box = fakeEngine();
 		const guard = guardIn();

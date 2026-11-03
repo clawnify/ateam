@@ -17,6 +17,7 @@ import Feather from "@expo/vector-icons/Feather";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
+	Alert,
 	Animated,
 	PanResponder,
 	Pressable,
@@ -494,7 +495,7 @@ function PairTray({ onPair }: { onPair: (code: string) => Promise<void> }) {
 function LockTray({ onLock }: { onLock: () => Promise<void> }) {
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const lock = async () => {
+	const run = async () => {
 		setBusy(true);
 		setError(null);
 		try {
@@ -505,6 +506,15 @@ function LockTray({ onLock }: { onLock: () => Promise<void> }) {
 			setBusy(false);
 		}
 	};
+	const lock = () =>
+		Alert.alert(
+			"Lock this box?",
+			"Only devices paired with it can use it from then on, starting with this phone. Your Mac, if it reaches the box over Tailscale, needs a code too: get one with `ateam pair` in this box's terminal (the terminal button on its card).",
+			[
+				{ text: "Cancel", style: "cancel" },
+				{ text: "Lock it", onPress: () => void run() },
+			],
+		);
 	return (
 		<View style={styles.tray}>
 			<Text style={styles.trayWarn}>
@@ -515,7 +525,7 @@ function LockTray({ onLock }: { onLock: () => Promise<void> }) {
 				<Pressable
 					style={[styles.pairBtn, busy && styles.pairBtnOff]}
 					disabled={busy}
-					onPress={() => void lock()}
+					onPress={lock}
 					accessibilityRole="button"
 				>
 					<Text style={styles.pairBtnText}>{busy ? "Locking…" : "Lock it"}</Text>

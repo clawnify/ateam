@@ -361,9 +361,11 @@ export function createLinks(deps: LinkDeps): Links {
 			if (attempt.cancelled) return false;
 			step(failActive);
 			const msg = err instanceof Error ? err.message : String(err);
-			const said = wakeError
-				? `${msg}. Waking it through ${waker?.label} failed too: ${wakeError}`
-				: msg;
+			// A locked box's refusal stays exact: the card offers a code field for it.
+			const said =
+				wakeError && msg !== NEEDS_PAIRING
+					? `${msg}. Waking it through ${waker?.label} failed too: ${wakeError}`
+					: msg;
 			set(key, (l) => ({
 				...l,
 				state: "down",

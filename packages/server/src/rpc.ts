@@ -203,6 +203,10 @@ export function serveRpc(
 			case CH.pairingStatus:
 				return g.store.status(device);
 			case CH.pairingInvite:
+				// On an open box a code adds nothing, and a device that paired before
+				// the owner locked would keep its way in: codes come once it is locked.
+				if (!g.store.locked() && opts.trusted !== true)
+					throw new Error("Lock the box first: until then any device can use it.");
 				return g.store.invite();
 			case CH.pairingRevoke: {
 				const id = String(input.id ?? "");
