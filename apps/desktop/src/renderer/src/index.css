@@ -350,6 +350,16 @@ input {
 	background: var(--text-dim);
 	flex: none;
 }
+/* The repo owner's GitHub avatar in the dot's 14px slot. GitHub draws org
+   logos as rounded squares; a faint inset edge keeps a dark logo visible. */
+.project-avatar {
+	width: 14px;
+	height: 14px;
+	border-radius: 3px;
+	outline: 1px solid rgb(255 255 255 / 0.1);
+	outline-offset: -1px;
+	flex: none;
+}
 /* A file from Finder held over a project: dropping it starts a task there. */
 .project-switcher.file-drop,
 .rail-tile.file-drop {

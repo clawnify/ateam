@@ -1757,6 +1757,7 @@ export function App() {
 						{boundProjectId ? (
 							<ProjectTitle
 								name={boundProject?.name ?? "…"}
+								owner={boundProject?.githubOwner ?? null}
 								color={boundProject?.color ?? null}
 								path={boundProject?.repoPath}
 							/>
