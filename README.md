@@ -252,7 +252,9 @@ their agents and brings their replies back, with every task it names a chip
 that opens it; it runs as
 your own Claude Code, with your skills, plugins and MCP servers, and asks for
 its permissions in the chat; it has its own tab, or sits as a sidebar on the
-right beside the board; files you attach or paste there can go to a new task or
+right beside the board; a project opened in its own window has a chat of its
+own about that project, which can still read your other projects and asks you
+before it messages one of their tasks; files you attach or paste there can go to a new task or
 to a running one, copied to its box when it runs on one, up to 10 MB a file),
 questions agents ask you with the `ask_user`
 board tool (option cards with tradeoffs, or a checklist, answered from the

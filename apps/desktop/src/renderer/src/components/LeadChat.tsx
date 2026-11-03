@@ -1128,7 +1128,10 @@ export function LeadChat({
 	onOpenTask,
 	onOpenProposal,
 	onHide,
+	scope,
 }: {
+	/** A project window's chat: the name of the project it is about. */
+	scope?: string;
 	/** Every loaded task, across projects and machines, to name and open the ones the Lead touches. */
 	tasks: TaskDTO[];
 	/** To say which project each task is in when the user picks one with "@". */
@@ -1358,7 +1361,11 @@ export function LeadChat({
 				<div className="lead-head">
 					<div>
 						<h2>Lead</h2>
-						<p>One chat for every task, on this Mac and on your boxes.</p>
+						<p>
+							{scope
+								? `${scope}'s own chat. The main window's chat covers every project.`
+								: "One chat for every task, on this Mac and on your boxes."}
+						</p>
 					</div>
 					<button
 						type="button"
@@ -1384,10 +1391,18 @@ export function LeadChat({
 				<div className="lead-thread" ref={thread}>
 					{!drawn && !snap.busy && (
 						<div className="lead-empty">
-							<p>
-								Ask about your tasks, start new ones, or send instructions to the agents working on
-								them. The Lead reads every board you're connected to.
-							</p>
+							{scope ? (
+								<p>
+									This chat is about {scope}. Ask about its tasks, start new ones, or send
+									instructions to their agents. It can read your other projects too, and asks you
+									before it messages one of their tasks.
+								</p>
+							) : (
+								<p>
+									Ask about your tasks, start new ones, or send instructions to the agents working
+									on them. The Lead reads every board you're connected to.
+								</p>
+							)}
 							<div className="lead-suggest">
 								{SUGGESTIONS.map((s) => (
 									<button type="button" key={s} onClick={() => send(s, [])}>

@@ -2440,6 +2440,7 @@ export function App() {
 							projects={projects}
 							onOpenTask={openTask}
 							onOpenProposal={openLeadProposal}
+							scope={boundProject?.name}
 						/>
 					) : (
 						<LoopsPanel
@@ -2472,6 +2473,7 @@ export function App() {
 							onOpenTask={openTask}
 							onOpenProposal={openLeadProposal}
 							onHide={() => setLeadSide(false)}
+							scope={boundProject?.name}
 						/>
 					</aside>
 				</>
