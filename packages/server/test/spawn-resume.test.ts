@@ -282,6 +282,19 @@ describe("spawnAgentInTask and a task parked on an outside party", () => {
 	});
 });
 
+describe("Ateam's Claude mod on the launch line", () => {
+	it("a claude conversation loads it from the hooks dir; codex and agent mode don't", async () => {
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", prompt: "hi there" });
+		expect(launches[0]?.args.at(-1)).toContain(
+			`--plugin-dir '${join(services.hooksDir, "claude-mod")}'`,
+		);
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "codex" });
+		expect(launches[1]?.args.at(-1)).not.toContain("--plugin-dir");
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", agentMode: true });
+		expect(launches[2]?.args.at(-1)).not.toContain("--plugin-dir");
+	});
+});
+
 describe("peer messaging on the launch line", () => {
 	const envOf = () => (launches[0] as unknown as { env: NodeJS.ProcessEnv }).env;
 
