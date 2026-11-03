@@ -519,7 +519,7 @@ export class HookServer extends EventEmitter {
 		if (preferredErr) {
 			const log = opts.log ?? ((line: string) => console.log(line));
 			log(
-				`[ateam] hook port ${preferred} given up (${preferredErr.code ?? preferredErr.message}); now on ${this.port}. Agents started before this restart lose their hooks and board tools until restarted.`,
+				`[ateam] hook port ${preferred} given up (${preferredErr.code ?? preferredErr.message}); now on ${this.port}. Agents started before this restart can't reach Ateam until they are restarted.`,
 			);
 		}
 		return this.port;
