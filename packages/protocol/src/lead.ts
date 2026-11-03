@@ -158,8 +158,9 @@ export type LeadItem =
 			at: number;
 	  }
 	/** A task or loop the Lead proposes. Nothing exists until the user creates
-	 *  it from the New task or New loop dialog, filled in from this. The Lead's
-	 *  agent is not told the outcome; the chat shows it. */
+	 *  it from the New task or New loop dialog, filled in from this. The chat
+	 *  shows the outcome, and the Lead's agent hears it with the user's next
+	 *  message (LeadSession.note). */
 	| {
 			kind: "proposal";
 			id: string;

@@ -128,7 +128,7 @@ const proposalFields = (w: Words) =>
 	}) as const;
 
 const proposeFlow = (w: Words) =>
-	`Nothing is created until the user confirms: ${w.flow} You never create one yourself, even when the user asks you to: proposing is how you do it. You are not told the outcome, so do not wait for it, and do not say it started. Proposing the same name again replaces the earlier one.`;
+	`Nothing is created until the user confirms: ${w.flow} You never create one yourself, even when the user asks you to: proposing is how you do it. You hear whether they created or dismissed it with their next message, so do not wait for it, and do not say it started. Proposing the same name again replaces the earlier one.`;
 
 const toolsFor = (w: Words) => [
 	{
@@ -491,7 +491,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		});
 		const what = kind === "task" ? "New task" : "New loop";
 		return {
-			text: `Proposed "${proposal.name}" in ${project.name}. ${w.decide(what)} Nothing starts until they do, and you are not told either way: say in a line what you proposed and why, do not say it started, and do not wait for it.`,
+			text: `Proposed "${proposal.name}" in ${project.name}. ${w.decide(what)} Nothing starts until they do, and you hear what they decided with their next message: say in a line what you proposed and why, do not say it started, and do not wait for it.`,
 		};
 	}
 
