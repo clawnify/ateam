@@ -57,6 +57,7 @@ import {
 	FOLLOWING,
 	firstLine,
 	goTo,
+	landed,
 	openFrom,
 	type StackView,
 	shown,
@@ -549,6 +550,10 @@ function entryLine(e: LeadThreadEntry): string {
 	return e.text;
 }
 
+/** A thread entry the user can open to read: a reply or a page. */
+type Openable = Extract<LeadThreadEntry, { kind: "agent" | "page" }>;
+const isOpenable = (e: LeadThreadEntry): e is Openable => e.kind === "agent" || e.kind === "page";
+
 /** What the card's head says the task did, from its latest entry of its own. */
 function threadVerb(t: LeadThread): string {
 	const own = t.entries.findLast((e) => e.kind === "agent" || e.kind === "page");
@@ -556,9 +561,12 @@ function threadVerb(t: LeadThread): string {
 }
 
 /** A followed task talking back, as a thread: its replies, the user's answers
- *  to it, its pages and notices, in order. The last reply is open, and what
- *  came after it; earlier ones fold to a line each and open in place. One box
- *  answers it, in words or with an emoji (on the last reply). The card and its
+ *  to it, its pages and notices, in order. Once there is more than one reply,
+ *  every entry is a line in a list that scrolls, and one reply or page is open
+ *  below it: the latest, or the line the user picked (one at a time, like a
+ *  mail client). The open one keeps the height of the tallest reply read in
+ *  the thread, so the card doesn't jump as the user picks. One box answers it,
+ *  in words or with an emoji (on the last reply). The card and its
  *  head are the stack's (ThreadStack). Expanded, the whole thread opens in a
  *  dialog with the same answer box, so a half-typed answer is in both. */
 function ThreadView({
@@ -591,49 +599,62 @@ function ThreadView({
 	const [text, setText] = useState("");
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	/** Folded entries the user opened. */
-	const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
 	const [showEarlier, setShowEarlier] = useState(false);
+	/** The reply or page the user picked to read, by id; null reads the latest. */
+	const [picked, setPicked] = useState<string | null>(null);
+	/** The tallest the open reply has been in this thread, which its area keeps. */
+	const [tallest, setTallest] = useState(0);
 	const md = useRef<HTMLDivElement>(null);
 	const whole = useRef<HTMLDivElement>(null);
 	/** What had focus before the dialog took it. */
 	const back = useRef<HTMLElement | null>(null);
-	const from = openFrom(entries.map((e) => e.kind));
 	const lastReply = entries.findLast((e) => e.kind === "agent");
+	const latest = entries.findLast(isOpenable);
+	const all = showEarlier ? [...earlier, ...entries] : entries;
+	const reading = all.find((e): e is Openable => isOpenable(e) && e.id === picked) ?? latest;
+	// One reply and nothing before it reads as it is; anything more is a list.
+	const listed = earlier.length > 0 || (latest !== undefined && entries.indexOf(latest) > 0);
+	const pick = (id: string) => setPicked(id === latest?.id ? null : id);
+	const folds = useRef<HTMLDivElement>(null);
+	/** Where the user scrolled the list to, or null while it rests on the newest. */
+	const foldsAt = useRef<number | null>(null);
 
-	// A new reply folds the one before it. Scrolled up reading that one, it
-	// stays open instead, so the text doesn't fold away under the user.
+	// The list scrolls in a box of its own, resting on the newest line. A
+	// new entry keeps it there, unless the user scrolled up in it. Shown again
+	// after another thread of the stack, it comes back to where it was.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: entries.length is the trigger, not a value the body reads: an entry adds a line.
+	useLayoutEffect(() => {
+		const el = folds.current;
+		if (el && !hidden) el.scrollTop = foldsAt.current ?? el.scrollHeight;
+	}, [hidden, entries.length]);
+
+	// A new reply takes the place of the one open. Scrolled up reading that
+	// one, the user keeps it open instead, so the text doesn't change under them.
 	const [count, setCount] = useState(entries.length);
 	if (count !== entries.length) {
 		setCount(entries.length);
-		if (entries.length > count && !atBottom()) {
-			const was = openFrom(entries.slice(0, count).map((e) => e.kind));
-			const keep = entries.slice(was, count).map((e) => e.id);
-			setOpened((o) => new Set([...o, ...keep]));
-		}
+		const was = entries.slice(0, count).findLast(isOpenable);
+		if (entries.length > count && picked === null && was && was !== latest && !atBottom())
+			setPicked(was.id);
 	}
-	const toggle = (id: string) =>
-		setOpened((o) => {
-			const next = new Set(o);
-			if (!next.delete(id)) next.add(id);
-			return next;
-		});
 
 	// The open reply's box changes size whenever it starts or stops being cut
 	// off: under the cap it is the reply's height, over it the cap's. So
 	// watching its size is enough. A hidden thread keeps what it last reported.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reading is the trigger, not a value the body reads: opening another reply puts a new box in md.
 	useEffect(() => {
 		const el = md.current;
 		if (!el || hidden) {
 			if (!el) onCut(thread.key, false);
 			return;
 		}
-		const watch = new ResizeObserver(() =>
-			onCut(thread.key, el.scrollHeight > el.clientHeight + 1),
-		);
+		const watch = new ResizeObserver(() => {
+			onCut(thread.key, el.scrollHeight > el.clientHeight + 1);
+			setTallest((t) => Math.max(t, el.offsetHeight));
+		});
 		watch.observe(el);
 		return () => watch.disconnect();
-	}, [hidden, thread.key, onCut]);
+	}, [hidden, thread.key, onCut, reading?.id]);
 
 	const send = async (go: () => Promise<void>) => {
 		setSending(true);
@@ -658,52 +679,50 @@ function ThreadView({
 		}
 	};
 
-	/** One entry: `folded` before the open point, `cap` on the open reply. */
-	const entry = (e: LeadThreadEntry, folded: boolean, cap: boolean) => {
-		if (e.kind === "user")
-			return (
-				<div key={e.id} className={folded ? "lead-you folded" : "lead-you"}>
-					{e.text}
-				</div>
-			);
+	/** An entry as the list shows it: a reply or a page as a line that opens it
+	 *  below (marked while it is), what the user sent folded, a notice as it is. */
+	const line = (e: LeadThreadEntry) => {
+		if (e.kind === "user") return <YouSaid key={e.id} entry={e} folded />;
 		if (e.kind === "notice")
 			return (
 				<p key={e.id} className="lead-notice info">
 					{e.text}
 				</p>
 			);
-		const body =
-			e.kind === "agent" ? (
-				<div ref={cap ? md : undefined} className={cap ? "md lead-reply-capped" : "md"}>
-					<Markdown text={e.text} />
-				</div>
-			) : (
-				<PageFrame taskId={e.task.taskId} pageId={e.pageId} title={e.title} />
-			);
-		if (!folded) return <Fragment key={e.id}>{body}</Fragment>;
-		const isOpen = opened.has(e.id);
 		const reaction = e.kind === "agent" ? e.reaction : undefined;
 		return (
-			<div key={e.id} className="lead-fold-group">
-				<button
-					type="button"
-					className="lead-fold"
-					aria-expanded={isOpen}
-					title={isOpen ? "Fold" : "Show all of it"}
-					onClick={() => toggle(e.id)}
-				>
-					<span className="lead-fold-dot" />
-					<span className="lead-fold-line">{isOpen ? "" : entryLine(e)}</span>
-					{reaction && <span className="lead-fold-react">{reaction}</span>}
-					<span className="lead-fold-at">{clock(e.at)}</span>
-				</button>
-				{isOpen && body}
+			<button
+				key={e.id}
+				type="button"
+				className="lead-fold"
+				aria-current={e === reading || undefined}
+				onClick={() => pick(e.id)}
+			>
+				<span className="lead-fold-dot" />
+				<span className="lead-fold-line">{entryLine(e)}</span>
+				{reaction && <span className="lead-fold-react">{reaction}</span>}
+				<span className="lead-fold-at">{clock(e.at)}</span>
+			</button>
+		);
+	};
+	/** An entry open; the reply being read is capped and scrolls past the cap. */
+	const full = (e: LeadThreadEntry) => {
+		if (e.kind === "user") return <YouSaid key={e.id} entry={e} />;
+		if (e.kind === "notice")
+			return (
+				<p key={e.id} className="lead-notice info">
+					{e.text}
+				</p>
+			);
+		if (e.kind === "page")
+			return <PageFrame key={e.id} taskId={e.task.taskId} pageId={e.pageId} title={e.title} />;
+		const cap = e === reading;
+		return (
+			<div key={e.id} ref={cap ? md : undefined} className={cap ? "md lead-reply-capped" : "md"}>
+				<Markdown text={e.text} />
 			</div>
 		);
 	};
-	const before = entries.slice(0, from);
-	const after = entries.slice(from);
-	const above = before.length > 0 || earlier.length > 0;
 
 	// Drawn twice, in the card and in the dialog, from the one draft. Once the
 	// thread goes on further down, its answer box is there; this one says so.
@@ -763,23 +782,47 @@ function ThreadView({
 	return (
 		<div className="lead-agent-body" hidden={hidden}>
 			<div className="lead-thread-entries">
-				{earlier.length > 0 && (
-					<button
-						type="button"
-						className="lead-fold lead-earlier"
-						aria-expanded={showEarlier}
-						onClick={() => setShowEarlier((s) => !s)}
-					>
-						<span className="lead-fold-dot" />
-						<span className="lead-fold-line">
-							{showEarlier ? "Hide earlier" : `${earlier.length} earlier in this thread`}
-						</span>
-					</button>
+				{listed ? (
+					<>
+						<div
+							ref={folds}
+							className="lead-thread-folds"
+							onScroll={(e) => {
+								const el = e.currentTarget;
+								const end = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
+								foldsAt.current = end ? null : el.scrollTop;
+							}}
+						>
+							{earlier.length > 0 && (
+								<button
+									type="button"
+									className="lead-fold lead-earlier"
+									aria-expanded={showEarlier}
+									onClick={() => setShowEarlier((s) => !s)}
+								>
+									<span className="lead-fold-dot" />
+									<span className="lead-fold-line">
+										{showEarlier ? "Hide earlier" : `${earlier.length} earlier in this thread`}
+									</span>
+								</button>
+							)}
+							{all.map(line)}
+						</div>
+						{reading && (
+							<>
+								<div className="lead-thread-sep" />
+								<div
+									className="lead-thread-read"
+									style={{ minHeight: `min(${tallest}px, var(--lead-reply-cap))` }}
+								>
+									{full(reading)}
+								</div>
+							</>
+						)}
+					</>
+				) : (
+					entries.map(full)
 				)}
-				{showEarlier && earlier.map((e) => entry(e, true, false))}
-				{before.map((e) => entry(e, true, false))}
-				{above && <div className="lead-thread-sep" />}
-				{after.map((e) => entry(e, false, e === entries[from] && e.kind === "agent"))}
 			</div>
 			{answer}
 			<Dialog open={expanded} onOpenChange={onExpandedChange}>
@@ -820,9 +863,31 @@ function ThreadView({
 	);
 }
 
+/** The user's words in a thread, under the question they answer when they
+ *  answered one: the question card is gone by then, so this is its record. */
+function YouSaid({
+	entry: e,
+	folded = false,
+}: {
+	entry: Extract<LeadThreadEntry, { kind: "user" }>;
+	folded?: boolean;
+}) {
+	const words = <div className={folded ? "lead-you folded" : "lead-you"}>{e.text}</div>;
+	if (!e.question) return words;
+	return (
+		<div className="lead-you-answer">
+			<div className="lead-you-question" title={e.question}>
+				<CircleHelp size={11} aria-hidden />
+				<span>{firstLine(e.question)}</span>
+			</div>
+			{words}
+		</div>
+	);
+}
+
 /** An entry in the whole thread (the Expand dialog): every one open. */
 function ThreadWhole({ entry: e }: { entry: LeadThreadEntry }) {
-	if (e.kind === "user") return <div className="lead-you">{e.text}</div>;
+	if (e.kind === "user") return <YouSaid entry={e} />;
 	if (e.kind === "notice") return <p className="lead-notice info">{e.text}</p>;
 	if (e.kind === "page")
 		return <PageFrame taskId={e.task.taskId} pageId={e.pageId} title={e.title} />;
@@ -856,7 +921,7 @@ function ThreadStack({
 	id: string;
 	/** Newest talker last. */
 	threads: LeadThread[];
-	/** How many entries have landed in the stack, across its threads. */
+	/** How many entries the stack's tasks have sent, across its threads (`landed`). */
 	total: number;
 	tasks: TaskDTO[];
 	onOpenTask: (t: TaskDTO) => void;
@@ -1175,6 +1240,8 @@ export function LeadChat({
 	}, []);
 
 	const blocks = useMemo(() => toLeadBlocks(snap.items), [snap.items]);
+	// A stack can hold only the user's answers, waiting on a task, and draws nothing.
+	const drawn = blocks.some((b) => b.kind !== "threads" || b.threads.length > 0);
 	// Every agent waiting on the user, newest first: they live on the tasks, not
 	// in this conversation, so they stay put above the composer while it scrolls.
 	const asking = useMemo(
@@ -1315,7 +1382,7 @@ export function LeadChat({
 				}}
 			>
 				<div className="lead-thread" ref={thread}>
-					{blocks.length === 0 && !snap.busy && (
+					{!drawn && !snap.busy && (
 						<div className="lead-empty">
 							<p>
 								Ask about your tasks, start new ones, or send instructions to the agents working on
@@ -1338,7 +1405,7 @@ export function LeadChat({
 								key={b.id}
 								id={b.id}
 								threads={b.threads}
-								total={b.items.length}
+								total={landed(b.items)}
 								tasks={tasks}
 								onOpenTask={onOpenTask}
 								atBottom={atBottom}

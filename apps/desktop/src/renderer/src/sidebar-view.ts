@@ -17,12 +17,16 @@ import {
 
 /** The list's order, inside each group when it is grouped. */
 export type TaskSortMode = "next" | "status" | "updated" | "custom";
-export type TaskGrouping = "none" | "status" | "machine" | "updated";
+export type TaskGrouping = "none" | "status" | "machine" | "updated" | "project";
 /** A task's PR filter value: its PR's state, or "none" when it has no PR. */
 export type PrKey = PrState | "none";
 
 export interface SidebarView {
 	grouping: TaskGrouping;
+	/** The grouping while the sidebar lists every project. It is its own, so
+	 *  All opens grouped by project and a pick there leaves one project's list
+	 *  as it was. The filters are shared. */
+	allGrouping: TaskGrouping;
 	/** Unticked filter values. Stored as what is hidden rather than what is
 	 *  shown, so a value that appears later (a box added next week) shows. */
 	hiddenStatus: KanbanColumn[];
@@ -36,6 +40,7 @@ export interface SidebarView {
 
 export const DEFAULT_VIEW: SidebarView = {
 	grouping: "none",
+	allGrouping: "project",
 	hiddenStatus: [],
 	hiddenPr: [],
 	hiddenMachines: [],
@@ -56,7 +61,7 @@ const STATUS_ORDER = (Object.keys(STATUS_RANK) as KanbanColumn[]).sort(
 	(a, b) => STATUS_RANK[a] - STATUS_RANK[b],
 );
 
-const GROUPINGS: readonly TaskGrouping[] = ["none", "status", "machine", "updated"];
+const GROUPINGS: readonly TaskGrouping[] = ["none", "status", "machine", "updated", "project"];
 export const PR_KEYS: readonly PrKey[] = ["none", "open", "merged", "closed"];
 
 /**
@@ -74,10 +79,11 @@ export function parseView(raw: string | null): SidebarView {
 	if (!v || typeof v !== "object") return DEFAULT_VIEW;
 	const o = v as Record<string, unknown>;
 	const list = (x: unknown): unknown[] => (Array.isArray(x) ? x : []);
+	const grouping = (g: unknown, fallback: TaskGrouping): TaskGrouping =>
+		GROUPINGS.includes(g as TaskGrouping) ? (g as TaskGrouping) : fallback;
 	return {
-		grouping: GROUPINGS.includes(o.grouping as TaskGrouping)
-			? (o.grouping as TaskGrouping)
-			: "none",
+		grouping: grouping(o.grouping, "none"),
+		allGrouping: grouping(o.allGrouping, "project"),
 		hiddenStatus: list(o.hiddenStatus).filter(
 			(s): s is KanbanColumn => typeof s === "string" && s in STATUS_RANK,
 		),
@@ -88,6 +94,20 @@ export function parseView(raw: string | null): SidebarView {
 		showArchived: o.showArchived === true,
 		collapsed: list(o.collapsed).filter((k): k is string => typeof k === "string"),
 	};
+}
+
+/** The view the list uses: under All, its own grouping in place of one
+ *  project's. */
+export function scopedView(view: SidebarView, all: boolean): SidebarView {
+	return all ? { ...view, grouping: view.allGrouping } : view;
+}
+
+/** A change made from the menu (which shows the scoped view), written back so
+ *  the grouping lands on the scope it was picked in and the other keeps its own. */
+export function unscopedView(view: SidebarView, next: SidebarView, all: boolean): SidebarView {
+	return all
+		? { ...next, grouping: view.grouping, allGrouping: next.grouping }
+		: { ...next, allGrouping: view.allGrouping };
 }
 
 /** Whether a task passes the view's filters. */
@@ -164,6 +184,8 @@ export function groupTasks(
 		machineOf: (t: TaskDTO) => Alias;
 		statusLabel: (c: KanbanColumn) => string;
 		now: number;
+		/** The repo card a task is in (key and name), for the Project grouping. */
+		projectOf?: (t: TaskDTO) => { key: string; name: string };
 	},
 ): TaskGroup[] {
 	const by = <K>(keyOf: (t: TaskDTO) => K, order: K[], prefix: string, label: (k: K) => string) =>
@@ -184,6 +206,21 @@ export function groupTasks(
 			);
 			return by(ctx.machineOf, machines, "machine", aliasLabel);
 		}
+		case "project": {
+			const projectOf = ctx.projectOf;
+			if (!projectOf) break;
+			// By name, like the machines: a group's place never depends on its tasks.
+			const names = new Map(tasks.map((t) => [projectOf(t).key, projectOf(t).name]));
+			const keys = [...names.keys()].sort((a, b) =>
+				(names.get(a) ?? "").localeCompare(names.get(b) ?? ""),
+			);
+			return by(
+				(t) => projectOf(t).key,
+				keys,
+				"project",
+				(k) => names.get(k) ?? k,
+			);
+		}
 		case "updated":
 			return by(
 				(t) => updatedBucket(t.lastEventAt, ctx.now),
@@ -191,9 +228,8 @@ export function groupTasks(
 				"updated",
 				(b) => UPDATED_LABEL[b],
 			);
-		default:
-			return [{ key: "all", label: "", tasks }];
 	}
+	return [{ key: "all", label: "", tasks }];
 }
 
 /**

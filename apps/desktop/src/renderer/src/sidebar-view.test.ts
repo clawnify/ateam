@@ -6,8 +6,10 @@ import {
 	groupTasks,
 	parseView,
 	passesFilters,
+	scopedView,
 	spliceOrder,
 	toggled,
+	unscopedView,
 	updatedBucket,
 } from "./sidebar-view";
 
@@ -42,6 +44,7 @@ test("a stored view keeps the values it knows and drops the rest", () => {
 	const v = parseView(
 		JSON.stringify({
 			grouping: "galaxy",
+			allGrouping: "status",
 			hiddenStatus: ["merged", "nope", 3],
 			hiddenPr: ["none", "draft"],
 			hiddenMachines: [null, "hetzner", 7],
@@ -51,6 +54,7 @@ test("a stored view keeps the values it knows and drops the rest", () => {
 	);
 	expect(v).toEqual({
 		grouping: "none",
+		allGrouping: "status",
 		hiddenStatus: ["merged"],
 		hiddenPr: ["none"],
 		hiddenMachines: [null, "hetzner"],
@@ -122,6 +126,37 @@ test("machine groups put this Mac first, then boxes by name", () => {
 		["machine:alpha", "alpha"],
 		["machine:zeta", "zeta"],
 	]);
+});
+
+test("project groups go by project name, keyed by the repo card", () => {
+	const cards: Record<string, { key: string; name: string }> = {
+		pLocal: { key: "gh:o/zeta", name: "zeta" },
+		pBox: { key: "gh:o/zeta", name: "zeta" },
+		pOther: { key: "gh:o/alpha", name: "alpha" },
+	};
+	const projectOf = (t: TaskDTO) => cards[t.projectId];
+	const list = [task("z1"), task("a1", { projectId: "pOther" }), task("z2", { projectId: "pBox" })];
+	const groups = groupTasks(list, "project", { ...ctx, projectOf });
+	expect(groups.map((g) => [g.key, g.label, ids(g.tasks)])).toEqual([
+		["project:gh:o/alpha", "alpha", ["a1"]],
+		["project:gh:o/zeta", "zeta", ["z1", "z2"]],
+	]);
+	// Without a way to tell projects apart it is one group, never a crash.
+	expect(groupTasks(list, "project", ctx)).toEqual([{ key: "all", label: "", tasks: list }]);
+});
+
+test("All has its own grouping: picking one there leaves a project's list alone", () => {
+	const view = { ...DEFAULT_VIEW, grouping: "status" as const };
+	expect(scopedView(view, false).grouping).toBe("status");
+	expect(scopedView(view, true).grouping).toBe("project");
+
+	const pickedInAll = unscopedView(view, { ...scopedView(view, true), grouping: "updated" }, true);
+	expect([pickedInAll.grouping, pickedInAll.allGrouping]).toEqual(["status", "updated"]);
+	const pickedInOne = unscopedView(view, { ...view, grouping: "machine" }, false);
+	expect([pickedInOne.grouping, pickedInOne.allGrouping]).toEqual(["machine", "project"]);
+	// Filters are shared by both.
+	const filtered = unscopedView(view, { ...scopedView(view, true), showArchived: true }, true);
+	expect(filtered.showArchived).toBe(true);
 });
 
 test("updated groups go by local calendar day, and no activity is Older", () => {

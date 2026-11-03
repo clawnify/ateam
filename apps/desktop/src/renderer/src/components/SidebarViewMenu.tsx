@@ -33,6 +33,7 @@ const GROUPINGS: { value: TaskGrouping; label: string }[] = [
 	{ value: "status", label: "Status" },
 	{ value: "machine", label: "Machine" },
 	{ value: "updated", label: "Last updated" },
+	{ value: "project", label: "Project" },
 ];
 
 const ORDERINGS: { value: TaskSortMode; label: string }[] = [
@@ -101,6 +102,7 @@ export function SidebarViewMenu({
 	groupKeys,
 	unread,
 	onMarkAllRead,
+	allProjects,
 }: {
 	view: SidebarView;
 	onView: (v: SidebarView) => void;
@@ -115,6 +117,8 @@ export function SidebarViewMenu({
 	/** Unread tasks among the ones the filters let through. */
 	unread: number;
 	onMarkAllRead: () => void;
+	/** The list holds every project, so it can be grouped by project. */
+	allProjects: boolean;
 }) {
 	const lit = filtersSet(view, machines);
 	const label = lit ? "View options (filters on)" : "View options";
@@ -149,11 +153,13 @@ export function SidebarViewMenu({
 						value={view.grouping}
 						onValueChange={(g) => onView({ ...view, grouping: g as TaskGrouping })}
 					>
-						{GROUPINGS.map(({ value, label }) => (
-							<DropdownMenuRadioItem key={value} value={value}>
-								{label}
-							</DropdownMenuRadioItem>
-						))}
+						{GROUPINGS.filter((g) => allProjects || g.value !== "project").map(
+							({ value, label }) => (
+								<DropdownMenuRadioItem key={value} value={value}>
+									{label}
+								</DropdownMenuRadioItem>
+							),
+						)}
 					</DropdownMenuRadioGroup>
 				</Sub>
 				<Sub label="Ordering" value={ORDERINGS.find((o) => o.value === sort)?.label}>

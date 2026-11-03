@@ -17,6 +17,7 @@ import {
 	type LeadItem,
 	type LeadPermissionAnswer,
 	type LeadSnapshot,
+	TASK_LINK_SCHEME,
 	type TaskDTO,
 } from "@ateam/protocol";
 import { LeadAttachments } from "./attachments";
@@ -178,12 +179,25 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 					/* created on a box that just went away: the outcome still stands */
 				}
 			}
+			// Decided from elsewhere, or a new conversation began, while it was read.
+			const now = lead.item(item.id);
+			if (now?.kind !== "proposal" || now.outcome) return;
 			const decided: LeadItem = {
 				...item,
 				outcome: outcome === "created" ? "created" : "dismissed",
 				...(task ? { task: refOf(task) } : {}),
 			};
 			lead.record(decided);
+			// The agent hears it with the user's next message, so it steers the
+			// task it made rather than proposing it again.
+			const what = `your proposed ${item.proposal.kind} ${JSON.stringify(item.proposal.name)}`;
+			lead.note(
+				outcome !== "created"
+					? `dismissed ${what}`
+					: task
+						? `created ${what} as [${task.name.replace(/[[\]\n]/g, " ")}](${TASK_LINK_SCHEME}${task.id})`
+						: `created ${what}`,
+			);
 		},
 		// Shown in the thread as the user's message.
 		async reply(taskId, text) {
@@ -213,7 +227,14 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 					? `Ticked: ${input.answer.join(", ")}`
 					: "Ticked nothing"
 				: input.answer;
-			lead.record({ kind: "user", id: randomUUID(), text, at: Date.now(), to: refOf(before) });
+			lead.record({
+				kind: "user",
+				id: randomUUID(),
+				text,
+				at: Date.now(),
+				to: refOf(before),
+				...(before.question ? { question: before.question.text } : {}),
+			});
 		},
 		onTaskUpdated: (task) => void follower.onTaskUpdated(task),
 		dispose() {

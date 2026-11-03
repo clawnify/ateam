@@ -113,8 +113,18 @@ export type LeadProposalOutcome = "created" | "dismissed" | "replaced";
 
 /** One rendered entry in the chat. A tool entry is updated in place when its result lands. */
 export type LeadItem =
-	/** The user's words; `to` when they went to a task's agent, not to the Lead. */
-	| { kind: "user"; id: string; text: string; at: number; to?: LeadTaskRef; files?: LeadFile[] }
+	/** The user's words; `to` when they went to a task's agent, not to the Lead.
+	 *  `question` is the text of the task's question they answer (ask_user),
+	 *  kept here because the task's own copy is cleared once answered. */
+	| {
+			kind: "user";
+			id: string;
+			text: string;
+			at: number;
+			to?: LeadTaskRef;
+			question?: string;
+			files?: LeadFile[];
+	  }
 	/** A followed task's agent finished a turn: its reply, shown to the user only
 	 *  (never fed to the Lead's model, so following costs nothing). */
 	| {
@@ -158,8 +168,9 @@ export type LeadItem =
 			at: number;
 	  }
 	/** A task or loop the Lead proposes. Nothing exists until the user creates
-	 *  it from the New task or New loop dialog, filled in from this. The Lead's
-	 *  agent is not told the outcome; the chat shows it. */
+	 *  it from the New task or New loop dialog, filled in from this. The chat
+	 *  shows the outcome, and the Lead's agent hears it with the user's next
+	 *  message (LeadSession.note). */
 	| {
 			kind: "proposal";
 			id: string;

@@ -13,6 +13,7 @@ import type {
 	SessionHitDTO,
 	TaskDTO,
 	TaskTriage,
+	UnifiedProject,
 } from "@ateam/protocol";
 import {
 	type Alias,
@@ -50,12 +51,12 @@ import {
 	Grid3x2,
 	History,
 	Hourglass,
+	Layers,
 	LayoutDashboard,
 	LayoutGrid,
 	LayoutPanelLeft,
 	Maximize2,
 	Minimize2,
-	Monitor,
 	PanelLeft,
 	PanelRight,
 	Play,
@@ -64,7 +65,6 @@ import {
 	Repeat,
 	RotateCw,
 	Rows2,
-	Server,
 	Settings,
 	SquareTerminal,
 	Trash2,
@@ -98,6 +98,7 @@ import { LoopForm, LoopsPanel } from "./components/LoopsPanel";
 import { Menu } from "./components/Menu";
 import { PageFrame } from "./components/PageFrame";
 import { PanelRightFilled } from "./components/PanelRightFilled";
+import { ProjectPicker, ProjectSwitcher, ProjectTitle } from "./components/ProjectSwitcher";
 import { PromptComposer } from "./components/PromptComposer";
 import { ProposalNote, ProposalStrip, proposalLabel } from "./components/Proposals";
 import { QuestionCard } from "./components/QuestionCard";
@@ -134,9 +135,11 @@ import {
 	passesFilters,
 	type SidebarView,
 	STATUS_RANK,
+	scopedView,
 	spliceOrder,
 	type TaskSortMode,
 	toggled,
+	unscopedView,
 } from "./sidebar-view";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
@@ -294,6 +297,20 @@ export function App() {
 	// only if there's a remote to clone the project from onto the box.
 	const [activeRepoRemote, setActiveRepoRemote] = useState<string | null>(null);
 	const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+	// Every project at once: the sidebar, the board, Mission Control and the
+	// Loops tab list all of them. activeProjectId stays the project new work
+	// goes to (the dialogs' Project pill), following the task last opened. A
+	// detached window is one project, so never there.
+	const [allProjects, setAllProjectsState] = useState(
+		() => !boundProjectId && localStorage.getItem("ateam.allProjects") === "1",
+	);
+	const setAllProjects = (on: boolean) => {
+		localStorage.setItem("ateam.allProjects", on ? "1" : "0");
+		setAllProjectsState(on);
+	};
+	// What the per-project memories (layout, tile order, custom order, view) are
+	// kept under: the project, or one shared set for All.
+	const scopeKey = allProjects ? "all" : activeProjectId;
 	const [tasksByProject, setTasksByProject] = useState<Record<string, TaskDTO[]>>({});
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 	const [selectedIssue, setSelectedIssue] = useState<GithubIssueDTO | null>(null);
@@ -314,14 +331,13 @@ export function App() {
 	// and failing that to Auto.
 	const [mcLayoutSet, setMcLayoutSet] = useState<Record<string, McChoice>>({});
 	const mcChoice: McChoice =
-		(activeProjectId &&
-			(mcLayoutSet[activeProjectId] ?? storedMcChoice(`ateam.mcLayout.${activeProjectId}`))) ||
+		(scopeKey && (mcLayoutSet[scopeKey] ?? storedMcChoice(`ateam.mcLayout.${scopeKey}`))) ||
 		storedMcLayout("ateam.mcLayout") ||
 		"auto";
 	const setMcLayout = (l: McChoice) => {
-		if (!activeProjectId) return;
-		localStorage.setItem(`ateam.mcLayout.${activeProjectId}`, l);
-		setMcLayoutSet((m) => ({ ...m, [activeProjectId]: l }));
+		if (!scopeKey) return;
+		localStorage.setItem(`ateam.mcLayout.${scopeKey}`, l);
+		setMcLayoutSet((m) => ({ ...m, [scopeKey]: l }));
 	};
 	// Bumped by the Sync button: Mission Control re-sorts its tiles to the
 	// sidebar's order once, then holds still again (see mcOrder).
@@ -342,7 +358,6 @@ export function App() {
 	const [mcHighlightId, setMcHighlightId] = useState<string | null>(null);
 	const [mcJump, setMcJump] = useState<{ id: string; seq: number } | null>(null);
 	const [panelMode, setPanelMode] = useState<"side" | "full">("side");
-	const [projectsCollapsed, setProjectsCollapsed] = useState(false);
 	const [tasksCollapsed, setTasksCollapsed] = useState(false);
 	const [loopsCollapsed, setLoopsCollapsed] = useState(false);
 	// The open loop dialog: `editId: null` creates, an id edits that loop. Owned
@@ -452,9 +467,9 @@ export function App() {
 	const [taskQuery, setTaskQuery] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [info, setInfo] = useState<string | null>(null);
-	// A task just created in the background (⇧⌘⏎ in the composer). The toast is
-	// the way into it, and its sidebar row and board card pulse once so you can
-	// see where it landed. Hovering the toast holds it open.
+	// A task just created in the background (⌘⏎ in the composer, the default).
+	// The toast is the way into it, and its sidebar row and board card pulse once
+	// so you can see where it landed. Hovering the toast holds it open.
 	const [started, setStarted] = useState<{ taskId: string; text: string } | null>(null);
 	const [startedHeld, setStartedHeld] = useState(false);
 	const [pulseId, setPulseId] = useState<string | null>(null);
@@ -664,21 +679,34 @@ export function App() {
 		[unifiedProjects, activeProjectId],
 	);
 	const activeMembers = activeCard?.members ?? [];
+	// Under All the board shows tasks only: an issue backlog is one repo's.
 	const issueRepository =
-		activeCard?.githubOwner && activeCard.githubName
+		!allProjects && activeCard?.githubOwner && activeCard.githubName
 			? `${activeCard.githubOwner}/${activeCard.githubName}`.toLowerCase()
 			: null;
+	// The engines' copies of every repo on the board, under All, else of the
+	// active one: whose tasks, loops and sessions the lists show.
+	const scopeMembers = useMemo(
+		() => (allProjects ? unifiedProjects.flatMap((c) => c.members) : activeMembers),
+		[allProjects, unifiedProjects, activeMembers],
+	);
+	// The repo card each project is in, for labels and the Project grouping.
+	const cardByProject = useMemo(() => {
+		const map = new Map<string, UnifiedProject>();
+		for (const card of unifiedProjects) for (const m of card.members) map.set(m.projectId, card);
+		return map;
+	}, [unifiedProjects]);
 	const issueSync = useGithubIssues(view === "board" ? issueRepository : null);
 	// Session search runs on each engine that holds this repo: the transcripts
 	// live on the machine that ran the agent, so a box searches its own disk.
 	const searchProjectIds = useMemo(
 		() =>
-			activeMembers.length > 0
-				? activeMembers.map((m) => m.projectId)
+			scopeMembers.length > 0
+				? scopeMembers.map((m) => m.projectId)
 				: activeProjectId
 					? [activeProjectId]
 					: [],
-		[activeMembers, activeProjectId],
+		[scopeMembers, activeProjectId],
 	);
 	// Which engine a task runs on = the engine that owns its project (tasks never
 	// migrate between engines, so origin is intrinsic to the projectId).
@@ -727,11 +755,11 @@ export function App() {
 		activeCard?.members[0]?.projectId ??
 		null;
 	// Fetch the active repo's remote from its owning engine whenever the card changes.
+	// Cleared first: the composer's Project pill can change the card while it is
+	// open, and a box set up in that gap must not clone the last repo's remote.
 	useEffect(() => {
-		if (!activeRepoProjectId) {
-			setActiveRepoRemote(null);
-			return;
-		}
+		setActiveRepoRemote(null);
+		if (!activeRepoProjectId) return;
 		let cancelled = false;
 		void window.ateam.projects.remoteUrl(activeRepoProjectId).then((url) => {
 			if (!cancelled) setActiveRepoRemote(url);
@@ -845,17 +873,19 @@ export function App() {
 	// Every loaded task, for the Lead chat to name and open the ones it touches.
 	const allTasks = useMemo(() => Object.values(tasksByProject).flat(), [tasksByProject]);
 
-	// The active card's board unions tasks from every engine that has the repo.
-	const activeTasks = activeCard
-		? activeMembers.flatMap((m) => tasksByProject[m.projectId] ?? [])
-		: activeProjectId
-			? (tasksByProject[activeProjectId] ?? [])
-			: [];
+	// The active card's board unions tasks from every engine that has the repo;
+	// under All, every card's.
+	const activeTasks =
+		allProjects || activeCard
+			? scopeMembers.flatMap((m) => tasksByProject[m.projectId] ?? [])
+			: activeProjectId
+				? (tasksByProject[activeProjectId] ?? [])
+				: [];
 	// Archived tasks of the project Clean up opens on, which is where they are
 	// shown and brought back.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: archivedTick is the trigger, not a value the body reads: it re-counts after a card leaves the board.
 	useEffect(() => {
-		if (!activeProjectId) return setArchivedCount(0);
+		if (!activeProjectId || allProjects) return setArchivedCount(0);
 		let stale = false;
 		// An engine older than v18 has no archive: it rejects, and counts as none.
 		void window.ateam.tasks
@@ -867,7 +897,7 @@ export function App() {
 		return () => {
 			stale = true;
 		};
-	}, [activeProjectId, archivedTick]);
+	}, [activeProjectId, allProjects, archivedTick]);
 	// With the Archived filter on, the sidebar lists the project's archived tasks
 	// too, from every machine it is on, re-listed whenever a card leaves a board
 	// (an archive is a removal). Each machine fills in on its own, so one that
@@ -941,6 +971,14 @@ export function App() {
 		const task = activeTasks.find((t) => t.id === proposalOpen.taskId);
 		for (const id of shownWhileOpen(task)) autoOpenedProposals.current.add(id);
 	}, [proposalOpen, activeTasks]);
+	// The dialog creates in the active project, and a proposal belongs to its
+	// task's. Under All they can differ (a task opened, then another project
+	// picked in New task's Project pill), so the active project follows it.
+	useEffect(() => {
+		const task = proposalOpen && activeTasks.find((t) => t.id === proposalOpen.taskId);
+		if (task && !activeCard?.members.some((m) => m.projectId === task.projectId))
+			setActiveProjectId(task.projectId);
+	}, [proposalOpen, activeTasks, activeCard]);
 	useEffect(() => {
 		const id = proposalToOpen(panelTask, autoOpenedProposals.current, dialogOpen);
 		if (!id || !panelTask) return;
@@ -977,27 +1015,30 @@ export function App() {
 		// the new card lands on its board, so the proposal's project becomes the
 		// active one. The view stays: the Lead tab, or the sidebar beside it.
 		if (!activeCard?.members.some((m) => m.projectId === item.projectId)) {
-			const stay = view;
-			selectProject(item.projectId);
-			setView(stay);
+			if (allProjects) setActiveProjectId(item.projectId);
+			else {
+				const stay = view;
+				selectProject(item.projectId);
+				setView(stay);
+			}
 		}
 		setLeadProposal(item);
 	};
 	// Which grid Mission Control shows: the project's (or repo card's) tasks
 	// or loops. A new key is a new set of tiles.
-	const mcGridKey = `${activeCard?.key ?? activeProjectId}:${mcMode}`;
+	const mcGridKey = `${allProjects ? "all" : (activeCard?.key ?? activeProjectId)}:${mcMode}`;
 	// The Auto button. The grid fits itself (see MissionControl).
 	const chooseAutoLayout = () => {
 		setMcLayout("auto");
 		goToView("mission");
 	};
-	// Loops of the active repo card (whichever engine holds them), and the task
-	// each one owns. Loop-owned tasks show under LOOPS, not again under TASKS
-	// (they stay on the board — it's the status surface).
+	// Loops of the active repo card (whichever engine holds them), or of every
+	// card under All, and the task each one owns. Loop-owned tasks show under
+	// LOOPS, not again under TASKS (they stay on the board: it's the status surface).
 	const activeLoops = useMemo(() => {
-		const memberIds = new Set(activeMembers.map((m) => m.projectId));
+		const memberIds = new Set(scopeMembers.map((m) => m.projectId));
 		return loops.filter((l) => l.projectId != null && memberIds.has(l.projectId));
-	}, [loops, activeMembers]);
+	}, [loops, scopeMembers]);
 	// The loop an edit dialog targets. If it leaves scope (deleted elsewhere, or
 	// the project switched) the dialog closes rather than edit a loop that's gone.
 	const editingLoop = loopDialog?.editId
@@ -1031,19 +1072,18 @@ export function App() {
 		localStorage.setItem("ateam.taskSort", mode);
 	};
 	useEffect(() => {
-		if (!activeProjectId) return;
+		if (!scopeKey) return;
 		try {
 			setCustomOrder(
-				JSON.parse(localStorage.getItem(`ateam.taskOrder.${activeProjectId}`) ?? "[]") as string[],
+				JSON.parse(localStorage.getItem(`ateam.taskOrder.${scopeKey}`) ?? "[]") as string[],
 			);
 		} catch {
 			setCustomOrder([]);
 		}
-	}, [activeProjectId]);
+	}, [scopeKey]);
 	const reorderTasks = (ids: string[]) => {
 		setCustomOrder(ids);
-		if (activeProjectId)
-			localStorage.setItem(`ateam.taskOrder.${activeProjectId}`, JSON.stringify(ids));
+		if (scopeKey) localStorage.setItem(`ateam.taskOrder.${scopeKey}`, JSON.stringify(ids));
 	};
 	const orderedSidebarTasks = useMemo(() => {
 		const list = [...sidebarTasks];
@@ -1065,18 +1105,28 @@ export function App() {
 	// The view menu's filters and grouping, applied on top of the ordering, so
 	// the order holds inside each group.
 	const machineOf = useCallback((t: TaskDTO) => originOf(t.projectId), [originOf]);
+	const projectOf = useCallback(
+		(t: TaskDTO) => {
+			const card = cardByProject.get(t.projectId);
+			return card ? { key: card.key, name: card.name } : { key: t.projectId, name: "…" };
+		},
+		[cardByProject],
+	);
+	// The view the list is drawn with: All keeps a grouping of its own.
+	const listView = useMemo(() => scopedView(sideView, allProjects), [sideView, allProjects]);
 	const sidebarGroups = useMemo(
 		() =>
 			groupTasks(
-				orderedSidebarTasks.filter((t) => passesFilters(t, sideView, machineOf)),
-				sideView.grouping,
+				orderedSidebarTasks.filter((t) => passesFilters(t, listView, machineOf)),
+				listView.grouping,
 				{
 					machineOf,
+					projectOf,
 					statusLabel: (c) => COLUMNS.find((col) => col.key === c)?.label ?? c,
 					now: Date.now(),
 				},
 			),
-		[orderedSidebarTasks, sideView, machineOf],
+		[orderedSidebarTasks, listView, machineOf, projectOf],
 	);
 	// The order Mission Control's Sync takes: the list as displayed, group by
 	// group, then what the filters hide. Archived tasks never have a tile.
@@ -1098,17 +1148,15 @@ export function App() {
 	// frame of the last one's.
 	const [mcOrderSet, setMcOrderSet] = useState<Record<string, string[]>>({});
 	const mcOrder = useMemo(() => {
-		if (!activeProjectId) return [];
-		const set = mcOrderSet[activeProjectId];
+		if (!scopeKey) return [];
+		const set = mcOrderSet[scopeKey];
 		if (set) return set;
 		try {
-			return JSON.parse(
-				localStorage.getItem(`ateam.mcOrder.${activeProjectId}`) ?? "[]",
-			) as string[];
+			return JSON.parse(localStorage.getItem(`ateam.mcOrder.${scopeKey}`) ?? "[]") as string[];
 		} catch {
 			return [];
 		}
-	}, [activeProjectId, mcOrderSet]);
+	}, [scopeKey, mcOrderSet]);
 	// Loops mode follows the sidebar's LOOPS list the way Tasks mode follows TASKS.
 	const loopOrderIds = useMemo(
 		() => sortedLoops.flatMap((l) => (l.taskId ? [l.taskId] : [])),
@@ -1130,9 +1178,9 @@ export function App() {
 		return [...mcOrder, ...missionBaseIds.filter((id) => !known.has(id))];
 	}, [mcOrder, missionBaseIds]);
 	const saveMcOrder = (ids: string[]) => {
-		if (!activeProjectId) return;
-		setMcOrderSet((m) => ({ ...m, [activeProjectId]: ids }));
-		localStorage.setItem(`ateam.mcOrder.${activeProjectId}`, JSON.stringify(ids));
+		if (!scopeKey) return;
+		setMcOrderSet((m) => ({ ...m, [scopeKey]: ids }));
+		localStorage.setItem(`ateam.mcOrder.${scopeKey}`, JSON.stringify(ids));
 	};
 	// Mission Control reports the tiles' order whenever it changes; they lead
 	// the saved order and everything else keeps its relative place behind them.
@@ -1178,15 +1226,18 @@ export function App() {
 		[sidebarGroups, matchesQuery],
 	);
 	const visibleSidebarTasks = useMemo(() => shownGroups.flatMap((g) => g.tasks), [shownGroups]);
-	// The machines this project is on, for the Machine filter.
+	// The machines the listed projects are on, for the Machine filter: this Mac
+	// first, then each box by name.
 	const sidebarMachines = useMemo(
 		() =>
-			activeMembers.length > 0
-				? activeMembers.map((m) => m.alias)
+			scopeMembers.length > 0
+				? [...new Set(scopeMembers.map((m) => m.alias))].sort((a, b) =>
+						a === null ? -1 : b === null ? 1 : a.localeCompare(b),
+					)
 				: activeProjectId
 					? [originOf(activeProjectId)]
 					: [],
-		[activeMembers, activeProjectId, originOf],
+		[scopeMembers, activeProjectId, originOf],
 	);
 	const filteredBoardTasks = useMemo(
 		() => activeTasks.filter(matchesQuery),
@@ -1205,20 +1256,39 @@ export function App() {
 			}
 		>
 	>({});
+	const rememberView = () => {
+		if (scopeKey) viewMemRef.current[scopeKey] = { taskId: selectedTaskId, mode: panelMode, view };
+	};
+	// One project picked in the switcher (or a rail tile): All ends.
 	const selectProject = (id: string) => {
-		if (id === activeProjectId) return;
-		if (activeProjectId) {
-			viewMemRef.current[activeProjectId] = {
-				taskId: selectedTaskId,
-				mode: panelMode,
-				view,
-			};
-		}
+		if (id === activeProjectId && !allProjects) return;
+		rememberView();
 		const mem = viewMemRef.current[id];
+		setAllProjects(false);
 		setActiveProjectId(id);
 		setSelectedTaskId(mem?.taskId ?? null);
 		setPanelMode(mem?.mode ?? "side");
 		setView(mem?.view ?? "board");
+	};
+	const selectAll = () => {
+		if (allProjects) return;
+		rememberView();
+		const mem = viewMemRef.current.all;
+		setAllProjects(true);
+		setSelectedTaskId(mem?.taskId ?? null);
+		setPanelMode(mem?.mode ?? "side");
+		setView(mem?.view ?? "board");
+		// New work goes to the project of the task in front of you.
+		const back = mem?.taskId ? allTasks.find((t) => t.id === mem.taskId) : undefined;
+		if (back) setActiveProjectId(back.projectId);
+	};
+	// Where new work goes. Under All only that changes and the lists stay put;
+	// with one project shown, it switches to that project.
+	const targetProject = (id: string) => (allProjects ? setActiveProjectId(id) : selectProject(id));
+	// A task picked under All may be another project's: new work follows it.
+	const follow = (t: TaskDTO | undefined) => {
+		if (allProjects && t && !activeCard?.members.some((m) => m.projectId === t.projectId))
+			setActiveProjectId(t.projectId);
 	};
 	// Opening a task IS reading it — the hooks set `isUnread` on Stop /
 	// PermissionRequest and nothing ever cleared it. Only explicit user
@@ -1246,7 +1316,9 @@ export function App() {
 		setSelectedTaskId(id);
 		markRead(id);
 		setPanelMode("side");
-		wakeIfOffline(activeTasks.find((t) => t.id === id));
+		const task = activeTasks.find((t) => t.id === id);
+		follow(task);
+		wakeIfOffline(task);
 	};
 	// Expanding a Mission Control tile opens that exact terminal full-width.
 	// `view` stays "mission", so collapsing or closing the panel lands back on
@@ -1254,6 +1326,7 @@ export function App() {
 	// side panel there.
 	const openFromMission = (task: TaskDTO, terminalId: string) => {
 		setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
+		follow(task);
 		setSelectedTaskId(task.id);
 		markRead(task.id);
 		setPanelMode("full");
@@ -1284,9 +1357,11 @@ export function App() {
 	// refresh is enough), and a removal closes the open panel.
 	const openRow = (t: TaskDTO) => {
 		if (t.archivedAt == null) return toggleTask(t);
-		void window.ateam.tasks.setArchived(t.id, false).then(openTask, (e) =>
-			setError(`Couldn't bring back ${t.name}: ${e instanceof Error ? e.message : String(e)}`),
-		);
+		void window.ateam.tasks
+			.setArchived(t.id, false)
+			.then(openTask, (e) =>
+				setError(`Couldn't bring back ${t.name}: ${e instanceof Error ? e.message : String(e)}`),
+			);
 	};
 	// Mark all as read: every unread task the list shows, folded groups too.
 	// Straight to the engine, since an archived task isn't on the board markRead
@@ -1384,7 +1459,7 @@ export function App() {
 				.map((f) => window.ateam.utils.pathForFile(f))
 				.filter(Boolean);
 			if (!paths.length) return;
-			selectProject(projectId);
+			targetProject(projectId);
 			setComposerIssue(null);
 			setSelectedIssue(null);
 			setComposerFiles(paths);
@@ -1636,8 +1711,21 @@ export function App() {
 		return version !== undefined && !boxSupports("cleanup", version) ? version : null;
 	}, [activeProjectId, activeMembers, envProtocol]);
 
+	// New task's and New loop's Project pill: under All the project is a choice
+	// made in the dialog, and picking one re-points it (its machines, its remote).
+	const projectPill = allProjects ? (
+		<ProjectPicker
+			cards={unifiedProjects}
+			value={activeCard?.key ?? null}
+			onChange={(card) => {
+				const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+				if (primary) setActiveProjectId(primary.projectId);
+			}}
+		/>
+	) : undefined;
+
 	const cleanup = () => {
-		if (activeProjectId && cleanupBlockedBy === null) setCleanupOpen(true);
+		if (activeProjectId && !allProjects && cleanupBlockedBy === null) setCleanupOpen(true);
 	};
 
 	return (
@@ -1661,6 +1749,39 @@ export function App() {
 					)}
 					{!rail && <IconButton icon={PanelLeft} label="Collapse sidebar" onClick={toggleRail} />}
 				</div>
+				{/* The project switcher, its own full-width row under the traffic-light
+				    strip (as Codex and Open Session do), so a name has room. A
+				    detached window IS one project, so it names it instead. */}
+				{!rail && (
+					<div className="side-project">
+						{boundProjectId ? (
+							<ProjectTitle
+								name={boundProject?.name ?? "…"}
+								color={boundProject?.color ?? null}
+								path={boundProject?.repoPath}
+							/>
+						) : (
+							<ProjectSwitcher
+								cards={unifiedProjects}
+								activeKey={activeCard?.key ?? null}
+								all={allProjects}
+								onSelect={(card) => {
+									const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+									if (primary) selectProject(primary.projectId);
+								}}
+								onSelectAll={selectAll}
+								onAdd={addProject}
+								onOpenWindow={(card) => {
+									const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+									if (primary) window.ateam.window.openProject(primary.projectId);
+								}}
+								onRemove={removeProject}
+								drop={activeProjectId ? projectDropProps("switcher", activeProjectId) : undefined}
+								dropping={dropCardKey === "switcher"}
+							/>
+						)}
+					</div>
+				)}
 
 				{rail ? (
 					// The expanded sidebar's three sections as tile groups, each led
@@ -1680,12 +1801,18 @@ export function App() {
 								<FolderPlus size={16} strokeWidth={1.75} />
 							</RailTile>
 						)}
+						{!boundProjectId && (
+							<RailTile label="All projects" active={allProjects} onClick={selectAll}>
+								<Layers size={16} strokeWidth={1.75} />
+							</RailTile>
+						)}
 						{/* Projects carry no status: a dot summing up every task in a repo
 						    never said which one, or what it wanted. */}
 						{unifiedProjects.map((card) => {
 							const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
 							if (!primary) return null;
-							const active = card.members.some((m) => m.projectId === activeProjectId);
+							const active =
+								!allProjects && card.members.some((m) => m.projectId === activeProjectId);
 							return (
 								<RailTile
 									key={card.key}
@@ -1769,128 +1896,6 @@ export function App() {
 					</TooltipProvider>
 				) : (
 					<>
-						{/* A detached window IS one project — show a static header, not a
-						    switchable one-item list. The dashboard keeps the full accordion. */}
-						{boundProjectId ? (
-							<div className="proj-header">
-								<span
-									className="dot"
-									style={boundProject?.color ? { background: boundProject.color } : undefined}
-								/>
-								<span className="proj-name" title={boundProject?.repoPath}>
-									{boundProject?.name ?? "…"}
-								</span>
-							</div>
-						) : (
-							<div className="side-section">
-								{/* PROJECTS accordion */}
-								<div className="section-head">
-									<button
-										type="button"
-										className="section-toggle"
-										onClick={() => setProjectsCollapsed((c) => !c)}
-									>
-										{projectsCollapsed ? (
-											<ChevronRight size={14} strokeWidth={2} />
-										) : (
-											<ChevronDown size={14} strokeWidth={2} />
-										)}
-										<span>Projects</span>
-									</button>
-									<IconButton icon={FolderPlus} label="Add project" onClick={addProject} />
-								</div>
-								{!projectsCollapsed && (
-									<div className="side-list">
-										{unifiedProjects.map((card) => {
-											// Selecting/detaching acts on the local copy if present, else the first.
-											const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
-											if (!primary) return null;
-											const active = card.members.some((m) => m.projectId === activeProjectId);
-											// Show the environments this repo spans (Local · box) when it's on more
-											// than just this Mac — that's the multi-engine cue.
-											const multiEnv =
-												card.members.length > 1 || card.members.some((m) => m.alias !== null);
-											return (
-												// Keep the menu beside the row button so its actions don't
-												// select or detach the project.
-												<div key={card.key} className="proj-row">
-													<button
-														type="button"
-														className={`proj ${active ? "active" : ""} ${dropCardKey === card.key ? "file-drop" : ""}`}
-														{...projectDropProps(card.key, primary.projectId)}
-														onClick={() => selectProject(primary.projectId)}
-														onDoubleClick={() => window.ateam.window.openProject(primary.projectId)}
-													>
-														{/* The project's own colour, never a status. */}
-														<span
-															className="dot"
-															style={card.color ? { background: card.color } : undefined}
-														/>
-														<span className="proj-name" title={primary.project.repoPath}>
-															{card.name}
-														</span>
-														{multiEnv && (
-															// One icon per environment — a monitor for this Mac, a server per
-															// box — instead of the names, which crowded the row as soon as a
-															// repo spanned more than one box. The name is the hover title
-															// (and the accessible name, so the row still reads its
-															// environments aloud). Monitor, not Laptop: lucide draws Laptop
-															// only 15 units tall inside the 24-unit box against Server's 20,
-															// so the pair looked mismatched at the same `size`. Monitor is
-															// 18 and exactly as wide, which reads as even.
-															<span className="proj-envs">
-																{card.members.map((m) => {
-																	const name = aliasLabel(m.alias);
-																	return (
-																		<span
-																			key={m.alias ?? "local"}
-																			className="proj-env"
-																			title={name}
-																			role="img"
-																			aria-label={name}
-																		>
-																			{m.alias === null ? (
-																				<Monitor size={12} strokeWidth={1.75} aria-hidden="true" />
-																			) : (
-																				<Server size={12} strokeWidth={1.75} aria-hidden="true" />
-																			)}
-																		</span>
-																	);
-																})}
-															</span>
-														)}
-													</button>
-													<span className="proj-open">
-														<Menu
-															label={`Actions for ${card.name}`}
-															// 24px, not 28: taller than the row, it poked out of the
-															// list's last row and gave the list a scrollbar.
-															className="size-6"
-															items={[
-																{
-																	label: "Open in new window",
-																	icon: ExternalLink,
-																	onClick: () => window.ateam.window.openProject(primary.projectId),
-																},
-																...card.members.map((member) => ({
-																	label: multiEnv
-																		? `Remove from ${aliasLabel(member.alias)}…`
-																		: "Remove project…",
-																	icon: Trash2,
-																	danger: true,
-																	onClick: () => removeProject(member),
-																})),
-															]}
-														/>
-													</span>
-												</div>
-											);
-										})}
-									</div>
-								)}
-							</div>
-						)}
-
 						{/* TASKS accordion — active tasks of the selected project */}
 						<div className="side-section">
 							<div className="section-head tasks-head">
@@ -1908,15 +1913,16 @@ export function App() {
 								</button>
 								<span style={{ display: "flex", gap: 2 }}>
 									<SidebarViewMenu
-										view={sideView}
-										onView={setSideView}
+										view={listView}
+										onView={(v) => setSideView(unscopedView(sideView, v, allProjects))}
 										sort={taskSort}
 										onSort={setTaskSort}
 										statuses={COLUMNS}
 										machines={sidebarMachines}
-										groupKeys={sideView.grouping === "none" ? [] : shownGroups.map((g) => g.key)}
+										groupKeys={listView.grouping === "none" ? [] : shownGroups.map((g) => g.key)}
 										unread={visibleSidebarTasks.filter((t) => t.isUnread).length}
 										onMarkAllRead={markAllRead}
+										allProjects={allProjects}
 									/>
 									<IconButton
 										icon={Plus}
@@ -1940,8 +1946,8 @@ export function App() {
 										</div>
 									) : (
 										shownGroups.map((g) => {
-											const grouped = sideView.grouping !== "none";
-											const folded = grouped && sideView.collapsed.includes(g.key);
+											const grouped = listView.grouping !== "none";
+											const folded = grouped && listView.collapsed.includes(g.key);
 											const row = (t: TaskDTO) => (
 												<TaskRow
 													task={t}
@@ -2118,6 +2124,7 @@ export function App() {
 							const age = relativeAge(t.lastEventAt, Date.now());
 							const box = originOf(t.projectId);
 							return [
+								allProjects && cardByProject.get(t.projectId)?.name,
 								COLUMNS.find((c) => c.key === t.column)?.label,
 								age && (age === "just now" ? age : `${age} ago`),
 								box && aliasLabel(box),
@@ -2188,7 +2195,7 @@ export function App() {
 								className="navbtn icon"
 								title="Sync with sidebar: put the tiles in the sidebar's current order (they never reorder on their own)"
 								aria-label="Sync Mission Control order with sidebar"
-								disabled={!activeProjectId}
+								disabled={!scopeKey}
 								onClick={syncMission}
 							>
 								<RefreshCw size={14} strokeWidth={1.75} />
@@ -2198,11 +2205,13 @@ export function App() {
 							type="button"
 							className="navbtn"
 							onClick={cleanup}
-							disabled={!activeProjectId || cleanupBlockedBy !== null}
+							disabled={!activeProjectId || allProjects || cleanupBlockedBy !== null}
 							title={
-								cleanupBlockedBy !== null
-									? `This project lives on a box running an older Ateam (protocol v${cleanupBlockedBy}). Cleanup needs v${FEATURE_MIN_VERSION.cleanup} or newer: update the box to use it here.`
-									: undefined
+								allProjects
+									? "Clean up works on one project: pick it in the project menu"
+									: cleanupBlockedBy !== null
+										? `This project lives on a box running an older Ateam (protocol v${cleanupBlockedBy}). Cleanup needs v${FEATURE_MIN_VERSION.cleanup} or newer: update the box to use it here.`
+										: undefined
 							}
 						>
 							<Brush size={14} strokeWidth={1.75} />
@@ -2266,7 +2275,7 @@ export function App() {
 							run={run}
 							ask={ask}
 							confirm={confirm}
-							reload={() => activeProjectId && loadTasks(activeProjectId)}
+							reload={() => loadTasks(selectedTask.projectId)}
 							onClose={(taskId) =>
 								setSelectedTaskId((cur) => (taskId == null || cur === taskId ? null : cur))
 							}
@@ -2338,12 +2347,16 @@ export function App() {
 									setSelectedIssue(null);
 								}}
 								// Badge a card only when it runs on a box — Local is the default, so
-								// tagging it would be noise. `null` = no badge.
+								// tagging it would be noise. Under All every card names its project
+								// first. `null` = no badge.
 								originLabel={(t) => {
 									const a = originOf(t.projectId);
-									if (!a) return null;
-									if (!offlineAliasOf(t)) return aliasLabel(a);
-									return `${aliasLabel(a)} · ${connections.find((c) => c.alias === a)?.asleep ? "asleep" : "offline"}`;
+									const project = allProjects ? cardByProject.get(t.projectId)?.name : undefined;
+									if (!a) return project ?? null;
+									const box = offlineAliasOf(t)
+										? `${aliasLabel(a)} · ${connections.find((c) => c.alias === a)?.asleep ? "asleep" : "offline"}`
+										: aliasLabel(a);
+									return project ? `${project} · ${box}` : box;
 								}}
 								isOffline={(t) => offlineAliasOf(t) !== null}
 							/>
@@ -2384,7 +2397,7 @@ export function App() {
 									run={run}
 									ask={ask}
 									confirm={confirm}
-									reload={() => activeProjectId && loadTasks(activeProjectId)}
+									reload={() => loadTasks(selectedTask.projectId)}
 									onClose={(taskId) =>
 										setSelectedTaskId((cur) => (taskId == null || cur === taskId ? null : cur))
 									}
@@ -2431,7 +2444,8 @@ export function App() {
 					) : (
 						<LoopsPanel
 							loops={sortedLoops}
-							members={activeMembers}
+							members={scopeMembers}
+							projectName={allProjects ? (id) => cardByProject.get(id)?.name ?? null : undefined}
 							envProtocol={envProtocol}
 							onChanged={refreshLoops}
 							onNew={() => setLoopDialog({ editId: null })}
@@ -2501,6 +2515,7 @@ export function App() {
 					}
 					initialFiles={composerSeed?.files ?? composerFiles}
 					initialAlias={composerSeed?.alias}
+					project={projectPill}
 					environments={composerEnvs}
 					envAgents={envAgents}
 					onAdd={addTailscaleBox}
@@ -2573,7 +2588,12 @@ export function App() {
 				<LoopForm
 					key={loopDialog.editId ?? "new"}
 					editing={editingLoop ?? undefined}
-					members={activeMembers}
+					project={projectPill}
+					// An edit is that loop's repo, which under All needn't be the active one.
+					members={
+						(editingLoop?.projectId && cardByProject.get(editingLoop.projectId)?.members) ||
+						activeMembers
+					}
 					agents={agents}
 					envProtocol={envProtocol}
 					onInstallAgent={installAgentOn}
