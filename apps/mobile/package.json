@@ -30,7 +30,8 @@
     "ios": "expo run:ios",
     "ios:dev": "APP_VARIANT=development EXPO_NO_GIT_STATUS=1 expo prebuild -p ios --clean && APP_VARIANT=development expo run:ios --device",
     "web": "expo start --web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "phone": "./scripts/phone-dev.sh"
   },
   "private": true
 }
