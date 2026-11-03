@@ -323,7 +323,13 @@ app
 			browserUrl: host.browserUrl,
 		});
 		registerHostIpc(host);
-		registerThemeIpc();
+		registerThemeIpc(async () => {
+			const [projects, boxes] = await Promise.all([
+				host.router.handle(CH.projectsList, []) as Promise<unknown[]>,
+				host.list(),
+			]);
+			return projects.length === 0 && !boxes.some((b) => b.known);
+		});
 		servePages(host.router);
 
 		if (SMOKE) {

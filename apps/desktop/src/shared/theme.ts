@@ -12,6 +12,7 @@ export const THEME_CH = {
 	/** Synchronous (ipcRenderer.sendSync): the saved theme, read at preload time. */
 	get: "theme:get",
 	set: "theme:set",
+	firstRun: "theme:firstRun",
 	evtChanged: "evt:theme:changed",
 } as const;
 
@@ -42,6 +43,12 @@ export interface AteamTheme {
 	saved(): ThemeId;
 	/** Save it and repaint every window in it. */
 	set(id: ThemeId): Promise<void>;
+	/**
+	 * Open on the theme choice instead of the board: a new install (no
+	 * project, no box ever connected) that hasn't saved a theme yet. Someone
+	 * updating from an older version has projects, so they never see it.
+	 */
+	firstRun(): Promise<boolean>;
 	/** Another window (or this one) changed it. */
 	onChange(cb: (id: ThemeId) => void): () => void;
 }
