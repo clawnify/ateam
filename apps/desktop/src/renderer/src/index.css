@@ -2031,16 +2031,7 @@ input {
 	content: "";
 	position: absolute;
 	inset: 0;
-	background: rgb(255 255 255 / 0.08);
-	pointer-events: none;
-}
-/* A Lead task pill held off the tiles (an empty grid, the New task slot): the
-   whole grid takes it, so the whole grid gets the wash. */
-.mc-wrap.drop::after {
-	content: "";
-	position: absolute;
-	inset: 0;
-	background: rgb(255 255 255 / 0.08);
+	background: rgb(var(--ink) / 0.08);
 	pointer-events: none;
 }
 .mc .tile .bar {
