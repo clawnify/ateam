@@ -85,7 +85,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { SessionGlyphs, SessionIcon } from "./components/AgentIcon";
+import { AgentIcon, SessionGlyphs, SessionIcon } from "./components/AgentIcon";
 import { ChangesList, DiffStat } from "./components/Changes";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { ConnectSteps } from "./components/ConnectSteps";
@@ -4775,7 +4775,23 @@ function MissionControl({
 									setDropTarget(null);
 								}}
 							>
-								<span className="bar-name">{task.name}</span>
+								{/* The Lead's task chip: the agent's logo and the name, and a
+								    click opens the task. It stays part of the drag handle, so
+								    a drag that starts on it still swaps the tile. The logo is
+								    the tile's oldest live agent, not task.agentId: that is the
+								    last agent launched and outlives its session. */}
+								<button
+									type="button"
+									className="lead-chip"
+									title={`Open ${task.name}`}
+									onClick={() => onExpand(task, shown)}
+								>
+									<AgentIcon
+										agentId={sessions.find((s) => s.agentId !== "shell")?.agentId}
+										size={12}
+									/>
+									<span className="lead-chip-name">{task.name}</span>
+								</button>
 								{/* What the terminal below can't show: whether it has a PR (its
 								    size is the +N -M on the right). The branch used to sit here,
 								    but it is the name again as a slug. */}

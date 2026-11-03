@@ -1871,12 +1871,14 @@ input {
 	width: 20px;
 	height: 20px;
 }
-/* The name gives way first, so the size and PR stay readable on a narrow tile. */
-.mc .tile .bar .bar-name {
+/* The task's chip (the Lead's), slimmed to the expand button's 20px and lifted
+   off the bar, which is the chip's own colour. The name gives way first, so the
+   size and PR stay readable on a narrow tile. */
+.mc .tile .bar .lead-chip {
 	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	padding: 1px 7px;
+	line-height: 16px;
+	background: var(--bg-elev-2);
 }
 .mc .tile .bar .bar-pr {
 	flex: none;
