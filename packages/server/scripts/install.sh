@@ -33,7 +33,19 @@
 # prebuilt node-pty fork — so the box needs a Node whose ABI both ship binaries
 # for, and NO compiler. Node 22 is the version this is proven on; if the box has
 # nothing suitable, nvm + node 22 are installed into the user's home.
-set -euo pipefail
+set -Eeuo pipefail
+# Where `set -e` ends the script, say which command did, on stderr (the desktop
+# shows the install log), instead of ending it with no word. -E hands the trap to
+# functions too. It speaks only in the script's own shell, so a failure inside
+# $(…) is told once, by the line that used it, and only while -e is on (nvm runs
+# under `set +e`).
+on_err() {
+	local status=$? cmd="${BASH_COMMAND%%$'\n'*}"
+	if [ "${BASHPID:-$$}" = "$$" ] && [[ $- == *e* ]]; then
+		printf '\n!! install.sh stopped at line %s (exit %s): %s\n' "$1" "$status" "$cmd" >&2
+	fi
+}
+trap 'on_err $LINENO' ERR
 
 REPO="clawnify/ateam"
 APP_DIR="$HOME/ateam-app"

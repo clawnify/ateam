@@ -30,7 +30,18 @@
 #                     nothing with no tailnet. The VNC password is the second lock,
 #                     not the first: never set this to a public address.
 #   TASKWINDOW_VERSION       the TaskWindow release to pin (default below)
-set -euo pipefail
+set -Eeuo pipefail
+# Where `set -e` ends the script, say which command did, on stderr (the app shows
+# its last lines), instead of ending it with no word. -E hands the trap to
+# functions too. It speaks only in the script's own shell, so a failure inside
+# $(…) is told once, by the line that used it, and only while -e is on.
+on_err() {
+	local status=$? cmd="${BASH_COMMAND%%$'\n'*}"
+	if [ "${BASHPID:-$$}" = "$$" ] && [[ $- == *e* ]]; then
+		printf '\n!! install-browser.sh stopped at line %s (exit %s): %s\n' "$1" "$status" "$cmd" >&2
+	fi
+}
+trap 'on_err $LINENO' ERR
 
 TASKWINDOW_VERSION="${TASKWINDOW_VERSION:-0.2.13}"
 # The Chrome Web Store id of TaskWindow; the store build pairs with the daemon by
