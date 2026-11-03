@@ -171,9 +171,10 @@ export class Pairings {
 		return true;
 	}
 
-	/** A brand-new box comes up locked: nothing is paired yet, so the first device
-	 *  pairs with `ateam pair`, or from a Mac over SSH. A box with a file already
-	 *  (an upgrade, a choice made) keeps it. */
+	/** Locks a brand-new box: nothing is paired yet, so the first device pairs with
+	 *  `ateam pair`, or from a Mac over SSH. A box with a file already (an upgrade, a
+	 *  choice made) keeps it. Off until Ateam Go on the App Store can pair
+	 *  (LOCK_NEW_BOXES in cli.ts). */
 	lockIfNew(): boolean {
 		if (existsSync(this.path)) return false;
 		this.write({ ...structuredClone(EMPTY), locked: true });

@@ -82,9 +82,13 @@ async function runDaemon(): Promise<void> {
 	// the server; overridable for dev.
 	const ptyDaemon = process.env.ATEAM_PTY_DAEMON ?? join(dirname(SELF), "daemon.js");
 
-	// A box with no database yet is a fresh install: it comes up locked to paired
-	// devices (pairing.ts). One that has run before keeps whatever it had: open
-	// until someone locks it, so an upgrade never locks a phone out.
+	// A box with no database yet is a fresh install, which can come up locked to
+	// paired devices (pairing.ts). One that has run before keeps whatever it had:
+	// open until someone locks it, so an upgrade never locks a phone out.
+	// shortcut: fresh boxes start open too. Ateam Go on the App Store (1.3.x) can't
+	// pair, so a locked box would shut that phone out. Turn this on once an Ateam Go
+	// that pairs is live on the App Store.
+	const LOCK_NEW_BOXES = false;
 	const fresh =
 		!existsSync(join(DATA_DIR, "ateam.sqlite")) && !existsSync(join(DATA_DIR, "grove.sqlite"));
 	const engine = await createEngine({
@@ -92,7 +96,7 @@ async function runDaemon(): Promise<void> {
 		daemonPath: ptyDaemon,
 		execPath: process.execPath,
 	});
-	if (fresh && pairing.store.lockIfNew())
+	if (LOCK_NEW_BOXES && fresh && pairing.store.lockIfNew())
 		console.log("[ateam] new box: locked to paired devices (pair one with `ateam pair`)");
 	engine.startLoops();
 	const dispatcher = createDispatcher(engine);
@@ -338,16 +342,29 @@ if (cmd === "daemon") {
 }
 
 /**
- * `ateam pair`: a one-time code for a device to pair with this box, from its own
- * terminal, the way in when no paired device is at hand (a box reached only over
- * Tailscale, the first phone). `--unlock` opens a locked box again, for when no
- * paired device is left. Both act on the same file the daemon reads (pairing.ts).
+ * `ateam pair`: a one-time code for a device to pair with this locked box, from its
+ * own terminal, the way in when no paired device is at hand (the phone locked it and
+ * the Mac reaches it only over Tailscale, or the one paired phone is lost). `--unlock`
+ * opens a locked box again, for when no paired device is left. Both act on the same
+ * file the daemon reads (pairing.ts).
  */
 function runPair(args: string[]): void {
 	if (args.includes("--unlock")) {
 		pairing.store.unlock();
 		console.log("This box is open again: any device that can reach its port may use it.");
 		console.log("Lock it from Settings → Boxes in Ateam once a device is connected.");
+		return;
+	}
+	// An open box lets any device in, so a code would unlock nothing, and neither app
+	// asks for one there. Locking happens from a device, which is paired as it locks.
+	if (!pairing.store.locked()) {
+		console.log(
+			"This box is open: any device that can reach its port may use it, so there's nothing to pair.",
+		);
+		console.log(
+			"Lock it from Ateam first: Settings → Boxes → Access on a Mac, or Lock it on its card in Ateam Go.",
+		);
+		process.exitCode = 1;
 		return;
 	}
 	const { code, expiresAt } = pairing.store.invite();

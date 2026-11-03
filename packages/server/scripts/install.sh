@@ -677,10 +677,15 @@ else
 	mark no 'tailscale — how the desktop/phone reach this box privately'
 fi
 
-# A box serving the phone is locked to the devices paired with it (pairing.ts):
-# a fresh one has none yet, so say where the first code comes from.
+# The phone's WebSocket serves any device that can reach it until the box is locked
+# to the devices paired with it (pairing.ts), so say which it is and where the lock is.
 if [ -n "$WS_ADDR" ]; then
-	info "     phone: pair it with the one-time code from \`ateam pair\` (or Settings → Boxes on a Mac)"
+	if grep -qs '"locked": true' "$DATA_DIR/pairings.json"; then
+		mark ok 'locked to paired devices (pair another from Ateam, or with: ateam pair)'
+	else
+		mark no "open to any device that can reach $WS_ADDR: lock it from Ateam"
+		info '     (Settings → Boxes → Access on a Mac, or Lock it on its card in Ateam Go)'
+	fi
 fi
 
 cat <<EOF

@@ -459,18 +459,19 @@ A connection from anything else gets no events (no terminal output, no board) an
 every call is refused with "This box needs pairing." until it pairs. SSH is never
 affected. Keep the ACL anyway: the lock and the ACL guard against different things.
 
-- **A new box comes up locked**, with nothing paired yet. A box that was installed
-  before stays open, as it was, until you lock it. Its card says anyone on your
-  tailnet can control it.
+- **A box starts open**, a new one too, and stays open until you lock it. Its card
+  says anyone on your tailnet can control it.
 - **Lock one** from **Settings → Boxes → Access → Lock it** on the Mac, or **Lock it**
   under its card in the phone's **Boxes**. The device you lock it from is paired first.
+  A phone needs Ateam Go 1.4 or later to pair: an older one can't use a locked box.
 - **Pair a phone** from the same place on the Mac: a QR code the iPhone's Camera opens
   in Ateam Go (`ateamgo://pair?...`), which asks before it pairs, naming the box, and the
   code itself to type on the box's card in **Boxes** on the phone. A code works once, for
   10 minutes.
-- **No paired device at hand** (a new box reached only over Tailscale, the first
-  phone): run `ateam pair` in the box's terminal, which prints a code. `ateam pair
-  --unlock` opens a box again when no paired device is left.
+- **No paired device at hand** (the phone locked the box and the Mac reaches it only
+  over Tailscale, or the one paired phone is lost): run `ateam pair` in the box's
+  terminal, which prints a code for a locked box. `ateam pair --unlock` opens a box
+  again when no paired device is left.
 - **Unpair** a device from **Settings → Boxes → Access**: its token stops working and
   its connection drops at once. Do it for a lost phone.
 
