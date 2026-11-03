@@ -545,6 +545,11 @@ input {
 	width: 0;
 	margin-left: 0;
 	overflow: hidden;
+	/* A dimmed row (paused loop, offline task) has opacity, which lifts its row
+	   button into the positioned paint layer, over this in-flow sibling: the
+	   menu showed but every click hit the row. Positioned, it paints in that
+	   same layer after the button, so it stays on top. */
+	position: relative;
 }
 .tasknode-row:is(:hover, :has(> .tasknode:focus-visible, > .row-menu :focus, [data-state="open"]))
 	> .row-menu {
@@ -2026,7 +2031,7 @@ input {
 	content: "";
 	position: absolute;
 	inset: 0;
-	background: rgb(255 255 255 / 0.08);
+	background: rgb(var(--ink) / 0.08);
 	pointer-events: none;
 }
 .mc .tile .bar {

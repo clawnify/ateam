@@ -2138,6 +2138,26 @@ export function App() {
 													task={task}
 													selected={task != null && task.id === sidebarSelectedId}
 													onClick={() => (task ? toggleTask(task) : goToView("loops"))}
+													onRunNow={() =>
+														window.ateam.loops.runNow(l.id).then(
+															(list) => {
+																// A run that fails records its error on the loop rather
+																// than throwing; the sidebar has no line for it, so say it.
+																const after = list.find((x) => x.id === l.id);
+																if (
+																	after?.lastStatus === "error" &&
+																	after.lastRunAt !== l.lastRunAt
+																) {
+																	setError(`${l.title} didn't run: ${after.lastError ?? "error"}`);
+																}
+																refreshLoops();
+															},
+															(e) =>
+																setError(
+																	`Couldn't run ${l.title}: ${e instanceof Error ? e.message : String(e)}`,
+																),
+														)
+													}
 												/>
 											);
 										})
@@ -3075,12 +3095,22 @@ function LoopRow({
 	task,
 	selected,
 	onClick,
+	onRunNow,
 }: {
 	loop: LoopDTO;
 	task: TaskDTO | null;
 	selected: boolean;
 	onClick: () => void;
+	/** Run it now, off schedule, like the Loops tab's Run now. */
+	onRunNow: () => Promise<void>;
 }) {
+	// Starting a run can take seconds (the first one creates the task's
+	// worktree), so the row's icon spins until the engine answers.
+	const [starting, setStarting] = useState(false);
+	const runNow = () => {
+		setStarting(true);
+		void onRunNow().finally(() => setStarting(false));
+	};
 	return (
 		<div className="tasknode-row">
 			<button
@@ -3089,11 +3119,24 @@ function LoopRow({
 				onClick={onClick}
 			>
 				<span className="ticon">
-					<Repeat size={14} strokeWidth={1.75} />
+					{starting ? (
+						<RefreshCw size={14} strokeWidth={1.75} className="spin" />
+					) : (
+						<Repeat size={14} strokeWidth={1.75} />
+					)}
 				</span>
 				<span className="tname">{loop.title}</span>
 				{task && <StatusPill column={task.column} title={task.triage.reason} />}
 			</button>
+			{/* TaskRow's menu, in the same column: hidden at rest, shown on hover. */}
+			<span className="row-menu">
+				<Menu
+					label={`Actions for ${loop.title}`}
+					icon={EllipsisVertical}
+					className="size-5 [&_svg:not([class*='size-'])]:size-3.5"
+					items={[{ label: "Run now", icon: Play, disabled: starting, onClick: runNow }]}
+				/>
+			</span>
 		</div>
 	);
 }
