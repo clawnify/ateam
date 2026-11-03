@@ -57,6 +57,7 @@ import {
 	FOLLOWING,
 	firstLine,
 	goTo,
+	landed,
 	openFrom,
 	type StackView,
 	shown,
@@ -680,12 +681,7 @@ function ThreadView({
 
 	/** One entry: `folded` before the open point, `cap` on the open reply. */
 	const entry = (e: LeadThreadEntry, folded: boolean, cap: boolean) => {
-		if (e.kind === "user")
-			return (
-				<div key={e.id} className={folded ? "lead-you folded" : "lead-you"}>
-					{e.text}
-				</div>
-			);
+		if (e.kind === "user") return <YouSaid key={e.id} entry={e} folded={folded} />;
 		if (e.kind === "notice")
 			return (
 				<p key={e.id} className="lead-notice info">
@@ -851,9 +847,31 @@ function ThreadView({
 	);
 }
 
+/** The user's words in a thread, under the question they answer when they
+ *  answered one: the question card is gone by then, so this is its record. */
+function YouSaid({
+	entry: e,
+	folded = false,
+}: {
+	entry: Extract<LeadThreadEntry, { kind: "user" }>;
+	folded?: boolean;
+}) {
+	const words = <div className={folded ? "lead-you folded" : "lead-you"}>{e.text}</div>;
+	if (!e.question) return words;
+	return (
+		<div className="lead-you-answer">
+			<div className="lead-you-question" title={e.question}>
+				<CircleHelp size={11} aria-hidden />
+				<span>{firstLine(e.question)}</span>
+			</div>
+			{words}
+		</div>
+	);
+}
+
 /** An entry in the whole thread (the Expand dialog): every one open. */
 function ThreadWhole({ entry: e }: { entry: LeadThreadEntry }) {
-	if (e.kind === "user") return <div className="lead-you">{e.text}</div>;
+	if (e.kind === "user") return <YouSaid entry={e} />;
 	if (e.kind === "notice") return <p className="lead-notice info">{e.text}</p>;
 	if (e.kind === "page")
 		return <PageFrame taskId={e.task.taskId} pageId={e.pageId} title={e.title} />;
@@ -1206,6 +1224,8 @@ export function LeadChat({
 	}, []);
 
 	const blocks = useMemo(() => toLeadBlocks(snap.items), [snap.items]);
+	// A stack can hold only the user's answers, waiting on a task, and draws nothing.
+	const drawn = blocks.some((b) => b.kind !== "threads" || b.threads.length > 0);
 	// Every agent waiting on the user, newest first: they live on the tasks, not
 	// in this conversation, so they stay put above the composer while it scrolls.
 	const asking = useMemo(
@@ -1346,7 +1366,7 @@ export function LeadChat({
 				}}
 			>
 				<div className="lead-thread" ref={thread}>
-					{blocks.length === 0 && !snap.busy && (
+					{!drawn && !snap.busy && (
 						<div className="lead-empty">
 							<p>
 								Ask about your tasks, start new ones, or send instructions to the agents working on
@@ -1369,7 +1389,7 @@ export function LeadChat({
 								key={b.id}
 								id={b.id}
 								threads={b.threads}
-								total={b.items.length}
+								total={landed(b.items)}
 								tasks={tasks}
 								onOpenTask={onOpenTask}
 								atBottom={atBottom}

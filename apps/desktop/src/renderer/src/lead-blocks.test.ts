@@ -5,6 +5,7 @@ import {
 	FOLLOWING,
 	firstLine,
 	goTo,
+	landed,
 	openFrom,
 	type StackView,
 	shown,
@@ -85,6 +86,49 @@ test("the user's answers to a task, its pages and its notices go in its thread",
 	expect(
 		stacks([agent("a", "one"), agent("b", "two"), user("u", "one")])[0]?.items.map((e) => e.id),
 	).toEqual(["a", "b", "u"]);
+});
+
+test("the user's answer stays in its thread where it stands: only a task talking moves one", () => {
+	expect(shape([agent("a", "one"), agent("b", "two"), user("u", "one")])).toEqual([
+		"threads:a:one=a,u two=b",
+	]);
+	// The task answering back is what brings it to the end.
+	expect(
+		shape([agent("a", "one"), agent("b", "two"), user("u", "one"), agent("c", "one")]),
+	).toEqual(["threads:a:two=b one=a,u,c"]);
+});
+
+test("words to a task with no thread in the stack open no page, and its next one opens with them", () => {
+	// An answer to a question: the task has said nothing in this stack.
+	expect(shape([agent("a", "one"), user("q", "two")])).toEqual(["threads:a:one=a"]);
+	expect(shape([agent("a", "one"), user("q", "two"), user("r", "two"), agent("b", "two")])).toEqual(
+		["threads:a:one=a two=q,r,b"],
+	);
+	// Still every entry for a client that draws them one by one.
+	expect(stacks([agent("a", "one"), user("q", "two")])[0]?.items.map((e) => e.id)).toEqual([
+		"a",
+		"q",
+	]);
+});
+
+test("words that start a stack hold it open with no thread until the task talks", () => {
+	expect(shape([lead("l"), user("q", "two")])).toEqual(["assistant:l", "threads:q:"]);
+	expect(shape([lead("l"), user("q", "two"), agent("b", "two")])).toEqual([
+		"assistant:l",
+		"threads:q:two=q,b",
+	]);
+});
+
+test("a reply from an earlier card waits for the task's next thread further down", () => {
+	const items = [agent("a", "one"), lead("l"), agent("b", "two"), user("u", "one")];
+	expect(shape(items)).toEqual(["threads:a:one=a", "assistant:l", "threads:b:two=b"]);
+	// Until the task talks, the earlier card keeps its own answer box.
+	expect(stacks(items)[0]?.threads[0]?.continuedIn).toBe(null);
+	const [first, second] = stacks([...items, agent("c", "one")]);
+	expect(first?.threads[0]?.continuedIn).toBe("b");
+	const one = second?.threads.find((t) => t.key === "one");
+	expect(one?.entries.map((e) => e.id)).toEqual(["u", "c"]);
+	expect(one?.earlier.map((e) => e.id)).toEqual(["a"]);
 });
 
 test("talk with the Lead in between starts a new stack, and nothing drawn moves", () => {
@@ -183,6 +227,17 @@ test("a held thread that talks again moves to the end with the user, unflagged",
 	const v = goTo(FOLLOWING, 0, ["a", "b"], 2);
 	expect(shown(v, ["b", "a"])).toBe(1);
 	expect(unseen(v, ["b", "a"], 3)).toBe(false);
+});
+
+test("answering a thread read further back flags nothing: only the tasks' entries count", () => {
+	const before = [agent("a", "one"), agent("b", "two")];
+	const after = [...before, user("u", "one")];
+	const keys = (items: LeadItem[]) => stacks(items)[0]?.threads.map((t) => t.key) ?? [];
+	expect(landed(before)).toBe(2);
+	expect(landed(after)).toBe(2);
+	const v = goTo(FOLLOWING, 0, keys(before), landed(before));
+	expect(shown(v, keys(after))).toBe(0);
+	expect(unseen(v, keys(after), landed(after))).toBe(false);
 });
 
 test("a task talking while the user reads further up doesn't replace the thread shown", () => {
