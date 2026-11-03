@@ -662,7 +662,7 @@ export function EnvironmentPicker({
 
 /** A row's hover-revealed side button (its provider, removing it). */
 const rowSideButton =
-	"mr-1.5 size-5 rounded-[5px] opacity-0 group-hover:opacity-100 hover:bg-white/8 hover:text-foreground focus-visible:opacity-100";
+	"mr-1.5 size-5 rounded-[5px] opacity-0 group-hover:opacity-100 hover:bg-[rgb(var(--ink)/0.08)] hover:text-foreground focus-visible:opacity-100";
 /** An add step's form, and its fields and sentences. */
 const addForm = "flex flex-col gap-[3px] px-2.5 pt-1.5 pb-2";
 const formInput = "h-auto bg-secondary px-2 py-1.5";

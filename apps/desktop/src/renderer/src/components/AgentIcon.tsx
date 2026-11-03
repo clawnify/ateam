@@ -16,6 +16,9 @@ export function AgentIcon({
 		"aria-hidden": true,
 		style: { flex: "none" as const, display: "block" as const },
 	};
+	// Codex and OpenCode are drawn in the chrome's white, which is the text
+	// colour under a light theme (a fill attribute can't hold var()).
+	const glyph = { ...common.style, color: "var(--primary)" };
 	switch (agentId) {
 		case "claude":
 			return (
@@ -30,7 +33,7 @@ export function AgentIcon({
 			);
 		case "codex":
 			return (
-				<svg {...common} fill="#ffffff" fillRule="evenodd">
+				<svg {...common} style={glyph} fill="currentColor" fillRule="evenodd">
 					<title>Codex</title>
 					<path
 						clipRule="evenodd"
@@ -40,7 +43,7 @@ export function AgentIcon({
 			);
 		case "opencode":
 			return (
-				<svg {...common} fill="#ffffff" fillRule="evenodd">
+				<svg {...common} style={glyph} fill="currentColor" fillRule="evenodd">
 					<title>OpenCode</title>
 					<path d="M16 6H8v12h8V6zm4 16H4V2h16v20z" />
 				</svg>
