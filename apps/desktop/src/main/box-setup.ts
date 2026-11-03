@@ -17,6 +17,9 @@ export interface ProviderSecrets {
 	tailscaleAuthKey?: string;
 	/** Wake providers' account inputs (their API key), by provider id. */
 	wakeAccounts?: Record<string, Record<string, string>>;
+	/** This Mac's device token for each locked box it is paired with, by alias
+	 *  (pairing, protocol v29). */
+	boxTokens?: Record<string, string>;
 }
 
 /**

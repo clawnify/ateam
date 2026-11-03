@@ -450,12 +450,34 @@ should have it — your phone and your Mac, not "anything I ever add to this tai
 ```
 
 The SSH transport doesn't need this — OpenSSH authenticates with your key regardless
-of who can reach port 22. It's specific to the WebSocket, which deliberately has no
-auth of its own.
+of who can reach port 22. It's specific to the WebSocket.
 
-**And know what the phone holds.** There's no app lock yet, so an unlocked, stolen
-phone on your tailnet is shell access to the box. Right now the tailnet is the only
-thing between the two.
+### Lock the box to your devices (v29)
+
+A box on v29 or later can serve its WebSocket only to the devices paired with it.
+A connection from anything else gets no events (no terminal output, no board) and
+every call is refused with "This box needs pairing." until it pairs. SSH is never
+affected. Keep the ACL anyway: the lock and the ACL guard against different things.
+
+- **A box starts open**, a new one too, and stays open until you lock it. Its card
+  says anyone on your tailnet can control it.
+- **Lock one** from **Settings → Boxes → Access → Lock it** on the Mac, or **Lock it**
+  under its card in the phone's **Boxes**. The device you lock it from is paired first.
+  A phone needs Ateam Go 1.4 or later to pair: an older one can't use a locked box.
+- **Pair a phone** from the same place on the Mac: a QR code the iPhone's Camera opens
+  in Ateam Go (`ateamgo://pair?...`), which asks before it pairs, naming the box, and the
+  code itself to type on the box's card in **Boxes** on the phone. A code works once, for
+  10 minutes.
+- **No paired device at hand** (the phone locked the box and the Mac reaches it only
+  over Tailscale, or the one paired phone is lost): run `ateam pair` in the box's
+  terminal, which prints a code for a locked box. `ateam pair --unlock` opens a box
+  again when no paired device is left.
+- **Unpair** a device from **Settings → Boxes → Access**: its token stops working and
+  its connection drops at once. Do it for a lost phone.
+
+The box keeps the list in `~/.ateam/pairings.json`, readable by you alone, with hashes
+of the tokens and codes, never the tokens themselves. Each device keeps its own token:
+the Mac in its encrypted store, the phone in its Keychain.
 
 > **Without `--service`**, nothing re-launches the daemon after a reboot. That's fine
 > for desktop-only use — `ssh … ateam attach` starts one on demand — but it strands a

@@ -140,7 +140,14 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // A new method only: a v27 box answers "Unknown method", and the desktop hides
 // the emoji button there (FEATURE_MIN_VERSION.leadReact). Settings gained
 // `client.leadBox`, read by the desktop alone.
-export const PROTOCOL_VERSION = 28;
+// v29: pairing. A box's network port (the WebSocket) can be locked to the devices
+// paired with it: a connection then gets no events and may only say hello (with
+// its device token) or redeem a one-time code until it is paired. SSH is never
+// gated: it authenticates with the user's key. system:hello takes an optional
+// `{ token }` and its reply gained `pairing`, optional, so an older engine reads
+// as an open box. pairing:* are new methods; an older box answers "Unknown
+// method" (FEATURE_MIN_VERSION.pairing).
+export const PROTOCOL_VERSION = 29;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -335,6 +342,9 @@ export const FEATURE_MIN_VERSION = {
 	/** v28 added lead:react to a box's Lead. An older box answers "Unknown
 	 *  method", so the desktop hides the emoji answer when its Lead lives there. */
 	leadReact: 28,
+	/** v29 added pairing:* and the lock on a box's network port. An older box is
+	 *  always open: clients say so instead of offering to lock it. */
+	pairing: 29,
 	/** v25 added githubAccess:*. An older box answers "Unknown method", so clients
 	 *  point at its terminal (gh auth login) and at Update box instead. */
 	githubAccess: 25,
@@ -998,6 +1008,56 @@ export interface SystemInfo {
 	 *  before it was reported, null from one run from source. A release can change
 	 *  the engine without a protocol bump, so clients compare this to offer updates. */
 	release?: string | null;
+	/** How this connection may use the box (v29; absent from an older engine,
+	 *  which is always open). */
+	pairing?: PairingState;
+}
+
+/** A connection's standing with a box's lock (pairing:*, v29).
+ *  - trusted: over SSH, which authenticated with the user's key.
+ *  - paired: a paired device's token was given.
+ *  - open: the box isn't locked, so anyone who can reach its port may use it.
+ *  - needed: the box is locked and this connection isn't paired: it gets no
+ *    events and every call but hello and pairing:redeem is refused. */
+export interface PairingState {
+	state: "trusted" | "paired" | "open" | "needed";
+	/** The paired device this connection is, when it is one. */
+	device?: string;
+}
+
+/** The refusal a locked box gives an unpaired connection. Clients match it to
+ *  offer pairing instead of showing it as an error. */
+export const NEEDS_PAIRING = "This box needs pairing.";
+
+/** One device paired with a box. */
+export interface PairedDeviceDTO {
+	id: string;
+	/** What the user called it ("iPhone", "MacBook Pro"). */
+	label: string;
+	kind: "desktop" | "phone" | "box";
+	createdAt: number;
+	lastUsedAt: number | null;
+}
+
+/** pairing:status: whether the box is locked, and who is paired. */
+export interface PairingStatusDTO {
+	locked: boolean;
+	devices: PairedDeviceDTO[];
+	/** The device the asking connection is, if any. */
+	you: string | null;
+}
+
+/** A one-time code a new device redeems for its token (pairing:invite). */
+export interface PairingInviteDTO {
+	code: string;
+	expiresAt: number;
+}
+
+/** What redeeming a code (or locking an open box) gives the device: its own
+ *  token, to keep and send with every hello from now on. */
+export interface PairingGrantDTO {
+	token: string;
+	device: PairedDeviceDTO;
 }
 
 /** What `system:update` reports back before the engine goes down to be replaced. */
@@ -1562,7 +1622,13 @@ export {
 export { browserViewUrl } from "./browser-view";
 export type { NativeClientApi } from "./client-api";
 // Client-side binding of the AteamApi surface over an RpcClient.
-export { buildAteamApi, leadClient, requestBoxUpdate, serverHandshake } from "./client-api";
+export {
+	buildAteamApi,
+	leadClient,
+	pairingClient,
+	requestBoxUpdate,
+	serverHandshake,
+} from "./client-api";
 // WebSocket ClientTransport over the platform-global WebSocket (browser / RN / Bun).
 export {
 	activeLabel,

@@ -73,7 +73,8 @@ import {
 } from "./src/boxes";
 import { Composer, type ComposerSubmit, type RunOn } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
-import { connect, mobileNative } from "./src/connection";
+import { connect, mobileNative, redeemPairing } from "./src/connection";
+import { parsePairLink } from "./src/pair-link";
 import { demoConnection } from "./src/demo";
 import { type Board, createFleet, type Fleet, pickProject } from "./src/fleet";
 import { GithubAccessScreen } from "./src/GithubAccessScreen";
@@ -91,6 +92,7 @@ import { useScrollFade } from "./src/scroll-fade";
 import {
 	loadBoards,
 	loadBoxes,
+	loadBoxToken,
 	loadConsent,
 	loadDismissedSkew,
 	loadLeadBox,
@@ -102,6 +104,7 @@ import {
 	type SavedConnection,
 	saveBoard,
 	saveBoxes,
+	saveBoxToken,
 	saveConsent,
 	saveDismissedSkew,
 	saveLeadBox,
@@ -158,6 +161,12 @@ const COLUMNS: { key: TaskDTO["column"]; label: string; tint: string }[] = [
 // on iPhone (wider than any screen), it stops the board/composer/form from stretching
 // edge-to-edge on iPad. The terminal is intentionally exempt — more columns is better.
 const CONTENT_MAX = 720;
+
+/** How this phone names itself to a box it pairs with. */
+const PHONE_LABEL = Platform.OS === "ios" ? "iPhone" : "Phone";
+
+/** A box's key (boxKey) from the `ws://host:port` URL it is dialled at. */
+const keyOfUrl = (url: string) => url.replace(/^wss?:\/\//, "").toLowerCase();
 
 function taskNote(t: TaskDTO): string {
 	if (t.column === "needs_attention") return "awaiting your input";
@@ -1100,7 +1109,9 @@ export default function App() {
 	const [link] = useState(() =>
 		createLinks({
 			fleet,
-			dial: (url, onClose) => connect(url, { onClose }),
+			// With this phone's token for the box, when it is paired with a locked one.
+			dial: async (url, onClose) =>
+				connect(url, { onClose, token: await loadBoxToken(keyOfUrl(url)) }),
 			boxes: () => boxesRef.current,
 			consented: () => consented.current,
 			askConsent: (then) => hooks.current.askConsent(then),
@@ -1708,6 +1719,76 @@ export default function App() {
 		void saveLeadBox(key);
 	}, []);
 
+	// Pairing (protocol v29). A box locked to its paired devices refuses this phone
+	// until it trades a one-time code for a token of its own, kept in the Keychain
+	// and sent with every connect from then on.
+	const pairBox = useCallback(
+		async (box: SavedConnection, code: string, save = false) => {
+			const key = boxKey(box);
+			const token = await redeemPairing(
+				`ws://${box.host}:${box.port || "8787"}`,
+				code,
+				PHONE_LABEL,
+			);
+			await saveBoxToken(key, token);
+			if (!(await link.connect(box, { wake: true, save }))) {
+				throw new Error(link.get(key).error ?? "Couldn't connect to the box.");
+			}
+		},
+		[link],
+	);
+	// Boxes locked from here this session: their open warning goes at once,
+	// before the next connect reports them paired.
+	const [lockedHere, setLockedHere] = useState<Set<string>>(() => new Set());
+	const lockBox = useCallback(
+		async (box: SavedBox) => {
+			const key = boxKey(box);
+			const c = link.conn(key);
+			if (!c) throw new Error("Connect to the box first.");
+			const grant = await c.lock(PHONE_LABEL);
+			await saveBoxToken(key, grant.token);
+			setLockedHere((s) => new Set(s).add(key));
+		},
+		[link],
+	);
+	// `ateamgo://pair?host=…&port=…&code=…`: the QR a paired Mac shows (Settings →
+	// Boxes → Pair a phone), opened by the iPhone's Camera. Any app or web page can
+	// open a link like this, so nothing happens on its own: a malformed one is
+	// dropped, and a good one asks first, naming the box it would pair with (and
+	// save, if it wasn't on the list).
+	useEffect(() => {
+		const handle = (url: string | null): void => {
+			const link = url ? parsePairLink(url) : null;
+			if (!link) return;
+			const { box, code } = link;
+			Alert.alert(
+				"Pair with this box?",
+				`Ateam Go pairs with the box at ${box.host}:${box.port} and adds it to your boxes. Only go on if you just showed this code on your Mac.`,
+				[
+					{ text: "Cancel", style: "cancel" },
+					{
+						text: "Pair",
+						onPress: () =>
+							void (async () => {
+								await booted.current;
+								endDemo();
+								try {
+									await pairBox(box, code, true);
+									setView("board");
+								} catch (e) {
+									setError(e instanceof Error ? e.message : String(e));
+									setView("connect");
+								}
+							})(),
+					},
+				],
+			);
+		};
+		void Linking.getInitialURL().then(handle);
+		const sub = Linking.addEventListener("url", (e) => handle(e.url));
+		return () => sub.remove();
+	}, [pairBox, endDemo]);
+
 	// The projects, one card per repo across boxes (@ateam/protocol unifyProjects).
 	const cards = useMemo(
 		() => unifyProjects(projects, originsOf(fleet, projects)),
@@ -2071,6 +2152,20 @@ export default function App() {
 						setBoxTerminalKey(boxKey(box));
 					}}
 					onGithub={(box) => setGithubKey(boxKey(box))}
+					openKeys={
+						new Set(
+							boxes
+								.map(boxKey)
+								.filter(
+									(k) =>
+										links[k]?.state === "live" &&
+										link.conn(k)?.pairing?.state === "open" &&
+										!lockedHere.has(k),
+								),
+						)
+					}
+					onPair={(box, code) => pairBox(box, code)}
+					onLock={lockBox}
 				/>
 			);
 		}

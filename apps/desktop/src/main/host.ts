@@ -7,6 +7,7 @@
 // listener — handshakes (gating the protocol version), and ADDS it: connecting
 // never drops the others.
 
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { getAgent } from "@ateam/agents";
 import {
@@ -15,6 +16,7 @@ import {
 	type BoxUpdateStarted,
 	type BrowserViewDTO,
 	beginStep,
+	boxSupports,
 	browserViewUrl,
 	CH,
 	type ClientTransport,
@@ -31,6 +33,10 @@ import {
 	failActive,
 	filled,
 	type GithubAccessDTO,
+	NEEDS_PAIRING,
+	type PairingGrantDTO,
+	type PairingInviteDTO,
+	type PairingStatusDTO,
 	PROTOCOL_VERSION,
 	type ProjectDTO,
 	providerById,
@@ -232,6 +238,11 @@ export interface Host {
 	boxLink(alias: string): BoxLink | null;
 	/** Told when a box comes to be held, stops being held, or is forgotten. */
 	onBoxChange(cb: (alias: string, change: BoxChange) => void): () => void;
+	/** A held box's lock (pairing:*, v29): see AteamHost.pairingStatus. */
+	pairingStatus(alias: string): Promise<PairingStatusDTO>;
+	pairingInvite(alias: string): Promise<PairingInviteDTO & { link: string | null }>;
+	pairingRevoke(alias: string, id: string): Promise<PairingStatusDTO>;
+	pairingLock(alias: string): Promise<PairingStatusDTO>;
 }
 
 /** A held box's own wire (Host.boxLink). */
@@ -535,6 +546,26 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			client.close();
 			return statusOf(raced, alias);
 		}
+		// A locked box (v29) gives an unpaired connection nothing until it pairs:
+		// with a code, this connection redeems it and this Mac keeps the token.
+		if (info.pairing?.state === "needed") {
+			if (!opts.code) {
+				client.close();
+				throw new Error(NEEDS_PAIRING);
+			}
+			try {
+				const grant = (await withTimeout(
+					rpc.call(CH.pairingRedeem, [{ code: opts.code, label: macLabel(), kind: "desktop" }]),
+					CONNECT_TIMEOUT_MS,
+				)) as PairingGrantDTO;
+				keepBoxToken(alias, grant.token);
+				// The hello said "needed": this connection is paired now.
+				info.pairing = { state: "paired", device: grant.device.id };
+			} catch (err) {
+				client.close();
+				throw err;
+			}
+		}
 		if (info.protocolVersion !== PROTOCOL_VERSION) {
 			// Upgrade it if we can, but a mismatch is no longer a refusal. Refusing was
 			// safe and total: a box one release old became unusable rather than partly
@@ -692,8 +723,10 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 				const client = openTransport(alias, wire);
 				const rpc: RpcClient = createRpcClient(client.transport);
 				try {
+					// This Mac's token for a locked box (v29); an open box or SSH ignores it.
+					const token = boxToken(alias);
 					const info = await withTimeout(
-						rpc.call(CH.systemHello) as Promise<SystemInfo>,
+						rpc.call(CH.systemHello, token ? [{ token }] : []) as Promise<SystemInfo>,
 						CONNECT_TIMEOUT_MS,
 					);
 					if (narrate) step(() => []);
@@ -889,7 +922,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			await connect(alias);
 		} catch (err) {
 			noteFailure(alias, err);
-			scheduleReconnect(alias);
+			// A locked box waits for a code: trying again changes nothing.
+			if ((err instanceof Error ? err.message : String(err)) !== NEEDS_PAIRING)
+				scheduleReconnect(alias);
 		}
 	}
 
@@ -995,6 +1030,58 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	let secretsStore: ReturnType<typeof createSecretStore> | null = null;
 	const secrets = () =>
 		(secretsStore ??= createSecretStore(join(app.getPath("userData"), "provider-secrets.enc")));
+
+	/** This Mac's device token for a locked box, by alias. */
+	const boxToken = (alias: string): string | undefined => secrets().load().boxTokens?.[alias];
+	const keepBoxToken = (alias: string, token: string | null) => {
+		const all = { ...(secrets().load().boxTokens ?? {}) };
+		if (token) all[alias] = token;
+		else delete all[alias];
+		secrets().save({ boxTokens: all });
+	};
+	/** How this Mac names itself to a box it pairs with. */
+	const macLabel = () => hostname().replace(/\.local$/, "") || "Mac";
+
+	/** A held box's own wire, on an engine that has a lock (v29). */
+	function pairingWire(alias: string): RpcClient {
+		const link = links.get(alias);
+		if (!link) throw new Error(`Connect ${alias} first.`);
+		if (!boxSupports("pairing", link.version))
+			throw new Error(`Update ${alias} first: its engine can't be locked.`);
+		return link.rpc;
+	}
+
+	async function pairingStatus(alias: string): Promise<PairingStatusDTO> {
+		return (await pairingWire(alias).call(CH.pairingStatus)) as PairingStatusDTO;
+	}
+
+	async function pairingInvite(alias: string): Promise<PairingInviteDTO & { link: string | null }> {
+		const invite = (await pairingWire(alias).call(CH.pairingInvite)) as PairingInviteDTO;
+		// A box reached by address: the phone reaches it at that same address.
+		const at = /^(.+):(\d+)$/.exec(alias);
+		const link = at
+			? `ateamgo://pair?host=${encodeURIComponent(at[1] ?? "")}&port=${at[2]}&code=${invite.code}`
+			: null;
+		return { ...invite, link };
+	}
+
+	async function pairingRevoke(alias: string, id: string): Promise<PairingStatusDTO> {
+		const wire = pairingWire(alias);
+		const before = (await wire.call(CH.pairingStatus)) as PairingStatusDTO;
+		const status = (await wire.call(CH.pairingRevoke, [{ id }])) as PairingStatusDTO;
+		// This Mac unpaired itself: its token is no use any more.
+		if (before.you === id) keepBoxToken(alias, null);
+		return status;
+	}
+
+	async function pairingLock(alias: string): Promise<PairingStatusDTO> {
+		const wire = pairingWire(alias);
+		const grant = (await wire.call(CH.pairingLock, [
+			{ label: macLabel(), kind: "desktop" },
+		])) as PairingGrantDTO;
+		keepBoxToken(alias, grant.token);
+		return (await wire.call(CH.pairingStatus)) as PairingStatusDTO;
+	}
 
 	function secretsStatus(): SecretsStatus {
 		const s = secrets().load();
@@ -1397,6 +1484,10 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		saveWakeAccount,
 		judgeGrammar,
 		boxLink: (alias) => links.get(alias) ?? null,
+		pairingStatus,
+		pairingInvite,
+		pairingRevoke,
+		pairingLock,
 		onBoxChange(cb) {
 			boxListeners.add(cb);
 			return () => boxListeners.delete(cb);
@@ -1418,6 +1509,12 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.canUpdateBoxes, () => host.canUpdateBoxes());
 	ipcMain.handle(HOST_CH.appRelease, () => app.getVersion());
 	ipcMain.handle(HOST_CH.boxGithub, () => host.githubStatuses());
+	ipcMain.handle(HOST_CH.pairingStatus, (_e, alias: string) => host.pairingStatus(String(alias)));
+	ipcMain.handle(HOST_CH.pairingInvite, (_e, alias: string) => host.pairingInvite(String(alias)));
+	ipcMain.handle(HOST_CH.pairingRevoke, (_e, alias: string, id: string) =>
+		host.pairingRevoke(String(alias), String(id)),
+	);
+	ipcMain.handle(HOST_CH.pairingLock, (_e, alias: string) => host.pairingLock(String(alias)));
 	ipcMain.handle(HOST_CH.provision, (_e, alias: string, input: { cloneUrl: string }) =>
 		host.provision(alias, input),
 	);

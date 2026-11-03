@@ -283,6 +283,11 @@ export function demoConnection(): Connection {
 			clone: async () => PROJECT,
 		},
 		lead: leadClient(rpc),
+		// The demo box is never locked.
+		pairing: undefined,
+		lock: async () => {
+			throw new Error("The demo box can't be locked.");
+		},
 		ping: async () => true,
 		close: () => {
 			onFrame = null;

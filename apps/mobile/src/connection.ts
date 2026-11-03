@@ -13,8 +13,12 @@ import {
 	type LeadClient,
 	leadClient,
 	type NativeClientApi,
+	NEEDS_PAIRING,
+	type PairingGrantDTO,
+	type PairingState,
 	PROTOCOL_VERSION,
 	type ProjectDTO,
+	pairingClient,
 	type RemoteRepoDTO,
 	type RpcClient,
 	requestBoxUpdate,
@@ -77,6 +81,11 @@ export interface Connection {
 	/** The box's own Lead chat, run by its engine. A box before v24 answers every
 	 *  call "Unknown method": gate on boxSupports("lead", info.protocolVersion). */
 	lead: LeadClient;
+	/** How this phone may use the box (v29): "open" when anyone on the network
+	 *  may, "paired" with this phone's token. Absent from an older box (open). */
+	pairing: PairingState | undefined;
+	/** Lock an open box (v29), pairing this phone first: its token, to keep. */
+	lock(label: string): Promise<PairingGrantDTO>;
 	/** Close the socket; the daemon and its live sessions live on. */
 	close(): void;
 }
@@ -88,6 +97,8 @@ export interface ConnectOptions {
 	 * to the still-alive daemon session. See the connectivity decision doc.
 	 */
 	onClose?: () => void;
+	/** This phone's device token for the box, when it is paired with it (v29). */
+	token?: string;
 }
 
 const CONNECT_TIMEOUT_MS = 15_000;
@@ -110,7 +121,10 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 	try {
 		// A bad host / firewalled port leaves the socket hanging with no error, so
 		// cap the handshake — the UI must not wait forever on connect.
-		info = await withTimeout(serverHandshake(rpc), CONNECT_TIMEOUT_MS);
+		info = await withTimeout(serverHandshake(rpc, opts.token), CONNECT_TIMEOUT_MS);
+		// A locked box gives an unpaired phone nothing but a way to pair: say so
+		// rather than hold a connection that can't be used.
+		if (info.pairing?.state === "needed") throw new Error(NEEDS_PAIRING);
 	} catch (err) {
 		intentional = true; // a failed connect isn't a drop to reattach from
 		client.close();
@@ -155,6 +169,8 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 				rpc.call(CH.projectsClone, [{ cloneUrl }]) as Promise<ProjectDTO>,
 		},
 		lead: leadClient(rpc),
+		pairing: info.pairing,
+		lock: (label: string) => pairingClient(rpc).lock(label, "phone"),
 		ping: () =>
 			withTimeout(serverHandshake(rpc), PING_TIMEOUT_MS).then(
 				() => true,
@@ -166,6 +182,26 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 			client.close();
 		},
 	};
+}
+
+/**
+ * Pair this phone with a locked box: trade a one-time code (from a paired
+ * device's Pair a phone, or `ateam pair` on the box) for its own device token,
+ * over a connection of its own that closes again. Keep the token and pass it
+ * to `connect`.
+ */
+export async function redeemPairing(url: string, code: string, label: string): Promise<string> {
+	const client = wsClientTransport(url);
+	const rpc = createRpcClient(client.transport);
+	try {
+		const grant = await withTimeout(
+			pairingClient(rpc).redeem(code, label, "phone"),
+			CONNECT_TIMEOUT_MS,
+		);
+		return grant.token;
+	} finally {
+		client.close();
+	}
 }
 
 /** The host of a `ws://host:port` URL, brackets kept for IPv6. Not `new URL`:

@@ -12,11 +12,12 @@
 // connect-steps): a woken box can take minutes to answer, and a bare spinner for
 // that long reads as stuck.
 
-import type { ConnectStep } from "@ateam/protocol";
+import { type ConnectStep, NEEDS_PAIRING } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
+	Alert,
 	Animated,
 	PanResponder,
 	Pressable,
@@ -24,6 +25,7 @@ import {
 	StatusBar,
 	StyleSheet,
 	Text,
+	TextInput,
 	View,
 } from "react-native";
 import { type BoxLink, boxKey, boxSubtitle, boxTitle, NEW_LINK, type SavedBox } from "./boxes";
@@ -51,6 +53,9 @@ export function BoxesScreen({
 	onDemo,
 	onBoxTerminal,
 	onGithub,
+	openKeys,
+	onPair,
+	onLock,
 }: {
 	/** The nav bar's left slot: back to the board when there is one, else the logo. */
 	leading: ReactNode;
@@ -80,6 +85,12 @@ export function BoxesScreen({
 	onBoxTerminal: (box: SavedBox) => void;
 	/** Open a connected box's GitHub access (sign-in, token, which repos it can push to). */
 	onGithub: (box: SavedBox) => void;
+	/** Connected boxes that can be locked and aren't: anyone on the network may use them. */
+	openKeys: Set<string>;
+	/** Pair this phone with a locked box using a one-time code. */
+	onPair: (box: SavedBox, code: string) => Promise<void>;
+	/** Lock an open box to the devices paired with it, starting with this phone. */
+	onLock: (box: SavedBox) => Promise<void>;
 }) {
 	// With one box there's nothing to choose: its Lead is the Lead.
 	const choosingLead = boxes.length > 1;
@@ -134,6 +145,8 @@ export function BoxesScreen({
 								onLead={choosingLead && !isLead ? () => onLeadBox(box) : undefined}
 								onTerminal={live ? () => onBoxTerminal(box) : undefined}
 								onGithub={live ? () => onGithub(box) : undefined}
+								onPair={(code) => onPair(box, code)}
+								onLock={live && openKeys.has(key) ? () => onLock(box) : undefined}
 							/>
 						);
 					})}
@@ -187,6 +200,8 @@ function BoxCard({
 	onLead,
 	onTerminal,
 	onGithub,
+	onPair,
+	onLock,
 }: {
 	box: SavedBox;
 	live: boolean;
@@ -214,6 +229,10 @@ function BoxCard({
 	onTerminal?: () => void;
 	/** Only on a connected box's card, like the terminal. */
 	onGithub?: () => void;
+	/** Pair this phone with the box using a code (shown when it's locked to others). */
+	onPair: (code: string) => Promise<void>;
+	/** Lock the box to its paired devices: only on a connected box anyone may use. */
+	onLock?: () => Promise<void>;
 }) {
 	const actionsWidth = ACTION_WIDTH * (onLead ? 3 : 2);
 	// The responder below is made once, so it reads the width through a ref too.
@@ -415,7 +434,104 @@ function BoxCard({
 			</View>
 			{tray ? (
 				<StepTray steps={steps} failure={failure} onCancel={reaching ? onCancel : null} />
+			) : failure === NEEDS_PAIRING ? (
+				<PairTray onPair={onPair} />
+			) : onLock ? (
+				<LockTray onLock={onLock} />
 			) : null}
+		</View>
+	);
+}
+
+/** Under a box locked to its paired devices: a code pairs this phone too. */
+function PairTray({ onPair }: { onPair: (code: string) => Promise<void> }) {
+	const [code, setCode] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const pair = async () => {
+		setBusy(true);
+		setError(null);
+		try {
+			await onPair(code);
+			setCode("");
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	return (
+		<View style={styles.tray}>
+			<Text style={styles.trayText}>
+				Locked to its paired devices. Enter a code from Pair a phone on your Mac, or from `ateam
+				pair` in the box's terminal.
+			</Text>
+			<View style={styles.pairRow}>
+				<TextInput
+					style={styles.pairInput}
+					value={code}
+					onChangeText={setCode}
+					placeholder="XXXX-XXXX"
+					placeholderTextColor={C.faint}
+					autoCapitalize="characters"
+					autoCorrect={false}
+					accessibilityLabel="Pairing code"
+				/>
+				<Pressable
+					style={[styles.pairBtn, (!code.trim() || busy) && styles.pairBtnOff]}
+					disabled={!code.trim() || busy}
+					onPress={() => void pair()}
+					accessibilityRole="button"
+				>
+					<Text style={styles.pairBtnText}>{busy ? "Pairing…" : "Pair"}</Text>
+				</Pressable>
+			</View>
+			{error ? <Text style={styles.pairError}>{error}</Text> : null}
+		</View>
+	);
+}
+
+/** Under a box anyone on the network may use: lock it, pairing this phone first. */
+function LockTray({ onLock }: { onLock: () => Promise<void> }) {
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const run = async () => {
+		setBusy(true);
+		setError(null);
+		try {
+			await onLock();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const lock = () =>
+		Alert.alert(
+			"Lock this box?",
+			"Only devices paired with it can use it from then on, starting with this phone. Your Mac, if it reaches the box over Tailscale, needs a code too: get one with `ateam pair` in this box's terminal (the terminal button on its card).",
+			[
+				{ text: "Cancel", style: "cancel" },
+				{ text: "Lock it", onPress: () => void run() },
+			],
+		);
+	return (
+		<View style={styles.tray}>
+			<Text style={styles.trayWarn}>
+				Anyone on your Tailscale network can control this box. Lock it so only the devices you pair
+				can.
+			</Text>
+			<View style={styles.pairRow}>
+				<Pressable
+					style={[styles.pairBtn, busy && styles.pairBtnOff]}
+					disabled={busy}
+					onPress={lock}
+					accessibilityRole="button"
+				>
+					<Text style={styles.pairBtnText}>{busy ? "Locking…" : "Lock it"}</Text>
+				</Pressable>
+			</View>
+			{error ? <Text style={styles.pairError}>{error}</Text> : null}
 		</View>
 	);
 }
@@ -551,6 +667,31 @@ const styles = StyleSheet.create({
 	cardSub: { color: C.faint, fontSize: 12, fontVariant: ["tabular-nums"] },
 	cardSubError: { color: C.red },
 
+	trayText: { color: C.muted, fontSize: 13, lineHeight: 18 },
+	trayWarn: { color: C.amber, fontSize: 13, lineHeight: 18 },
+	pairError: { color: C.red, fontSize: 13 },
+	pairRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+	pairInput: {
+		flex: 1,
+		height: 36,
+		paddingHorizontal: 10,
+		borderRadius: 8,
+		borderWidth: 1,
+		borderColor: C.line,
+		color: C.ink,
+		fontSize: 15,
+		letterSpacing: 1,
+	},
+	pairBtn: {
+		height: 36,
+		paddingHorizontal: 14,
+		borderRadius: 8,
+		backgroundColor: C.ink,
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	pairBtnOff: { opacity: 0.4 },
+	pairBtnText: { color: C.bg, fontSize: 14, fontWeight: "600" },
 	tray: {
 		marginTop: -12,
 		marginHorizontal: 6,

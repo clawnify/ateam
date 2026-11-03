@@ -28,5 +28,8 @@ export function wsServerTransport(socket: WebSocket): ServerTransport {
 			// 'error' anyway, so listening on 'close' alone frees the subscriptions once.
 			socket.on("close", handler);
 		},
+		close() {
+			socket.close();
+		},
 	};
 }
