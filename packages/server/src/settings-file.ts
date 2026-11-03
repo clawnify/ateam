@@ -38,6 +38,7 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 		syncEngineSettingsToBoxes: true,
 		filterGrammarWithJev: true,
 		pinnedSkills: null,
+		theme: "dark",
 	},
 	engine: {
 		defaultAgentId: "claude",

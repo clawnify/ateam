@@ -4,12 +4,14 @@ import { CH, type TaskDTO } from "@ateam/protocol";
 import { createEngine, type Engine, readSettings } from "@ateam/server";
 import { app, BrowserWindow, dialog, Menu } from "electron";
 import { autoUpdater } from "electron-updater";
+import { windowBackground } from "../shared/theme";
 import { APP_NAME } from "./app-name";
 import { createHost, registerHostIpc } from "./host";
 import { registerIpc } from "./ipc";
 import { type Lead, startLead } from "./lead";
 import { guardPageFrames, registerPageScheme, servePages } from "./pages";
 import { showStartupFailure } from "./startup-failure";
+import { registerThemeIpc, savedTheme } from "./theme";
 import { createUpdateFlow } from "./update-flow";
 import { createWaitNotifier } from "./wait-notify";
 
@@ -198,7 +200,7 @@ function createWindow(projectId?: string): BrowserWindow {
 		minWidth: 900,
 		minHeight: 600,
 		title: APP_NAME,
-		backgroundColor: "#0c0c0e",
+		backgroundColor: windowBackground(savedTheme()),
 		titleBarStyle: "hiddenInset",
 		webPreferences: {
 			preload: join(__dirname, "../preload/index.js"),
@@ -307,6 +309,7 @@ app
 			browserUrl: host.browserUrl,
 		});
 		registerHostIpc(host);
+		registerThemeIpc();
 		servePages(host.router);
 
 		if (SMOKE) {
