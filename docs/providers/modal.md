@@ -23,7 +23,8 @@ Against that:
   last snapshot.
 - Over SSH nothing can become root, and processes started through Modal's `exec` don't
   survive a snapshot (both seen on gVisor).
-- The phone could only wake a box through Modal's gRPC SDKs.
+- Waking a box from the phone takes more than one API call. It would need a small app the
+  user deploys in their own Modal workspace, which Ateam would have to maintain (untested).
 - CPU costs about 3.7 times what Sprites charges, and Modal bills at least what a box
   requests, whatever it uses.
 
@@ -55,7 +56,7 @@ need to keep processes alive.
 | Tailscale across a snapshot | Started over SSH as the box user (userspace mode), `tailscaled` kept its node and address across a memory snapshot. Started through `exec`, it didn't survive on gVisor. On vm, the `exec`-started one still reported Running on the same node from inside after a restore, but the laptop saw the node offline a minute later. Not settled |
 | Desktop by tailnet address | The desktop connects to a `host:port` box over the WebSocket. Connected that way, it cloned a public repo onto the box, created a task and launched Claude Code. After a mid-turn snapshot it marked the box offline, then reconnected by itself within seconds of the restore (17s offline in all, with a 20s gap between snapshot and restore) |
 | Agent across a snapshot | Claude Code 2.1.316 on gVisor. A sign-in half done (the login URL showing, its state only in memory) survived a snapshot, and finished after the restore. Mid-turn, with a Bash tool call running a 2-minute loop: the snapshot took 5.3s and the restore 0.3s, 20s later. The loop kept ticking and the turn's timer kept counting. The end of the turn, Claude's next API call, wasn't read before the sandbox stopped at the spend limit |
-| Spend limit | The workspace had $1.00 of credit for the month and allowed no spend beyond it. When the spike reached it (about 00:05 UTC on 2026-11-03, $1.02 metered in all), the sandboxes that were running stopped, and every create and restore failed with `ResourceExhaustedError: Workspace … has exceeded its spend limit` |
+| Spend limit | When the workspace reached its spend limit, the sandboxes that were running stopped, as [Modal's budgets guide](https://modal.com/docs/guide/budgets) says they do: "Modal stops workloads that would incur additional out-of-pocket charges". Every create and restore then failed with `ResourceExhaustedError: Workspace … has exceeded its spend limit`. The spike's own test boxes, held at 2 vCPU and 4 GiB, had used up the workspace's credit |
 
 ## Cost
 
@@ -80,28 +81,33 @@ what an idle box uses above the minimum request is still unmeasured.
 
 ## What it would take
 
-- **A box command that starts everything.** `sshd` and `tailscaled` would have to start
-  from the sandbox's own command, which is the only place that runs as root and keeps its
-  processes across a snapshot. `tailscaled` needs its state on disk as a regular node: an
-  ephemeral node is removed 30–60 minutes after it goes offline, so it wouldn't outlive a
-  night's sleep.
+- **`tailscaled` where a snapshot keeps it.** Start it from the sandbox's own command, or
+  over SSH as the box user in userspace mode as the `tailscale` phase does, never through
+  `exec`. Kernel mode needs root, which only the sandbox's command has. It also needs its
+  state on disk as a regular node: an ephemeral node is removed 30–60 minutes after it goes
+  offline, so it wouldn't outlive a night's sleep.
 - **The stable alias**, as `modal_box.py` prototypes. The `~/.ssh/config` entry is fixed,
   with `HostKeyAlias`. Its `ProxyCommand` finds the box's sandbox by name, restores the
   memory snapshot, or wakes cold from the filesystem snapshot once the chain is near 7
   days, then pipes the connection through. The desktop's `SleepCheck` would ask the same
   record whether a box sleeps. Otherwise every launch of the desktop wakes every Modal box.
 - **A sleep driver** (`packages/server/src/sleep/`) that runs `modal_box.py sleep`'s
-  steps. Something has to hold a Modal token to call them. A token on the box reaches every
-  sandbox in the workspace, which is the same problem as a boxd org key. A scheduled
-  function in the user's own Modal workspace could do it instead (untested).
+  steps. A Modal token on the box would reach every sandbox in the workspace, which is the
+  same problem as a boxd org key. The app below keeps that token inside Modal, so the box
+  would only hold a Proxy Token for the app's endpoints.
 - **A daily cycle for a busy box.** A snapshot and restore restarts the 24-hour clock on
   gVisor, at the cost of one dropped connection.
 - **A weekly cold restart**, when the memory snapshot chain runs out. That restarts the
   engine and ends any agent that is running.
-- **A wake adapter for the phone** (`packages/protocol/src/wake.ts`). Modal exposes
-  sandboxes through its SDKs (Python, JavaScript, Go), which speak gRPC. There is no single
-  REST call to make, as with the other providers. Whether the JavaScript SDK runs in React
-  Native is unchecked.
+- **A small app in the user's own Modal workspace**, holding the Modal token so nothing
+  else does. A private web endpoint, guarded by a
+  [Proxy Token](https://modal.com/docs/guide/webhook-proxy-auth) sent as `Modal-Key` and
+  `Modal-Secret` headers, would wake a box and return its tunnel. The phone's wake adapter
+  (`packages/protocol/src/wake.ts`) would then make one HTTPS call, like the providers woken
+  with a single REST call, and the `ProxyCommand` could be `curl` and `nc` instead of the
+  SDK. A scheduled function could run the daily cycle. Ateam would ship this app and keep it
+  working in every user's workspace. Untested, including whether a function can take a
+  memory snapshot of a sandbox.
 - All of this rests on `_experimental_` SDK calls that may change without notice.
 
 ## How the agent and phone tests were run
@@ -116,10 +122,10 @@ sockets to tailnet addresses, so the WebSocket check fails there. While it waits
 3. Give Claude a long command, and in the middle of it run
    `modal-spike.py snapshot --sandbox <id> --gap 20`.
 
-The phase starts `tailscaled` through `exec`, so on gVisor the node won't come back after
-that snapshot. Start it over SSH as the box user instead:
-`/usr/sbin/tailscaled --state=mem: --tun=userspace-networking --statedir=$HOME/.ts --socket=$HOME/.ts/tailscaled.sock`,
-then `tailscale --socket=$HOME/.ts/tailscaled.sock up`.
+The phase starts `tailscaled` over SSH as the box user, in userspace mode, because that is
+what survives a snapshot. The first run started it through `exec`, and on gVisor the node
+didn't come back. The phase hasn't been rerun since that change: its SSH start was run by
+hand, on gVisor.
 
 ## Open points
 
@@ -137,14 +143,23 @@ then `tailscale --socket=$HOME/.ts/tailscaled.sock up`.
       Go never connected: the simulator build on the test laptop is a Debug build that
       needs a Metro server.
 - [ ] **A restore on vm.** Does it restart the `timeout` clock (`restore-clock --runtime vm`),
-      and does a `tailscaled` started from the box's own command keep its node across it?
+      and does `tailscaled`, started over SSH by the `tailscale` phase, keep its node across it?
 - [ ] **What an idle box uses** above the minimum request (`cost`, one app per sizing).
 - [ ] **Persistent Sandboxes.** Still gated on 2026-11-03. Ask Modal to enable them, then run
       `modal-spike.py persistent`. Check the hourly session limit in practice, whether the
       tunnel stays the same across pause and resume, and whether an incoming SSH connection
       resumes a paused sandbox.
-- [ ] **Who holds the Modal token** for the sleep driver: the box, or a scheduled function
-      in the user's workspace.
+- [ ] **The app in the user's workspace.** Can a deployed function take a memory snapshot of
+      a sandbox and restore it, and does a Proxy Token limit the box and the phone to the
+      app's endpoints?
+- [ ] **Volumes for the box's files.** A Modal Volume mounted at `/home` would keep files
+      without a snapshot's 30-day expiry, at $0.09 per GiB-month. Untested: how git and
+      `node_modules` perform on it.
+- [ ] **Who can reach sshd.** The raw TCP tunnel is open to the whole internet, guarded only
+      by sshd's key-only login. `Sandbox.create` takes an `inbound_cidr_allowlist`.
+- [ ] **Latency.** A sandbox with memory snapshots can't pin its region, and the vm test box
+      relayed through New York. Terminal latency from Europe is unmeasured.
 
 Running the spike needs a Modal token (`modal token new`) and a workspace with credit: the
-spend limit stops every phase, including restores.
+spend limit stops every phase, including restores. Check `modal billing summary` before a
+long phase.

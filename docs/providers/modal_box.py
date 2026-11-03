@@ -9,7 +9,7 @@ connect, so `~/.ssh/config` is written once:
     Host modal-<box>
       User ateam
       HostKeyAlias modal-<box>
-      ProxyCommand uv run -q --with modal python /path/to/modal_box.py proxy <box>
+      ProxyCommand uv run -q --with modal==1.6.3 python /path/to/modal_box.py proxy <box>
 
     modal_box.py create <box> [--runtime vm]   build the image and start the box
     modal_box.py proxy <box>                    the ProxyCommand: wake the box if it sleeps, then pipe stdio to its sshd
@@ -20,8 +20,9 @@ connect, so `~/.ssh/config` is written once:
 The image authorizes MODAL_BOX_KEY.pub (default ~/.ssh/id_ed25519.pub), plus every key in the file
 MODAL_BOX_AUTHORIZED if that is set. Nothing here runs unless something calls `sleep`: deciding when
 is the engine's job (packages/server/src/sleep/control.ts), and this prototype has no driver for it.
-The box's command starts only sshd. For the phone, tailscaled would have to start there too: it is the
-only place that runs as root and keeps its processes across a snapshot (see modal.md).
+The box's command starts only sshd. For the phone, tailscaled has to start where a snapshot keeps it:
+from the box's command, or over SSH as the box user in userspace mode, never through Modal's exec (see
+modal.md). The SDK is pinned because the calls this makes are `_experimental_` and may change in any release.
 """
 
 import argparse
@@ -36,7 +37,10 @@ import modal
 APP_NAME = "ateam-boxes"
 INSTALL = "https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh"
 SSHD = ["/bin/sh", "-c", "mkdir -p /run/sshd && exec /usr/sbin/sshd -D -e"]
-SIZE = {"cpu": 2, "memory": 4096}
+# The minimum request, allowed to burst to 2 vCPU and 4 GiB: Modal bills the larger of what a sandbox
+# requests and what it uses, so a fixed 2 vCPU bills 2 vCPU all day. This sizing ran the engine in the cost
+# phase, but the snapshot measurements in modal.md were taken at a fixed 2 vCPU and 4 GiB.
+SIZE = {"cpu": (0.125, 2), "memory": (1024, 4096)}
 LIFETIME = 24 * 3600  # Modal's cap on `timeout`
 # A memory snapshot expires 7 days after the first one in its chain, and a snapshot of a restored
 # sandbox keeps that date. Wake cold (from the filesystem snapshot) a little before that.

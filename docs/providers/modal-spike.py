@@ -4,7 +4,7 @@ Each phase creates its own sandboxes, prints what it measured, and terminates th
 
     uv tool install modal && modal token new     # once
     ssh-keygen -t ed25519 -N "" -f /tmp/modal-spike-key
-    MODAL_BOX_KEY=/tmp/modal-spike-key uv run --with modal python docs/providers/modal-spike.py <phase> [--runtime vm]
+    MODAL_BOX_KEY=/tmp/modal-spike-key uv run --with modal==1.6.3 python docs/providers/modal-spike.py <phase> [--runtime vm]
 
 Phases:
     baseline     image with sshd + the engine, SSH over a TCP tunnel, `ateam attach`, TUN/Tailscale probe
@@ -236,7 +236,7 @@ def alias(image, runtime):
     with open(cfg, "w") as f:
         f.write(f"Host modal-{box}\n  User ateam\n  IdentityFile {KEY}\n  HostKeyAlias modal-{box}\n"
                 f"  UserKnownHostsFile /tmp/{box}.known_hosts\n  StrictHostKeyChecking accept-new\n"
-                f"  ProxyCommand uv run -q --with modal python {here}/modal_box.py proxy {box}\n")
+                f"  ProxyCommand uv run -q --with modal==1.6.3 python {here}/modal_box.py proxy {box}\n")
     results = []
 
     def check(label, ok, detail=""):
@@ -360,40 +360,44 @@ def pause(flag: str, why: str) -> None:
         os.remove(flag)
 
 
-TS_STATE = ("tailscale status --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); "
+TS = "tailscale --socket=$HOME/.ts/tailscaled.sock"
+TS_STATE = (f"{TS} status --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); "
             "print(d[\"BackendState\"], (d.get(\"TailscaleIPs\") or [\"-\"])[0], d[\"Self\"][\"ID\"])'")
 
 
 def tailscale(image, runtime):
     """Phone over Tailscale: join the tailnet as an ephemeral node (approve the printed login link), serve the
     engine's WebSocket there, reach it from this machine's tailnet, then again after a memory snapshot.
-    Run it on a tailnet node. Pauses for a by-hand check from the phone at each step."""
+    Run it on a laptop on the tailnet. Pauses for a by-hand check from the phone at each step.
+
+    tailscaled runs as the box user in userspace mode, started over SSH, because that is what survives a
+    memory snapshot. The first run started it through Modal's exec, and on gVisor the node didn't come back:
+    Modal doesn't restore background processes an exec started. Kernel mode would need root, which over SSH
+    nothing gets (sudo is refused), so it would have to start from the sandbox's own command. This version
+    hasn't been rerun; its SSH start was run by hand on gVisor, where it survived a snapshot."""
     label = runtime or "gvisor"
     flag = f"/tmp/modal-spike-{label}.go"
     sb, host, port = start(image, runtime, timeout=3600, _experimental_enable_snapshot=True)
-    userspace = runtime != "vm"
-    # No systemd in either runtime, so tailscaled runs as a plain background process. --state=mem: makes the
-    # node ephemeral: `tailscale logout` removes it at once, and Tailscale does 30-60 min after it goes offline.
-    # Started through Modal's exec, as here, it did not survive the memory restore on gVisor: Modal doesn't
-    # restore background processes an exec started. A box has to start it from the sandbox's own command, or
-    # over SSH (userspace mode runs as the box user; sudo is refused there).
-    in_box(sb, "mkdir -p /run/tailscale; (tailscaled --state=mem: --socket=/run/tailscale/tailscaled.sock "
-               + ("--tun=userspace-networking " if userspace else "") + ">/tmp/tailscaled.log 2>&1 &); sleep 3")
-    in_box(sb, f"(tailscale up --hostname=modal-spike-{label} --accept-dns=false >/tmp/up.log 2>&1 &); sleep 6")
-    print("approve:", in_box(sb, "grep -o 'https://login.tailscale.com/[^ ]*' /tmp/up.log | head -1"), flush=True)
+    # --state=mem: makes the node ephemeral: `tailscale logout` removes it at once, and Tailscale does 30-60 min
+    # after it goes offline, so it can't stand in for a box that sleeps overnight.
+    ssh(host, port, "mkdir -p ~/.ts; nohup /usr/sbin/tailscaled --state=mem: --tun=userspace-networking "
+                    "--statedir=$HOME/.ts --socket=$HOME/.ts/tailscaled.sock >/tmp/tailscaled.log 2>&1 </dev/null & "
+                    f"sleep 3; nohup {TS} up --hostname=modal-spike-{label} --accept-dns=false "
+                    ">/tmp/up.log 2>&1 </dev/null & sleep 6")
+    print("approve:", ssh(host, port, "grep -o 'https://login.tailscale.com/[^ ]*' /tmp/up.log | head -1")[1],
+          flush=True)
     st, s = "", time.time()
     while time.time() - s < 1800:
-        st = in_box(sb, TS_STATE)
+        st = ssh(host, port, TS_STATE)[1]
         if st.startswith("Running"):
             break
         time.sleep(5)
     timed("approved and running", s)
     _, ip, node = st.split()
-    print("tailnet", ip, "node", node, "|", in_box(sb, "ip -br addr show tailscale0 2>&1 | head -1"))
-    # Kernel TUN puts the tailnet IP on an interface the engine can bind. In userspace mode it isn't on
-    # any interface; tailscaled hands inbound connections to the same port on localhost instead.
-    listen = "127.0.0.1:8787" if userspace else f"{ip}:8787"
-    ssh(host, port, f"echo {listen} > ~/.ateam/ws-addr")
+    print("tailnet", ip, "node", node)
+    # In userspace mode the tailnet address isn't on any interface: tailscaled hands inbound connections to
+    # the same port on localhost, so the engine listens there.
+    ssh(host, port, "echo 127.0.0.1:8787 > ~/.ateam/ws-addr")
     engine_check(host, port)
     print("ws listener:", in_box(sb, "ss -ltn | grep 8787"))
     print("hello over the tailnet:", ws_hello(f"{ip}:8787")[:120], flush=True)
@@ -404,20 +408,20 @@ def tailscale(image, runtime):
     sb.terminate()
     time.sleep(30)  # the phone sees the box go away
     s = time.time(); sb = modal.Sandbox._experimental_from_snapshot(snap); timed("memory restore", s)
+    h2, p2 = tunnel(sb)
+    ssh_ready(h2, p2)
     s, st, hello = time.time(), "", ""
     while time.time() - s < 300:
-        st = in_box(sb, TS_STATE)
+        st = ssh(h2, p2, TS_STATE)[1]
         hello = ws_hello(f"{ip}:8787")
         if "protocolVersion" in hello:
             break
         time.sleep(2)
     timed("tailnet WebSocket answers again", s)
     print("after restore:", st, "| same node:", st.split()[1:] == [ip, node], "|", hello[:120])
-    h2, p2 = tunnel(sb)
-    ssh_ready(h2, p2)
     print(ssh(h2, p2, SURVIVORS))
     pause(flag, "check the phone reconnected")
-    print("logout:", in_box(sb, "tailscale logout 2>&1; echo rc=$?"))
+    print("logout:", ssh(h2, p2, f"{TS} logout 2>&1; echo rc=$?"))
     sb.terminate()
 
 
