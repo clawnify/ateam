@@ -213,6 +213,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			view:
 				native.browserView ??
 				(() => Promise.reject(new Error("This client has no browser surface."))),
+			install: (taskId) => call<void>(CH.browserInstall, [taskId]),
 		},
 		search: {
 			sessions: (input) => call<SessionHitDTO[]>(CH.searchSessions, [input]),

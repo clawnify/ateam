@@ -79,7 +79,7 @@ const CONNECT_ATTEMPT_MS = 2_500;
 
 /** Abstract engine events — the transport-neutral superset of what used to be
  *  `win.webContents.send(...)` calls. */
-interface EngineEventMap {
+export interface EngineEventMap {
 	taskUpdated: [TaskDTO];
 	taskRemoved: [string];
 	loopsUpdated: [LoopDTO[]];
