@@ -1,0 +1,161 @@
+name: install.sh
+
+# install.sh is served live from main: the desktop's box setup (INSTALL_URL in
+# apps/desktop/src/main/host.ts), the engine's own self-update (INSTALL_URL in
+# packages/server/src/dispatcher.ts) and the documented one-liner all pipe
+# raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh
+# into bash. A merge is therefore a rollout to every new install, with no release
+# in between, so this runs the PR's copy for real before it gets there. It also
+# runs daily against main, because what install.sh installs changes without any
+# PR touching it: a new release, a new Node 22, npm prebuilds, gh's release assets.
+#
+# Not a required check: the "Protect" ruleset requires `ci` only, and these runs
+# depend on nodejs.org (nvm), GitHub releases and the npm registry.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/server/scripts/install.sh
+      - .github/workflows/install-sh.yml
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: install-sh-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # An awk program over install.sh's output: prints the OK line of its
+  # "[7/7] verify the handshake" step, and fails when that step printed none.
+  HANDSHAKE_OK: |
+    /^==> / { in7 = /^==> \[7\/7\] verify the handshake$/ }
+    in7 && /^    OK  [{].*protocolVersion/ { print; ok = 1 }
+    END { exit !ok }
+  # The engine daemon's command line, as install.sh's daemon_pid() matches it.
+  DAEMON_PAT: ateam-app/cli\.js daemon
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      SHELLCHECK_VERSION: v0.11.0
+      SHELLCHECK_SHA256: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+    steps:
+      - uses: actions/checkout@v4
+      # A pinned, checksummed release rather than the runner image's own copy, so
+      # the lint only changes when this file does, not when the image updates.
+      - name: Install ShellCheck
+        run: |
+          tarball="$RUNNER_TEMP/shellcheck.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.gz"
+          echo "$SHELLCHECK_SHA256  $tarball" | sha256sum -c -
+          tar -xzf "$tarball" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION" >>"$GITHUB_PATH"
+      - run: bash -n packages/server/scripts/install.sh
+      - run: shellcheck --version && shellcheck -S warning packages/server/scripts/install.sh
+
+  e2e:
+    name: e2e (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    # A bare box. No systemd in a container, so no --service: the service job
+    # below covers that.
+    container: debian:bookworm-slim
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Prepare the box (no node, no gh, no sudo)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq curl ca-certificates procps git
+          useradd -m -s /bin/bash tester
+      - uses: actions/checkout@v4
+      # The way the desktop runs it: a login shell piping the script into
+      # `bash -s`, so the script is on stdin and anything in it that reads stdin
+      # would eat the rest of the script. It installs the latest release's dist,
+      # not this PR's build: install.sh on main always installs a release.
+      - name: Run install.sh as the box user
+        run: |
+          install -o tester -m 0644 packages/server/scripts/install.sh /home/tester/install.sh
+          su - tester -c 'cat ~/install.sh | bash -s' 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Check the handshake step printed OK
+        run: awk "$HANDSHAKE_OK" "$RUNNER_TEMP/install.log"
+      - name: Check gh runs as the box user
+        run: su - tester -c 'gh --version'
+      # An upgrade. The desktop's heal on connect and Update button, and the
+      # engine's self-update, all re-run install.sh on a box whose daemon is
+      # running. It must stop that daemon and answer from the new dist (#171).
+      - name: Note the daemon the re-run must replace
+        run: pgrep -f "$DAEMON_PAT" | tee "$RUNNER_TEMP/daemon.pid"
+      - name: Re-run install.sh over the running install
+        run: su - tester -c 'cat ~/install.sh | bash -s' 2>&1 | tee "$RUNNER_TEMP/rerun.log"
+      # The pid check is the one that does not take install.sh's word for it: a
+      # re-run that never stopped the old daemon still prints "stopped" and gets
+      # an OK from it.
+      - name: Check the re-run replaced the running daemon
+        run: |
+          grep -E '^    stopped the old daemon \(pid [0-9]+\)' "$RUNNER_TEMP/rerun.log"
+          awk "$HANDSHAKE_OK" "$RUNNER_TEMP/rerun.log"
+          old="$(cat "$RUNNER_TEMP/daemon.pid")"
+          daemons="$(pgrep -f "$DAEMON_PAT" | paste -sd ' ')"
+          echo "daemon $old -> $daemons"
+          [ "$(wc -w <<<"$daemons")" = 1 ] && [ "$daemons" != "$old" ]
+
+  # --service, which every Ateam client passes, needs systemd, and a container
+  # has none. The runner VM does, with passwordless sudo, so a box user with sudo
+  # gets the system unit, the scope install.sh prefers. Not a bare box (the image
+  # ships Node and gh); the e2e job covers that part.
+  service:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare a box user with passwordless sudo
+        run: |
+          sudo useradd -m -s /bin/bash tester
+          echo 'tester ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/tester >/dev/null
+          sudo chmod 0440 /etc/sudoers.d/tester
+          sudo install -o tester -m 0644 packages/server/scripts/install.sh /home/tester/install.sh
+      - name: Run install.sh --service as the box user
+        run: sudo su - tester -c 'cat ~/install.sh | bash -s -- --service' 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Check the service owns the daemon
+        run: |
+          awk "$HANDSHAKE_OK" "$RUNNER_TEMP/install.log"
+          grep -E '^    service active \(pid [0-9]+\); starts on boot$' "$RUNNER_TEMP/install.log"
+          systemctl is-active ateam.service
+          main="$(systemctl show -p MainPID --value ateam.service)"
+          daemons="$(pgrep -f "$DAEMON_PAT" | paste -sd ' ')"
+          echo "MainPID $main; daemons: $daemons"
+          [ "$daemons" = "$main" ]
+          # Why a system unit and not a user one (#126): the kernel's OOM killer
+          # must pick an agent before the daemon the phone depends on.
+          echo "oom_score_adj $(cat "/proc/$main/oom_score_adj")"
+          [ "$(cat "/proc/$main/oom_score_adj")" = -500 ]
+          echo "$main" >"$RUNNER_TEMP/main.pid"
+      - name: Re-run install.sh --service over the running service
+        run: sudo su - tester -c 'cat ~/install.sh | bash -s -- --service' 2>&1 | tee "$RUNNER_TEMP/rerun.log"
+      - name: Check the upgrade restarted the service
+        run: |
+          grep -E '^    stopped the old daemon \(pid [0-9]+\)' "$RUNNER_TEMP/rerun.log"
+          awk "$HANDSHAKE_OK" "$RUNNER_TEMP/rerun.log"
+          grep -E '^    service active \(pid [0-9]+\); starts on boot$' "$RUNNER_TEMP/rerun.log"
+          systemctl is-active ateam.service
+          old="$(cat "$RUNNER_TEMP/main.pid")"
+          main="$(systemctl show -p MainPID --value ateam.service)"
+          daemons="$(pgrep -f "$DAEMON_PAT" | paste -sd ' ')"
+          echo "MainPID $old -> $main; daemons: $daemons"
+          [ "$main" != "$old" ]
+          [ "$daemons" = "$main" ]

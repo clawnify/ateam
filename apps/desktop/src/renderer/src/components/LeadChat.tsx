@@ -549,6 +549,13 @@ function entryLine(e: LeadThreadEntry): string {
 	return e.text;
 }
 
+/** Where a thread's folded lines rest: the end, or the top of the newest entry
+ *  when the user opened it and it is taller than the box, so it reads from its start. */
+function foldsRest(el: HTMLElement): number {
+	const last = el.lastElementChild as HTMLElement | null;
+	return Math.min(last?.offsetTop ?? 0, el.scrollHeight - el.clientHeight);
+}
+
 /** What the card's head says the task did, from its latest entry of its own. */
 function threadVerb(t: LeadThread): string {
 	const own = t.entries.findLast((e) => e.kind === "agent" || e.kind === "page");
@@ -600,6 +607,19 @@ function ThreadView({
 	const back = useRef<HTMLElement | null>(null);
 	const from = openFrom(entries.map((e) => e.kind));
 	const lastReply = entries.findLast((e) => e.kind === "agent");
+	const folds = useRef<HTMLDivElement>(null);
+	/** Where the user scrolled the folded lines to, or null while they rest on the newest. */
+	const foldsAt = useRef<number | null>(null);
+
+	// The folded lines scroll in a box of their own, resting on the newest
+	// (the line just above the open reply). A reply folding in keeps them
+	// there, unless the user scrolled up in them. Shown again after another
+	// thread of the stack, they come back to where they were.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: from is the trigger, not a value the body reads: a reply folding in adds a line.
+	useLayoutEffect(() => {
+		const el = folds.current;
+		if (el && !hidden) el.scrollTop = foldsAt.current ?? foldsRest(el);
+	}, [hidden, from]);
 
 	// A new reply folds the one before it. Scrolled up reading that one, it
 	// stays open instead, so the text doesn't fold away under the user.
@@ -763,21 +783,32 @@ function ThreadView({
 	return (
 		<div className="lead-agent-body" hidden={hidden}>
 			<div className="lead-thread-entries">
-				{earlier.length > 0 && (
-					<button
-						type="button"
-						className="lead-fold lead-earlier"
-						aria-expanded={showEarlier}
-						onClick={() => setShowEarlier((s) => !s)}
+				{above && (
+					<div
+						ref={folds}
+						className="lead-thread-folds"
+						onScroll={(e) => {
+							const el = e.currentTarget;
+							foldsAt.current = el.scrollTop >= foldsRest(el) - 2 ? null : el.scrollTop;
+						}}
 					>
-						<span className="lead-fold-dot" />
-						<span className="lead-fold-line">
-							{showEarlier ? "Hide earlier" : `${earlier.length} earlier in this thread`}
-						</span>
-					</button>
+						{earlier.length > 0 && (
+							<button
+								type="button"
+								className="lead-fold lead-earlier"
+								aria-expanded={showEarlier}
+								onClick={() => setShowEarlier((s) => !s)}
+							>
+								<span className="lead-fold-dot" />
+								<span className="lead-fold-line">
+									{showEarlier ? "Hide earlier" : `${earlier.length} earlier in this thread`}
+								</span>
+							</button>
+						)}
+						{showEarlier && earlier.map((e) => entry(e, true, false))}
+						{before.map((e) => entry(e, true, false))}
+					</div>
 				)}
-				{showEarlier && earlier.map((e) => entry(e, true, false))}
-				{before.map((e) => entry(e, true, false))}
 				{above && <div className="lead-thread-sep" />}
 				{after.map((e) => entry(e, false, e === entries[from] && e.kind === "agent"))}
 			</div>

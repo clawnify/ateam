@@ -452,9 +452,9 @@ export function App() {
 	const [taskQuery, setTaskQuery] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [info, setInfo] = useState<string | null>(null);
-	// A task just created in the background (⇧⌘⏎ in the composer). The toast is
-	// the way into it, and its sidebar row and board card pulse once so you can
-	// see where it landed. Hovering the toast holds it open.
+	// A task just created in the background (⌘⏎ in the composer, the default).
+	// The toast is the way into it, and its sidebar row and board card pulse once
+	// so you can see where it landed. Hovering the toast holds it open.
 	const [started, setStarted] = useState<{ taskId: string; text: string } | null>(null);
 	const [startedHeld, setStartedHeld] = useState(false);
 	const [pulseId, setPulseId] = useState<string | null>(null);
