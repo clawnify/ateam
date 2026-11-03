@@ -393,8 +393,9 @@ tapping the output never hides the keyboard (the chevron key at the end of the
 shortcut bar does), and a long press selects text for Copy without bringing the
 keyboard up.
 
-The phone opens on **Home**, the desktop sidebar as a list: your projects, then the
-selected project's tasks in status order, then its loops. The pill in the navbar
+The phone opens on **Home**, the desktop sidebar as a list: your projects (a dropdown
+at the top of the desktop sidebar), then the selected project's tasks in status order,
+then its loops. The pill in the navbar
 switches to **Board** (the kanban), **Mission Control** (two live terminals per
 page, paged with the control at the bottom right; tap a tile to highlight it and
 drive it from the shortcut bar, or expand it to type), and **Loops** (create, edit,
