@@ -47,6 +47,7 @@ const api: AteamApi = {
 		cleanupCandidates: (projectId) => ipcRenderer.invoke(CH.tasksCleanupCandidates, projectId),
 		listArchived: (projectId) => ipcRenderer.invoke(CH.tasksListArchived, projectId),
 		setArchived: (id, archived) => ipcRenderer.invoke(CH.tasksSetArchived, id, archived),
+		changeSteps: (taskId) => ipcRenderer.invoke(CH.tasksChangeSteps, taskId),
 	},
 	git: {
 		commit: (taskId, message) => ipcRenderer.invoke(CH.gitCommit, taskId, message),
