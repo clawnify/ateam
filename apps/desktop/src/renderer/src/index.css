@@ -4446,6 +4446,10 @@ input {
 	gap: 6px;
 	margin: 0;
 }
+/* The task's other proposals: they wait on its strip rather than open next. */
+.proposal-more {
+	margin: 0;
+}
 /* What the user decided on the Lead's own permission prompt, kept in the thread. */
 .lead-permission-outcome {
 	font-size: 12px;

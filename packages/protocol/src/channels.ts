@@ -72,6 +72,7 @@ export const CH = {
 	editorOpenUrl: "editor:openUrl",
 	editorInstall: "editor:install",
 	browserView: "browser:view",
+	browserInstall: "browser:install",
 	browserViewUrl: "browser:viewUrl",
 	ptySpawnAgent: "pty:spawnAgent",
 	ptySpawnShell: "pty:spawnShell",

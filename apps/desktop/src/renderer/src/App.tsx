@@ -17,6 +17,7 @@ import type {
 import {
 	type Alias,
 	aliasLabel,
+	BROWSER_NOT_INSTALLED_ERROR,
 	boxSupports,
 	byLatestActivity,
 	describeMergeResult,
@@ -110,8 +111,16 @@ import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
-import { bestMcLayout, MC_PAGE_SIZE, type McChoice, type McLayout } from "./mc-layout";
-import { panelOnScreen, proposalToOpen } from "./proposal-open";
+import {
+	bestMcShape,
+	MC_PAGE_SIZE,
+	type McArea,
+	type McChoice,
+	type McLayout,
+	mcCapacity,
+	mcShapeGrid,
+} from "./mc-layout";
+import { panelOnScreen, proposalToOpen, shownWhileOpen } from "./proposal-open";
 import {
 	activeTerminal,
 	conversationToResume,
@@ -150,7 +159,6 @@ const MC_LAYOUTS = [
 	["split", Columns2, "Split"],
 	["stack", Rows2, "Stack"],
 ] as const;
-const mcLayoutLabel = (l: McLayout) => MC_LAYOUTS.find(([mode]) => mode === l)?.[2] ?? l;
 
 // A saved layout, or null when unset or naming one that no longer exists.
 function storedMcLayout(key: string): McLayout | null {
@@ -169,6 +177,8 @@ const MC_TILE_MIME = "application/x-ateam-tile";
 // How long a dragged tile is held over the grid's top or bottom edge before
 // the page flips.
 const FLIP_HOLD_MS = 500;
+// How long the grid's size must hold still before Auto refits to it.
+const MC_RESIZE_SETTLE_MS = 200;
 
 // Whether a drag carries files from Finder (not a tile, not dragged text).
 const draggingFiles = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
@@ -312,34 +322,6 @@ export function App() {
 		if (!activeProjectId) return;
 		localStorage.setItem(`ateam.mcLayout.${activeProjectId}`, l);
 		setMcLayoutSet((m) => ({ ...m, [activeProjectId]: l }));
-	};
-	// The layout Auto last fitted for the project, kept so the grid reopens in it
-	// (the 3x2's sidebar rail included) until the fresh count says otherwise.
-	const [mcFitSet, setMcFitSet] = useState<Record<string, McLayout>>({});
-	const mcFit =
-		(activeProjectId &&
-			(mcFitSet[activeProjectId] ?? storedMcLayout(`ateam.mcFit.${activeProjectId}`))) ||
-		"grid";
-	const mcLayout: McLayout = mcChoice === "auto" ? mcFit : mcChoice;
-	// Auto fits the grid to its live tiles when Mission Control opens and again
-	// each time a tile arrives or leaves while it is up: deleting a task or
-	// starting one is a change you made and expect the layout to follow. A refit
-	// resizes every terminal (each agent redraws) and re-pages the tiles, so a
-	// grid that must hold still is what the fixed layouts are for. Opening sets
-	// the fit pending, which holds the terminals unmounted until the grid
-	// reports its tile count (see reorderMission).
-	const [mcFitPending, setMcFitPending] = useState(false);
-	// How many tiles the open grid has; null until it reports, after opening.
-	const [mcTileCount, setMcTileCount] = useState<number | null>(null);
-	// Fit to this many tiles. A grid with none yet stays pending, so the first
-	// tiles to arrive are what it fits.
-	const fitMission = (tiles: number) => {
-		if (!activeProjectId || tiles === 0) return;
-		setMcFitPending(false);
-		const l = bestMcLayout(tiles);
-		if (l === mcFit) return;
-		localStorage.setItem(`ateam.mcFit.${activeProjectId}`, l);
-		setMcFitSet((m) => ({ ...m, [activeProjectId]: l }));
 	};
 	// Bumped by the Sync button: Mission Control re-sorts its tiles to the
 	// sidebar's order once, then holds still again (see mcOrder).
@@ -518,7 +500,12 @@ export function App() {
 		try {
 			await fn();
 		} catch (e) {
-			const msg = e instanceof Error ? e.message : String(e);
+			// Electron wraps a main-process error in "Error invoking remote method
+			// '<channel>': Error: …"; the channel name means nothing to the user.
+			const msg = (e instanceof Error ? e.message : String(e)).replace(
+				/^Error invoking remote method '[^']+': (Error: )?/,
+				"",
+			);
 			// The engine refusing to launch into a task mid-delete: expected when
 			// the delete's own kill makes the open panel auto-resume its agent.
 			if (msg.includes(TASK_REMOVING_ERROR)) return;
@@ -946,6 +933,14 @@ export function App() {
 		cleanupOpen ||
 		newIssueOpen ||
 		promptUi != null;
+	// Declared before the effect below so it runs first in a commit: while one of
+	// a task's proposals is open, its others count as shown, so none of them
+	// takes the dialog's place the moment it closes (shownWhileOpen).
+	useEffect(() => {
+		if (!proposalOpen) return;
+		const task = activeTasks.find((t) => t.id === proposalOpen.taskId);
+		for (const id of shownWhileOpen(task)) autoOpenedProposals.current.add(id);
+	}, [proposalOpen, activeTasks]);
 	useEffect(() => {
 		const id = proposalToOpen(panelTask, autoOpenedProposals.current, dialogOpen);
 		if (!id || !panelTask) return;
@@ -988,25 +983,12 @@ export function App() {
 		}
 		setLeadProposal(item);
 	};
-	// Opening Mission Control, which Auto holds the terminals for until it has
-	// fitted: switching to it, or to
-	// another project's or mode's grid while on it. Coming back from a tile
-	// expanded full width is not an opening (the view never changed), even
-	// though the grid remounts. Settled during render, like the rail.
+	// Which grid Mission Control shows: the project's (or repo card's) tasks
+	// or loops. A new key is a new set of tiles.
 	const mcGridKey = `${activeCard?.key ?? activeProjectId}:${mcMode}`;
-	const mcOpenKey = view === "mission" ? mcGridKey : null;
-	const [mcOpenSeen, setMcOpenSeen] = useState(mcOpenKey);
-	if (mcOpenSeen !== mcOpenKey) {
-		setMcOpenSeen(mcOpenKey);
-		setMcTileCount(null);
-		if (mcOpenKey) setMcFitPending(true);
-	}
-	// The Auto button: on the grid it fits what is there now (no tile report is
-	// coming to do it); from anywhere else the opening does it.
+	// The Auto button. The grid fits itself (see MissionControl).
 	const chooseAutoLayout = () => {
 		setMcLayout("auto");
-		if (mcGridShown && mcTileCount) fitMission(mcTileCount);
-		else setMcFitPending(true);
 		goToView("mission");
 	};
 	// Loops of the active repo card (whichever engine holds them), and the task
@@ -1154,11 +1136,7 @@ export function App() {
 	};
 	// Mission Control reports the tiles' order whenever it changes; they lead
 	// the saved order and everything else keeps its relative place behind them.
-	// The report is also the grid's tile count, which Auto fits to: the opening
-	// waits on it, and every later arrival or departure refits.
 	const reorderMission = (tileIds: string[]) => {
-		setMcTileCount(tileIds.length);
-		if (mcChoice === "auto") fitMission(tileIds.length);
 		const onTiles = new Set(tileIds);
 		const next = [...tileIds, ...mcOrder.filter((id) => !onTiles.has(id))];
 		if (next.length === mcOrder.length && next.every((id, i) => id === mcOrder[i])) return;
@@ -2177,18 +2155,12 @@ export function App() {
 						    picking a layout opens the grid in it. Lit like a tab: only on
 						    Mission Control (a task focused over it included), so from the
 						    Board none of them reads as current. Under Auto only Auto is
-						    lit; its tooltip names the layout it fitted. */}
+						    lit. */}
 						<div className="mclayout" role="group" aria-label="Mission Control layout">
 							<button
 								type="button"
 								className={`navbtn icon ${view === "mission" && mcChoice === "auto" ? "active" : ""}`}
-								title={
-									view !== "mission" || mcChoice !== "auto"
-										? "Mission Control: Auto layout (fits the live terminals as they come and go)"
-										: mcFitPending
-											? "Mission Control: Auto layout (fits the terminals once one is live)"
-											: `Mission Control: Auto layout (${mcLayoutLabel(mcLayout)} for the live terminals)`
-								}
+								title="Mission Control: Auto layout (fits the live terminals to the space, with no empty slot)"
 								aria-label="Mission Control: Auto layout"
 								aria-pressed={view === "mission" && mcChoice === "auto"}
 								onClick={chooseAutoLayout}
@@ -2434,8 +2406,7 @@ export function App() {
 							tasks={missionTasks}
 							agents={agents}
 							order={missionOrderIds}
-							layout={mcLayout}
-							holdForFit={mcFitPending && mcChoice === "auto"}
+							layout={mcChoice}
 							syncSeq={mcSyncSeq}
 							onExpand={openFromMission}
 							highlightId={mcHighlightId}
@@ -2624,6 +2595,7 @@ export function App() {
 						<ProposalNote
 							from={task.name}
 							proposal={p}
+							waiting={(task.proposals?.length ?? 1) - 1}
 							onDismiss={() => {
 								setProposalOpen(null);
 								void clearProposal(task.id, p.id);
@@ -3397,6 +3369,13 @@ function TaskPanel({
 	const [browserSrc, setBrowserSrc] = useState<string | null>(null);
 	const [browserOpen, setBrowserOpen] = useState(false);
 	const [browserBusy, setBrowserBusy] = useState<string | null>(null);
+	// The task on screen now. This panel is reused across tasks, not remounted,
+	// and a browser open can outlive a switch (an install takes minutes): its
+	// result must not land in the next task's panel.
+	const shownTaskId = useRef(task.id);
+	useEffect(() => {
+		shownTaskId.current = task.id;
+	}, [task.id]);
 	// Dock the agent terminal as a right sidebar while the editor or the changes
 	// view owns the main area — the agent keeps working in view instead of
 	// vanishing behind it. Default on; the left-sidebar variant was left out.
@@ -3949,16 +3928,46 @@ function TaskPanel({
 								// A loaded view stays connected (noVNC reconnects on its own),
 								// so only the first open asks the box.
 								if (browserSrc) return;
+								// After each await, touch the panel only if it still shows
+								// this task. An error still reaches the toast either way.
+								const forTask = task.id;
+								const stillShown = () => shownTaskId.current === forTask;
 								setBrowserBusy("Opening the browser…");
 								try {
-									setBrowserSrc((await window.ateam.browser.view(task.id)).url);
+									let view: { url: string };
+									try {
+										view = await window.ateam.browser.view(task.id);
+									} catch (e) {
+										// A box without the browser: offer it, as the editor does.
+										// Nothing is installed without a yes.
+										if (!String(e).includes(BROWSER_NOT_INSTALLED_ERROR)) throw e;
+										const ok = await confirm(
+											`Install a browser on "${alias}"?`,
+											`The agents on "${alias}" get a Chrome of their own, which you can watch and take over in this panel. Ateam installs Chrome, a virtual desktop and noVNC there with apt, so the box needs passwordless sudo and x86_64 Debian or Ubuntu. It takes a few minutes.`,
+										);
+										if (!ok) {
+											if (stillShown()) setBrowserOpen(false);
+											return;
+										}
+										if (stillShown())
+											setBrowserBusy(
+												`Installing the browser on "${alias}". This takes a few minutes…`,
+											);
+										await window.ateam.browser.install(task.id).catch((err) => {
+											// A box from before browser:install: its own not-installed
+											// message carries the command to run there instead.
+											throw /Unknown method/.test(String(err)) ? e : err;
+										});
+										view = await window.ateam.browser.view(task.id);
+									}
+									if (stillShown()) setBrowserSrc(view.url);
 								} catch (e) {
-									setBrowserOpen(false);
+									if (stillShown()) setBrowserOpen(false);
 									if (/Unknown method/.test(String(e)))
 										throw new Error(`Update Ateam on "${alias}" to open its browser here.`);
 									throw e;
 								} finally {
-									setBrowserBusy(null);
+									if (stillShown()) setBrowserBusy(null);
 								}
 							});
 						}}
@@ -4203,7 +4212,6 @@ function MissionControl({
 	agents,
 	order,
 	layout,
-	holdForFit,
 	syncSeq,
 	onExpand,
 	highlightId,
@@ -4225,10 +4233,8 @@ function MissionControl({
 	agents: AgentDTO[];
 	/** The rank tiles take on mount and on Sync; read at no other time. */
 	order: string[];
-	layout: McLayout;
-	/** Auto is about to fit `layout` to the tile count this grid reports, so no
-	 *  terminal should mount at a size it is about to leave. */
-	holdForFit: boolean;
+	/** A fixed layout, or "auto": each page shaped to the grid's own size. */
+	layout: McChoice;
 	/** Bumped by the Sync button: re-sort the tiles to `order` once. */
 	syncSeq: number;
 	onExpand: (task: TaskDTO, terminalId: string) => void;
@@ -4263,11 +4269,45 @@ function MissionControl({
 	const tilesRef = useRef(tiles);
 	tilesRef.current = tiles;
 
+	// Auto shapes each page to the grid's size, so the grid measures itself:
+	// once before the first paint, so no terminal mounts at a size Auto is
+	// about to leave, then each time a resize settles. Mid-resize the tiles
+	// just stretch, as they always have; the shape and the page size move once
+	// the size holds still, because a refit redraws every agent and can
+	// re-page the tiles. Measured under any layout, so picking Auto fits at once.
+	const wrapRef = useRef<HTMLDivElement>(null);
+	const [fit, setFit] = useState<{ area: McArea; capacity: number } | null>(null);
+	useLayoutEffect(() => {
+		const el = wrapRef.current;
+		if (!el) return;
+		const measure = () => {
+			const area = { width: el.clientWidth, height: el.clientHeight };
+			if (area.width === 0 || area.height === 0) return;
+			setFit((f) =>
+				f && f.area.width === area.width && f.area.height === area.height
+					? f
+					: { area, capacity: mcCapacity(area, f?.capacity) },
+			);
+		};
+		measure();
+		let timer = 0;
+		const observer = new ResizeObserver(() => {
+			window.clearTimeout(timer);
+			timer = window.setTimeout(measure, MC_RESIZE_SETTLE_MS);
+		});
+		observer.observe(el);
+		return () => {
+			observer.disconnect();
+			window.clearTimeout(timer);
+		};
+	}, []);
+
 	// Pages instead of a scroll area: each layout shows a fixed number of tiles
-	// at once, and the rest live on further pages. "In view" is then a crisp
-	// set — exactly what the reorder-skip below needs.
+	// at once (Auto, as many as its grid fits), and the rest live on further
+	// pages. "In view" is then a crisp set — exactly what the reorder-skip
+	// below needs.
 	const [page, setPage] = useState(0);
-	const pageSize = MC_PAGE_SIZE[layout];
+	const pageSize = layout === "auto" ? (fit?.capacity ?? 1) : MC_PAGE_SIZE[layout];
 	const pageCount = Math.max(1, Math.ceil(tiles.length / pageSize));
 	// Clamp in-render (sessions can die, the layout can change page size) so a
 	// stale page never shows an empty grid, then sync the state.
@@ -4601,37 +4641,55 @@ function MissionControl({
 			</button>
 		) : null;
 
+	// Every return is inside the same .mc-wrap, so the element Auto measures
+	// stays put from the first fetch to the last tile.
 	if (tiles.length === 0) {
-		if (!loaded) return <div className="mc" data-layout={layout} />;
+		if (!loaded)
+			return (
+				<div className="mc-wrap" ref={wrapRef}>
+					<div className="mc" data-layout={layout} />
+				</div>
+			);
 		// mc-none: centered in the whole area, not in the layout's first cell.
 		return (
-			<div className="mc mc-none" data-layout={layout}>
-				{mode === "loops" ? (
-					<div className="empty">
-						No loop sessions running.
-						<br />A loop shows up here while its session is live.
-					</div>
-				) : (
-					<div className="empty">
-						No live agents yet.
-						<br />
-						Start a task to watch its agent work here.
-						{newTaskButton && (
-							<>
-								<br />
-								{newTaskButton}
-							</>
-						)}
-					</div>
-				)}
+			<div className="mc-wrap" ref={wrapRef}>
+				<div className="mc mc-none" data-layout={layout}>
+					{mode === "loops" ? (
+						<div className="empty">
+							No loop sessions running.
+							<br />A loop shows up here while its session is live.
+						</div>
+					) : (
+						<div className="empty">
+							No live agents yet.
+							<br />
+							Start a task to watch its agent work here.
+							{newTaskButton && (
+								<>
+									<br />
+									{newTaskButton}
+								</>
+							)}
+						</div>
+					)}
+				</div>
 			</div>
 		);
 	}
-	// The tiles are counted; the layout to show them in lands next render.
-	if (holdForFit) return <div className="mc" data-layout={layout} />;
+	// Auto without a size yet: hold the terminals until it has one.
+	if (layout === "auto" && !fit)
+		return (
+			<div className="mc-wrap" ref={wrapRef}>
+				<div className="mc" data-layout={layout} />
+			</div>
+		);
+	// Auto's page: lines of tiles that fill the grid, every tile a cell and
+	// every cell a tile. The last page is shaped for the tiles it has.
+	const autoGrid =
+		layout === "auto" && fit ? mcShapeGrid(bestMcShape(visible.length, fit.area)) : null;
 
 	return (
-		<div className="mc-wrap">
+		<div className="mc-wrap" ref={wrapRef}>
 			{/* Keyed by page: flipping remounts the grid, and TerminalView replays
 			    its ring-buffer snapshot on mount, so a page flip is a clean swap.
 			    The slide follows the flip direction, a "perfect scroll" to the
@@ -4640,11 +4698,12 @@ function MissionControl({
 				key={clampedPage}
 				className="mc"
 				data-layout={layout}
+				style={autoGrid?.container}
 				initial={dirRef.current === 0 ? false : { y: dirRef.current * 32, opacity: 0.3 }}
 				animate={{ y: 0, opacity: 1 }}
 				transition={springy}
 			>
-				{visible.map(({ task, sessions }) => {
+				{visible.map(({ task, sessions }, i) => {
 					const shown = activeTerminal(sessions, shownByTask[task.id]?.terminalId ?? null);
 					if (!shown) return null; // a task with no live session is not a tile
 					const tabs = sessionTabs(sessions, agents);
@@ -4670,6 +4729,7 @@ function MissionControl({
 							// only: `layout` alone would scale a terminal mid-flight when the
 							// page holds a different number of tiles than it did before.
 							layout="position"
+							style={autoGrid?.tiles[i]}
 							initial={{ opacity: 0 }}
 							animate={{ opacity: 1 }}
 							transition={{ layout: springy, opacity: { duration: 0.22 } }}
@@ -4802,8 +4862,9 @@ function MissionControl({
 				})}
 				{/* A page with room left (only ever the last one) offers a new task
 				    in its first open slot; the tile that task grows takes the slot,
-				    and the offer moves on to the next one, gliding like the tiles. */}
-				{newTaskButton && visible.length < pageSize && (
+				    and the offer moves on to the next one, gliding like the tiles.
+				    Auto leaves no open slot: its tiles fill the page. */}
+				{newTaskButton && !autoGrid && visible.length < pageSize && (
 					<motion.div
 						key="mc-slot"
 						className="mc-slot"

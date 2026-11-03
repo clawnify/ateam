@@ -259,7 +259,8 @@ export function LoopForm({
 	const onKeys = (e: React.KeyboardEvent) => {
 		if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
 			e.preventDefault();
-			void submit();
+			// Only a fresh press: a held ⌘⏎ repeats (PromptComposer has the same).
+			if (!e.repeat) void submit();
 		}
 		if (e.key === "Escape") onCancel();
 	};

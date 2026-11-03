@@ -67,6 +67,7 @@ const ENTITY = new Set<string>([
 	CH.editorOpen, // taskId — the editor lives on the task's engine
 	CH.editorInstall, // taskId — installs on that same engine
 	CH.browserView, // taskId — the browser lives on the task's box
+	CH.browserInstall, // taskId — installs on that same box
 	CH.agentsInstall, // {projectId} — installs the agent CLI on that engine's machine
 	CH.ptySpawnAgent, // {taskId}
 	CH.ptySpawnShell, // {taskId}

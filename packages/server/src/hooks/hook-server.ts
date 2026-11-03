@@ -69,7 +69,8 @@ export type FollowUpResolver = (terminalId: string, eventType: string) => string
 
 /**
  * The peer inbox behind `/inbox/wait` (see peer-messages.ts): token checks and
- * the long-poll a listener holds open.
+ * the long-poll a listener holds open. `/inbox/user/*` is the Claude mod's: the
+ * user's own words, leased until it acks them.
  */
 export interface PeerInboxHandlers {
 	verify(terminalId: string, token: string): boolean;
@@ -82,6 +83,16 @@ export interface PeerInboxHandlers {
 		>;
 		cancel: () => void;
 	};
+	waitUser(terminalId: string): {
+		result: Promise<
+			| { kind: "message"; deliveryId: string; text: string }
+			| { kind: "timeout" }
+			| { kind: "superseded" }
+			| { kind: "gone" }
+		>;
+		cancel: () => void;
+	};
+	ackUser(terminalId: string, deliveryId: string, entered: boolean): boolean;
 }
 
 /** Claude Code's PermissionRequest hook, held open until someone decides
@@ -95,6 +106,27 @@ export type PermissionHandler = (req: {
 
 /** Only localhost origins may reach the MCP endpoint (DNS-rebinding guard). */
 const LOCAL_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
+
+/** How long a busy saved hook port is retried before a new one is picked. */
+const PREFERRED_RETRY_MS = 5_000;
+const PREFERRED_RETRY_EVERY_MS = 250;
+/**
+ * Where a new hook port is picked: below both macOS's ephemeral range
+ * (49152-65535) and Linux's default one (32768-60999), so another program's
+ * listen(0) on 127.0.0.1 is never handed the port while the app is down.
+ * (On macOS that is the only kind of use that blocks this bind: an outgoing
+ * connection or a 0.0.0.0 listener on the same port does not.)
+ */
+export const FRESH_PORT_MIN = 20_000;
+export const FRESH_PORT_MAX = 32_767;
+const FRESH_PORT_PICKS = 10;
+
+export interface HookServerStartOptions {
+	/** Where the "saved port given up" line goes. Defaults to console.log. */
+	log?: (line: string) => void;
+	/** How long a busy saved port is retried. Tests shorten it. */
+	retryForMs?: number;
+}
 
 /**
  * Tiny localhost HTTP server that agent hooks ping to report lifecycle events.
@@ -137,7 +169,7 @@ export class HookServer extends EventEmitter {
 		this.followUp = resolve;
 	}
 
-	async start(preferred?: number): Promise<number> {
+	async start(preferred?: number, opts: HookServerStartOptions = {}): Promise<number> {
 		this.server = http.createServer((req, res) => {
 			const json = (status: number, body: unknown) => {
 				res.writeHead(status, { "content-type": "application/json" });
@@ -296,6 +328,43 @@ export class HookServer extends EventEmitter {
 					return;
 				}
 
+				// The Claude mod (agent-setup): the user's own words for this
+				// terminal, which it submits as the user's prompt. Same answers as
+				// /inbox/wait, the 200 a JSON { deliveryId, text } it then acks with
+				// POST /inbox/user/ack?deliveryId=&entered=1|0 (204, or 404 for a
+				// lease this terminal does not hold).
+				if (url.pathname === "/inbox/user/wait" || url.pathname === "/inbox/user/ack") {
+					const terminalId = url.searchParams.get("terminalId") ?? "";
+					const token = (req.headers["x-ateam-terminal-token"] as string | undefined) ?? "";
+					if (!this.inbox) return json(503, { error: "inbox not ready" });
+					if (!terminalId || !token || !this.inbox.verify(terminalId, token)) {
+						res.writeHead(401);
+						res.end();
+						return;
+					}
+					if (req.method === "POST" && url.pathname === "/inbox/user/ack") {
+						const deliveryId = url.searchParams.get("deliveryId") ?? "";
+						const entered = url.searchParams.get("entered") === "1";
+						res.writeHead(this.inbox.ackUser(terminalId, deliveryId, entered) ? 204 : 404);
+						res.end();
+						return;
+					}
+					if (req.method === "GET" && url.pathname === "/inbox/user/wait") {
+						const { result, cancel } = this.inbox.waitUser(terminalId);
+						res.on("close", cancel);
+						result.then((o) => {
+							if (res.writableEnded || res.destroyed) return;
+							if (o.kind === "message") {
+								json(200, { deliveryId: o.deliveryId, text: o.text });
+							} else {
+								res.writeHead(o.kind === "timeout" ? 204 : o.kind === "superseded" ? 409 : 410);
+								res.end();
+							}
+						});
+						return;
+					}
+				}
+
 				// Board tools as plain GET (debug / non-MCP clients). The MCP
 				// endpoint above is the path agents actually use.
 				if (req.method === "GET" && url.pathname === "/board/get") {
@@ -399,33 +468,60 @@ export class HookServer extends EventEmitter {
 			}
 		});
 
-		// Prefer the port persisted from the previous run so agents that survived
-		// an app restart (their env still points at the old port) keep reporting
-		// status. Fall back to an ephemeral port if it's taken.
+		/** Resolves null once bound, or the bind error. */
 		const tryListen = (port: number) =>
-			new Promise<boolean>((resolve) => {
+			new Promise<NodeJS.ErrnoException | null>((resolve) => {
 				const srv = this.server;
-				if (!srv) return resolve(false);
-				const onError = () => {
+				if (!srv) return resolve(new Error("hook server is gone"));
+				const onError = (err: NodeJS.ErrnoException) => {
 					srv.removeListener("listening", onListening);
-					resolve(false);
+					resolve(err);
 				};
 				const onListening = () => {
 					srv.removeListener("error", onError);
-					resolve(true);
+					resolve(null);
 				};
 				srv.once("error", onError);
 				srv.once("listening", onListening);
 				srv.listen(port, "127.0.0.1");
 			});
 
-		let bound = false;
-		if (preferred && preferred > 0) bound = await tryListen(preferred);
-		if (!bound) bound = await tryListen(0);
-		if (!bound) throw new Error("hook server could not bind to a port");
+		// Agents read the port once, at launch (ATEAM_HOOK_PORT and the board MCP
+		// URL), so the port saved by the previous run is the only one an agent that
+		// outlived the restart can reach. Keep it whenever it is free, even when it
+		// sits inside the ephemeral range. If it is busy, retry for a while: during
+		// an update relaunch the quitting instance can still hold it (#400).
+		const hasPreferred = !!preferred && preferred > 0;
+		let preferredErr: NodeJS.ErrnoException | null = null;
+		if (hasPreferred) {
+			const deadline = Date.now() + (opts.retryForMs ?? PREFERRED_RETRY_MS);
+			preferredErr = await tryListen(preferred);
+			while (preferredErr?.code === "EADDRINUSE" && Date.now() < deadline) {
+				await new Promise((r) => setTimeout(r, PREFERRED_RETRY_EVERY_MS));
+				preferredErr = await tryListen(preferred);
+			}
+		}
+
+		// A new port (first run, or the saved one stayed busy) comes from below
+		// the ephemeral ranges (see FRESH_PORT_MIN). listen(0) is the last resort.
+		if (!hasPreferred || preferredErr) {
+			let err: NodeJS.ErrnoException | null = new Error("not tried");
+			for (let i = 0; err && i < FRESH_PORT_PICKS; i++) {
+				const span = FRESH_PORT_MAX - FRESH_PORT_MIN + 1;
+				err = await tryListen(FRESH_PORT_MIN + Math.floor(Math.random() * span));
+			}
+			if (err) err = await tryListen(0);
+			if (err) throw new Error(`hook server could not bind to a port: ${err.message}`);
+		}
 
 		const addr = this.server.address();
 		this.port = typeof addr === "object" && addr ? addr.port : 0;
+		if (preferredErr) {
+			const log = opts.log ?? ((line: string) => console.log(line));
+			log(
+				`[ateam] hook port ${preferred} given up (${preferredErr.code ?? preferredErr.message}); now on ${this.port}. Agents started before this restart can't reach Ateam until they are restarted.`,
+			);
+		}
 		return this.port;
 	}
 

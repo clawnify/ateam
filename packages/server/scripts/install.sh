@@ -401,8 +401,16 @@ if ! bash -lc 'command -v gh' >/dev/null 2>&1; then
 	step "install the GitHub CLI (gh)"
 	GH_ARCH="$(uname -m)"
 	case "$GH_ARCH" in x86_64) GH_ARCH=amd64 ;; aarch64 | arm64) GH_ARCH=arm64 ;; esac
-	GH_TAG="$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)"
-	if [ -n "$GH_TAG" ]; then
+	# The tag comes from where github.com/…/releases/latest redirects (…/releases/tag/vX.Y.Z),
+	# not from api.github.com: the API allows 60 unauthenticated calls an hour per IP,
+	# which image builds sharing an egress IP can run out of. No pipeline, so nothing
+	# can race under pipefail, and `|| true` keeps a failed lookup from aborting the
+	# install. Any other final URL leaves the tag empty, which skips gh.
+	GH_URL="$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/cli/cli/releases/latest || true)"
+	case "$GH_URL" in */releases/tag/v*) GH_TAG="${GH_URL##*/}" ;; *) GH_TAG="" ;; esac
+	if [ -z "$GH_TAG" ]; then
+		info "could not look up the latest gh release, so clone/push will need it installed later"
+	else
 		GH_TMP="$(mktemp -d)"
 		if curl -fsSL "https://github.com/cli/cli/releases/download/${GH_TAG}/gh_${GH_TAG#v}_linux_${GH_ARCH}.tar.gz" |
 			tar -xz -C "$GH_TMP" 2>/dev/null; then
