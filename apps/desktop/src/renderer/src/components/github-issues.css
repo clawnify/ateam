@@ -3,12 +3,18 @@
 	width: 100%;
 	text-align: left;
 }
+/* Clamp needs overflow: hidden, or lines past the third still paint over the
+   labels and meta below. A long path or URL in a title breaks instead of
+   running out of the card. */
 .card.issue-card .name {
 	white-space: normal;
 	line-height: 1.5;
 	display: -webkit-box;
 	-webkit-line-clamp: 3;
+	line-clamp: 3;
 	-webkit-box-orient: vertical;
+	overflow: hidden;
+	overflow-wrap: anywhere;
 }
 .issue-source {
 	display: flex;
