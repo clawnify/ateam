@@ -3,9 +3,15 @@ import type { TaskDTO } from "@ateam/protocol";
 
 // The pure half needs no Electron; stub the import so the module loads under bun.
 mock.module("electron", () => ({ Notification: class {} }));
-const { FRESH_MS, plainText, proposalNotice, questionNotice, waitNotice } = await import(
-	"./wait-notify"
-);
+const {
+	createWaitNotifier,
+	FRESH_MS,
+	plainText,
+	proposalNotice,
+	questionNotice,
+	stillDue,
+	waitNotice,
+} = await import("./wait-notify");
 
 const NOW = 1_700_000_000_000;
 
@@ -156,5 +162,71 @@ describe("plainText", () => {
 		expect(plainText("rm *.tmp and *.log, keep snake_case_name")).toBe(
 			"rm *.tmp and *.log, keep snake_case_name",
 		);
+	});
+});
+
+// While a project's own window is in front, other projects' banners wait until
+// the user leaves it; its own project's show as usual.
+describe("banners while a project window is in front", () => {
+	const asked = (id: string, projectId: string, askedAt = Date.now()) =>
+		task({
+			id,
+			projectId,
+			name: id,
+			waitingFiredAt: null,
+			question: { id: `${id}-q`, text: `${id} asks`, options: [], allowText: true, askedAt },
+		} as Partial<TaskDTO>);
+
+	function setup() {
+		let focused: string | null = "web";
+		const shown: string[] = [];
+		const n = createWaitNotifier(() => {}, {
+			focusedProject: () => focused,
+			show: (notice) => shown.push(notice.title),
+		});
+		return { n, shown, focus: (p: string | null) => (focused = p) };
+	}
+
+	it("shows its own project's banners and holds the rest until the user leaves", () => {
+		const { n, shown } = setup();
+		const api = asked("api-task", "api");
+		n.notify(asked("web-task", "web"));
+		n.notify(api);
+		expect(shown).toEqual(["web-task"]);
+		n.release();
+		expect(shown).toEqual(["web-task", "api-task"]);
+		// Once each: a later update of the same question (a rename) shows nothing more.
+		n.notify({ ...api, name: "renamed" } as TaskDTO);
+		n.release();
+		expect(shown).toEqual(["web-task", "api-task"]);
+	});
+
+	it("drops a held banner whose question was answered meanwhile", () => {
+		const { n, shown } = setup();
+		const t = asked("api-task", "api");
+		n.notify(t);
+		n.notify({ ...t, question: null } as TaskDTO);
+		n.release();
+		expect(shown).toEqual([]);
+	});
+
+	it("holds nothing from the main window or another app, and lets held ones go then", () => {
+		const { n, shown, focus } = setup();
+		n.notify(asked("api-task", "api"));
+		expect(shown).toEqual([]);
+		// The window closed without a blur: the next update lets them go.
+		focus(null);
+		n.notify(asked("docs-task", "docs"));
+		expect(shown).toEqual(["api-task", "docs-task"]);
+	});
+
+	it("still shows a banner held longer than the freshness window", () => {
+		const at = Date.now();
+		const t = asked("api-task", "api", at);
+		const key = questionNotice(t, new Set(), at)?.key ?? "";
+		// Judged from when it was held, not from now.
+		expect(stillDue(key, t, at)).toBe(true);
+		expect(stillDue(key, { ...t, question: null } as TaskDTO, at)).toBe(false);
+		expect(questionNotice(t, new Set(), at + FRESH_MS + 1)).toBeNull();
 	});
 });
