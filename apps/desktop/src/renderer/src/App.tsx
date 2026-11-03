@@ -122,6 +122,7 @@ import {
 	type McLayout,
 	mcCapacity,
 	mcShapeGrid,
+	placeArrivals,
 } from "./mc-layout";
 import { panelOnScreen, proposalToOpen, shownWhileOpen } from "./proposal-open";
 import {
@@ -143,6 +144,7 @@ import {
 	toggled,
 	unscopedView,
 } from "./sidebar-view";
+import { draggedTaskId, TASK_DRAG_MIME } from "./task-drag";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
 import { useBoxesNeedingYou } from "./useBoxesNeedingYou";
@@ -729,16 +731,20 @@ export function App() {
 	// Opening a task on a box that isn't held is the user asking for that box, the
 	// same intent as starting a task on it, so it is woken the same way. Only an
 	// open does this: a selection restored on launch must never wake a box.
-	const wakeBox = useCallback(async (alias: string) => {
-		if (wakingRef.current === alias) return;
+	// True once this call brought the box up; false when it failed, or when
+	// another wake of the same box is still under way.
+	const wakeBox = useCallback(async (alias: string): Promise<boolean> => {
+		if (wakingRef.current === alias) return false;
 		wakingRef.current = alias;
 		setWakingAlias(alias);
 		try {
 			await window.ateamHost.connect(alias, { wake: true });
+			return true;
 		} catch (e) {
 			setError(
 				`Couldn't reach ${aliasLabel(alias)}: ${e instanceof Error ? e.message : String(e)}`,
 			);
+			return false;
 		} finally {
 			wakingRef.current = null;
 			setWakingAlias(null);
@@ -1333,6 +1339,16 @@ export function App() {
 		markRead(task.id);
 		setPanelMode("full");
 	};
+	// Over the Mission Control grid a click on a task (a sidebar row, a Lead
+	// chat pill) points at the task's tile (white edge, keyboard focus) rather
+	// than covering the grid. A task with no live session has no tile, so
+	// Mission Control hands it back and it opens full width as before (see
+	// onJumpMissing).
+	const pointAtTile = (t: TaskDTO) => {
+		markRead(t.id);
+		setMcHighlightId(t.id);
+		setMcJump((j) => ({ id: t.id, seq: (j?.seq ?? 0) + 1 }));
+	};
 	// Clicking the task you're already focused on closes it, revealing the view
 	// underneath — the lit tab already tells you which one you'll land on. Only
 	// the sidebar toggles: a search hit or a board card means "take me there",
@@ -1342,17 +1358,44 @@ export function App() {
 			setSelectedTaskId(null);
 			return;
 		}
-		// Over the Mission Control grid a sidebar click points at the task's tile
-		// (white edge, keyboard focus) rather than covering the grid. A task with
-		// no live session has no tile, so Mission Control hands it back and it
-		// opens full width as before (see onJumpMissing).
-		if (mcGridShown) {
-			markRead(t.id);
-			setMcHighlightId(t.id);
-			setMcJump((j) => ({ id: t.id, seq: (j?.seq ?? 0) + 1 }));
-			return;
-		}
+		if (mcGridShown) return pointAtTile(t);
 		openTask(t);
+	};
+	// A task pill in the Lead chat: its tile when the grid is showing beside
+	// the chat, else the task itself.
+	const openFromLead = (t: TaskDTO) => (mcGridShown ? pointAtTile(t) : openTask(t));
+	// A Lead pill dropped on Mission Control for a task with no tile: wake its
+	// agent so it joins the grid. The same pick as the task panel's "Resume
+	// last conversation" (resumeLast): the newest agent tab a restart or the
+	// reaper put to sleep, else the latest conversation in the worktree. True
+	// once an agent is live, false when none could be started.
+	const wakeIntoMission = async (task: TaskDTO): Promise<boolean> => {
+		// A box that didn't come up has already said why (wakeBox).
+		const alias = offlineAliasOf(task);
+		if (alias && !(await wakeBox(alias))) return false;
+		let woke = false;
+		await run(async () => {
+			const [live, restorable] = await Promise.all([
+				window.ateam.pty.listForTask(task.id),
+				window.ateam.pty.listRestorable(task.id),
+			]);
+			// Live after all (it woke between the drag and the drop): its tile is on its way.
+			if (tileSessions(live).length === 0) {
+				// The engine lists latest first.
+				const newest = restorable.find((s) => s.agentId !== "shell");
+				if (newest)
+					await window.ateam.pty.restoreSession({ taskId: task.id, terminalId: newest.terminalId });
+				else
+					await window.ateam.pty.spawnAgent({
+						taskId: task.id,
+						agentId: task.agentId ?? agents.find((a) => a.available)?.id ?? "claude",
+						yolo: false,
+						resume: true,
+					});
+			}
+			woke = true;
+		});
+		return woke;
 	};
 	// A sidebar row or rail tile. An archived one is brought back as it opens: the
 	// engine sends a removal for every write to an archived task (a git-status
@@ -2440,6 +2483,7 @@ export function App() {
 								if (t) openTask(t);
 							}}
 							onReorder={reorderMission}
+							onWake={wakeIntoMission}
 							onNewTask={activeProjectId ? newTask : undefined}
 						/>
 					) : view === "settings" ? (
@@ -2448,7 +2492,7 @@ export function App() {
 						<LeadChat
 							tasks={allTasks}
 							projects={projects}
-							onOpenTask={openTask}
+							onOpenTask={openFromLead}
 							onOpenProposal={openLeadProposal}
 							scope={boundProject?.name}
 						/>
@@ -2480,7 +2524,7 @@ export function App() {
 						<LeadChat
 							tasks={allTasks}
 							projects={projects}
-							onOpenTask={openTask}
+							onOpenTask={openFromLead}
 							onOpenProposal={openLeadProposal}
 							onHide={() => setLeadSide(false)}
 							scope={boundProject?.name}
@@ -4261,6 +4305,7 @@ function MissionControl({
 	jump,
 	onJumpMissing,
 	onReorder,
+	onWake,
 	onNewTask,
 }: {
 	/** Which list `tasks` was drawn from; only the empty state and the New
@@ -4289,6 +4334,8 @@ function MissionControl({
 	onJumpMissing: (taskId: string) => void;
 	/** The tiles' order changed (a tile arrived, died, or was dragged). */
 	onReorder: (tileIds: string[]) => void;
+	/** Wakes the agent of a task dropped here with no tile; false if none started. */
+	onWake: (task: TaskDTO) => Promise<boolean>;
 	/** Opens the task composer. Absent when there is no project to create in. */
 	onNewTask?: () => void;
 }) {
@@ -4409,12 +4456,17 @@ function MissionControl({
 	// grid for that moment rather than flashing "No live agents yet".
 	const [loaded, setLoaded] = useState(false);
 	const rankRef = useRef(rank);
+	// Where the tile of a task dropped here with no tile goes once its agent is
+	// up: before this tile, or at the end for null. Cleared when it arrives.
+	const placeRef = useRef(new Map<string, string | null>());
+	// The tasks whose wake is still under way (dropTask).
+	const wakingTasksRef = useRef(new Set<string>());
 
 	// Lay the collected sessions out. `force` (mount, Sync) sorts every tile by
 	// the rank. Otherwise tiles keep the slots they have: a tile whose session
 	// died leaves, and a task that just got a live session joins at the end
-	// (by rank among ones arriving together), so nothing already on screen
-	// moves except to close a gap.
+	// (by rank among ones arriving together), or where it was dropped, so
+	// nothing already on screen moves except to close a gap or make room for it.
 	const resort = useCallback((force = false) => {
 		const r = rankRef.current;
 		const byRank = (a: { task: TaskDTO }, b: { task: TaskDTO }): number =>
@@ -4434,7 +4486,7 @@ function MissionControl({
 				});
 				const had = new Set(kept.map((t) => t.task.id));
 				const arrived = sessionsRef.current.filter((t) => !had.has(t.task.id)).sort(byRank);
-				next = [...kept, ...arrived];
+				next = placeArrivals(kept, arrived, (t) => t.task.id, placeRef.current);
 			}
 			// Keep the previous array when nothing moved so downstream renders
 			// (and their terminals) see a stable identity.
@@ -4457,6 +4509,7 @@ function MissionControl({
 	onReorderRef.current = onReorder;
 	useEffect(() => {
 		if (loaded) onReorderRef.current(tiles.map((t) => t.task.id));
+		for (const t of tiles) placeRef.current.delete(t.task.id);
 	}, [tiles, loaded]);
 
 	// Sessions announce themselves, so this listens instead of polling. Both spawn
@@ -4674,6 +4727,72 @@ function MissionControl({
 		onDragLeave: stopFlipTimer,
 	});
 
+	// A task pill dragged from the Lead chat (task-drag.ts). On a tile, a task
+	// that has a tile trades places with it, as a dragged tile does; one with
+	// no tile has its agent woken and its tile takes that slot, the tiles from
+	// there on moving along one. Off the tiles (an empty grid, the New task
+	// slot) only a task with no tile lands, at the end. Either way it ends up
+	// highlighted and focused. Tasks outside this grid (another project, a
+	// loop in Tasks mode) aren't taken.
+	const pillTask = (e: React.DragEvent): string | null => {
+		const id = draggedTaskId(e);
+		return id && tasksRef.current.some((t) => t.id === id) ? id : null;
+	};
+	const hasTile = (id: string) => tilesRef.current.some((t) => t.task.id === id);
+	const dropTask = (id: string, onto: string | null) => {
+		const task = tasksRef.current.find((t) => t.id === id);
+		if (!task) return;
+		onHighlight(id);
+		pendingFocusRef.current = id;
+		if (hasTile(id)) {
+			if (onto) swapTiles(id, onto);
+			return;
+		}
+		placeRef.current.set(id, onto);
+		// Its agent is already waking from an earlier drop: this one only moves
+		// the spot. A second wake could start a second agent on the same
+		// conversation, since the engine only joins a resume by id (sessions.ts).
+		// Once the wake returns its agent is live, and a later wake sees it.
+		if (wakingTasksRef.current.has(id)) return;
+		wakingTasksRef.current.add(id);
+		void onWake(task).then((woke) => {
+			wakingTasksRef.current.delete(id);
+			if (woke) return;
+			placeRef.current.delete(id);
+			if (pendingFocusRef.current === id) pendingFocusRef.current = null;
+		});
+	};
+	const offTile = (e: React.DragEvent) => !(e.target as Element).closest(".tile");
+	const wrapDropProps = {
+		onDragOver: (e: React.DragEvent) => {
+			const id = pillTask(e);
+			if (!id) return;
+			// The page-flip strips, as for a dragged tile.
+			if (!dragging) setDragging(true);
+			if (!offTile(e)) return; // the tile under it answers
+			const takes = !hasTile(id);
+			if (takes) {
+				e.preventDefault();
+				e.dataTransfer.dropEffect = "move";
+			}
+			if (dropTarget !== (takes ? "" : null)) setDropTarget(takes ? "" : null);
+		},
+		onDragLeave: (e: React.DragEvent) => {
+			if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+			setDropTarget((d) => (d === "" ? null : d));
+		},
+		onDrop: (e: React.DragEvent) => {
+			if (!offTile(e)) return;
+			const id = e.dataTransfer.getData(TASK_DRAG_MIME);
+			if (!id || hasTile(id)) return;
+			e.preventDefault();
+			setDropTarget(null);
+			dropTask(id, null);
+		},
+	};
+	// The wrap itself is the drop target off the tiles ("" in dropTarget).
+	const wrapClass = dropTarget === "" ? "mc-wrap drop" : "mc-wrap";
+
 	// Tasks only: a loop's session is started by the loop, not from here.
 	const newTaskButton =
 		mode === "tasks" && onNewTask ? (
@@ -4688,13 +4807,13 @@ function MissionControl({
 	if (tiles.length === 0) {
 		if (!loaded)
 			return (
-				<div className="mc-wrap" ref={wrapRef}>
+				<div className={wrapClass} ref={wrapRef} {...wrapDropProps}>
 					<div className="mc" data-layout={layout} />
 				</div>
 			);
 		// mc-none: centered in the whole area, not in the layout's first cell.
 		return (
-			<div className="mc-wrap" ref={wrapRef}>
+			<div className={wrapClass} ref={wrapRef} {...wrapDropProps}>
 				<div className="mc mc-none" data-layout={layout}>
 					{mode === "loops" ? (
 						<div className="empty">
@@ -4721,7 +4840,7 @@ function MissionControl({
 	// Auto without a size yet: hold the terminals until it has one.
 	if (layout === "auto" && !fit)
 		return (
-			<div className="mc-wrap" ref={wrapRef}>
+			<div className={wrapClass} ref={wrapRef} {...wrapDropProps}>
 				<div className="mc" data-layout={layout} />
 			</div>
 		);
@@ -4731,7 +4850,7 @@ function MissionControl({
 		layout === "auto" && fit ? mcShapeGrid(bestMcShape(visible.length, fit.area)) : null;
 
 	return (
-		<div className="mc-wrap" ref={wrapRef}>
+		<div className={wrapClass} ref={wrapRef} {...wrapDropProps}>
 			{/* Keyed by page: flipping remounts the grid, and TerminalView replays
 			    its ring-buffer snapshot on mount, so a page flip is a clean swap.
 			    The slide follows the flip direction, a "perfect scroll" to the
@@ -4781,10 +4900,11 @@ function MissionControl({
 							// The bar isn't focusable, so a click on it highlights here.
 							onPointerDown={() => onHighlight(task.id)}
 							onDragOver={(e) => {
-								if (!e.dataTransfer.types.includes(MC_TILE_MIME)) return;
+								const pill = pillTask(e);
+								if (!pill && !e.dataTransfer.types.includes(MC_TILE_MIME)) return;
 								e.preventDefault();
 								e.dataTransfer.dropEffect = "move";
-								const over = dragIdRef.current === task.id ? null : task.id;
+								const over = (pill ?? dragIdRef.current) === task.id ? null : task.id;
 								if (dropTarget !== over) setDropTarget(over);
 							}}
 							onDragLeave={(e) => {
@@ -4793,10 +4913,12 @@ function MissionControl({
 							}}
 							onDrop={(e) => {
 								const from = e.dataTransfer.getData(MC_TILE_MIME);
-								if (!from) return;
+								const pill = e.dataTransfer.getData(TASK_DRAG_MIME);
+								if (!from && !pill) return;
 								e.preventDefault();
 								setDropTarget(null);
-								swapTiles(from, task.id);
+								if (from) swapTiles(from, task.id);
+								else dropTask(pill, task.id);
 							}}
 						>
 							{/* biome-ignore lint/a11y/noStaticElementInteractions: a pointer drag handle; the sidebar's Custom order is the same ordering. */}

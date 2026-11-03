@@ -179,3 +179,28 @@ export function mcShapeGrid(shape: McShape): {
 		),
 	};
 }
+
+// ---- tiles arriving ----
+
+/**
+ * The tiles once new ones arrive. The tiles already placed keep their slots.
+ * Each arrival goes where it was dropped (before the tile `place` names for
+ * it), or at the end when it has no spot, was dropped off the tiles (null),
+ * or the tile it was dropped on is gone. Arrivals land in the order given,
+ * so two dropped on the same tile line up in that order before it.
+ */
+export function placeArrivals<T>(
+	kept: T[],
+	arrived: T[],
+	idOf: (t: T) => string,
+	place: ReadonlyMap<string, string | null>,
+): T[] {
+	const next = [...kept];
+	for (const t of arrived) {
+		const before = place.get(idOf(t));
+		const at = before ? next.findIndex((x) => idOf(x) === before) : -1;
+		if (at < 0) next.push(t);
+		else next.splice(at, 0, t);
+	}
+	return next;
+}
