@@ -1,24 +1,20 @@
 import { expect, test } from "bun:test";
-import { CH } from "@ateam/protocol";
-import { candidateId, createAggregate } from "./aggregate";
-import type { Backend } from "./backend";
+import { type AggregateBackend, candidateId, createAggregate } from "./aggregate";
+import { CH } from "./index";
 
 // A fake engine: canned per-method results + a log of which methods it was asked.
 function fake(
 	kind: "local" | "remote",
 	data: Record<string, (args: unknown[]) => unknown>,
-): Backend & { calls: string[] } {
+): AggregateBackend & { calls: string[] } {
 	const calls: string[] = [];
 	return {
 		kind,
-		methods: [],
 		calls,
 		handle(method, args) {
 			calls.push(method);
 			return data[method]?.(args);
 		},
-		on: () => () => {},
-		dispose: () => {},
 	};
 }
 
@@ -170,4 +166,13 @@ test("issue reads use this Mac's login and created issue tasks retain their owni
 	await agg.handle(CH.ptySpawnShell, [{ taskId: "issue-task" }]);
 	expect(remote.calls).toContain(CH.ptySpawnShell);
 	expect(local.calls).not.toContain(CH.ptySpawnShell);
+});
+
+// The phone learns a task from its engine's push: an agent or a loop can start one
+// that no read has returned yet, and opening it must reach that engine.
+test("learn routes ids that arrived outside a call", async () => {
+	const { remote, agg } = fixtures();
+	agg.learn(remote, { id: "pushed-task", projectId: "pB" });
+	await agg.handle(CH.ptyListForTask, ["pushed-task"]);
+	expect(remote.calls).toContain(CH.ptyListForTask);
 });

@@ -15,12 +15,17 @@ import type {
 	TaskTriage,
 } from "@ateam/protocol";
 import {
+	type Alias,
+	aliasLabel,
+	BROWSER_NOT_INSTALLED_ERROR,
 	boxSupports,
 	byLatestActivity,
 	describeMergeResult,
+	type EngineMember,
 	FEATURE_MIN_VERSION,
 	PROTOCOL_VERSION,
 	TASK_REMOVING_ERROR,
+	unifyProjects,
 	wakeMachineName,
 } from "@ateam/protocol";
 import {
@@ -115,7 +120,7 @@ import {
 	mcCapacity,
 	mcShapeGrid,
 } from "./mc-layout";
-import { panelOnScreen, proposalToOpen } from "./proposal-open";
+import { panelOnScreen, proposalToOpen, shownWhileOpen } from "./proposal-open";
 import {
 	activeTerminal,
 	conversationToResume,
@@ -135,12 +140,6 @@ import {
 } from "./sidebar-view";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
-import {
-	type Alias,
-	aliasLabel,
-	type EngineMember,
-	unifyProjects,
-} from "./unify";
 import { useBoxesNeedingYou } from "./useBoxesNeedingYou";
 import { useGithubIssues } from "./useGithubIssues";
 
@@ -501,7 +500,12 @@ export function App() {
 		try {
 			await fn();
 		} catch (e) {
-			const msg = e instanceof Error ? e.message : String(e);
+			// Electron wraps a main-process error in "Error invoking remote method
+			// '<channel>': Error: …"; the channel name means nothing to the user.
+			const msg = (e instanceof Error ? e.message : String(e)).replace(
+				/^Error invoking remote method '[^']+': (Error: )?/,
+				"",
+			);
 			// The engine refusing to launch into a task mid-delete: expected when
 			// the delete's own kill makes the open panel auto-resume its agent.
 			if (msg.includes(TASK_REMOVING_ERROR)) return;
@@ -929,6 +933,14 @@ export function App() {
 		cleanupOpen ||
 		newIssueOpen ||
 		promptUi != null;
+	// Declared before the effect below so it runs first in a commit: while one of
+	// a task's proposals is open, its others count as shown, so none of them
+	// takes the dialog's place the moment it closes (shownWhileOpen).
+	useEffect(() => {
+		if (!proposalOpen) return;
+		const task = activeTasks.find((t) => t.id === proposalOpen.taskId);
+		for (const id of shownWhileOpen(task)) autoOpenedProposals.current.add(id);
+	}, [proposalOpen, activeTasks]);
 	useEffect(() => {
 		const id = proposalToOpen(panelTask, autoOpenedProposals.current, dialogOpen);
 		if (!id || !panelTask) return;
@@ -2583,6 +2595,7 @@ export function App() {
 						<ProposalNote
 							from={task.name}
 							proposal={p}
+							waiting={(task.proposals?.length ?? 1) - 1}
 							onDismiss={() => {
 								setProposalOpen(null);
 								void clearProposal(task.id, p.id);
@@ -3356,6 +3369,13 @@ function TaskPanel({
 	const [browserSrc, setBrowserSrc] = useState<string | null>(null);
 	const [browserOpen, setBrowserOpen] = useState(false);
 	const [browserBusy, setBrowserBusy] = useState<string | null>(null);
+	// The task on screen now. This panel is reused across tasks, not remounted,
+	// and a browser open can outlive a switch (an install takes minutes): its
+	// result must not land in the next task's panel.
+	const shownTaskId = useRef(task.id);
+	useEffect(() => {
+		shownTaskId.current = task.id;
+	}, [task.id]);
 	// Dock the agent terminal as a right sidebar while the editor or the changes
 	// view owns the main area — the agent keeps working in view instead of
 	// vanishing behind it. Default on; the left-sidebar variant was left out.
@@ -3908,16 +3928,46 @@ function TaskPanel({
 								// A loaded view stays connected (noVNC reconnects on its own),
 								// so only the first open asks the box.
 								if (browserSrc) return;
+								// After each await, touch the panel only if it still shows
+								// this task. An error still reaches the toast either way.
+								const forTask = task.id;
+								const stillShown = () => shownTaskId.current === forTask;
 								setBrowserBusy("Opening the browser…");
 								try {
-									setBrowserSrc((await window.ateam.browser.view(task.id)).url);
+									let view: { url: string };
+									try {
+										view = await window.ateam.browser.view(task.id);
+									} catch (e) {
+										// A box without the browser: offer it, as the editor does.
+										// Nothing is installed without a yes.
+										if (!String(e).includes(BROWSER_NOT_INSTALLED_ERROR)) throw e;
+										const ok = await confirm(
+											`Install a browser on "${alias}"?`,
+											`The agents on "${alias}" get a Chrome of their own, which you can watch and take over in this panel. Ateam installs Chrome, a virtual desktop and noVNC there with apt, so the box needs passwordless sudo and x86_64 Debian or Ubuntu. It takes a few minutes.`,
+										);
+										if (!ok) {
+											if (stillShown()) setBrowserOpen(false);
+											return;
+										}
+										if (stillShown())
+											setBrowserBusy(
+												`Installing the browser on "${alias}". This takes a few minutes…`,
+											);
+										await window.ateam.browser.install(task.id).catch((err) => {
+											// A box from before browser:install: its own not-installed
+											// message carries the command to run there instead.
+											throw /Unknown method/.test(String(err)) ? e : err;
+										});
+										view = await window.ateam.browser.view(task.id);
+									}
+									if (stillShown()) setBrowserSrc(view.url);
 								} catch (e) {
-									setBrowserOpen(false);
+									if (stillShown()) setBrowserOpen(false);
 									if (/Unknown method/.test(String(e)))
 										throw new Error(`Update Ateam on "${alias}" to open its browser here.`);
 									throw e;
 								} finally {
-									setBrowserBusy(null);
+									if (stillShown()) setBrowserBusy(null);
 								}
 							});
 						}}

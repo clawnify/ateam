@@ -79,7 +79,7 @@ const CONNECT_ATTEMPT_MS = 2_500;
 
 /** Abstract engine events — the transport-neutral superset of what used to be
  *  `win.webContents.send(...)` calls. */
-interface EngineEventMap {
+export interface EngineEventMap {
 	taskUpdated: [TaskDTO];
 	taskRemoved: [string];
 	loopsUpdated: [LoopDTO[]];
@@ -270,7 +270,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		markPtyReady = r;
 	});
 	const hooks = new HookServer();
-	const hookPort = await hooks.start(repo.getSettings(db).hookPort ?? undefined);
+	const hookPort = await hooks.start(repo.getSettings(db).hookPort ?? undefined, {
+		log: opts.log,
+	});
 	const notifyScriptPath = await ensureNotifyScript(dataDir);
 	await ensureGhShim(dataDir);
 	const peerSecret = await ensurePeerSecret(dataDir);
@@ -416,6 +418,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	hooks.setPeerInbox({
 		verify: (terminalId, token) => verifyPeerToken(peerSecret, terminalId, token),
 		wait: (terminalId) => peers.wait(terminalId),
+		waitUser: (terminalId) => peers.waitUser(terminalId),
+		ackUser: (terminalId, deliveryId, entered) => peers.ackUser(terminalId, deliveryId, entered),
 	});
 
 	// Record an agent's exit: close the session and file its card. Shared by the

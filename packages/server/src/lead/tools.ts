@@ -110,7 +110,7 @@ const proposalFields = (w: Words) =>
 		prompt: {
 			type: "string",
 			description:
-				"The new agent's first instruction. It cannot see this chat, so make it self-contained: the goal, the context the user gave you, and what done looks like.",
+				"The new agent's first instruction: what the user asked for, in their own words where you can, with what from this chat it needs to understand them (it cannot see this chat). Nothing the user didn't say: no approach, constraints, checks, definition of done or opinions of your own. The agent decides those in the project.",
 		},
 		reason: {
 			type: "string",

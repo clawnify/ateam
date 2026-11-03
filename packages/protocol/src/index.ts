@@ -127,7 +127,11 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // whether the box can push, only read, or not see it. New methods only: a v24
 // engine answers "Unknown method", and clients send the user to the box terminal
 // instead (FEATURE_MIN_VERSION.githubAccess).
-export const PROTOCOL_VERSION = 25;
+// v26: browser:install runs install-browser.sh on the box once the user said
+// yes, so the Browser button offers the install instead of a command to paste.
+// A new method only: a v25 engine answers "Unknown method", and the desktop
+// shows the command from that engine's own BROWSER_NOT_INSTALLED_ERROR.
+export const PROTOCOL_VERSION = 26;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -1054,97 +1058,8 @@ export interface SessionHitDTO {
 	why: string | null;
 }
 
-// ---- IPC channel names ----
-export const CH = {
-	projectsPick: "projects:pick",
-	projectsRegister: "projects:register",
-	projectsClone: "projects:clone",
-	projectsRemoteUrl: "projects:remoteUrl",
-	projectsIssues: "projects:issues",
-	projectsCreateIssue: "projects:createIssue",
-	projectsRemoteRepos: "projects:remoteRepos",
-	projectsList: "projects:list",
-	projectsRemove: "projects:remove",
-	windowOpenProject: "window:openProject",
-	tasksList: "tasks:list",
-	tasksCreate: "tasks:create",
-	tasksCreateFromIssue: "tasks:createFromIssue",
-	tasksRemove: "tasks:remove",
-	tasksSetColumn: "tasks:setColumn",
-	tasksMarkRead: "tasks:markRead",
-	tasksSetWaiting: "tasks:setWaiting",
-	tasksCleanup: "tasks:cleanup",
-	tasksCleanupPreview: "tasks:cleanupPreview",
-	tasksCleanupCandidates: "tasks:cleanupCandidates",
-	tasksListArchived: "tasks:listArchived",
-	tasksSetArchived: "tasks:setArchived",
-	tasksLastReply: "tasks:lastReply",
-	tasksGet: "tasks:get",
-	tasksMessage: "tasks:message",
-	tasksAnswerQuestion: "tasks:answerQuestion",
-	tasksClearProposal: "tasks:clearProposal",
-	tasksPage: "tasks:page",
-	peersSendFromLead: "peers:sendFromLead",
-	gitCommit: "git:commit",
-	gitPush: "git:push",
-	gitUpdate: "git:update",
-	gitMerge: "git:merge",
-	gitDiff: "git:diff",
-	gitFileDiff: "git:fileDiff",
-	gitStatus: "git:status",
-	loopsList: "loops:list",
-	loopsSetEnabled: "loops:setEnabled",
-	loopsRunNow: "loops:runNow",
-	loopsTemplates: "loops:templates",
-	loopsCreate: "loops:create",
-	loopsUpdate: "loops:update",
-	loopsDelete: "loops:delete",
-	agentsList: "agents:list",
-	agentsInstall: "agents:install",
-	searchSessions: "search:sessions",
-	skillsList: "skills:list",
-	skillsLink: "skills:link",
-	skillsPick: "skills:pick",
-	systemHello: "system:hello",
-	systemUpdate: "system:update",
-	fsListDir: "fs:listDir",
-	utilPickFiles: "util:pickFiles",
-	utilAttachImages: "util:attachImages",
-	utilAttachClipboardImage: "util:attachClipboardImage",
-	utilWriteImageBytes: "util:writeImageBytes",
-	utilOpenInEditor: "util:openInEditor",
-	utilOpenBrowser: "util:openBrowser",
-	settingsGet: "settings:get",
-	settingsUpdate: "settings:update",
-	credentialsGet: "credentials:get",
-	credentialsUpdate: "credentials:update",
-	githubAccessStatus: "githubAccess:status",
-	githubAccessConnect: "githubAccess:connect",
-	githubAccessCheck: "githubAccess:check",
-	editorOpen: "editor:open",
-	editorOpenUrl: "editor:openUrl",
-	editorInstall: "editor:install",
-	browserView: "browser:view",
-	browserViewUrl: "browser:viewUrl",
-	ptySpawnAgent: "pty:spawnAgent",
-	ptySpawnShell: "pty:spawnShell",
-	ptyBoxShell: "pty:boxShell",
-	ptyWrite: "pty:write",
-	ptyResize: "pty:resize",
-	ptyKill: "pty:kill",
-	ptySnapshot: "pty:snapshot",
-	ptyListForTask: "pty:listForTask",
-	ptyListRestorable: "pty:listRestorable",
-	ptyRestoreSession: "pty:restoreSession",
-	// main → renderer push events
-	evtPtyData: "evt:pty:data",
-	evtPtyExit: "evt:pty:exit",
-	evtOpenSettings: "evt:settings:open",
-	evtOpenTask: "evt:task:open",
-	evtTaskUpdated: "evt:task:updated",
-	evtTaskRemoved: "evt:task:removed",
-	evtLoopsUpdated: "evt:loops:updated",
-} as const;
+// ---- IPC channel names (their own module: see channels.ts) ----
+export { CH } from "./channels";
 
 // ---- event payloads ----
 export interface PtyDataEvent {
@@ -1219,6 +1134,14 @@ export const DEFAULT_BROWSER_VIEW_PORT = 6080;
  * An error crosses IPC as its message only, so the text is the contract.
  */
 export const TASK_REMOVING_ERROR = "This task is being deleted";
+
+/**
+ * What browser:view throws on a box where install-browser.sh never ran. The
+ * desktop matches it to offer browser:install. Every engine since the Browser
+ * panel opens its message with this text, so it also matches an engine too old
+ * to install.
+ */
+export const BROWSER_NOT_INSTALLED_ERROR = "This box has no browser yet";
 
 /** Where the engine's embedded editor (code-server) answers, on ITS machine. */
 export interface EditorEndpointDTO {
@@ -1359,10 +1282,17 @@ export interface AteamApi {
 		/**
 		 * Resolve the URL of the browser on this task's box: its Chrome's desktop in
 		 * noVNC, connected and signed in, for THIS client to load. Rejects with the
-		 * reason for a task on this Mac (its browser is your own Chrome) and for a
-		 * box with no browser installed.
+		 * reason for a task on this Mac (its browser is your own Chrome) and, with
+		 * BROWSER_NOT_INSTALLED_ERROR, for a box with no browser installed.
 		 */
 		view(taskId: string): Promise<{ url: string }>;
+		/**
+		 * Install the browser on the task's box (install-browser.sh: apt packages,
+		 * Chrome, TaskWindow, noVNC). Call only after the user said yes to a
+		 * BROWSER_NOT_INSTALLED_ERROR. Takes minutes; resolves when installed, and a
+		 * following view() opens it.
+		 */
+		install(taskId: string): Promise<void>;
 	};
 	skills: {
 		/**
@@ -1544,6 +1474,21 @@ export interface AteamApi {
 	};
 }
 
+// Routing one board across several engines (the desktop's Mac + boxes, the phone's boxes).
+export {
+	type Aggregate,
+	type AggregateBackend,
+	candidateId,
+	createAggregate,
+} from "./aggregate";
+// A box's board as last seen, served while the box isn't held.
+export {
+	asSnapshot,
+	type BoxSnapshot,
+	OFFLINE_ERROR,
+	offlineHandle,
+	takeSnapshot,
+} from "./board-snapshot";
 // The URL every client loads for a box's browser view (noVNC).
 export { browserViewUrl } from "./browser-view";
 export type { NativeClientApi } from "./client-api";
@@ -1555,6 +1500,8 @@ export {
 	beginStep,
 	type ConnectStep,
 	failActive,
+	RECONNECT_DELAYS_MS,
+	reconnectDelay,
 	relabelActive,
 	type StepStatus,
 	WOKEN_CONNECT_MS,
@@ -1588,8 +1535,18 @@ export {
 	taskTag,
 	taskTags,
 } from "./task-tags";
+// A cap for a promise that can't be left to wait forever (an RPC has none of its own).
+export { withTimeout } from "./timeout";
 // Reading an engine older than this client (the version gate is advisory now).
 export { NO_TRIAGE, tolerantRpc } from "./tolerate";
+// One card per repo across engines (the same GitHub repo on two machines).
+export {
+	type Alias,
+	aliasLabel,
+	type EngineMember,
+	type UnifiedProject,
+	unifyProjects,
+} from "./unify";
 export {
 	filled,
 	type InputValues,

@@ -1,7 +1,7 @@
 // The GitHub accounts the phone has seen on any box: gh logins, and the owners of the
 // boxes' repositories. A box with neither yet (no GitHub repositories, gh not signed
-// in) still needs a token for the right owner, and the phone holds one box at a time,
-// so these are its choices there. Names only, never tokens.
+// in) still needs a token for the right owner, and what the phone saw on its other
+// boxes is what it can offer there. Names only, never tokens.
 
 export interface GithubSeen {
 	/** gh logins, newest first. */

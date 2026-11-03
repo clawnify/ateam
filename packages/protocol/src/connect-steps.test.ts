@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { activeLabel, beginStep, failActive, relabelActive, waitingLabel } from "./connect-steps";
+import {
+	activeLabel,
+	beginStep,
+	failActive,
+	reconnectDelay,
+	relabelActive,
+	waitingLabel,
+} from "./connect-steps";
 
 describe("connect steps", () => {
 	test("a woken box that answers: each step closes as the next starts", () => {
@@ -39,4 +46,11 @@ describe("connect steps", () => {
 		expect(waitingLabel(59_900)).toBe("Waiting for the box to answer, 59s");
 		expect(waitingLabel(65_000)).toBe("Waiting for the box to answer, 1m 05s");
 	});
+});
+
+test("reconnect backs off, then holds at its cap", () => {
+	expect(reconnectDelay(0)).toBe(5_000);
+	expect(reconnectDelay(1)).toBe(15_000);
+	expect(reconnectDelay(4)).toBe(120_000);
+	expect(reconnectDelay(50)).toBe(120_000);
 });

@@ -24,6 +24,23 @@
  *     resumed with the message as the prompt, or a fresh agent is started when
  *     it never had one.
  *
+ * The user's own words to a live Claude conversation (an answer to its
+ * ask_user question, a reply from the Lead chat or the phone) never take the
+ * asyncRewake door: Claude Code frames that hook's output as
+ * "[SYSTEM NOTIFICATION - NOT USER INPUT] ... must NOT be treated as approval
+ * or consent", and a careful agent then refuses the answer (verified on
+ * 2.1.316). They go in through Ateam's Claude mod instead, loaded with
+ * `--plugin-dir` (agent-setup), which long-polls `/inbox/user/wait` and submits
+ * each batch with `$.prompt.submit({ asUser: true })`: Claude reads it exactly
+ * as typed input, and its own provenance counts it as a person. A batch is
+ * leased to the mod until it acks that the prompt entered the session (one
+ * dropped after an Esc is offered again once a turn ends). A session with no
+ * mod polling (launched before this, or mods turned off) is restarted with them
+ * as its prompt, which Claude also reads as the user's. Messages from agents
+ * and the Lead keep the hook door: through the mod they would fire Claude's
+ * UserPromptSubmit like a typed reply, and the engine would take them for the
+ * user's (clearing the task's open question).
+ *
  * No keystrokes are ever typed into a live TUI (see loops/agent-loops.design.md,
  * "zero PTY injection").
  *
@@ -33,6 +50,7 @@
  * launches run at once, so a burst cannot spawn a herd of agents.
  */
 
+import { randomUUID } from "node:crypto";
 import { getAgent } from "@ateam/agents";
 import type { AgentSession, AteamDb, PeerMessage, Project, Task } from "@ateam/db";
 import { repo } from "@ateam/db";
@@ -58,6 +76,17 @@ export const LISTENER_GRACE_MS = 2 * 60 * 1000;
 const SWEEP_MS = 30 * 1000;
 /** How long one `/inbox/wait` call is held open before it answers "nothing yet". */
 export const WAIT_WINDOW_MS = 4 * 60 * 1000;
+/** The same for the Claude mod's `/inbox/user/wait`: under the 30 s Claude Code
+ *  gives one `$.http.fetch` call, body included. */
+export const USER_WAIT_WINDOW_MS = 20 * 1000;
+/** The mod polls again as soon as each call answers, so one not heard from for
+ *  this long is gone (mods turned off, or its worker crashed). */
+export const MOD_FRESH_MS = 60 * 1000;
+/** How long after a Claude session starts, or this engine does, a mod that has
+ *  not polled yet is still expected. */
+export const MOD_GRACE_MS = 60 * 1000;
+/** How long a batch handed to the mod waits for its ack before it is offered again. */
+export const MOD_LEASE_MS = 30 * 60 * 1000;
 
 /**
  * The sender id a message from the Lead chat carries in `fromTerminalId` (with
@@ -101,19 +130,28 @@ export interface DeliveryFacts {
  */
 export type DeliveryPlan = "listener" | "wait" | "restart" | "launch";
 
+/** A restart would throw work away: the agent is busy, or someone typed into it. */
+function holdsWork(
+	status: string,
+	lastInputAt: number | null,
+	lastEventAt: number | null,
+	now: number,
+): boolean {
+	// Mid-turn or holding a question: it is busy, and a restart would throw the
+	// turn away. Its Stop brings us back here.
+	if (status !== "idle") return true;
+	if (lastInputAt == null) return false;
+	if (now - lastInputAt < INPUT_QUIET_MS) return true;
+	// Typed into since its turn ended: a prompt it is now working on (Codex
+	// reports no turn start without its trusted hooks) or a draft. Either way
+	// the status is stale; its next Stop brings us back.
+	return lastEventAt == null || lastInputAt > lastEventAt;
+}
+
 export function planDelivery(f: DeliveryFacts): DeliveryPlan {
 	if (!f.live) return "launch";
 	if (f.live.hasListener) return "listener";
-	// Mid-turn or holding a question: it is busy, and a restart would throw the
-	// turn away. Its Stop brings us back here.
-	if (f.live.status !== "idle") return "wait";
-	if (f.lastInputAt != null) {
-		if (f.now - f.lastInputAt < INPUT_QUIET_MS) return "wait";
-		// Typed into since its turn ended: a prompt it is now working on (Codex
-		// reports no turn start without its trusted hooks) or a draft. Either
-		// way the status is stale; its next Stop brings us back.
-		if (f.lastEventAt == null || f.lastInputAt > f.lastEventAt) return "wait";
-	}
+	if (holdsWork(f.live.status, f.lastInputAt, f.lastEventAt, f.now)) return "wait";
 	// A harness that listens is expected to register; give it a moment so a
 	// message is not delivered by a restart instead. The moment runs from the
 	// later of the message and the turn's end: Claude's listener is re-armed by
@@ -125,6 +163,35 @@ export function planDelivery(f: DeliveryFacts): DeliveryPlan {
 		f.now - Math.max(f.oldestPendingAt, f.lastEventAt ?? 0) < LISTENER_GRACE_MS
 	)
 		return "wait";
+	return "restart";
+}
+
+export interface UserDeliveryFacts {
+	/** The live Claude session's status. */
+	status: string;
+	/** Its Ateam mod is waiting for a message right now. */
+	modWaiting: boolean;
+	/** Its mod polled lately, or the session (or this engine) only just started. */
+	modExpected: boolean;
+	/** The mod's last batch was dropped (an Esc stands until the user's next
+	 *  input): hold until a turn ends. */
+	paused: boolean;
+	lastInputAt: number | null;
+	lastEventAt: number | null;
+	now: number;
+}
+
+/**
+ * The user's own words to a live Claude conversation go in as the user's
+ * prompt or not yet: to its mod (`listener`), or by restarting the idle
+ * session with them as the prompt. Never through the asyncRewake hook (see the
+ * header).
+ */
+export function planUserDelivery(f: UserDeliveryFacts): DeliveryPlan {
+	if (f.paused) return "wait";
+	if (f.modWaiting) return "listener";
+	if (f.modExpected) return "wait";
+	if (holdsWork(f.status, f.lastInputAt, f.lastEventAt, f.now)) return "wait";
 	return "restart";
 }
 
@@ -205,6 +272,14 @@ export type WaitOutcome =
 	| { kind: "superseded" }
 	| { kind: "gone" };
 
+/** What the Claude mod's long-poll answers: a batch of the user's own words
+ *  with the id it acks, or why there is none. */
+export type UserWaitOutcome =
+	| { kind: "message"; deliveryId: string; text: string }
+	| { kind: "timeout" }
+	| { kind: "superseded" }
+	| { kind: "gone" };
+
 export interface PeerMessengerDeps {
 	db: AteamDb;
 	/** PTY daemon liveness. */
@@ -219,20 +294,41 @@ export interface PeerMessengerDeps {
 	now?: () => number;
 }
 
-interface Waiter {
+interface Waiter<O> {
 	taskId: string;
-	resolve: (o: WaitOutcome) => void;
+	resolve: (o: O) => void;
 	timer: ReturnType<typeof setTimeout>;
 }
 
+/** A batch the Claude mod holds until it acks that the prompt went in. */
+interface Lease {
+	terminalId: string;
+	taskId: string;
+	ids: string[];
+	until: number;
+}
+
+const isFromUser = (m: PeerMessage) => m.fromTerminalId === USER_SENDER;
+
 export class PeerMessenger {
-	private waiters = new Map<string, Waiter>();
+	/** Listeners on the hook door (Claude's inbox.sh, OpenCode's plugin). */
+	private waiters = new Map<string, Waiter<WaitOutcome>>();
+	/** Claude mods waiting for the user's own words, by terminal. */
+	private modWaiters = new Map<string, Waiter<UserWaitOutcome>>();
+	/** When each terminal's mod last polled. */
+	private modSeenAt = new Map<string, number>();
+	private leases = new Map<string, Lease>();
+	/** Terminals whose mod had a batch dropped, with their task: held until a
+	 *  turn ends there (kick). */
+	private paused = new Map<string, string>();
 	private waking = new Set<string>();
 	private sweepTimer: ReturnType<typeof setInterval> | null = null;
 	private readonly now: () => number;
+	private readonly startedAt: number;
 
 	constructor(private deps: PeerMessengerDeps) {
 		this.now = deps.now ?? Date.now;
+		this.startedAt = this.now();
 	}
 
 	start(): void {
@@ -247,6 +343,13 @@ export class PeerMessenger {
 			clearTimeout(w.timer);
 			w.resolve({ kind: "gone" });
 			this.waiters.delete(id);
+		}
+		// Not "gone": a mod polls only from its session's start, so one told to
+		// stop would be dead for the next engine. inbox.sh is re-armed at a Stop.
+		for (const [id, w] of this.modWaiters) {
+			clearTimeout(w.timer);
+			w.resolve({ kind: "timeout" });
+			this.modWaiters.delete(id);
 		}
 	}
 
@@ -357,7 +460,7 @@ export class PeerMessenger {
 			hop,
 			createdAt: now,
 		});
-		const plan = this.deliver(target.id);
+		const plan = this.deliverParts(target.id).rest;
 		return { ok: true, reason: `sent to "${target.name}" (${target.id}): ${describePlan(plan)}` };
 	}
 
@@ -393,7 +496,9 @@ export class PeerMessenger {
 			hop: 1,
 			createdAt: now,
 		});
-		const plan = this.deliver(target.id);
+		// The door this message took: the user's own words may go apart from the rest.
+		const parts = this.deliverParts(target.id);
+		const plan = sender === "user" && parts.user !== "none" ? parts.user : parts.rest;
 		return { ok: true, reason: `sent to "${target.name}" (${target.id}): ${describePlan(plan)}` };
 	}
 
@@ -427,77 +532,219 @@ export class PeerMessenger {
 		return { result, cancel };
 	}
 
+	/**
+	 * The Claude mod asking for this terminal's messages from the user. Like
+	 * `wait`, on its own slot so it never displaces the hook listener, and with
+	 * a window that fits a mod's fetch. A batch it gets is leased, not
+	 * delivered, until `ackUser`.
+	 */
+	waitUser(terminalId: string): { result: Promise<UserWaitOutcome>; cancel: () => void } {
+		const { db } = this.deps;
+		const session = repo.getSessionByTerminal(db, terminalId);
+		if (!session || !this.deps.isLive(terminalId)) {
+			return { result: Promise.resolve({ kind: "gone" }), cancel: () => {} };
+		}
+		this.modSeenAt.set(terminalId, this.now());
+		this.modWaiters.get(terminalId)?.resolve({ kind: "superseded" });
+		this.dropModWaiter(terminalId);
+		let cancel = () => {};
+		const result = new Promise<UserWaitOutcome>((resolve) => {
+			const timer = setTimeout(() => {
+				this.dropModWaiter(terminalId);
+				resolve({ kind: "timeout" });
+			}, USER_WAIT_WINDOW_MS);
+			this.modWaiters.set(terminalId, { taskId: session.taskId, resolve, timer });
+			cancel = () => {
+				if (this.modWaiters.get(terminalId)?.resolve === resolve) this.dropModWaiter(terminalId);
+			};
+		});
+		this.deliver(session.taskId);
+		return { result, cancel };
+	}
+
+	/**
+	 * The mod says what became of a batch: `entered`, the prompt is in the
+	 * session (delivered); otherwise Claude dropped it (an Esc stands until the
+	 * user's next input), so it is offered again once a turn ends there. False
+	 * for a lease this terminal does not hold.
+	 */
+	ackUser(terminalId: string, deliveryId: string, entered: boolean): boolean {
+		const lease = this.leases.get(deliveryId);
+		if (!lease || lease.terminalId !== terminalId) return false;
+		this.leases.delete(deliveryId);
+		if (entered) {
+			repo.markPeerMessagesDelivered(this.deps.db, lease.ids, "mod", this.now());
+		} else {
+			this.paused.set(terminalId, lease.taskId);
+		}
+		return true;
+	}
+
 	/** Look at a task again (its agent's turn ended, it exited, ...). */
 	kick(taskId: string): void {
+		// A turn ended: whatever the user's Esc held back can go in now.
+		for (const [terminalId, t] of this.paused) if (t === taskId) this.paused.delete(terminalId);
 		if (repo.listPendingPeerMessages(this.deps.db, taskId).length > 0) this.deliver(taskId);
 	}
 
+	/** Every task with something pending, leases past their time included. */
 	sweep(): void {
 		for (const taskId of repo.listTasksWithPendingPeerMessages(this.deps.db)) this.deliver(taskId);
 	}
 
 	/** Try to get a task's pending messages to its agent; returns what it did. */
 	deliver(taskId: string): DeliveryPlan | "none" {
+		const { user, rest } = this.deliverParts(taskId);
+		return rest !== "none" ? rest : user;
+	}
+
+	/**
+	 * `deliver`, saying what happened to the user's own words (`user`, set only
+	 * for a live Claude conversation) and to everything else (`rest`).
+	 */
+	private deliverParts(taskId: string): {
+		user: DeliveryPlan | "none";
+		rest: DeliveryPlan | "none";
+	} {
+		const none = { user: "none", rest: "none" } as const;
 		const { db } = this.deps;
-		const pending = repo.listPendingPeerMessages(db, taskId);
-		if (pending.length === 0) return "none";
-		if (this.waking.has(taskId)) return "launch";
+		const pending = this.pendingFor(taskId);
+		if (pending.length === 0) return none;
+		if (this.waking.has(taskId)) return { user: "launch", rest: "launch" };
 		const task = repo.getTask(db, taskId);
-		if (!task) return "none";
+		if (!task) return none;
 
 		const live = this.liveAgentSession(taskId);
-		const listenerTerminal = live ? this.listenerFor(taskId, live.terminalId) : null;
+		// A conversation Ateam launched by id. Agent mode has none: a board, not a
+		// conversation, keeps the hook door for everything.
+		const conversation = live?.agentId === "claude" && live.agentSessionId != null;
+		const mine = conversation ? pending.filter(isFromUser) : [];
+		const rest = mine.length > 0 ? pending.filter((m) => !isFromUser(m)) : pending;
+		return {
+			user: live && mine.length > 0 ? this.deliverUser(task, live, mine) : "none",
+			rest: rest.length > 0 ? this.deliverRest(task, live, rest) : "none",
+		};
+	}
+
+	/** The user's own words to a live Claude conversation (planUserDelivery). */
+	private deliverUser(task: Task, live: AgentSession, batch: PeerMessage[]): DeliveryPlan {
+		const now = this.now();
+		const { terminalId } = live;
+		const waiter = this.modWaiters.get(terminalId);
+		const seen = this.modSeenAt.get(terminalId);
+		const plan = planUserDelivery({
+			status: live.status,
+			modWaiting: waiter != null,
+			modExpected:
+				(seen != null && now - seen < MOD_FRESH_MS) ||
+				now - Math.max(live.startedAt ?? 0, this.startedAt) < MOD_GRACE_MS,
+			paused: this.paused.has(terminalId),
+			lastInputAt: this.deps.lastInputAt(terminalId),
+			lastEventAt: live.lastEventAt ?? null,
+			now,
+		});
+		if (plan === "listener" && waiter) {
+			const deliveryId = randomUUID();
+			this.leases.set(deliveryId, {
+				terminalId,
+				taskId: task.id,
+				ids: batch.map((m) => m.id),
+				until: now + MOD_LEASE_MS,
+			});
+			this.dropModWaiter(terminalId);
+			waiter.resolve({ kind: "message", deliveryId, text: this.render(batch) });
+			return plan;
+		}
+		if (plan === "restart") return this.wake(task, live, plan);
+		return plan;
+	}
+
+	/** Everything else, through the hook door, a restart or a launch. */
+	private deliverRest(
+		task: Task,
+		live: AgentSession | undefined,
+		batch: PeerMessage[],
+	): DeliveryPlan {
+		const listenerTerminal = live ? this.listenerFor(task.id, live.terminalId) : null;
 		const plan = planDelivery({
 			live: live
 				? { agentId: live.agentId, status: live.status, hasListener: listenerTerminal != null }
 				: null,
 			lastInputAt: live ? this.deps.lastInputAt(live.terminalId) : null,
 			lastEventAt: live?.lastEventAt ?? null,
-			oldestPendingAt: pending[0]?.createdAt ?? this.now(),
+			oldestPendingAt: batch[0]?.createdAt ?? this.now(),
 			now: this.now(),
 		});
-
-		const text = this.render(pending);
-		const ids = pending.map((m) => m.id);
 		switch (plan) {
 			case "listener": {
 				const w = listenerTerminal ? this.waiters.get(listenerTerminal) : undefined;
 				if (!w || !listenerTerminal) return "wait";
-				repo.markPeerMessagesDelivered(db, ids, "listener", this.now());
+				repo.markPeerMessagesDelivered(
+					this.deps.db,
+					batch.map((m) => m.id),
+					"listener",
+					this.now(),
+				);
 				this.dropWaiter(listenerTerminal);
-				w.resolve({ kind: "message", text });
+				w.resolve({ kind: "message", text: this.render(batch) });
 				return plan;
 			}
 			case "restart":
-			case "launch": {
-				if (this.waking.size >= MAX_WAKES) return "wait";
-				this.waking.add(taskId);
-				void (async () => {
-					try {
-						if (plan === "restart" && live) await this.deps.stopSession(live);
-						// Re-read: more may have arrived while the old agent shut down.
-						const batch = repo.listPendingPeerMessages(db, taskId);
-						if (batch.length === 0) return;
-						await this.deps.launch(task, this.render(batch));
-						repo.markPeerMessagesDelivered(
-							db,
-							batch.map((m) => m.id),
-							"launch",
-							this.now(),
-						);
-					} catch (e) {
-						this.deps.log(
-							`[ateam] peer message to ${taskId} not delivered: ${e instanceof Error ? e.message : String(e)}`,
-						);
-					} finally {
-						this.waking.delete(taskId);
-					}
-				})();
-				return plan;
-			}
+			case "launch":
+				return this.wake(task, live, plan);
 			default:
 				return plan;
 		}
+	}
+
+	/**
+	 * Restart the live agent (or start one) with everything pending as its
+	 * prompt, the user's words and anything else alike: a launch prompt is the
+	 * user's own turn to every harness.
+	 */
+	private wake(task: Task, live: AgentSession | undefined, plan: DeliveryPlan): DeliveryPlan {
+		if (this.waking.has(task.id)) return "launch";
+		if (this.waking.size >= MAX_WAKES) return "wait";
+		this.waking.add(task.id);
+		void (async () => {
+			try {
+				if (plan === "restart" && live) await this.deps.stopSession(live);
+				// Re-read: more may have arrived while the old agent shut down, and a
+				// batch its mod held went with it.
+				const batch = this.pendingFor(task.id);
+				if (batch.length === 0) return;
+				await this.deps.launch(task, this.render(batch));
+				repo.markPeerMessagesDelivered(
+					this.deps.db,
+					batch.map((m) => m.id),
+					"launch",
+					this.now(),
+				);
+			} catch (e) {
+				this.deps.log(
+					`[ateam] peer message to ${task.id} not delivered: ${e instanceof Error ? e.message : String(e)}`,
+				);
+			} finally {
+				this.waking.delete(task.id);
+			}
+		})();
+		return plan;
+	}
+
+	/**
+	 * A task's undelivered messages, less those a live mod holds. A lease past
+	 * its time, or on a terminal that is gone, is given up here, so its batch
+	 * is offered again.
+	 */
+	private pendingFor(taskId: string): PeerMessage[] {
+		const now = this.now();
+		const held = new Set<string>();
+		for (const [id, lease] of this.leases) {
+			if (lease.taskId !== taskId) continue;
+			if (lease.until <= now || !this.deps.isLive(lease.terminalId)) this.leases.delete(id);
+			else for (const m of lease.ids) held.add(m);
+		}
+		return repo.listPendingPeerMessages(this.deps.db, taskId).filter((m) => !held.has(m.id));
 	}
 
 	private render(pending: PeerMessage[]): string {
@@ -549,6 +796,12 @@ export class PeerMessenger {
 		const w = this.waiters.get(terminalId);
 		if (w) clearTimeout(w.timer);
 		this.waiters.delete(terminalId);
+	}
+
+	private dropModWaiter(terminalId: string): void {
+		const w = this.modWaiters.get(terminalId);
+		if (w) clearTimeout(w.timer);
+		this.modWaiters.delete(terminalId);
 	}
 
 	/**

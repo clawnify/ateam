@@ -10,6 +10,7 @@ import { createTask as gitCreateTask, seedWorktree } from "@ateam/git-core";
 import {
 	BOARD_MCP_TOOLS,
 	buildAgentEnv,
+	claudeModDir,
 	codexBoardMcpArgs,
 	ensureBoardMcpConfig,
 	ensureClaudeHooks,
@@ -398,7 +399,11 @@ async function launchAgent(
 			token,
 		});
 		const sq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
-		agentCmd = `${agentCmd} --mcp-config ${sq(mcpConfig)} --allowedTools ${sq(BOARD_MCP_TOOLS.join(","))}`;
+		// Ateam's Claude mod, which brings the user's own words in as their prompt
+		// (agent-setup, peer-messages.ts). One path per flag, so it swallows
+		// nothing; a Claude Code without mods (before 2.1.287, or mods turned off)
+		// loads nothing, and those words go in by a restart instead.
+		agentCmd = `${agentCmd} --plugin-dir ${sq(claudeModDir(services.hooksDir))} --mcp-config ${sq(mcpConfig)} --allowedTools ${sq(BOARD_MCP_TOOLS.join(","))}`;
 	}
 	// The pane outlives the agent (the `exec` keeps it usable as a shell), so the
 	// agent's own exit is otherwise invisible: no PTY exit fires, and the session

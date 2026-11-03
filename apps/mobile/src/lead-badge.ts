@@ -3,7 +3,7 @@
 // answered), white when something arrived since the chat was last on screen: a
 // reply from the Lead, a followed task's reply or page, a proposal, a notice.
 // The user's own messages and tool rows never light it. The hook that keeps
-// it for the connected box is useLeadBadge.ts.
+// it for the Lead's box (picked in Boxes) is useLeadBadge.ts.
 //
 // "Seen" is the newest item's time (the box's clock, so the phone's clock can't
 // skew it) when the chat was last on screen, kept per box across launches.

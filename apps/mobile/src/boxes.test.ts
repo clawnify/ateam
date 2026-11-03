@@ -1,10 +1,15 @@
 // The connection screen's list of boxes: one per address, newest first, and what each card says.
 import { describe, expect, test } from "bun:test";
 import {
+	awayOf,
 	boxKey,
 	boxSubtitle,
 	boxTitle,
+	leadBoxOf,
+	leadFirst,
+	NEW_LINK,
 	parseBoxes,
+	pickRunOn,
 	removeBox,
 	type SavedBox,
 	touchBox,
@@ -83,5 +88,44 @@ describe("boxes", () => {
 		expect(parseBoxes("{not json", null)).toEqual([]);
 		expect(parseBoxes(JSON.stringify([{ host: "" }, 4, null, plain]), null)).toEqual([plain]);
 		expect(parseBoxes(null, JSON.stringify({ port: "8787" }))).toEqual([]);
+	});
+});
+
+describe("which box", () => {
+	test("the Lead is the picked box while it's on the list, else the one used last", () => {
+		expect(leadBoxOf([probe, sprite], boxKey(sprite))).toBe(boxKey(sprite));
+		expect(leadBoxOf([probe, sprite], "gone:8787")).toBe(boxKey(probe));
+		expect(leadBoxOf([probe], null)).toBe(boxKey(probe));
+		expect(leadBoxOf([], null)).toBeNull();
+	});
+
+	test("a task runs on the picked box, else the Lead's box, else the first that answers", () => {
+		const on = [boxKey(probe), boxKey(sprite)];
+		const live = (k: string) => k === boxKey(sprite);
+		expect(pickRunOn(on, boxKey(probe), null, live)).toBe(boxKey(probe));
+		// Nothing picked for this project: the Lead's box, up or not, as Local on the desktop.
+		expect(pickRunOn(on, null, boxKey(probe), live)).toBe(boxKey(probe));
+		expect(pickRunOn(on, boxKey(plain), boxKey(probe), live)).toBe(boxKey(probe));
+		// The Lead's box hasn't got the project: the first one up.
+		expect(pickRunOn(on, boxKey(plain), boxKey(plain), live)).toBe(boxKey(sprite));
+		// None up: the first, which the start then wakes.
+		expect(pickRunOn(on, null, null, () => false)).toBe(boxKey(probe));
+		expect(pickRunOn([], null, null, live)).toBeNull();
+	});
+
+	test("the Lead's box leads a list of boxes", () => {
+		expect(leadFirst(["a", "b", "c"], "c")).toEqual(["c", "a", "b"]);
+		expect(leadFirst(["a", "b"], "z")).toEqual(["a", "b"]);
+		expect(leadFirst(["a", "b"], null)).toEqual(["a", "b"]);
+	});
+
+	test("a box is away while it sleeps or after a failure, not while it's up or untried", () => {
+		expect(awayOf(undefined)).toBeNull();
+		expect(awayOf({ ...NEW_LINK, state: "live", error: "old" })).toBeNull();
+		expect(awayOf({ ...NEW_LINK, state: "connecting" })).toBeNull();
+		expect(awayOf({ ...NEW_LINK, state: "connecting", asleep: true })).toBe("asleep");
+		expect(awayOf({ ...NEW_LINK, state: "down", error: "timed out" })).toBe("offline");
+		// Tried again: still away until the try says otherwise.
+		expect(awayOf({ ...NEW_LINK, state: "connecting", error: "timed out" })).toBe("offline");
 	});
 });
