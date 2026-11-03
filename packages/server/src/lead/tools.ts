@@ -51,6 +51,13 @@ export interface LeadToolDeps {
 		/** The paths the agent on `ownerId`'s machine reads them at (deliver-files.ts). */
 		deliver(ownerId: string, paths: string[]): Promise<{ paths: string[] } | { error: string }>;
 	};
+	/** A project window's chat: the id of the project it is about. Its board,
+	 *  proposals, messages and answers stay in that project. Another project's
+	 *  tasks can still be read, and messaged with message_other_project, which is
+	 *  not pre-approved (LEAD_TOOL_NAMES), so Claude asks the user each time. */
+	home?: string;
+	/** A home chat messaged a task in another project, for the main chat to hear. */
+	onElsewhere?(m: { task: TaskDTO; projectName: string; homeName: string; body: string }): void;
 }
 
 /** The words that change with where the Lead runs. A box's Lead sees that box
@@ -96,12 +103,17 @@ const filesParam = (w: Words) =>
 /** The MCP server name; Claude Code prefixes each tool with mcp__<name>__. */
 export const LEAD_MCP_NAME = "ateam_lead";
 
+/** The tool a project's own chat messages another project's tasks with. */
+export const OTHER_PROJECT_TOOL = "message_other_project";
+
 /** The fields propose_task and propose_loop share (an agent's, plus the project). */
-const proposalFields = (w: Words) =>
+const proposalFields = (w: Words, scoped: boolean) =>
 	({
 		project: {
 			type: "string",
-			description: "The project's id from get_board (or its exact name when only one matches).",
+			description: scoped
+				? "Leave it out: this chat proposes work in its own project only."
+				: "The project's id from get_board (or its exact name when only one matches).",
 		},
 		name: {
 			type: "string",
@@ -128,12 +140,29 @@ const proposalFields = (w: Words) =>
 	}) as const;
 
 const proposeFlow = (w: Words) =>
-	`Nothing is created until the user confirms: ${w.flow} You never create one yourself, even when the user asks you to: proposing is how you do it. You are not told the outcome, so do not wait for it, and do not say it started. Proposing the same name again replaces the earlier one.`;
+	`Nothing is created until the user confirms: ${w.flow} You never create one yourself, even when the user asks you to: proposing is how you do it. You hear whether they created or dismissed it with their next message, so do not wait for it, and do not say it started. Proposing the same name again replaces the earlier one.`;
 
-const toolsFor = (w: Words) => [
+/** send_message's and message_other_project's parameters. */
+const messageSchema = (w: Words) =>
+	({
+		type: "object",
+		properties: {
+			task: { type: "string", description: "The task's id from get_board (or its exact name)." },
+			message: {
+				type: "string",
+				description: "What to tell the agent, at most 8000 characters.",
+			},
+			files: filesParam(w),
+		},
+		required: ["task", "message"],
+		additionalProperties: false,
+	}) as const;
+
+/** `scoped`: a project's own chat (LeadToolDeps.home). */
+const toolsFor = (w: Words, scoped = false) => [
 	{
 		name: "get_board",
-		description: `List the tasks ${w.board}, grouped under each project's name, the repo it is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its machine and its id; one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus where it stands now (a summary written a few minutes after its agent goes quiet) and what it waits for or asks the user. Filter to what you need: all (the default) is every task still in play, merged ones left out; needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project, merged ones included (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.`,
+		description: `List the tasks ${w.board}, grouped under each project's name, the repo it is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its machine and its id; one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus where it stands now (a summary written a few minutes after its agent goes quiet) and what it waits for or asks the user. Filter to what you need: all (the default) is every task still in play, merged ones left out; needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project, merged ones included (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.${scoped ? " This chat is one project's: without project, every filter lists that project's tasks only." : ""}`,
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -150,7 +179,9 @@ const toolsFor = (w: Words) => [
 				},
 				project: {
 					type: "string",
-					description: "Only this project (its id from an earlier get_board, or its name).",
+					description: scoped
+						? "Leave it out for this chat's project. Another project's name or id reads its tasks; \"all\" reads every project."
+						: "Only this project (its id from an earlier get_board, or its name).",
 				},
 			},
 			additionalProperties: false,
@@ -161,8 +192,8 @@ const toolsFor = (w: Words) => [
 		description: `Propose a new task: a coding agent in its own git branch and worktree of a project. Any work in a project's code is a task, finding out why something in it behaves as it does included. ${proposeFlow(w)}`,
 		inputSchema: {
 			type: "object",
-			properties: { ...proposalFields(w), files: filesParam(w) },
-			required: ["project", "name", "prompt"],
+			properties: { ...proposalFields(w, scoped), files: filesParam(w) },
+			required: scoped ? ["name", "prompt"] : ["project", "name", "prompt"],
 			additionalProperties: false,
 		},
 	},
@@ -172,7 +203,7 @@ const toolsFor = (w: Words) => [
 		inputSchema: {
 			type: "object",
 			properties: {
-				...proposalFields(w),
+				...proposalFields(w, scoped),
 				prompt: {
 					type: "string",
 					description:
@@ -193,27 +224,14 @@ const toolsFor = (w: Words) => [
 						"Optional: a message sent once after each run's first reply, such as a slash command that checks the work.",
 				},
 			},
-			required: ["project", "name", "prompt"],
+			required: scoped ? ["name", "prompt"] : ["project", "name", "prompt"],
 			additionalProperties: false,
 		},
 	},
 	{
 		name: "send_message",
-		description:
-			"Send a message to the agent working on a task, on the user's behalf. Ateam delivers it now if the agent is listening, when its current turn ends if it is busy, or starts it with your message if it is stopped. The agent cannot see this chat, so make the message self-contained. Its answer is its reply at the end of that turn: read it later with read_task, do not wait for it.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				task: { type: "string", description: "The task's id from get_board (or its exact name)." },
-				message: {
-					type: "string",
-					description: "What to tell the agent, at most 8000 characters.",
-				},
-				files: filesParam(w),
-			},
-			required: ["task", "message"],
-			additionalProperties: false,
-		},
+		description: `Send a message to the agent working on a task, on the user's behalf. Ateam delivers it now if the agent is listening, when its current turn ends if it is busy, or starts it with your message if it is stopped. The agent cannot see this chat, so make the message self-contained. Its answer is its reply at the end of that turn: read it later with read_task, do not wait for it.${scoped ? ` Only for this chat's own project's tasks: message a task in another project with ${OTHER_PROJECT_TOOL}.` : ""}`,
+		inputSchema: messageSchema(w),
 	},
 	{
 		name: "read_task",
@@ -230,8 +248,7 @@ const toolsFor = (w: Words) => [
 	},
 	{
 		name: "answer_question",
-		description:
-			"Pass the user's answer on to a task whose agent asked them a question (get_board shows it as `question`). Only with an answer the user gave you in this chat: never decide for them, and never answer an approval on your own judgment.",
+		description: `Pass the user's answer on to a task whose agent asked them a question (get_board shows it as \`question\`). Only with an answer the user gave you in this chat: never decide for them, and never answer an approval on your own judgment.${scoped ? " Only for this chat's own project's tasks." : ""}`,
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -246,11 +263,25 @@ const toolsFor = (w: Words) => [
 			additionalProperties: false,
 		},
 	},
+	...(scoped
+		? [
+				{
+					name: OTHER_PROJECT_TOOL,
+					description:
+						"Send a message to a task in another project than this chat's, on the user's behalf, when they ask you to here. Ateam asks the user to allow each one before it goes, unless they chose to always allow it. Otherwise it works like send_message.",
+					inputSchema: messageSchema(w),
+				},
+			]
+		: []),
 ];
 
 /** Sent on initialize; Claude Code puts it in the system prompt. */
-const instructionsFor = (w: Words) =>
-	`These tools drive the user's Ateam board: every task is a coding agent working in its own git worktree, ${w.where}. Use get_board first, propose_task or propose_loop for new work (the user creates it from ${w.createsFrom}), send_message to steer a task's agent, and read_task to see what a task last said. A task with a question is waiting on the user: tell them, and pass their answer on with answer_question. A task that proposes a new task or loop is waiting for the user to create or dismiss it, ${w.decideOn}: tell them rather than proposing it again yourself.`;
+const instructionsFor = (w: Words, home?: string) =>
+	`These tools drive the user's Ateam board: every task is a coding agent working in its own git worktree, ${w.where}. Use get_board first, propose_task or propose_loop for new work (the user creates it from ${w.createsFrom}), send_message to steer a task's agent, and read_task to see what a task last said. A task with a question is waiting on the user: tell them, and pass their answer on with answer_question. A task that proposes a new task or loop is waiting for the user to create or dismiss it, ${w.decideOn}: tell them rather than proposing it again yourself.${
+		home
+			? ` This chat belongs to one project (project ${home}), in its own Ateam window: get_board lists its tasks unless you name another project, and propose_task, propose_loop, send_message and answer_question work in it alone. You can still read other projects (get_board with a project's name or "all", read_task), and message one of their tasks with ${OTHER_PROJECT_TOOL} when the user asks you to here; they approve each message first. New work in another project is proposed from the Lead chat in Ateam's main window: tell the user to ask there.`
+			: ""
+	}`;
 
 /** Where an agent is, in the words the Lead uses (same scale as list_peers). */
 function agentState(t: TaskDTO): string {
@@ -311,23 +342,38 @@ function explain(e: unknown, what: string): string {
 	return `${what} failed: ${msg}`;
 }
 
-export function createLeadTools(deps: LeadToolDeps): McpToolServer {
+export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
+	/** The words of the permission card Claude raises for one of these tools,
+	 *  when the generic one would show ids: null for the generic one. */
+	describe(tool: string, input: Record<string, unknown>): string | null;
+} {
 	const w = WORDS[deps.place ?? "mac"];
+	const home = deps.home;
 	const machineLabel = (alias: string | null) => alias ?? w.here;
 	const call = async <T>(method: string, args: unknown[]) => (await deps.handle(method, args)) as T;
+	/** Each task the board showed, by id, so a permission card can name it. */
+	const seen = new Map<string, { name: string; project: string }>();
 
 	async function board(): Promise<{ project: ProjectDTO; tasks: TaskDTO[] | null }[]> {
 		const projects = await call<ProjectDTO[]>(CH.projectsList, []);
 		return Promise.all(
 			projects.map(async (project) => {
 				try {
-					return { project, tasks: await call<TaskDTO[]>(CH.tasksList, [project.id]) };
+					const tasks = await call<TaskDTO[]>(CH.tasksList, [project.id]);
+					for (const t of tasks) seen.set(t.id, { name: t.name, project: project.name });
+					return { project, tasks };
 				} catch {
 					return { project, tasks: null };
 				}
 			}),
 		);
 	}
+
+	/** Why a home chat can't do this to `task` itself, or null when it can. */
+	const elsewhere = (task: TaskDTO, instead: string): string | null =>
+		home && task.projectId !== home
+			? `"${task.name}" is in another project than this chat's. ${instead}`
+			: null;
 
 	/** A project by id, or by name when exactly one matches. */
 	async function findProject(ref: string): Promise<ProjectDTO | string> {
@@ -377,7 +423,9 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 			args.filter === "needs_you" || args.filter === "working" || args.filter === "recent"
 				? args.filter
 				: "all";
-		const only = typeof args.project === "string" ? args.project.trim().toLowerCase() : "";
+		const asked = typeof args.project === "string" ? args.project.trim().toLowerCase() : "";
+		// A home chat sees its own project unless it names another, or "all".
+		const only = home && asked === "all" ? "" : asked;
 		const keep = (t: TaskDTO) => {
 			// Merged work is out of play, but it is news: a briefing on the latest
 			// tasks includes what just merged.
@@ -389,7 +437,11 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 			return true;
 		};
 		const groups = (await board())
-			.filter(({ project }) => !only || project.id === only || project.name.toLowerCase() === only)
+			.filter(({ project }) =>
+				home && !asked
+					? project.id === home
+					: !only || project.id === only || project.name.toLowerCase() === only,
+			)
 			.map(({ project, tasks }) => ({
 				project,
 				rows: tasks ? tasks.filter(keep).sort(byLatestActivity) : null,
@@ -470,8 +522,15 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		if (!deps.propose) return { text: "Proposing isn't available here.", isError: true };
 		const verdict = validateProposal({ ...args, kind });
 		if (!verdict.ok) return { text: verdict.reason, isError: true };
-		const project = await findProject(String(args.project ?? ""));
+		const project = await findProject(String(args.project ?? home ?? ""));
 		if (typeof project === "string") return { text: project, isError: true };
+		// A project window holds its own project alone, so another one's dialog
+		// can't open there; the main window's chat proposes anywhere.
+		if (home && project.id !== home)
+			return {
+				text: `This chat proposes work in its own project only. Work in ${project.name} is proposed from the Lead chat in Ateam's main window: tell the user to ask there.`,
+				isError: true,
+			};
 		// Only files attached in this chat. They stay where they are: creating the
 		// task from the dialog delivers them to a box (ipc.ts, deliver-files.ts).
 		const asked = kind === "task" && Array.isArray(args.files) ? args.files.map(String) : [];
@@ -491,14 +550,48 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 		});
 		const what = kind === "task" ? "New task" : "New loop";
 		return {
-			text: `Proposed "${proposal.name}" in ${project.name}. ${w.decide(what)} Nothing starts until they do, and you are not told either way: say in a line what you proposed and why, do not say it started, and do not wait for it.`,
+			text: `Proposed "${proposal.name}" in ${project.name}. ${w.decide(what)} Nothing starts until they do, and you hear what they decided with their next message: say in a line what you proposed and why, do not say it started, and do not wait for it.`,
 		};
 	}
 
 	async function sendMessage(args: Record<string, unknown>): Promise<McpToolResult> {
-		let body = String(args.message ?? "");
 		const task = await findTask(String(args.task ?? ""));
 		if (typeof task === "string") return { text: task, isError: true };
+		const no = elsewhere(
+			task,
+			`Message it with ${OTHER_PROJECT_TOOL}, which the user approves first.`,
+		);
+		if (no) return { text: no, isError: true };
+		return deliver(task, args);
+	}
+
+	/** A home chat's message to another project's task: the user allowed it in
+	 *  Claude's permission card (this tool isn't pre-approved), and the main
+	 *  chat hears of it with the user's next message there. */
+	async function messageOther(args: Record<string, unknown>): Promise<McpToolResult> {
+		const task = await findTask(String(args.task ?? ""));
+		if (typeof task === "string") return { text: task, isError: true };
+		if (!home || task.projectId === home)
+			return {
+				text: `"${task.name}" is in this chat's own project: use send_message.`,
+				isError: true,
+			};
+		const res = await deliver(task, args);
+		if (!res.isError && deps.onElsewhere) {
+			const projects = await call<ProjectDTO[]>(CH.projectsList, []).catch(() => []);
+			const nameOf = (id: string) => projects.find((p) => p.id === id)?.name ?? "another project";
+			deps.onElsewhere({
+				task,
+				projectName: nameOf(task.projectId),
+				homeName: nameOf(home),
+				body: String(args.message ?? ""),
+			});
+		}
+		return res;
+	}
+
+	async function deliver(task: TaskDTO, args: Record<string, unknown>): Promise<McpToolResult> {
+		let body = String(args.message ?? "");
 		const files = await filesFor(task.id, args.files);
 		if ("error" in files) return { text: files.error, isError: true };
 		// The same footer an agent's first prompt gets (server sessions.ts).
@@ -548,6 +641,11 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 	async function answer(args: Record<string, unknown>): Promise<McpToolResult> {
 		const task = await findTask(String(args.task ?? ""));
 		if (typeof task === "string") return { text: task, isError: true };
+		const no = elsewhere(
+			task,
+			"The user answers it on the board, or from the Lead chat in Ateam's main window.",
+		);
+		if (no) return { text: no, isError: true };
 		if (!task.question) return { text: `"${task.name}" has no question waiting.`, isError: true };
 		try {
 			await call(CH.tasksAnswerQuestion, [
@@ -567,8 +665,22 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 
 	return {
 		info: { name: LEAD_MCP_NAME, version: "0.1.0" },
-		instructions: instructionsFor(w),
-		tools: toolsFor(w),
+		instructions: instructionsFor(w, home),
+		tools: toolsFor(w, !!home),
+		describe(tool, input) {
+			if (tool !== `mcp__${LEAD_MCP_NAME}__${OTHER_PROJECT_TOOL}`) return null;
+			const ref = String(input.task ?? "");
+			const known =
+				seen.get(ref) ??
+				[...seen.values()].find((t) => t.name.toLowerCase() === ref.trim().toLowerCase());
+			const to = known ? `"${known.name}" in ${known.project}` : `"${ref}"`;
+			const body = String(input.message ?? "").slice(0, 1500);
+			const quoted = body
+				.split("\n")
+				.map((l) => `> ${l}`)
+				.join("\n");
+			return `**Message ${to}, outside this chat's project?**\n\n${quoted}`;
+		},
 		async call(name, args) {
 			switch (name) {
 				case "get_board":
@@ -579,6 +691,8 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer {
 					return propose("loop", args);
 				case "send_message":
 					return sendMessage(args);
+				case OTHER_PROJECT_TOOL:
+					return home ? messageOther(args) : null;
 				case "read_task":
 					return readTask(args);
 				case "answer_question":

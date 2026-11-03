@@ -107,6 +107,7 @@ export function LoopForm({
 	editing,
 	draft,
 	note,
+	project,
 	members,
 	agents,
 	envProtocol,
@@ -119,6 +120,9 @@ export function LoopForm({
 	draft?: LoopDraft;
 	/** Shown above the form, e.g. who proposed this loop and why. */
 	note?: ReactNode;
+	/** The Project pill, first in the foot, when a new loop's project is a
+	 *  choice here (the board shows every project). Picking one changes `members`. */
+	project?: ReactNode;
 	members: EngineMember[];
 	agents: AgentDTO[];
 	envProtocol: Record<string, number>;
@@ -151,6 +155,12 @@ export function LoopForm({
 			members[0]?.projectId ??
 			"",
 	);
+	// Another project picked in the Project pill: run it on that repo's Mac copy,
+	// else its first box, keeping everything typed.
+	useEffect(() => {
+		if (editing || memberFor(members, projectId)) return;
+		setProjectId(members.find((m) => m.alias === null)?.projectId ?? members[0]?.projectId ?? "");
+	}, [editing, members, projectId]);
 	// Only agents actually installed on this machine can run a session.
 	const usable = agents.filter((a) => a.available);
 	const [agentId, setAgentId] = useState(
@@ -324,6 +334,7 @@ export function LoopForm({
 						/>
 					</div>
 					<div className="comp-foot">
+						{!editing && project}
 						<AgentPicker
 							agents={agents}
 							value={agentId}
@@ -435,6 +446,7 @@ export function LoopForm({
 export function LoopsPanel({
 	loops,
 	members,
+	projectName,
 	envProtocol,
 	onChanged,
 	onNew,
@@ -442,6 +454,8 @@ export function LoopsPanel({
 }: {
 	loops: LoopDTO[];
 	members: EngineMember[];
+	/** Set while every project's loops are listed: the project a loop is in. */
+	projectName?: (projectId: string) => string | null;
 	/** alias ("local" for this Mac) → the protocol each connected engine speaks. */
 	envProtocol: Record<string, number>;
 	onChanged: () => void;
@@ -553,7 +567,7 @@ export function LoopsPanel({
 					A loop starts a coding-agent session with the same prompt on a schedule. Each loop owns
 					one task (branch + worktree); every run is a fresh session in it, on the environment you
 					pick (this Mac or a box that has this repo). Loops only exist when you create them, and
-					you only see the selected project's.
+					you see {projectName ? "every project's" : "the selected project's"}.
 				</p>
 			</div>
 
@@ -575,7 +589,13 @@ export function LoopsPanel({
 				</div>
 			)}
 
-			{loops.length === 0 && <div className="empty">No loops on this project. Create one.</div>}
+			{loops.length === 0 && (
+				<div className="empty">
+					{projectName
+						? "No loops on any project. Create one."
+						: "No loops on this project. Create one."}
+				</div>
+			)}
 
 			{loops.map((l) => (
 				<div key={l.id} className={`loop-card ${l.enabled ? "" : "off"}`}>
@@ -583,7 +603,12 @@ export function LoopsPanel({
 						<div className="loop-title">
 							<span>{l.title}</span>
 							<span className="loop-tag">
-								{aliasLabel(memberFor(members, l.projectId)?.alias ?? null)}
+								{[
+									l.projectId && projectName?.(l.projectId),
+									aliasLabel(memberFor(members, l.projectId)?.alias ?? null),
+								]
+									.filter(Boolean)
+									.join(" · ")}
 							</span>
 							<span className="loop-cadence muted">
 								{l.agentId ?? "claude"} · {loopScheduleLabel(l, LOCAL_TZ)}

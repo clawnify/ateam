@@ -35,8 +35,8 @@ function toBase64(f: File): Promise<string> {
  * Either way the prompt is handed to the chosen agent as its first instruction,
  * and YOLO launches it in the agent's automatic mode.
  *
- * A task is created and opened (⌘⏎), or created and left in the background
- * (⇧⌘⏎, or ⇧-click) so the view you were on stays put.
+ * A task is created in the background by default (⌘⏎), so the view you were on
+ * stays put, or created and opened (⇧⌘⏎, or ⇧-click).
  */
 export function PromptComposer({
 	agents,
@@ -48,6 +48,7 @@ export function PromptComposer({
 	initialFiles = [],
 	initialAlias,
 	header,
+	project,
 	environments = [],
 	envAgents,
 	onAdd,
@@ -73,6 +74,9 @@ export function PromptComposer({
 	initialAlias?: string | null;
 	/** Shown above the form, e.g. who proposed this task and why. */
 	header?: ReactNode;
+	/** The Project pill, first in the foot, when the project is a choice here
+	 *  (the board shows every project). Picking one changes `environments`. */
+	project?: ReactNode;
 	/** Where the task can run: this Mac + each ~/.ssh/config box. `alias` null = Local.
 	 *  A box is disabled when the repo can't run there (no GitHub identity to clone).
 	 *  Unused by the session variant, which has no environment to choose. */
@@ -99,8 +103,9 @@ export function PromptComposer({
 		yolo: boolean;
 		files: string[];
 		alias: string | null;
-		/** false: create it in the background and leave the view as it is (⇧⌘⏎).
-		 *  A session always opens, being a tab of the task already on screen. */
+		/** false: create it in the background and leave the view as it is (⌘⏎,
+		 *  the default); true: open it (⇧⌘⏎). A session always opens, being a tab
+		 *  of the task already on screen. */
 		open: boolean;
 	}) => void;
 }) {
@@ -116,8 +121,9 @@ export function PromptComposer({
 	// Files still being saved from their bytes, and a line about a drop that can't attach.
 	const [pending, setPending] = useState(0);
 	const [note, setNote] = useState<string | null>(null);
-	// ⇧ together with ⌘ (or with the pointer on the go button) means "create and
-	// stay", and the button says so before you commit. ⇧ alone is only a capital
+	// A new task stays in the background unless ⇧ is held together with ⌘ (or
+	// with the pointer on the go button), which means "create and open it", and
+	// the button's icon says so before you commit. ⇧ alone is only a capital
 	// letter being typed, so it leaves the button alone.
 	const [mods, setMods] = useState({ shift: false, cmd: false });
 	const [overGo, setOverGo] = useState(false);
@@ -137,7 +143,7 @@ export function PromptComposer({
 			window.removeEventListener("blur", reset);
 		};
 	}, [session]);
-	const staying = !session && mods.shift && (mods.cmd || overGo);
+	const staying = !session && !(mods.shift && (mods.cmd || overGo));
 	// Remember the last-picked environment across tasks (and app restarts) so it isn't
 	// re-selected every time; fall back to the first runnable one (Local, unless the repo
 	// isn't here) when nothing valid is saved for this project. "__local__" = the Mac.
@@ -159,6 +165,14 @@ export function PromptComposer({
 		setAliasState(a);
 		localStorage.setItem("ateam.runOn", a === null ? "__local__" : a);
 	};
+	// Another project picked in the Project pill can't run where this one could
+	// (no copy on this Mac, no remote to clone onto a box): move to the first
+	// place it can, without remembering it as a pick.
+	useEffect(() => {
+		if (session || environments.some((e) => e.alias === alias && !e.disabled)) return;
+		const first = environments.find((e) => !e.disabled);
+		if (first) setAliasState(first.alias);
+	}, [session, environments, alias]);
 
 	// Which agents the chosen environment actually has installed. Known only for a
 	// connected engine; when unknown, fall back to the catalog's own `available` flag.
@@ -274,7 +288,7 @@ export function PromptComposer({
 			e.preventDefault();
 			// A held ⌘↩ repeats. Only a fresh press creates: the repeat must not
 			// land in whatever dialog opens in this one's place.
-			if (!e.repeat) submit(!e.shiftKey);
+			if (!e.repeat) submit(e.shiftKey);
 		}
 		if (e.key === "Escape") onClose();
 	};
@@ -334,6 +348,7 @@ export function PromptComposer({
 					>
 						<Paperclip size={16} strokeWidth={1.75} />
 					</button>
+					{!session && project}
 					<AgentPicker
 						agents={agents}
 						value={agentId}
@@ -363,25 +378,29 @@ export function PromptComposer({
 					</button>
 					<span className="spacer" />
 					<span className="muted" style={{ fontSize: 11 }}>
-						{session ? "⌘⏎" : "⌘⏎ open · ⇧⌘⏎ stay"}
+						{session ? "⌘⏎" : "⌘⏎ stay · ⇧⌘⏎ open"}
 					</span>
 					<button
 						type="button"
-						className={`comp-go ${staying ? "stay" : ""}`}
+						className="comp-go"
 						disabled={!canSubmit}
 						title={
 							session
 								? "Launch another agent session in this task (⌘⏎)"
 								: staying
-									? "Create task and stay here (⇧⌘⏎)"
-									: "Create task and open it (⌘⏎). Hold ⇧ to stay here."
+									? "Create task in the background and stay here (⌘⏎). Hold ⇧ to open it."
+									: "Create task and open it (⇧⌘⏎)"
 						}
 						aria-label={
-							session ? "Launch session" : staying ? "Create task and stay here" : "Create task"
+							session
+								? "Launch session"
+								: staying
+									? "Create task and stay here"
+									: "Create task and open it"
 						}
 						onMouseEnter={() => setOverGo(true)}
 						onMouseLeave={() => setOverGo(false)}
-						onClick={(e) => submit(!e.shiftKey)}
+						onClick={(e) => submit(e.shiftKey)}
 					>
 						{staying ? (
 							<Plus size={15} strokeWidth={2.25} />

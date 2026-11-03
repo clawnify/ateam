@@ -37,8 +37,9 @@ export type LeadBlock =
 	| { kind: "item"; item: Exclude<LeadItem, { kind: "tool" | "agent" | "page" }> }
 	| { kind: "tools"; id: string; tools: LeadToolItem[] }
 	/** Tasks talking back, one after another: a thread per task, ordered by
-	 *  each one's latest entry (the last is the newest). `items` is every entry
-	 *  in the order it arrived. */
+	 *  each task's latest entry of its own (the last is the newest). `items` is
+	 *  every entry in the order it arrived, the user's held ones too, so it can
+	 *  hold entries and no thread yet. */
 	| { kind: "threads"; id: string; items: LeadThreadEntry[]; threads: LeadThread[] };
 
 /** The task an item belongs to, when it goes in that task's thread. */
@@ -62,13 +63,21 @@ function threadTask(item: LeadItem): LeadTaskRef | undefined {
  *  message to the Lead, the Lead's) starts a new block, and a task that talks
  *  again after it gets a new thread there: nothing already drawn moves. That
  *  thread carries the task's earlier entries, and the earlier thread points
- *  to it. A block's id is its first item's, which never changes as more join it. */
+ *  to it. A block's id is its first item's, which never changes as more join it.
+ *
+ *  Only a task's own entries (replies, pages, notices) open a thread or move
+ *  it to the end. The user's words join the task's thread in the stack where
+ *  it stands. With no thread there (an answer to a question, a reply from an
+ *  earlier card) they open no page: they wait, and the task's next thread
+ *  opens with them. */
 export function toLeadBlocks(items: LeadItem[]): LeadBlock[] {
 	const out: LeadBlock[] = [];
-	/** Each task's entries so far in the conversation. */
+	/** Each task's entries so far in the conversation's threads. */
 	const history = new Map<string, LeadThreadEntry[]>();
 	/** Each task's latest thread, to point at the one that continues it. */
 	const latest = new Map<string, LeadThread>();
+	/** The user's words to a task with no thread in the stack they joined. */
+	const held = new Map<string, LeadThreadEntry[]>();
 	for (const item of items) {
 		const last = out[out.length - 1];
 		const task = threadTask(item);
@@ -83,6 +92,17 @@ export function toLeadBlocks(items: LeadItem[]): LeadBlock[] {
 			const key = task.taskId;
 			const seen = history.get(key) ?? [];
 			let thread = block.threads.find((t) => t.key === key);
+			if (entry.kind === "user") {
+				if (thread) {
+					thread.task = task;
+					thread.entries.push(entry);
+					seen.push(entry);
+					history.set(key, seen);
+				} else held.set(key, [...(held.get(key) ?? []), entry]);
+				continue;
+			}
+			const waiting = held.get(key) ?? [];
+			held.delete(key);
 			if (thread) block.threads.splice(block.threads.indexOf(thread), 1);
 			else {
 				const before = latest.get(key);
@@ -93,8 +113,8 @@ export function toLeadBlocks(items: LeadItem[]): LeadBlock[] {
 			// The newest talker goes last, where the card opens.
 			block.threads.push(thread);
 			thread.task = task;
-			thread.entries.push(entry);
-			seen.push(entry);
+			thread.entries.push(...waiting, entry);
+			seen.push(...waiting, entry);
 			history.set(key, seen);
 		} else if (item.kind === "tool") {
 			if (last?.kind === "tools") last.tools.push(item);

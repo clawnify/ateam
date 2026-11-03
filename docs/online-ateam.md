@@ -393,8 +393,9 @@ tapping the output never hides the keyboard (the chevron key at the end of the
 shortcut bar does), and a long press selects text for Copy without bringing the
 keyboard up.
 
-The phone opens on **Home**, the desktop sidebar as a list: your projects, then the
-selected project's tasks in status order, then its loops. The pill in the navbar
+The phone opens on **Home**, the desktop sidebar as a list: your projects (a dropdown
+at the top of the desktop sidebar), then the selected project's tasks in status order,
+then its loops. The pill in the navbar
 switches to **Board** (the kanban), **Mission Control** (two live terminals per
 page, paged with the control at the bottom right; tap a tile to highlight it and
 drive it from the shortcut bar, or expand it to type), and **Loops** (create, edit,
@@ -415,7 +416,8 @@ on the bubble says it has something for you: white for a reply since you last lo
 amber while it waits for your answer before it can go on. When it proposes a task or a
 loop, the card's **Start it** or **Set it up** opens the New task sheet or the New loop
 form filled in from the proposal; nothing starts until you confirm, and Auto mode stays
-off. The Lead's agent stops after 10 minutes without a turn, so the first message after
+off. Whether you started it or dismissed it, the Lead learns with your next message, so
+it steers the task you started instead of proposing it again. The Lead's agent stops after 10 minutes without a turn, so the first message after
 that takes a few seconds while it picks the conversation back up. The
 composer under Home and Board has a **Task | Lead** switch above it: on Task, sending
 starts a task, as before; on Lead, it asks the Lead and opens the chat. The paperclip

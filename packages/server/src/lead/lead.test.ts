@@ -7,8 +7,8 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { CH, type LeadEvent, type TaskDTO } from "@ateam/protocol";
 import { startLead } from "./index";
-import { LeadSession } from "./session";
-import { createLeadTools } from "./tools";
+import { LeadSession, NOTES_HEAD } from "./session";
+import { createLeadTools, LEAD_MCP_NAME } from "./tools";
 
 // ---- tools, against a fake router -------------------------------------------
 
@@ -862,6 +862,136 @@ describe("answering a task's reply", () => {
 		await expect(lead.react("gone", "👍")).rejects.toThrow("no longer in the chat");
 		await expect(lead.react(user?.id ?? "", "👍")).rejects.toThrow("no longer in the chat");
 		expect(sent()).toHaveLength(1);
+		lead.dispose();
+	});
+});
+
+describe("answering a task's question from the chat", () => {
+	it("keeps the question with the answer, since the task's own copy is cleared", async () => {
+		const question = {
+			id: "q1",
+			text: "Which colour?\n\nPick one.",
+			options: ["Red", "Blue"],
+			allowText: false,
+			askedAt: 1,
+		};
+		const task = { ...TASKS[0], lastReplyAt: 1, page: null, question } as unknown as TaskDTO;
+		const router = fakeRouter({
+			[CH.tasksGet]: () => task,
+			[CH.tasksAnswerQuestion]: () => undefined,
+		});
+		const lead = await startLead({
+			place: "mac",
+			dir: mkdtempSync(join(tmpdir(), "lead-")),
+			handle: router.handle,
+			machineOf: () => null,
+			deliver: async (_owner, paths) => ({ paths }),
+			emit: () => {},
+		});
+		await lead.answer({ taskId: "t1", questionId: "q1", answer: "Red" });
+		expect(lead.snapshot().items.at(-1)).toMatchObject({
+			kind: "user",
+			text: "Red",
+			to: { taskId: "t1" },
+			question: "Which colour?\n\nPick one.",
+		});
+		lead.dispose();
+	});
+});
+
+describe("what the user did with the Lead's proposals", () => {
+	it("reaches the agent with the user's next message, once, after a restart too", async () => {
+		const first = makeSession();
+		first.session.note('dismissed your proposed task "Old idea"');
+		first.session.dispose();
+		// The app restarted before the user wrote again.
+		const { session, procs } = makeSession(first.dir);
+		session.send("next");
+		await tick();
+		const p = procs[0] as FakeClaude;
+		expect(p.written[0]).toMatchObject({
+			message: { content: `${NOTES_HEAD}\n- dismissed your proposed task "Old idea"\n\nnext` },
+		});
+		// The chat shows only the user's words.
+		expect(session.snapshot().items.at(-1)).toMatchObject({ kind: "user", text: "next" });
+		session.send("again");
+		await tick();
+		expect(p.written.at(-1)).toMatchObject({ message: { content: "again" } });
+		session.dispose();
+	});
+
+	it("goes with the old conversation when a new one starts", async () => {
+		const { session, procs } = makeSession();
+		session.note('dismissed your proposed task "Old idea"');
+		session.reset();
+		session.send("hi");
+		await tick();
+		expect((procs[0] as FakeClaude).written[0]).toMatchObject({ message: { content: "hi" } });
+		session.dispose();
+	});
+
+	it("names the task made from a proposal, and what was dismissed", async () => {
+		const task = { ...TASKS[0], lastReplyAt: 1, page: null, question: null } as unknown as TaskDTO;
+		const router = fakeRouter({ [CH.tasksGet]: () => task });
+		const procs: FakeClaude[] = [];
+		const dir = mkdtempSync(join(tmpdir(), "lead-"));
+		const lead = await startLead({
+			place: "mac",
+			dir,
+			handle: router.handle,
+			machineOf: () => null,
+			deliver: async (_owner, paths) => ({ paths }),
+			emit: () => {},
+			spawnClaude: (args) => {
+				const p = new FakeClaude(args);
+				procs.push(p);
+				return p as unknown as ChildProcess;
+			},
+		});
+		lead.send("plan the week");
+		await tick();
+		const p = procs[0] as FakeClaude;
+		// The agent proposes through its MCP server, as claude does.
+		const { url, headers } = JSON.parse(readFileSync(join(dir, "mcp.json"), "utf8")).mcpServers[
+			LEAD_MCP_NAME
+		] as { url: string; headers: Record<string, string> };
+		const propose = (name: string) =>
+			fetch(url, {
+				method: "POST",
+				headers: { ...headers, "content-type": "application/json" },
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 1,
+					method: "tools/call",
+					params: {
+						name: "propose_task",
+						arguments: { project: "ateam", name, prompt: `${name}.` },
+					},
+				}),
+			});
+		await propose("Fix login");
+		await propose("Old idea");
+		const [made, dropped] = lead.snapshot().items.filter((i) => i.kind === "proposal");
+		if (!made || !dropped) throw new Error("no proposals in the chat");
+
+		const before = p.written.length;
+		// Two windows deciding the same card: it is told once.
+		await Promise.all([
+			lead.proposal(made.id, "created", "t1"),
+			lead.proposal(made.id, "created", "t1"),
+		]);
+		await lead.proposal(dropped.id, "dismissed");
+		// Nothing goes to the agent on its own: it runs when the user writes.
+		await tick();
+		expect(p.written).toHaveLength(before);
+
+		lead.send("what's next?");
+		await tick();
+		expect(p.written.at(-1)).toMatchObject({
+			message: {
+				content: `${NOTES_HEAD}\n- created your proposed task "Fix login" as [fix login](task:t1)\n- dismissed your proposed task "Old idea"\n\nwhat's next?`,
+			},
+		});
 		lead.dispose();
 	});
 });

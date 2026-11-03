@@ -49,6 +49,12 @@ import { LEAD_MCP_NAME } from "./tools";
  *  a box's own, over that box alone, for the phone (protocol v24). */
 export type LeadPlace = "mac" | "box";
 
+/** Heads the notes (LeadSession.note) put before the user's next message. */
+export const NOTES_HEAD = "Since your last turn (from Ateam, not the user's words), the user:";
+
+/** The most notes kept for the next message; the oldest go first. */
+const MAX_NOTES = 20;
+
 /** The system prompt the Lead's agent gets, in the words true where it runs. */
 export function leadPrompt(place: LeadPlace): string {
 	const mac = place === "mac";
@@ -64,6 +70,7 @@ export function leadPrompt(place: LeadPlace): string {
 
 - Read the board (get_board) before acting on it.
 - Propose new work with propose_task, or propose_loop for something that should run on a schedule. ${decide} You never start a task or a loop yourself, even when the user asks you to: proposing is how you do it. Its agent cannot see this chat, so the prompt is what the user asked for, in their own words where you can, plus what from this chat it needs to understand them (what they said earlier, the task they mean). Add nothing of your own: no approach, steps, constraints, checks, definition of done or opinions the user didn't give, and no description of the files you pass, which the agent opens itself. It works in the project and decides those. Say in a line what you proposed; never say it started.
+- A message can start with "${NOTES_HEAD}" and a list: Ateam telling you what the user did that you didn't see, such as creating or dismissing one of your proposals. A task created from your proposal exists: steer it with send_message, never propose it again. Don't propose a dismissed one again unless the user asks.
 - Steer a task's agent with send_message, and see what it last said with read_task. Agents answer when their turn ends: never wait or poll in a loop. Say what you sent, and that the user can ask you for an update.
 - A task with a question (get_board shows it) is waiting on the user. Tell them what it asks; when they answer here, pass it on with answer_question. Never answer a question or approve anything on your own judgment.
 - Files the user attaches come as an "Attached files" list of paths on this ${mac ? "Mac" : "box"}. Open one with Read when you need to see it. To hand files to a task's agent, pass their paths in \`files\` to propose_task or send_message: only files attached in this chat can be sent.
@@ -83,6 +90,12 @@ export function leadPrompt(place: LeadPlace): string {
 export interface LeadSessionOptions {
 	/** Where the transcript, state and MCP config live. */
 	dir: string;
+	/** The agent's working folder, where Claude keeps the chat's "Always allow"
+	 *  rules (.claude/settings.local.json); default `dir`. A project window's
+	 *  chat shares the main chat's, so a rule allowed in one holds in all. */
+	cwd?: string;
+	/** The words of a permission card, before the generic ones (describeAsk). */
+	describe?(tool: string, input: Record<string, unknown>): string | null;
 	/** Where it runs, for the words of its prompt (default: the Mac). */
 	place?: LeadPlace;
 	mcp: { url: string; token: string };
@@ -102,6 +115,10 @@ interface LeadState {
 	sessionId?: string;
 	/** Auto mode; a preference, so a new conversation keeps it. */
 	auto?: boolean;
+	/** What the user did in the chat that the agent hasn't been told yet
+	 *  (note()). Kept here so an app restart or a box Lead's idle stop between
+	 *  the outcome and the next message doesn't lose it. */
+	notes?: string[];
 }
 
 /** Claude's answer to one of our control requests. */
@@ -156,6 +173,7 @@ export class LeadSession {
 
 	constructor(private opts: LeadSessionOptions) {
 		mkdirSync(opts.dir, { recursive: true });
+		if (opts.cwd) mkdirSync(opts.cwd, { recursive: true });
 		this.transcript = join(opts.dir, "transcript.jsonl");
 		this.statePath = join(opts.dir, "state.json");
 		this.state = this.readState();
@@ -207,11 +225,21 @@ export class LeadSession {
 		// The same footer an agent's first prompt gets (server sessions.ts): the
 		// Lead opens a file with Read when it needs to, and passes the paths on.
 		const list = files.map((f) => `- ${f.path}`).join("\n");
-		const content = files.length
+		const said = files.length
 			? body
 				? `${body}\n\nAttached files:\n${list}`
 				: `Attached files:\n${list}`
 			: body;
+		// Told once, with this message rather than as a turn of its own: the
+		// agent runs only when the user writes. The chat shows the user's words.
+		const notes = this.state.notes ?? [];
+		if (notes.length) {
+			this.state.notes = undefined;
+			this.saveState();
+		}
+		const content = notes.length
+			? `${NOTES_HEAD}\n${notes.map((n) => `- ${n}`).join("\n")}\n\n${said}`
+			: said;
 		const line = `${JSON.stringify({ type: "user", message: { role: "user", content } })}\n`;
 		this.clearIdle();
 		this.ensureProcess();
@@ -235,6 +263,8 @@ export class LeadSession {
 		this.draft = "";
 		this.busy = false;
 		this.state.sessionId = undefined;
+		// About the old conversation's proposals: nothing to the new one.
+		this.state.notes = undefined;
 		this.saveState();
 		this.opts.emit({ type: "reset", snapshot: this.snapshot() });
 	}
@@ -302,6 +332,13 @@ export class LeadSession {
 		this.put(item);
 	}
 
+	/** Tell the agent, with the user's next message, something the user did in
+	 *  the chat that it can't see (a proposal created or dismissed). */
+	note(line: string): void {
+		this.state.notes = [...(this.state.notes ?? []), line].slice(-MAX_NOTES);
+		this.saveState();
+	}
+
 	item(id: string): LeadItem | undefined {
 		return this.items.get(id);
 	}
@@ -358,7 +395,10 @@ export class LeadSession {
 		this.sentBeforeInit = [];
 		this.stderr = "";
 		const args = this.args();
-		const proc = (this.opts.spawnClaude ?? spawnThroughLoginShell)(args, this.opts.dir);
+		const proc = (this.opts.spawnClaude ?? spawnThroughLoginShell)(
+			args,
+			this.opts.cwd ?? this.opts.dir,
+		);
 		this.proc = proc;
 		let buf = "";
 		proc.stdout?.on("data", (d: Buffer) => {
@@ -524,7 +564,7 @@ export class LeadSession {
 				this.put({
 					kind: "permission",
 					id,
-					text: describeAsk(tool, input),
+					text: this.opts.describe?.(tool, input) ?? describeAsk(tool, input),
 					canAlways: suggestions.length > 0,
 					always: ruleText(suggestions),
 					at: now,
