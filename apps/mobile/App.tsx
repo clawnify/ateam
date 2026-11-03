@@ -74,6 +74,7 @@ import {
 import { Composer, type ComposerSubmit, type RunOn } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
 import { connect, mobileNative, redeemPairing } from "./src/connection";
+import { parsePairLink } from "./src/pair-link";
 import { demoConnection } from "./src/demo";
 import { type Board, createFleet, type Fleet, pickProject } from "./src/fleet";
 import { GithubAccessScreen } from "./src/GithubAccessScreen";
@@ -1751,28 +1752,37 @@ export default function App() {
 		[link],
 	);
 	// `ateamgo://pair?host=…&port=…&code=…`: the QR a paired Mac shows (Settings →
-	// Boxes → Pair a phone), opened by the iPhone's Camera. Pairs, and saves the
-	// box if it wasn't on the list.
+	// Boxes → Pair a phone), opened by the iPhone's Camera. Any app or web page can
+	// open a link like this, so nothing happens on its own: a malformed one is
+	// dropped, and a good one asks first, naming the box it would pair with (and
+	// save, if it wasn't on the list).
 	useEffect(() => {
 		const handle = (url: string | null): void => {
-			if (!url?.startsWith("ateamgo://pair")) return;
-			const param = (name: string) =>
-				decodeURIComponent(url.match(new RegExp(`[?&]${name}=([^&#]*)`))?.[1] ?? "");
-			const host = param("host");
-			const code = param("code");
-			if (!host || !code) return;
-			void (async () => {
-				await booted.current;
-				endDemo();
-				const box: SavedConnection = { host, port: param("port") || "8787" };
-				try {
-					await pairBox(box, code, true);
-					setView("board");
-				} catch (e) {
-					setError(e instanceof Error ? e.message : String(e));
-					setView("connect");
-				}
-			})();
+			const link = url ? parsePairLink(url) : null;
+			if (!link) return;
+			const { box, code } = link;
+			Alert.alert(
+				"Pair with this box?",
+				`Ateam Go pairs with the box at ${box.host}:${box.port} and adds it to your boxes. Only go on if you just showed this code on your Mac.`,
+				[
+					{ text: "Cancel", style: "cancel" },
+					{
+						text: "Pair",
+						onPress: () =>
+							void (async () => {
+								await booted.current;
+								endDemo();
+								try {
+									await pairBox(box, code, true);
+									setView("board");
+								} catch (e) {
+									setError(e instanceof Error ? e.message : String(e));
+									setView("connect");
+								}
+							})(),
+					},
+				],
+			);
 		};
 		void Linking.getInitialURL().then(handle);
 		const sub = Linking.addEventListener("url", (e) => handle(e.url));

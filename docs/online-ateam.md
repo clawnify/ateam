@@ -465,8 +465,9 @@ affected. Keep the ACL anyway: the lock and the ACL guard against different thin
 - **Lock one** from **Settings → Boxes → Access → Lock it** on the Mac, or **Lock it**
   under its card in the phone's **Boxes**. The device you lock it from is paired first.
 - **Pair a phone** from the same place on the Mac: a QR code the iPhone's Camera opens
-  in Ateam Go (`ateamgo://pair?...`), and the code itself to type on the box's card in
-  **Boxes** on the phone. A code works once, for 10 minutes.
+  in Ateam Go (`ateamgo://pair?...`), which asks before it pairs, naming the box, and the
+  code itself to type on the box's card in **Boxes** on the phone. A code works once, for
+  10 minutes.
 - **No paired device at hand** (a new box reached only over Tailscale, the first
   phone): run `ateam pair` in the box's terminal, which prints a code. `ateam pair
   --unlock` opens a box again when no paired device is left.
