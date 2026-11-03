@@ -38,8 +38,9 @@ APP_NAME = "ateam-boxes"
 INSTALL = "https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh"
 SSHD = ["/bin/sh", "-c", "mkdir -p /run/sshd && exec /usr/sbin/sshd -D -e"]
 # The minimum request, allowed to burst to 2 vCPU and 4 GiB: Modal bills the larger of what a sandbox
-# requests and what it uses, so a fixed 2 vCPU bills 2 vCPU all day. This sizing ran the engine in the cost
-# phase, but the snapshot measurements in modal.md were taken at a fixed 2 vCPU and 4 GiB.
+# requests and what it uses, so a fixed 2 vCPU bills 2 vCPU all day. An idle box stays under this request on
+# both runtimes, $1.00 a day (the `cost` phase). The control, tailscale and vm restore-clock runs used this
+# sizing; the earlier snapshot timings in modal.md were at a fixed 2 vCPU / 4 GiB.
 SIZE = {"cpu": (0.125, 2), "memory": (1024, 4096)}
 LIFETIME = 24 * 3600  # Modal's cap on `timeout`
 # A memory snapshot expires 7 days after the first one in its chain, and a snapshot of a restored
