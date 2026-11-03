@@ -1,8 +1,11 @@
 import {
 	type AgentDTO,
+	type Alias,
+	aliasLabel,
 	boxSupports,
 	dailyCron,
 	dailyTimeOf,
+	type EngineMember,
 	FEATURE_MIN_VERSION,
 	type LoopDTO,
 	loopScheduleLabel,
@@ -25,7 +28,6 @@ import {
 	Zap,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { type Alias, aliasLabel, type EngineMember } from "../unify";
 import { AgentPicker } from "./AgentPicker";
 import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
 import { SCHEDULE_PRESETS, type ScheduleKind, SchedulePicker } from "./SchedulePicker";

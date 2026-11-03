@@ -515,6 +515,7 @@ function Waiting({
 
 export function LeadScreen({
 	lead,
+	boxLabel,
 	supported,
 	boxVersion,
 	tasks,
@@ -524,6 +525,8 @@ export function LeadScreen({
 	onStartProposal,
 }: {
 	lead: LeadClient | null;
+	/** The box it runs on, named when the phone holds more than one; else null. */
+	boxLabel?: string | null;
 	/** The box serves its own Lead (protocol v24+). */
 	supported: boolean;
 	boxVersion: number;
@@ -681,7 +684,9 @@ export function LeadScreen({
 	return (
 		<View style={styles.root}>
 			<View style={styles.head}>
-				<Text style={styles.eyebrow}>Lead · this box</Text>
+				<Text style={styles.eyebrow} numberOfLines={1}>
+					Lead · {boxLabel ?? "this box"}
+				</Text>
 				<Pressable
 					onPress={newConversation}
 					disabled={!snap?.items.length}

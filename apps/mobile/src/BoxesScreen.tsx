@@ -1,15 +1,16 @@
-// The connection screen once the phone has connected somewhere: every box it has
-// reached, as cards (src/boxes.ts keeps the list). Tap one to connect, swipe left to
-// edit it or remove it from the list, + to add a Tailscale box. The form itself stays
-// in App.tsx. The words match the desktop's Run on list (EnvironmentPicker.tsx): a
-// box, Add a Tailscale box, Remove from this list, a check on the one in use.
+// Every box the phone has saved, as cards (src/boxes.ts keeps the list). The phone
+// holds all of them at once, as one board (src/fleet.ts), so a card says where its
+// box stands: connected, being reached, asleep, or why the last attempt failed. Tap
+// one that isn't connected to wake it; swipe left to edit it, remove it from the
+// list, or make it the box whose Lead the phone talks to; + to add a Tailscale box.
+// The form itself stays in App.tsx. The words match the desktop's Run on list
+// (EnvironmentPicker.tsx): a box, Add a Tailscale box, Remove from this list.
 //
-// Nothing here checks a box in the background. A probe is a connection into the
-// box, and connections are what keep a sleeping provider box awake, so a card only
-// says what the phone already knows: which box is connected, which one it's
-// reaching right now, and why the last attempt failed. While a box is being
-// reached, a tray under its card lists the steps (@ateam/protocol connect-steps): a woken
-// box can take minutes to answer, and a bare spinner for that long reads as stuck.
+// The phone dials every box over the tailnet, which leaves a sleeping one asleep;
+// only a tap (or opening something on it) wakes one through its provider. While a
+// box is being reached, a tray under its card lists the steps (@ateam/protocol
+// connect-steps): a woken box can take minutes to answer, and a bare spinner for
+// that long reads as stuck.
 
 import type { ConnectStep } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
@@ -25,22 +26,19 @@ import {
 	Text,
 	View,
 } from "react-native";
-import { boxKey, boxSubtitle, boxTitle, type SavedBox } from "./boxes";
+import { type BoxLink, boxKey, boxSubtitle, boxTitle, NEW_LINK, type SavedBox } from "./boxes";
 import { ProviderIcon } from "./ProviderIcon";
 import { C, CONTENT_MAX } from "./theme";
 
-/** How far a card slides open: room for Edit and Remove. */
-const ACTIONS_WIDTH = 160;
+/** How far a card slides open, per action behind it (Edit, Remove, and Lead). */
+const ACTION_WIDTH = 80;
 
 export function BoxesScreen({
 	leading,
 	boxes,
-	liveKey,
-	attemptKey,
-	failedKey,
-	progress,
+	links,
+	leadKey,
 	onCancel,
-	busy,
 	error,
 	connected,
 	openKey,
@@ -48,43 +46,43 @@ export function BoxesScreen({
 	onConnect,
 	onEdit,
 	onRemove,
+	onLeadBox,
 	onAdd,
-	onDisconnect,
 	onDemo,
 	onBoxTerminal,
 	onGithub,
 }: {
-	/** The nav bar's left slot: back to the board when connected, else the logo. */
+	/** The nav bar's left slot: back to the board when there is one, else the logo. */
 	leading: ReactNode;
 	boxes: SavedBox[];
-	/** The box connected now. */
-	liveKey: string | null;
-	/** The box a connection attempt is reaching right now. */
-	attemptKey: string | null;
-	/** The box the last attempt failed on; its card shows `error`. */
-	failedKey: string | null;
-	/** The steps of the current or last attempt, and the box they belong to. */
-	progress: { key: string; steps: ConnectStep[] } | null;
+	/** Where the link to each box stands, by its key. */
+	links: Record<string, BoxLink>;
+	/** The box whose Lead the phone talks to. */
+	leadKey: string | null;
 	/** Stop waiting for a woken box. */
-	onCancel: () => void;
-	/** An attempt is in flight: cards wait for it rather than start a second one. */
-	busy: boolean;
+	onCancel: (box: SavedBox) => void;
+	/** What went wrong outside any one box (a key that didn't save). */
 	error: string | null;
+	/** Some box is connected: the demo is offered only when none is. */
 	connected: boolean;
 	/** The card swiped open, if any: one at a time. */
 	openKey: string | null;
 	onSwipeOpen: (key: string | null) => void;
+	/** A card's tap: back to the board when its box is connected, else wake it. */
 	onConnect: (box: SavedBox) => void;
 	onEdit: (box: SavedBox) => void;
 	onRemove: (box: SavedBox) => void;
+	/** Make this the box whose Lead the phone talks to. */
+	onLeadBox: (box: SavedBox) => void;
 	onAdd: () => void;
-	onDisconnect: () => void;
 	onDemo: () => void;
-	/** Open the connected box's own terminal (outside every project). */
-	onBoxTerminal: () => void;
-	/** Open the connected box's GitHub access (sign-in, token, which repos it can push to). */
-	onGithub: () => void;
+	/** Open a connected box's own terminal (outside every project). */
+	onBoxTerminal: (box: SavedBox) => void;
+	/** Open a connected box's GitHub access (sign-in, token, which repos it can push to). */
+	onGithub: (box: SavedBox) => void;
 }) {
+	// With one box there's nothing to choose: its Lead is the Lead.
+	const choosingLead = boxes.length > 1;
 	return (
 		<View style={styles.root}>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
@@ -112,44 +110,48 @@ export function BoxesScreen({
 				<View style={styles.column}>
 					{boxes.map((box) => {
 						const key = boxKey(box);
-						const failed = key === failedKey && key !== attemptKey;
+						const link = links[key] ?? NEW_LINK;
+						const live = link.state === "live";
+						const isLead = choosingLead && key === leadKey;
 						return (
 							<BoxCard
 								key={key}
 								box={box}
-								live={key === liveKey}
-								reaching={key === attemptKey}
-								failure={failed ? error : null}
-								steps={progress?.key === key ? progress.steps : []}
-								onCancel={onCancel}
-								disabled={busy}
+								live={live}
+								reaching={link.state === "connecting"}
+								asked={link.asked}
+								asleep={link.state === "down" && link.asleep}
+								failure={link.state === "down" && !link.asleep ? link.error : null}
+								// A try in the background shows only as the spinner; the steps are for one asked for.
+								steps={link.asked ? link.steps : []}
+								lead={isLead}
+								onCancel={() => onCancel(box)}
 								open={key === openKey}
 								onOpenChange={(open) => onSwipeOpen(open ? key : null)}
 								onPress={() => onConnect(box)}
 								onEdit={() => onEdit(box)}
 								onRemove={() => onRemove(box)}
-								onTerminal={key === liveKey ? onBoxTerminal : undefined}
-								onGithub={key === liveKey ? onGithub : undefined}
+								onLead={choosingLead && !isLead ? () => onLeadBox(box) : undefined}
+								onTerminal={live ? () => onBoxTerminal(box) : undefined}
+								onGithub={live ? () => onGithub(box) : undefined}
 							/>
 						);
 					})}
 
 					<Text style={styles.hint}>
-						Swipe left on a box to edit it or remove it from this list.
+						{choosingLead
+							? "Swipe left on a box to edit it, remove it from this list, or talk to its Lead."
+							: "Swipe left on a box to edit it or remove it from this list."}
 					</Text>
 
 					{/* An error about one box is on its card; this is for the rest (a key that didn't save). */}
-					{error && !boxes.some((b) => boxKey(b) === failedKey && failedKey !== attemptKey) ? (
+					{error ? (
 						<View style={styles.errorBox}>
 							<Text style={styles.errorText}>{error}</Text>
 						</View>
 					) : null}
 
-					{connected ? (
-						<Pressable style={styles.disconnectBtn} onPress={onDisconnect} hitSlop={6}>
-							<Text style={styles.disconnectText}>Disconnect</Text>
-						</Pressable>
-					) : (
+					{connected ? null : (
 						<>
 							<View style={styles.demoRow}>
 								<View style={styles.demoRule} />
@@ -171,46 +173,61 @@ function BoxCard({
 	box,
 	live,
 	reaching,
+	asked,
+	asleep,
 	failure,
 	steps,
+	lead,
 	onCancel,
-	disabled,
 	open,
 	onOpenChange,
 	onPress,
 	onEdit,
 	onRemove,
+	onLead,
 	onTerminal,
 	onGithub,
 }: {
 	box: SavedBox;
 	live: boolean;
 	reaching: boolean;
+	/** The attempt reaching it was asked for, and wakes it: a tap waits for that one.
+	 *  A try in the background doesn't hold up a tap, which wakes it. */
+	asked: boolean;
+	/** Not answering, and most likely asleep: it has a provider, and nobody woke it. */
+	asleep: boolean;
 	/** Why the last attempt to reach this box failed, or null. */
 	failure: string | null;
 	/** What reaching this box went through; empty when it isn't being reached. */
 	steps: ConnectStep[];
+	/** The box whose Lead the phone talks to (marked only when there's a choice). */
+	lead: boolean;
 	onCancel: () => void;
-	disabled: boolean;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onPress: () => void;
 	onEdit: () => void;
 	onRemove: () => void;
-	/** The connected box's terminal; only on its card. */
+	/** Make this the Lead's box; absent on the Lead's box itself, or with one box. */
+	onLead?: () => void;
+	/** The box's terminal; only on a connected box's card. */
 	onTerminal?: () => void;
-	/** Only on the connected box's card, like the terminal. */
+	/** Only on a connected box's card, like the terminal. */
 	onGithub?: () => void;
 }) {
+	const actionsWidth = ACTION_WIDTH * (onLead ? 3 : 2);
+	// The responder below is made once, so it reads the width through a ref too.
+	const width = useRef(actionsWidth);
+	width.current = actionsWidth;
 	const x = useRef(new Animated.Value(0)).current;
-	// Where the card rests (0 closed, -ACTIONS_WIDTH open), so a drag starts from there.
+	// Where the card rests (0 closed, -width open), so a drag starts from there.
 	const rest = useRef(0);
 	// The responder is made once, so it reads the latest callback through a ref.
 	const openChange = useRef(onOpenChange);
 	openChange.current = onOpenChange;
 
 	const snap = (toOpen: boolean) => {
-		rest.current = toOpen ? -ACTIONS_WIDTH : 0;
+		rest.current = toOpen ? -width.current : 0;
 		Animated.spring(x, {
 			toValue: rest.current,
 			useNativeDriver: true,
@@ -231,13 +248,13 @@ function BoxCard({
 			onMoveShouldSetPanResponder: (_, g) =>
 				Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
 			onPanResponderMove: (_, g) => {
-				x.setValue(Math.max(-ACTIONS_WIDTH, Math.min(0, rest.current + g.dx)));
+				x.setValue(Math.max(-width.current, Math.min(0, rest.current + g.dx)));
 			},
 			onPanResponderRelease: (e, g) => {
 				// Judged by where the finger lifted, not by the last move: a quick flick can
 				// lift well past the last move event the card was sent (x0 is the grant point).
 				const at = rest.current + (e.nativeEvent.pageX - g.x0);
-				const toOpen = g.vx < -0.4 || (g.vx <= 0.4 && at < -ACTIONS_WIDTH / 2);
+				const toOpen = g.vx < -0.4 || (g.vx <= 0.4 && at < -width.current / 2);
 				snap(toOpen);
 				openChange.current(toOpen);
 			},
@@ -258,9 +275,11 @@ function BoxCard({
 		? "connected"
 		: reaching
 			? "connecting"
-			: failure
-				? `failed: ${failure}`
-				: null;
+			: asleep
+				? "asleep"
+				: failure
+					? `failed: ${failure}`
+					: null;
 
 	return (
 		<View>
@@ -268,10 +287,24 @@ function BoxCard({
 				{/* Behind the card, uncovered by the swipe. Hidden from VoiceOver while
 			    covered: the card offers the same two as actions. */}
 				<View
-					style={styles.actions}
+					style={[styles.actions, { width: actionsWidth }]}
 					accessibilityElementsHidden={!open}
 					importantForAccessibility={open ? "auto" : "no-hide-descendants"}
 				>
+					{onLead ? (
+						<Pressable
+							style={[styles.action, styles.editAction]}
+							onPress={() => {
+								onOpenChange(false);
+								onLead();
+							}}
+							accessibilityRole="button"
+							accessibilityLabel={`Talk to the Lead on ${title}`}
+						>
+							<Feather name="message-circle" size={16} color={C.ink} />
+							<Text style={styles.editText}>Lead</Text>
+						</Pressable>
+					) : null}
 					<Pressable
 						style={[styles.action, styles.editAction]}
 						onPress={() => {
@@ -303,16 +336,17 @@ function BoxCard({
 						style={styles.card}
 						// An open card's tap closes it; only a closed card connects.
 						onPress={() => (open ? onOpenChange(false) : onPress())}
-						disabled={disabled && !open}
+						disabled={reaching && asked && !open}
 						accessibilityRole="button"
-						accessibilityLabel={`${title}, ${subtitle}${state ? `, ${state}` : ""}`}
-						accessibilityHint={live ? "Returns to the board" : "Connects to this box"}
+						accessibilityLabel={`${title}${lead ? ", Lead" : ""}, ${subtitle}${state ? `, ${state}` : ""}`}
+						accessibilityHint={live ? "Returns to the board" : "Wakes and connects this box"}
 						// The card is one VoiceOver element, so the buttons inside it are its
 						// actions too, or VoiceOver couldn't reach them.
 						accessibilityActions={[
 							{ name: "activate" },
 							...(onGithub ? [{ name: "github", label: "GitHub on this box" }] : []),
 							...(onTerminal ? [{ name: "terminal", label: "Box terminal" }] : []),
+							...(onLead ? [{ name: "lead", label: "Talk to this box's Lead" }] : []),
 							{ name: "edit", label: "Edit" },
 							{ name: "remove", label: "Remove from this list" },
 						]}
@@ -322,19 +356,27 @@ function BoxCard({
 							else if (action === "remove") onRemove();
 							else if (action === "github") onGithub?.();
 							else if (action === "terminal") onTerminal?.();
-							else if (!disabled) onPress();
+							else if (action === "lead") onLead?.();
+							else if (!(reaching && asked)) onPress();
 						}}
 					>
 						<ProviderIcon providerId={box.provider?.id} />
 						<View style={styles.cardText}>
-							<Text style={styles.cardTitle} numberOfLines={1}>
-								{title}
-							</Text>
+							<View style={styles.titleRow}>
+								<Text style={styles.cardTitle} numberOfLines={1}>
+									{title}
+								</Text>
+								{lead ? <Text style={styles.leadTag}>Lead</Text> : null}
+							</View>
 							<Text
 								style={[styles.cardSub, failure && !tray ? styles.cardSubError : null]}
 								numberOfLines={2}
 							>
-								{failure && !tray ? failure : subtitle}
+								{failure && !tray
+									? failure
+									: asleep
+										? `Asleep · tap to wake · ${subtitle}`
+										: subtitle}
 							</Text>
 						</View>
 						{onGithub ? (
@@ -363,6 +405,8 @@ function BoxCard({
 							<Feather name="check" size={17} color={C.ink} />
 						) : reaching ? (
 							<ActivityIndicator color={C.muted} size="small" />
+						) : asleep ? (
+							<Feather name="moon" size={16} color={C.muted} />
 						) : failure ? (
 							<Feather name="alert-circle" size={20} color={C.red} />
 						) : null}
@@ -465,7 +509,6 @@ const styles = StyleSheet.create({
 		top: 0,
 		right: 0,
 		bottom: 0,
-		width: ACTIONS_WIDTH,
 		flexDirection: "row",
 	},
 	action: { flex: 1, alignItems: "center", justifyContent: "center", gap: 4 },
@@ -493,7 +536,18 @@ const styles = StyleSheet.create({
 		justifyContent: "center",
 	},
 	cardText: { flex: 1, gap: 3 },
-	cardTitle: { color: C.ink, fontSize: 15, fontWeight: "600" },
+	titleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+	cardTitle: { flexShrink: 1, color: C.ink, fontSize: 15, fontWeight: "600" },
+	leadTag: {
+		color: C.muted,
+		fontSize: 10,
+		fontWeight: "700",
+		paddingHorizontal: 6,
+		paddingVertical: 2,
+		borderRadius: 5,
+		backgroundColor: C.sunken,
+		overflow: "hidden",
+	},
 	cardSub: { color: C.faint, fontSize: 12, fontVariant: ["tabular-nums"] },
 	cardSubError: { color: C.red },
 
@@ -531,15 +585,6 @@ const styles = StyleSheet.create({
 		marginTop: 6,
 	},
 	errorText: { color: C.red, fontSize: 13, lineHeight: 18 },
-	disconnectBtn: {
-		marginTop: 10,
-		borderWidth: 1,
-		borderColor: "rgba(248,113,113,0.4)",
-		borderRadius: 10,
-		paddingVertical: 12,
-		alignItems: "center",
-	},
-	disconnectText: { color: C.red, fontSize: 14, fontWeight: "700" },
 	demoRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 10 },
 	demoRule: { flex: 1, height: 1, backgroundColor: C.line },
 	demoOr: { color: C.faint, fontSize: 12 },

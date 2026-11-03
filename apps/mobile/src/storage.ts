@@ -1,6 +1,7 @@
 // Persist the boxes the phone has connected to, so they survive app restarts and
 // reinstalls. Otherwise every launch (and every rebuild) starts blank and you
 // retype the box's Tailscale IP. AsyncStorage is RN's simple key-value store.
+import { asSnapshot, type BoxSnapshot } from "@ateam/protocol";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { parseBoxes, type SavedBox } from "./boxes";
@@ -41,6 +42,83 @@ export async function saveBoxes(boxes: SavedBox[]): Promise<void> {
 		await AsyncStorage.setItem(BOXES_KEY, JSON.stringify(boxes));
 	} catch {
 		/* best-effort: a failed persist just shows the list as it was next launch */
+	}
+}
+
+// Each box's board as the phone last saw it (src/fleet.ts), so a box that is
+// asleep when the app opens still lists its projects and tasks.
+const boardKey = (box: string) => `ateam.board.${box}`;
+
+/** Every saved box's last-seen board that parses; a box without one is left out. */
+export async function loadBoards(boxes: string[]): Promise<Map<string, BoxSnapshot>> {
+	const out = new Map<string, BoxSnapshot>();
+	await Promise.all(
+		boxes.map(async (box) => {
+			try {
+				const raw = await AsyncStorage.getItem(boardKey(box));
+				const snap = asSnapshot(raw ? JSON.parse(raw) : null);
+				if (snap) out.set(box, snap);
+			} catch {
+				/* unreadable reads as none: the box's cards wait for it to answer */
+			}
+		}),
+	);
+	return out;
+}
+
+export async function saveBoard(box: string, snapshot: BoxSnapshot): Promise<void> {
+	try {
+		await AsyncStorage.setItem(boardKey(box), JSON.stringify(snapshot));
+	} catch {
+		/* best-effort: next launch shows the board kept before this one */
+	}
+}
+
+export async function removeBoard(box: string): Promise<void> {
+	try {
+		await AsyncStorage.removeItem(boardKey(box));
+	} catch {
+		/* best-effort: a removed box's board is never read again anyway */
+	}
+}
+
+// The box whose Lead the corner button and the composer's Lead talk to, picked
+// in Boxes. Each box runs its own Lead, which sees that box's tasks only.
+const LEAD_BOX_KEY = "ateam.leadBox";
+
+export async function loadLeadBox(): Promise<string | null> {
+	try {
+		return await AsyncStorage.getItem(LEAD_BOX_KEY);
+	} catch {
+		return null;
+	}
+}
+
+export async function saveLeadBox(box: string): Promise<void> {
+	try {
+		await AsyncStorage.setItem(LEAD_BOX_KEY, box);
+	} catch {
+		/* best-effort: the Lead falls back to the box used last */
+	}
+}
+
+// The box a new task runs on when its project is on more than one (the
+// composer's Run on), kept like the desktop's `ateam.runOn`.
+const RUN_ON_KEY = "ateam.runOn";
+
+export async function loadRunOn(): Promise<string | null> {
+	try {
+		return await AsyncStorage.getItem(RUN_ON_KEY);
+	} catch {
+		return null;
+	}
+}
+
+export async function saveRunOn(box: string): Promise<void> {
+	try {
+		await AsyncStorage.setItem(RUN_ON_KEY, box);
+	} catch {
+		/* best-effort: Run on starts on the project's first box next time */
 	}
 }
 

@@ -15,13 +15,17 @@ import type {
 	TaskTriage,
 } from "@ateam/protocol";
 import {
+	type Alias,
+	aliasLabel,
 	BROWSER_NOT_INSTALLED_ERROR,
 	boxSupports,
 	byLatestActivity,
 	describeMergeResult,
+	type EngineMember,
 	FEATURE_MIN_VERSION,
 	PROTOCOL_VERSION,
 	TASK_REMOVING_ERROR,
+	unifyProjects,
 	wakeMachineName,
 } from "@ateam/protocol";
 import {
@@ -136,12 +140,6 @@ import {
 } from "./sidebar-view";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
-import {
-	type Alias,
-	aliasLabel,
-	type EngineMember,
-	unifyProjects,
-} from "./unify";
 import { useBoxesNeedingYou } from "./useBoxesNeedingYou";
 import { useGithubIssues } from "./useGithubIssues";
 

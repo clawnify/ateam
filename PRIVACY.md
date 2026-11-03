@@ -23,7 +23,11 @@ Ateam Go stores a small amount of data locally on your phone, and only there:
   have the app wake it through its provider (below), the provider you picked
   and the machine's name there. Each one stays in the app's list until you
   remove it,
-- your last-selected project,
+- the board each machine showed when the phone last reached it (its projects,
+  tasks and loops), so a machine that is asleep when you open the app still
+  lists them; it goes when you remove that machine from the list,
+- your last-selected project, the machine whose Lead chat you use, and the
+  machine new tasks start on when a project is on more than one,
 - your preview-port preference, and
 - your API key for each provider you have the app wake a machine through, which
   is kept in the iOS Keychain, and
@@ -32,10 +36,10 @@ Ateam Go stores a small amount of data locally on your phone, and only there:
   push service is involved, and the app asks for notification permission the
   first time there is one to schedule.
 
-This exists solely so the app reopens where you left off and you can switch
-machines without retyping them. Apart from the provider key and machine name,
-which go to that provider as described below, it never leaves the device, and
-deleting the app deletes it.
+This exists solely so the app reopens where you left off, shows every machine's
+projects even while one is asleep, and never asks you to retype a machine. Apart
+from the provider key and machine name, which go to that provider as described
+below, it never leaves the device, and deleting the app deletes it.
 
 The Ateam desktop app stores your projects, tasks, and settings in a local
 database on your computer. That data likewise never leaves your machine through

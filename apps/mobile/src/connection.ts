@@ -16,6 +16,7 @@ import {
 	PROTOCOL_VERSION,
 	type ProjectDTO,
 	type RemoteRepoDTO,
+	type RpcClient,
 	requestBoxUpdate,
 	type SystemInfo,
 	serverHandshake,
@@ -38,6 +39,9 @@ export const mobileNative: NativeClientApi = {
 
 export interface Connection {
 	api: AteamApi;
+	/** The RPC under `api`, read through tolerantRpc: what the merged board
+	 *  (src/fleet.ts) routes this box's share of every call to. */
+	rpc: RpcClient;
 	info: SystemInfo;
 	/** True when the box speaks a different wire contract than this app. The
 	 *  connection is live either way; this is what the UI warns about. */
@@ -58,9 +62,10 @@ export interface Connection {
 	 * Calls that address THIS box rather than an entity on it. They stay off
 	 * AteamApi for the same reason `update` does: a client holding several engines
 	 * has no answer to "which one?", so the aggregate cannot route them and would
-	 * silently fall back to the local machine. The phone holds exactly one box, so
-	 * here the question doesn't arise. Gate `repos` on FEATURE_MIN_VERSION
-	 * .githubProjects — a pre-v9 box rejects it as an unknown method.
+	 * silently fall back to the local machine. The phone's merged board refuses them
+	 * (src/fleet.ts), so they go through the Connection of the box they're about.
+	 * Gate `repos` on FEATURE_MIN_VERSION.githubProjects — a pre-v9 box rejects it
+	 * as an unknown method.
 	 */
 	box: {
 		/** Every GitHub repo this box's `gh` can see, most recently pushed first. */
@@ -137,8 +142,10 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 		},
 	};
 
+	const tolerant = tolerantRpc(rpc, info.protocolVersion);
 	return {
-		api: buildAteamApi(tolerantRpc(rpc, info.protocolVersion), native),
+		api: buildAteamApi(tolerant, native),
+		rpc: tolerant,
 		info,
 		skewed,
 		update: () => requestBoxUpdate(rpc),
