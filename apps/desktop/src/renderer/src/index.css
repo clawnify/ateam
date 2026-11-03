@@ -466,6 +466,16 @@ input {
 	background: var(--text-dim);
 	flex: none;
 }
+/* The repo owner's GitHub avatar in the dot's 14px slot. GitHub draws org
+   logos as rounded squares; a faint inset edge keeps a dark logo visible. */
+.project-avatar {
+	width: 14px;
+	height: 14px;
+	border-radius: 3px;
+	outline: 1px solid rgb(255 255 255 / 0.1);
+	outline-offset: -1px;
+	flex: none;
+}
 /* A file from Finder held over a project: dropping it starts a task there. */
 .project-switcher.file-drop,
 .rail-tile.file-drop {
@@ -1669,6 +1679,103 @@ input {
 }
 .changes .del {
 	color: var(--red);
+}
+
+/* Changes by step (ChangeSteps.tsx): an index into the diff, wider than the
+   flat list in a full panel because each file carries a note. In the side
+   panel it keeps the flat list's width (the rule above wins there), so the
+   diff beside it gets no less room than it has today. */
+.changes.by-step {
+	flex-basis: 300px;
+}
+.changes-switch {
+	display: flex;
+	gap: 2px;
+}
+.changes-switch button {
+	background: none;
+	border: none;
+	border-radius: 4px;
+	padding: 2px 5px;
+	color: var(--text-dim);
+	font-size: 12px;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.changes-switch button:hover,
+.changes-switch button[aria-pressed="true"] {
+	color: var(--text);
+}
+.changes-switch button[aria-pressed="true"] {
+	background: var(--bg-elev-2);
+}
+.steps {
+	display: flex;
+	flex-direction: column;
+	padding-bottom: 8px;
+}
+.steps-status {
+	padding: 2px 10px 6px;
+	color: var(--text-dim);
+	font-size: 11.5px;
+	line-height: 1.4;
+}
+.step {
+	padding: 8px 0 4px;
+	border-top: 1px solid var(--border);
+}
+.step-title {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	padding: 0 10px;
+	font-weight: 600;
+	font-size: 12px;
+}
+.step-num {
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+.step.unexplained .step-title {
+	color: var(--amber);
+}
+.step-why {
+	margin: 2px 10px 4px;
+	color: var(--text-dim);
+	font-size: 11.5px;
+	line-height: 1.4;
+}
+.step-file {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	width: 100%;
+	padding: 3px 10px;
+	background: transparent;
+	border: none;
+	color: var(--text);
+	text-align: left;
+	cursor: pointer;
+}
+.step-file:hover,
+.step-file.selected {
+	background: var(--bg-elev-2);
+}
+.step-file-head {
+	display: flex;
+	justify-content: space-between;
+	gap: 8px;
+	min-width: 0;
+	font-family: ui-monospace, Menlo, monospace;
+	font-size: 11.5px;
+}
+.changes .fdir {
+	color: var(--text-dim);
+}
+.step-note {
+	color: var(--text-dim);
+	font-size: 11px;
+	line-height: 1.35;
 }
 
 /* file diff view (react-diff-view, re-themed dark) */

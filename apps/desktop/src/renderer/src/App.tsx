@@ -86,6 +86,7 @@ import {
 	useState,
 } from "react";
 import { SessionGlyphs, SessionIcon } from "./components/AgentIcon";
+import { ChangesPane } from "./components/ChangeSteps";
 import { ChangesList, DiffStat } from "./components/Changes";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { ConnectSteps } from "./components/ConnectSteps";
@@ -1757,6 +1758,7 @@ export function App() {
 						{boundProjectId ? (
 							<ProjectTitle
 								name={boundProject?.name ?? "…"}
+								owner={boundProject?.githubOwner ?? null}
 								color={boundProject?.color ?? null}
 								path={boundProject?.repoPath}
 							/>
@@ -2440,6 +2442,7 @@ export function App() {
 							projects={projects}
 							onOpenTask={openTask}
 							onOpenProposal={openLeadProposal}
+							scope={boundProject?.name}
 						/>
 					) : (
 						<LoopsPanel
@@ -2472,6 +2475,7 @@ export function App() {
 							onOpenTask={openTask}
 							onOpenProposal={openLeadProposal}
 							onHide={() => setLeadSide(false)}
+							scope={boundProject?.name}
 						/>
 					</aside>
 				</>
@@ -4182,7 +4186,8 @@ function TaskPanel({
 
 				{changesOpen && (
 					<div className="changes-view">
-						<ChangesList
+						<ChangesPane
+							taskId={task.id}
 							diff={diff}
 							selected={viewFile}
 							onSelect={setViewFile}

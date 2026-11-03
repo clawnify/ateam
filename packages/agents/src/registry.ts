@@ -108,6 +108,12 @@ export interface HeadlessInvocation {
 	 * answer (Claude's `--output-format text`).
 	 */
 	lastMessageFlag?: string;
+	/**
+	 * The flag in `args` that names the model, for a caller whose job needs a
+	 * different one than the default those args pin (see `askAgent`'s `model`).
+	 * Absent for a CLI whose model ids differ per account (Codex) or that pins none.
+	 */
+	modelFlag?: string;
 }
 
 /**
@@ -155,6 +161,7 @@ export const AGENTS = [
 		headless: {
 			args: ["-p", "--safe-mode", "--restricted", "--model", "haiku", "--output-format", "text"],
 			prompt: "stdin",
+			modelFlag: "--model",
 		},
 	},
 	{

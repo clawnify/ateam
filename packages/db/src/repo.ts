@@ -4,6 +4,7 @@ import {
 	agentSessions,
 	type BoardChange,
 	boardChanges,
+	type ChangeStepsBody,
 	type Host,
 	hosts,
 	type Loop,
@@ -18,7 +19,9 @@ import {
 	projects,
 	type Settings,
 	settings,
+	type TaskChangeSteps,
 	type TaskPage,
+	taskChangeSteps,
 	taskPages,
 	tasks,
 } from "./schema";
@@ -245,6 +248,23 @@ export const repo = {
 
 	getTaskPageHtml(db: AteamDb, taskId: string): string | undefined {
 		return db.select().from(taskPages).where(eq(taskPages.taskId, taskId)).get()?.html;
+	},
+
+	/** The task's change steps, the last ones written; undefined before the first. */
+	getChangeSteps(db: AteamDb, taskId: string): TaskChangeSteps | undefined {
+		return db.select().from(taskChangeSteps).where(eq(taskChangeSteps.taskId, taskId)).get();
+	},
+
+	/** Replace the task's change steps with the ones written for `diffKey`. */
+	setChangeSteps(
+		db: AteamDb,
+		taskId: string,
+		row: { diffKey: string; body: ChangeStepsBody; madeAt: number },
+	) {
+		db.insert(taskChangeSteps)
+			.values({ taskId, ...row })
+			.onConflictDoUpdate({ target: taskChangeSteps.taskId, set: row })
+			.run();
 	},
 
 	// ---- agent sessions & events ----
