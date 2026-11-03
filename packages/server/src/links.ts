@@ -256,7 +256,7 @@ export class BoxLinks implements PeerRelay {
 			to: string;
 			body: string;
 			hop: number;
-			from: { taskId: string; name: string; agent: string };
+			from: { taskId: string; name: string; agent: string; lead?: boolean };
 		},
 	): Promise<SendResult> {
 		const l = [...this.lives.values()].find((x) => x.stored.name === box);
@@ -279,6 +279,20 @@ export class BoxLinks implements PeerRelay {
 		} catch (e) {
 			return { ok: false, reason: `the box ${box} didn't take it: ${message(e)}` };
 		}
+	}
+
+	/** The Lead here messages a task on the linked box behind `backend`. It goes as
+	 *  a message from this box's Lead, which that box weighs as a colleague's
+	 *  request: a link never speaks with the user's own weight. */
+	asLead(backend: AggregateBackend, to: string, body: string): Promise<SendResult> {
+		const name = this.nameOf(backend);
+		if (!name) return Promise.resolve({ ok: false, reason: "that box isn't linked any more" });
+		return this.deliver(name, {
+			to,
+			body,
+			hop: 1,
+			from: { taskId: "lead", name: "Lead", agent: "Lead", lead: true },
+		});
 	}
 
 	// ---- connections ----

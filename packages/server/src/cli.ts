@@ -125,7 +125,23 @@ async function runDaemon(): Promise<void> {
 		dir: join(DATA_DIR, "lead"),
 		log: (line) => console.log(line),
 		reach: {
-			handle: (method, args) => reach.handle(method, args),
+			handle: async (method, args) => {
+				// A task on a linked box: the Lead's message goes as this box's Lead,
+				// weighed there as a colleague's request, and an answer to its agent's
+				// question isn't passed on: a link never speaks, or approves, as the user.
+				if (method === CH.peersSendFromLead || method === CH.tasksAnswerQuestion) {
+					const req = (args[0] ?? {}) as { taskId?: unknown; body?: unknown };
+					const at = typeof req.taskId === "string" ? reach.ownerOf.get(req.taskId) : undefined;
+					if (at && at !== here) {
+						if (method === CH.tasksAnswerQuestion)
+							throw new Error(
+								`That task is on ${links.nameOf(at)}: the user answers it from their Mac or phone, which reach every box. A link between boxes can't answer for them.`,
+							);
+						return links.asLead(at, req.taskId as string, String(req.body ?? ""));
+					}
+				}
+				return reach.handle(method, args);
+			},
 			machineOf: (id) => links.nameOf(reach.ownerOf.get(id)),
 			onTaskUpdated: (cb) =>
 				links.onTaskUpdated((task, backend) => {

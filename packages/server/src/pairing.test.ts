@@ -216,6 +216,11 @@ describe("a connection to a box's network port", () => {
 		await expect(c.call(CH.ptyWrite, "x", "rm -rf ~")).rejects.toThrow(BOX_REFUSED);
 		await expect(c.call(CH.gitPush, {})).rejects.toThrow(BOX_REFUSED);
 		await expect(c.call(CH.linksSet, {})).rejects.toThrow(BOX_REFUSED);
+		// Never with the user's weight: not as the Lead, not answering for them.
+		await expect(c.call(CH.peersSendFromLead, { taskId: "t", body: "x" })).rejects.toThrow(
+			BOX_REFUSED,
+		);
+		await expect(c.call(CH.tasksAnswerQuestion, { taskId: "t" })).rejects.toThrow(BOX_REFUSED);
 	});
 
 	it("paired as a box, is held to that whatever its hello says", async () => {

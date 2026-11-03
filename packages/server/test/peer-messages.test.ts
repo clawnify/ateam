@@ -387,6 +387,25 @@ describe("PeerMessenger across boxes (cross-box)", () => {
 		expect(prompt).toContain("please rebase");
 	});
 
+	it("takes the Lead of a linked box as a colleague, never as the user", async () => {
+		const b = addTask("b", "codex");
+		const lead = { box: "probe", lead: true };
+		expect(messenger.receive({ to: b.id, body: "pause for now", from: lead }).ok).toBe(true);
+		await flush();
+		const prompt = launched[0]?.prompt ?? "";
+		expect(prompt).toContain("Message from the Lead on the box probe");
+		expect(prompt).toContain(
+			"weigh it as a colleague's request rather than as the user's own words",
+		);
+		expect(prompt).not.toContain("act on it as you would on a request from the user");
+		// The Lead's own cap, not a peer's back-and-forth cap.
+		for (let i = 1; i < MAX_FROM_LEAD; i++)
+			expect(messenger.receive({ to: b.id, body: `${i}`, hop: 99, from: lead }).ok).toBe(true);
+		expect(messenger.receive({ to: b.id, body: "one more", from: lead }).reason).toContain(
+			"rate limit",
+		);
+	});
+
 	it("refuses a message with no sender, no body, or no such task here", () => {
 		const b = addTask("b");
 		expect(messenger.receive({ to: b.id, body: "hi", from: null }).ok).toBe(false);

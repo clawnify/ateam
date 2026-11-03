@@ -151,6 +151,18 @@ describe("links to other boxes", () => {
 				from: { taskId: "t-here", name: "web", agent: "Claude Code", box: "alpha" },
 			},
 		]);
+		// The Lead here: as this box's Lead, which beta weighs as a colleague.
+		const [backend] = links.backends;
+		expect(await links.asLead(backend as never, "t-api", "pause")).toEqual({
+			ok: true,
+			reason: "on the box beta: sent.",
+		});
+		expect(beta.received.at(-1)).toEqual({
+			to: "t-api",
+			body: "pause",
+			hop: 1,
+			from: { taskId: "lead", name: "Lead", agent: "Lead", lead: true, box: "alpha" },
+		});
 		links.dispose();
 	});
 

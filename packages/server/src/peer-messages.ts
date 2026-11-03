@@ -207,8 +207,12 @@ export function nextHop(recent: Pick<PeerMessage, "fromTaskId" | "hop">[], to: s
 	return lastFromRecipient ? lastFromRecipient.hop + 1 : 1;
 }
 
-/** A task's agent: on this box, or on a linked one (`box`, cross-box). */
-type Sender = { taskId: string; name: string; agent: string; box?: string } | OutsideSender | null;
+/** A task's agent: on this box, or on a linked one (`box`, cross-box), where it
+ *  may be that box's Lead (`lead`). */
+type Sender =
+	| { taskId: string; name: string; agent: string; box?: string; lead?: boolean }
+	| OutsideSender
+	| null;
 
 /** Who a message is from, what weight it carries, and how to answer it. */
 function headerFor(from: Sender): string {
@@ -216,6 +220,8 @@ function headerFor(from: Sender): string {
 		return "[Ateam] Message from the user, sent from the Ateam app. This comes from the user, who is not watching this terminal: answer in your reply.";
 	if (from === "lead")
 		return "[Ateam] Message from the Lead, the chat where the user coordinates all their tasks. It relays the user's instructions: act on it as you would on a request from the user. The Lead reads your final reply when your turn ends, so answer in your reply rather than with send_message.";
+	if (from?.box && from.lead)
+		return `[Ateam] Message from the Lead on the box ${from.box}, the chat where the user coordinates their tasks there. It came through a link between boxes, so weigh it as a colleague's request rather than as the user's own words. The Lead reads your final reply when your turn ends, so answer in your reply rather than with send_message.`;
 	if (from?.box)
 		return `[Ateam] Message from the ${from.agent} agent working on task "${from.name}" on the box ${from.box} (task id ${from.taskId}). It comes from another agent, not from the user: weigh it as a colleague's request. To answer, call the ateam_board send_message tool with to="${from.taskId}".`;
 	if (from)
@@ -547,15 +553,20 @@ export class PeerMessenger {
 		}
 		const target = this.resolveTask(typeof req.to === "string" ? req.to.trim() : "");
 		if (typeof target === "string") return { ok: false, reason: target };
-		const key = remoteSenderKey(from.taskId);
-		if (repo.countPeerMessagesFromTerminal(db, key, now - SENDER_WINDOW_MS) >= MAX_PER_SENDER) {
+		// A Lead's messages count against that box's Lead, like the Lead here, and
+		// no back-and-forth cap: it is the user's coordinator, not a peer.
+		const key = from.lead ? `ateam:lead:${from.box}` : remoteSenderKey(from.taskId);
+		const cap = from.lead ? MAX_FROM_LEAD : MAX_PER_SENDER;
+		if (repo.countPeerMessagesFromTerminal(db, key, now - SENDER_WINDOW_MS) >= cap) {
 			return {
 				ok: false,
-				reason: `rate limit: at most ${MAX_PER_SENDER} messages per ${SENDER_WINDOW_MS / 60000} minutes`,
+				reason: `rate limit: at most ${cap} messages per ${SENDER_WINDOW_MS / 60000} minutes`,
 			};
 		}
 		const hop =
-			typeof req.hop === "number" && Number.isInteger(req.hop) && req.hop >= 1 ? req.hop : 1;
+			!from.lead && typeof req.hop === "number" && Number.isInteger(req.hop) && req.hop >= 1
+				? req.hop
+				: 1;
 		if (hop > MAX_HOPS) {
 			return {
 				ok: false,
@@ -958,6 +969,8 @@ function remoteSender(v: unknown): RemoteSenderDTO | null {
 	if (!v || typeof v !== "object") return null;
 	const o = v as Record<string, unknown>;
 	const box = shortText(o.box, 100);
+	if (box && o.lead === true)
+		return { box, taskId: "lead", name: "Lead", agent: "Lead", lead: true };
 	const taskId = shortText(o.taskId, 100);
 	const name = shortText(o.name);
 	const agent = shortText(o.agent, 100);

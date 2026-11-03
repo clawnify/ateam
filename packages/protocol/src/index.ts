@@ -1110,6 +1110,9 @@ export interface RemoteSenderDTO {
 	name: string;
 	/** The agent's label ("Claude Code"). */
 	agent: string;
+	/** The Lead chat on that box rather than a task's agent. Through a link it is
+	 *  weighed as a colleague's request, never as the user's own words. */
+	lead?: boolean;
 }
 
 /** What `system:update` reports back before the engine goes down to be replaced. */

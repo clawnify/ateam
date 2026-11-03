@@ -33,8 +33,11 @@ const FORWARDED: Record<keyof EngineEventMap, true> = {
  *  by. Never terminal output. */
 const BOX_EVENTS: readonly (keyof EngineEventMap)[] = ["taskUpdated", "taskRemoved"];
 
-/** All a link from another box may call: read the board, list the tasks and
- *  message them (its agents and its Lead), and pass on the user's answer. */
+/** All a link from another box may call: read the board, and list the tasks
+ *  and message them as another box (peers:sendFromBox), its Lead included. Not
+ *  peers:sendFromLead, which carries the user's own weight, nor answering an
+ *  agent's question, which can approve a permission prompt: a box that is
+ *  compromised must not speak, or approve, as the user on the boxes it links to. */
 const BOX_METHODS = new Set<string>([
 	CH.systemHello,
 	CH.projectsList,
@@ -43,8 +46,6 @@ const BOX_METHODS = new Set<string>([
 	CH.tasksLastReply,
 	CH.peersList,
 	CH.peersSendFromBox,
-	CH.peersSendFromLead,
-	CH.tasksAnswerQuestion,
 ]);
 
 /** What a link from another box is told when it calls anything else. */

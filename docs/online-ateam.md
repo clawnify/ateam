@@ -487,11 +487,13 @@ every box this Mac holds to every other one:
 - **Agents on one box reach the tasks on the others.** `list_peers` lists them too, each
   with the box it is on, and `send_message` to one of them goes across. The agent there
   reads who sent it and from which box, and its reply comes straight back.
-- **A Lead that runs on a box sees them all:** its board, its messages and the answers
-  it passes on reach every linked box.
+- **A Lead that runs on a box sees them all:** its board covers every linked box, and it
+  can message their tasks. There its message is weighed as a colleague's request, not
+  as your own words, and it can't answer an agent's question for you: answer those from
+  your Mac or your phone, which reach every box.
 - **A link can only read the board and send messages.** It gets task updates, never
   terminal output, and the box it reaches refuses anything else: terminals, git,
-  deleting, installing.
+  deleting, installing, and speaking or answering as you.
 - **Each link is a pairing** of kind "box" on the box it reaches, listed under
   **Access** there. Unpair it to cut that link; turning this off and on again sets it up
   anew. The Mac sets the pairings up, since it holds every box: it asks the box being
