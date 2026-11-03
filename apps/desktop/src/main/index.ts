@@ -226,10 +226,14 @@ function createWindow(projectId?: string): BrowserWindow {
 	return win;
 }
 
-// A clicked notification: bring the dashboard forward (or open one) and show
-// the task there. The dashboard spans every project, so it can show any task.
-function openTaskInMainWindow(task: TaskDTO): void {
-	let win = [...windowProject].find(([w, pid]) => pid === null && !w.isDestroyed())?.[0];
+// A clicked notification: bring the task's own project window forward when one
+// is open, else the dashboard (or open one), and show the task there. The
+// dashboard spans every project, so it can show any task.
+function openTaskInItsWindow(task: TaskDTO): void {
+	const live = [...windowProject].filter(([w]) => !w.isDestroyed());
+	let win =
+		live.find(([, pid]) => pid === task.projectId)?.[0] ??
+		live.find(([, pid]) => pid === null)?.[0];
 	if (!win) {
 		win = createWindow();
 		win.webContents.once("did-finish-load", () => win?.webContents.send(CH.evtOpenTask, task));
@@ -288,14 +292,24 @@ app
 		// window management (detaching a project) is desktop-native, passed to registerIpc.
 		// Every engine's events pass through here on their way to the windows, so
 		// this is where a due wait becomes a macOS notification (wait-notify.ts).
-		const notifyWait = createWaitNotifier(openTaskInMainWindow);
+		const notifyWait = createWaitNotifier(openTaskInItsWindow, {
+			focusedProject: () => {
+				const win = BrowserWindow.getFocusedWindow();
+				return win ? (windowProject.get(win) ?? null) : null;
+			},
+		});
+		// Leaving a project window (to another window or app) shows the other
+		// projects' banners held while it was in front.
+		app.on("browser-window-blur", (_e, win) => {
+			if (windowProject.get(win)) notifyWait.release();
+		});
 		// The Lead starts below, once the host exists; until then no task reports back to it.
 		let lead: Lead | null = null;
 		const host = createHost({
 			localEngine: engine,
 			broadcast: (channel, ...args) => {
 				if (channel === CH.evtTaskUpdated) {
-					notifyWait(args[0] as TaskDTO);
+					notifyWait.notify(args[0] as TaskDTO);
 					lead?.onTaskUpdated(args[0] as TaskDTO);
 				}
 				broadcast(channel, ...args);
