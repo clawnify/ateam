@@ -4522,6 +4522,9 @@ input {
 	border-radius: 12px;
 	background: rgba(255, 255, 255, 0.03);
 	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+	/* How tall the open reply gets before it scrolls (.lead-reply-capped), and
+	   the most its area keeps when a shorter one is picked (ThreadView). */
+	--lead-reply-cap: min(320px, 50vh);
 }
 .lead-agent-head {
 	display: flex;
@@ -4573,14 +4576,12 @@ input {
 	flex-direction: column;
 	gap: 6px;
 }
-/* The folded lines above the open reply: a long thread scrolls here, so the
-   card stays about one screen tall (Expand shows it whole). About five and a
-   half lines: the half-cut top line says there are more, where macOS shows no
-   scrollbar until a scroll. The side padding
-   makes room for the lines' hover bleed (.lead-fold's negative margin), and
-   relative makes the box the lines' offsetParent (foldsRest). */
+/* The list of a thread's entries above the open one: a long thread scrolls
+   here, so the card stays about one screen tall (Expand shows it whole).
+   About five and a half lines: the half-cut top line says there are more,
+   where macOS shows no scrollbar until a scroll. The side padding makes room
+   for the lines' hover bleed (.lead-fold's negative margin). */
 .lead-thread-folds {
-	position: relative;
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
@@ -4608,6 +4609,14 @@ input {
 	color: var(--text);
 	background: rgba(255, 255, 255, 0.04);
 }
+/* The line whose reply is open below the list. */
+.lead-fold[aria-current="true"] {
+	color: var(--text);
+	background: rgba(255, 255, 255, 0.06);
+}
+.lead-fold[aria-current="true"] .lead-fold-dot {
+	background: var(--text);
+}
 .lead-fold-dot {
 	flex-shrink: 0;
 	width: 5px;
@@ -4631,11 +4640,6 @@ input {
 	font-size: 11px;
 	color: #6f6f7a;
 	font-variant-numeric: tabular-nums;
-}
-.lead-fold-group {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
 }
 .lead-earlier {
 	font-size: 12px;
@@ -4685,7 +4689,7 @@ input {
    height while paging through a stack: the arrows above and Reply below stay
    on screen. */
 .lead-reply-capped {
-	max-height: min(320px, 50vh);
+	max-height: var(--lead-reply-cap);
 	overflow-y: auto;
 }
 /* The same reply whole, in its dialog: scrolls once taller than the window. */

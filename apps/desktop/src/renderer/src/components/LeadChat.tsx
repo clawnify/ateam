@@ -549,12 +549,9 @@ function entryLine(e: LeadThreadEntry): string {
 	return e.text;
 }
 
-/** Where a thread's folded lines rest: the end, or the top of the newest entry
- *  when the user opened it and it is taller than the box, so it reads from its start. */
-function foldsRest(el: HTMLElement): number {
-	const last = el.lastElementChild as HTMLElement | null;
-	return Math.min(last?.offsetTop ?? 0, el.scrollHeight - el.clientHeight);
-}
+/** A thread entry the user can open to read: a reply or a page. */
+type Openable = Extract<LeadThreadEntry, { kind: "agent" | "page" }>;
+const isOpenable = (e: LeadThreadEntry): e is Openable => e.kind === "agent" || e.kind === "page";
 
 /** What the card's head says the task did, from its latest entry of its own. */
 function threadVerb(t: LeadThread): string {
@@ -563,9 +560,12 @@ function threadVerb(t: LeadThread): string {
 }
 
 /** A followed task talking back, as a thread: its replies, the user's answers
- *  to it, its pages and notices, in order. The last reply is open, and what
- *  came after it; earlier ones fold to a line each and open in place. One box
- *  answers it, in words or with an emoji (on the last reply). The card and its
+ *  to it, its pages and notices, in order. Once there is more than one reply,
+ *  every entry is a line in a list that scrolls, and one reply or page is open
+ *  below it: the latest, or the line the user picked (one at a time, like a
+ *  mail client). The open one keeps the height of the tallest reply read in
+ *  the thread, so the card doesn't jump as the user picks. One box answers it,
+ *  in words or with an emoji (on the last reply). The card and its
  *  head are the stack's (ThreadStack). Expanded, the whole thread opens in a
  *  dialog with the same answer box, so a half-typed answer is in both. */
 function ThreadView({
@@ -598,62 +598,62 @@ function ThreadView({
 	const [text, setText] = useState("");
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	/** Folded entries the user opened. */
-	const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
 	const [showEarlier, setShowEarlier] = useState(false);
+	/** The reply or page the user picked to read, by id; null reads the latest. */
+	const [picked, setPicked] = useState<string | null>(null);
+	/** The tallest the open reply has been in this thread, which its area keeps. */
+	const [tallest, setTallest] = useState(0);
 	const md = useRef<HTMLDivElement>(null);
 	const whole = useRef<HTMLDivElement>(null);
 	/** What had focus before the dialog took it. */
 	const back = useRef<HTMLElement | null>(null);
-	const from = openFrom(entries.map((e) => e.kind));
 	const lastReply = entries.findLast((e) => e.kind === "agent");
+	const latest = entries.findLast(isOpenable);
+	const all = showEarlier ? [...earlier, ...entries] : entries;
+	const reading = all.find((e): e is Openable => isOpenable(e) && e.id === picked) ?? latest;
+	// One reply and nothing before it reads as it is; anything more is a list.
+	const listed = earlier.length > 0 || (latest !== undefined && entries.indexOf(latest) > 0);
+	const pick = (id: string) => setPicked(id === latest?.id ? null : id);
 	const folds = useRef<HTMLDivElement>(null);
-	/** Where the user scrolled the folded lines to, or null while they rest on the newest. */
+	/** Where the user scrolled the list to, or null while it rests on the newest. */
 	const foldsAt = useRef<number | null>(null);
 
-	// The folded lines scroll in a box of their own, resting on the newest
-	// (the line just above the open reply). A reply folding in keeps them
-	// there, unless the user scrolled up in them. Shown again after another
-	// thread of the stack, they come back to where they were.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: from is the trigger, not a value the body reads: a reply folding in adds a line.
+	// The list scrolls in a box of its own, resting on the newest line. A
+	// new entry keeps it there, unless the user scrolled up in it. Shown again
+	// after another thread of the stack, it comes back to where it was.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: entries.length is the trigger, not a value the body reads: an entry adds a line.
 	useLayoutEffect(() => {
 		const el = folds.current;
-		if (el && !hidden) el.scrollTop = foldsAt.current ?? foldsRest(el);
-	}, [hidden, from]);
+		if (el && !hidden) el.scrollTop = foldsAt.current ?? el.scrollHeight;
+	}, [hidden, entries.length]);
 
-	// A new reply folds the one before it. Scrolled up reading that one, it
-	// stays open instead, so the text doesn't fold away under the user.
+	// A new reply takes the place of the one open. Scrolled up reading that
+	// one, the user keeps it open instead, so the text doesn't change under them.
 	const [count, setCount] = useState(entries.length);
 	if (count !== entries.length) {
 		setCount(entries.length);
-		if (entries.length > count && !atBottom()) {
-			const was = openFrom(entries.slice(0, count).map((e) => e.kind));
-			const keep = entries.slice(was, count).map((e) => e.id);
-			setOpened((o) => new Set([...o, ...keep]));
-		}
+		const was = entries.slice(0, count).findLast(isOpenable);
+		if (entries.length > count && picked === null && was && was !== latest && !atBottom())
+			setPicked(was.id);
 	}
-	const toggle = (id: string) =>
-		setOpened((o) => {
-			const next = new Set(o);
-			if (!next.delete(id)) next.add(id);
-			return next;
-		});
 
 	// The open reply's box changes size whenever it starts or stops being cut
 	// off: under the cap it is the reply's height, over it the cap's. So
 	// watching its size is enough. A hidden thread keeps what it last reported.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reading is the trigger, not a value the body reads: opening another reply puts a new box in md.
 	useEffect(() => {
 		const el = md.current;
 		if (!el || hidden) {
 			if (!el) onCut(thread.key, false);
 			return;
 		}
-		const watch = new ResizeObserver(() =>
-			onCut(thread.key, el.scrollHeight > el.clientHeight + 1),
-		);
+		const watch = new ResizeObserver(() => {
+			onCut(thread.key, el.scrollHeight > el.clientHeight + 1);
+			setTallest((t) => Math.max(t, el.offsetHeight));
+		});
 		watch.observe(el);
 		return () => watch.disconnect();
-	}, [hidden, thread.key, onCut]);
+	}, [hidden, thread.key, onCut, reading?.id]);
 
 	const send = async (go: () => Promise<void>) => {
 		setSending(true);
@@ -678,11 +678,12 @@ function ThreadView({
 		}
 	};
 
-	/** One entry: `folded` before the open point, `cap` on the open reply. */
-	const entry = (e: LeadThreadEntry, folded: boolean, cap: boolean) => {
+	/** An entry as the list shows it: a reply or a page as a line that opens it
+	 *  below (marked while it is), what the user sent folded, a notice as it is. */
+	const line = (e: LeadThreadEntry) => {
 		if (e.kind === "user")
 			return (
-				<div key={e.id} className={folded ? "lead-you folded" : "lead-you"}>
+				<div key={e.id} className="lead-you folded">
 					{e.text}
 				</div>
 			);
@@ -692,38 +693,45 @@ function ThreadView({
 					{e.text}
 				</p>
 			);
-		const body =
-			e.kind === "agent" ? (
-				<div ref={cap ? md : undefined} className={cap ? "md lead-reply-capped" : "md"}>
-					<Markdown text={e.text} />
-				</div>
-			) : (
-				<PageFrame taskId={e.task.taskId} pageId={e.pageId} title={e.title} />
-			);
-		if (!folded) return <Fragment key={e.id}>{body}</Fragment>;
-		const isOpen = opened.has(e.id);
 		const reaction = e.kind === "agent" ? e.reaction : undefined;
 		return (
-			<div key={e.id} className="lead-fold-group">
-				<button
-					type="button"
-					className="lead-fold"
-					aria-expanded={isOpen}
-					title={isOpen ? "Fold" : "Show all of it"}
-					onClick={() => toggle(e.id)}
-				>
-					<span className="lead-fold-dot" />
-					<span className="lead-fold-line">{isOpen ? "" : entryLine(e)}</span>
-					{reaction && <span className="lead-fold-react">{reaction}</span>}
-					<span className="lead-fold-at">{clock(e.at)}</span>
-				</button>
-				{isOpen && body}
+			<button
+				key={e.id}
+				type="button"
+				className="lead-fold"
+				aria-current={e === reading || undefined}
+				onClick={() => pick(e.id)}
+			>
+				<span className="lead-fold-dot" />
+				<span className="lead-fold-line">{entryLine(e)}</span>
+				{reaction && <span className="lead-fold-react">{reaction}</span>}
+				<span className="lead-fold-at">{clock(e.at)}</span>
+			</button>
+		);
+	};
+	/** An entry open; the reply being read is capped and scrolls past the cap. */
+	const full = (e: LeadThreadEntry) => {
+		if (e.kind === "user")
+			return (
+				<div key={e.id} className="lead-you">
+					{e.text}
+				</div>
+			);
+		if (e.kind === "notice")
+			return (
+				<p key={e.id} className="lead-notice info">
+					{e.text}
+				</p>
+			);
+		if (e.kind === "page")
+			return <PageFrame key={e.id} taskId={e.task.taskId} pageId={e.pageId} title={e.title} />;
+		const cap = e === reading;
+		return (
+			<div key={e.id} ref={cap ? md : undefined} className={cap ? "md lead-reply-capped" : "md"}>
+				<Markdown text={e.text} />
 			</div>
 		);
 	};
-	const before = entries.slice(0, from);
-	const after = entries.slice(from);
-	const above = before.length > 0 || earlier.length > 0;
 
 	// Drawn twice, in the card and in the dialog, from the one draft. Once the
 	// thread goes on further down, its answer box is there; this one says so.
@@ -783,34 +791,47 @@ function ThreadView({
 	return (
 		<div className="lead-agent-body" hidden={hidden}>
 			<div className="lead-thread-entries">
-				{above && (
-					<div
-						ref={folds}
-						className="lead-thread-folds"
-						onScroll={(e) => {
-							const el = e.currentTarget;
-							foldsAt.current = el.scrollTop >= foldsRest(el) - 2 ? null : el.scrollTop;
-						}}
-					>
-						{earlier.length > 0 && (
-							<button
-								type="button"
-								className="lead-fold lead-earlier"
-								aria-expanded={showEarlier}
-								onClick={() => setShowEarlier((s) => !s)}
-							>
-								<span className="lead-fold-dot" />
-								<span className="lead-fold-line">
-									{showEarlier ? "Hide earlier" : `${earlier.length} earlier in this thread`}
-								</span>
-							</button>
+				{listed ? (
+					<>
+						<div
+							ref={folds}
+							className="lead-thread-folds"
+							onScroll={(e) => {
+								const el = e.currentTarget;
+								const end = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
+								foldsAt.current = end ? null : el.scrollTop;
+							}}
+						>
+							{earlier.length > 0 && (
+								<button
+									type="button"
+									className="lead-fold lead-earlier"
+									aria-expanded={showEarlier}
+									onClick={() => setShowEarlier((s) => !s)}
+								>
+									<span className="lead-fold-dot" />
+									<span className="lead-fold-line">
+										{showEarlier ? "Hide earlier" : `${earlier.length} earlier in this thread`}
+									</span>
+								</button>
+							)}
+							{all.map(line)}
+						</div>
+						{reading && (
+							<>
+								<div className="lead-thread-sep" />
+								<div
+									className="lead-thread-read"
+									style={{ minHeight: `min(${tallest}px, var(--lead-reply-cap))` }}
+								>
+									{full(reading)}
+								</div>
+							</>
 						)}
-						{showEarlier && earlier.map((e) => entry(e, true, false))}
-						{before.map((e) => entry(e, true, false))}
-					</div>
+					</>
+				) : (
+					entries.map(full)
 				)}
-				{above && <div className="lead-thread-sep" />}
-				{after.map((e) => entry(e, false, e === entries[from] && e.kind === "agent"))}
 			</div>
 			{answer}
 			<Dialog open={expanded} onOpenChange={onExpandedChange}>
