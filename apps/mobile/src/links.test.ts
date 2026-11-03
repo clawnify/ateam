@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { PROTOCOL_VERSION } from "@ateam/protocol";
+import { PROTOCOL_VERSION, WOKEN_CONNECT_MS } from "@ateam/protocol";
 import { awayOf, type BoxLink, boxKey } from "./boxes";
 import type { Connection } from "./connection";
 import { type Clock, createLinks, type LinkDeps, REWAKE_MS } from "./links";
@@ -293,4 +293,72 @@ test("back in the foreground, a dead socket is dropped and redialled, a live one
 	expect(h.calls).toHaveLength(3);
 	// Nobody waits on it, so the redial doesn't wake it.
 	expect(h.wakes).toEqual([]);
+});
+
+test("Cancel during the wake ends the try at once: the card rests, the tap hears no, the box is never dialled", async () => {
+	let woken: (s: string) => void = () => {};
+	const h = harness({
+		wakerFor: async () => ({
+			label: "Sprites",
+			ensureAwake: () =>
+				new Promise<string>((r) => {
+					woken = r;
+				}),
+		}),
+	});
+	const tap = h.links.connect(sleepy, { wake: true });
+	await settle();
+	expect(h.state()[key(sleepy)]).toMatchObject({ state: "connecting", asked: true });
+	expect(h.state()[key(sleepy)]?.steps).toHaveLength(1);
+	h.links.cancel(key(sleepy));
+	// Said on the card right away, not once the wake call comes back.
+	expect(h.state()[key(sleepy)]).toMatchObject({ state: "down", asked: false, steps: [] });
+	expect(await tap).toBe(false);
+	woken("woken");
+	await h.fc.advance(10_000);
+	expect(h.calls).toHaveLength(0);
+	expect(h.state()[key(sleepy)]?.state).toBe("down");
+});
+
+test("Cancel while the box is dialled: the socket that answers later is closed, never put on the board", async () => {
+	const h = harness();
+	const tap = h.links.connect(sleepy, { wake: true });
+	await settle();
+	expect(h.calls).toHaveLength(1);
+	h.links.cancel(key(sleepy));
+	expect(await tap).toBe(false);
+	const late = fakeConn();
+	h.calls[0]?.resolve(late);
+	await settle();
+	expect(late.closed).toBe(true);
+	expect(h.log).toEqual([]);
+	expect(h.links.liveKeys()).toEqual([]);
+	expect(h.state()[key(sleepy)]?.state).toBe("down");
+});
+
+test("a woken box that Cancel stopped waiting for isn't tried again until something asks for it", async () => {
+	let dials = 0;
+	const dial = () => {
+		dials++;
+		return Promise.reject(new Error("timed out"));
+	};
+	const h = harness({
+		dial,
+		wakerFor: async () => ({ label: "Sprites", ensureAwake: async () => "woken" }),
+	});
+	const tap = h.links.connect(sleepy, { wake: true });
+	await settle();
+	expect(dials).toBe(1);
+	// Between two tries of the woken box: Cancel ends the gap too.
+	h.links.cancel(key(sleepy));
+	expect(await tap).toBe(false);
+	// What a card's tap does after a connect that failed.
+	h.links.retry(key(sleepy));
+	await h.fc.advance(WOKEN_CONNECT_MS + 120_000);
+	expect(dials).toBe(1);
+	expect(h.state()[key(sleepy)]).toMatchObject({ state: "down", steps: [] });
+	// Asked for again, it is reached again.
+	h.links.ensure(key(sleepy));
+	await settle();
+	expect(dials).toBe(2);
 });
