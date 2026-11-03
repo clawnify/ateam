@@ -29,8 +29,10 @@ Any other VPS (EC2, a home server, …) works the same way as Hetzner without a 
 of its own — see [`../online-ateam.md`](../online-ateam.md), the reference
 walkthrough these pages assume you've skimmed.
 
-Evaluated and not supported yet: [Modal](modal.md). A sandbox runs the engine fine, but
-it lives at most 24 hours and gets a new address every time it's restored.
+Evaluated and not supported yet: [Modal](modal.md). A sandbox runs the engine, takes the
+phone over Tailscale and keeps an agent running across a memory snapshot. But staying a box
+needs experimental snapshot APIs, an ssh helper and a cold restart every week, and its CPU
+costs about 3.7 times Sprites'.
 
 > **Not the same as "Create a box" in the app.** The desktop can *provision* a VPS
 > for you (currently Hetzner) via the `BoxProvider` interface in
