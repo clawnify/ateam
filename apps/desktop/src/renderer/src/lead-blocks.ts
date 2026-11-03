@@ -10,7 +10,8 @@
 // an older one holds still while more arrive, and the card says one did.
 //
 // A thread is held by its task's id, not its place: a task that talks again
-// moves to the end of the stack, where the newest is.
+// moves to the end of the stack, where the newest is. The user's own answer
+// moves nothing and counts as nothing new (`landed`).
 //
 // Pure + unit-tested (see lead-blocks.test.ts).
 
@@ -23,6 +24,13 @@ export interface StackView {
 }
 
 export const FOLLOWING: StackView = { at: null, seen: -1 };
+
+/** How many of a stack's entries its tasks sent: the count `arrived` and
+ *  `unseen` work from. The user's answers are left out, or answering a thread
+ *  read further back would flag the stack as if a task had spoken. */
+export function landed(items: { kind: string }[]): number {
+	return items.filter((e) => e.kind !== "user").length;
+}
 
 /** The index shown, out of the stack's thread `keys`, newest last. */
 export function shown(v: StackView, keys: string[]): number {

@@ -227,7 +227,14 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 					? `Ticked: ${input.answer.join(", ")}`
 					: "Ticked nothing"
 				: input.answer;
-			lead.record({ kind: "user", id: randomUUID(), text, at: Date.now(), to: refOf(before) });
+			lead.record({
+				kind: "user",
+				id: randomUUID(),
+				text,
+				at: Date.now(),
+				to: refOf(before),
+				...(before.question ? { question: before.question.text } : {}),
+			});
 		},
 		onTaskUpdated: (task) => void follower.onTaskUpdated(task),
 		dispose() {
