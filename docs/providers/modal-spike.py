@@ -19,6 +19,11 @@ Phases:
     tailscale    join the tailnet (approve a login link), the phone's WebSocket over it, across a memory snapshot
                  (run it with `--with websockets` on a laptop on the tailnet: a node running tailscaled in
                  userspace mode can't open sockets to tailnet addresses)
+    control      modal_control.py, deployed in the workspace: sleep and wake a box through its private
+                 endpoints with a Proxy Token (MODAL_PROXY_TOKEN), and ssh in with curl and nc only
+    allowlist    does `inbound_cidr_allowlist` guard the raw TCP tunnel sshd sits behind
+    latency      where a box lands, with snapshots on or pinned to "eu", and how far it is from here
+    volumes      a clone and an npm install on a Modal Volume against the box's own disk
     snapshot     memory-snapshot a running sandbox (`--sandbox <id>`), wait `--gap` seconds, restore it:
                  the step taken in the middle of an agent's turn
 
@@ -29,6 +34,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 
@@ -313,8 +319,9 @@ def cost(image, runtime):
     """An hour of an idle box with the engine running, at each sizing. Modal bills the larger of what a
     sandbox requests and what it uses, so the request is the lever. The bill groups costs by app and hour
     (sandbox tags don't show in it), so each sizing gets its own app. Read it a couple of hours later:
-    `modal billing report --for today -r h --show-resources`. Not rerun since that change: the first run
-    shared one app, and the workspace's spend limit stopped it before the in-box readings."""
+    `modal billing report --for today -r h --show-resources`. Run that way on 2026-11-03, each sizing was
+    billed exactly its request, on both runtimes. The in-box readings mean something only on vm: gVisor has
+    no cgroup files, and its `free` shows the limit or the host's memory."""
     boxes = {}
     for label, (rt, size) in COST_SIZES.items():
         sized = modal.App.lookup(f"ateam-cost-{label}", create_if_missing=True)
@@ -373,8 +380,8 @@ def tailscale(image, runtime):
     tailscaled runs as the box user in userspace mode, started over SSH, because that is what survives a
     memory snapshot. The first run started it through Modal's exec, and on gVisor the node didn't come back:
     Modal doesn't restore background processes an exec started. Kernel mode would need root, which over SSH
-    nothing gets (sudo is refused), so it would have to start from the sandbox's own command. This version
-    hasn't been rerun; its SSH start was run by hand on gVisor, where it survived a snapshot."""
+    nothing gets (sudo is refused), so it would have to start from the sandbox's own command. Run this way
+    on gVisor, the node kept its address and node ID across a snapshot."""
     label = runtime or "gvisor"
     flag = f"/tmp/modal-spike-{label}.go"
     sb, host, port = start(image, runtime, timeout=3600, _experimental_enable_snapshot=True)
@@ -425,6 +432,161 @@ def tailscale(image, runtime):
     sb.terminate()
 
 
+def control(image, runtime):
+    """The control plane in the user's workspace; deploy modal_control.py first. Its functions sleep a box
+    and wake it from inside Modal. With MODAL_PROXY_TOKEN set to a Proxy Token ("wk-….ws-…", from
+    `modal workspace proxy-tokens create`), it also goes through the private endpoints: the box wakes from an
+    ssh alias whose ProxyCommand is only curl and nc, and the token is refused as an API token."""
+    import urllib.error
+    import urllib.request
+
+    token = os.environ.get("MODAL_PROXY_TOKEN")
+    wake_box = modal.Function.from_name("ateam-control", "wake_box")
+    sleep_box = modal.Function.from_name("ateam-control", "sleep_box")
+    wake_url = modal.Function.from_name("ateam-control", "wake").get_web_url()
+    sleep_url = modal.Function.from_name("ateam-control", "sleep").get_web_url()
+    box = f"ctl-{int(time.time()) % 100000}"
+    cfg = f"/tmp/{box}.ssh_config"
+    with open(cfg, "w") as f:
+        f.write(f"Host modal-{box}\n  User ateam\n  IdentityFile {KEY}\n  HostKeyAlias modal-{box}\n"
+                f"  UserKnownHostsFile /tmp/{box}.known_hosts\n  StrictHostKeyChecking accept-new\n"
+                f"  ProxyCommand sh -c 'set -- $(curl -fsS -X POST -H \"Authorization: Bearer $MODAL_PROXY_TOKEN\" "
+                f"\"{wake_url}?box={box}\"); exec nc \"$1\" \"$2\"'\n")
+    results = []
+
+    def check(label, ok, detail=""):
+        results.append((label, ok))
+        print(("PASS" if ok else "FAIL"), label, detail, flush=True)
+
+    def post(url, auth=True):
+        headers = {"Authorization": f"Bearer {token}"} if auth else {}
+        req = urllib.request.Request(f"{url}?box={box}", method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                return r.status, r.read().decode().strip()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode().strip()[:120]
+
+    def hello():
+        s = time.time()
+        p = subprocess.Popen(["ssh", "-F", cfg, f"modal-{box}", "bash -lc 'exec ateam attach --stdio'"],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        p.stdin.write(HELLO); p.stdin.flush()
+        line = p.stdout.readline()
+        took = time.time() - s
+        p.kill()
+        return "protocolVersion" in line, took, p.stderr.read().strip()[:200]
+
+    sb = modal_box.create(box, runtime, image)
+    host, port = tunnel(sb)
+    ssh_ready(host, port)
+    engine_check(host, port)
+    ssh(host, port, "(nohup sleep 9999 >/dev/null 2>&1 &)")
+
+    s = time.time(); timings = sleep_box.remote(box)
+    check("a function in Modal snapshots the box and ends it", modal_box.running(box) is None,
+          f"{time.time() - s:.1f}s {timings}")
+    s = time.time(); addr = wake_box.remote(box)
+    check("a function in Modal wakes it, answering once sshd does", len(addr.split()) == 2,
+          f"{time.time() - s:.1f}s {addr}")
+    h2, p2 = addr.split()
+    rc, out = ssh(h2, int(p2), SURVIVORS)
+    check("its processes survived", "procs-survived" in out and "engine-survived" in out, out.replace("\n", " "))
+    code, body = post(wake_url, auth=False)
+    check("an endpoint refuses a call without a Proxy Token", code == 401, f"{code} {body}")
+
+    if token:
+        s = time.time(); code, body = post(sleep_url)
+        check("the sleep endpoint snapshots the box and ends it", code == 200 and modal_box.running(box) is None,
+              f"{time.time() - s:.1f}s {body}")
+        ok, took, err = hello()
+        check("a connect through curl and nc wakes it and handshakes", ok, f"{took:.1f}s {err}")
+        ok, took, err = hello()
+        check("a connect while it's awake", ok, f"{took:.1f}s {err}")
+        key, _, secret = token.partition(".")
+        r = subprocess.run([sys.executable, "-c", "import modal; modal.App.lookup('ateam-boxes'); print('accepted')"],
+                           env=os.environ | {"MODAL_TOKEN_ID": key, "MODAL_TOKEN_SECRET": secret},
+                           capture_output=True, text=True, timeout=120)
+        check("the Proxy Token doesn't work as an API token", "accepted" not in r.stdout,
+              (r.stderr.strip().splitlines() or [""])[-1][:160])
+    else:
+        print("MODAL_PROXY_TOKEN isn't set: skipped the endpoints that need a Proxy Token", flush=True)
+    modal_box.destroy(box)
+    print(f"{sum(ok for _, ok in results)}/{len(results)} passed")
+
+
+def allowlist(image, runtime):
+    """Does `inbound_cidr_allowlist` guard the raw TCP tunnel? The SDK's docstring names only encrypted
+    tunnels and connection tokens. One sandbox allows this machine's address, the other only a documentation
+    address (192.0.2.1/32): ssh from here should reach the first and not the second."""
+    import urllib.request
+
+    me = urllib.request.urlopen("https://api.ipify.org", timeout=10).read().decode().strip()
+    for label, cidrs in {"this machine": [f"{me}/32"], "someone else": ["192.0.2.1/32"]}.items():
+        sb = modal.Sandbox.create(*SSHD, app=app, image=image, unencrypted_ports=[22], runtime=runtime,
+                                  timeout=600, inbound_cidr_allowlist=cidrs, **SIZE)
+        host, port = tunnel(sb)
+        reached = ssh_ready(host, port, tries=20)
+        print(f"allowing only {label} ({cidrs[0]}): ssh from here", "reached it" if reached else "was refused",
+              flush=True)
+        sb.terminate()
+
+
+def echo_rtt(host: str, port: int, n: int = 20) -> float:
+    """Median time for a line to come back through `cat` over one ssh session: what a keystroke feels like."""
+    import statistics
+
+    p = subprocess.Popen(["ssh", "-i", KEY, "-p", str(port), "-o", "StrictHostKeyChecking=no",
+                          "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", f"ateam@{host}", "cat"],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+    times = []
+    for i in range(n + 1):
+        s = time.time()
+        p.stdin.write(f"{i}\n"); p.stdin.flush()
+        p.stdout.readline()
+        if i:  # the first round trip also waits for the session to settle
+            times.append(time.time() - s)
+    p.kill()
+    return statistics.median(times)
+
+
+def latency(image, runtime):
+    """Where a box lands and how far it is from here. A sandbox with memory snapshots can't pin a region; one
+    pinned to "eu" can't take memory snapshots and bills 1.15x. Pauses so another machine (say a laptop in
+    Europe, its key authorized through MODAL_BOX_AUTHORIZED) can time the same tunnels."""
+    boxes = {"default placement, snapshots on": {"_experimental_enable_snapshot": True},
+             "pinned to eu, snapshots off": {"region": "eu"}}
+    started = []
+    for label, kw in boxes.items():
+        sb, host, port = start(image, runtime, **kw)
+        where = in_box(sb, "env | grep -E '^MODAL_(REGION|CLOUD_PROVIDER)=' | sort | tr '\\n' ' '")
+        print(f"{label}: {where}| echo round trip from here {echo_rtt(host, port) * 1000:.0f} ms | {host} {port}",
+              flush=True)
+        started.append(sb)
+    pause("/tmp/modal-spike-latency.go", "time the tunnels above from another machine")
+    for sb in started:
+        sb.terminate()
+
+
+def volumes(image, runtime):
+    """A Modal Volume for the box's files instead of its own disk: the same shallow clone, npm install and
+    git status on each, timed. Deletes the Volume afterwards."""
+    name = f"ateam-spike-vol-{int(time.time()) % 100000}"
+    vol = modal.Volume.from_name(name, create_if_missing=True)
+    sb, host, port = start(image, runtime, volumes={"/mnt/vol": vol})
+    in_box(sb, "mkdir -p /mnt/vol/work && chown ateam:ateam /mnt/vol/work")
+    for where in ["/home/ateam/work", "/mnt/vol/work"]:
+        rc, out = ssh(host, port, "export PATH=$(echo ~/.nvm/versions/node/*/bin):$PATH TIMEFORMAT=%R; "
+                                  f"mkdir -p {where} && cd {where} && "
+                                  "{ time git clone -q --depth 1 https://github.com/expressjs/express e; } 2>&1 && cd e && "
+                                  "{ time npm install --silent --no-audit --no-fund >/dev/null 2>&1; } 2>&1 && "
+                                  "{ time git status --porcelain >/dev/null; } 2>&1 && find . | wc -l", timeout=900)
+        clone, install, status, files = (out.split() + ["?"] * 4)[:4]
+        print(f"{where}: clone {clone}s, npm install {install}s, git status {status}s, {files} files", flush=True)
+    sb.terminate()
+    modal.Volume.objects.delete(name)
+
+
 def snapshot(sandbox_id: str, gap: float) -> None:
     """Memory-snapshot a running sandbox (one created with snapshots on), end it, wait, restore it."""
     sb = modal.Sandbox.from_id(sandbox_id)
@@ -439,7 +601,8 @@ def snapshot(sandbox_id: str, gap: float) -> None:
 PHASES = {"baseline": baseline, "fs-snapshot": fs_snapshot, "mem-snapshot": mem_snapshot,
           "idle": idle, "persistent": persistent, "exit-snapshot": exit_snapshot,
           "restore-clock": restore_clock, "alias": alias, "cost": cost,
-          "tailscale": tailscale}
+          "tailscale": tailscale, "control": control, "allowlist": allowlist, "latency": latency,
+          "volumes": volumes}
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
