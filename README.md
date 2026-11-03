@@ -201,7 +201,8 @@ the TestFlight / App Store one.
 1. **Once, on a Mac** with the iPhone connected: `cd apps/mobile && npm run ios:dev`
    builds and installs Ateam Go Dev with automatic signing.
 2. **On the box where you edit**: `cd apps/mobile && npm run phone` starts Metro
-   and prints a URL. Open Ateam Go Dev and enter that URL.
+   and prints a URL. The URL only works over Tailscale, so put the phone on the
+   same tailnet as the box, then open Ateam Go Dev and enter that URL.
 
 JavaScript changes reload in the app. Native changes (`apps/mobile/modules`, new
 native packages, `app.json` plugins) need a new `npm run ios:dev` on the Mac.

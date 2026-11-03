@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Serve this worktree's JS to the "Ateam Go Dev" app on your iPhone, over the
 # tailnet only:  https://<this box>.<tailnet>.ts.net:8443  ->  Metro on 8082.
-# Never put Metro on a public URL (no boxd proxy): its debugger endpoint has no auth.
+# Never put Metro on a public URL (no public proxy URL): its debugger endpoint has no auth.
 # JS edits reload on the phone. Native changes (modules/, new native packages,
 # app.json plugins) need a new `npm run ios:dev` build on the Mac.
 # When done: Ctrl-C, then `sudo tailscale serve --https=8443 off`.
