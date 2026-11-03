@@ -166,6 +166,13 @@ export function bootstrap(db: SqliteExecutor): void {
 			html TEXT NOT NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS task_change_steps (
+			task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+			diff_key TEXT NOT NULL,
+			body TEXT NOT NULL,
+			made_at INTEGER NOT NULL
+		);
+
 			CREATE TABLE IF NOT EXISTS hosts (
 				host_alias TEXT PRIMARY KEY,
 				transport TEXT NOT NULL DEFAULT 'ssh',

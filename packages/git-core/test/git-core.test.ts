@@ -16,6 +16,7 @@ import {
 	isBranchForName,
 	parseGithubRepo,
 	parseWorktreeList,
+	patches,
 	push,
 	registerProject,
 	removeTask,
@@ -685,6 +686,31 @@ describe("commit & diff", () => {
 		});
 		expect(tracked).toContain("+more");
 		expect(tracked).not.toContain("new file mode");
+	});
+
+	// The change steps read every file's patch at once: each one must be exactly
+	// what the viewer shows for that file, committed, edited or untracked.
+	it("patches every file as fileDiff does", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "all patches" });
+		await commitFile(task.worktreePath, "feature.ts", "one\ntwo\n", "add feature");
+		await Bun.write(join(task.worktreePath, "README.md"), "# temp repo\nedited\n");
+		await Bun.write(join(task.worktreePath, "fresh.md"), "brand new\n");
+
+		const d = await diff({ worktreePath: task.worktreePath, baseBranch: "main" });
+		const files = d.files.map((f) => f.path);
+		expect([...files].sort()).toEqual(["README.md", "feature.ts", "fresh.md"]);
+
+		const all = await patches({ worktreePath: task.worktreePath, baseBranch: "main", files });
+		expect(all.map((p) => p.path)).toEqual(files);
+		for (const { path, patch } of all) {
+			expect(patch).toBe(
+				await fileDiff({ worktreePath: task.worktreePath, file: path, baseBranch: "main" }),
+			);
+		}
+		const of = (path: string) => all.find((p) => p.path === path)?.patch ?? "";
+		expect(of("README.md")).toContain("+edited");
+		expect(of("feature.ts")).toContain("+two");
+		expect(of("fresh.md")).toContain("new file mode");
 	});
 });
 
