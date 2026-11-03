@@ -479,6 +479,35 @@ The box keeps the list in `~/.ateam/pairings.json`, readable by you alone, with 
 of the tokens and codes, never the tokens themselves. Each device keeps its own token:
 the Mac in its encrypted store, the phone in its Keychain.
 
+### Let boxes reach each other (v30)
+
+With two boxes or more, **Settings → Boxes → Boxes reach each other → Turn on** links
+every box this Mac holds to every other one:
+
+- **Agents on one box reach the tasks on the others.** `list_peers` lists them too, each
+  with the box it is on, and `send_message` to one of them goes across. The agent there
+  reads who sent it and from which box, and its reply comes straight back.
+- **A Lead that runs on a box sees them all:** its board, its messages and the answers
+  it passes on reach every linked box.
+- **A link can only read the board and send messages.** It gets task updates, never
+  terminal output, and the box it reaches refuses anything else: terminals, git,
+  deleting, installing.
+- **Each link is a pairing** of kind "box" on the box it reaches, listed under
+  **Access** there. Unpair it to cut that link; turning this off and on again sets it up
+  anew. The Mac sets the pairings up, since it holds every box: it asks the box being
+  reached for a one-time code and hands it to the other box, which redeems it itself, so
+  the token never comes through the Mac. A box that isn't locked takes a link as it
+  takes any device, and once you lock it, the Mac pairs the links to it.
+- **A box that's asleep or off the tailnet** is listed as unreachable, and a message to
+  one of its tasks fails with that reason. Boxes don't wake each other.
+- **What a box needs:** v30, and a network port the other boxes can reach (the one Ateam
+  Go uses). A box whose port listens on 127.0.0.1 only can reach the others but can't be
+  reached. If your tailnet policy limits which devices reach which, let the boxes reach
+  each other on that port.
+- **Your Mac's own tasks** aren't part of it yet: boxes can't reach your Mac.
+
+The box keeps its links in `~/.ateam/links.json`, readable by you alone.
+
 > **Without `--service`**, nothing re-launches the daemon after a reboot. That's fine
 > for desktop-only use — `ssh … ateam attach` starts one on demand — but it strands a
 > phone, which has no way to start one. Install the service if you use the app.

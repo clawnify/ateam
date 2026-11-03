@@ -4,6 +4,7 @@
 // connection management off AteamApi. Imports only @ateam/protocol (dependency-
 // free), so both the node (main/preload) and web (renderer) tsconfigs resolve it.
 import type {
+	BoxLinkDTO,
 	BoxWake,
 	ConnectionDTO,
 	ConnectStep,
@@ -48,6 +49,8 @@ export const HOST_CH = {
 	pairingInvite: "host:pairingInvite",
 	pairingRevoke: "host:pairingRevoke",
 	pairingLock: "host:pairingLock",
+	crossBoxStatus: "host:crossBoxStatus",
+	crossBoxSet: "host:crossBoxSet",
 	/** Clone+register a repo onto a specific box (connect it first). */
 	provision: "host:provision",
 	/** Install the ateam engine on a reachable SSH box, then connect to it. */
@@ -187,6 +190,17 @@ export interface HostStatus {
  * call to whichever engine owns the entity (see main/aggregate.ts). `connect(alias)`
  * adds a box (additive — local is never dropped); `disconnect(alias)` removes one.
  */
+/** Cross-box as Settings → Boxes shows it: the switch, and each held box's links. */
+export interface CrossBoxStatusDTO {
+	on: boolean;
+	boxes: {
+		alias: string;
+		/** Why it is left out, or why other boxes can't reach it. */
+		problem?: string;
+		links: BoxLinkDTO[];
+	}[];
+}
+
 export interface AteamHost {
 	list(): Promise<ConnectionDTO[]>;
 	/** Add an engine (idempotent if already held). `null` is a no-op — local is permanent. */
@@ -232,6 +246,11 @@ export interface AteamHost {
 	pairingRevoke(alias: string, id: string): Promise<PairingStatusDTO>;
 	/** Lock an open box to the devices paired with it, starting with this Mac. */
 	pairingLock(alias: string): Promise<PairingStatusDTO>;
+	/** Whether the boxes reach each other (cross-box, v30), and how each one's
+	 *  links are doing. */
+	crossBoxStatus(): Promise<CrossBoxStatusDTO>;
+	/** Turn cross-box on or off: links are set up, or taken down, on every box. */
+	crossBoxSet(on: boolean): Promise<CrossBoxStatusDTO>;
 	/** Connect the box if needed, then clone+register a repo ON it from its remote URL
 	 *  (so a task can run there). Returns the box's project row for that repo. */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;

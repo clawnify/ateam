@@ -236,8 +236,12 @@ export interface Host {
 	 *  the box itself rather than a board entity (its Lead), or null when it isn't
 	 *  held. Never through the router: it sends unknown methods to this Mac. */
 	boxLink(alias: string): BoxLink | null;
+	/** Every box held right now, by alias (this Mac's own engine isn't one). */
+	heldBoxes(): string[];
 	/** Told when a box comes to be held, stops being held, or is forgotten. */
 	onBoxChange(cb: (alias: string, change: BoxChange) => void): () => void;
+	/** Told when this Mac locks a box (pairing:lock), so links to it can pair. */
+	onLocked(cb: (alias: string) => void): () => void;
 	/** A held box's lock (pairing:*, v29): see AteamHost.pairingStatus. */
 	pairingStatus(alias: string): Promise<PairingStatusDTO>;
 	pairingInvite(alias: string): Promise<PairingInviteDTO & { link: string | null }>;
@@ -249,6 +253,8 @@ export interface Host {
 export interface BoxLink {
 	rpc: RpcClient;
 	version: number;
+	/** Where its network port listens, as its hello said (v30), or null. */
+	wsAddr: string | null;
 }
 export type BoxChange = "held" | "released" | "forgotten";
 
@@ -304,6 +310,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	const tellBox = (alias: string, change: BoxChange) => {
 		for (const l of boxListeners) l(alias, change);
 	};
+	const lockListeners = new Set<(alias: string) => void>();
 
 	// One aggregate over a LIVE backend array: connecting pushes onto it (so the
 	// learned id→engine registry survives), disconnecting rebuilds a fresh one (so a
@@ -620,7 +627,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		);
 		infos.set(alias, info); // cached before the backend is reachable — statusOf's invariant
 		backends.set(alias, backend);
-		links.set(alias, { rpc, version: info.protocolVersion });
+		links.set(alias, { rpc, version: info.protocolVersion, wsAddr: info.wsAddr ?? null });
 		// The live aggregate now fans out to it too. If its board was being served
 		// offline, the engine takes that place, and the ids already on screen with it.
 		const stand = offline.get(alias);
@@ -1080,6 +1087,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			{ label: macLabel(), kind: "desktop" },
 		])) as PairingGrantDTO;
 		keepBoxToken(alias, grant.token);
+		for (const l of lockListeners) l(alias);
 		return (await wire.call(CH.pairingStatus)) as PairingStatusDTO;
 	}
 
@@ -1484,6 +1492,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		saveWakeAccount,
 		judgeGrammar,
 		boxLink: (alias) => links.get(alias) ?? null,
+		heldBoxes: () => [...links.keys()],
 		pairingStatus,
 		pairingInvite,
 		pairingRevoke,
@@ -1491,6 +1500,10 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		onBoxChange(cb) {
 			boxListeners.add(cb);
 			return () => boxListeners.delete(cb);
+		},
+		onLocked(cb) {
+			lockListeners.add(cb);
+			return () => lockListeners.delete(cb);
 		},
 	};
 }

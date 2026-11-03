@@ -282,7 +282,7 @@ const ROWS: Row[] = [
 		section: "boxes",
 		title: "Boxes",
 		description:
-			"Every box you've used: whether it's connected, its engine version, and the GitHub account and token it uses. Connect, update or forget a box here, paste a new GitHub token instead of using the box's terminal, and choose a box for the Lead chat to run on.",
+			"Every box you've used: whether it's connected, its engine version, and the GitHub account and token it uses. Connect, update or forget a box here, paste a new GitHub token instead of using the box's terminal, choose a box for the Lead chat to run on, and let your boxes reach each other.",
 		control: () => null,
 	},
 	{
