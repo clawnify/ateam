@@ -7,6 +7,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "expo": "^54.0.36",
+    "expo-dev-client": "~6.0.21",
     "expo-document-picker": "14.0.8",
     "expo-file-system": "19.0.23",
     "expo-image-picker": "~17.0.11",
@@ -27,8 +28,10 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "ios:dev": "APP_VARIANT=development EXPO_NO_GIT_STATUS=1 expo prebuild -p ios --clean && APP_VARIANT=development expo run:ios --device",
     "web": "expo start --web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "phone": "./scripts/phone-dev.sh"
   },
   "private": true
 }
