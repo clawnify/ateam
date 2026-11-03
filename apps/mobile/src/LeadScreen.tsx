@@ -54,7 +54,7 @@ import { C, CONTENT_MAX } from "./theme";
 const INK_ON_WHITE = "#15151a";
 
 const SUGGESTIONS = [
-	"What's on the board?",
+	"What should I focus on in the next hour?",
 	"Which tasks need me?",
 	"What did the last finished task say?",
 ];

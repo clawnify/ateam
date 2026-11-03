@@ -94,7 +94,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 const EMPTY: LeadSnapshot = { items: [], draft: "", busy: false, auto: false };
 
 const SUGGESTIONS = [
-	"What's on the board?",
+	"What should I focus on in the next hour?",
 	"Which tasks need me?",
 	"What did the last finished task say?",
 ];
