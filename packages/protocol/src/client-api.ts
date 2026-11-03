@@ -30,6 +30,10 @@ import type {
 	LoopTemplateDTO,
 	MergeEnqueueDTO,
 	MergeStrategy,
+	PairedDeviceDTO,
+	PairingGrantDTO,
+	PairingInviteDTO,
+	PairingStatusDTO,
 	ProjectDTO,
 	PtyDataEvent,
 	PtyExitEvent,
@@ -63,8 +67,24 @@ import type { RpcClient } from "./rpc";
  * `info.protocolVersion` against `PROTOCOL_VERSION` to gate a version-skewed
  * remote. It's a low-level connect primitive, deliberately not on AteamApi.
  */
-export function serverHandshake(rpc: RpcClient): Promise<SystemInfo> {
-	return rpc.call(CH.systemHello) as Promise<SystemInfo>;
+export function serverHandshake(rpc: RpcClient, token?: string): Promise<SystemInfo> {
+	// The device token for a locked box (v29); an open box ignores it.
+	return rpc.call(CH.systemHello, token ? [{ token }] : []) as Promise<SystemInfo>;
+}
+
+/** A box's lock (v29), for a client on its own wire. */
+export function pairingClient(rpc: RpcClient) {
+	return {
+		status: () => rpc.call(CH.pairingStatus) as Promise<PairingStatusDTO>,
+		invite: () => rpc.call(CH.pairingInvite) as Promise<PairingInviteDTO>,
+		/** Trade a one-time code for this device's own token. */
+		redeem: (code: string, label: string, kind: PairedDeviceDTO["kind"]) =>
+			rpc.call(CH.pairingRedeem, [{ code, label, kind }]) as Promise<PairingGrantDTO>,
+		/** Lock an open box, pairing this device first. */
+		lock: (label: string, kind: PairedDeviceDTO["kind"]) =>
+			rpc.call(CH.pairingLock, [{ label, kind }]) as Promise<PairingGrantDTO>,
+		revoke: (id: string) => rpc.call(CH.pairingRevoke, [{ id }]) as Promise<PairingStatusDTO>,
+	};
 }
 
 /**

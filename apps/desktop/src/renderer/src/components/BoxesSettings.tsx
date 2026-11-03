@@ -1,6 +1,7 @@
 import {
 	type ConnectionDTO,
 	type GithubAccessDTO,
+	NEEDS_PAIRING,
 	PROTOCOL_VERSION,
 	relativeAge,
 } from "@ateam/protocol";
@@ -8,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { HostStatus } from "../../../shared/host";
 import { type BoxRow, boxesNeedingYou, boxRows, engineLabel } from "../boxes-settings";
 import { useLeadHome } from "../useLeadHome";
+import { BoxAccess } from "./BoxAccess";
 import { GithubAccess } from "./GithubAccess";
 import { Button } from "./ui/button";
 import { usePrompt } from "./usePrompt";
@@ -26,6 +28,7 @@ const errorText = (e: unknown) =>
 function statusLine(row: BoxRow, now: number): string {
 	if (row.state === "connected") return "Connected";
 	if (row.state === "asleep") return "Asleep";
+	if (row.failure === NEEDS_PAIRING) return "Locked: this Mac needs pairing";
 	if (row.failure) return `Couldn't connect: ${row.failure}`;
 	const age = relativeAge(row.lastSeen, now);
 	return age
@@ -43,6 +46,8 @@ export function BoxesSettings() {
 	// alias → what's running on it right now ("Connecting…"), and the last outcome.
 	const [busy, setBusy] = useState<Record<string, string>>({});
 	const [notes, setNotes] = useState<Record<string, { text: string; error: boolean }>>({});
+	// alias → the pairing code being typed for a locked box.
+	const [codes, setCodes] = useState<Record<string, string>>({});
 	const { ui: promptUi, confirm } = usePrompt();
 	const leadHome = useLeadHome();
 
@@ -90,6 +95,13 @@ export function BoxesSettings() {
 	const connect = (row: BoxRow) =>
 		act(row.alias, row.state === "asleep" ? "Waking…" : "Connecting…", async () => {
 			await window.ateamHost.connect(row.alias, { wake: true });
+			return null;
+		});
+
+	const pairWithCode = (row: BoxRow) =>
+		act(row.alias, "Pairing…", async () => {
+			await window.ateamHost.connect(row.alias, { code: codes[row.alias] ?? "" });
+			setCodes(({ [row.alias]: _, ...rest }) => rest);
 			return null;
 		});
 
@@ -185,7 +197,7 @@ export function BoxesSettings() {
 									<span className="gh-access-muted">{busy[row.alias]}</span>
 								) : (
 									<>
-										{row.state !== "connected" ? (
+										{row.state !== "connected" && row.failure !== NEEDS_PAIRING ? (
 											<Button size="xs" variant="outline" onClick={() => void connect(row)}>
 												Connect
 											</Button>
@@ -233,6 +245,47 @@ export function BoxesSettings() {
 										Run the Lead here
 									</Button>
 								</div>
+							)}
+						</div>
+						<div className="box-card-section">
+							<div className="box-card-label">Access</div>
+							{row.failure === NEEDS_PAIRING && row.state !== "connected" ? (
+								<form
+									className="box-lead-row"
+									onSubmit={(e) => {
+										e.preventDefault();
+										void pairWithCode(row);
+									}}
+								>
+									<span className="gh-access-muted">
+										It's locked to its paired devices. Enter a code from one of them (Pair a phone
+										on another Mac, or `ateam pair` in the box's terminal).
+									</span>
+									<input
+										className="box-pair-input"
+										placeholder="XXXX-XXXX"
+										aria-label="Pairing code"
+										value={codes[row.alias] ?? ""}
+										onChange={(e) => setCodes((c) => ({ ...c, [row.alias]: e.target.value }))}
+									/>
+									<Button
+										size="xs"
+										variant="outline"
+										type="submit"
+										disabled={!(codes[row.alias] ?? "").trim() || !!busy[row.alias]}
+									>
+										Pair
+									</Button>
+								</form>
+							) : row.state !== "connected" ? (
+								<div className="gh-access-muted">Connect to see who can use it.</div>
+							) : !row.pairingReady ? (
+								<div className="gh-access-muted">
+									Update the box to lock it to your devices. Until then anyone who can reach its
+									network port can use it.
+								</div>
+							) : (
+								<BoxAccess alias={row.alias} title={row.title} confirm={confirm} />
 							)}
 						</div>
 						<div className="box-card-section">

@@ -8,6 +8,8 @@ import type {
 	ConnectionDTO,
 	ConnectStep,
 	GithubAccessDTO,
+	PairingInviteDTO,
+	PairingStatusDTO,
 	ProjectDTO,
 	RepoAccessDTO,
 	SystemInfo,
@@ -41,6 +43,11 @@ export const HOST_CH = {
 	appRelease: "host:appRelease",
 	/** The GitHub access each box last reported (Host.githubStatuses). */
 	boxGithub: "host:boxGithub",
+	/** A held box's lock and paired devices (pairing:*, v29). */
+	pairingStatus: "host:pairingStatus",
+	pairingInvite: "host:pairingInvite",
+	pairingRevoke: "host:pairingRevoke",
+	pairingLock: "host:pairingLock",
 	/** Clone+register a repo onto a specific box (connect it first). */
 	provision: "host:provision",
 	/** Install the ateam engine on a reachable SSH box, then connect to it. */
@@ -147,6 +154,9 @@ export interface ConnectOptions {
 	/** Set (or with null, clear) which provider wakes this `host:port` box. Saved
 	 *  once the box answers, like the box itself. */
 	binding?: BoxWake | null;
+	/** A one-time pairing code for a locked box (v29): redeemed on this connect,
+	 *  and this Mac keeps the device token it gives. */
+	code?: string;
 }
 
 /** Whether each provisioning secret is already saved (never the value itself). */
@@ -213,6 +223,15 @@ export interface AteamHost {
 	appRelease(): Promise<string>;
 	/** The GitHub access each box last reported, by alias, without reaching a box. */
 	boxGithub(): Promise<Record<string, GithubAccessDTO>>;
+	/** Whether a held box (v29) is locked to its paired devices, and which they are. */
+	pairingStatus(alias: string): Promise<PairingStatusDTO>;
+	/** A one-time code for another device, with the `ateamgo://` link a phone's
+	 *  Camera opens when the box is reached by address (null for an SSH alias). */
+	pairingInvite(alias: string): Promise<PairingInviteDTO & { link: string | null }>;
+	/** Unpair a device: its token stops working and its connections drop. */
+	pairingRevoke(alias: string, id: string): Promise<PairingStatusDTO>;
+	/** Lock an open box to the devices paired with it, starting with this Mac. */
+	pairingLock(alias: string): Promise<PairingStatusDTO>;
 	/** Connect the box if needed, then clone+register a repo ON it from its remote URL
 	 *  (so a task can run there). Returns the box's project row for that repo. */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;

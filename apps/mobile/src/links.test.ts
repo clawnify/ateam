@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { PROTOCOL_VERSION, WOKEN_CONNECT_MS } from "@ateam/protocol";
+import { NEEDS_PAIRING, PROTOCOL_VERSION, WOKEN_CONNECT_MS } from "@ateam/protocol";
 import { awayOf, type BoxLink, boxKey } from "./boxes";
 import type { Connection } from "./connection";
 import { type Clock, createLinks, type LinkDeps, REWAKE_MS } from "./links";
@@ -361,4 +361,21 @@ test("a woken box that Cancel stopped waiting for isn't tried again until someth
 	h.links.ensure(key(sleepy));
 	await settle();
 	expect(dials).toBe(2);
+});
+
+test("a box locked to other devices says so and isn't dialled again: it waits for a code", async () => {
+	let dials = 0;
+	const h = harness({
+		dial: () => {
+			dials++;
+			return Promise.reject(new Error(NEEDS_PAIRING));
+		},
+	});
+	h.setBoxes([plain]);
+	h.links.holdAll();
+	await settle();
+	expect(h.state()[key(plain)]).toMatchObject({ state: "down", error: NEEDS_PAIRING });
+	expect(dials).toBe(1);
+	await h.fc.advance(300_000);
+	expect(dials).toBe(1);
 });

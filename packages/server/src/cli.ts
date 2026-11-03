@@ -27,7 +27,14 @@ import { createDispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
 import { createEngine } from "./engine";
 import { engineLead } from "./lead/engine-lead";
-import { type RpcExtension, serveRpc } from "./rpc";
+import { Pairings } from "./pairing";
+import {
+	LiveConnections,
+	type PairingGuard,
+	RedeemLimiter,
+	type RpcExtension,
+	serveRpc,
+} from "./rpc";
 import { readSettings } from "./settings-file";
 import { detectSleepDriver, type SleepControl, startSleepControl } from "./sleep";
 import { socketServerTransport } from "./transport/socket";
@@ -51,6 +58,13 @@ const SELF = process.argv[1] ? realpathSync(process.argv[1]) : "";
 let sleepControl: SleepControl | null = null;
 // Served beside the dispatcher on every connection, once the engine is up.
 let extensions: RpcExtension[] = [];
+// The lock on the network port (pairing.ts): which devices may use the box over
+// the WebSocket. The unix socket (what `attach` relays over SSH) is never gated.
+const pairing: PairingGuard = {
+	store: new Pairings(DATA_DIR),
+	live: new LiveConnections(),
+	limiter: new RedeemLimiter(),
+};
 
 async function runDaemon(): Promise<void> {
 	// Single-instance guard: if a daemon already serves SOCK, bow out — do NOT
@@ -68,11 +82,18 @@ async function runDaemon(): Promise<void> {
 	// the server; overridable for dev.
 	const ptyDaemon = process.env.ATEAM_PTY_DAEMON ?? join(dirname(SELF), "daemon.js");
 
+	// A box with no database yet is a fresh install: it comes up locked to paired
+	// devices (pairing.ts). One that has run before keeps whatever it had: open
+	// until someone locks it, so an upgrade never locks a phone out.
+	const fresh =
+		!existsSync(join(DATA_DIR, "ateam.sqlite")) && !existsSync(join(DATA_DIR, "grove.sqlite"));
 	const engine = await createEngine({
 		dataDir: DATA_DIR,
 		daemonPath: ptyDaemon,
 		execPath: process.execPath,
 	});
+	if (fresh && pairing.store.lockIfNew())
+		console.log("[ateam] new box: locked to paired devices (pair one with `ateam pair`)");
 	engine.startLoops();
 	const dispatcher = createDispatcher(engine);
 	// This box's own Lead chat, for the phone (lead/engine-lead.ts). Only here:
@@ -100,8 +121,9 @@ async function runDaemon(): Promise<void> {
 	// 'end' auto-closes the write-end, dropping the response mid-flight.
 	const server = createServer({ allowHalfOpen: true }, (sock: Socket) => {
 		// Each client gets its own serveRpc over one connection; the engine (and
-		// its PTY sessions) is shared and outlives any single client.
-		serveClient(engine, dispatcher, socketServerTransport(sock));
+		// its PTY sessions) is shared and outlives any single client. Trusted: only
+		// this user's processes can open the socket, and SSH authenticated the relay.
+		serveClient(engine, dispatcher, socketServerTransport(sock), true);
 	});
 	server.on("error", (err: NodeJS.ErrnoException) => {
 		// Lost a startup race: another daemon bound SOCK between our probe and
@@ -145,9 +167,10 @@ function serveClient(
 	engine: Engine,
 	dispatcher: Dispatcher,
 	transport: Parameters<typeof serveRpc>[2],
+	trusted: boolean,
 ): void {
 	sleepControl?.touch();
-	serveRpc(engine, dispatcher, transport, extensions);
+	serveRpc(engine, dispatcher, transport, extensions, { trusted, pairing });
 }
 
 /**
@@ -222,7 +245,7 @@ function maybeStartWsListener(engine: Engine, dispatcher: Dispatcher): void {
 		port,
 		// Each client gets its own serveRpc; the engine (and its PTY sessions) is
 		// shared and outlives any single client — same contract as the socket path.
-		onConnection: (sock) => serveClient(engine, dispatcher, wsServerTransport(sock)),
+		onConnection: (sock) => serveClient(engine, dispatcher, wsServerTransport(sock), false),
 		log: (line) => console.log(line),
 	});
 }
@@ -307,7 +330,28 @@ if (cmd === "daemon") {
 } else if (cmd === "attach") {
 	// `--stdio` is the only (and default) mode today; accepted for forward-compat.
 	runAttach();
+} else if (cmd === "pair") {
+	runPair(process.argv.slice(3));
 } else {
-	console.error("usage: ateam <daemon | attach --stdio>");
+	console.error("usage: ateam <daemon | attach --stdio | pair [--unlock]>");
 	process.exit(2);
+}
+
+/**
+ * `ateam pair`: a one-time code for a device to pair with this box, from its own
+ * terminal, the way in when no paired device is at hand (a box reached only over
+ * Tailscale, the first phone). `--unlock` opens a locked box again, for when no
+ * paired device is left. Both act on the same file the daemon reads (pairing.ts).
+ */
+function runPair(args: string[]): void {
+	if (args.includes("--unlock")) {
+		pairing.store.unlock();
+		console.log("This box is open again: any device that can reach its port may use it.");
+		console.log("Lock it from Settings → Boxes in Ateam once a device is connected.");
+		return;
+	}
+	const { code, expiresAt } = pairing.store.invite();
+	const minutes = Math.round((expiresAt - Date.now()) / 60000);
+	console.log(`Pairing code: ${code.slice(0, 4)}-${code.slice(4)}`);
+	console.log(`Enter it in Ateam within ${minutes} minutes. It works once.`);
 }

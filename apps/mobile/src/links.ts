@@ -19,6 +19,7 @@ import {
 	beginStep,
 	type ConnectStep,
 	failActive,
+	NEEDS_PAIRING,
 	providerById,
 	reconnectDelay,
 	relabelActive,
@@ -214,6 +215,8 @@ export function createLinks(deps: LinkDeps): Links {
 		const stale = clock.now() - (lastWakeAt.get(key) ?? 0) >= REWAKE_MS;
 		const wake = wakeNow || (deps.waitedOn(key) && (backoff.get(key) ?? 0) > 0 && stale);
 		if (await connect(box, { wake })) return;
+		// A locked box waits for a pairing code: trying again changes nothing.
+		if (state[key]?.error === NEEDS_PAIRING) return;
 		retry(key);
 	}
 

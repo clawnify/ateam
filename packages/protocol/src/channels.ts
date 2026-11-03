@@ -55,6 +55,13 @@ export const CH = {
 	skillsPick: "skills:pick",
 	systemHello: "system:hello",
 	systemUpdate: "system:update",
+	// Which devices may use a box over its network port (pairing.ts). Box-addressed,
+	// like system:*: a multi-engine client calls them on that box's own wire.
+	pairingStatus: "pairing:status",
+	pairingInvite: "pairing:invite",
+	pairingRedeem: "pairing:redeem",
+	pairingRevoke: "pairing:revoke",
+	pairingLock: "pairing:lock",
 	fsListDir: "fs:listDir",
 	utilPickFiles: "util:pickFiles",
 	utilAttachImages: "util:attachImages",

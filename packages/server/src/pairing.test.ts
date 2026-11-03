@@ -1,0 +1,252 @@
+// The lock on a box's network port: the pairing store (pairing.ts) and how one
+// connection is gated by it (rpc.ts serveRpc).
+import { describe, expect, it } from "bun:test";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	CH,
+	type ClientFrame,
+	NEEDS_PAIRING,
+	type PairingGrantDTO,
+	type PairingInviteDTO,
+	type ServerFrame,
+} from "@ateam/protocol";
+import type { Dispatcher } from "./dispatcher";
+import type { Engine } from "./engine";
+import { CODE_TTL_MS, PAIRINGS_FILE, Pairings } from "./pairing";
+import { LiveConnections, type PairingGuard, RedeemLimiter, serveRpc } from "./rpc";
+
+const dir = () => mkdtempSync(join(tmpdir(), "pairing-"));
+
+describe("the pairing store", () => {
+	it("is open until locked; locking pairs the device that asked", () => {
+		const p = new Pairings(dir());
+		expect(p.locked()).toBe(false);
+		const grant = p.lock("MacBook", "desktop");
+		expect(p.locked()).toBe(true);
+		expect(p.verify(grant.token)?.id).toBe(grant.device.id);
+		expect(p.status(null).devices.map((d) => d.label)).toEqual(["MacBook"]);
+	});
+
+	it("trades a code, once, for a token of the device's own, and keeps only hashes", () => {
+		const d = dir();
+		const p = new Pairings(d);
+		const { code } = p.invite();
+		// As typed off a screen: lower case, with the dash it was shown with.
+		const typed = `${code.slice(0, 4)}-${code.slice(4)}`.toLowerCase();
+		const grant = p.redeem(typed, "iPhone", "phone");
+		expect(grant.device).toMatchObject({ label: "iPhone", kind: "phone" });
+		expect(p.verify(grant.token)?.label).toBe("iPhone");
+		expect(() => p.redeem(code, "Again", "phone")).toThrow("isn't valid");
+		const file = readFileSync(join(d, PAIRINGS_FILE), "utf8");
+		expect(file).not.toContain(grant.token);
+		expect(file).not.toContain(code);
+		expect(statSync(join(d, PAIRINGS_FILE)).mode & 0o777).toBe(0o600);
+	});
+
+	it("refuses a code after ten minutes", () => {
+		let t = 1_000_000;
+		const p = new Pairings(dir(), () => t);
+		const { code } = p.invite();
+		t += CODE_TTL_MS + 1;
+		expect(() => p.redeem(code, "Late", "phone")).toThrow("expired");
+	});
+
+	it("forgets a revoked device's token", () => {
+		const p = new Pairings(dir());
+		const grant = p.lock("MacBook", "desktop");
+		expect(p.revoke(grant.device.id)).toBe(true);
+		expect(p.verify(grant.token)).toBeNull();
+		expect(p.revoke(grant.device.id)).toBe(false);
+	});
+
+	it("fails closed on a damaged file", () => {
+		const d = dir();
+		writeFileSync(join(d, PAIRINGS_FILE), "{ not json");
+		const p = new Pairings(d);
+		expect(p.locked()).toBe(true);
+		expect(p.verify("x".repeat(43))).toBeNull();
+	});
+});
+
+// ---- one connection, gated ----
+
+function fakeEngine() {
+	const listeners = new Map<string, Set<(p: unknown) => void>>();
+	const engine = {
+		on: (event: string, l: (p: unknown) => void) => {
+			const set = listeners.get(event) ?? new Set();
+			set.add(l);
+			listeners.set(event, set);
+			return () => set.delete(l);
+		},
+	} as unknown as Engine;
+	const emit = (event: string, payload: unknown) => {
+		for (const l of listeners.get(event) ?? []) l(payload);
+	};
+	const dispatcher = {
+		methods: [],
+		handle: async (method: string) =>
+			method === CH.systemHello ? { protocolVersion: 29, agents: [] } : `did ${method}`,
+		release: () => {},
+	} as unknown as Dispatcher;
+	return { engine, emit, dispatcher };
+}
+
+const tick = () => new Promise((r) => setTimeout(r, 2));
+
+function connect(box: ReturnType<typeof fakeEngine>, guard: PairingGuard, trusted = false) {
+	const sent: ServerFrame[] = [];
+	let onFrame: (f: ClientFrame) => void = () => {};
+	let closed = false;
+	serveRpc(
+		box.engine,
+		box.dispatcher,
+		{
+			send: (f) => sent.push(f),
+			onFrame: (h) => {
+				onFrame = h;
+			},
+			close: () => {
+				closed = true;
+			},
+		},
+		[],
+		{ trusted, pairing: guard },
+	);
+	let n = 0;
+	const call = async (method: string, ...args: unknown[]) => {
+		const id = ++n;
+		onFrame({ t: "req", id, method, args });
+		for (let i = 0; i < 50; i++) {
+			const res = sent.find((f) => f.t === "res" && f.id === id);
+			if (res?.t === "res") {
+				if (!res.ok) throw new Error(res.error);
+				return res.result;
+			}
+			await tick();
+		}
+		throw new Error(`no reply to ${method}`);
+	};
+	const events = () => sent.filter((f) => f.t === "evt").length;
+	return { call, events, closed: () => closed };
+}
+
+function guardIn(d = dir()): PairingGuard {
+	return { store: new Pairings(d), live: new LiveConnections(), limiter: new RedeemLimiter() };
+}
+
+describe("a connection to a box's network port", () => {
+	it("on an open box, works as before and says it is open", async () => {
+		const box = fakeEngine();
+		const c = connect(box, guardIn());
+		expect(await c.call(CH.systemHello)).toMatchObject({ pairing: { state: "open" } });
+		expect(await c.call("tasks:list")).toBe("did tasks:list");
+		box.emit("taskUpdated", { id: "t" });
+		expect(c.events()).toBe(1);
+	});
+
+	it("on a locked box, gets no events and no calls until it is paired", async () => {
+		const box = fakeEngine();
+		const guard = guardIn();
+		const owner = guard.store.lock("MacBook", "desktop");
+		const c = connect(box, guard);
+		box.emit("ptyData", { data: "secret output" });
+		expect(c.events()).toBe(0);
+		expect(await c.call(CH.systemHello)).toMatchObject({ pairing: { state: "needed" } });
+		await expect(c.call("tasks:list")).rejects.toThrow(NEEDS_PAIRING);
+		await expect(c.call(CH.pairingInvite)).rejects.toThrow(NEEDS_PAIRING);
+		// The paired device's token lets it in, events and all.
+		expect(await c.call(CH.systemHello, { token: owner.token })).toMatchObject({
+			pairing: { state: "paired", device: owner.device.id },
+		});
+		box.emit("ptyData", { data: "now visible" });
+		expect(c.events()).toBe(1);
+		expect(await c.call("tasks:list")).toBe("did tasks:list");
+	});
+
+	it("pairs a new device with a code from a paired one", async () => {
+		const box = fakeEngine();
+		const guard = guardIn();
+		const owner = guard.store.lock("MacBook", "desktop");
+		const mac = connect(box, guard);
+		await mac.call(CH.systemHello, { token: owner.token });
+		const { code } = (await mac.call(CH.pairingInvite)) as PairingInviteDTO;
+		const phone = connect(box, guard);
+		const grant = (await phone.call(CH.pairingRedeem, {
+			code,
+			label: "iPhone",
+			kind: "phone",
+		})) as PairingGrantDTO;
+		expect(await phone.call("tasks:list")).toBe("did tasks:list");
+		const next = connect(box, guard);
+		expect(await next.call(CH.systemHello, { token: grant.token })).toMatchObject({
+			pairing: { state: "paired" },
+		});
+	});
+
+	it("over SSH, is never gated", async () => {
+		const box = fakeEngine();
+		const guard = guardIn();
+		guard.store.lock("MacBook", "desktop");
+		const ssh = connect(box, guard, true);
+		expect(await ssh.call(CH.systemHello)).toMatchObject({ pairing: { state: "trusted" } });
+		expect(await ssh.call(CH.pairingInvite)).toMatchObject({ code: expect.any(String) });
+	});
+
+	it("locking drops every connection that was only in because the box was open", async () => {
+		const box = fakeEngine();
+		const guard = guardIn();
+		const other = connect(box, guard);
+		const ssh = connect(box, guard, true);
+		const mac = connect(box, guard);
+		const grant = (await mac.call(CH.pairingLock, {
+			label: "MacBook",
+			kind: "desktop",
+		})) as PairingGrantDTO;
+		expect(grant.device.label).toBe("MacBook");
+		expect(other.closed()).toBe(true);
+		expect(ssh.closed()).toBe(false);
+		expect(mac.closed()).toBe(false);
+		await expect(mac.call(CH.pairingLock, {})).rejects.toThrow("locked already");
+	});
+
+	it("revoking a device drops its live connections", async () => {
+		const box = fakeEngine();
+		const guard = guardIn();
+		const owner = guard.store.lock("MacBook", "desktop");
+		const mac = connect(box, guard);
+		await mac.call(CH.systemHello, { token: owner.token });
+		const { code } = (await mac.call(CH.pairingInvite)) as PairingInviteDTO;
+		const phone = connect(box, guard);
+		const grant = (await phone.call(CH.pairingRedeem, {
+			code,
+			label: "iPhone",
+		})) as PairingGrantDTO;
+		await mac.call(CH.pairingRevoke, { id: grant.device.id });
+		await tick();
+		expect(phone.closed()).toBe(true);
+		expect(mac.closed()).toBe(false);
+	});
+
+	it("drops a connection after five wrong codes, and stops taking codes after many", async () => {
+		const box = fakeEngine();
+		const guard: PairingGuard = {
+			store: new Pairings(dir()),
+			live: new LiveConnections(),
+			limiter: new RedeemLimiter(8),
+		};
+		guard.store.lock("MacBook", "desktop");
+		const c = connect(box, guard);
+		for (let i = 0; i < 5; i++)
+			await expect(c.call(CH.pairingRedeem, { code: "AAAAAAAA" })).rejects.toThrow("isn't valid");
+		expect(c.closed()).toBe(true);
+		const d = connect(box, guard);
+		for (let i = 0; i < 3; i++)
+			await expect(d.call(CH.pairingRedeem, { code: "AAAAAAAA" })).rejects.toThrow("isn't valid");
+		// Eight wrong codes across connections: even a right one waits now.
+		const { code } = guard.store.invite();
+		await expect(d.call(CH.pairingRedeem, { code })).rejects.toThrow("Too many wrong codes");
+	});
+});

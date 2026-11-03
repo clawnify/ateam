@@ -231,6 +231,24 @@ export async function saveProviderAccount(
 	else await SecureStore.deleteItemAsync(accountItem(providerId, key));
 }
 
+// This phone's device token for each locked box it is paired with (pairing,
+// protocol v29), by box key. In the Keychain: it is the phone's key to the box.
+const tokenItem = (key: string) => `ateam.boxtoken.${key.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+
+export async function loadBoxToken(key: string): Promise<string | undefined> {
+	try {
+		return (await SecureStore.getItemAsync(tokenItem(key))) ?? undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Keep a box's token, or forget it with null. Throws, so a token that didn't save never looks saved. */
+export async function saveBoxToken(key: string, token: string | null): Promise<void> {
+	if (token) await SecureStore.setItemAsync(tokenItem(key), token);
+	else await SecureStore.deleteItemAsync(tokenItem(key));
+}
+
 // The box version whose "older Ateam" banner the user dismissed, per box. The
 // banner returns on its own when the box reports a different version.
 const skewKey = (host: string) => `ateam.skewDismissed.${host}`;

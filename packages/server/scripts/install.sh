@@ -677,6 +677,12 @@ else
 	mark no 'tailscale — how the desktop/phone reach this box privately'
 fi
 
+# A box serving the phone is locked to the devices paired with it (pairing.ts):
+# a fresh one has none yet, so say where the first code comes from.
+if [ -n "$WS_ADDR" ]; then
+	info "     phone: pair it with the one-time code from \`ateam pair\` (or Settings → Boxes on a Mac)"
+fi
+
 cat <<EOF
 
 Installed. From your Mac, add this box to ~/.ssh/config, then pick it in Ateam's
