@@ -424,6 +424,37 @@ export const taskPages = sqliteTable("task_pages", {
 	html: text("html").notNull(),
 });
 
+/** One step of a task's change, as the change steps write it (change-steps.ts). */
+export interface ChangeStep {
+	title: string;
+	why: string;
+	files: { path: string; note: string }[];
+}
+
+/** What the change steps say about a task's diff. */
+export interface ChangeStepsBody {
+	steps: ChangeStep[];
+	/** Changes the agent's own account of the work never mentions. */
+	unexplained: { path: string; note: string }[];
+}
+
+/**
+ * A task's diff told as steps, the last ones written. In a table of its own,
+ * like a page's HTML, so listing the board never reads it. `diffKey` names the
+ * diff they describe (its files and line counts), so a later diff knows they
+ * are out of date. Only the steps are kept, never the patch: the diff itself is
+ * always read live from git.
+ */
+export const taskChangeSteps = sqliteTable("task_change_steps", {
+	taskId: text("task_id")
+		.primaryKey()
+		.references(() => tasks.id, { onDelete: "cascade" }),
+	diffKey: text("diff_key").notNull(),
+	body: text("body", { mode: "json" }).$type<ChangeStepsBody>().notNull(),
+	madeAt: integer("made_at").notNull(),
+});
+export type TaskChangeSteps = typeof taskChangeSteps.$inferSelect;
+
 /**
  * Remote hosts the client can drive an engine on, keyed by `host_alias` — the
  * connection's identity, whose meaning depends on `transport`:

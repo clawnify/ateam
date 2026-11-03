@@ -3,6 +3,7 @@ export type {
 	AgentId,
 	AvailableAgent,
 	BinaryPresence,
+	HeadlessInvocation,
 	PromptTransport,
 	SessionScan,
 } from "./registry";

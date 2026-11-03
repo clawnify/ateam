@@ -13,6 +13,7 @@ import type {
 	AteamApi,
 	AttachDelivery,
 	BoxUpdateStarted,
+	ChangeStepsDTO,
 	CleanupCandidate,
 	CleanupReport,
 	CreateLoopInput,
@@ -103,6 +104,7 @@ export function leadClient(rpc: RpcClient): LeadClient {
 		interrupt: async () => void (await call(LEAD_CH.interrupt)),
 		reset: async () => void (await call(LEAD_CH.reset)),
 		reply: async (taskId, text) => void (await call(LEAD_CH.reply, taskId, text)),
+		react: async (id, emoji) => void (await call(LEAD_CH.react, id, emoji)),
 		answer: async (input) => void (await call(LEAD_CH.answer, input)),
 		permission: async (id, answer) => void (await call(LEAD_CH.permission, id, answer)),
 		setAuto: async (on) => void (await call(LEAD_CH.setAuto, on)),
@@ -175,6 +177,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			cleanup: (projectId) => call<CleanupReport>(CH.tasksCleanup, [projectId]),
 			listArchived: (projectId) => call<TaskDTO[]>(CH.tasksListArchived, [projectId]),
 			setArchived: (id, archived) => call<TaskDTO>(CH.tasksSetArchived, [id, archived]),
+			changeSteps: (taskId) => call<ChangeStepsDTO>(CH.tasksChangeSteps, [taskId]),
 		},
 		git: {
 			commit: (taskId, message) => call<{ sha: string }>(CH.gitCommit, [taskId, message]),

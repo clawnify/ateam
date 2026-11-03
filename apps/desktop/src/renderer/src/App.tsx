@@ -86,6 +86,7 @@ import {
 	useState,
 } from "react";
 import { SessionGlyphs, SessionIcon } from "./components/AgentIcon";
+import { ChangesPane } from "./components/ChangeSteps";
 import { ChangesList, DiffStat } from "./components/Changes";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { ConnectSteps } from "./components/ConnectSteps";
@@ -105,6 +106,7 @@ import { QuestionCard } from "./components/QuestionCard";
 import { RailTile } from "./components/RailTile";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { SidebarViewMenu } from "./components/SidebarViewMenu";
+import { TaskPeek, TaskPeekProvider } from "./components/TaskPeek";
 import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
 import { Button } from "./components/ui/button";
@@ -120,6 +122,7 @@ import {
 	type McLayout,
 	mcCapacity,
 	mcShapeGrid,
+	placeArrivals,
 } from "./mc-layout";
 import { panelOnScreen, proposalToOpen, shownWhileOpen } from "./proposal-open";
 import {
@@ -141,10 +144,12 @@ import {
 	toggled,
 	unscopedView,
 } from "./sidebar-view";
+import { draggedTaskId, TASK_DRAG_MIME } from "./task-drag";
 import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
 import { useBoxesNeedingYou } from "./useBoxesNeedingYou";
 import { useGithubIssues } from "./useGithubIssues";
+import { useLeadHome } from "./useLeadHome";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
 	{ key: "todo", label: "Backlog" },
@@ -711,6 +716,12 @@ export function App() {
 	// Which engine a task runs on = the engine that owns its project (tasks never
 	// migrate between engines, so origin is intrinsic to the projectId).
 	const originOf = useCallback((projectId: string): Alias => origins[projectId] ?? null, [origins]);
+	// Where the main Lead chat lives, and what a box's Lead can reach (its own tasks).
+	const leadHome = useLeadHome();
+	const onLeadBox = useCallback(
+		(t: TaskDTO) => leadHome.box !== null && originOf(t.projectId) === leadHome.box,
+		[leadHome.box, originOf],
+	);
 	// The box a task is on when that box isn't held (its card is from the box's
 	// last-seen board), else null.
 	const offlineAliasOf = useCallback(
@@ -727,16 +738,20 @@ export function App() {
 	// Opening a task on a box that isn't held is the user asking for that box, the
 	// same intent as starting a task on it, so it is woken the same way. Only an
 	// open does this: a selection restored on launch must never wake a box.
-	const wakeBox = useCallback(async (alias: string) => {
-		if (wakingRef.current === alias) return;
+	// True once this call brought the box up; false when it failed, or when
+	// another wake of the same box is still under way.
+	const wakeBox = useCallback(async (alias: string): Promise<boolean> => {
+		if (wakingRef.current === alias) return false;
 		wakingRef.current = alias;
 		setWakingAlias(alias);
 		try {
 			await window.ateamHost.connect(alias, { wake: true });
+			return true;
 		} catch (e) {
 			setError(
 				`Couldn't reach ${aliasLabel(alias)}: ${e instanceof Error ? e.message : String(e)}`,
 			);
+			return false;
 		} finally {
 			wakingRef.current = null;
 			setWakingAlias(null);
@@ -1331,6 +1346,16 @@ export function App() {
 		markRead(task.id);
 		setPanelMode("full");
 	};
+	// Over the Mission Control grid a click on a task (a sidebar row, a Lead
+	// chat pill) points at the task's tile (white edge, keyboard focus) rather
+	// than covering the grid. A task with no live session has no tile, so
+	// Mission Control hands it back and it opens full width as before (see
+	// onJumpMissing).
+	const pointAtTile = (t: TaskDTO) => {
+		markRead(t.id);
+		setMcHighlightId(t.id);
+		setMcJump((j) => ({ id: t.id, seq: (j?.seq ?? 0) + 1 }));
+	};
 	// Clicking the task you're already focused on closes it, revealing the view
 	// underneath — the lit tab already tells you which one you'll land on. Only
 	// the sidebar toggles: a search hit or a board card means "take me there",
@@ -1340,17 +1365,44 @@ export function App() {
 			setSelectedTaskId(null);
 			return;
 		}
-		// Over the Mission Control grid a sidebar click points at the task's tile
-		// (white edge, keyboard focus) rather than covering the grid. A task with
-		// no live session has no tile, so Mission Control hands it back and it
-		// opens full width as before (see onJumpMissing).
-		if (mcGridShown) {
-			markRead(t.id);
-			setMcHighlightId(t.id);
-			setMcJump((j) => ({ id: t.id, seq: (j?.seq ?? 0) + 1 }));
-			return;
-		}
+		if (mcGridShown) return pointAtTile(t);
 		openTask(t);
+	};
+	// A task pill in the Lead chat: its tile when the grid is showing beside
+	// the chat, else the task itself.
+	const openFromLead = (t: TaskDTO) => (mcGridShown ? pointAtTile(t) : openTask(t));
+	// A Lead pill dropped on Mission Control for a task with no tile: wake its
+	// agent so it joins the grid. The same pick as the task panel's "Resume
+	// last conversation" (resumeLast): the newest agent tab a restart or the
+	// reaper put to sleep, else the latest conversation in the worktree. True
+	// once an agent is live, false when none could be started.
+	const wakeIntoMission = async (task: TaskDTO): Promise<boolean> => {
+		// A box that didn't come up has already said why (wakeBox).
+		const alias = offlineAliasOf(task);
+		if (alias && !(await wakeBox(alias))) return false;
+		let woke = false;
+		await run(async () => {
+			const [live, restorable] = await Promise.all([
+				window.ateam.pty.listForTask(task.id),
+				window.ateam.pty.listRestorable(task.id),
+			]);
+			// Live after all (it woke between the drag and the drop): its tile is on its way.
+			if (tileSessions(live).length === 0) {
+				// The engine lists latest first.
+				const newest = restorable.find((s) => s.agentId !== "shell");
+				if (newest)
+					await window.ateam.pty.restoreSession({ taskId: task.id, terminalId: newest.terminalId });
+				else
+					await window.ateam.pty.spawnAgent({
+						taskId: task.id,
+						agentId: task.agentId ?? agents.find((a) => a.available)?.id ?? "claude",
+						yolo: false,
+						resume: true,
+					});
+			}
+			woke = true;
+		});
+		return woke;
 	};
 	// A sidebar row or rail tile. An archived one is brought back as it opens: the
 	// engine sends a removal for every write to an archived task (a git-status
@@ -1393,6 +1445,12 @@ export function App() {
 	};
 	// Tabs mean "show me this view". The focused task covers the view it belongs
 	// to, so switching tabs — including clicking the lit one — closes it.
+	// Settings opened at a page from elsewhere (the Lead's header → Boxes).
+	const [settingsJump, setSettingsJump] = useState<{ section: "boxes"; n: number } | null>(null);
+	const openLeadSettings = () => {
+		setSettingsJump((j) => ({ section: "boxes", n: (j?.n ?? 0) + 1 }));
+		goToView("settings");
+	};
 	const goToView = (v: View) => {
 		if (panelMode === "full") setSelectedTaskId(null);
 		setView(v);
@@ -1564,7 +1622,13 @@ export function App() {
 		setComposerOpen(true);
 	};
 
-	const composeTask = (input: ComposeInput, onCreated?: (task: TaskDTO) => void) =>
+	/** `keepFiles`: files already on the machine the task runs on (attached in
+	 *  the chat of a Lead that lives on that box), which aren't sent again. */
+	const composeTask = (
+		input: ComposeInput,
+		onCreated?: (task: TaskDTO) => void,
+		keepFiles?: string[],
+	) =>
 		run(async () => {
 			const card = activeCard;
 			if (!card) return;
@@ -1692,6 +1756,7 @@ export function App() {
 				yolo: input.yolo,
 				prompt: input.prompt || undefined,
 				files: input.files.length ? input.files : undefined,
+				...(keepFiles?.length ? { keepFiles } : {}),
 			});
 			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 			// Only once the agent is really up: a failed launch shows its error instead.
@@ -1890,7 +1955,9 @@ export function App() {
 									onClick={() => (task ? toggleTask(task) : goToView("loops"))}
 								>
 									<Repeat size={16} strokeWidth={1.75} />
-									{task?.column === "needs_attention" && <span className="corner needs_attention" />}
+									{task?.column === "needs_attention" && (
+										<span className="corner needs_attention" />
+									)}
 								</RailTile>
 							);
 						})}
@@ -1934,91 +2001,98 @@ export function App() {
 								</span>
 							</div>
 							{!tasksCollapsed && (
-								<div className="side-list">
-									{!activeProjectId ? (
-										<div className="tree-empty">Select a project</div>
-									) : visibleSidebarTasks.length === 0 ? (
-										<div className="tree-empty">
-											{sidebarTasks.length === 0
-												? "No active tasks"
-												: tagFilter
-													? "No matching tasks"
-													: "No tasks match the filters"}
-										</div>
-									) : (
-										shownGroups.map((g) => {
-											const grouped = listView.grouping !== "none";
-											const folded = grouped && listView.collapsed.includes(g.key);
-											const row = (t: TaskDTO) => (
-												<TaskRow
-													task={t}
-													offline={offlineAliasOf(t) !== null}
-													selected={t.id === sidebarSelectedId}
-													pulse={t.id === pulseId}
-													onClick={() => openRow(t)}
-													onDelete={() => deleteTask(t)}
-												/>
-											);
-											return (
-												<div key={g.key}>
-													{grouped && (
-														<button
-															type="button"
-															className="task-group-head"
-															aria-expanded={!folded}
-															onClick={() =>
-																setSideView({
-																	...sideView,
-																	collapsed: toggled(sideView.collapsed, g.key),
-																})
-															}
-														>
-															{folded ? (
-																<ChevronRight size={12} strokeWidth={2} />
-															) : (
-																<ChevronDown size={12} strokeWidth={2} />
-															)}
-															<span>{g.label}</span>
-														</button>
-													)}
-													{folded ? null : taskSort === "custom" ? (
-														// Custom order: drag rows up/down inside the group; Motion
-														// animates the shuffle. A drag only trades the group's own
-														// slots, so tasks in other groups, or hidden by a filter, keep
-														// their place in the saved order.
-														<Reorder.Group
-															as="div"
-															axis="y"
-															values={g.tasks.map((t) => t.id)}
-															onReorder={(ids) =>
-																reorderTasks(
-																	spliceOrder(
-																		orderedSidebarTasks.map((t) => t.id),
-																		ids,
-																	),
-																)
-															}
-														>
-															{g.tasks.map((t) => (
-																<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
+								<TaskPeekProvider>
+									<div className="side-list">
+										{!activeProjectId ? (
+											<div className="tree-empty">Select a project</div>
+										) : visibleSidebarTasks.length === 0 ? (
+											<div className="tree-empty">
+												{sidebarTasks.length === 0
+													? "No active tasks"
+													: tagFilter
+														? "No matching tasks"
+														: "No tasks match the filters"}
+											</div>
+										) : (
+											shownGroups.map((g) => {
+												const grouped = listView.grouping !== "none";
+												const folded = grouped && listView.collapsed.includes(g.key);
+												const row = (t: TaskDTO) => (
+													<TaskRow
+														task={t}
+														offline={offlineAliasOf(t) !== null}
+														selected={t.id === sidebarSelectedId}
+														pulse={t.id === pulseId}
+														onClick={() => openRow(t)}
+														onDelete={() => deleteTask(t)}
+													/>
+												);
+												return (
+													<div key={g.key}>
+														{grouped && (
+															<button
+																type="button"
+																className="task-group-head"
+																aria-expanded={!folded}
+																onClick={() =>
+																	setSideView({
+																		...sideView,
+																		collapsed: toggled(sideView.collapsed, g.key),
+																	})
+																}
+															>
+																{folded ? (
+																	<ChevronRight size={12} strokeWidth={2} />
+																) : (
+																	<ChevronDown size={12} strokeWidth={2} />
+																)}
+																<span>{g.label}</span>
+															</button>
+														)}
+														{folded ? null : taskSort === "custom" ? (
+															// Custom order: drag rows up/down inside the group; Motion
+															// animates the shuffle. A drag only trades the group's own
+															// slots, so tasks in other groups, or hidden by a filter, keep
+															// their place in the saved order.
+															<Reorder.Group
+																as="div"
+																axis="y"
+																values={g.tasks.map((t) => t.id)}
+																onReorder={(ids) =>
+																	reorderTasks(
+																		spliceOrder(
+																			orderedSidebarTasks.map((t) => t.id),
+																			ids,
+																		),
+																	)
+																}
+															>
+																{g.tasks.map((t) => (
+																	<Reorder.Item
+																		as="div"
+																		key={t.id}
+																		value={t.id}
+																		transition={springy}
+																	>
+																		{row(t)}
+																	</Reorder.Item>
+																))}
+															</Reorder.Group>
+														) : (
+															// Sorted modes: layout animation glides rows to their new spot
+															// when a status change or update reorders them.
+															g.tasks.map((t) => (
+																<motion.div key={t.id} layout transition={springy}>
 																	{row(t)}
-																</Reorder.Item>
-															))}
-														</Reorder.Group>
-													) : (
-														// Sorted modes: layout animation glides rows to their new spot
-														// when a status change or update reorders them.
-														g.tasks.map((t) => (
-															<motion.div key={t.id} layout transition={springy}>
-																{row(t)}
-															</motion.div>
-														))
-													)}
-												</div>
-											);
-										})
-									)}
-								</div>
+																</motion.div>
+															))
+														)}
+													</div>
+												);
+											})
+										)}
+									</div>
+								</TaskPeekProvider>
 							)}
 						</div>
 
@@ -2064,6 +2138,26 @@ export function App() {
 													task={task}
 													selected={task != null && task.id === sidebarSelectedId}
 													onClick={() => (task ? toggleTask(task) : goToView("loops"))}
+													onRunNow={() =>
+														window.ateam.loops.runNow(l.id).then(
+															(list) => {
+																// A run that fails records its error on the loop rather
+																// than throwing; the sidebar has no line for it, so say it.
+																const after = list.find((x) => x.id === l.id);
+																if (
+																	after?.lastStatus === "error" &&
+																	after.lastRunAt !== l.lastRunAt
+																) {
+																	setError(`${l.title} didn't run: ${after.lastError ?? "error"}`);
+																}
+																refreshLoops();
+															},
+															(e) =>
+																setError(
+																	`Couldn't run ${l.title}: ${e instanceof Error ? e.message : String(e)}`,
+																),
+														)
+													}
 												/>
 											);
 										})
@@ -2431,17 +2525,21 @@ export function App() {
 								if (t) openTask(t);
 							}}
 							onReorder={reorderMission}
+							onWake={wakeIntoMission}
 							onNewTask={activeProjectId ? newTask : undefined}
 						/>
 					) : view === "settings" ? (
-						<SettingsPanel agents={agents} boxesNeedYou={boxesNeedYou} />
+						<SettingsPanel agents={agents} boxesNeedYou={boxesNeedYou} jumpTo={settingsJump} />
 					) : view === "lead" ? (
 						<LeadChat
 							tasks={allTasks}
 							projects={projects}
-							onOpenTask={openTask}
+							onOpenTask={openFromLead}
 							onOpenProposal={openLeadProposal}
 							scope={boundProject?.name}
+							home={leadHome}
+							onLeadBox={onLeadBox}
+							onOpenLeadSettings={openLeadSettings}
 						/>
 					) : (
 						<LoopsPanel
@@ -2471,10 +2569,13 @@ export function App() {
 						<LeadChat
 							tasks={allTasks}
 							projects={projects}
-							onOpenTask={openTask}
+							onOpenTask={openFromLead}
 							onOpenProposal={openLeadProposal}
 							onHide={() => setLeadSide(false)}
 							scope={boundProject?.name}
+							home={leadHome}
+							onLeadBox={onLeadBox}
+							onOpenLeadSettings={openLeadSettings}
 						/>
 					</aside>
 				</>
@@ -2708,10 +2809,23 @@ export function App() {
 							onInstallAgent={installAgentOn}
 							onClose={() => setLeadProposal(null)}
 							onCreate={(input) => {
+								// Files attached in the chat of a Lead on a box are kept on that
+								// box: they go with a task started there, and nowhere else.
+								const kept =
+									leadHome.box && item.files?.length
+										? item.files.filter((f) => input.files.includes(f))
+										: [];
+								if (kept.length && input.alias !== leadHome.box) {
+									setError(
+										`Its files are on ${leadHome.box}, where the Lead runs: start it there, or attach them again.`,
+									);
+									return;
+								}
 								setLeadProposal(null);
 								void composeTask(
 									input,
 									(task) => void decideLeadProposal(item.id, "created", task.id),
+									kept,
 								);
 							}}
 						/>
@@ -2922,40 +3036,44 @@ function TaskRow({
 	// rest, menu on hover, swapped in place just left of the status.
 	return (
 		<div className="tasknode-row">
-			<button
-				type="button"
-				className={`tasknode ${selected ? "selected" : ""} ${offline ? "offline" : ""} ${pulse ? "just-started" : ""}`}
-				title={offline ? "Its box is asleep or out of reach. Open it to wake the box." : undefined}
-				onClick={onClick}
+			<TaskPeek
+				task={t}
+				note={offline ? "Its box is asleep or out of reach. Open it to wake the box." : undefined}
 			>
-				{glyphs.length > 0 ? (
-					<span className="ticon glyphs">
-						<SessionGlyphs ids={glyphs} size={14} />
-					</span>
-				) : (
-					<Icon className="ticon" size={14} strokeWidth={1.75} />
-				)}
-				{/* The status stays put; on hover the tags slide in beside it, like
+				<button
+					type="button"
+					className={`tasknode ${selected ? "selected" : ""} ${offline ? "offline" : ""} ${pulse ? "just-started" : ""}`}
+					onClick={onClick}
+				>
+					{glyphs.length > 0 ? (
+						<span className="ticon glyphs">
+							<SessionGlyphs ids={glyphs} size={14} />
+						</span>
+					) : (
+						<Icon className="ticon" size={14} strokeWidth={1.75} />
+					)}
+					{/* The status stays put; on hover the tags slide in beside it, like
 				    the card's. They share one line with the name, so the name only
 				    gives up the room the tags that fit really take. */}
-				<span className="tmain">
-					<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
-					{tags.map((tag) => (
-						<span className="pill row-tag" key={tag}>
-							{tag}
-						</span>
-					))}
-				</span>
-				<TriageGlyph triage={t.triage} />
-				{/* Listed under the Archived filter: it says so in the status's spot. */}
-				{t.archivedAt != null ? (
-					<span className="pill" title="Archived. Opening it brings it back to the board.">
-						archived
+					<span className="tmain">
+						<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
+						{tags.map((tag) => (
+							<span className="pill row-tag" key={tag}>
+								{tag}
+							</span>
+						))}
 					</span>
-				) : (
-					<StatusPill column={t.column} title={t.triage.reason} />
-				)}
-			</button>
+					<TriageGlyph triage={t.triage} />
+					{/* Listed under the Archived filter: it says so in the status's spot. */}
+					{t.archivedAt != null ? (
+						<span className="pill" title="Archived. Opening it brings it back to the board.">
+							archived
+						</span>
+					) : (
+						<StatusPill column={t.column} title={t.triage.reason} />
+					)}
+				</button>
+			</TaskPeek>
 			{/* Vertical, so it's narrow enough to swap in beside the status without
 			    moving it. Wait on someone lives in the open task's ··· menu. */}
 			<span className="row-menu">
@@ -2977,12 +3095,22 @@ function LoopRow({
 	task,
 	selected,
 	onClick,
+	onRunNow,
 }: {
 	loop: LoopDTO;
 	task: TaskDTO | null;
 	selected: boolean;
 	onClick: () => void;
+	/** Run it now, off schedule, like the Loops tab's Run now. */
+	onRunNow: () => Promise<void>;
 }) {
+	// Starting a run can take seconds (the first one creates the task's
+	// worktree), so the row's icon spins until the engine answers.
+	const [starting, setStarting] = useState(false);
+	const runNow = () => {
+		setStarting(true);
+		void onRunNow().finally(() => setStarting(false));
+	};
 	return (
 		<div className="tasknode-row">
 			<button
@@ -2991,11 +3119,24 @@ function LoopRow({
 				onClick={onClick}
 			>
 				<span className="ticon">
-					<Repeat size={14} strokeWidth={1.75} />
+					{starting ? (
+						<RefreshCw size={14} strokeWidth={1.75} className="spin" />
+					) : (
+						<Repeat size={14} strokeWidth={1.75} />
+					)}
 				</span>
 				<span className="tname">{loop.title}</span>
 				{task && <StatusPill column={task.column} title={task.triage.reason} />}
 			</button>
+			{/* TaskRow's menu, in the same column: hidden at rest, shown on hover. */}
+			<span className="row-menu">
+				<Menu
+					label={`Actions for ${loop.title}`}
+					icon={EllipsisVertical}
+					className="size-5 [&_svg:not([class*='size-'])]:size-3.5"
+					items={[{ label: "Run now", icon: Play, disabled: starting, onClick: runNow }]}
+				/>
+			</span>
 		</div>
 	);
 }
@@ -3055,136 +3196,141 @@ function Board({
 
 	return (
 		// Clicking empty board space deselects; card clicks stopPropagation.
-		<div className="board" onClick={onDeselect}>
-			{COLUMNS.map((col) => {
-				// Latest activity on top, the sidebar's "Recently updated" order: a
-				// task that just finished a turn is the first card in its column, not
-				// wherever its creation date (or its machine) put it.
-				const items = tasks.filter((t) => t.column === col.key).sort(byLatestActivity);
-				return (
-					<div className="col" key={col.key}>
-						<h3>
-							{col.label}{" "}
-							<span className="count">
-								{items.length + (col.key === "todo" ? issues.length : 0)}
-							</span>
-							{col.key === "todo" && issueActions}
-						</h3>
-						{col.key === "todo" && issueStatus}
-						{col.key === "todo" && issues.length > 0 && (
-							<>
-								{issues.map((issue) => (
-									<GithubIssueCard
-										key={issue.number}
-										issue={issue}
-										selected={issue.number === selectedIssueNumber}
-										onSelect={() => onSelectIssue(issue)}
-									/>
-								))}
-							</>
-						)}
-						{items.map((t) => {
-							const tags = tagsFor(t);
-							const glyphs = taskGlyphs(t);
-							const isSelected = t.id === selectedId;
-							return (
-								<motion.div
-									key={t.id}
-									layout
-									transition={springy}
-									ref={isSelected ? selectedRef : undefined}
-									// Fires after any layout animation settles — a status change
-									// carrying the card to another column, or cards above it coming
-									// and going. Re-check from the card's final resting box.
-									onLayoutAnimationComplete={isSelected ? revealSelected : undefined}
-									className={`card ${isSelected ? "selected" : ""} ${isOffline(t) ? "offline" : ""} ${t.id === pulseId ? "just-started" : ""}`}
-									onClick={(e) => {
-										e.stopPropagation();
-										onSelect(t.id);
-									}}
-								>
-									{/* A stalled agent must not wear the live "running" ring — the card
-								    would contradict its own caption. */}
-									{t.agentStatus && (
-										<span
-											className={`ring ${t.triage.bucket === "stalled" ? "stalled" : t.agentStatus}`}
+		<TaskPeekProvider>
+			<div className="board" onClick={onDeselect}>
+				{COLUMNS.map((col) => {
+					// Latest activity on top, the sidebar's "Recently updated" order: a
+					// task that just finished a turn is the first card in its column, not
+					// wherever its creation date (or its machine) put it.
+					const items = tasks.filter((t) => t.column === col.key).sort(byLatestActivity);
+					return (
+						<div className="col" key={col.key}>
+							<h3>
+								{col.label}{" "}
+								<span className="count">
+									{items.length + (col.key === "todo" ? issues.length : 0)}
+								</span>
+								{col.key === "todo" && issueActions}
+							</h3>
+							{col.key === "todo" && issueStatus}
+							{col.key === "todo" && issues.length > 0 && (
+								<>
+									{issues.map((issue) => (
+										<GithubIssueCard
+											key={issue.number}
+											issue={issue}
+											selected={issue.number === selectedIssueNumber}
+											onSelect={() => onSelectIssue(issue)}
 										/>
-									)}
-									{/* No branch line: the branch is the name as a slug, so the card
+									))}
+								</>
+							)}
+							{items.map((t) => {
+								const tags = tagsFor(t);
+								const glyphs = taskGlyphs(t);
+								const isSelected = t.id === selectedId;
+								return (
+									<TaskPeek task={t} key={t.id}>
+										<motion.div
+											layout
+											transition={springy}
+											ref={isSelected ? selectedRef : undefined}
+											// Fires after any layout animation settles — a status change
+											// carrying the card to another column, or cards above it coming
+											// and going. Re-check from the card's final resting box.
+											onLayoutAnimationComplete={isSelected ? revealSelected : undefined}
+											className={`card ${isSelected ? "selected" : ""} ${isOffline(t) ? "offline" : ""} ${t.id === pulseId ? "just-started" : ""}`}
+											onClick={(e) => {
+												e.stopPropagation();
+												onSelect(t.id);
+											}}
+										>
+											{/* A stalled agent must not wear the live "running" ring — the card
+								    would contradict its own caption. */}
+											{t.agentStatus && (
+												<span
+													className={`ring ${t.triage.bucket === "stalled" ? "stalled" : t.agentStatus}`}
+												/>
+											)}
+											{/* No branch line: the branch is the name as a slug, so the card
 								    carries state instead and the branch lives in the open task.
 								    Tags show on hover inside the name's line, the sidebar row's
 								    treatment, so hovering never reflows the board. */}
-									<div className="name">
-										<span className="name-text">
-											{t.isUnread && <span className="unread" title="New since you last looked" />}
-											{t.name}
-										</span>
-										{tags.length > 0 && (
-											<span className="card-tags">
-												{tags.map((tag) => (
-													<span className="pill" key={tag}>
-														{tag}
+											<div className="name">
+												<span className="name-text">
+													{t.isUnread && (
+														<span className="unread" title="New since you last looked" />
+													)}
+													{t.name}
+												</span>
+												{tags.length > 0 && (
+													<span className="card-tags">
+														{tags.map((tag) => (
+															<span className="pill" key={tag}>
+																{tag}
+															</span>
+														))}
 													</span>
-												))}
-											</span>
-										)}
-									</div>
-									{originLabel(t) && (
-										<span className="card-env muted" style={{ fontSize: 10 }}>
-											{originLabel(t)}
-										</span>
-									)}
-									{/* Why this card is where it is — the triage verdict that until now
-								    was computed on every refresh and shown only to the MCP tool. */}
-									{/* Parked on an outside party: the wait IS why the card is where it
-								    is, so it takes the triage line over until it ends. */}
-									{/* A proposal waiting on you is why it sits in Needs You, so it
-								    says so first. */}
-									<div
-										className={`triage wait-${waitState(t, Date.now())}`}
-										title={proposalLabel(t) ?? waitingLabel(t, Date.now()) ?? t.triage.reason}
-									>
-										{proposalLabel(t) ?? waitingLabel(t, Date.now()) ?? t.triage.reason}
-									</div>
-									<div className="meta">
-										<WorkSize task={t} files />
-										{t.issueUrl && (
-											<a
-												className="issue-link"
-												href={t.issueUrl}
-												target="_blank"
-												rel="noreferrer"
-												onClick={(event) => event.stopPropagation()}
-											>
-												Issue #{t.issueUrl.split("/").pop()}
-											</a>
-										)}
-										{t.prNumber && <span>PR #{t.prNumber}</span>}
-										{t.mergeStatus && (
-											<span className={`merge-status ${t.mergeStatus}`}>
-												{t.mergeStatus === "conflict" ? "merge conflict" : t.mergeStatus}
-											</span>
-										)}
-										{/* Age and agent icon share one right-aligned group: the icon used to
-									    be absolutely positioned and sat on top of the age label. */}
-										<span className="meta-end">
-											{relativeAge(t.lastEventAt, Date.now()) && (
-												<span className="age">{relativeAge(t.lastEventAt, Date.now())}</span>
-											)}
-											{glyphs.length > 0 && (
-												<span className="glyphs">
-													<SessionGlyphs ids={glyphs} size={15} />
+												)}
+											</div>
+											{originLabel(t) && (
+												<span className="card-env muted" style={{ fontSize: 10 }}>
+													{originLabel(t)}
 												</span>
 											)}
-										</span>
-									</div>
-								</motion.div>
-							);
-						})}
-					</div>
-				);
-			})}
-		</div>
+											{/* Why this card is where it is — the triage verdict that until now
+								    was computed on every refresh and shown only to the MCP tool. */}
+											{/* Parked on an outside party: the wait IS why the card is where it
+								    is, so it takes the triage line over until it ends. */}
+											{/* A proposal waiting on you is why it sits in Needs You, so it
+								    says so first. */}
+											<div
+												className={`triage wait-${waitState(t, Date.now())}`}
+												title={proposalLabel(t) ?? waitingLabel(t, Date.now()) ?? t.triage.reason}
+											>
+												{proposalLabel(t) ?? waitingLabel(t, Date.now()) ?? t.triage.reason}
+											</div>
+											<div className="meta">
+												<WorkSize task={t} files />
+												{t.issueUrl && (
+													<a
+														className="issue-link"
+														href={t.issueUrl}
+														target="_blank"
+														rel="noreferrer"
+														onClick={(event) => event.stopPropagation()}
+													>
+														Issue #{t.issueUrl.split("/").pop()}
+													</a>
+												)}
+												{t.prNumber && <span>PR #{t.prNumber}</span>}
+												{t.mergeStatus && (
+													<span className={`merge-status ${t.mergeStatus}`}>
+														{t.mergeStatus === "conflict" ? "merge conflict" : t.mergeStatus}
+													</span>
+												)}
+												{/* Age and agent icon share one right-aligned group: the icon used to
+									    be absolutely positioned and sat on top of the age label. */}
+												<span className="meta-end">
+													{relativeAge(t.lastEventAt, Date.now()) && (
+														<span className="age">{relativeAge(t.lastEventAt, Date.now())}</span>
+													)}
+													{glyphs.length > 0 && (
+														<span className="glyphs">
+															<SessionGlyphs ids={glyphs} size={15} />
+														</span>
+													)}
+												</span>
+											</div>
+										</motion.div>
+									</TaskPeek>
+								);
+							})}
+						</div>
+					);
+				})}
+			</div>
+		</TaskPeekProvider>
 	);
 }
 
@@ -3367,7 +3513,10 @@ function TaskPanel({
 			const plan = await window.ateam.skills.link({ path, dryRun: true });
 			const fresh = plan.links.filter((l) => l.status === "create");
 			if (!fresh.length) {
-				await confirm(`"${plan.name}" is already linked`, "Every agent folder already points at this skill.");
+				await confirm(
+					`"${plan.name}" is already linked`,
+					"Every agent folder already points at this skill.",
+				);
 				return;
 			}
 			const where = fresh
@@ -3785,12 +3934,7 @@ function TaskPanel({
 								title={live ? label : `${label} — closed by a restart. Click to resume it.`}
 								onClick={() => {
 									// The tab already on screen folds the question card over it.
-									if (
-										live &&
-										task.question &&
-										session.terminalId === terminalId &&
-										!mainViewOpen
-									) {
+									if (live && task.question && session.terminalId === terminalId && !mainViewOpen) {
 										toggleQuestion();
 										return;
 									}
@@ -4185,7 +4329,8 @@ function TaskPanel({
 
 				{changesOpen && (
 					<div className="changes-view">
-						<ChangesList
+						<ChangesPane
+							taskId={task.id}
 							diff={diff}
 							selected={viewFile}
 							onSelect={setViewFile}
@@ -4242,6 +4387,7 @@ function MissionControl({
 	jump,
 	onJumpMissing,
 	onReorder,
+	onWake,
 	onNewTask,
 }: {
 	/** Which list `tasks` was drawn from; only the empty state and the New
@@ -4270,6 +4416,8 @@ function MissionControl({
 	onJumpMissing: (taskId: string) => void;
 	/** The tiles' order changed (a tile arrived, died, or was dragged). */
 	onReorder: (tileIds: string[]) => void;
+	/** Wakes the agent of a task dropped here with no tile; false if none started. */
+	onWake: (task: TaskDTO) => Promise<boolean>;
 	/** Opens the task composer. Absent when there is no project to create in. */
 	onNewTask?: () => void;
 }) {
@@ -4390,12 +4538,17 @@ function MissionControl({
 	// grid for that moment rather than flashing "No live agents yet".
 	const [loaded, setLoaded] = useState(false);
 	const rankRef = useRef(rank);
+	// Where the tile of a task dropped here with no tile goes once its agent is
+	// up: before this tile, or at the end for null. Cleared when it arrives.
+	const placeRef = useRef(new Map<string, string | null>());
+	// The tasks whose wake is still under way (dropTask).
+	const wakingTasksRef = useRef(new Set<string>());
 
 	// Lay the collected sessions out. `force` (mount, Sync) sorts every tile by
 	// the rank. Otherwise tiles keep the slots they have: a tile whose session
 	// died leaves, and a task that just got a live session joins at the end
-	// (by rank among ones arriving together), so nothing already on screen
-	// moves except to close a gap.
+	// (by rank among ones arriving together), or where it was dropped, so
+	// nothing already on screen moves except to close a gap or make room for it.
 	const resort = useCallback((force = false) => {
 		const r = rankRef.current;
 		const byRank = (a: { task: TaskDTO }, b: { task: TaskDTO }): number =>
@@ -4415,7 +4568,7 @@ function MissionControl({
 				});
 				const had = new Set(kept.map((t) => t.task.id));
 				const arrived = sessionsRef.current.filter((t) => !had.has(t.task.id)).sort(byRank);
-				next = [...kept, ...arrived];
+				next = placeArrivals(kept, arrived, (t) => t.task.id, placeRef.current);
 			}
 			// Keep the previous array when nothing moved so downstream renders
 			// (and their terminals) see a stable identity.
@@ -4438,6 +4591,7 @@ function MissionControl({
 	onReorderRef.current = onReorder;
 	useEffect(() => {
 		if (loaded) onReorderRef.current(tiles.map((t) => t.task.id));
+		for (const t of tiles) placeRef.current.delete(t.task.id);
 	}, [tiles, loaded]);
 
 	// Sessions announce themselves, so this listens instead of polling. Both spawn
@@ -4655,6 +4809,72 @@ function MissionControl({
 		onDragLeave: stopFlipTimer,
 	});
 
+	// A task pill dragged from the Lead chat (task-drag.ts). On a tile, a task
+	// that has a tile trades places with it, as a dragged tile does; one with
+	// no tile has its agent woken and its tile takes that slot, the tiles from
+	// there on moving along one. Off the tiles (an empty grid, the New task
+	// slot) only a task with no tile lands, at the end. Either way it ends up
+	// highlighted and focused. Tasks outside this grid (another project, a
+	// loop in Tasks mode) aren't taken.
+	const pillTask = (e: React.DragEvent): string | null => {
+		const id = draggedTaskId(e);
+		return id && tasksRef.current.some((t) => t.id === id) ? id : null;
+	};
+	const hasTile = (id: string) => tilesRef.current.some((t) => t.task.id === id);
+	const dropTask = (id: string, onto: string | null) => {
+		const task = tasksRef.current.find((t) => t.id === id);
+		if (!task) return;
+		onHighlight(id);
+		pendingFocusRef.current = id;
+		if (hasTile(id)) {
+			if (onto) swapTiles(id, onto);
+			return;
+		}
+		placeRef.current.set(id, onto);
+		// Its agent is already waking from an earlier drop: this one only moves
+		// the spot. A second wake could start a second agent on the same
+		// conversation, since the engine only joins a resume by id (sessions.ts).
+		// Once the wake returns its agent is live, and a later wake sees it.
+		if (wakingTasksRef.current.has(id)) return;
+		wakingTasksRef.current.add(id);
+		void onWake(task).then((woke) => {
+			wakingTasksRef.current.delete(id);
+			if (woke) return;
+			placeRef.current.delete(id);
+			if (pendingFocusRef.current === id) pendingFocusRef.current = null;
+		});
+	};
+	const offTile = (e: React.DragEvent) => !(e.target as Element).closest(".tile");
+	const wrapDropProps = {
+		onDragOver: (e: React.DragEvent) => {
+			const id = pillTask(e);
+			if (!id) return;
+			// The page-flip strips, as for a dragged tile.
+			if (!dragging) setDragging(true);
+			if (!offTile(e)) return; // the tile under it answers
+			const takes = !hasTile(id);
+			if (takes) {
+				e.preventDefault();
+				e.dataTransfer.dropEffect = "move";
+			}
+			if (dropTarget !== (takes ? "" : null)) setDropTarget(takes ? "" : null);
+		},
+		onDragLeave: (e: React.DragEvent) => {
+			if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+			setDropTarget((d) => (d === "" ? null : d));
+		},
+		onDrop: (e: React.DragEvent) => {
+			if (!offTile(e)) return;
+			const id = e.dataTransfer.getData(TASK_DRAG_MIME);
+			if (!id || hasTile(id)) return;
+			e.preventDefault();
+			setDropTarget(null);
+			dropTask(id, null);
+		},
+	};
+	// The wrap itself is the drop target off the tiles ("" in dropTarget).
+	const wrapClass = dropTarget === "" ? "mc-wrap drop" : "mc-wrap";
+
 	// Tasks only: a loop's session is started by the loop, not from here.
 	const newTaskButton =
 		mode === "tasks" && onNewTask ? (
@@ -4669,13 +4889,13 @@ function MissionControl({
 	if (tiles.length === 0) {
 		if (!loaded)
 			return (
-				<div className="mc-wrap" ref={wrapRef}>
+				<div className={wrapClass} ref={wrapRef} {...wrapDropProps}>
 					<div className="mc" data-layout={layout} />
 				</div>
 			);
 		// mc-none: centered in the whole area, not in the layout's first cell.
 		return (
-			<div className="mc-wrap" ref={wrapRef}>
+			<div className={wrapClass} ref={wrapRef} {...wrapDropProps}>
 				<div className="mc mc-none" data-layout={layout}>
 					{mode === "loops" ? (
 						<div className="empty">
@@ -4702,7 +4922,7 @@ function MissionControl({
 	// Auto without a size yet: hold the terminals until it has one.
 	if (layout === "auto" && !fit)
 		return (
-			<div className="mc-wrap" ref={wrapRef}>
+			<div className={wrapClass} ref={wrapRef} {...wrapDropProps}>
 				<div className="mc" data-layout={layout} />
 			</div>
 		);
@@ -4712,7 +4932,7 @@ function MissionControl({
 		layout === "auto" && fit ? mcShapeGrid(bestMcShape(visible.length, fit.area)) : null;
 
 	return (
-		<div className="mc-wrap" ref={wrapRef}>
+		<div className={wrapClass} ref={wrapRef} {...wrapDropProps}>
 			{/* Keyed by page: flipping remounts the grid, and TerminalView replays
 			    its ring-buffer snapshot on mount, so a page flip is a clean swap.
 			    The slide follows the flip direction, a "perfect scroll" to the
@@ -4762,10 +4982,11 @@ function MissionControl({
 							// The bar isn't focusable, so a click on it highlights here.
 							onPointerDown={() => onHighlight(task.id)}
 							onDragOver={(e) => {
-								if (!e.dataTransfer.types.includes(MC_TILE_MIME)) return;
+								const pill = pillTask(e);
+								if (!pill && !e.dataTransfer.types.includes(MC_TILE_MIME)) return;
 								e.preventDefault();
 								e.dataTransfer.dropEffect = "move";
-								const over = dragIdRef.current === task.id ? null : task.id;
+								const over = (pill ?? dragIdRef.current) === task.id ? null : task.id;
 								if (dropTarget !== over) setDropTarget(over);
 							}}
 							onDragLeave={(e) => {
@@ -4774,10 +4995,12 @@ function MissionControl({
 							}}
 							onDrop={(e) => {
 								const from = e.dataTransfer.getData(MC_TILE_MIME);
-								if (!from) return;
+								const pill = e.dataTransfer.getData(TASK_DRAG_MIME);
+								if (!from && !pill) return;
 								e.preventDefault();
 								setDropTarget(null);
-								swapTiles(from, task.id);
+								if (from) swapTiles(from, task.id);
+								else dropTask(pill, task.id);
 							}}
 						>
 							{/* biome-ignore lint/a11y/noStaticElementInteractions: a pointer drag handle; the sidebar's Custom order is the same ordering. */}

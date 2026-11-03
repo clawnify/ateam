@@ -6,6 +6,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { checkGrammar } from "../grammar/check";
 import { DraftTracker, retype } from "../grammar/draft";
 import type { GrammarIssue } from "../grammar/filter";
+import { onThemeChange, terminalTheme } from "../lib/theme";
 import { osc52Text } from "../terminal-clipboard";
 import { terminalScroll } from "../terminal-scroll";
 import { GrammarFixes } from "./GrammarFixes";
@@ -88,7 +89,7 @@ export function TerminalView({
 			fontSize: 12.5,
 			fontFamily: 'ui-monospace, Menlo, "SF Mono", monospace',
 			cursorBlink: true,
-			theme: { background: "#000000", foreground: "#e6e6ea" },
+			theme: terminalTheme(),
 			scrollback: 5000,
 			// A TUI that captures the mouse (OpenCode turns on modes 1000-1006 at
 			// startup; so does Claude Code's fullscreen renderer) gets every drag as mouse reports, so
@@ -446,6 +447,10 @@ export function TerminalView({
 		const onWinResize = () => syncSize();
 		window.addEventListener("resize", onWinResize);
 		syncSize();
+		// xterm paints on a canvas, so a theme change has to be handed to it.
+		const offTheme = onThemeChange(() => {
+			term.options.theme = terminalTheme();
+		});
 
 		return () => {
 			disposed = true;
@@ -460,6 +465,7 @@ export function TerminalView({
 			window.removeEventListener("focus", onWinFocus);
 			window.removeEventListener("ateam:focus-terminal", onFocusRequest);
 			window.removeEventListener("resize", onWinResize);
+			offTheme();
 			offData();
 			disposeInput.dispose();
 			ro.disconnect();

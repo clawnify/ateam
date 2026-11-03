@@ -7,6 +7,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import type { HostStatus } from "../../../shared/host";
 import { type BoxRow, boxesNeedingYou, boxRows, engineLabel } from "../boxes-settings";
+import { useLeadHome } from "../useLeadHome";
 import { GithubAccess } from "./GithubAccess";
 import { Button } from "./ui/button";
 import { usePrompt } from "./usePrompt";
@@ -15,7 +16,8 @@ import { usePrompt } from "./usePrompt";
 // known about it, its engine version and an Update when it's behind, and its
 // GitHub access. Listing reads only what the desktop already holds, so opening
 // the page never wakes a sleeping box: connecting one is a click, and so is
-// everything that changes a box.
+// everything that changes a box. Here too the desktop's Lead chat is moved onto
+// a box (client.leadBox), as the phone picks its Lead box in its own Boxes.
 
 const IPC_PREFIX = /^Error invoking remote method '[^']+': (Error: )?/;
 const errorText = (e: unknown) =>
@@ -42,6 +44,7 @@ export function BoxesSettings() {
 	const [busy, setBusy] = useState<Record<string, string>>({});
 	const [notes, setNotes] = useState<Record<string, { text: string; error: boolean }>>({});
 	const { ui: promptUi, confirm } = usePrompt();
+	const leadHome = useLeadHome();
 
 	const load = useCallback(async () => {
 		const [list, connected, failed, updatable, release, githubByBox] = await Promise.all([
@@ -117,6 +120,22 @@ export function BoxesSettings() {
 		});
 	};
 
+	const moveLead = async (row: BoxRow | null) => {
+		if (row) {
+			const ok = await confirm(
+				`Run the Lead on ${row.title}?`,
+				`The desktop's Lead chat becomes ${row.title}'s own Lead, the conversation your phone has when it picks ${row.title} as its Lead box. It sees ${row.title}'s tasks only, uses the Claude account signed in there, and keeps the conversation and its attachments on the box. This Mac's conversation stays as it is, and moving back shows it again.`,
+			);
+			if (!ok) return;
+		}
+		const alias = row?.alias ?? leadHome.box;
+		if (!alias) return;
+		await act(alias, row ? "Moving the Lead…" : "Moving it back…", async () => {
+			await window.ateamLead.setHome(row ? row.alias : null);
+			return null;
+		});
+	};
+
 	if (connections === null) return <div className="gh-access-muted">Loading boxes…</div>;
 	const rows = boxRows(connections, held, failures, {
 		protocol: PROTOCOL_VERSION,
@@ -147,6 +166,7 @@ export function BoxesSettings() {
 							<div className="box-card-text">
 								<div className="box-card-title">
 									{row.title}
+									{leadHome.box === row.alias ? <span className="box-card-tag">Lead</span> : null}
 									{needing.has(row.alias) ? (
 										<span className="box-card-dot" role="img" aria-label="needs you" />
 									) : null}
@@ -187,6 +207,34 @@ export function BoxesSettings() {
 								{note.text}
 							</div>
 						) : null}
+						<div className="box-card-section">
+							<div className="box-card-label">Lead</div>
+							{leadHome.box === row.alias ? (
+								<div className="box-lead-row">
+									<span className="gh-access-muted">
+										The desktop's Lead chat runs here. Your phone shares it when it picks this box
+										as its Lead box.
+									</span>
+									<Button size="xs" variant="outline" onClick={() => void moveLead(null)}>
+										Back to this Mac
+									</Button>
+								</div>
+							) : row.state !== "connected" ? (
+								<div className="gh-access-muted">Connect to run the Lead here.</div>
+							) : !row.leadReady ? (
+								<div className="gh-access-muted">Update the box to run the Lead here.</div>
+							) : (
+								<div className="box-lead-row">
+									<span className="gh-access-muted">
+										One Lead conversation with your phone, going on while this Mac sleeps. It sees
+										this box's tasks only.
+									</span>
+									<Button size="xs" variant="outline" onClick={() => void moveLead(row)}>
+										Run the Lead here
+									</Button>
+								</div>
+							)}
+						</div>
 						<div className="box-card-section">
 							<div className="box-card-label">GitHub</div>
 							{row.state !== "connected" ? (

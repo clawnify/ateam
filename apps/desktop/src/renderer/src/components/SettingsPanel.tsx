@@ -11,6 +11,8 @@ import {
 } from "@ateam/protocol";
 import { AlertTriangle, Search } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { THEMES } from "../../../shared/theme";
+import { useTheme } from "../lib/theme";
 import { BoxesSettings } from "./BoxesSettings";
 
 /**
@@ -91,6 +93,14 @@ const ARCHIVE_OPTIONS: { value: number; label: string }[] = [
 ];
 
 const ROWS: Row[] = [
+	{
+		id: "client.theme",
+		section: "general",
+		title: "Theme",
+		description:
+			"The colours of this Mac's windows. Terminals follow it; the agents inside them keep their own theme setting.",
+		control: () => <ThemeSelect />,
+	},
 	{
 		id: "client.autoDownloadUpdates",
 		section: "general",
@@ -272,7 +282,7 @@ const ROWS: Row[] = [
 		section: "boxes",
 		title: "Boxes",
 		description:
-			"Every box you've used: whether it's connected, its engine version, and the GitHub account and token it uses. Connect, update or forget a box here, and paste a new GitHub token instead of using the box's terminal.",
+			"Every box you've used: whether it's connected, its engine version, and the GitHub account and token it uses. Connect, update or forget a box here, paste a new GitHub token instead of using the box's terminal, and choose a box for the Lead chat to run on.",
 		control: () => null,
 	},
 	{
@@ -471,10 +481,13 @@ function Switch({
 export function SettingsPanel({
 	agents,
 	boxesNeedYou = false,
+	jumpTo,
 }: {
 	agents: AgentDTO[];
 	/** A connected box needs the user (useBoxesNeedingYou): Boxes gets a dot. */
 	boxesNeedYou?: boolean;
+	/** Open at this page; a new `n` opens it again. */
+	jumpTo?: { section: SectionId; n: number } | null;
 }) {
 	const [result, setResult] = useState<SettingsResult | null>(null);
 	const [credentials, setCredentials] = useState<CredentialsResult | null>(null);
@@ -482,7 +495,10 @@ export function SettingsPanel({
 	const [query, setQuery] = useState("");
 	// One section at a time, like every settings page a Mac user has met: the
 	// nav is the page's tabs, not an index into one long scroll.
-	const [active, setActive] = useState<SectionId>("general");
+	const [active, setActive] = useState<SectionId>(jumpTo?.section ?? "general");
+	useEffect(() => {
+		if (jumpTo) setActive(jumpTo.section);
+	}, [jumpTo]);
 	const searchRef = useRef<HTMLInputElement>(null);
 
 	useEffect(() => {
@@ -683,5 +699,30 @@ export function SettingsPanel({
 				)}
 			</div>
 		</div>
+	);
+}
+
+/**
+ * Its own component (a row's control is a plain function, so it can't hold a
+ * hook). Reads the theme from this window, not from `settings`: with sync off
+ * that object is the selected box's file, and the theme is this Mac's.
+ */
+function ThemeSelect() {
+	const theme = useTheme();
+	return (
+		<select
+			className="settings-select"
+			value={theme}
+			onChange={(e) => {
+				const id = THEMES.find((t) => t.id === e.target.value)?.id;
+				if (id) void window.ateamTheme.set(id);
+			}}
+		>
+			{THEMES.map((t) => (
+				<option key={t.id} value={t.id}>
+					{t.label}
+				</option>
+			))}
+		</select>
 	);
 }

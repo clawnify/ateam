@@ -125,9 +125,10 @@ describe("a box's own Lead over the engine's RPC", () => {
 		await phone.call(LEAD_CH.send, "brief me");
 		expect(existsSync(dir)).toBe(true);
 		const p = procs[0] as FakeClaude;
-		// The box's words, not the Mac's.
+		// The box's words, not the Mac's: the user may be on either.
 		const prompt = p.args[p.args.indexOf("--append-system-prompt") + 1] ?? "";
-		expect(prompt).toContain("phone");
+		expect(prompt).toContain("on their phone or on their Mac");
+		expect(prompt).toContain("this box's tasks only");
 		expect(prompt).not.toContain("Mac or on");
 		p.say(
 			{ type: "system", subtype: "init", session_id: "s1" },
@@ -158,6 +159,17 @@ describe("a box's own Lead over the engine's RPC", () => {
 		await tick();
 		const content = (procs[0]?.written[0] as { message: { content: string } }).message.content;
 		expect(content).toBe(`what is this?\n\nAttached files:\n- ${file.path}`);
+		ext.dispose();
+	});
+
+	it("answers an emoji (v28) for an agent's reply, and refuses one for a reply it doesn't have", async () => {
+		const { ext } = setup();
+		const desktop = connect(ext);
+		// Routed to the Lead, not to the dispatcher's "Unknown method".
+		await expect(desktop.call(LEAD_CH.react, "gone", "👍")).rejects.toThrow(
+			"That reply is no longer in the chat.",
+		);
+		await expect(desktop.call(LEAD_CH.react, 7, "👍")).rejects.toThrow("The reply must be text.");
 		ext.dispose();
 	});
 

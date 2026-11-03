@@ -131,7 +131,16 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // yes, so the Browser button offers the install instead of a command to paste.
 // A new method only: a v25 engine answers "Unknown method", and the desktop
 // shows the command from that engine's own BROWSER_NOT_INSTALLED_ERROR.
-export const PROTOCOL_VERSION = 26;
+// v27: change steps. tasks:changeSteps tells a task's diff as steps, with the
+// agent's reason for each and what its account of the work never mentions. A
+// new method only: a v26 engine answers "Unknown method", and the Changes view
+// stays the flat list it always was.
+// v28: a box's Lead answers lead:react, an emoji answer to an agent's reply,
+// for the desktop whose Lead lives on that box (the phone doesn't send it yet).
+// A new method only: a v27 box answers "Unknown method", and the desktop hides
+// the emoji button there (FEATURE_MIN_VERSION.leadReact). Settings gained
+// `client.leadBox`, read by the desktop alone.
+export const PROTOCOL_VERSION = 28;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -233,6 +242,42 @@ export interface QuestionChoiceDTO {
 }
 
 /** A task's last finished turn, as the Lead chat reads it (tasks:lastReply). */
+/** A diff with fewer files reads fine as a flat list, so the Changes view
+ *  doesn't offer steps for it (the median PR on Ateam's own repo is 4 files). */
+export const CHANGE_STEPS_MIN_FILES = 8;
+
+/** One step of a task's change: a reason, and the files that carry it out. */
+export interface ChangeStepDTO {
+	title: string;
+	/** Why the step was needed, from the agent's own account of the work. */
+	why: string;
+	files: { path: string; note: string }[];
+}
+
+/**
+ * A task's diff told as steps (tasks:changeSteps). An index into the diff, never
+ * a copy of it: every path opens the same live file diff the flat list does.
+ */
+export interface ChangeStepsDTO {
+	/** The last steps written, or null before the first. They may describe an
+	 *  older diff: see `current`. */
+	steps: ChangeStepDTO[] | null;
+	/** Changes the agent's account of the work never mentions. */
+	unexplained: { path: string; note: string }[];
+	/** Whether the steps describe the diff as it is now. */
+	current: boolean;
+	madeAt: number | null;
+	/** New steps are being written; ask again for them. */
+	working: boolean;
+	/**
+	 * Why none will be written for the diff as it is now: `small`, too few files
+	 * for steps to help; `agent`, the task's agent can't write them (OpenCode);
+	 * `failed`, the last try gave nothing usable, a missing agent CLI included
+	 * (tried again after a while, or once the diff changes).
+	 */
+	unavailable: "small" | "agent" | "failed" | null;
+}
+
 export interface TaskLastReplyDTO {
 	text: string;
 	at: number;
@@ -287,6 +332,9 @@ export const FEATURE_MIN_VERSION = {
 	/** v24 added the box's own Lead chat (LEAD_RPC). An older box answers every
 	 *  call "Unknown method", so the phone offers to update the box instead. */
 	lead: 24,
+	/** v28 added lead:react to a box's Lead. An older box answers "Unknown
+	 *  method", so the desktop hides the emoji answer when its Lead lives there. */
+	leadReact: 28,
 	/** v25 added githubAccess:*. An older box answers "Unknown method", so clients
 	 *  point at its terminal (gh auth login) and at Update box instead. */
 	githubAccess: 25,
@@ -659,7 +707,21 @@ export interface ClientSettings {
 	 * so the buttons stay put rather than following usage.
 	 */
 	pinnedSkills: string[] | null;
+	/**
+	 * The desktop's colours. Read and written by the desktop's main process on
+	 * this Mac only (never routed to a box, never synced), so every window
+	 * opens in it before its first paint.
+	 */
+	theme: ThemeId;
+	/**
+	 * Where the desktop's main Lead chat lives: a box's alias, whose own Lead
+	 * (the one the phone talks to when it picks that box) is then the chat, or
+	 * null for this Mac. Set from Settings → Boxes; cleared when that box is
+	 * forgotten.
+	 */
+	leadBox: string | null;
 }
+export type ThemeId = "dark" | "light" | "classic";
 
 /** Where a skill came from, in the order its agent prefers them. */
 export type SkillScope = "personal" | "project" | "plugin" | "command" | "system";
@@ -1229,6 +1291,9 @@ export interface AteamApi {
 		listArchived(projectId: string): Promise<TaskDTO[]>;
 		/** Archive a task (off every list, worktree kept) or bring it back. */
 		setArchived(id: string, archived: boolean): Promise<TaskDTO>;
+		/** The task's diff told as steps. Asking starts writing new ones when the
+		 *  diff moved on; the answer says so (`working`) and the caller asks again. */
+		changeSteps(taskId: string): Promise<ChangeStepsDTO>;
 	};
 	git: {
 		commit(taskId: string, message: string): Promise<{ sha: string }>;
@@ -1342,6 +1407,10 @@ export interface AteamApi {
 			prompt?: string;
 			/** Absolute paths to attach — appended to the prompt for the agent to read. */
 			files?: string[];
+			/** Those of `files` already on the task's machine (attached in the chat of
+			 *  a Lead on that box): the desktop passes them on as they are rather than
+			 *  send them there. Never reaches the engine. */
+			keepFiles?: string[];
 			/** Resume this exact conversation instead of starting a new one. */
 			resumeSessionId?: string;
 		}): Promise<{ terminalId: string }>;

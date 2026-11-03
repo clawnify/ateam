@@ -2,9 +2,9 @@
 // drives the board (packages/server/src/lead). Two hosts run one:
 // - the desktop, in main, over every engine it holds; the renderer reaches it
 //   over Electron IPC on these channels (window.ateamLead);
-// - a box's engine, over that box alone, for the phone, which holds one box and
-//   never reaches the Mac; it answers LEAD_RPC over the engine's own RPC and
-//   pushes LEAD_EVENT.
+// - a box's engine, over that box alone; it answers LEAD_RPC over the engine's
+//   own RPC and pushes LEAD_EVENT. The phone talks to the one on its Lead box,
+//   and so does the desktop when its Lead lives on a box (LeadHome).
 // Imports nothing, so both the node and web tsconfigs resolve it.
 
 export const LEAD_CH = {
@@ -38,13 +38,18 @@ export const LEAD_CH = {
 	/** Items recorded before one the client has: a phone loads a conversation's
 	 *  tail first (snapshot's `tail`) and older pages as it scrolls back. */
 	older: "lead:older",
+	/** Where the desktop's main chat lives: this Mac or a box (LeadHome). */
+	home: "lead:home",
+	/** Move the desktop's main chat to a box, or with null back to this Mac. */
+	setHome: "lead:setHome",
 	evtEvent: "evt:lead:event",
+	evtHome: "evt:lead:home",
 } as const;
 
-/** The channels a box's engine answers for its own Lead (v24). Attaching by
- *  path and previews are the desktop's: a phone has no paths on the box and
- *  keeps its own previews. `attachBytes` takes the file as base64 there, since
- *  RPC frames are JSON. */
+/** The channels a box's engine answers for its own Lead (v24; `react` since
+ *  v28). Attaching by path and previews are the client's: it has no paths on
+ *  the box and keeps its own previews. `attachBytes` takes the file as base64
+ *  there, since RPC frames are JSON. */
 export const LEAD_RPC = [
 	LEAD_CH.snapshot,
 	LEAD_CH.send,
@@ -57,6 +62,7 @@ export const LEAD_RPC = [
 	LEAD_CH.attachBytes,
 	LEAD_CH.proposal,
 	LEAD_CH.older,
+	LEAD_CH.react,
 ] as const;
 
 /** The engine's push event for its Lead, with a LeadEvent payload. Sent only
@@ -219,9 +225,10 @@ export type LeadEvent =
 	| { type: "auto"; auto: boolean }
 	| { type: "reset"; snapshot: LeadSnapshot };
 
-/** A box's own Lead, as a remote client (the phone) reaches it over the
- *  engine's RPC (leadClient in client-api.ts). The desktop's window.ateamLead
- *  minus what needs a path on the Lead's machine: files arrive as bytes. */
+/** A box's own Lead, as a remote client (the phone, or the desktop when its
+ *  Lead lives on a box) reaches it over the engine's RPC (leadClient in
+ *  client-api.ts). window.ateamLead minus what needs a path on the Lead's
+ *  machine: files arrive as bytes. */
 export interface LeadClient {
 	/** `tail`: only the last that many items (`more` says older ones exist). A
 	 *  box before this answers the whole conversation, which reads the same. */
@@ -236,6 +243,9 @@ export interface LeadClient {
 	interrupt(): Promise<void>;
 	reset(): Promise<void>;
 	reply(taskId: string, text: string): Promise<void>;
+	/** An emoji answer to an agent's reply (`id`, a `kind: "agent"` item). A box
+	 *  before v28 rejects it: gate on boxSupports("leadReact"). */
+	react(id: string, emoji: string): Promise<void>;
 	answer(input: {
 		taskId: string;
 		questionId: string;
@@ -252,9 +262,23 @@ export interface LeadClient {
 	onEvent(cb: (e: LeadEvent) => void): () => void;
 }
 
+/** Where the desktop's main Lead chat lives (`client.leadBox`). A project
+ *  window's chat is always this Mac's. */
+export interface LeadHome {
+	/** The box whose own Lead is the main chat, or null for this Mac. */
+	box: string | null;
+	/** That box is held right now (always true for this Mac). */
+	connected: boolean;
+	/** Emoji answers work there (this Mac, or a box on v28 or later). */
+	canReact: boolean;
+}
+
 /** window.ateamLead. */
 export interface AteamLead {
-	snapshot(): Promise<LeadSnapshot>;
+	/** `tail`: only the last that many items (`more` says older ones exist). */
+	snapshot(opts?: { tail?: number }): Promise<LeadSnapshot>;
+	/** Up to `limit` items before `beforeId`, oldest first. */
+	older(beforeId: string, limit: number): Promise<{ items: LeadItem[]; more: boolean }>;
 	/** `files`: paths of files attached in this chat (from attach or attachBytes). */
 	send(text: string, files?: string[]): Promise<void>;
 	attach(paths: string[] | null): Promise<LeadAttachResult>;
@@ -275,4 +299,10 @@ export interface AteamLead {
 	/** The user created (`taskId` when it was a task) or dismissed a proposal. */
 	proposal(id: string, outcome: "created" | "dismissed", taskId?: string): Promise<void>;
 	onEvent(cb: (e: LeadEvent) => void): () => void;
+	/** Where the calling window's chat lives. */
+	home(): Promise<LeadHome>;
+	/** Move the main chat to a box (its own Lead, a separate conversation), or
+	 *  with null back to this Mac's. Nothing is copied between them. */
+	setHome(box: string | null): Promise<LeadHome>;
+	onHome(cb: (home: LeadHome) => void): () => void;
 }

@@ -5,6 +5,7 @@ import {
 	type KanbanColumn,
 	LEAD_CH,
 	type LeadEvent,
+	type LeadHome,
 	type LoopDTO,
 	type MergeStrategy,
 	type PtyDataEvent,
@@ -20,6 +21,7 @@ import {
 	type HostStatus,
 	type InstallLogEvent,
 } from "../shared/host";
+import { type AteamTheme, THEME_CH, themeOrDefault } from "../shared/theme";
 
 const api: AteamApi = {
 	projects: {
@@ -47,6 +49,7 @@ const api: AteamApi = {
 		cleanupCandidates: (projectId) => ipcRenderer.invoke(CH.tasksCleanupCandidates, projectId),
 		listArchived: (projectId) => ipcRenderer.invoke(CH.tasksListArchived, projectId),
 		setArchived: (id, archived) => ipcRenderer.invoke(CH.tasksSetArchived, id, archived),
+		changeSteps: (taskId) => ipcRenderer.invoke(CH.tasksChangeSteps, taskId),
 	},
 	git: {
 		commit: (taskId, message) => ipcRenderer.invoke(CH.gitCommit, taskId, message),
@@ -238,7 +241,8 @@ const host: AteamHost = {
 contextBridge.exposeInMainWorld("ateamHost", host);
 
 const lead: AteamLead = {
-	snapshot: () => ipcRenderer.invoke(LEAD_CH.snapshot),
+	snapshot: (opts) => ipcRenderer.invoke(LEAD_CH.snapshot, opts),
+	older: (beforeId, limit) => ipcRenderer.invoke(LEAD_CH.older, beforeId, limit),
 	send: (text, files) => ipcRenderer.invoke(LEAD_CH.send, text, files),
 	attach: (paths) => ipcRenderer.invoke(LEAD_CH.attach, paths),
 	attachBytes: (name, data) => ipcRenderer.invoke(LEAD_CH.attachBytes, name, data),
@@ -256,5 +260,25 @@ const lead: AteamLead = {
 		ipcRenderer.on(LEAD_CH.evtEvent, handler);
 		return () => ipcRenderer.off(LEAD_CH.evtEvent, handler);
 	},
+	home: () => ipcRenderer.invoke(LEAD_CH.home),
+	setHome: (box) => ipcRenderer.invoke(LEAD_CH.setHome, box),
+	onHome: (cb: (home: LeadHome) => void) => {
+		const handler = (_: unknown, home: LeadHome) => cb(home);
+		ipcRenderer.on(LEAD_CH.evtHome, handler);
+		return () => ipcRenderer.off(LEAD_CH.evtHome, handler);
+	},
 };
 contextBridge.exposeInMainWorld("ateamLead", lead);
+
+// The theme (shared/theme.ts): read synchronously so the renderer can set it
+// before React's first paint, on every load and reload of the window.
+const theme: AteamTheme = {
+	saved: () => themeOrDefault(ipcRenderer.sendSync(THEME_CH.get)),
+	set: (id) => ipcRenderer.invoke(THEME_CH.set, id),
+	onChange: (cb) => {
+		const handler = (_: unknown, id: unknown) => cb(themeOrDefault(id));
+		ipcRenderer.on(THEME_CH.evtChanged, handler);
+		return () => ipcRenderer.off(THEME_CH.evtChanged, handler);
+	},
+};
+contextBridge.exposeInMainWorld("ateamTheme", theme);

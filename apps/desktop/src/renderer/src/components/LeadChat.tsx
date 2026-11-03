@@ -7,6 +7,7 @@ import {
 	findLeadTask,
 	type LeadAttachResult,
 	type LeadFile,
+	type LeadHome,
 	type LeadItem,
 	type LeadPermissionAnswer,
 	type LeadSnapshot,
@@ -65,6 +66,7 @@ import {
 } from "../lead-blocks";
 import { type DraftRef, expandRefs, splitSent } from "../lead-refs";
 import { recordEmoji, topEmoji } from "../lib/emoji-use";
+import { taskDragProps } from "../task-drag";
 import { AgentIcon } from "./AgentIcon";
 import { IconButton } from "./IconButton";
 import { Markdown, TaskLinkContext } from "./Markdown";
@@ -93,8 +95,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 const EMPTY: LeadSnapshot = { items: [], draft: "", busy: false, auto: false };
 
+/** How many of the latest items the chat loads; "Show earlier" pages back. */
+const PAGE = 200;
+
 const SUGGESTIONS = [
-	"What's on the board?",
+	"What should I focus on in the next hour?",
 	"Which tasks need me?",
 	"What did the last finished task say?",
 ];
@@ -154,6 +159,7 @@ function ToolGroup({
 							className="lead-chip"
 							title={`Open ${task.name}`}
 							onClick={() => onOpenTask(task)}
+							{...taskDragProps(task.id)}
 						>
 							<AgentIcon agentId={task.agentId} size={12} />
 							<span className="lead-chip-name">{task.name}</span>
@@ -260,7 +266,8 @@ function Attachment({ file, onRemove }: { file: LeadFile; onRemove?: () => void 
 	);
 }
 
-/** A task named in the thread; opens it when it is on a board this window has loaded. */
+/** A task named in the thread; opens it when it is on a board this window has
+ *  loaded. Every task chip also drags onto Mission Control (task-drag.ts). */
 function TaskChip({
 	task,
 	tasks,
@@ -278,6 +285,7 @@ function TaskChip({
 			title={loaded ? `Open ${task.name}` : task.name}
 			disabled={!loaded}
 			onClick={() => loaded && onOpenTask(loaded)}
+			{...taskDragProps(loaded?.id)}
 		>
 			<AgentIcon agentId={task.agentId} size={12} />
 			<span className="lead-chip-name">{task.name}</span>
@@ -309,6 +317,7 @@ function TaskLink({
 			title={task ? `Open ${task.name}` : "Not on a board this window has loaded"}
 			disabled={!task}
 			onClick={() => task && onOpenTask(task)}
+			{...taskDragProps(task?.id)}
 		>
 			{task && <AgentIcon agentId={task.agentId} size={12} />}
 			<span className="lead-chip-name">{label}</span>
@@ -578,6 +587,7 @@ function ThreadView({
 	onCut,
 	atBottom,
 	onContinue,
+	canReact,
 }: {
 	thread: LeadThread;
 	/** Another thread of its stack is shown. Kept mounted, so a half-typed answer survives. */
@@ -593,6 +603,8 @@ function ThreadView({
 	atBottom: () => boolean;
 	/** Go to the card further down where this thread goes on. */
 	onContinue: (block: string, key: string) => void;
+	/** The Lead takes emoji answers (a box before v28 doesn't). */
+	canReact: boolean;
 }) {
 	const { entries, earlier, task } = thread;
 	const [open, setOpen] = useState(false);
@@ -765,7 +777,7 @@ function ThreadView({
 								<CornerDownRight size={12} />
 								Reply
 							</button>
-							{lastReply && (
+							{lastReply && canReact && (
 								<EmojiReply
 									name={task.name}
 									reaction={lastReply.reaction}
@@ -916,6 +928,7 @@ function ThreadStack({
 	onPaged,
 	jump,
 	onContinue,
+	canReact,
 }: {
 	/** The block's id, which "Continues below" in an earlier card points to. */
 	id: string;
@@ -932,6 +945,8 @@ function ThreadStack({
 	/** "Continues below" was clicked for a thread in this stack: show it. */
 	jump: { block: string; key: string; n: number } | null;
 	onContinue: (block: string, key: string) => void;
+	/** The Lead takes emoji answers (a box before v28 doesn't). */
+	canReact: boolean;
 }) {
 	const keys = threads.map((t) => t.key);
 	const n = keys.length;
@@ -1076,6 +1091,7 @@ function ThreadStack({
 					hidden={i !== cur}
 					atBottom={atBottom}
 					onContinue={onContinue}
+					canReact={canReact}
 					chip={
 						<TaskChip
 							task={t.task}
@@ -1129,9 +1145,18 @@ export function LeadChat({
 	onOpenProposal,
 	onHide,
 	scope,
+	home,
+	onLeadBox,
+	onOpenLeadSettings,
 }: {
 	/** A project window's chat: the name of the project it is about. */
 	scope?: string;
+	/** Where the chat lives: this Mac, or a box whose own Lead it is (useLeadHome). */
+	home: LeadHome;
+	/** Whether a task is on the Lead's box: all that a box's Lead can reach. */
+	onLeadBox: (t: TaskDTO) => boolean;
+	/** Settings → Boxes, where the chat's home is chosen. */
+	onOpenLeadSettings?: () => void;
 	/** Every loaded task, across projects and machines, to name and open the ones the Lead touches. */
 	tasks: TaskDTO[];
 	/** To say which project each task is in when the user picks one with "@". */
@@ -1185,26 +1210,58 @@ export function LeadChat({
 
 	const openProposal = useRef(onOpenProposal);
 	openProposal.current = onOpenProposal;
+	// A turn this chat started, until it ends. A Lead on a box also answers
+	// the phone, and a proposal from a turn asked there mustn't pop a dialog
+	// on this Mac: it waits as its card.
+	const ownTurn = useRef(false);
 
 	useEffect(() => {
-		let live = true;
 		const off = window.ateamLead.onEvent((e) => {
 			setSnap((s) => applyLeadEvent(s, e));
+			if (e.type === "busy" && !e.busy) ownTurn.current = false;
 			// A proposal opens its dialog by itself once, as it arrives here; one
 			// that arrived while the chat was closed waits as its card.
 			if (e.type === "item" && e.item.kind === "proposal" && !e.item.outcome) {
-				if (autoOpened.has(e.item.id)) return;
+				if (autoOpened.has(e.item.id) || !ownTurn.current) return;
 				autoOpened.add(e.item.id);
 				openProposal.current(e.item, true);
 			}
 		});
-		void window.ateamLead.snapshot().then((s) => live && setSnap(s));
 		input.current?.focus();
+		return off;
+	}, []);
+	// The latest items, again whenever the chat moves (another conversation).
+	// A box coming back reloads on its own (a "reset" event).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: home.box is the trigger: a new home is another conversation to load
+	useEffect(() => {
+		let live = true;
+		void window.ateamLead.snapshot({ tail: PAGE }).then(
+			(s) => live && setSnap(s),
+			() => {},
+		);
 		return () => {
 			live = false;
-			off();
 		};
-	}, []);
+	}, [home.box]);
+	const [paging, setPaging] = useState(false);
+	const showEarlier = () => {
+		const first = snap.items[0];
+		if (!first || paging) return;
+		setPaging(true);
+		pinned.current = false;
+		void window.ateamLead
+			.older(first.id, PAGE)
+			.then(
+				(page) =>
+					setSnap((s) =>
+						s.items[0]?.id === first.id
+							? { ...s, items: [...page.items, ...s.items], more: page.more }
+							: s,
+					),
+				(e) => setAttachNote(cleanError(e)),
+			)
+			.finally(() => setPaging(false));
+	};
 
 	useLayoutEffect(() => {
 		const el = scroller.current;
@@ -1258,9 +1315,17 @@ export function LeadChat({
 	const toolRunning =
 		lastBlock?.kind === "tools" && lastBlock.tools.some((t) => t.result === undefined);
 
+	// A box's Lead sees that box's tasks only: the @ picker offers no others.
+	const reachable = useMemo(
+		() => (home.box ? tasks.filter(onLeadBox) : tasks),
+		[home.box, tasks, onLeadBox],
+	);
+	const away = home.box !== null && !home.connected;
+
 	const send = (body = text, attach = files) => {
 		if (!body.trim() && !attach.length) return;
 		pinned.current = true;
+		ownTurn.current = true;
 		window.ateamLead
 			.send(
 				expandRefs(body, refs),
@@ -1343,6 +1408,17 @@ export function LeadChat({
 				// doesn't move when the sidebar opens.
 				<div className="lead-side-head">
 					<span className="lead-side-title">Lead</span>
+					{home.box && (
+						<button
+							type="button"
+							className="lead-home"
+							title={`The Lead runs on ${home.box}. Change it in Settings → Boxes.`}
+							onClick={onOpenLeadSettings}
+						>
+							<span className={`lead-home-dot ${home.connected ? "on" : ""}`} />
+							{home.box}
+						</button>
+					)}
 					<IconButton
 						icon={SquarePen}
 						label="New conversation"
@@ -1362,9 +1438,25 @@ export function LeadChat({
 					<div>
 						<h2>Lead</h2>
 						<p>
-							{scope
-								? `${scope}'s own chat. The main window's chat covers every project.`
-								: "One chat for every task, on this Mac and on your boxes."}
+							{scope ? (
+								`${scope}'s own chat. The main window's chat covers every project.`
+							) : home.box ? (
+								<>
+									Runs on{" "}
+									<button
+										type="button"
+										className="lead-home"
+										title="Change it in Settings → Boxes"
+										onClick={onOpenLeadSettings}
+									>
+										<span className={`lead-home-dot ${home.connected ? "on" : ""}`} />
+										{home.box}
+									</button>{" "}
+									and sees its tasks only. Your phone shares it when it picks that box.
+								</>
+							) : (
+								"One chat for every task, on this Mac and on your boxes."
+							)}
 						</p>
 					</div>
 					<button
@@ -1389,6 +1481,11 @@ export function LeadChat({
 				}}
 			>
 				<div className="lead-thread" ref={thread}>
+					{snap.more && (
+						<button type="button" className="lead-earlier" disabled={paging} onClick={showEarlier}>
+							{paging ? "Loading…" : "Show earlier"}
+						</button>
+					)}
 					{!drawn && !snap.busy && (
 						<div className="lead-empty">
 							{scope ? (
@@ -1400,7 +1497,10 @@ export function LeadChat({
 							) : (
 								<p>
 									Ask about your tasks, start new ones, or send instructions to the agents working
-									on them. The Lead reads every board you're connected to.
+									on them.{" "}
+									{home.box
+										? `This Lead runs on ${home.box} and reads its board.`
+										: "The Lead reads every board you're connected to."}
 								</p>
 							)}
 							<div className="lead-suggest">
@@ -1427,6 +1527,7 @@ export function LeadChat({
 								onPaged={keepInView}
 								jump={jump}
 								onContinue={onContinue}
+								canReact={home.canReact}
 							/>
 						) : b.item.kind === "user" ? (
 							<div key={b.item.id} className="lead-user">
@@ -1488,7 +1589,12 @@ export function LeadChat({
 								key={t.id}
 								task={t}
 								onOpenTask={onOpenTask}
-								onAnswer={(input) => window.ateamLead.answer(input)}
+								onAnswer={(input) =>
+									// A box's Lead can't reach a task elsewhere: answer it directly.
+									home.box && !onLeadBox(t)
+										? window.ateam.tasks.answerQuestion(input).then(() => {})
+										: window.ateamLead.answer(input)
+								}
 							/>
 						))}
 					</div>
@@ -1496,6 +1602,11 @@ export function LeadChat({
 			)}
 
 			<div className="lead-composer">
+				{away && (
+					<div className="lead-attach-note">
+						{home.box} isn't connected. Sending connects it, waking it if it's asleep.
+					</div>
+				)}
 				{attachNote && <div className="lead-attach-note">{attachNote}</div>}
 				<div className={`lead-box ${dragging ? "dropping" : ""}`}>
 					{files.length > 0 && (
@@ -1529,7 +1640,7 @@ export function LeadChat({
 						onChange={setText}
 						refs={refs}
 						onRefsChange={setRefs}
-						tasks={tasks}
+						tasks={reachable}
 						projectName={projectName}
 						inputRef={input}
 						placeholder="Ask the Lead, @ a task"
