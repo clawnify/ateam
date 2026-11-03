@@ -1,4 +1,6 @@
-// macOS notification when a task's wait comes due (see waits.ts in the server).
+// macOS notification when a task's wait comes due (see waits.ts in the server),
+// an agent asks a question, or proposes a task or loop. While a project's own
+// window is in front, other projects' banners wait until the user leaves it.
 //
 // The engine already does the board's half: it files the card in Needs You and
 // stamps `waitingFiredAt`. This is the half that reaches you when you are not
@@ -116,30 +118,99 @@ function plainLine(line: string): string {
 		.replace(/(\d+)/g, (_, i: string) => code[Number(i)] ?? "");
 }
 
+const NOTICES = [waitNotice, questionNotice, proposalNotice];
+
 /**
- * Wire it: returns the function to call with every taskUpdated payload.
- * `onClick` brings a window forward and opens the task there.
+ * Whether a banner held since `at` is still worth showing, judged on the task as
+ * it is now: the same firing, question or proposal still pending. Freshness is
+ * counted from when it was held, so a long stay in a project window doesn't
+ * turn it stale.
  */
-export function createWaitNotifier(onClick: (task: TaskDTO) => void): (task: TaskDTO) => void {
+export function stillDue(key: string, latest: TaskDTO, at: number): boolean {
+	const none = new Set<string>();
+	return NOTICES.some((notice) => notice(latest, none, at)?.key === key);
+}
+
+export interface WaitNotifierOptions {
+	/** The project of the window in front, or null when no project window is
+	 *  (the main window, or another app). Other projects' banners wait until
+	 *  the user leaves that window: release(). */
+	focusedProject?(): string | null;
+	/** Show one banner (tests); default: a macOS notification. */
+	show?(notice: WaitNotice, task: TaskDTO): void;
+}
+
+export interface WaitNotifier {
+	/** Call with every taskUpdated payload. */
+	notify(task: TaskDTO): void;
+	/** The user left a project window: show the held banners still due. */
+	release(): void;
+}
+
+/**
+ * Wire it. `onClick` brings the task's window forward and opens the task there.
+ */
+export function createWaitNotifier(
+	onClick: (task: TaskDTO) => void,
+	opts: WaitNotifierOptions = {},
+): WaitNotifier {
 	const shown = new Set<string>();
+	// Banners held while a project window is in front, and the newest copy of
+	// each held task, to check on release that it is still due.
+	let held: { notice: WaitNotice; at: number; taskId: string }[] = [];
+	const latest = new Map<string, TaskDTO>();
 	// Electron drops a notification's handlers once it is garbage collected,
 	// which turns a click into a no-op; hold each one until it is done with.
 	const live = new Set<Notification>();
-	return (task) => {
-		const now = Date.now();
-		const notice =
-			waitNotice(task, shown, now) ??
-			questionNotice(task, shown, now) ??
-			proposalNotice(task, shown, now);
-		if (!notice || !Notification.isSupported()) return;
-		shown.add(notice.key);
-		const n = new Notification({ title: notice.title, body: notice.body });
-		live.add(n);
-		n.on("click", () => {
-			live.delete(n);
-			onClick(task);
+	const show =
+		opts.show ??
+		((notice: WaitNotice, task: TaskDTO) => {
+			if (!Notification.isSupported()) return;
+			const n = new Notification({ title: notice.title, body: notice.body });
+			live.add(n);
+			n.on("click", () => {
+				live.delete(n);
+				onClick(task);
+			});
+			n.on("close", () => live.delete(n));
+			n.show();
 		});
-		n.on("close", () => live.delete(n));
-		n.show();
+
+	const release = () => {
+		const due = held.filter((h) => {
+			const task = latest.get(h.taskId);
+			return task != null && stillDue(h.notice.key, task, h.at);
+		});
+		held = [];
+		// shortcut: every held banner shows at once; fold them into one summary
+		// if a long stay in a project window ever leaves more than a handful.
+		for (const h of due) {
+			const task = latest.get(h.taskId);
+			if (task) show(h.notice, task);
+		}
+		latest.clear();
+	};
+
+	return {
+		notify(task) {
+			if (held.some((h) => h.taskId === task.id)) latest.set(task.id, task);
+			// A blur missed (a window closed in front): nothing holds them any more.
+			const focused = opts.focusedProject?.() ?? null;
+			if (focused === null && held.length) release();
+			const now = Date.now();
+			const notice =
+				waitNotice(task, shown, now) ??
+				questionNotice(task, shown, now) ??
+				proposalNotice(task, shown, now);
+			if (!notice) return;
+			shown.add(notice.key);
+			if (focused !== null && focused !== task.projectId) {
+				held.push({ notice, at: now, taskId: task.id });
+				latest.set(task.id, task);
+				return;
+			}
+			show(notice, task);
+		},
+		release,
 	};
 }
