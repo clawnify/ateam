@@ -1,8 +1,9 @@
-// Ateam mobile — a thin remote for a box running the Ateam engine. The phone
-// opens a WebSocket to the box's opt-in `ateam` WS listener (over Tailscale),
-// handshakes, and drives the SAME engine the desktop does via the shared
-// @ateam/protocol contract (see src/connection.ts). The board is LIVE and the
-// composer creates + launches tasks on the box; tapping a task opens its terminal.
+// Ateam mobile: a thin remote for the boxes running the Ateam engine. The phone
+// opens a WebSocket to each saved box's opt-in `ateam` WS listener (over Tailscale),
+// handshakes, and drives the SAME engines the desktop does via the shared
+// @ateam/protocol contract (see src/connection.ts). Every box is on one LIVE board
+// at once, as on the desktop (src/fleet.ts); the composer creates + launches tasks
+// on the project's Run on box; tapping a task opens its terminal.
 //
 // Theme = Ateam's real tokens (apps/desktop/src/renderer/src/index.css): near-black
 // #0c0c0e canvas, ink/white for the primary action and every highlight (no accent
@@ -11,6 +12,7 @@
 import type {
 	AgentDTO,
 	AteamApi,
+	BoxSnapshot,
 	LeadClient,
 	LoopDTO,
 	ProjectDTO,
@@ -19,27 +21,25 @@ import type {
 } from "@ateam/protocol";
 import {
 	activeLabel,
-	beginStep,
 	boxSupports,
-	type ConnectStep,
-	failActive,
+	buildAteamApi,
 	filled,
 	type InputValues,
 	inputsAt,
 	PROTOCOL_VERSION,
 	providerById,
-	relabelActive,
+	unifyProjects,
 	WAKE_PROVIDERS,
 	type WakeAdapter,
-	WOKEN_CONNECT_MS,
-	WOKEN_RETRY_GAP_MS,
-	waitingLabel,
 	wakeAdapter,
+	withTimeout,
 } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+	ActionSheetIOS,
 	ActivityIndicator,
+	Alert,
 	AppState,
 	KeyboardAvoidingView,
 	Linking,
@@ -58,16 +58,30 @@ import { AgentIcon } from "./src/AgentIcon";
 import { filesToBox } from "./src/attach";
 import { BoxesScreen } from "./src/BoxesScreen";
 import { BoxTerminalScreen } from "./src/BoxTerminalScreen";
-import { boxKey, boxTitle, removeBox, type SavedBox, touchBox } from "./src/boxes";
-import { Composer, type ComposerSubmit } from "./src/Composer";
+import {
+	awayOf,
+	type BoxLink,
+	boxKey,
+	boxTitle,
+	leadBoxOf,
+	leadFirst,
+	NEW_LINK,
+	pickRunOn,
+	removeBox,
+	type SavedBox,
+	touchBox,
+} from "./src/boxes";
+import { Composer, type ComposerSubmit, type RunOn } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
-import { type Connection, connect } from "./src/connection";
+import { connect, mobileNative } from "./src/connection";
 import { demoConnection } from "./src/demo";
+import { type Board, createFleet, type Fleet, pickProject } from "./src/fleet";
 import { GithubAccessScreen } from "./src/GithubAccessScreen";
-import { HomeScreen } from "./src/HomeScreen";
+import { HomeScreen, type ProjectRow, placeText, type TaskPlace } from "./src/HomeScreen";
 import { LeadScreen } from "./src/LeadScreen";
 import { type LoopDraft, LoopForm, LoopsScreen } from "./src/LoopsScreen";
 import type { LeadBadge } from "./src/lead-badge";
+import { createLinks, type LinkDeps, type Waker } from "./src/links";
 import { MissionScreen } from "./src/MissionScreen";
 import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
@@ -75,17 +89,25 @@ import { type ProposalItem, ProposalSheet } from "./src/ProposalSheet";
 import { ProviderIcon } from "./src/ProviderIcon";
 import { useScrollFade } from "./src/scroll-fade";
 import {
+	loadBoards,
 	loadBoxes,
 	loadConsent,
 	loadDismissedSkew,
+	loadLeadBox,
 	loadPreviewPort,
 	loadProviderAccount,
+	loadRunOn,
 	loadSelectedProject,
+	removeBoard,
+	type SavedConnection,
+	saveBoard,
 	saveBoxes,
 	saveConsent,
 	saveDismissedSkew,
+	saveLeadBox,
 	savePreviewPort,
 	saveProviderAccount,
+	saveRunOn,
 	saveSelectedProject,
 } from "./src/storage";
 import { type Tab, TabStrip } from "./src/TabStrip";
@@ -187,9 +209,21 @@ function AgentTag({ agent }: { agent: string }) {
 	);
 }
 
-function TaskCard({ task, tint, onOpen }: { task: TaskDTO; tint: string; onOpen: () => void }) {
+function TaskCard({
+	task,
+	tint,
+	place,
+	onOpen,
+}: {
+	task: TaskDTO;
+	tint: string;
+	/** Where it runs (src/HomeScreen.tsx TaskPlace). */
+	place: TaskPlace;
+	onOpen: () => void;
+}) {
+	const where = placeText(place);
 	return (
-		<Pressable style={styles.card} onPress={onOpen} hitSlop={2}>
+		<Pressable style={[styles.card, place.away && styles.cardAway]} onPress={onOpen} hitSlop={2}>
 			<View style={styles.cardTop}>
 				<AgentTag agent={task.agentId ?? "·"} />
 				<Text style={styles.cardName} numberOfLines={2}>
@@ -199,6 +233,7 @@ function TaskCard({ task, tint, onOpen }: { task: TaskDTO; tint: string; onOpen:
 			{/* No branch chip: the branch is the name as a slug. */}
 			<View style={styles.cardMeta}>
 				<Badge tint={tint}>{taskNote(task)}</Badge>
+				{where ? <Badge tint={C.muted}>{where}</Badge> : null}
 			</View>
 		</Pressable>
 	);
@@ -241,16 +276,27 @@ function Field({
 	);
 }
 
-/** How a connect was asked for. `wake`: the user wants this box now (Connect, a
- *  card, opening or returning to the app), so a sleeping one is woken first; never
- *  from the drop-reconnect loop. `navigate`: land on Home once connected, which only
- *  a connect the user asked for does, so a reattach leaves them where they are.
- *  `replaces`: the saved box the form was editing, so a changed address replaces it. */
-type ConnectOpts = { wake?: boolean; navigate?: boolean; replaces?: string | null };
+/** The demo's place on the board: a box that isn't one (src/demo.ts). */
+const DEMO = "demo";
 
-// How old the last wake can get before a reconnect retry wakes the box again. Under
-// the shortest hold a provider's wake gives (Sprites: 5 min, packages/protocol/src/wake-sprites.ts).
-const REWAKE_MS = 60_000;
+/** What src/links.ts asks of the app, through a ref the links are made with once. */
+type LinkHooks = Pick<
+	LinkDeps,
+	"askConsent" | "wakerFor" | "lastBoard" | "labelOf" | "save" | "onConnected"
+> & { prepare: NonNullable<LinkDeps["prepare"]> };
+
+const NO_HOOKS: LinkHooks = {
+	askConsent: () => {},
+	wakerFor: async () => null,
+	lastBoard: () => null,
+	labelOf: (key) => key,
+	save: () => {},
+	prepare: async () => {},
+	onConnected: () => {},
+};
+
+// How long one box gets to list a project's tasks before the board goes on without it.
+const BOARD_READ_MS = 10_000;
 
 /** A provider's account inputs (its key), from the Keychain. */
 function loadAccount(def: ProviderDefinition): Promise<InputValues> {
@@ -486,7 +532,7 @@ function ConnectionScreen({
 						</View>
 					) : null}
 
-					{/* With a Boxes list, Disconnect lives there; this is for a phone with none (the demo). */}
+					{/* On a phone with no box saved, the demo is all that's connected: this leaves it. */}
 					{connected && !onBackToList ? (
 						<Pressable style={styles.disconnectBtn} onPress={onDisconnect} hitSlop={6}>
 							<Text style={styles.disconnectText}>Disconnect</Text>
@@ -569,24 +615,72 @@ const TOP_INSET_GUESS = STATUS_BAR + 54;
 // ── Shell — status dot (left) · tab pill (center) · one of Home / Board / Mission
 // Control / Loops below, or the open task's terminal in their place ──
 
+/** A box that runs another Ateam than this app: the banner over the board. */
+interface SkewNotice {
+	/** The box, named when the phone holds more than one; else null. */
+	label: string | null;
+	/** Its protocol version. */
+	version: number;
+	/** An update came back on the same version: the box already runs the newest
+	 *  release, and it's this app that is ahead of it. */
+	atLatest: boolean;
+	updating: boolean;
+	/** Why the last update attempt failed. Cleared at the start of the next one. */
+	error: string | null;
+	onUpdate: () => void;
+	/** Hide the banner for this box version (it returns when the version changes). */
+	onDismiss: () => void;
+}
+
+/** The banner's words for a box on another Ateam than this app. */
+function skewText(n: SkewNotice): string {
+	const box = n.label ?? "This box";
+	if (n.version >= PROTOCOL_VERSION) {
+		return `${box} runs a newer Ateam (v${n.version}). Update this app from TestFlight.`;
+	}
+	return n.atLatest
+		? `${box} is on the latest Ateam release (v${n.version}). This app is ahead of it; the next release clears this.`
+		: `${box} runs an older Ateam (v${n.version}). It works, but newer features will misbehave.`;
+}
+
+/** Where a screen that needs one box stands: the box's own api once it answers,
+ *  else what reaching it is doing (the screen waits in place, then remounts). */
+interface BoxView {
+	/** The box's own api; null while it is being reached. */
+	api: AteamApi | null;
+	/** Bumps on every connect: keys the screen so it remounts onto the fresh api. */
+	gen: number;
+	/** What reaching it is doing right now (connect-steps in @ateam/protocol), if anything. */
+	status: string | null;
+	/** Why the last wake failed, until a wake or a connect succeeds. */
+	wakeError: string | null;
+}
+
+/** The box terminal: one box's shell, outside every project. */
+interface BoxTerminalView extends BoxView {
+	title: string;
+	onUpdateBox: () => void;
+	updating: boolean;
+	updateError: string | null;
+	boxAtLatest: boolean;
+}
+
 function Shell({
 	connColor,
 	projects,
-	selectedProjectId,
+	selectedKey,
 	onSelectProject,
 	agents,
 	tasks,
+	shown,
+	placeOf,
 	loading,
 	creating,
 	onOpenConnection,
 	onOpenTask,
 	onCreate,
 	onAddProject,
-	skew,
-	updating,
-	updateError,
-	boxAtLatest,
-	onUpdateBox,
+	notice,
 	api,
 	tab,
 	onTab,
@@ -595,49 +689,50 @@ function Shell({
 	onEditLoop,
 	onLoopsChanged,
 	openTask,
+	openTaskView,
 	openTaskFocus,
 	onCloseTask,
 	onExpandTask,
-	boxTerminalOpen,
-	onBoxTerminal,
-	reconnecting,
-	reconnectStatus,
-	wakeError,
-	onDismissSkew,
-	connGen,
+	boxTerminal,
+	onCloseBoxTerminal,
 	snack,
 	onOpenSnack,
 	onDismissSnack,
 	composerLead,
 	onLeadSent,
+	runOn,
 	lead,
+	leadLabel,
+	leadView,
 	boxVersion,
 	leadOpen,
 	onLead,
 	leadBadge,
+	onUpdateLeadBox,
+	updatingLeadBox,
 	onStartProposal,
 }: {
 	connColor: string;
-	projects: ProjectDTO[];
-	selectedProjectId: string | null;
-	onSelectProject: (id: string) => void;
+	projects: ProjectRow[];
+	selectedKey: string | null;
+	onSelectProject: (key: string) => void;
+	/** The agents on the box a new task would run on. */
 	agents: AgentDTO[];
+	/** Every task on every box. */
 	tasks: TaskDTO[];
+	/** The selected project's tasks, from every box it's on. */
+	shown: TaskDTO[];
+	/** Where a task runs: its box when it isn't the Lead's, and whether that box is away. */
+	placeOf: (task: TaskDTO) => TaskPlace;
 	loading: boolean;
 	creating: boolean;
 	onOpenConnection: () => void;
 	onOpenTask: (task: TaskDTO) => void;
 	onCreate: (input: ComposerSubmit) => void;
 	onAddProject: () => void;
-	/** The box's protocol when it differs from this app's; null when they match. */
-	skew: number | null;
-	updating: boolean;
-	/** Why the last update attempt failed. Cleared at the start of the next one. */
-	updateError: string | null;
-	/** An update came back on the same version: the box already runs the newest
-	 *  release, and it's this app that is ahead of it. */
-	boxAtLatest: boolean;
-	onUpdateBox: () => void;
+	/** A box that runs another Ateam than this app; null when none does. */
+	notice: SkewNotice | null;
+	/** The merged board's api (src/fleet.ts): every box at once. */
 	api: AteamApi;
 	tab: Tab;
 	onTab: (tab: Tab) => void;
@@ -645,58 +740,58 @@ function Shell({
 	loops: LoopDTO[];
 	onNewLoop: () => void;
 	onEditLoop: (loop: LoopDTO) => void;
-	onLoopsChanged: (loops: LoopDTO[]) => void;
+	/** A loop changed from the Loops tab: read the board's loops again. */
+	onLoopsChanged: () => void;
 	/** The task whose terminal fills the view under the navbar, if any. */
 	openTask: TaskDTO | null;
+	/** Its box, for the terminal. */
+	openTaskView: BoxView;
 	/** Whether that terminal should open with the keyboard up (expanded from a tile). */
 	openTaskFocus: boolean;
 	onCloseTask: () => void;
 	/** Expand a Mission Control tile: open its terminal ready to type. */
 	onExpandTask: (task: TaskDTO) => void;
-	/** Whether the box terminal (outside every project) fills the view under the navbar. */
-	boxTerminalOpen: boolean;
-	onBoxTerminal: (open: boolean) => void;
-	/** The box dropped and is being reattached: an open terminal waits in place. */
-	reconnecting: boolean;
-	/** What a reattach is doing right now (connect-steps in @ateam/protocol), if anything. */
-	reconnectStatus: string | null;
-	/** Why the last wake failed, until a wake or a connect succeeds. */
-	wakeError: string | null;
-	/** Hide the version banner for this box version (it returns when the version changes). */
-	onDismissSkew: () => void;
-	/** Keys the terminal so an auto-reattach remounts it onto the fresh api. */
-	connGen: number;
+	/** The box terminal filling the view under the navbar, if one is open. */
+	boxTerminal: BoxTerminalView | null;
+	onCloseBoxTerminal: () => void;
 	/** Name of the task just started in the background, for the composer's snackbar. */
 	snack: string | null;
 	onOpenSnack: () => void;
 	onDismissSnack: () => void;
-	/** The box's Lead for the composer's Task/Lead switch; absent when it has none. */
+	/** The Lead box's Lead for the composer's Task/Lead switch; absent when it has none. */
 	composerLead?: LeadClient;
 	/** The composer sent a message to the Lead (`open`: show the chat). */
 	onLeadSent: (open: boolean) => void;
-	/** The box's own Lead chat (src/LeadScreen.tsx). */
+	/** The composer's Run on, when the project is on more than one box. */
+	runOn?: RunOn;
+	/** The Lead box's own Lead chat (src/LeadScreen.tsx). */
 	lead: LeadClient | null;
-	/** The box's protocol version, skewed or not. */
+	/** The Lead box, named when the phone holds more than one; else null. */
+	leadLabel: string | null;
+	/** The Lead box while it is being reached; null once it answers. */
+	leadView: (BoxView & { title: string }) | null;
+	/** The Lead box's protocol version, skewed or not. */
 	boxVersion: number;
 	/** The Lead chat covers the tabs (the button in the header's right corner). */
 	leadOpen: boolean;
 	onLead: (open: boolean) => void;
 	/** The dot on the Lead button (src/lead-badge.ts). */
 	leadBadge: LeadBadge;
+	onUpdateLeadBox: () => void;
+	updatingLeadBox: boolean;
 	/** "Start it" on one of the Lead's proposals. */
 	onStartProposal: (item: ProposalItem) => void;
 }) {
-	const shown = tasks.filter((t) => t.projectId === selectedProjectId);
 	// Mission Control tiles: this project's tasks that have (or had) an agent, in
 	// Home's order, merged work excluded.
 	const missionTasks = sortTasks(
 		shown.filter((t) => t.column !== "merged" && t.agentStatus !== null),
 		"status",
 	);
-	// A full terminal (a task's, or the box's) covers the tab's content. The Lead
+	// A full terminal (a task's, or a box's) covers the tab's content. The Lead
 	// covers it too, under a task opened from one of its chips: closing the task
 	// comes back to the chat.
-	const covered = openTask !== null || boxTerminalOpen;
+	const covered = openTask !== null || boxTerminal !== null;
 	const showLead = leadOpen && !covered;
 	const showTab = !covered && !leadOpen;
 	// The composer's Task | Lead switch floats over these lists: it fades while
@@ -726,7 +821,7 @@ function Shell({
 							onChange={(t) => {
 								// A tab tap from the full terminal (or the Lead) leaves it, like the desktop.
 								onCloseTask();
-								onBoxTerminal(false);
+								onCloseBoxTerminal();
 								onLead(false);
 								onTab(t);
 							}}
@@ -734,14 +829,14 @@ function Shell({
 					</View>
 					{/* The Lead, box-wide like the desktop's right sidebar, so it sits apart
 				    from the project's tabs. As wide as the status dot's slot, so the tabs
-				    stay centered. The box terminal is on this box's card in Boxes. */}
+				    stay centered. A box's terminal is on its card in Boxes. */}
 					<Pressable
 						style={styles.cornerHit}
 						onPress={() => {
 							// From a task opened out of the chat, back to the chat.
-							const back = openTask !== null || boxTerminalOpen;
+							const back = covered;
 							onCloseTask();
-							onBoxTerminal(false);
+							onCloseBoxTerminal();
 							onLead(back || !leadOpen);
 						}}
 						hitSlop={10}
@@ -770,72 +865,69 @@ function Shell({
 			    the one fix, rather than blocking the way the handshake used to. A box
 			    AHEAD of the app can't be fixed from here: updating it would only take it
 			    further away, so that case just explains itself. */}
-				{skew !== null && (
+				{notice && (
 					<View style={styles.skewBar}>
-						<Text style={styles.skewText}>
-							{skew < PROTOCOL_VERSION
-								? boxAtLatest
-									? `This box is on the latest Ateam release (v${skew}). This app is ahead of it; the next release clears this.`
-									: `This box runs an older Ateam (v${skew}). It works, but newer features will misbehave.`
-								: `This box runs a newer Ateam (v${skew}). Update this app from TestFlight.`}
-						</Text>
-						{skew < PROTOCOL_VERSION && !boxAtLatest && (
+						<Text style={styles.skewText}>{skewText(notice)}</Text>
+						{notice.version < PROTOCOL_VERSION && !notice.atLatest && (
 							<Pressable
-								style={[styles.skewBtn, updating && styles.skewBtnBusy]}
-								onPress={onUpdateBox}
-								disabled={updating}
+								style={[styles.skewBtn, notice.updating && styles.skewBtnBusy]}
+								onPress={notice.onUpdate}
+								disabled={notice.updating}
 							>
-								<Text style={styles.skewBtnText}>{updating ? "Updating…" : "Update box"}</Text>
+								<Text style={styles.skewBtnText}>
+									{notice.updating ? "Updating…" : "Update box"}
+								</Text>
 							</Pressable>
 						)}
-						<Pressable onPress={onDismissSkew} hitSlop={10} accessibilityLabel="Dismiss">
+						<Pressable onPress={notice.onDismiss} hitSlop={10} accessibilityLabel="Dismiss">
 							<Feather name="x" size={16} color={C.amber} />
 						</Pressable>
 					</View>
 				)}
-				{skew !== null && updateError && (
+				{notice?.error && (
 					<View style={styles.skewErrorBar}>
-						<Text style={styles.skewErrorText}>{updateError}</Text>
+						<Text style={styles.skewErrorText}>{notice.error}</Text>
 					</View>
 				)}
 			</View>
 			{!listUnder && <View style={{ height: topInset }} />}
 
-			{/* Through a drop an open terminal keeps its place, and reattaches (a new
-			    connGen remounts it) once the box answers again. */}
-			{openTask && reconnecting ? (
+			{/* While its box is being reached (asleep, or dropped) an open terminal keeps
+			    its place, and attaches (a new gen remounts it) once the box answers. It
+			    talks to its box directly: a pasted image must land where its agent is. */}
+			{openTask && !openTaskView.api ? (
 				<ReconnectingTerminal
 					lead={<AgentIcon agentId={openTask.agentId} size={12} />}
 					title={(tasks.find((t) => t.id === openTask.id) ?? openTask).name}
 					onBack={onCloseTask}
-					status={reconnectStatus}
-					wakeError={wakeError}
+					status={openTaskView.status}
+					wakeError={openTaskView.wakeError}
 				/>
-			) : openTask ? (
+			) : openTask && openTaskView.api ? (
 				<Term
-					key={`${connGen}:${openTask.id}`}
-					api={api}
+					key={`${openTaskView.gen}:${openTask.id}`}
+					api={openTaskView.api}
 					task={tasks.find((t) => t.id === openTask.id) ?? openTask}
 					onClose={onCloseTask}
 					autoFocus={openTaskFocus}
 				/>
-			) : boxTerminalOpen && reconnecting ? (
+			) : boxTerminal && !boxTerminal.api ? (
 				<ReconnectingTerminal
 					lead={<Feather name="terminal" size={12} color={C.ink} />}
-					title="Box terminal"
-					onBack={() => onBoxTerminal(false)}
-					status={reconnectStatus}
-					wakeError={wakeError}
+					title={boxTerminal.title}
+					onBack={onCloseBoxTerminal}
+					status={boxTerminal.status}
+					wakeError={boxTerminal.wakeError}
 				/>
-			) : boxTerminalOpen ? (
+			) : boxTerminal?.api ? (
 				<BoxTerminalScreen
-					key={`${connGen}:box`}
-					api={api}
-					onClose={() => onBoxTerminal(false)}
-					onUpdateBox={onUpdateBox}
-					updating={updating}
-					updateError={updateError}
-					boxAtLatest={boxAtLatest}
+					key={`${boxTerminal.gen}:box`}
+					api={boxTerminal.api}
+					onClose={onCloseBoxTerminal}
+					onUpdateBox={boxTerminal.onUpdateBox}
+					updating={boxTerminal.updating}
+					updateError={boxTerminal.updateError}
+					boxAtLatest={boxTerminal.boxAtLatest}
 				/>
 			) : null}
 			{showTab && tab === "board" && (
@@ -868,7 +960,13 @@ function Shell({
 											<Text style={styles.eyebrowCount}>{inCol.length}</Text>
 										</View>
 										{inCol.map((t) => (
-											<TaskCard key={t.id} task={t} tint={col.tint} onOpen={() => onOpenTask(t)} />
+											<TaskCard
+												key={t.id}
+												task={t}
+												tint={col.tint}
+												place={placeOf(t)}
+												onOpen={() => onOpenTask(t)}
+											/>
 										))}
 									</View>
 								);
@@ -880,8 +978,9 @@ function Shell({
 			{showTab && tab === "home" && (
 				<HomeScreen
 					projects={projects}
-					selectedProjectId={selectedProjectId}
+					selectedKey={selectedKey}
 					onSelectProject={onSelectProject}
+					placeOf={placeOf}
 					onAddProject={onAddProject}
 					tasks={shown}
 					loops={loops}
@@ -896,15 +995,25 @@ function Shell({
 			{showTab && tab === "mission" && (
 				<MissionScreen api={api} tasks={missionTasks} onExpand={onExpandTask} />
 			)}
-			{showLead && (
+			{showLead && leadView && (
+				<ReconnectingTerminal
+					lead={<Feather name="message-circle" size={12} color={C.ink} />}
+					title={leadView.title}
+					onBack={() => onLead(false)}
+					status={leadView.status}
+					wakeError={leadView.wakeError}
+				/>
+			)}
+			{showLead && !leadView && (
 				<LeadScreen
 					lead={lead}
+					boxLabel={leadLabel}
 					supported={boxSupports("lead", boxVersion)}
 					boxVersion={boxVersion}
 					tasks={tasks}
 					onOpenTask={onOpenTask}
-					onUpdateBox={onUpdateBox}
-					updating={updating}
+					onUpdateBox={onUpdateLeadBox}
+					updating={updatingLeadBox}
 					onStartProposal={onStartProposal}
 				/>
 			)}
@@ -932,6 +1041,7 @@ function Shell({
 					snack={snack}
 					onOpenSnack={onOpenSnack}
 					onDismissSnack={onDismissSnack}
+					runOn={runOn}
 				/>
 			)}
 		</KeyboardAvoidingView>
@@ -941,10 +1051,6 @@ function Shell({
 export default function App() {
 	useColorScheme(); // reserved: theme-aware later
 	const [view, setView] = useState<"connect" | "board">("connect");
-	// Read by the reattach loop, which waits while the connection screen is open: the
-	// user is choosing a box there, and an attempt that landed would pull them out.
-	const viewRef = useRef(view);
-	viewRef.current = view;
 	// The connection screen shows the Boxes list (src/BoxesScreen.tsx), or the form
 	// for adding or editing one. With no saved boxes it is always the form.
 	const [connectScreen, setConnectScreen] = useState<"list" | "form">("list");
@@ -952,13 +1058,8 @@ export default function App() {
 	const boxesRef = useRef<SavedBox[]>([]);
 	// The saved box the form is editing, by its key.
 	const [editingKey, setEditingKey] = useState<string | null>(null);
-	// The box a connect is reaching right now, and the one the last connect failed on.
-	const [attemptKey, setAttemptKey] = useState<string | null>(null);
-	const [failedKey, setFailedKey] = useState<string | null>(null);
 	const [swipeOpenKey, setSwipeOpenKey] = useState<string | null>(null);
-	// Which of Home / Board / Mission Control / Loops is showing. A connect the user
-	// asks for to a different box lands on Home, the sidebar-as-a-list; the same box
-	// again keeps the tab.
+	// Which of Home / Board / Mission Control / Loops is showing.
 	const [tab, setTab] = useState<Tab>("home");
 	const [loops, setLoops] = useState<LoopDTO[]>([]);
 	// The loop form modal: null closed, `editing` null for a new loop.
@@ -969,54 +1070,77 @@ export default function App() {
 	} | null>(null);
 	// A task the Lead proposed, open in its New task sheet.
 	const [proposalSheet, setProposalSheet] = useState<ProposalItem | null>(null);
+	// The form: the box being added or edited.
 	const [host, setHost] = useState("");
 	const [port, setPort] = useState("8787");
 	// Waking a sleeping box through its provider before connecting (packages/protocol/src/wake.ts).
-	// The provider and this box's inputs ride on the saved connection; the
-	// provider's account inputs (its key) live in the Keychain and are only ever
-	// held here, in a ref, never in render state.
+	// The provider and the box's inputs ride on the saved box; the provider's account
+	// inputs (its key) live in the Keychain and are only ever held here, in a ref,
+	// never in render state.
 	const [providerId, setProviderId] = useState<string | null>(null);
 	const [boxValues, setBoxValues] = useState<InputValues>({});
 	const [accountSaved, setAccountSaved] = useState<Record<string, boolean>>({});
 	const [waking, setWaking] = useState<string | null>(null);
-	// What the current or last attempt went through, for the tray under that box's
-	// card and the reconnecting view. Kept after a failure, so the failed step shows.
-	const [progress, setProgress] = useState<{ key: string; steps: ConnectStep[] } | null>(null);
-	// Set by Cancel on the tray: the wait for a woken box stops at its next try.
-	const cancelWait = useRef(false);
-	// Why the last wake failed, for the reconnecting view: the connect screen's
-	// `error` is cleared at every attempt, so it would only flash between retries.
-	const [wakeFailure, setWakeFailure] = useState<string | null>(null);
-	// When the phone last asked a provider to wake the box. A wake only holds the box
-	// up for a while (a Sprite pauses again 2 min after the phone's wake), so the
-	// reconnect loop wakes again once this is older than REWAKE_MS.
-	const lastWakeAt = useRef(0);
-	const wakeTarget = useRef<{ id: string | null; box: InputValues }>({ id: null, box: {} });
-	wakeTarget.current = { id: providerId, box: boxValues };
+	const [formBusy, setFormBusy] = useState(false);
+	// The connection screen's own error: the form's connect, a key that didn't save.
+	const [error, setError] = useState<string | null>(null);
 	const accounts = useRef<Record<string, InputValues>>({});
 	// One adapter per provider and key, so its session (boxd's lasts an hour) is reused across connects.
-	const waker = useRef<{ sig: string; adapter: WakeAdapter } | null>(null);
-	const [connecting, setConnecting] = useState(false);
-	const [connected, setConnected] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	// The box's protocol when it differs from ours (null when level). Set on every
-	// connect, so a reconnect after an update is what clears the banner.
-	const [skew, setSkew] = useState<number | null>(null);
-	const [updatingBox, setUpdatingBox] = useState(false);
-	// Why the last update attempt failed. Separate from `error` (the connect
-	// screen's own state) because this renders on the BOARD, where the button
-	// lives — reusing `error` left a failed update with nowhere to show up: the
-	// button just flashed and reverted, which is exactly what an
-	// Unknown-method rejection looked like the one time this actually happened.
-	const [updateError, setUpdateError] = useState<string | null>(null);
-	// The skew an update started from. If the reconnect lands on the same version,
-	// the box already had the newest release: say so instead of offering it again.
-	const updateFrom = useRef<number | null>(null);
-	const [boxAtLatest, setBoxAtLatest] = useState(false);
+	const wakers = useRef(new Map<string, WakeAdapter>());
+
+	// Every saved box is on the board at once (src/fleet.ts): live, or its last-seen
+	// board standing in. Each box's link (reached, kept, retried, woken) is
+	// src/links.ts; `links` is where each one stands, for its card and whatever waits
+	// on it. The links are made once, so what they ask of the app goes through
+	// `hooks`, set again every render below.
+	const [fleet] = useState(() => createFleet());
+	const board = useMemo(() => buildAteamApi(fleet.rpc, mobileNative), [fleet]);
+	const [links, setLinks] = useState<Record<string, BoxLink>>({});
+	const hooks = useRef<LinkHooks>(NO_HOOKS);
+	const [link] = useState(() =>
+		createLinks({
+			fleet,
+			dial: (url, onClose) => connect(url, { onClose }),
+			boxes: () => boxesRef.current,
+			consented: () => consented.current,
+			askConsent: (then) => hooks.current.askConsent(then),
+			wakerFor: (box) => hooks.current.wakerFor(box),
+			waitedOn: (key) => waitingOn.current.has(key),
+			lastBoard: (key) => hooks.current.lastBoard(key),
+			labelOf: (key) => hooks.current.labelOf(key),
+			save: (box, replaces) => hooks.current.save(box, replaces),
+			prepare: (key, c) => hooks.current.prepare(key, c),
+			onConnected: (key, c) => hooks.current.onConnected(key, c),
+			onLinks: setLinks,
+		}),
+	);
+	// Each box's board as last seen (src/storage.ts), what stands in while it's away.
+	const kept = useRef(new Map<string, BoxSnapshot>());
+	// The offline demo stands in for every box while it runs.
+	const demo = useRef(false);
+	// No board was kept from before (a first launch): the first box that answers
+	// takes the app from Boxes to its board, as the one launch connect used to.
+	const landOnBoard = useRef(false);
+
+	// A box on another Ateam than this app: the version whose banner was dismissed,
+	// per box (it comes back when the box reports a different one), and its update.
+	const [skewDismissed, setSkewDismissed] = useState<Record<string, number>>({});
+	const [updatingKey, setUpdatingKey] = useState<string | null>(null);
+	// Why the last update failed. It renders on the BOARD, where the button lives:
+	// a failed update with nowhere to show up just flashed and reverted, which is
+	// exactly what an Unknown-method rejection looked like the one time it happened.
+	const [updateError, setUpdateError] = useState<{ key: string; message: string } | null>(null);
+	// The skew an update started from, per box. If the reconnect lands on the same
+	// version, the box already had the newest release: say so instead of offering it again.
+	const updateFrom = useRef(new Map<string, number | null>());
+	const [atLatest, setAtLatest] = useState<Record<string, boolean>>({});
+
 	const [tasks, setTasks] = useState<TaskDTO[]>([]);
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
-	const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-	const [agents, setAgents] = useState<AgentDTO[]>([]);
+	// The selected project as its card key (@ateam/protocol unifyProjects): one repo,
+	// on however many boxes.
+	const [selectedKey, setSelectedKey] = useState<string | null>(null);
+	const [agentsByBox, setAgentsByBox] = useState<Record<string, AgentDTO[]>>({});
 	const [loading, setLoading] = useState(false);
 	const [creating, setCreating] = useState(false);
 	const [openTask, setOpenTask] = useState<TaskDTO | null>(null);
@@ -1036,80 +1160,138 @@ export default function App() {
 		const timer = setTimeout(() => setLeadSent(false), 6000);
 		return () => clearTimeout(timer);
 	}, [leadSent]);
+	// A task that couldn't start, said in the snackbar until dismissed or replaced.
+	const [failure, setFailure] = useState<string | null>(null);
 	const [openTaskFocus, setOpenTaskFocus] = useState(false);
-	const [boxTerminalOpen, setBoxTerminalOpen] = useState(false);
-	// The connected box's GitHub access (GithubAccessScreen), full screen over whatever
-	// opened it: the Boxes list or the project browser, which it returns to.
-	const [githubOpen, setGithubOpen] = useState(false);
+	// What's open over the board that belongs to one box: its terminal, its GitHub
+	// access, or adding a project to it. Each holds that box's key.
+	const [boxTerminalKey, setBoxTerminalKey] = useState<string | null>(null);
+	const [githubKey, setGithubKey] = useState<string | null>(null);
+	const [browserKey, setBrowserKey] = useState<string | null>(null);
 	const [leadOpen, setLeadOpen] = useState(false);
-	// The box version whose banner was dismissed; the banner comes back when the
-	// box reports a different one. Persisted per box.
-	const [dismissedSkew, setDismissedSkew] = useState<number | null>(null);
-	const [browserOpen, setBrowserOpen] = useState(false);
+	// The box whose Lead the phone talks to, as picked in Boxes; and the box a new
+	// task runs on when its project is on several (the composer's Run on).
+	const [leadPicked, setLeadPicked] = useState<string | null>(null);
+	const [runOnPicked, setRunOnPicked] = useState<string | null>(null);
 	const [previewOpen, setPreviewOpen] = useState(false);
 	const [previewPort, setPreviewPort] = useState("3000");
-	const conn = useRef<Connection | null>(null);
+	// The project to restore on launch (loaded from storage before the first read,
+	// so the board opens on it rather than the first one). Updated on every pick.
+	const preferredKey = useRef<string | null>(null);
+	// The board as it is now, so a box that goes can keep its share of it, and the
+	// last full read, for what a connect the user asked for found on its box.
+	const boardRef = useRef<Board>({ projects: [], tasks: [], loops: [] });
+	boardRef.current = { projects, tasks, loops };
+	const lastRead = useRef<Board>({ projects: [], tasks: [], loops: [] });
 
-	// Auto-reattach bookkeeping. `target` is the box we intend to stay connected to
-	// (set on connect, cleared on explicit Disconnect) — the trigger for reconnecting.
-	// `connGen` bumps on every successful (re)connect: it keys the open terminal so it
-	// remounts onto the fresh `api` and cleanly re-resolves its still-alive PTY session.
-	const target = useRef<{ host: string; port: string } | null>(null);
-	const [connGen, setConnGen] = useState(0);
-	const reconnectRef = useRef<() => void>(() => {});
-	const attempting = useRef(false);
-	const backoff = useRef(0);
-	const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const boxByKey = useCallback(
+		(key: string): SavedBox | null => boxesRef.current.find((b) => boxKey(b) === key) ?? null,
+		[],
+	);
+	const labelOf = useCallback(
+		(key: string): string => {
+			if (key === DEMO) return "Demo";
+			const box = boxByKey(key);
+			return box ? boxTitle(box) : key;
+		},
+		[boxByKey],
+	);
 
-	// The project to restore on launch (loaded from storage before the first connect,
-	// so refresh() prefers it over project #1). Updated on every explicit pick.
-	const preferredProjectId = useRef<string | null>(null);
+	// A box's share of the board, kept as its last-seen board (src/storage.ts). Not
+	// over an earlier one with an empty share: a read that timed out on the box comes
+	// back with nothing from it, which is no reason to forget its projects.
+	const keepBoard = useCallback(
+		(key: string, from: Board): BoxSnapshot | null => {
+			if (key === DEMO) return null;
+			const snap = fleet.snapshotOf(key, from);
+			const before = kept.current.get(key);
+			if (snap.projects.length === 0 && before && before.projects.length > 0) return before;
+			kept.current.set(key, snap);
+			void saveBoard(key, snap);
+			return snap;
+		},
+		[fleet],
+	);
 
-	// Resolves with the box's projects, so a connect can tell a box that has none.
-	const refresh = useCallback(async (): Promise<ProjectDTO[]> => {
-		const api = conn.current?.api;
-		if (!api) return [];
-		// A refresh that outlives its box (another box connected while it ran) must not
-		// write that box's projects, tasks or loops over the new one's.
-		const stale = () => conn.current?.api !== api;
-		setLoading(true);
-		try {
-			const projs: ProjectDTO[] = await api.projects.list();
-			if (stale()) return projs;
-			setProjects(projs);
-			setSelectedProjectId((cur) => {
-				// Keep the live selection across refreshes and reconnects, but not onto
-				// another box, where that project doesn't exist.
-				if (cur && projs.some((p) => p.id === cur)) return cur;
-				const pref = preferredProjectId.current;
-				if (pref && projs.some((p) => p.id === pref)) return pref; // restore last pick
-				return projs[0]?.id ?? null; // fallback: first project (or none)
-			});
-			const perProject = await Promise.all(projs.map((p) => api.tasks.list(p.id)));
-			const all = perProject.flat().sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0));
-			if (stale()) return projs;
-			setTasks(all);
-			// The whole list, so reminders for waits cleared while away go too.
-			if (target.current) syncReminders(target.current, all, true);
-			// A box that predates loops rejects the call; the sections just stay empty.
-			const boxLoops = await api.loops.list().catch(() => []);
-			if (!stale()) setLoops(boxLoops);
-			return projs;
-		} finally {
-			// The newer box's refresh owns the spinner once this one is stale.
-			if (!stale()) setLoading(false);
+	// One read of the whole board, every box at once. A box that stops answering
+	// mid-read doesn't hold it up: its projects keep the tasks they showed.
+	const readBoard = useCallback(async (): Promise<Board> => {
+		const projs = await board.projects.list();
+		const before = boardRef.current;
+		const perProject = await Promise.all(
+			projs.map((p) =>
+				withTimeout(board.tasks.list(p.id), BOARD_READ_MS, "tasks").catch(() =>
+					before.tasks.filter((t) => t.projectId === p.id),
+				),
+			),
+		);
+		const all = perProject.flat().sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0));
+		// A box that predates loops rejects the call; the sections just stay empty.
+		const boardLoops = await board.loops.list().catch(() => before.loops);
+		const read: Board = { projects: projs, tasks: all, loops: boardLoops };
+		lastRead.current = read;
+		setProjects(projs);
+		setTasks(all);
+		setLoops(boardLoops);
+		const cards = unifyProjects(projs, originsOf(fleet, projs));
+		setSelectedKey((cur) => pickProject(cards, cur, preferredKey.current));
+		for (const key of fleet.keys()) {
+			if (!fleet.isLive(key) || key === DEMO) continue;
+			keepBoard(key, read);
+			// Each box's whole list, so reminders for waits cleared while away go too.
+			const box = boxByKey(key);
+			if (box) {
+				syncReminders(
+					box,
+					all.filter((t) => fleet.ownerOf(t.id) === key),
+					true,
+				);
+			}
 		}
-	}, []);
+		return read;
+	}, [board, fleet, keepBoard, boxByKey]);
+
+	// Reads are coalesced: one asked for while another runs makes it read once more,
+	// and both callers get that newer board. Connects land one per box, close together.
+	const refreshing = useRef<Promise<Board> | null>(null);
+	const refreshAgain = useRef(false);
+	const refresh = useCallback((): Promise<Board> => {
+		if (refreshing.current) {
+			refreshAgain.current = true;
+			return refreshing.current;
+		}
+		const run = async (): Promise<Board> => {
+			setLoading(true);
+			try {
+				let read: Board;
+				do {
+					refreshAgain.current = false;
+					read = await readBoard();
+				} while (refreshAgain.current);
+				return read;
+			} finally {
+				refreshing.current = null;
+				setLoading(false);
+			}
+		};
+		refreshing.current = run();
+		return refreshing.current;
+	}, [readBoard]);
+
+	// A box sends its own loops when they change, not the board's: read them all again.
+	const refreshLoops = useCallback(async () => {
+		const next = await board.loops.list().catch(() => null);
+		if (next) setLoops(next);
+	}, [board]);
 
 	// Live updates: merge each pushed task in place (replace by id, or prepend if new).
-	// Re-subscribes on `connGen` too, so after an auto-reattach the stream binds to the
-	// fresh connection's api rather than the dead one's.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: connGen re-binds api after reconnect
+	// The board's RPC fans in every live box and survives their reconnects (src/fleet.ts).
 	useEffect(() => {
-		const api = conn.current?.api;
-		if (!api || view !== "board") return;
-		const off = api.events.onTaskUpdated((t) => {
-			if (target.current) syncReminders(target.current, [t], false);
+		if (view !== "board") return;
+		const off = board.events.onTaskUpdated((t) => {
+			const owner = fleet.ownerOf(t.id);
+			const box = owner ? boxByKey(owner) : null;
+			if (box) syncReminders(box, [t], false);
 			setTasks((prev) => {
 				const i = prev.findIndex((x) => x.id === t.id);
 				if (i === -1) return [t, ...prev];
@@ -1118,22 +1300,17 @@ export default function App() {
 				return next;
 			});
 		});
-		const offLoops = api.loops.onUpdated((next) => setLoops(next));
+		const offLoops = board.loops.onUpdated(() => void refreshLoops());
 		return () => {
 			off();
 			offLoops();
 		};
-	}, [view, connGen]);
+	}, [view, board, fleet, boxByKey, refreshLoops]);
 
-	// The one connect path: the Connect button, a Boxes card, the launch auto-connect,
-	// and the auto-reattach below. Returns whether it connected, so reconnect() can
-	// decide to retry. On success it records the `target` (so drops reattach), puts the
-	// box at the top of the Boxes list, and bumps `connGen` (so the board + any open
-	// terminal rebind to the fresh api).
-	// Consent state. A ref (not state) because connectTo reads it synchronously and must
+	// Consent state. A ref (not state) because connects read it synchronously and must
 	// not be re-created when it flips, which would retrigger the effects that depend on it.
 	const consented = useRef(false);
-	const pendingConnect = useRef<{ host: string; port: string; opts: ConnectOpts } | null>(null);
+	const pendingConnect = useRef<(() => void) | null>(null);
 	const [consentOpen, setConsentOpen] = useState(false);
 
 	// The Boxes list as it is now, persisted. Through a ref as well as state, so a
@@ -1144,291 +1321,147 @@ export default function App() {
 		void saveBoxes(next);
 	}, []);
 
-	const connectTo = useCallback(
-		// A box that went to sleep on its own stays asleep until someone actually
-		// wants it, so only `opts.wake` (see ConnectOpts) wakes it first.
-		async (h: string, p: string, opts: ConnectOpts = {}): Promise<boolean> => {
-			const port = p || "8787";
-			// The box this connect leaves, if any: the same one again is a reconnect.
-			const prev = target.current;
-			// Nothing leaves the phone until the disclosure has been accepted. Guarding
-			// HERE rather than on the Connect button covers every route in: the button,
-			// the launch reattach, and the drop-reconnect loop.
-			if (!consented.current) {
-				pendingConnect.current = { host: h, port, opts };
-				setConsentOpen(true);
-				return false;
-			}
-			if (retryTimer.current) {
-				clearTimeout(retryTimer.current);
-				retryTimer.current = null;
-			}
-			const key = boxKey({ host: h, port });
-			setConnecting(true);
-			setAttemptKey(key);
-			setFailedKey(null);
-			setError(null);
-			setProgress({ key, steps: [] });
-			const step = (f: (steps: ConnectStep[]) => ConnectStep[]) =>
-				setProgress((cur) => (cur && cur.key === key ? { key, steps: f(cur.steps) } : cur));
-			cancelWait.current = false;
-			let tick: ReturnType<typeof setInterval> | null = null;
-			const wakeFor = wakeTarget.current;
-			const def = providerById(wakeFor.id);
-			let wakeError: string | null = null;
-			let woke = false;
-			try {
-				const account = def ? (accounts.current[def.id] ?? {}) : {};
-				if (
-					opts.wake &&
-					def &&
-					filled(def, "box", wakeFor.box) &&
-					filled(def, "account", account)
-				) {
-					const sig = `${def.id}\n${JSON.stringify(account)}`;
-					if (waker.current?.sig !== sig) {
-						const made = wakeAdapter(def, account);
-						waker.current = made ? { sig, adapter: made } : null;
-					}
-					const adapter = waker.current?.adapter;
-					if (adapter) {
-						setWaking(def.label);
-						step((s) => beginStep(s, `Waking the box through ${def.label}`));
-						lastWakeAt.current = Date.now();
-						try {
-							// "running": it was up already, so there is nothing to wait for.
-							woke = (await adapter.ensureAwake(wakeFor.box)) !== "running";
-							setWakeFailure(null);
-						} catch (err) {
-							// Still try the box: it may be up, and a key problem must not
-							// cost a connection that would have worked.
-							wakeError = err instanceof Error ? err.message : String(err);
-							setWakeFailure(`Waking it through ${def.label} failed: ${wakeError}`);
-							step(failActive);
-						} finally {
-							setWaking(null);
-						}
-					}
-				}
-				step((s) => beginStep(s, "Reaching Ateam on the box"));
-				// A woken box refuses or ignores the socket until its network and engine
-				// are up, which on a Sprite can take minutes after the wake returns. So it
-				// gets tries until WOKEN_CONNECT_MS; a box nobody woke gets the one.
-				const started = Date.now();
-				const deadline = started + (woke ? WOKEN_CONNECT_MS : 0);
-				let c: Connection;
-				for (;;) {
-					conn.current?.close();
-					try {
-						c = await connect(`ws://${h}:${port}`, {
-							onClose: () => {
-								// This connection dropped on its own (network flip, box restart, NAT
-								// reap). If it's still the live one and we still want the box, reattach.
-								if (conn.current !== c || !target.current) return;
-								c.close(); // stop its keepalive; socket is already gone
-								conn.current = null;
-								setConnected(false);
-								backoff.current = 0;
-								reconnectRef.current();
-							},
-						});
-						break;
-					} catch (err) {
-						if (cancelWait.current) throw new Error("Cancelled");
-						if (Date.now() >= deadline) throw err;
-						if (!tick) {
-							const relabel = () =>
-								step((s) => relabelActive(s, waitingLabel(Date.now() - started)));
-							relabel();
-							tick = setInterval(relabel, 1_000);
-						}
-						await new Promise((r) => setTimeout(r, WOKEN_RETRY_GAP_MS));
-						if (cancelWait.current) throw new Error("Cancelled");
-					}
-				}
-				if (tick) clearInterval(tick);
-				conn.current = c;
-				target.current = { host: h, port };
-				backoff.current = 0;
-				setWakeFailure(null);
-				commitBoxes(
-					touchBox(
-						boxesRef.current,
-						{ host: h, port, ...(def ? { provider: { id: def.id, box: wakeFor.box } } : {}) },
-						Date.now(),
-						opts.replaces,
-					),
-				);
-				// Per box, and boxes now switch with a tap: read before the banner can show.
-				setDismissedSkew(await loadDismissedSkew(h));
-				setConnected(true);
-				const nextSkew = c.skewed ? c.info.protocolVersion : null;
-				setSkew(nextSkew);
-				// Only the reconnect that ends an update can say the box is already on the
-				// latest release. Any other connect, to this box or another, drops the claim:
-				// it hides Update box, and a release may have come out since.
-				if (updateFrom.current !== null) {
-					setBoxAtLatest(nextSkew !== null && nextSkew === updateFrom.current);
-					updateFrom.current = null;
-				} else {
-					setBoxAtLatest(false);
-				}
-				// Whatever we came back as, we are no longer mid-update. A reconnect is
-				// exactly how an update ends, so this is where the spinner stops.
-				setUpdatingBox(false);
-				setConnGen((g) => g + 1);
-				// A box switched to meanwhile has its own agents; this late list isn't them.
-				void c.api.agents.list().then((a) => {
-					if (conn.current === c) setAgents(a);
-				});
-				if (opts.navigate) {
-					setView("board");
-					setEditingKey(null);
-					// A different box starts on Home, and the terminals of the one left
-					// close. The same box again (a reconnect from the Boxes list) returns
-					// you to where you were.
-					if (prev?.host !== h || prev?.port !== port) {
-						setTab("home");
-						setOpenTask(null);
-						setBoxTerminalOpen(false);
-						setGithubOpen(false);
-						setLeadOpen(false);
-					}
-				}
-				step((s) => beginStep(s, "Loading projects"));
-				const projs = await refresh();
-				setProgress((cur) => (cur?.key === key ? null : cur));
-				// A box with no project has nothing to show, so a connect the user asked for
-				// opens Add a project. A reattach doesn't: it would pop up over their screen.
-				if (opts.navigate && projs.length === 0) setBrowserOpen(true);
-				return true;
-			} catch (err) {
-				step(failActive);
-				conn.current = null;
-				setConnected(false);
-				const msg = err instanceof Error ? err.message : String(err);
-				setError(
-					wakeError ? `${msg}. Waking it through ${def?.label} failed too: ${wakeError}` : msg,
-				);
-				setFailedKey(key);
-				return false;
-			} finally {
-				if (tick) clearInterval(tick);
-				setConnecting(false);
-				setAttemptKey(null);
-			}
-		},
-		[refresh, commitBoxes],
-	);
-
-	// Ask the box to replace itself with the current release. The reply lands before
-	// the engine goes down, then the socket drops and the reconnect loop picks it up
-	// on the new dist, so success here looks like a disconnect, not a result.
-	const updateBox = useCallback(async () => {
-		const c = conn.current;
-		if (!c) return;
-		setUpdatingBox(true);
-		setUpdateError(null);
-		updateFrom.current = skew;
-		try {
-			await c.update();
-		} catch (err) {
-			// The likely one: a box older than v7 has no system:update at all, and has
-			// to be updated once from a Mac before it can ever do this itself.
-			setUpdatingBox(false);
-			updateFrom.current = null;
-			setUpdateError(err instanceof Error ? err.message : String(err));
+	// How to wake a box through its provider: its key from the Keychain, one adapter
+	// per provider and key. src/links.ts asks only when someone wants the box.
+	const wakerFor = useCallback(async (box: SavedConnection): Promise<Waker | null> => {
+		const def = providerById(box.provider?.id);
+		const target = box.provider;
+		if (!def || !target) return null;
+		let account = accounts.current[def.id];
+		if (!account) {
+			account = await loadAccount(def);
+			accounts.current[def.id] = account;
 		}
-	}, [skew]);
+		if (!filled(def, "box", target.box) || !filled(def, "account", account)) return null;
+		const sig = `${def.id}\n${JSON.stringify(account)}`;
+		let adapter = wakers.current.get(sig);
+		if (!adapter) {
+			const fresh = wakeAdapter(def, account);
+			if (!fresh) return null;
+			adapter = fresh;
+			wakers.current.set(sig, fresh);
+		}
+		const wake = adapter;
+		return { label: def.label, ensureAwake: () => wake.ensureAwake(target.box) };
+	}, []);
 
-	// Reattach to the intended box: try once, and on failure schedule a capped
-	// exponential backoff retry (1s → 15s) so a still-down box keeps getting picked up.
-	// The first try after a drop skips the wake (a network flip shouldn't wait on the
-	// provider), but a retry wakes whenever the last wake is stale: a box that went to
-	// sleep would otherwise never answer, and one woken earlier may have paused again.
-	// The retries stop while the app is in the background, so this can't keep a box up
-	// on its own.
-	const reconnect = useCallback(
-		async (wake = false) => {
-			const t = target.current;
-			const stale = Date.now() - lastWakeAt.current >= REWAKE_MS;
-			// Waits while the connection screen is open, retry timer included: leaving it
-			// (leaveConnect) picks the box back up.
-			if (!t || attempting.current || viewRef.current === "connect") return;
-			if (retryTimer.current) {
-				clearTimeout(retryTimer.current);
-				retryTimer.current = null;
+	// Whatever waits on a box right now (its task open, its terminal, the Lead, an
+	// update): a box nobody waits on is never woken, so one that sleeps stays asleep.
+	const waitingOn = useRef(new Set<string>());
+
+	// What the links ask of the app (src/links.ts), current every render.
+	hooks.current = {
+		askConsent: (then) => {
+			pendingConnect.current = then;
+			setConsentOpen(true);
+		},
+		wakerFor,
+		lastBoard: (key) => keepBoard(key, boardRef.current),
+		labelOf,
+		save: (box, replaces) => commitBoxes(touchBox(boxesRef.current, box, Date.now(), replaces)),
+		// Read before the banner can show for a version already dismissed.
+		prepare: async (key) => {
+			const box = boxByKey(key);
+			const dismissed = box ? await loadDismissedSkew(box.host) : null;
+			if (dismissed !== null) setSkewDismissed((cur) => ({ ...cur, [key]: dismissed }));
+		},
+		onConnected: async (key, c) => {
+			const nextSkew = c.skewed ? c.info.protocolVersion : null;
+			// Only the reconnect that ends an update can say the box is already on the
+			// latest release. Any other connect drops the claim: a release may be out since.
+			const from = updateFrom.current.get(key);
+			const ended = updateFrom.current.delete(key);
+			setAtLatest((cur) => ({ ...cur, [key]: ended && nextSkew !== null && nextSkew === from }));
+			// Whatever it came back as, it is no longer mid-update: a reconnect is
+			// exactly how an update ends, so this is where the spinner stops.
+			setUpdatingKey((cur) => (cur === key ? null : cur));
+			void c.api.agents.list().then((a) => {
+				if (link.conn(key) === c) setAgentsByBox((cur) => ({ ...cur, [key]: a }));
+			});
+			if (landOnBoard.current) {
+				landOnBoard.current = false;
+				setView("board");
 			}
-			attempting.current = true;
-			let ok = false;
+			await refresh();
+		},
+	};
+
+	const openOwner = openTask ? fleet.ownerOf(openTask.id) : null;
+	const leadKey = demo.current ? DEMO : leadBoxOf(boxes, leadPicked);
+	waitingOn.current = new Set(
+		[
+			openOwner,
+			boxTerminalKey,
+			githubKey,
+			browserKey,
+			updatingKey,
+			leadOpen ? leadKey : null,
+		].filter((k): k is string => k !== null),
+	);
+	useEffect(() => {
+		if (view === "board") link.ensure(openOwner);
+	}, [view, openOwner, link]);
+	useEffect(() => {
+		link.ensure(boxTerminalKey);
+	}, [boxTerminalKey, link]);
+	useEffect(() => {
+		if (leadOpen) link.ensure(leadKey);
+	}, [leadOpen, leadKey, link]);
+
+	// Ask a box to replace itself with the current release. The reply lands before
+	// the engine goes down, then the socket drops and the reconnect picks it up on
+	// the new dist, so success here looks like a disconnect, not a result.
+	const updateBox = useCallback(
+		async (key: string) => {
+			const c = link.conn(key);
+			if (!c) return;
+			setUpdatingKey(key);
+			setUpdateError(null);
+			updateFrom.current.set(key, c.skewed ? c.info.protocolVersion : null);
 			try {
-				ok = await connectTo(t.host, t.port, { wake: wake || (backoff.current > 0 && stale) });
-			} finally {
-				attempting.current = false;
-			}
-			if (!ok && target.current) {
-				const delay = Math.min(15_000, 1_000 * 2 ** backoff.current);
-				backoff.current += 1;
-				retryTimer.current = setTimeout(() => {
-					retryTimer.current = null;
-					void reconnect();
-				}, delay);
+				await c.update();
+			} catch (err) {
+				// The likely one: a box older than v7 has no system:update at all, and has
+				// to be updated once from a Mac before it can ever do this itself.
+				setUpdatingKey(null);
+				updateFrom.current.delete(key);
+				setUpdateError({ key, message: err instanceof Error ? err.message : String(err) });
 			}
 		},
-		[connectTo],
+		[link],
 	);
 
-	// Break the connectTo ⇄ reconnect cycle: connectTo's onClose calls through this ref.
-	useEffect(() => {
-		reconnectRef.current = () => void reconnect();
-	}, [reconnect]);
-
-	// Reattach when the app returns to the foreground — the #1 case (app-switching). The
-	// socket iOS suspended in the background is usually dead with no close event, so probe
-	// it and only reconnect if the probe fails (avoids churning a still-live session).
+	// Back to the iOS foreground, the #1 case (app-switching): each box's socket is
+	// probed and every box that isn't up tried again (src/links.ts foreground).
+	// Going to the background keeps each box's share of the board for next launch.
 	useEffect(() => {
 		const sub = AppState.addEventListener("change", (s) => {
-			if (s !== "active" || !target.current || attempting.current) return;
-			void (async () => {
-				const alive = conn.current ? await conn.current.ping() : false;
-				if (!alive) {
-					backoff.current = 0;
-					void reconnect(true);
-				}
-			})();
+			if (demo.current) return;
+			if (s === "background") {
+				for (const key of link.liveKeys()) keepBoard(key, boardRef.current);
+				return;
+			}
+			if (s === "active") link.foreground();
 		});
 		return () => sub.remove();
-	}, [reconnect]);
+	}, [link, keepBoard]);
 
-	// Cancel any pending retry on unmount.
-	useEffect(
-		() => () => {
-			if (retryTimer.current) clearTimeout(retryTimer.current);
-		},
-		[],
-	);
+	// The app itself going (a reload in development): every socket closed, every try stopped.
+	useEffect(() => () => link.pause(), [link]);
 
-	// Back from the connection screen to the board. A connection that dropped while
-	// the screen was open was left alone there, so pick it up now.
+	// Back from the connection screen to the board.
 	const leaveConnect = useCallback(() => {
-		viewRef.current = "board"; // before reconnect() reads it, not at the next render
 		setView("board");
 		setSwipeOpenKey(null);
-		if (target.current && !conn.current) {
-			backoff.current = 0;
-			void reconnect();
-		}
-	}, [reconnect]);
+	}, []);
 
-	// Fill the form with a saved box, provider and all, or empty it for a new one. The
-	// wake ref too: a connect right after this runs before the next render would set it.
+	// Fill the form with a saved box, provider and all, or empty it for a new one.
 	const fillForm = useCallback(async (box: SavedBox | null) => {
 		setHost(box?.host ?? "");
 		setPort(box?.port ?? "8787");
 		setError(null);
 		const def = providerById(box?.provider?.id);
 		if (!def || !box?.provider) {
-			wakeTarget.current = { id: null, box: {} };
 			setProviderId(null);
 			setBoxValues({});
 			setAccountSaved({});
@@ -1436,29 +1469,54 @@ export default function App() {
 		}
 		const account = accounts.current[def.id] ?? (await loadAccount(def));
 		accounts.current[def.id] = account;
-		wakeTarget.current = { id: def.id, box: box.provider.box };
 		setProviderId(def.id);
 		setBoxValues(box.provider.box);
 		setAccountSaved(savedFlags(def, account));
 	}, []);
 
-	// A card's tap: the box in use goes back to the board; any other connects, the
-	// same as filling the form and tapping Connect.
+	// Leave the demo: the saved boxes come back, their boards as last seen, then
+	// their engines.
+	const endDemo = useCallback(() => {
+		if (!demo.current) return;
+		demo.current = false;
+		link.forget(DEMO);
+		setAgentsByBox({});
+		setOpenTask(null);
+		setLeadOpen(false);
+		for (const b of boxesRef.current) {
+			const key = boxKey(b);
+			const snap = kept.current.get(key);
+			if (snap) fleet.detach(key, { snapshot: snap, label: boxTitle(b) });
+		}
+		void refresh();
+		link.resume();
+	}, [fleet, link, refresh]);
+
+	// A card's tap: back to the board when its box is up; else wake it, then go.
 	const openBox = useCallback(
 		async (box: SavedBox) => {
-			if (connected && target.current && boxKey(target.current) === boxKey(box)) {
+			const key = boxKey(box);
+			landOnBoard.current = false;
+			endDemo();
+			if (link.conn(key)) {
 				leaveConnect();
 				return;
 			}
-			await fillForm(box);
-			setEditingKey(null);
-			void connectTo(box.host, box.port, { wake: true, navigate: true });
+			if (!(await link.connect(box, { wake: true }))) {
+				link.retry(key);
+				return;
+			}
+			leaveConnect();
+			// A box with no project has nothing to show, so a wake the user asked for
+			// opens Add a project on it.
+			if (!lastRead.current.projects.some((p) => fleet.ownerOf(p.id) === key)) setBrowserKey(key);
 		},
-		[connected, connectTo, fillForm, leaveConnect],
+		[link, endDemo, fleet, leaveConnect],
 	);
 
 	const editBox = useCallback(
 		async (box: SavedBox) => {
+			landOnBoard.current = false;
 			await fillForm(box);
 			setEditingKey(boxKey(box));
 			setConnectScreen("form");
@@ -1467,6 +1525,7 @@ export default function App() {
 	);
 
 	const addBox = useCallback(() => {
+		landOnBoard.current = false;
 		void fillForm(null);
 		setEditingKey(null);
 		setConnectScreen("form");
@@ -1500,7 +1559,7 @@ export default function App() {
 				await wakeAdapter(def, account)?.check();
 				for (const [key, value] of entered) await saveProviderAccount(def.id, key, value);
 				accounts.current[def.id] = account;
-				waker.current = null;
+				wakers.current.clear();
 				setAccountSaved(savedFlags(def, account));
 				setError(null);
 				return true;
@@ -1520,7 +1579,7 @@ export default function App() {
 				await saveProviderAccount(def.id, input.key, null);
 			}
 			accounts.current[def.id] = {};
-			waker.current = null;
+			wakers.current.clear();
 			setAccountSaved({});
 		} catch (err) {
 			setError(
@@ -1529,50 +1588,105 @@ export default function App() {
 		}
 	}, []);
 
-	const onConnect = useCallback(() => {
+	// Take a box off the board: no more tries, its socket closed, its kept board gone.
+	const forgetBox = useCallback(
+		(key: string) => {
+			// Asked before it leaves the board, which stops knowing whose they were.
+			const its = new Set(
+				boardRef.current.tasks.filter((t) => fleet.ownerOf(t.id) === key).map((t) => t.id),
+			);
+			link.forget(key);
+			setOpenTask((t) => (t && its.has(t.id) ? null : t));
+			kept.current.delete(key);
+			void removeBoard(key);
+			setAgentsByBox(({ [key]: _gone, ...rest }) => rest);
+			setBoxTerminalKey((k) => (k === key ? null : k));
+			setGithubKey((k) => (k === key ? null : k));
+			setBrowserKey((k) => (k === key ? null : k));
+			void refresh();
+		},
+		[fleet, link, refresh],
+	);
+
+	const onConnect = useCallback(async () => {
 		if (!host.trim()) {
 			setError("Enter the box's Tailscale IP or hostname.");
 			return;
 		}
-		void connectTo(host.trim(), port.trim(), { wake: true, navigate: true, replaces: editingKey });
-	}, [host, port, connectTo, editingKey]);
-
-	// Enter demo mode: a fully offline Connection (canned board + terminal). No box, no
-	// reattach, no saved connection — for App Review (guideline 2.1) and first-look onboarding.
-	const startDemo = useCallback(async () => {
-		target.current = null; // demo never reattaches
-		setOpenTask(null);
-		setBoxTerminalOpen(false);
-		setGithubOpen(false);
-		setLeadOpen(false);
-		if (retryTimer.current) {
-			clearTimeout(retryTimer.current);
-			retryTimer.current = null;
-		}
-		conn.current?.close();
-		const demo = demoConnection();
-		conn.current = demo;
-		setConnected(true);
+		const def = providerById(providerId);
+		const box: SavedConnection = {
+			host: host.trim(),
+			port: port.trim() || "8787",
+			...(def ? { provider: { id: def.id, box: boxValues } } : {}),
+		};
+		const key = boxKey(box);
+		const replaces = editingKey;
+		landOnBoard.current = false;
+		endDemo();
+		setFormBusy(true);
 		setError(null);
-		setConnGen((g) => g + 1);
-		void demo.api.agents.list().then((a) => {
-			if (conn.current === demo) setAgents(a);
+		try {
+			if (!(await link.connect(box, { wake: true, save: true, replaces, onWaking: setWaking }))) {
+				const failed = link.get(key).error;
+				if (failed) setError(failed);
+				return;
+			}
+			// An edit that moved the box to another address: the old one leaves the board.
+			if (replaces && replaces !== key) forgetBox(replaces);
+			setEditingKey(null);
+			setConnectScreen("list");
+			leaveConnect();
+			if (!lastRead.current.projects.some((p) => fleet.ownerOf(p.id) === key)) setBrowserKey(key);
+		} finally {
+			setFormBusy(false);
+		}
+	}, [
+		host,
+		port,
+		providerId,
+		boxValues,
+		editingKey,
+		link,
+		endDemo,
+		forgetBox,
+		fleet,
+		leaveConnect,
+	]);
+
+	// Enter demo mode: a fully offline Connection (canned board + terminal) in place
+	// of every box, none of them reached meanwhile. For App Review (guideline 2.1)
+	// and first-look onboarding.
+	const startDemo = useCallback(async () => {
+		demo.current = true;
+		landOnBoard.current = false;
+		link.pause();
+		for (const key of fleet.keys()) fleet.remove(key);
+		setOpenTask(null);
+		setBoxTerminalKey(null);
+		setGithubKey(null);
+		setBrowserKey(null);
+		setLeadOpen(false);
+		const d = demoConnection();
+		link.adopt(DEMO, d);
+		void d.api.agents.list().then((a) => {
+			if (link.conn(DEMO) === d) setAgentsByBox({ [DEMO]: a });
 		});
+		setError(null);
 		setView("board");
 		setTab("home");
-		await refresh();
-	}, [refresh]);
+		return refresh();
+	}, [fleet, link, refresh]);
 
-	// Accepting resumes whatever connection was interrupted, so Agree lands you on the
-	// board rather than back on a form you already filled in.
+	// Accepting resumes whatever was interrupted, so Agree lands you on the board
+	// rather than back on a form you already filled in.
 	const onAgreeConsent = useCallback(() => {
 		consented.current = true;
 		setConsentOpen(false);
 		void saveConsent();
 		const pending = pendingConnect.current;
 		pendingConnect.current = null;
-		if (pending) void connectTo(pending.host, pending.port, pending.opts);
-	}, [connectTo]);
+		pending?.();
+	}, []);
 
 	// Declining is not a dead end: the demo is offline, so it needs no consent at all.
 	const onDeclineConsent = useCallback(() => {
@@ -1582,78 +1696,159 @@ export default function App() {
 	}, [startDemo]);
 
 	// Pick a project and remember it, so the next launch lands on it (not project #1).
-	const selectProject = useCallback((id: string) => {
-		preferredProjectId.current = id;
-		setSelectedProjectId(id);
-		void saveSelectedProject(id);
+	const selectProject = useCallback((key: string) => {
+		preferredKey.current = key;
+		setSelectedKey(key);
+		void saveSelectedProject(key);
 	}, []);
 
-	// Open the box's dev server in the phone browser. The box IP is exactly the host we
-	// connected to (already on the tailnet) — no tunnel, no discovery. Remember the port.
+	const onLeadBox = useCallback((box: SavedBox) => {
+		const key = boxKey(box);
+		setLeadPicked(key);
+		void saveLeadBox(key);
+	}, []);
+
+	// The projects, one card per repo across boxes (@ateam/protocol unifyProjects).
+	const cards = useMemo(
+		() => unifyProjects(projects, originsOf(fleet, projects)),
+		[projects, fleet],
+	);
+	// Boxes are named on the board only when there's more than one to tell apart:
+	// never in the demo, which stands in for all of them.
+	const multi = !demo.current && boxes.length > 1;
+	// A project names every box it's on, the Lead's box first: the phone's home, as
+	// Local leads the desktop's lists.
+	const projectRows: ProjectRow[] = useMemo(
+		() =>
+			cards.map((c) => ({
+				key: c.key,
+				name: c.name,
+				on: multi
+					? leadFirst(
+							c.members.map((m) => m.alias ?? ""),
+							leadKey,
+						)
+							.map(labelOf)
+							.join(" · ")
+					: null,
+			})),
+		[cards, multi, labelOf, leadKey],
+	);
+	const selectedCard = cards.find((c) => c.key === selectedKey) ?? null;
+	const memberIds = useMemo(
+		() => new Set(selectedCard?.members.map((m) => m.projectId) ?? []),
+		[selectedCard],
+	);
+	const shown = useMemo(() => tasks.filter((t) => memberIds.has(t.projectId)), [tasks, memberIds]);
+	// Where a task runs, for its row. The Lead's box goes unnamed (the default, as
+	// Local is on the desktop: naming it would be noise); a box that sleeps or isn't
+	// answering says so, its rows from its board as last seen.
+	const placeOf = useCallback(
+		(t: TaskDTO): TaskPlace => {
+			const key = fleet.ownerOf(t.id);
+			if (!key) return { box: null, away: null };
+			return {
+				box: multi && key !== leadKey ? labelOf(key) : null,
+				away: awayOf(links[key]),
+			};
+		},
+		[multi, fleet, labelOf, leadKey, links],
+	);
+	const isLive = (key: string) => links[key]?.state === "live";
+	const runOnKeys = leadFirst(
+		(selectedCard?.members ?? []).map((m) => m.alias).filter((k): k is string => k !== null),
+		leadKey,
+	);
+	const runOnKey = pickRunOn(runOnKeys, runOnPicked, leadKey, isLive);
+	const runOnMember = selectedCard?.members.find((m) => m.alias === runOnKey) ?? null;
+	const runOn: RunOn | undefined =
+		runOnKeys.length > 1 && runOnKey
+			? {
+					options: runOnKeys.map((k) => ({ key: k, label: labelOf(k), live: isLive(k) })),
+					value: runOnKey,
+					onChange: (k) => {
+						setRunOnPicked(k);
+						void saveRunOn(k);
+					},
+				}
+			: undefined;
+
+	// Open the box's dev server in the phone browser. The box's IP is the host the
+	// phone reaches it at (already on the tailnet): no tunnel, no discovery.
 	const openPreview = useCallback(() => {
-		const h = target.current?.host;
+		const key = runOnKey ?? link.liveKeys()[0] ?? null;
+		const h = key ? boxByKey(key)?.host : undefined;
 		if (!h) return;
 		const p = previewPort.trim() || "3000";
 		void savePreviewPort(p);
 		setPreviewOpen(false);
 		void Linking.openURL(`http://${h}:${p}`);
-	}, [previewPort]);
+	}, [previewPort, runOnKey, boxByKey, link]);
 
-	// Settles once the launch connect below has: a reminder tap that launched the
-	// app waits for it rather than racing it to a box.
+	// Settles once the launch read has: a reminder tap that launched the app waits
+	// for it rather than racing it to a box.
 	const booted = useRef<Promise<void>>(Promise.resolve());
-	// On launch: prefill the last box and auto-reconnect to it, so reopening the app
-	// lands straight on the live board (no retyping/tapping). On failure it falls back
-	// to the connection screen with the error, fields prefilled.
+	// On launch: every saved box's board as last seen goes up at once, then each box
+	// is reached in the background (holdAll), none of them woken.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on mount
 	useEffect(() => {
 		booted.current = (async () => {
-			// Load the remembered project BEFORE connecting, so the first refresh() restores
-			// it instead of racing to project #1. Preview port is a plain UI default.
-			const [savedBoxes, savedProject, savedPreviewPort, agreed] = await Promise.all([
-				loadBoxes(),
-				loadSelectedProject(),
-				loadPreviewPort(),
-				loadConsent(),
-			]);
+			const [savedBoxes, savedProject, savedPreviewPort, agreed, leadBox, runOnBox] =
+				await Promise.all([
+					loadBoxes(),
+					loadSelectedProject(),
+					loadPreviewPort(),
+					loadConsent(),
+					loadLeadBox(),
+					loadRunOn(),
+				]);
 			boxesRef.current = savedBoxes;
 			setBoxes(savedBoxes);
-			// The box used last is the one to reopen on.
-			const last = savedBoxes[0] ?? null;
-			if (last) await fillForm(last);
-			// Read in the same batch as the connection, so the auto-reattach below can't
-			// race ahead of it and show the disclosure to someone who already accepted.
+			// Read in the same batch as the boxes, so the reach below can't race ahead
+			// of it and show the disclosure to someone who already accepted.
 			consented.current = agreed;
-			preferredProjectId.current = savedProject;
+			preferredKey.current = savedProject;
 			if (savedPreviewPort) setPreviewPort(savedPreviewPort);
-			if (!last) return;
-			await connectTo(last.host, last.port, { wake: true, navigate: true });
+			setLeadPicked(leadBox);
+			setRunOnPicked(runOnBox);
+			if (savedBoxes.length === 0) return;
+			const boards = await loadBoards(savedBoxes.map(boxKey));
+			for (const [key, snap] of boards) kept.current.set(key, snap);
+			// A deep link may have opened the demo meanwhile: it has the board until it
+			// ends, and ending it puts these boards up and reaches their boxes (endDemo).
+			if (demo.current) return;
+			for (const b of savedBoxes) {
+				const snap = boards.get(boxKey(b));
+				if (snap) fleet.detach(boxKey(b), { snapshot: snap, label: boxTitle(b) });
+			}
+			if (boards.size > 0) {
+				setView("board");
+				await refresh();
+			} else {
+				landOnBoard.current = true;
+			}
+			link.holdAll();
 		})();
 	}, []);
 
-	// A tapped wait reminder opens its task, on its box: connecting to that box
-	// first when the phone is on another one, or on none.
+	// A tapped wait reminder opens its task, waking its box if it sleeps.
 	const openReminder = useCallback(
 		async (r: ReminderData) => {
 			await booted.current;
-			const here = conn.current && target.current && boxKey(target.current) === boxKey(r);
-			if (!here) {
-				const saved = boxesRef.current.find((b) => boxKey(b) === boxKey(r));
-				if (saved) await fillForm(saved);
-				if (!(await connectTo(r.host, r.port, { wake: true, navigate: true }))) return;
-			}
-			const api = conn.current?.api;
-			if (!api) return;
-			const projs = await api.projects.list();
-			const all = (await Promise.all(projs.map((p) => api.tasks.list(p.id)))).flat();
-			const t = all.find((x) => x.id === r.taskId);
+			const key = boxKey(r);
+			const box = boxByKey(key);
+			if (!box) return;
+			landOnBoard.current = false;
+			endDemo();
+			if (!link.conn(key) && !(await link.connect(box, { wake: true }))) link.retry(key);
+			const read = await refresh();
+			const t = read.tasks.find((x) => x.id === r.taskId);
 			if (!t) return; // removed since: the board it landed on is the best there is
-			viewRef.current = "board";
 			setView("board");
 			setOpenTaskFocus(false);
 			setOpenTask(t);
 		},
-		[connectTo, fillForm],
+		[boxByKey, link, endDemo, refresh],
 	);
 	useEffect(() => onReminderTap((r) => void openReminder(r)), [openReminder]);
 
@@ -1664,14 +1859,10 @@ export default function App() {
 		const handle = (url: string | null): void => {
 			if (!url?.startsWith("ateamgo://demo")) return;
 			void (async () => {
-				await startDemo();
-				const api = conn.current?.api;
-				if (!api) return;
+				const read = await startDemo();
 				const taskId = url.match(/\/task\/([^/?#]+)/)?.[1];
 				if (taskId) {
-					const projs = await api.projects.list();
-					const all = (await Promise.all(projs.map((p) => api.tasks.list(p.id)))).flat();
-					const t = all.find((x) => x.id === taskId || x.slug === taskId);
+					const t = read.tasks.find((x) => x.id === taskId || x.slug === taskId);
 					if (t) setOpenTask(t);
 				} else if (url.includes("/preview")) {
 					setPreviewOpen(true);
@@ -1683,65 +1874,92 @@ export default function App() {
 		return () => sub.remove();
 	}, [startDemo]);
 
-	const onDisconnect = useCallback(() => {
-		target.current = null; // intent: stay disconnected — no auto-reattach
-		setOpenTask(null);
-		setBoxTerminalOpen(false);
-		setGithubOpen(false);
-		setLeadOpen(false);
-		if (retryTimer.current) {
-			clearTimeout(retryTimer.current);
-			retryTimer.current = null;
-		}
-		backoff.current = 0;
-		conn.current?.close();
-		conn.current = null;
-		setConnected(false);
-		setTasks([]);
-		setProjects([]);
-		setSelectedProjectId(null);
-		setLoops([]);
+	// Leaving the demo from the form, on a phone with no box saved.
+	const onLeaveDemo = useCallback(() => {
+		endDemo();
 		setView("connect");
 		setConnectScreen("list");
-	}, []);
+	}, [endDemo]);
 
-	// Removing the box in use disconnects from it, as the desktop falls back to Local:
-	// left connected, the next reattach would quietly put it back on the list.
+	// Removing a box takes it off the board, as the desktop's does: left on, the next
+	// reattach would quietly put it back on the list.
 	const onRemoveBox = useCallback(
 		(box: SavedBox) => {
 			const key = boxKey(box);
 			commitBoxes(removeBox(boxesRef.current, key));
 			setSwipeOpenKey(null);
-			if (failedKey === key) {
-				setFailedKey(null);
-				setError(null);
-			}
-			if (target.current && boxKey(target.current) === key) onDisconnect();
+			forgetBox(key);
 		},
-		[commitBoxes, failedKey, onDisconnect],
+		[commitBoxes, forgetBox],
 	);
 
-	// Composer submit: create a task in the selected project, launch the agent,
-	// and open its terminal (which attaches to the just-spawned session), or,
-	// asked to stay, leave the board where it is and say so in the snackbar.
+	// Add a project: to the box it's asked of. With several up, the user picks one;
+	// with none up, Boxes is where one is woken.
+	const onAddProject = useCallback(() => {
+		const up = boxesRef.current.map(boxKey).filter((k) => link.conn(k));
+		if (demo.current) return setBrowserKey(DEMO);
+		if (up.length === 0) {
+			Alert.alert("Add a project", "No box is connected right now. Wake one in Boxes first.", [
+				{ text: "Boxes", onPress: () => setView("connect") },
+				{ text: "Cancel", style: "cancel" },
+			]);
+			return;
+		}
+		if (up.length === 1) return setBrowserKey(up[0] ?? null);
+		const labels = up.map(labelOf);
+		const pick = (i: number) => {
+			const key = up[i];
+			if (key) setBrowserKey(key);
+		};
+		if (Platform.OS === "ios") {
+			ActionSheetIOS.showActionSheetWithOptions(
+				{
+					title: "Add a project to",
+					options: [...labels, "Cancel"],
+					cancelButtonIndex: labels.length,
+				},
+				pick,
+			);
+			return;
+		}
+		Alert.alert("Add a project to", undefined, [
+			...labels.map((text, i) => ({ text, onPress: () => pick(i) })),
+			{ text: "Cancel", style: "cancel" as const },
+		]);
+	}, [labelOf, link]);
+
+	// Composer submit: create a task in the selected project on its Run on box (woken
+	// first if it sleeps), launch the agent, and open its terminal (which attaches to
+	// the just-spawned session), or, asked to stay, leave the board where it is and
+	// say so in the snackbar.
 	const onCreate = useCallback(
 		async (input: ComposerSubmit) => {
-			const api = conn.current?.api;
-			if (!api || !selectedProjectId) return;
+			const member = runOnMember;
+			if (!member) return;
+			const key = member.alias;
 			setCreating(true);
+			setFailure(null);
 			try {
+				if (key && !link.conn(key)) {
+					const box = boxByKey(key);
+					if (!box || !(await link.connect(box, { wake: true }))) {
+						if (box) link.retry(key);
+						throw new Error(`Couldn't reach ${labelOf(key)}. Its card in Boxes says why.`);
+					}
+				}
 				// Agent mode supplies an explicit name; normal mode derives it from the prompt.
 				const name = input.name?.trim() || titleFromPrompt(input.prompt) || "task";
-				const task = await api.tasks.create({
-					projectId: selectedProjectId,
+				const task = await board.tasks.create({
+					projectId: member.projectId,
 					name,
 					agentId: input.agentId,
 					// The engine may replace a name nobody typed with a model title, once.
 					nameAuto: !input.name?.trim(),
 				});
-				// Attached on the phone: put on the box, where the agent reads them.
-				const files = input.files.length ? await filesToBox(api, input.files) : [];
-				await api.pty.spawnAgent({
+				// Attached on the phone: put on the task's box, where its agent reads them.
+				const boxApi = key ? link.conn(key)?.api : undefined;
+				const files = input.files.length && boxApi ? await filesToBox(boxApi, input.files) : [];
+				await board.pty.spawnAgent({
 					taskId: task.id,
 					agentId: input.agentId,
 					yolo: input.yolo,
@@ -1754,55 +1972,62 @@ export default function App() {
 				if (input.open) setOpenTask(task);
 				else setStartedTask(task);
 			} catch (err) {
-				setError(err instanceof Error ? err.message : String(err));
+				setFailure(err instanceof Error ? err.message : String(err));
 			} finally {
 				setCreating(false);
 			}
 		},
-		[selectedProjectId],
+		[runOnMember, board, boxByKey, link, labelOf],
 	);
 
-	// The dot on the header's Lead button (src/lead-badge.ts): the box's Lead has
-	// something for the user while its chat isn't on screen.
+	// The Lead: the picked box's own Lead (each box runs one, seeing its tasks only).
+	const leadConn = leadKey ? (link.conn(leadKey) ?? null) : null;
+	const leadVersion = (leadKey ? links[leadKey]?.version : null) ?? PROTOCOL_VERSION;
+	const leadClient = leadConn && boxSupports("lead", leadVersion) ? leadConn.lead : null;
+	// The dot on the header's Lead button (src/lead-badge.ts): the Lead has something
+	// for the user while its chat isn't on screen.
 	const leadBadge = useLeadBadge(
-		connected && conn.current && boxSupports("lead", skew ?? PROTOCOL_VERSION)
-			? conn.current.lead
-			: null,
-		connected && target.current ? boxKey(target.current) : null,
-		view === "board" && leadOpen && !openTask && !boxTerminalOpen && !browserOpen && !githubOpen,
+		leadClient,
+		leadConn ? leadKey : null,
+		view === "board" && leadOpen && !openTask && !boxTerminalKey && !browserKey && !githubKey,
 	);
+	const anyLive = Object.values(links).some((l) => l.state === "live");
+	const linkOf = (key: string | null): BoxLink => (key ? links[key] : undefined) ?? NEW_LINK;
 
-	if (githubOpen && conn.current) {
+	const githubConn = githubKey ? link.conn(githubKey) : undefined;
+	if (githubKey && githubConn) {
 		return (
 			<GithubAccessScreen
-				api={conn.current.api}
-				boxLabel={target.current ? boxTitle(target.current) : "this box"}
-				supported={boxSupports("githubAccess", conn.current.info.protocolVersion)}
-				onClose={() => setGithubOpen(false)}
-				onUpdateBox={updateBox}
-				updating={updatingBox}
+				api={githubConn.api}
+				boxLabel={labelOf(githubKey)}
+				supported={boxSupports("githubAccess", githubConn.info.protocolVersion)}
+				onClose={() => setGithubKey(null)}
+				onUpdateBox={() => void updateBox(githubKey)}
+				updating={updatingKey === githubKey}
 			/>
 		);
 	}
 
-	// The project browser is a full-screen view-swap (NOT a nested modal — presenting
+	// The project browser is a full-screen view-swap (NOT a nested modal: presenting
 	// a modal while the dropdown modal dismisses deadlocks iOS and freezes the app).
-	if (browserOpen && conn.current) {
+	const browserConn = browserKey ? link.conn(browserKey) : undefined;
+	if (browserKey && browserConn) {
 		return (
 			<ProjectBrowser
-				conn={conn.current}
-				onClose={() => setBrowserOpen(false)}
+				conn={browserConn}
+				onClose={() => setBrowserKey(null)}
 				onRegistered={(project) => {
-					setBrowserOpen(false);
-					selectProject(project.id);
+					setBrowserKey(null);
+					const card = unifyProjects([project], { [project.id]: browserKey })[0];
+					if (card) selectProject(card.key);
 					void refresh();
 				}}
 				onOpenTerminal={() => {
-					setBrowserOpen(false);
+					setBrowserKey(null);
 					setOpenTask(null);
-					setBoxTerminalOpen(true);
+					setBoxTerminalKey(browserKey);
 				}}
-				onOpenGithub={() => setGithubOpen(true)}
+				onOpenGithub={() => setGithubKey(browserKey)}
 			/>
 		);
 	}
@@ -1811,12 +2036,14 @@ export default function App() {
 		return <ConsentScreen onAgree={onAgreeConsent} onDemo={onDeclineConsent} />;
 	}
 
+	// A board to go back to: the saved boxes' (live, or as last seen), or the demo's.
+	const onBoard = demo.current || boxes.length > 0;
 	if (view === "connect") {
 		if (connectScreen === "list" && boxes.length > 0) {
 			return (
 				<BoxesScreen
 					leading={
-						connected ? (
+						onBoard && !landOnBoard.current ? (
 							<Pressable onPress={leaveConnect} hitSlop={8}>
 								<Text style={styles.backText}>‹ Board</Text>
 							</Pressable>
@@ -1825,30 +2052,25 @@ export default function App() {
 						)
 					}
 					boxes={boxes}
-					liveKey={connected && target.current ? boxKey(target.current) : null}
-					attemptKey={attemptKey}
-					failedKey={failedKey}
-					progress={progress}
-					onCancel={() => {
-						cancelWait.current = true;
-					}}
-					busy={connecting}
+					links={links}
+					leadKey={leadKey}
+					onCancel={(box) => link.cancel(boxKey(box))}
 					error={error}
-					connected={connected}
+					connected={anyLive}
 					openKey={swipeOpenKey}
 					onSwipeOpen={setSwipeOpenKey}
 					onConnect={(box) => void openBox(box)}
 					onEdit={(box) => void editBox(box)}
 					onRemove={onRemoveBox}
+					onLeadBox={onLeadBox}
 					onAdd={addBox}
-					onDisconnect={onDisconnect}
-					onDemo={startDemo}
-					onBoxTerminal={() => {
+					onDemo={() => void startDemo()}
+					onBoxTerminal={(box) => {
 						setView("board");
 						setOpenTask(null);
-						setBoxTerminalOpen(true);
+						setBoxTerminalKey(boxKey(box));
 					}}
-					onGithub={() => setGithubOpen(true)}
+					onGithub={(box) => setGithubKey(boxKey(box))}
 				/>
 			);
 		}
@@ -1858,7 +2080,7 @@ export default function App() {
 				port={port}
 				setHost={setHost}
 				setPort={setPort}
-				onConnect={onConnect}
+				onConnect={() => void onConnect()}
 				onBack={leaveConnect}
 				onBackToList={
 					boxes.length > 0
@@ -1870,10 +2092,10 @@ export default function App() {
 						: null
 				}
 				editing={editingKey !== null}
-				onDisconnect={onDisconnect}
-				onDemo={startDemo}
-				connecting={connecting}
-				connected={connected}
+				onDisconnect={onLeaveDemo}
+				onDemo={() => void startDemo()}
+				connecting={formBusy}
+				connected={anyLive}
 				error={error}
 				providerId={providerId}
 				onPickProvider={(id) => void onPickProvider(id)}
@@ -1887,61 +2109,98 @@ export default function App() {
 		);
 	}
 
+	// The first live box on another Ateam than this app, whose banner isn't dismissed.
+	const skewKey =
+		[...boxes.map(boxKey), ...(demo.current ? [DEMO] : [])].find((k) => {
+			const l = links[k];
+			return (
+				l?.state === "live" &&
+				l.version !== null &&
+				l.version !== PROTOCOL_VERSION &&
+				skewDismissed[k] !== l.version
+			);
+		}) ?? null;
+	const skewVersion = skewKey ? links[skewKey]?.version : null;
+	const notice =
+		skewKey && skewVersion != null
+			? {
+					label: multi ? labelOf(skewKey) : null,
+					version: skewVersion,
+					atLatest: atLatest[skewKey] ?? false,
+					updating: updatingKey === skewKey,
+					error: updateError?.key === skewKey ? updateError.message : null,
+					onUpdate: () => void updateBox(skewKey),
+					onDismiss: () => {
+						setSkewDismissed((cur) => ({ ...cur, [skewKey]: skewVersion }));
+						void saveDismissedSkew(boxByKey(skewKey)?.host ?? "", skewVersion);
+					},
+				}
+			: null;
+
+	const openLink = linkOf(openOwner);
+	const termLink = linkOf(boxTerminalKey);
+	const leadLink = linkOf(leadKey);
 	return (
 		<>
 			<Shell
-				connColor={connected ? C.green : C.faint}
-				projects={projects}
-				selectedProjectId={selectedProjectId}
+				connColor={anyLive ? C.green : C.faint}
+				projects={projectRows}
+				selectedKey={selectedKey}
 				onSelectProject={selectProject}
-				agents={agents}
+				agents={(runOnKey ? agentsByBox[runOnKey] : undefined) ?? []}
 				tasks={tasks}
+				shown={shown}
+				placeOf={placeOf}
 				loading={loading}
 				creating={creating}
-				snack={startedTask ? `Started ${startedTask.name}` : leadSent ? "Sent to the Lead" : null}
+				snack={
+					startedTask ? `Started ${startedTask.name}` : leadSent ? "Sent to the Lead" : failure
+				}
 				onOpenSnack={() => {
 					// The list copy has the launch's newer status, if it has arrived.
 					if (startedTask) setOpenTask(tasks.find((t) => t.id === startedTask.id) ?? startedTask);
 					else if (leadSent) setLeadOpen(true);
 					setStartedTask(null);
 					setLeadSent(false);
+					setFailure(null);
 				}}
 				onDismissSnack={() => {
 					setStartedTask(null);
 					setLeadSent(false);
+					setFailure(null);
 				}}
-				composerLead={
-					conn.current && boxSupports("lead", skew ?? PROTOCOL_VERSION)
-						? conn.current.lead
-						: undefined
-				}
+				composerLead={leadClient ?? undefined}
 				onLeadSent={(open) => {
 					if (!open) return setLeadSent(true);
 					// The chat streams the answer; it covers the tabs, so close what covers it.
 					setOpenTask(null);
-					setBoxTerminalOpen(false);
+					setBoxTerminalKey(null);
 					setLeadOpen(true);
 				}}
+				runOn={runOn}
 				onOpenConnection={() => {
 					setView("connect");
 					setConnectScreen("list");
 				}}
 				onOpenTask={setOpenTask}
-				onCreate={onCreate}
-				onAddProject={() => setBrowserOpen(true)}
-				skew={skew !== null && skew === dismissedSkew ? null : skew}
-				updating={updatingBox}
-				updateError={updateError}
-				boxAtLatest={boxAtLatest}
-				onUpdateBox={updateBox}
-				api={conn.current?.api ?? demoConnection().api}
+				onCreate={(input) => void onCreate(input)}
+				onAddProject={onAddProject}
+				notice={notice}
+				api={board}
 				tab={tab}
 				onTab={setTab}
-				loops={loops.filter((l) => l.projectId === selectedProjectId)}
+				loops={loops.filter((l) => l.projectId !== null && memberIds.has(l.projectId))}
 				onNewLoop={() => setLoopForm({ editing: null })}
 				onEditLoop={(l) => setLoopForm({ editing: l })}
-				onLoopsChanged={(next) => setLoops(Array.isArray(next) ? next : loops)}
+				onLoopsChanged={() => void refreshLoops()}
 				openTask={openTask}
+				openTaskView={{
+					// A task no read has placed yet goes through the board, which routes it.
+					api: openOwner ? (link.conn(openOwner)?.api ?? null) : board,
+					gen: openLink.gen,
+					status: activeLabel(openLink.steps),
+					wakeError: openLink.wakeError,
+				}}
 				openTaskFocus={openTaskFocus}
 				onCloseTask={() => {
 					setOpenTask(null);
@@ -1951,22 +2210,43 @@ export default function App() {
 					setOpenTaskFocus(true);
 					setOpenTask(t);
 				}}
-				boxTerminalOpen={boxTerminalOpen}
-				reconnecting={!connected && target.current !== null}
-				reconnectStatus={progress ? activeLabel(progress.steps) : null}
-				wakeError={wakeFailure}
-				onBoxTerminal={setBoxTerminalOpen}
-				onDismissSkew={() => {
-					if (skew === null) return;
-					setDismissedSkew(skew);
-					void saveDismissedSkew(target.current?.host ?? "", skew);
-				}}
-				connGen={connGen}
-				lead={conn.current?.lead ?? null}
-				boxVersion={skew ?? PROTOCOL_VERSION}
+				boxTerminal={
+					boxTerminalKey
+						? {
+								title: multi ? `${labelOf(boxTerminalKey)} terminal` : "Box terminal",
+								api: link.conn(boxTerminalKey)?.api ?? null,
+								gen: termLink.gen,
+								status: activeLabel(termLink.steps),
+								wakeError: termLink.wakeError,
+								onUpdateBox: () => void updateBox(boxTerminalKey),
+								updating: updatingKey === boxTerminalKey,
+								updateError: updateError?.key === boxTerminalKey ? updateError.message : null,
+								boxAtLatest: atLatest[boxTerminalKey] ?? false,
+							}
+						: null
+				}
+				onCloseBoxTerminal={() => setBoxTerminalKey(null)}
+				lead={leadClient}
+				leadLabel={multi && leadKey ? labelOf(leadKey) : null}
+				leadView={
+					leadOpen && leadKey && !leadConn
+						? {
+								title: multi ? `Lead on ${labelOf(leadKey)}` : "Lead",
+								api: null,
+								gen: leadLink.gen,
+								status: activeLabel(leadLink.steps),
+								wakeError: leadLink.wakeError,
+							}
+						: null
+				}
+				boxVersion={leadVersion}
 				leadOpen={leadOpen}
 				onLead={setLeadOpen}
 				leadBadge={leadBadge}
+				onUpdateLeadBox={() => {
+					if (leadKey) void updateBox(leadKey);
+				}}
+				updatingLeadBox={leadKey !== null && updatingKey === leadKey}
 				onStartProposal={(item) => {
 					if (item.proposal.kind === "task") return setProposalSheet(item);
 					const p = item.proposal;
@@ -1988,20 +2268,20 @@ export default function App() {
 					});
 				}}
 			/>
-			{proposalSheet && conn.current && (
+			{proposalSheet && leadConn && (
 				<ProposalSheet
 					item={proposalSheet}
-					agents={agents}
+					agents={(leadKey ? agentsByBox[leadKey] : undefined) ?? []}
 					onClose={() => setProposalSheet(null)}
 					onStart={async (input) => {
-						const c = conn.current;
-						if (!c) throw new Error("Not connected to the box.");
-						const task = await c.api.tasks.create({
+						const c = leadConn;
+						// The proposal is the Lead box's, and so is its project: the board routes there.
+						const task = await board.tasks.create({
 							projectId: input.projectId,
 							name: input.name,
 							agentId: input.agentId,
 						});
-						await c.api.pty.spawnAgent({
+						await board.pty.spawnAgent({
 							taskId: task.id,
 							agentId: input.agentId,
 							yolo: input.yolo,
@@ -2011,32 +2291,44 @@ export default function App() {
 						void c.lead.proposalCreated(proposalSheet.id, task.id).catch(() => {});
 						setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [task, ...prev]));
 						setProposalSheet(null);
-						selectProject(input.projectId);
+						const card = cards.find((k) => k.members.some((m) => m.projectId === input.projectId));
+						if (card) selectProject(card.key);
 						// The task's terminal covers the chat; closing it comes back to the Lead.
 						setOpenTask(task);
 					}}
 				/>
 			)}
-			{loopForm && conn.current && (
+			{loopForm && (
 				<LoopForm
-					api={conn.current.api}
-					agents={agents}
-					projectId={loopForm.proposal?.projectId ?? selectedProjectId}
-					boxProtocol={skew ?? PROTOCOL_VERSION}
+					api={board}
+					agents={(runOnKey ? agentsByBox[runOnKey] : undefined) ?? []}
+					projectId={loopForm.proposal?.projectId ?? runOnMember?.projectId ?? null}
+					boxProtocol={
+						linkOf(
+							loopForm.proposal
+								? leadKey
+								: loopForm.editing
+									? fleet.ownerOf(loopForm.editing.id)
+									: runOnKey,
+						).version ?? PROTOCOL_VERSION
+					}
 					editing={loopForm.editing}
 					draft={loopForm.proposal?.draft}
 					onClose={() => setLoopForm(null)}
-					onSaved={(next) => {
+					onSaved={() => {
 						const from = loopForm.proposal;
-						if (from) void conn.current?.lead.proposalCreated(from.id).catch(() => {});
+						if (from) void leadConn?.lead.proposalCreated(from.id).catch(() => {});
 						setLoopForm(null);
-						setLoops(Array.isArray(next) ? next : loops);
+						void refreshLoops();
 					}}
 				/>
 			)}
 			<PreviewModal
 				visible={previewOpen}
-				host={target.current?.host ?? null}
+				host={(() => {
+					const key = runOnKey ?? link.liveKeys()[0] ?? null;
+					return key ? (boxByKey(key)?.host ?? null) : null;
+				})()}
 				port={previewPort}
 				setPort={setPreviewPort}
 				onOpen={openPreview}
@@ -2044,6 +2336,11 @@ export default function App() {
 			/>
 		</>
 	);
+}
+
+/** Which box owns each project, as the board's reads taught it (src/fleet.ts). */
+function originsOf(fleet: Fleet, projects: ProjectDTO[]): Record<string, string | null> {
+	return Object.fromEntries(projects.map((p) => [p.id, fleet.ownerOf(p.id)]));
 }
 
 const styles = StyleSheet.create({
@@ -2313,6 +2610,8 @@ const styles = StyleSheet.create({
 		padding: 12,
 		marginBottom: 8,
 	},
+	// From a box that's asleep or not answering: its board as last seen.
+	cardAway: { opacity: 0.55 },
 	cardTop: { flexDirection: "row", alignItems: "flex-start", gap: 9 },
 	agentTag: {
 		width: 22,

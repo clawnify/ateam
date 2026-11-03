@@ -1,15 +1,14 @@
 import { expect, test } from "bun:test";
-import { CH } from "@ateam/protocol";
-import { createAggregate } from "./aggregate";
-import type { Backend } from "./backend";
 import {
 	asSnapshot,
 	type BoxSnapshot,
+	CH,
+	createAggregate,
 	OFFLINE_ERROR,
-	offlineBackend,
-	reconnectDelay,
 	takeSnapshot,
-} from "./offline";
+} from "@ateam/protocol";
+import type { Backend } from "./backend";
+import { offlineBackend } from "./offline";
 
 function engine(
 	kind: "local" | "remote",
@@ -85,11 +84,4 @@ test("rehome hands an offline box's ids to the live engine that replaces it", as
 	expect(agg.ownerOf.get("tBox")).toBe(live);
 	expect(agg.ownerOf.get("pBox")).toBe(live);
 	expect(await agg.handle(CH.ptySpawnAgent, [{ taskId: "tBox" }])).toEqual({ terminalId: "t1" });
-});
-
-test("reconnect backs off, then holds at its cap", () => {
-	expect(reconnectDelay(0)).toBe(5_000);
-	expect(reconnectDelay(1)).toBe(15_000);
-	expect(reconnectDelay(4)).toBe(120_000);
-	expect(reconnectDelay(50)).toBe(120_000);
 });

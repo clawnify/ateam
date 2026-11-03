@@ -1,9 +1,10 @@
-// Home: the desktop sidebar as a phone list. A Tasks section, last updated
+// Home: the desktop sidebar as a phone list. Projects from every box (one row per
+// repo, however many boxes it's on), a Tasks section, last updated
 // first (tap the header to switch to status order: Review, Needs You, In
 // Progress, Backlog), and a Loops section below, each row
 // an icon, a name and a status dot. Tap a task for its terminal; tap a loop for
 // its task's terminal, or the Loops tab if it has never run.
-import type { LoopDTO, ProjectDTO, TaskDTO } from "@ateam/protocol";
+import type { LoopDTO, TaskDTO } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -39,10 +40,40 @@ export function statusColor(t: TaskDTO | null | undefined): string {
 	}
 }
 
-function TaskRow({ task, onPress }: { task: TaskDTO; onPress: () => void }) {
+/** Where a task runs, for its row: its box, named only when it isn't the Lead's
+ *  (the phone's home, unnamed as Local is on the desktop), and why that box's
+ *  tasks are out of date, if they are (src/boxes.ts awayOf). */
+export interface TaskPlace {
+	box: string | null;
+	away: "asleep" | "offline" | null;
+}
+
+/** The words for a task's place ("box-b", "box-b · asleep", "asleep"), or null. */
+export function placeText(place: TaskPlace): string | null {
+	return [place.box, place.away].filter(Boolean).join(" · ") || null;
+}
+
+/** A project in the list: a repo, on one box or several (@ateam/protocol unifyProjects). */
+export interface ProjectRow {
+	key: string;
+	name: string;
+	/** The boxes it's on, named, when the phone holds more than one; else null. */
+	on: string | null;
+}
+
+function TaskRow({
+	task,
+	place,
+	onPress,
+}: {
+	task: TaskDTO;
+	place: TaskPlace;
+	onPress: () => void;
+}) {
 	const tags = tagsFor(task);
+	const where = placeText(place);
 	return (
-		<Pressable style={styles.row} onPress={onPress}>
+		<Pressable style={[styles.row, place.away && styles.rowAway]} onPress={onPress}>
 			<View style={styles.icon}>
 				{task.agentId ? (
 					<AgentIcon agentId={task.agentId} size={16} />
@@ -62,6 +93,11 @@ function TaskRow({ task, onPress }: { task: TaskDTO; onPress: () => void }) {
 					))}
 				</View>
 			)}
+			{where ? (
+				<Text style={styles.box} numberOfLines={1}>
+					{where}
+				</Text>
+			) : null}
 			<View style={[styles.dot, { backgroundColor: statusColor(task) }]} />
 		</Pressable>
 	);
@@ -96,8 +132,9 @@ function LoopRow({
 
 export function HomeScreen({
 	projects,
-	selectedProjectId,
+	selectedKey,
 	onSelectProject,
+	placeOf,
 	onAddProject,
 	tasks,
 	loops,
@@ -108,9 +145,11 @@ export function HomeScreen({
 	scrollProps,
 	topInset = 0,
 }: {
-	projects: ProjectDTO[];
-	selectedProjectId: string | null;
-	onSelectProject: (id: string) => void;
+	projects: ProjectRow[];
+	selectedKey: string | null;
+	onSelectProject: (key: string) => void;
+	/** Where a task runs (TaskPlace). */
+	placeOf: (task: TaskDTO) => TaskPlace;
 	onAddProject: () => void;
 	/** The selected project's tasks (loop-owned ones are listed under Loops). */
 	tasks: TaskDTO[];
@@ -162,15 +201,15 @@ export function HomeScreen({
 				</View>
 				{projectsOpen &&
 					(projects.length === 0 ? (
-						<Text style={styles.emptyText}>No projects on this box</Text>
+						<Text style={styles.emptyText}>No projects yet</Text>
 					) : (
 						projects.map((p) => {
-							const active = p.id === selectedProjectId;
+							const active = p.key === selectedKey;
 							return (
 								<Pressable
-									key={p.id}
+									key={p.key}
 									style={[styles.row, active && styles.rowActive]}
-									onPress={() => onSelectProject(p.id)}
+									onPress={() => onSelectProject(p.key)}
 								>
 									<View style={styles.icon}>
 										<View style={[styles.projDot, active && styles.projDotActive]} />
@@ -178,6 +217,11 @@ export function HomeScreen({
 									<Text style={[styles.name, active && styles.nameActive]} numberOfLines={1}>
 										{p.name}
 									</Text>
+									{p.on ? (
+										<Text style={styles.box} numberOfLines={1}>
+											{p.on}
+										</Text>
+									) : null}
 								</Pressable>
 							);
 						})
@@ -208,7 +252,9 @@ export function HomeScreen({
 					) : ordered.length === 0 ? (
 						<Text style={styles.emptyText}>No active tasks</Text>
 					) : (
-						ordered.map((t) => <TaskRow key={t.id} task={t} onPress={() => onOpenTask(t)} />)
+						ordered.map((t) => (
+							<TaskRow key={t.id} task={t} place={placeOf(t)} onPress={() => onOpenTask(t)} />
+						))
 					))}
 
 				<View style={[styles.sectionHead, styles.sectionHeadLower]}>
@@ -280,6 +326,8 @@ const styles = StyleSheet.create({
 		paddingVertical: 11,
 	},
 	rowPaused: { opacity: 0.5 },
+	// From a box that's asleep or not answering: its board as last seen.
+	rowAway: { opacity: 0.55 },
 	rowActive: { backgroundColor: C.surface },
 	projDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.line },
 	projDotActive: { backgroundColor: C.ink },
@@ -299,6 +347,7 @@ const styles = StyleSheet.create({
 		overflow: "hidden",
 	},
 	dot: { width: 8, height: 8, borderRadius: 4 },
+	box: { flexShrink: 1, maxWidth: "40%", color: C.faint, fontSize: 12 },
 	empty: { paddingVertical: 20, alignItems: "center" },
 	emptyText: { color: C.faint, fontSize: 13, paddingHorizontal: 14, paddingVertical: 10 },
 });

@@ -352,6 +352,15 @@ goes only to the box you name, and that the agents on that box talk to their own
 providers under your accounts. Agreeing is remembered; declining opens the offline demo
 instead, which connects to nothing.
 
+**More than one box.** Add the others in **Boxes** (tap the status dot, then **+**).
+The phone holds every box you've added at once, as the desktop does: **Projects** lists
+the projects of all of them, and the same GitHub repo on two boxes is one project, its
+tasks marked with the box they run on. In a project that's on more than one box,
+**Run on** under the composer's field picks where a new task starts. The phone never
+wakes a box on its own: a box that's asleep keeps its projects and tasks on the board,
+as the phone last saw them, dimmed and marked *asleep* (or *offline* when it doesn't
+answer), until you tap its card, open one of its tasks or start a task there.
+
 **What still needs a computer.** Everything above — don't try to defer it. The phone
 has nothing to connect to until a daemon is listening, and it cannot install that
 daemon for you. Do steps 0–4 in one SSH session.
@@ -394,7 +403,11 @@ navbar; the back arrow is the first key in the shortcut bar.
 The speech bubble at the navbar's right corner opens the **Lead**, the chat that reads
 the board and steers its agents. On the phone it runs on the box itself (a **v24 box**;
 an older one offers **Update box** there), so it works with your Mac off. It sees that
-box's tasks only, and it is a different conversation from the Lead on your Mac. A dot
+box's tasks only, and it is a different conversation from the Lead on your Mac. With
+more than one box it's the Lead of the box you pick in **Boxes** (swipe the box's
+card, then **Lead**), or the box you used last until you pick one. That box is the
+phone's home, as your Mac is on the desktop: new tasks start there unless you pick
+another box in **Run on**, and its tasks carry no box label. A dot
 on the bubble says it has something for you: white for a reply since you last looked,
 amber while it waits for your answer before it can go on. When it proposes a task or a
 loop, the card's **Start it** or **Set it up** opens the New task sheet or the New loop

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { KanbanColumn, TaskDTO } from "@ateam/protocol";
+import type { Alias, KanbanColumn, TaskDTO } from "@ateam/protocol";
 import {
 	DEFAULT_VIEW,
 	filtersSet,
@@ -10,7 +10,6 @@ import {
 	toggled,
 	updatedBucket,
 } from "./sidebar-view";
-import type { Alias } from "./unify";
 
 // Local noon, so "today" and "yesterday" never straddle midnight in any zone.
 const NOW = new Date(2026, 10, 2, 12, 0, 0).getTime();

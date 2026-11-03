@@ -7,8 +7,13 @@
 // order and takes the sidebar's only when its Sync button is pressed.
 //
 // Pure + unit-tested (see sidebar-view.test.ts).
-import type { KanbanColumn, PrState, TaskDTO } from "@ateam/protocol";
-import { type Alias, aliasLabel } from "./unify";
+import {
+	type Alias,
+	aliasLabel,
+	type KanbanColumn,
+	type PrState,
+	type TaskDTO,
+} from "@ateam/protocol";
 
 /** The list's order, inside each group when it is grouped. */
 export type TaskSortMode = "next" | "status" | "updated" | "custom";

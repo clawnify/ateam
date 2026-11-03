@@ -11,6 +11,19 @@
 export const WOKEN_CONNECT_MS = 3 * 60_000;
 export const WOKEN_RETRY_GAP_MS = 3_000;
 
+// A box that left without being asked is tried again: soon at first (a blip, or
+// the network coming back after sleep), then at a steady pace. The cap bounds what
+// an unreachable box costs (one connect attempt per interval) and how late a box
+// woken elsewhere (another client, a loop) shows up live. Its cards stay on the
+// board in between (board-snapshot.ts), so the cap is about freshness, not
+// visibility. The desktop (main/host.ts) and the phone (src/links.ts) both use it.
+export const RECONNECT_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000];
+
+/** How long to wait before reconnect attempt `attempt` (0-based). */
+export function reconnectDelay(attempt: number): number {
+	return RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 120_000;
+}
+
 export type StepStatus = "done" | "active" | "failed";
 
 export interface ConnectStep {
