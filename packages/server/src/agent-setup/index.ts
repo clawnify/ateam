@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BOARD_INSTRUCTIONS } from "../hooks/board-mcp";
@@ -282,6 +282,129 @@ export const AteamInbox = async ({ client }) => {
 };
 `;
 
+/**
+ * Ateam's Claude Code mod (a plugin with a hooks module, Claude Code 2.1.287+),
+ * loaded into every Claude task with `--plugin-dir` (sessions.ts). It carries
+ * the user's own words from Ateam into the session as the user's prompt:
+ * `$.prompt.submit({ asUser: true })`, which Claude reads exactly as typed
+ * input. The asyncRewake hook can't: Claude Code frames its output as
+ * "NOT USER INPUT", so an agent rightly refuses an approval that came that way.
+ * Messages from agents and the Lead keep the hook (see peer-messages.ts).
+ *
+ * It long-polls `/inbox/user/wait` (a 20 s window: Claude Code ends one
+ * `$.http.fetch` call at 30 s) and acks each batch once Claude says the prompt
+ * entered, or not (dropped after an Esc). Every hop is its own `$.clock.after`,
+ * so a reload of the mod, whose timers Claude Code drops, ends the old chain.
+ * Plain JS with `$` passed only to top-level functions, as `claude plugin
+ * validate` requires.
+ */
+export const CLAUDE_MOD_DIR = "claude-mod";
+
+export function claudeModDir(hooksDir: string): string {
+	return join(hooksDir, CLAUDE_MOD_DIR);
+}
+
+const CLAUDE_MOD_MANIFEST = `${JSON.stringify(
+	{
+		name: "ateam-inbox",
+		version: "1.0.0",
+		description:
+			"Ateam: brings your answers and replies sent from the Ateam app into this session as your own messages.",
+	},
+	null,
+	2,
+)}\n`;
+
+const CLAUDE_MOD_HOOKS = `${JSON.stringify({ modules: ["./register.js"] }, null, 2)}\n`;
+
+const CLAUDE_MOD_MODULE = `// Ateam's Claude Code mod. Written by Ateam; edits are overwritten.
+// Brings the user's own words sent from Ateam (an answer to this agent's
+// ask_user question, a reply from the Lead chat or the phone) into the session
+// as the user's prompt. See peer-messages.ts in the Ateam repo.
+
+// Waits before asking again after the engine could not be reached (restarting).
+const RETRY_MS = [1000, 5000, 15000, 30000]
+
+function later($, cfg, misses, ms) {
+  $.clock.after(ms, () => poll($, cfg, misses))
+}
+
+function ack($, cfg, deliveryId, entered) {
+  const url = cfg.base + '/ack?' + cfg.query + '&deliveryId=' + encodeURIComponent(deliveryId) +
+    '&entered=' + (entered ? '1' : '0')
+  return $.http.fetch(url, { method: 'POST', headers: cfg.headers }).catch(() => {})
+}
+
+function submit($, cfg, batch) {
+  // Resolves when the turn starts (after any running one), or with a drop.
+  $.prompt.submit({ text: batch.text, asUser: true })
+    .then((r) => ack($, cfg, batch.deliveryId, !(r && r.drop)))
+    .catch(() => ack($, cfg, batch.deliveryId, false))
+}
+
+function poll($, cfg, misses) {
+  $.http.fetch(cfg.base + '/wait?' + cfg.query, { headers: cfg.headers }).then(
+    (res) => {
+      if (res.status === 200) {
+        submit($, cfg, JSON.parse(res.text))
+        later($, cfg, 0, 1)
+      } else if (res.status === 204) {
+        later($, cfg, 0, 1)
+      } else if (res.status === 410) {
+        // The engine doesn't see this terminal yet (it just started): this
+        // session is alive, since this mod runs in it, so ask again.
+        later($, cfg, misses + 1, RETRY_MS[Math.min(misses, RETRY_MS.length - 1)])
+      }
+      // 401 wrong token, 404 an engine without this route, 409 a newer copy of
+      // this mod took over: stop.
+    },
+    () => later($, cfg, misses + 1, RETRY_MS[Math.min(misses, RETRY_MS.length - 1)]),
+  )
+}
+
+export function register(on) {
+  on('session.start', async ($, e, next) => {
+    const started = await next(e)
+    const port = await $.env.get('ATEAM_HOOK_PORT')
+    const terminalId = await $.env.get('ATEAM_TERMINAL_ID')
+    const token = await $.env.get('ATEAM_TERMINAL_TOKEN')
+    if (port && terminalId && token) {
+      poll($, {
+        base: 'http://127.0.0.1:' + port + '/inbox/user',
+        query: 'terminalId=' + encodeURIComponent(terminalId),
+        headers: { 'x-ateam-terminal-token': token },
+      }, 0)
+    }
+    return started
+  })
+}
+`;
+
+/** The mod's files, by path under its folder. */
+export const CLAUDE_MOD_FILES: Record<string, string> = {
+	".claude-plugin/plugin.json": CLAUDE_MOD_MANIFEST,
+	"hooks/hooks.json": CLAUDE_MOD_HOOKS,
+	"hooks/register.js": CLAUDE_MOD_MODULE,
+};
+
+/**
+ * Write a file only when its text changed, through a rename: every running
+ * Claude task watches the mod's folder and reloads it on a change, so an
+ * unchanged rewrite at each engine start must not touch it, and a changed one
+ * must never be read half written.
+ */
+async function writeIfChanged(path: string, text: string): Promise<void> {
+	try {
+		if ((await readFile(path, "utf8")) === text) return;
+	} catch {
+		/* not there yet */
+	}
+	await mkdir(dirname(path), { recursive: true });
+	const tmp = `${path}.${process.pid}.tmp`;
+	await writeFile(tmp, text, "utf8");
+	await rename(tmp, path);
+}
+
 /** Write the notify scripts into Ateam's userData dir; returns notify.sh's path. */
 export async function ensureNotifyScript(userDataDir: string): Promise<string> {
 	const hooksDir = join(userDataDir, "hooks");
@@ -299,6 +422,9 @@ export async function ensureNotifyScript(userDataDir: string): Promise<string> {
 	await writeFile(permissionPath, PERMISSION_SCRIPT, "utf8");
 	await chmod(permissionPath, 0o755);
 	await writeFile(join(hooksDir, "opencode-inbox.js"), OPENCODE_INBOX_PLUGIN, "utf8");
+	for (const [rel, text] of Object.entries(CLAUDE_MOD_FILES)) {
+		await writeIfChanged(join(claudeModDir(hooksDir), rel), text);
+	}
 	return scriptPath;
 }
 

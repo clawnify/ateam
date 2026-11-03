@@ -416,6 +416,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	hooks.setPeerInbox({
 		verify: (terminalId, token) => verifyPeerToken(peerSecret, terminalId, token),
 		wait: (terminalId) => peers.wait(terminalId),
+		waitUser: (terminalId) => peers.waitUser(terminalId),
+		ackUser: (terminalId, deliveryId, entered) => peers.ackUser(terminalId, deliveryId, entered),
 	});
 
 	// Record an agent's exit: close the session and file its card. Shared by the

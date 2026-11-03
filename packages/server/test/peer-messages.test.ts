@@ -12,10 +12,14 @@ import {
 	MAX_FROM_LEAD,
 	MAX_HOPS,
 	MAX_PER_SENDER,
+	MOD_GRACE_MS,
+	MOD_LEASE_MS,
 	nextHop,
 	PEER_SEARCH_LIMIT,
 	PeerMessenger,
 	planDelivery,
+	planUserDelivery,
+	type UserDeliveryFacts,
 } from "../src/peer-messages";
 
 const NOW = 1_000_000_000;
@@ -100,6 +104,41 @@ describe("planDelivery", () => {
 		expect(planDelivery(facts({ ...waitedOut, lastEventAt: NOW - LISTENER_GRACE_MS }))).toBe(
 			"restart",
 		);
+	});
+});
+
+function userFacts(over: Partial<UserDeliveryFacts> = {}): UserDeliveryFacts {
+	return {
+		status: "idle",
+		modWaiting: false,
+		modExpected: false,
+		paused: false,
+		lastInputAt: null,
+		lastEventAt: NOW - 5 * 60_000,
+		now: NOW,
+		...over,
+	};
+}
+
+describe("planUserDelivery", () => {
+	it("hands to a waiting mod whatever the agent is doing", () => {
+		for (const status of ["idle", "running", "awaiting_input"]) {
+			expect(planUserDelivery(userFacts({ status, modWaiting: true }))).toBe("listener");
+		}
+	});
+
+	it("holds what an Esc dropped, even with the mod waiting", () => {
+		expect(planUserDelivery(userFacts({ modWaiting: true, paused: true }))).toBe("wait");
+	});
+
+	it("waits for a mod that is expected rather than restarting", () => {
+		expect(planUserDelivery(userFacts({ modExpected: true }))).toBe("wait");
+	});
+
+	it("restarts an idle session with no mod, never a busy or typed-into one", () => {
+		expect(planUserDelivery(userFacts())).toBe("restart");
+		expect(planUserDelivery(userFacts({ status: "running" }))).toBe("wait");
+		expect(planUserDelivery(userFacts({ lastInputAt: NOW - INPUT_QUIET_MS + 1 }))).toBe("wait");
 	});
 });
 
@@ -407,6 +446,189 @@ describe("PeerMessenger listeners", () => {
 		await flush();
 		expect(stopped).toEqual(["tb"]);
 		expect(launched).toHaveLength(1);
+	});
+});
+
+/** A Claude conversation Ateam launched by id, started well before `now`. */
+function addConversation(task: Task, terminalId: string, status = "idle"): AgentSession {
+	repo.createSession(db, {
+		taskId: task.id,
+		agentId: "claude",
+		terminalId,
+		cwd: task.worktreePath,
+		agentSessionId: terminalId,
+	});
+	const row = repo.getSessionByTerminal(db, terminalId) as AgentSession;
+	repo.updateSession(db, row.id, {
+		status: status as "idle",
+		lastEventAt: now - 5 * 60_000,
+		startedAt: now - 10 * 60_000,
+	});
+	live.add(terminalId);
+	return repo.getSessionByTerminal(db, terminalId) as AgentSession;
+}
+
+/** Whether a long-poll has answered by the time pending callbacks ran. */
+async function answered(p: Promise<unknown>): Promise<boolean> {
+	let done = false;
+	void p.then(() => {
+		done = true;
+	});
+	await flush();
+	return done;
+}
+
+function deliveredVia(taskId: string): (string | null)[] {
+	return db
+		.select()
+		.from(schema.peerMessages)
+		.all()
+		.filter((m) => m.toTaskId === taskId)
+		.map((m) => m.deliveredVia);
+}
+
+describe("The user's own words to a Claude conversation", () => {
+	it("go to its mod, held until it acks that the prompt went in", async () => {
+		const b = addTask("b", "claude");
+		addConversation(b, "tb");
+		const hook = messenger.wait("tb");
+		const mod = messenger.waitUser("tb");
+		const r = messenger.sendFrom("user", { to: b.id, body: "Build as proposed" });
+		expect(r.reason).toContain("delivered to its agent now");
+		const out = await mod.result;
+		expect(out.kind).toBe("message");
+		if (out.kind !== "message") return;
+		expect(out.text).toContain("Message from the user");
+		expect(out.text).toContain("Build as proposed");
+		// Never through the asyncRewake hook, whose output Claude frames as not the user's.
+		expect(await answered(hook.result)).toBe(false);
+		// Leased, not delivered: still pending, and not handed out twice.
+		expect(repo.listPendingPeerMessages(db, b.id)).toHaveLength(1);
+		const again = messenger.waitUser("tb");
+		expect(await answered(again.result)).toBe(false);
+		expect(messenger.ackUser("tb", out.deliveryId, true)).toBe(true);
+		expect(repo.listPendingPeerMessages(db, b.id)).toHaveLength(0);
+		expect(deliveredVia(b.id)).toEqual(["mod"]);
+		hook.cancel();
+		again.cancel();
+	});
+
+	it("go apart from agents' messages, which keep the hook door", async () => {
+		const a = addTask("a");
+		const b = addTask("b", "claude");
+		addSession(a, "claude", "ta");
+		addConversation(b, "tb");
+		const hook = messenger.wait("tb");
+		const mod = messenger.waitUser("tb");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "my branch touches yours" });
+		messenger.sendFrom("user", { to: b.id, body: "go ahead" });
+		const fromAgent = await hook.result;
+		const fromUser = await mod.result;
+		if (fromAgent.kind !== "message" || fromUser.kind !== "message") throw new Error("both answer");
+		expect(fromAgent.text).toContain("my branch touches yours");
+		expect(fromAgent.text).not.toContain("go ahead");
+		expect(fromUser.text).toContain("go ahead");
+		expect(fromUser.text).not.toContain("my branch touches yours");
+	});
+
+	it("wait for the turn to end after an Esc dropped them, then go again", async () => {
+		const b = addTask("b", "claude");
+		addConversation(b, "tb");
+		const first = messenger.waitUser("tb");
+		messenger.sendFrom("user", { to: b.id, body: "yes" });
+		const out = await first.result;
+		if (out.kind !== "message") throw new Error("expected a batch");
+		expect(messenger.ackUser("tb", out.deliveryId, false)).toBe(true);
+		expect(repo.listPendingPeerMessages(db, b.id)).toHaveLength(1);
+		// Offered again at once, Claude would drop it again: held until a Stop.
+		const held = messenger.waitUser("tb");
+		expect(await answered(held.result)).toBe(false);
+		messenger.kick(b.id);
+		const retried = await held.result;
+		expect(retried.kind).toBe("message");
+	});
+
+	it("are offered again once a lease runs out without an ack", async () => {
+		const b = addTask("b", "claude");
+		addConversation(b, "tb");
+		const first = messenger.waitUser("tb");
+		messenger.sendFrom("user", { to: b.id, body: "yes" });
+		expect((await first.result).kind).toBe("message");
+		now += MOD_LEASE_MS + 1;
+		expect((await messenger.waitUser("tb").result).kind).toBe("message");
+	});
+
+	it("restart an idle conversation whose mod is not there, as its prompt", async () => {
+		const b = addTask("b", "claude");
+		addConversation(b, "tb");
+		messenger.wait("tb"); // its hook listens, and must not get them
+		now += MOD_GRACE_MS + 1;
+		const r = messenger.sendFrom("user", { to: b.id, body: "Build as proposed" });
+		expect(r.reason).toContain("resuming its conversation");
+		await flush();
+		await flush();
+		expect(stopped).toEqual(["tb"]);
+		expect(launched[0]?.prompt).toContain("Build as proposed");
+		expect(deliveredVia(b.id)).toEqual(["launch"]);
+	});
+
+	it("wait for a mod still expected rather than restart under it", async () => {
+		const b = addTask("b", "claude");
+		addConversation(b, "tb");
+		// The engine has only just started: mods are still reconnecting.
+		expect(messenger.sendFrom("user", { to: b.id, body: "x" }).reason).toContain("queued");
+		// Later, a mod that polled a moment ago is between two calls.
+		now += MOD_GRACE_MS + 1;
+		messenger.waitUser("tb").cancel();
+		messenger.kick(b.id);
+		await flush();
+		expect(stopped).toHaveLength(0);
+		expect(launched).toHaveLength(0);
+	});
+
+	it("go out with the launch when the terminal holding them is gone", async () => {
+		const b = addTask("b", "claude");
+		addConversation(b, "tb");
+		const first = messenger.waitUser("tb");
+		messenger.sendFrom("user", { to: b.id, body: "yes, merge it" });
+		expect((await first.result).kind).toBe("message");
+		live.delete("tb");
+		messenger.kick(b.id);
+		await flush();
+		await flush();
+		expect(launched[0]?.prompt).toContain("yes, merge it");
+	});
+
+	it("leave an agents board (no conversation id) on the hook door", async () => {
+		const b = addTask("b", "claude");
+		addSession(b, "claude", "tb");
+		const hook = messenger.wait("tb");
+		messenger.sendFrom("user", { to: b.id, body: "hello" });
+		expect((await hook.result).kind).toBe("message");
+	});
+
+	// A mod polls only from its session's start: told "gone", it would be dead
+	// for the next engine, and every later answer would cost a restart.
+	it("tell a waiting mod to ask again when the engine stops", async () => {
+		const b = addTask("b", "claude");
+		addConversation(b, "tb");
+		const mod = messenger.waitUser("tb");
+		const hook = messenger.wait("tb");
+		messenger.stop();
+		expect((await mod.result).kind).toBe("timeout");
+		expect((await hook.result).kind).toBe("gone");
+	});
+
+	it("refuse an ack for a lease the terminal does not hold", async () => {
+		const b = addTask("b", "claude");
+		addConversation(b, "tb");
+		const first = messenger.waitUser("tb");
+		messenger.sendFrom("user", { to: b.id, body: "yes" });
+		const out = await first.result;
+		if (out.kind !== "message") throw new Error("expected a batch");
+		expect(messenger.ackUser("tx", out.deliveryId, true)).toBe(false);
+		expect(messenger.ackUser("tb", "no-such-lease", true)).toBe(false);
+		expect(repo.listPendingPeerMessages(db, b.id)).toHaveLength(1);
 	});
 });
 
