@@ -10,8 +10,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { pushPrompt } from "../digest";
-import type { SessionDigest, TranscriptSource } from "../types";
+import { cleanPrompt, contentText, pushPrompt } from "../digest";
+import type { SessionDigest, TranscriptSource, TurnEntry } from "../types";
 import { fileMemo, mtimeOf, readHead } from "./files";
 
 const ROOT = () => join(homedir(), ".claude", "projects");
@@ -21,11 +21,19 @@ const ROOT = () => join(homedir(), ".claude", "projects");
  *  gigabyte of I/O across 229 directories (1.3s) instead of 14MB (0.1s). */
 const HEAD_BYTES = 64_000;
 
+/** How many transcripts are tried for a `cwd` before a directory is given up.
+ *  Not just the first: a headless `claude -p` session opens with queue entries
+ *  that carry its whole prompt, and with a big prompt the `cwd` comes after
+ *  HEAD_BYTES (at 246KB in one seen 2026-11-03). Two such sessions listed first
+ *  hid their directory, and every interactive session in it, from search,
+ *  summaries and the change steps. The usual directory still stops at its first. */
+const MAX_HEAD_FILES = 20;
+
 /** dir → cwd, for the life of the process. Misses are NOT remembered: a
  *  directory that is empty now holds the session you start next. */
 const dirCwds = new Map<string, string>();
 
-/** Read the `cwd` a project directory belongs to, from its first transcript. */
+/** Read the `cwd` a project directory belongs to, from its transcripts' heads. */
 async function dirCwd(dir: string): Promise<string | null> {
 	const known = dirCwds.get(dir);
 	if (known) return known;
@@ -35,7 +43,7 @@ async function dirCwd(dir: string): Promise<string | null> {
 	} catch {
 		return null;
 	}
-	for (const f of files.slice(0, 2)) {
+	for (const f of files.slice(0, MAX_HEAD_FILES)) {
 		let head: string;
 		try {
 			head = await readHead(join(dir, f), HEAD_BYTES);
@@ -111,12 +119,61 @@ export async function readClaudeTranscript(
 	return { agentId: "claude", sessionId, cwd, branch, startedAt, endedAt, prompts, path, mtimeMs };
 }
 
-export function claudeSource(): TranscriptSource {
+/**
+ * A transcript's turns: each real user prompt, and the agent's last text before
+ * the next one (or before the end). Harness-injected user events (isMeta, tool
+ * results, a compaction's summary) and side chains are not turns.
+ */
+export async function readClaudeTurns(path: string): Promise<TurnEntry[]> {
+	let raw: string;
+	try {
+		raw = await readFile(path, "utf8");
+	} catch {
+		return [];
+	}
+	const turns: TurnEntry[] = [];
+	let reply: TurnEntry | null = null;
+	for (const line of raw.split("\n")) {
+		const user = line.includes('"type":"user"');
+		if (!user && !line.includes('"type":"assistant"')) continue;
+		let ev: Record<string, unknown>;
+		try {
+			ev = JSON.parse(line) as Record<string, unknown>;
+		} catch {
+			continue;
+		}
+		if (ev.isSidechain) continue;
+		const at = typeof ev.timestamp === "string" ? Date.parse(ev.timestamp) || 0 : 0;
+		const content = (ev.message as { content?: unknown } | undefined)?.content;
+		if (ev.type === "assistant") {
+			const text = Array.isArray(content)
+				? content
+						.filter((b) => (b as { type?: unknown })?.type === "text")
+						.map((b) => String((b as { text?: unknown }).text ?? ""))
+						.join("\n")
+						.trim()
+				: "";
+			if (text) reply = { role: "agent", text, at };
+			continue;
+		}
+		if (ev.type !== "user" || ev.isMeta || ev.isCompactSummary) continue;
+		if (typeof ev.sourceToolUseID === "string") continue;
+		const text = cleanPrompt(contentText(content));
+		if (!text) continue;
+		if (reply) turns.push(reply);
+		reply = null;
+		turns.push({ role: "user", text, at });
+	}
+	if (reply) turns.push(reply);
+	return turns;
+}
+
+/** `root` exists so the tests can point at a fixture store, as for Codex. */
+export function claudeSource(root = ROOT()): TranscriptSource {
 	const digests = fileMemo<SessionDigest | null>();
 	return {
 		agentId: "claude",
 		async digestsFor(cwds) {
-			const root = ROOT();
 			const wanted = new Set(cwds);
 			const out: SessionDigest[] = [];
 			let dirs: string[];

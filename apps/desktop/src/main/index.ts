@@ -325,7 +325,15 @@ app
 				router: host.router,
 				machineOf: (id) => host.origins()[id] ?? null,
 				dir: join(app.getPath("userData"), "lead"),
-				broadcast,
+				// A project window talks to that project's own chat.
+				projectOf: (sender) => {
+					const win = BrowserWindow.fromWebContents(sender);
+					return win ? (windowProject.get(win) ?? null) : null;
+				},
+				sendTo: (project, channel, e) => {
+					for (const [w, pid] of windowProject)
+						if (pid === project && !w.isDestroyed()) w.webContents.send(channel, e);
+				},
 			});
 			lead = started;
 			app.on("will-quit", () => started.dispose());

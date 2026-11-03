@@ -8,8 +8,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { pushPrompt } from "../digest";
-import type { SessionDigest, TranscriptSource } from "../types";
+import { cleanPrompt, contentText, pushPrompt } from "../digest";
+import type { SessionDigest, TranscriptSource, TurnEntry } from "../types";
 import { fileMemo, mtimeOf, readFirstLine } from "./files";
 
 const ROOT = () => join(homedir(), ".codex", "sessions");
@@ -95,6 +95,45 @@ export async function readCodexRollout(
 		path,
 		mtimeMs,
 	};
+}
+
+/**
+ * A rollout's turns: each user message (the same cleaned text search reads,
+ * so Codex's injected environment and instruction blocks drop out), and the
+ * reply that ended each turn, which Codex records as `task_complete` with its
+ * `last_agent_message`.
+ */
+export async function readCodexTurns(path: string): Promise<TurnEntry[]> {
+	let raw: string;
+	try {
+		raw = await readFile(path, "utf8");
+	} catch {
+		return [];
+	}
+	const turns: TurnEntry[] = [];
+	for (const line of raw.split("\n")) {
+		const user = line.includes('"role":"user"');
+		if (!user && !line.includes('"task_complete"')) continue;
+		let ev: {
+			timestamp?: string;
+			payload?: { type?: string; role?: string; content?: unknown; last_agent_message?: unknown };
+		};
+		try {
+			ev = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		const at = ev.timestamp ? Date.parse(ev.timestamp) || 0 : 0;
+		const p = ev.payload;
+		if (p?.type === "task_complete") {
+			const text = typeof p.last_agent_message === "string" ? p.last_agent_message.trim() : "";
+			if (text) turns.push({ role: "agent", text, at });
+		} else if (p?.role === "user") {
+			const text = cleanPrompt(contentText(p.content));
+			if (text) turns.push({ role: "user", text, at });
+		}
+	}
+	return turns;
 }
 
 /** `root` exists so the tests can point at a fixture store: Bun's `os.homedir()`

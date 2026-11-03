@@ -1,5 +1,5 @@
-export type { DiffFile, DiffInput, DiffResult, FileDiffInput } from "./diff";
-export { diff, fileDiff } from "./diff";
+export type { DiffFile, DiffInput, DiffResult, FileDiffInput, PatchesInput } from "./diff";
+export { diff, fileDiff, patches } from "./diff";
 export type { GitCoreErrorCode } from "./errors";
 export { errorMessage, GitCoreError } from "./errors";
 export { gitFor, refExists, safeRaw } from "./git-client";

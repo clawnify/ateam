@@ -86,6 +86,7 @@ import {
 	useState,
 } from "react";
 import { SessionGlyphs, SessionIcon } from "./components/AgentIcon";
+import { ChangesPane } from "./components/ChangeSteps";
 import { ChangesList, DiffStat } from "./components/Changes";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { ConnectSteps } from "./components/ConnectSteps";
@@ -105,6 +106,7 @@ import { QuestionCard } from "./components/QuestionCard";
 import { RailTile } from "./components/RailTile";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { SidebarViewMenu } from "./components/SidebarViewMenu";
+import { TaskPeek, TaskPeekProvider } from "./components/TaskPeek";
 import { TaskSearch } from "./components/TaskSearch";
 import { TerminalView } from "./components/Terminal";
 import { Button } from "./components/ui/button";
@@ -1757,6 +1759,7 @@ export function App() {
 						{boundProjectId ? (
 							<ProjectTitle
 								name={boundProject?.name ?? "…"}
+								owner={boundProject?.githubOwner ?? null}
 								color={boundProject?.color ?? null}
 								path={boundProject?.repoPath}
 							/>
@@ -1933,91 +1936,98 @@ export function App() {
 								</span>
 							</div>
 							{!tasksCollapsed && (
-								<div className="side-list">
-									{!activeProjectId ? (
-										<div className="tree-empty">Select a project</div>
-									) : visibleSidebarTasks.length === 0 ? (
-										<div className="tree-empty">
-											{sidebarTasks.length === 0
-												? "No active tasks"
-												: tagFilter
-													? "No matching tasks"
-													: "No tasks match the filters"}
-										</div>
-									) : (
-										shownGroups.map((g) => {
-											const grouped = listView.grouping !== "none";
-											const folded = grouped && listView.collapsed.includes(g.key);
-											const row = (t: TaskDTO) => (
-												<TaskRow
-													task={t}
-													offline={offlineAliasOf(t) !== null}
-													selected={t.id === sidebarSelectedId}
-													pulse={t.id === pulseId}
-													onClick={() => openRow(t)}
-													onDelete={() => deleteTask(t)}
-												/>
-											);
-											return (
-												<div key={g.key}>
-													{grouped && (
-														<button
-															type="button"
-															className="task-group-head"
-															aria-expanded={!folded}
-															onClick={() =>
-																setSideView({
-																	...sideView,
-																	collapsed: toggled(sideView.collapsed, g.key),
-																})
-															}
-														>
-															{folded ? (
-																<ChevronRight size={12} strokeWidth={2} />
-															) : (
-																<ChevronDown size={12} strokeWidth={2} />
-															)}
-															<span>{g.label}</span>
-														</button>
-													)}
-													{folded ? null : taskSort === "custom" ? (
-														// Custom order: drag rows up/down inside the group; Motion
-														// animates the shuffle. A drag only trades the group's own
-														// slots, so tasks in other groups, or hidden by a filter, keep
-														// their place in the saved order.
-														<Reorder.Group
-															as="div"
-															axis="y"
-															values={g.tasks.map((t) => t.id)}
-															onReorder={(ids) =>
-																reorderTasks(
-																	spliceOrder(
-																		orderedSidebarTasks.map((t) => t.id),
-																		ids,
-																	),
-																)
-															}
-														>
-															{g.tasks.map((t) => (
-																<Reorder.Item as="div" key={t.id} value={t.id} transition={springy}>
+								<TaskPeekProvider>
+									<div className="side-list">
+										{!activeProjectId ? (
+											<div className="tree-empty">Select a project</div>
+										) : visibleSidebarTasks.length === 0 ? (
+											<div className="tree-empty">
+												{sidebarTasks.length === 0
+													? "No active tasks"
+													: tagFilter
+														? "No matching tasks"
+														: "No tasks match the filters"}
+											</div>
+										) : (
+											shownGroups.map((g) => {
+												const grouped = listView.grouping !== "none";
+												const folded = grouped && listView.collapsed.includes(g.key);
+												const row = (t: TaskDTO) => (
+													<TaskRow
+														task={t}
+														offline={offlineAliasOf(t) !== null}
+														selected={t.id === sidebarSelectedId}
+														pulse={t.id === pulseId}
+														onClick={() => openRow(t)}
+														onDelete={() => deleteTask(t)}
+													/>
+												);
+												return (
+													<div key={g.key}>
+														{grouped && (
+															<button
+																type="button"
+																className="task-group-head"
+																aria-expanded={!folded}
+																onClick={() =>
+																	setSideView({
+																		...sideView,
+																		collapsed: toggled(sideView.collapsed, g.key),
+																	})
+																}
+															>
+																{folded ? (
+																	<ChevronRight size={12} strokeWidth={2} />
+																) : (
+																	<ChevronDown size={12} strokeWidth={2} />
+																)}
+																<span>{g.label}</span>
+															</button>
+														)}
+														{folded ? null : taskSort === "custom" ? (
+															// Custom order: drag rows up/down inside the group; Motion
+															// animates the shuffle. A drag only trades the group's own
+															// slots, so tasks in other groups, or hidden by a filter, keep
+															// their place in the saved order.
+															<Reorder.Group
+																as="div"
+																axis="y"
+																values={g.tasks.map((t) => t.id)}
+																onReorder={(ids) =>
+																	reorderTasks(
+																		spliceOrder(
+																			orderedSidebarTasks.map((t) => t.id),
+																			ids,
+																		),
+																	)
+																}
+															>
+																{g.tasks.map((t) => (
+																	<Reorder.Item
+																		as="div"
+																		key={t.id}
+																		value={t.id}
+																		transition={springy}
+																	>
+																		{row(t)}
+																	</Reorder.Item>
+																))}
+															</Reorder.Group>
+														) : (
+															// Sorted modes: layout animation glides rows to their new spot
+															// when a status change or update reorders them.
+															g.tasks.map((t) => (
+																<motion.div key={t.id} layout transition={springy}>
 																	{row(t)}
-																</Reorder.Item>
-															))}
-														</Reorder.Group>
-													) : (
-														// Sorted modes: layout animation glides rows to their new spot
-														// when a status change or update reorders them.
-														g.tasks.map((t) => (
-															<motion.div key={t.id} layout transition={springy}>
-																{row(t)}
-															</motion.div>
-														))
-													)}
-												</div>
-											);
-										})
-									)}
-								</div>
+																</motion.div>
+															))
+														)}
+													</div>
+												);
+											})
+										)}
+									</div>
+								</TaskPeekProvider>
 							)}
 						</div>
 
@@ -2460,6 +2470,7 @@ export function App() {
 							projects={projects}
 							onOpenTask={openTask}
 							onOpenProposal={openLeadProposal}
+							scope={boundProject?.name}
 						/>
 					) : (
 						<LoopsPanel
@@ -2492,6 +2503,7 @@ export function App() {
 							onOpenTask={openTask}
 							onOpenProposal={openLeadProposal}
 							onHide={() => setLeadSide(false)}
+							scope={boundProject?.name}
 						/>
 					</aside>
 				</>
@@ -2939,40 +2951,44 @@ function TaskRow({
 	// rest, menu on hover, swapped in place just left of the status.
 	return (
 		<div className="tasknode-row">
-			<button
-				type="button"
-				className={`tasknode ${selected ? "selected" : ""} ${offline ? "offline" : ""} ${pulse ? "just-started" : ""}`}
-				title={offline ? "Its box is asleep or out of reach. Open it to wake the box." : undefined}
-				onClick={onClick}
+			<TaskPeek
+				task={t}
+				note={offline ? "Its box is asleep or out of reach. Open it to wake the box." : undefined}
 			>
-				{glyphs.length > 0 ? (
-					<span className="ticon glyphs">
-						<SessionGlyphs ids={glyphs} size={14} />
-					</span>
-				) : (
-					<Icon className="ticon" size={14} strokeWidth={1.75} />
-				)}
-				{/* The status stays put; on hover the tags slide in beside it, like
+				<button
+					type="button"
+					className={`tasknode ${selected ? "selected" : ""} ${offline ? "offline" : ""} ${pulse ? "just-started" : ""}`}
+					onClick={onClick}
+				>
+					{glyphs.length > 0 ? (
+						<span className="ticon glyphs">
+							<SessionGlyphs ids={glyphs} size={14} />
+						</span>
+					) : (
+						<Icon className="ticon" size={14} strokeWidth={1.75} />
+					)}
+					{/* The status stays put; on hover the tags slide in beside it, like
 				    the card's. They share one line with the name, so the name only
 				    gives up the room the tags that fit really take. */}
-				<span className="tmain">
-					<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
-					{tags.map((tag) => (
-						<span className="pill row-tag" key={tag}>
-							{tag}
-						</span>
-					))}
-				</span>
-				<TriageGlyph triage={t.triage} />
-				{/* Listed under the Archived filter: it says so in the status's spot. */}
-				{t.archivedAt != null ? (
-					<span className="pill" title="Archived. Opening it brings it back to the board.">
-						archived
+					<span className="tmain">
+						<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
+						{tags.map((tag) => (
+							<span className="pill row-tag" key={tag}>
+								{tag}
+							</span>
+						))}
 					</span>
-				) : (
-					<StatusPill column={t.column} title={t.triage.reason} />
-				)}
-			</button>
+					<TriageGlyph triage={t.triage} />
+					{/* Listed under the Archived filter: it says so in the status's spot. */}
+					{t.archivedAt != null ? (
+						<span className="pill" title="Archived. Opening it brings it back to the board.">
+							archived
+						</span>
+					) : (
+						<StatusPill column={t.column} title={t.triage.reason} />
+					)}
+				</button>
+			</TaskPeek>
 			{/* Vertical, so it's narrow enough to swap in beside the status without
 			    moving it. Wait on someone lives in the open task's ··· menu. */}
 			<span className="row-menu">
@@ -3095,136 +3111,141 @@ function Board({
 
 	return (
 		// Clicking empty board space deselects; card clicks stopPropagation.
-		<div className="board" onClick={onDeselect}>
-			{COLUMNS.map((col) => {
-				// Latest activity on top, the sidebar's "Recently updated" order: a
-				// task that just finished a turn is the first card in its column, not
-				// wherever its creation date (or its machine) put it.
-				const items = tasks.filter((t) => t.column === col.key).sort(byLatestActivity);
-				return (
-					<div className="col" key={col.key}>
-						<h3>
-							{col.label}{" "}
-							<span className="count">
-								{items.length + (col.key === "todo" ? issues.length : 0)}
-							</span>
-							{col.key === "todo" && issueActions}
-						</h3>
-						{col.key === "todo" && issueStatus}
-						{col.key === "todo" && issues.length > 0 && (
-							<>
-								{issues.map((issue) => (
-									<GithubIssueCard
-										key={issue.number}
-										issue={issue}
-										selected={issue.number === selectedIssueNumber}
-										onSelect={() => onSelectIssue(issue)}
-									/>
-								))}
-							</>
-						)}
-						{items.map((t) => {
-							const tags = tagsFor(t);
-							const glyphs = taskGlyphs(t);
-							const isSelected = t.id === selectedId;
-							return (
-								<motion.div
-									key={t.id}
-									layout
-									transition={springy}
-									ref={isSelected ? selectedRef : undefined}
-									// Fires after any layout animation settles — a status change
-									// carrying the card to another column, or cards above it coming
-									// and going. Re-check from the card's final resting box.
-									onLayoutAnimationComplete={isSelected ? revealSelected : undefined}
-									className={`card ${isSelected ? "selected" : ""} ${isOffline(t) ? "offline" : ""} ${t.id === pulseId ? "just-started" : ""}`}
-									onClick={(e) => {
-										e.stopPropagation();
-										onSelect(t.id);
-									}}
-								>
-									{/* A stalled agent must not wear the live "running" ring — the card
-								    would contradict its own caption. */}
-									{t.agentStatus && (
-										<span
-											className={`ring ${t.triage.bucket === "stalled" ? "stalled" : t.agentStatus}`}
+		<TaskPeekProvider>
+			<div className="board" onClick={onDeselect}>
+				{COLUMNS.map((col) => {
+					// Latest activity on top, the sidebar's "Recently updated" order: a
+					// task that just finished a turn is the first card in its column, not
+					// wherever its creation date (or its machine) put it.
+					const items = tasks.filter((t) => t.column === col.key).sort(byLatestActivity);
+					return (
+						<div className="col" key={col.key}>
+							<h3>
+								{col.label}{" "}
+								<span className="count">
+									{items.length + (col.key === "todo" ? issues.length : 0)}
+								</span>
+								{col.key === "todo" && issueActions}
+							</h3>
+							{col.key === "todo" && issueStatus}
+							{col.key === "todo" && issues.length > 0 && (
+								<>
+									{issues.map((issue) => (
+										<GithubIssueCard
+											key={issue.number}
+											issue={issue}
+											selected={issue.number === selectedIssueNumber}
+											onSelect={() => onSelectIssue(issue)}
 										/>
-									)}
-									{/* No branch line: the branch is the name as a slug, so the card
+									))}
+								</>
+							)}
+							{items.map((t) => {
+								const tags = tagsFor(t);
+								const glyphs = taskGlyphs(t);
+								const isSelected = t.id === selectedId;
+								return (
+									<TaskPeek task={t} key={t.id}>
+										<motion.div
+											layout
+											transition={springy}
+											ref={isSelected ? selectedRef : undefined}
+											// Fires after any layout animation settles — a status change
+											// carrying the card to another column, or cards above it coming
+											// and going. Re-check from the card's final resting box.
+											onLayoutAnimationComplete={isSelected ? revealSelected : undefined}
+											className={`card ${isSelected ? "selected" : ""} ${isOffline(t) ? "offline" : ""} ${t.id === pulseId ? "just-started" : ""}`}
+											onClick={(e) => {
+												e.stopPropagation();
+												onSelect(t.id);
+											}}
+										>
+											{/* A stalled agent must not wear the live "running" ring — the card
+								    would contradict its own caption. */}
+											{t.agentStatus && (
+												<span
+													className={`ring ${t.triage.bucket === "stalled" ? "stalled" : t.agentStatus}`}
+												/>
+											)}
+											{/* No branch line: the branch is the name as a slug, so the card
 								    carries state instead and the branch lives in the open task.
 								    Tags show on hover inside the name's line, the sidebar row's
 								    treatment, so hovering never reflows the board. */}
-									<div className="name">
-										<span className="name-text">
-											{t.isUnread && <span className="unread" title="New since you last looked" />}
-											{t.name}
-										</span>
-										{tags.length > 0 && (
-											<span className="card-tags">
-												{tags.map((tag) => (
-													<span className="pill" key={tag}>
-														{tag}
+											<div className="name">
+												<span className="name-text">
+													{t.isUnread && (
+														<span className="unread" title="New since you last looked" />
+													)}
+													{t.name}
+												</span>
+												{tags.length > 0 && (
+													<span className="card-tags">
+														{tags.map((tag) => (
+															<span className="pill" key={tag}>
+																{tag}
+															</span>
+														))}
 													</span>
-												))}
-											</span>
-										)}
-									</div>
-									{originLabel(t) && (
-										<span className="card-env muted" style={{ fontSize: 10 }}>
-											{originLabel(t)}
-										</span>
-									)}
-									{/* Why this card is where it is — the triage verdict that until now
-								    was computed on every refresh and shown only to the MCP tool. */}
-									{/* Parked on an outside party: the wait IS why the card is where it
-								    is, so it takes the triage line over until it ends. */}
-									{/* A proposal waiting on you is why it sits in Needs You, so it
-								    says so first. */}
-									<div
-										className={`triage wait-${waitState(t, Date.now())}`}
-										title={proposalLabel(t) ?? waitingLabel(t, Date.now()) ?? t.triage.reason}
-									>
-										{proposalLabel(t) ?? waitingLabel(t, Date.now()) ?? t.triage.reason}
-									</div>
-									<div className="meta">
-										<WorkSize task={t} files />
-										{t.issueUrl && (
-											<a
-												className="issue-link"
-												href={t.issueUrl}
-												target="_blank"
-												rel="noreferrer"
-												onClick={(event) => event.stopPropagation()}
-											>
-												Issue #{t.issueUrl.split("/").pop()}
-											</a>
-										)}
-										{t.prNumber && <span>PR #{t.prNumber}</span>}
-										{t.mergeStatus && (
-											<span className={`merge-status ${t.mergeStatus}`}>
-												{t.mergeStatus === "conflict" ? "merge conflict" : t.mergeStatus}
-											</span>
-										)}
-										{/* Age and agent icon share one right-aligned group: the icon used to
-									    be absolutely positioned and sat on top of the age label. */}
-										<span className="meta-end">
-											{relativeAge(t.lastEventAt, Date.now()) && (
-												<span className="age">{relativeAge(t.lastEventAt, Date.now())}</span>
-											)}
-											{glyphs.length > 0 && (
-												<span className="glyphs">
-													<SessionGlyphs ids={glyphs} size={15} />
+												)}
+											</div>
+											{originLabel(t) && (
+												<span className="card-env muted" style={{ fontSize: 10 }}>
+													{originLabel(t)}
 												</span>
 											)}
-										</span>
-									</div>
-								</motion.div>
-							);
-						})}
-					</div>
-				);
-			})}
-		</div>
+											{/* Why this card is where it is — the triage verdict that until now
+								    was computed on every refresh and shown only to the MCP tool. */}
+											{/* Parked on an outside party: the wait IS why the card is where it
+								    is, so it takes the triage line over until it ends. */}
+											{/* A proposal waiting on you is why it sits in Needs You, so it
+								    says so first. */}
+											<div
+												className={`triage wait-${waitState(t, Date.now())}`}
+												title={proposalLabel(t) ?? waitingLabel(t, Date.now()) ?? t.triage.reason}
+											>
+												{proposalLabel(t) ?? waitingLabel(t, Date.now()) ?? t.triage.reason}
+											</div>
+											<div className="meta">
+												<WorkSize task={t} files />
+												{t.issueUrl && (
+													<a
+														className="issue-link"
+														href={t.issueUrl}
+														target="_blank"
+														rel="noreferrer"
+														onClick={(event) => event.stopPropagation()}
+													>
+														Issue #{t.issueUrl.split("/").pop()}
+													</a>
+												)}
+												{t.prNumber && <span>PR #{t.prNumber}</span>}
+												{t.mergeStatus && (
+													<span className={`merge-status ${t.mergeStatus}`}>
+														{t.mergeStatus === "conflict" ? "merge conflict" : t.mergeStatus}
+													</span>
+												)}
+												{/* Age and agent icon share one right-aligned group: the icon used to
+									    be absolutely positioned and sat on top of the age label. */}
+												<span className="meta-end">
+													{relativeAge(t.lastEventAt, Date.now()) && (
+														<span className="age">{relativeAge(t.lastEventAt, Date.now())}</span>
+													)}
+													{glyphs.length > 0 && (
+														<span className="glyphs">
+															<SessionGlyphs ids={glyphs} size={15} />
+														</span>
+													)}
+												</span>
+											</div>
+										</motion.div>
+									</TaskPeek>
+								);
+							})}
+						</div>
+					);
+				})}
+			</div>
+		</TaskPeekProvider>
 	);
 }
 
@@ -4225,7 +4246,8 @@ function TaskPanel({
 
 				{changesOpen && (
 					<div className="changes-view">
-						<ChangesList
+						<ChangesPane
+							taskId={task.id}
 							diff={diff}
 							selected={viewFile}
 							onSelect={setViewFile}

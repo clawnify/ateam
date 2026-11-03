@@ -215,7 +215,9 @@ bun run --filter @ateam/desktop build      # production bundle
 
 Working: project registration (with optional `git init` for plain folders),
 worktree-per-task lifecycle, commit/push/update/merge, a GitHub-style changes
-view (aggregate diffstat → file list + side-by-side diffs), prompt-first task
+view (aggregate diffstat → file list + side-by-side diffs; a change of 8 or
+more files also reads by step, each with the agent's reason, and first the
+changes its own account of the work never mentions), prompt-first task
 composer (pick the agent and type the first instruction in one step; ⌘⏎ starts
 the new task in the background and leaves you where you are, as does
 long-pressing send on the phone, and ⇧⌘⏎ opens it) reused for extra sessions inside an
@@ -252,7 +254,9 @@ their agents and brings their replies back, with every task it names a chip
 that opens it; it runs as
 your own Claude Code, with your skills, plugins and MCP servers, and asks for
 its permissions in the chat; it has its own tab, or sits as a sidebar on the
-right beside the board; files you attach or paste there can go to a new task or
+right beside the board; a project opened in its own window has a chat of its
+own about that project, which can still read your other projects and asks you
+before it messages one of their tasks; files you attach or paste there can go to a new task or
 to a running one, copied to its box when it runs on one, up to 10 MB a file),
 questions agents ask you with the `ask_user`
 board tool (option cards with tradeoffs, or a checklist, answered from the
@@ -269,8 +273,9 @@ that task, and its card waits in Needs You until you create or dismiss them),
 task titles and summaries (a task you start without a name gets a short title
 a few seconds in, once, so other agents never lose track of it; once a task's
 agent has been quiet for a few minutes, a sentence or two on where it stands
-shows under the open task's title and in the Lead's and the agents' board
-tools; written by an OpenRouter model when you add a key in Settings, otherwise
+shows under the open task's title, beside its full title when the pointer
+rests on its sidebar row or board card for two seconds, and in the Lead's and
+the agents' board tools; written by an OpenRouter model when you add a key in Settings, otherwise
 by Claude Code, or turned off there),
 and signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
