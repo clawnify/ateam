@@ -1,14 +1,16 @@
 // Bottom composer on the board — mobile counterpart to the desktop
 // NewTaskComposer. Type a prompt, pick the agent + launch mode, send: it creates
-// a task (worktree on the box) and launches the agent, then opens its terminal.
+// a task (worktree on the box) and launches the agent, and you stay on the board
+// (a snackbar above the composer then offers the way in). Agents mode opens the
+// task instead: its board starts with no prompt and waits for you there.
 // Or, with the switch floating above it on Lead, the text goes to the box's
 // Lead chat instead, and the chat opens to show the answer; the row then holds
 // the Lead's own controls. The switch remembers the last choice; a box without
 // its own Lead (before v24) shows no switch.
-// Long-press send to start it and stay on the board instead (a snackbar above
-// the composer then offers the way in). When the project is on more than one
-// box, a Run on line under the field picks the box the task starts on, as the
-// desktop's Run on does.
+// Long-press send to choose between that and opening the new task (or, on
+// Lead, staying here instead of opening the chat). When the project is on more
+// than one box, a Run on line under the field picks the box the task starts on,
+// as the desktop's Run on does.
 // Auto mode = the agent's automatic mode (yolo); Agent mode = the tool's own multi-agent
 // board (`claude agents`) in that worktree. The paperclip attaches photos or
 // files, held here and uploaded on send to where the message goes (attach.tsx).
@@ -68,7 +70,8 @@ export interface ComposerSubmit {
 	agentId: string;
 	yolo: boolean;
 	agentMode: boolean;
-	/** false: start it in the background and stay on the board (long-press send). */
+	/** false: start it in the background and stay on the board (a tap on send);
+	 *  true: open it (long-press send, "Start and open"). */
 	open: boolean;
 	/** Attached on this phone; the caller puts them on the box for the agent. */
 	files: PickedFile[];
@@ -207,8 +210,11 @@ export function Composer({
 		setFiles([]);
 	};
 
-	// Long-press send: choose between opening the new task and staying here. A tap
-	// still opens it, as it always has.
+	// Long-press send: choose between opening and staying here. A tap starts a
+	// task in the background and stays on the board, as the desktop's ⌘⏎ does.
+	// It opens where there is something to do there: the Lead chat, where its
+	// answer shows, and an agents-mode task, whose board waits for your input.
+	const tapOpens = toLead || agentMode;
 	const sendRef = useRef<View>(null);
 	const runOnRef = useRef<View>(null);
 	const chooseRunOn = () => {
@@ -456,7 +462,7 @@ export function Composer({
 						<Pressable
 							ref={sendRef}
 							style={[styles.send, !canSubmit && styles.sendOff]}
-							onPress={() => void submit(true)}
+							onPress={() => void submit(tapOpens)}
 							onLongPress={chooseLanding}
 							disabled={!canSubmit}
 							hitSlop={6}
@@ -465,10 +471,17 @@ export function Composer({
 							accessibilityHint={
 								toLead
 									? "Opens the Lead chat. Long press to send and stay here."
-									: "Opens the new task. Long press to start it and stay on the board."
+									: agentMode
+										? "Opens the new task. Long press to start it and stay on the board."
+										: "Starts the task and stays on the board. Long press to start it and open it."
 							}
 						>
-							<Text style={styles.sendText}>↑</Text>
+							{/* What a tap does, as on the desktop: ↑ opens, + stays here. */}
+							{tapOpens ? (
+								<Text style={styles.sendText}>↑</Text>
+							) : (
+								<Feather name="plus" size={20} color={INK_ON_WHITE} />
+							)}
 						</Pressable>
 					</View>
 				</View>
