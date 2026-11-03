@@ -32,8 +32,8 @@
 	--color-card-foreground: var(--text);
 	--color-popover: var(--bg-elev);
 	--color-popover-foreground: var(--text);
-	--color-primary: #ffffff;
-	--color-primary-foreground: #15151a;
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-fg);
 	--color-secondary: var(--bg-elev-2);
 	--color-secondary-foreground: var(--text);
 	--color-muted: var(--bg-elev-2);

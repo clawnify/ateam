@@ -1,22 +1,138 @@
 @import "@xterm/xterm/css/xterm.css";
 
 :root {
-	--bg: #0c0c0e;
-	--bg-elev: #141418;
-	--bg-elev-2: #1c1c22;
-	--border: #2a2a33;
-	--text: #e6e6ea;
-	--text-dim: #9a9aa6;
 	--accent: #7c5cff;
 	--accent-dim: #5a45b0;
-	--green: #4ade80;
-	--amber: #fbbf24;
-	--red: #f87171;
-	--blue: #60a5fa;
 	/* Side-panel width, and so the board's right-hand no-go zone: the panel is
 	   sticky over it, so the selected card reserves it as scroll-margin. */
 	--panel-w: 480px;
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* Themes (lib/theme.ts sets data-theme on <html>; shared/theme.ts lists them).
+   Every colour in this file is one of these tokens, so a theme is only a
+   block here. */
+
+/* Dark, the default: neutral greys, off-white text, borders as translucent
+   off-white. */
+:root,
+:root[data-theme="dark"] {
+	--bg: #141414;
+	--bg-elev: #181818;
+	--bg-elev-2: #242424;
+	--bg-hover: #2e2e2e;
+	--bg-tooltip: #242424;
+	--bg-code: #2a2a2a;
+	--bg-composer: #262626;
+	--border: #f0f0f01e;
+	--border-hover: #f0f0f033;
+	--border-focus: #f0f0f040;
+	--text: #f0f0f0;
+	--text-dim: #989898;
+	--text-faint: #737373;
+	--dot: #595959;
+	/* White in the chrome: the primary button and the selection marks. */
+	--primary: #f0f0f0;
+	--primary-fg: #141414;
+	--primary-hover: #dcdcdc;
+	/* The channel overlays are drawn in: rgb(var(--ink) / 0.06). */
+	--ink: 240 240 240;
+	--scroll-thumb: #383838;
+	--scroll-thumb-hover: #4a4a4a;
+	--term-bg: #141414;
+	--toast-err-bg: #2a1618;
+	--toast-err-fg: #ffd7dc;
+	--toast-info-bg: #14201a;
+	--toast-info-fg: #d7ffe6;
+	--diagram-line: #8e8e8e;
+	--diagram-surface-alt: #1c1c1c;
+	--diagram-border: #484848;
+	/* An agent's page is written for a dark background (show_page says so). */
+	--page-bg: transparent;
+	--scheme: dark;
+	--green: #70b489;
+	--amber: #f1b467;
+	--red: #fc6b83;
+	/* Blue is Nord's nord9 (MIT, github.com/nordtheme/nord). */
+	--blue: #81a1c1;
+}
+
+/* Light: #f3f3f3 chrome, #fcfcfc surfaces, #141414 text, borders and hovers
+   in translucent #141414. */
+:root[data-theme="light"] {
+	--bg: #f3f3f3;
+	--bg-elev: #fcfcfc;
+	--bg-elev-2: #eaeaea;
+	--bg-hover: #e2e2e2;
+	--bg-tooltip: #fcfcfc;
+	--bg-code: #e8e8e8;
+	--bg-composer: #fcfcfc;
+	--border: #14141414;
+	--border-hover: #14141433;
+	--border-focus: #1414144d;
+	--text: #141414;
+	--text-dim: #6d6d6d;
+	--text-faint: #8a8a8a;
+	--dot: #b4b4b4;
+	--primary: #141414;
+	--primary-fg: #fcfcfc;
+	--primary-hover: #2e2e2e;
+	--ink: 20 20 20;
+	--scroll-thumb: #14141424;
+	--scroll-thumb-hover: #14141433;
+	--term-bg: #f3f3f3;
+	--toast-err-bg: #fbe9ed;
+	--toast-err-fg: #7a0f2c;
+	--toast-info-bg: #e6f2ec;
+	--toast-info-fg: #004d2d;
+	--diagram-line: #8a8a8a;
+	--diagram-surface-alt: #f7f7f7;
+	--diagram-border: #c8c8c8;
+	/* Agents' pages assume a dark background, so they keep one here. */
+	--page-bg: #181818;
+	--scheme: light;
+	--green: #007041;
+	--amber: #a46700;
+	--red: #be1744;
+	--blue: #2778c1;
+}
+
+/* Classic: Ateam's first palette, near-black with a cool tint. */
+:root[data-theme="classic"] {
+	--bg: #0c0c0e;
+	--bg-elev: #141418;
+	--bg-elev-2: #1c1c22;
+	--bg-hover: #25252e;
+	--bg-tooltip: #2a2a33;
+	--bg-code: #26262e;
+	--bg-composer: #222228;
+	--border: #2a2a33;
+	--border-hover: #3a3a46;
+	--border-focus: #4a4a56;
+	--text: #e6e6ea;
+	--text-dim: #9a9aa6;
+	--text-faint: #6f6f7a;
+	--dot: #55555f;
+	--primary: #ffffff;
+	--primary-fg: #15151a;
+	--primary-hover: #e4e4e8;
+	--ink: 255 255 255;
+	--scroll-thumb: #2f2f37;
+	--scroll-thumb-hover: #41414c;
+	--term-bg: #000;
+	--toast-err-bg: #2a1414;
+	--toast-err-fg: #ffd7d7;
+	--toast-info-bg: #14201a;
+	--toast-info-fg: #d7ffe6;
+	--diagram-line: #8a8a96;
+	--diagram-surface-alt: #18181d;
+	--diagram-border: #44444f;
+	--page-bg: transparent;
+	--scheme: dark;
+	--green: #4ade80;
+	--amber: #fbbf24;
+	--red: #f87171;
+	--blue: #60a5fa;
 }
 
 * {
@@ -46,29 +162,29 @@ button {
 		border-color 0.12s;
 }
 button:hover {
-	background: #25252e;
-	border-color: #3a3a46;
+	background: var(--bg-hover);
+	border-color: var(--border-hover);
 }
 button.primary {
-	background: #ffffff;
-	border-color: #ffffff;
-	color: #15151a;
+	background: var(--primary);
+	border-color: var(--primary);
+	color: var(--primary-fg);
 }
 button.primary:hover {
-	background: #e4e4e8;
-	border-color: #e4e4e8;
+	background: var(--primary-hover);
+	border-color: var(--primary-hover);
 }
 button:disabled {
 	opacity: 0.4;
 	cursor: default;
 }
 button.yolo {
-	background: rgba(251, 191, 36, 0.12);
+	background: color-mix(in srgb, var(--amber) 12%, transparent);
 	border-color: var(--amber);
 	color: var(--amber);
 }
 button.yolo:hover {
-	background: rgba(251, 191, 36, 0.22);
+	background: color-mix(in srgb, var(--amber) 22%, transparent);
 }
 
 select {
@@ -193,11 +309,11 @@ input {
 }
 .side-list:hover::-webkit-scrollbar-thumb,
 .side-list:has(:focus-visible)::-webkit-scrollbar-thumb {
-	background: #2f2f37;
+	background: var(--scroll-thumb);
 	background-clip: padding-box;
 }
 .side-list::-webkit-scrollbar-thumb:hover {
-	background: #41414c;
+	background: var(--scroll-thumb-hover);
 	background-clip: padding-box;
 }
 /* Slim header row sharing the traffic-light strip: the collapse toggle lives
@@ -437,7 +553,7 @@ input {
 }
 .tasknode.selected {
 	background: var(--bg-elev-2);
-	border-left: 2px solid #fff;
+	border-left: 2px solid var(--primary);
 }
 .tasknode .ticon {
 	color: var(--text-dim);
@@ -793,10 +909,10 @@ input {
 	position: relative;
 }
 .card:hover {
-	border-color: #3a3a46;
+	border-color: var(--border-hover);
 }
 .card.selected {
-	border-color: #ffffff;
+	border-color: var(--primary);
 	/* A selected card means the side panel is open (going full-width hides the
 	   board), and the panel is sticky over the board's right edge. Reserving its
 	   width here is what lets scrollIntoView({inline:"nearest"}) land the card
@@ -964,11 +1080,11 @@ input {
 }
 .ring.running {
 	background: var(--blue);
-	box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.25);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 25%, transparent);
 }
 .ring.awaiting_input {
 	background: var(--amber);
-	box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.3);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 30%, transparent);
 	animation: pulse 1.4s infinite;
 }
 .ring.idle {
@@ -1098,7 +1214,7 @@ input {
 .term {
 	flex: 1;
 	min-height: 180px;
-	background: #000;
+	background: var(--term-bg);
 	padding: 6px;
 }
 /* No terminal on this task yet: the way back into the last conversation, and
@@ -1272,7 +1388,7 @@ input {
 }
 .sess-tab .sess-tab-close:hover {
 	opacity: 1;
-	background: rgba(255, 255, 255, 0.12);
+	background: rgb(var(--ink) / 0.12);
 }
 
 /* panel body: terminal, or the changes view (files left · diff right) */
@@ -1399,7 +1515,7 @@ input {
 }
 .skill-row-pin:hover {
 	color: var(--text);
-	background: rgba(255, 255, 255, 0.08);
+	background: rgb(var(--ink) / 0.08);
 }
 .skill-empty {
 	padding: 8px;
@@ -1561,7 +1677,7 @@ input {
 	min-height: 0;
 	display: flex;
 	flex-direction: column;
-	background: #000;
+	background: var(--term-bg);
 }
 .filediff-head {
 	display: flex;
@@ -1632,7 +1748,7 @@ input {
 	/* Flush tiles, as on iOS: no gutter, no padding; each tile's own 1px edge
 	   is the divider. */
 	gap: 0;
-	background: #000;
+	background: var(--term-bg);
 	/* Tiles are paged, never scrolled: every layout sizes its rows so exactly
 	   one pageful fills the box, so there is nothing to scroll to. */
 	overflow: hidden;
@@ -1781,7 +1897,7 @@ input {
 	overflow: hidden;
 	display: flex;
 	flex-direction: column;
-	background: #000;
+	background: var(--term-bg);
 }
 /* The highlighted tile (sidebar click or clicking into it): a white edge, the
    app's focus color, same as the iOS Mission Control. */
@@ -1794,7 +1910,7 @@ input {
 	content: "";
 	position: absolute;
 	inset: 0;
-	background: rgb(255 255 255 / 0.08);
+	background: rgb(var(--ink) / 0.08);
 	pointer-events: none;
 }
 .mc .tile .bar {
@@ -2002,13 +2118,13 @@ input {
 }
 .comp-yolo.active {
 	color: var(--amber);
-	background: rgba(251, 191, 36, 0.12);
+	background: color-mix(in srgb, var(--amber) 12%, transparent);
 }
 /* Keep the amber while hovering an already-active toggle — otherwise the generic
    .iconbtn:hover (same specificity, later in the file) wins and hides that it's on. */
 .comp-yolo.active:hover {
 	color: var(--amber);
-	background: rgba(251, 191, 36, 0.18);
+	background: color-mix(in srgb, var(--amber) 18%, transparent);
 }
 .comp-go {
 	width: 28px;
@@ -2016,7 +2132,7 @@ input {
 	border: none;
 	border-radius: 50%;
 	background: var(--text);
-	color: #000;
+	color: var(--bg);
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -2058,9 +2174,9 @@ input {
 	bottom: 16px;
 	left: 50%;
 	transform: translateX(-50%);
-	background: #2a1414;
+	background: var(--toast-err-bg);
 	border: 1px solid var(--red);
-	color: #ffd7d7;
+	color: var(--toast-err-fg);
 	padding: 10px 16px;
 	border-radius: 9px;
 	font-size: 12px;
@@ -2069,9 +2185,9 @@ input {
 	z-index: 200;
 }
 .toast.info {
-	background: #14201a;
+	background: var(--toast-info-bg);
 	border-color: var(--green);
-	color: #d7ffe6;
+	color: var(--toast-info-fg);
 }
 .toast-action {
 	margin-left: 14px;
@@ -2159,7 +2275,7 @@ input {
 	background: transparent;
 }
 .iconbtn.danger:hover {
-	background: rgba(248, 113, 113, 0.16);
+	background: color-mix(in srgb, var(--red) 16%, transparent);
 	color: var(--red);
 }
 
@@ -2193,7 +2309,7 @@ input {
 	top: calc(100% + 6px);
 	left: 50%;
 	transform: translateX(-50%);
-	background: #2a2a33;
+	background: var(--bg-tooltip);
 	border: 1px solid var(--border);
 	color: var(--text);
 	font-size: 11px;
@@ -2263,7 +2379,7 @@ input {
 	margin: 8px -16px -10px;
 	padding: 8px 16px 10px;
 	background: rgba(0, 0, 0, 0.25);
-	border-top: 1px solid rgba(255, 255, 255, 0.08);
+	border-top: 1px solid rgb(var(--ink) / 0.08);
 	border-radius: 0 0 9px 9px;
 }
 .toast .conn-step,
@@ -2299,7 +2415,7 @@ input {
 	font-size: 12px;
 	line-height: 1.4;
 	color: var(--red);
-	background: rgba(248, 113, 113, 0.1);
+	background: color-mix(in srgb, var(--red) 10%, transparent);
 	border-radius: 6px;
 }
 .conn-error svg {
@@ -2341,7 +2457,7 @@ input {
 	color: var(--red);
 }
 .navbtn.danger:hover {
-	background: rgba(248, 113, 113, 0.14);
+	background: color-mix(in srgb, var(--red) 14%, transparent);
 	color: var(--red);
 }
 
@@ -2418,7 +2534,7 @@ input {
 }
 .cleanup-item.selected {
 	background: var(--bg-elev-2);
-	border-left: 2px solid #fff;
+	border-left: 2px solid var(--primary);
 }
 /* Name, then the "recommended" pill when the sweep would take this one
    (advice, not a filter). The name ellipsizes; the pill never shrinks.
@@ -2496,7 +2612,7 @@ input {
 /* ---- scrollbars: dark + thin ---- */
 * {
 	scrollbar-width: thin;
-	scrollbar-color: #2f2f37 transparent;
+	scrollbar-color: var(--scroll-thumb) transparent;
 }
 ::-webkit-scrollbar {
 	width: 9px;
@@ -2506,13 +2622,13 @@ input {
 	background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-	background: #2f2f37;
+	background: var(--scroll-thumb);
 	border-radius: 6px;
 	border: 2px solid transparent;
 	background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-	background: #41414c;
+	background: var(--scroll-thumb-hover);
 	background-clip: padding-box;
 }
 ::-webkit-scrollbar-corner {
@@ -2716,7 +2832,7 @@ input {
 .comp-every input[type="time"] {
 	width: auto;
 	text-align: left;
-	color-scheme: dark;
+	color-scheme: var(--scheme);
 }
 .comp-every:focus-within {
 	color: var(--text);
@@ -2871,7 +2987,7 @@ input {
 }
 .cb-error {
 	font-size: 12px;
-	color: #e5645a;
+	color: var(--red);
 }
 .cb-create {
 	background: var(--text);
@@ -3436,7 +3552,7 @@ input {
 	background: var(--bg-elev-2);
 }
 .lead .md code {
-	background: #26262e;
+	background: var(--bg-code);
 }
 .lead .md pre code {
 	background: none;
@@ -3448,7 +3564,7 @@ input {
 }
 .lead .question .diagram .pele {
 	--pele-bg: var(--bg-elev-2);
-	--pele-surface: #26262e;
+	--pele-surface: var(--bg-code);
 }
 /* The Lead as the sidebar on the right (see .app.lead-open). */
 .lead-side {
@@ -3558,7 +3674,7 @@ input {
 	max-width: 80%;
 	padding: 10px 14px;
 	border-radius: 12px;
-	background: rgba(255, 255, 255, 0.05);
+	background: rgb(var(--ink) / 0.05);
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
@@ -3636,10 +3752,10 @@ input {
 	--pele-bg: var(--bg-elev);
 	--pele-fg: var(--text);
 	--pele-muted: var(--text-dim);
-	--pele-line: #8a8a96;
+	--pele-line: var(--diagram-line);
 	--pele-surface: var(--bg-elev-2);
-	--pele-surface-alt: #18181d;
-	--pele-border: #44444f;
+	--pele-surface-alt: var(--diagram-surface-alt);
+	--pele-border: var(--diagram-border);
 	--pele-accent: var(--blue);
 	--pele-critical: var(--red);
 	--pele-error: var(--red);
@@ -3674,7 +3790,7 @@ input {
 	border-radius: 8px;
 }
 .lead-tools-head:hover {
-	background: rgba(255, 255, 255, 0.04);
+	background: rgb(var(--ink) / 0.04);
 	color: var(--text);
 }
 .lead-tools-sum {
@@ -3698,11 +3814,11 @@ input {
 	display: flex;
 	flex-direction: column;
 	border-radius: 12px;
-	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+	box-shadow: inset 0 0 0 1px rgb(var(--ink) / 0.06);
 	overflow: hidden;
 }
 .lead-step + .lead-step {
-	border-top: 1px solid rgba(255, 255, 255, 0.06);
+	border-top: 1px solid rgb(var(--ink) / 0.06);
 }
 .lead-step-row {
 	display: flex;
@@ -3718,7 +3834,7 @@ input {
 	border-radius: 0;
 }
 .lead-step-row:hover {
-	background: rgba(255, 255, 255, 0.03);
+	background: rgb(var(--ink) / 0.03);
 }
 .lead-step-label {
 	flex: none;
@@ -3836,15 +3952,15 @@ input {
 	align-items: flex-end;
 	gap: 8px;
 	padding: 8px;
-	background: #222228;
+	background: var(--bg-composer);
 	border-radius: 14px;
 	box-shadow:
-		inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+		inset 0 0 0 1px rgb(var(--ink) / 0.08),
 		0 4px 20px rgba(0, 0, 0, 0.25);
 }
 .lead-box:focus-within {
 	box-shadow:
-		inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+		inset 0 0 0 1px rgb(var(--ink) / 0.16),
 		0 4px 20px rgba(0, 0, 0, 0.25);
 }
 /* The text box and, behind it, the layer that tints the tasks picked with "@"
@@ -3877,9 +3993,9 @@ input {
    The spread gives the tint its air instead. */
 .lead-input-marks mark {
 	color: transparent;
-	background: rgba(255, 255, 255, 0.1);
+	background: rgb(var(--ink) / 0.1);
 	border-radius: 4px;
-	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1);
+	box-shadow: 0 0 0 2px rgb(var(--ink) / 0.1);
 	-webkit-box-decoration-break: clone;
 	box-decoration-break: clone;
 }
@@ -3912,10 +4028,10 @@ input {
 	bottom: calc(100% + 6px);
 	z-index: 30;
 	padding: 4px;
-	background: #222228;
+	background: var(--bg-composer);
 	border-radius: 12px;
 	box-shadow:
-		inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+		inset 0 0 0 1px rgb(var(--ink) / 0.08),
 		0 8px 28px rgba(0, 0, 0, 0.35);
 }
 .lead-refs-title {
@@ -3937,7 +4053,7 @@ input {
 	cursor: pointer;
 }
 .lead-ref.active {
-	background: rgba(255, 255, 255, 0.08);
+	background: rgb(var(--ink) / 0.08);
 }
 .lead-ref-name {
 	flex: 1;
@@ -3977,7 +4093,7 @@ input {
 	display: inline-flex;
 	border-radius: 8px;
 	overflow: hidden;
-	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+	box-shadow: inset 0 0 0 1px rgb(var(--ink) / 0.08);
 }
 /* Scaled to fit, never cropped: a screenshot's edges are often the point. */
 .lead-thumb img {
@@ -4025,8 +4141,8 @@ input {
 	color: var(--bg);
 }
 .lead-send:hover {
-	background: #d4d4da;
-	border-color: #d4d4da;
+	background: var(--primary-hover);
+	border-color: var(--primary-hover);
 }
 .lead-send:disabled {
 	opacity: 0.35;
@@ -4252,7 +4368,7 @@ input {
 	outline: none;
 }
 .question-reply textarea:focus {
-	border-color: #4a4a56;
+	border-color: var(--border-focus);
 }
 .question-error {
 	margin: 0;
@@ -4486,7 +4602,7 @@ input {
 	display: block;
 	width: 100%;
 	border: 0;
-	background: transparent;
+	background: var(--page-bg);
 	color-scheme: dark;
 }
 .page-frame:focus {
@@ -4520,8 +4636,8 @@ input {
 	gap: 8px;
 	padding: 12px 14px;
 	border-radius: 12px;
-	background: rgba(255, 255, 255, 0.03);
-	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+	background: rgb(var(--ink) / 0.03);
+	box-shadow: inset 0 0 0 1px rgb(var(--ink) / 0.06);
 	/* How tall the open reply gets before it scrolls (.lead-reply-capped), and
 	   the most its area keeps when a shorter one is picked (ThreadView). */
 	--lead-reply-cap: min(320px, 50vh);
@@ -4607,12 +4723,12 @@ input {
 }
 .lead-fold:hover {
 	color: var(--text);
-	background: rgba(255, 255, 255, 0.04);
+	background: rgb(var(--ink) / 0.04);
 }
 /* The line whose reply is open below the list. */
 .lead-fold[aria-current="true"] {
 	color: var(--text);
-	background: rgba(255, 255, 255, 0.06);
+	background: rgb(var(--ink) / 0.06);
 }
 .lead-fold[aria-current="true"] .lead-fold-dot {
 	background: var(--text);
@@ -4622,7 +4738,7 @@ input {
 	width: 5px;
 	height: 5px;
 	border-radius: 50%;
-	background: #55555f;
+	background: var(--dot);
 }
 .lead-fold-line {
 	flex: 1;
@@ -4638,7 +4754,7 @@ input {
 .lead-fold-at {
 	flex-shrink: 0;
 	font-size: 11px;
-	color: #6f6f7a;
+	color: var(--text-faint);
 	font-variant-numeric: tabular-nums;
 }
 .lead-earlier {
@@ -4647,7 +4763,7 @@ input {
 .lead-thread-sep {
 	height: 1px;
 	margin: 2px 0;
-	background: rgba(255, 255, 255, 0.06);
+	background: rgb(var(--ink) / 0.06);
 }
 /* What the user sent the task, inside its thread. */
 .lead-you {
@@ -4656,7 +4772,7 @@ input {
 	padding: 4px 10px;
 	font-size: 13px;
 	border-radius: 10px;
-	background: rgba(255, 255, 255, 0.06);
+	background: rgb(var(--ink) / 0.06);
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
@@ -4695,7 +4811,7 @@ input {
 	-webkit-line-clamp: 3;
 	overflow: hidden;
 	color: var(--text-dim);
-	background: rgba(255, 255, 255, 0.04);
+	background: rgb(var(--ink) / 0.04);
 }
 /* A reply in the Expand dialog, with the emoji it was answered with. Two in a
    row get a rule between them, or they read as one. */
@@ -4709,7 +4825,7 @@ input {
 }
 .lead-whole-reply + .lead-whole-reply {
 	padding-top: 12px;
-	border-top: 1px solid rgba(255, 255, 255, 0.06);
+	border-top: 1px solid rgb(var(--ink) / 0.06);
 }
 .lead-whole-reply > .lead-fold-react {
 	font-size: 15px;

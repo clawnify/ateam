@@ -20,6 +20,7 @@ import {
 	type HostStatus,
 	type InstallLogEvent,
 } from "../shared/host";
+import { type AteamTheme, THEME_CH, themeOrDefault } from "../shared/theme";
 
 const api: AteamApi = {
 	projects: {
@@ -258,3 +259,16 @@ const lead: AteamLead = {
 	},
 };
 contextBridge.exposeInMainWorld("ateamLead", lead);
+
+// The theme (shared/theme.ts): read synchronously so the renderer can set it
+// before React's first paint, on every load and reload of the window.
+const theme: AteamTheme = {
+	saved: () => themeOrDefault(ipcRenderer.sendSync(THEME_CH.get)),
+	set: (id) => ipcRenderer.invoke(THEME_CH.set, id),
+	onChange: (cb) => {
+		const handler = (_: unknown, id: unknown) => cb(themeOrDefault(id));
+		ipcRenderer.on(THEME_CH.evtChanged, handler);
+		return () => ipcRenderer.off(THEME_CH.evtChanged, handler);
+	},
+};
+contextBridge.exposeInMainWorld("ateamTheme", theme);

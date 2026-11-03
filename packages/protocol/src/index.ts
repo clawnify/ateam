@@ -659,7 +659,14 @@ export interface ClientSettings {
 	 * so the buttons stay put rather than following usage.
 	 */
 	pinnedSkills: string[] | null;
+	/**
+	 * The desktop's colours. Read and written by the desktop's main process on
+	 * this Mac only (never routed to a box, never synced), so every window
+	 * opens in it before its first paint.
+	 */
+	theme: ThemeId;
 }
+export type ThemeId = "dark" | "light" | "classic";
 
 /** Where a skill came from, in the order its agent prefers them. */
 export type SkillScope = "personal" | "project" | "plugin" | "command" | "system";

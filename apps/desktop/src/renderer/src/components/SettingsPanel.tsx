@@ -11,6 +11,8 @@ import {
 } from "@ateam/protocol";
 import { AlertTriangle, Search } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { THEMES } from "../../../shared/theme";
+import { useTheme } from "../lib/theme";
 import { BoxesSettings } from "./BoxesSettings";
 
 /**
@@ -91,6 +93,14 @@ const ARCHIVE_OPTIONS: { value: number; label: string }[] = [
 ];
 
 const ROWS: Row[] = [
+	{
+		id: "client.theme",
+		section: "general",
+		title: "Theme",
+		description:
+			"The colours of this Mac's windows. Terminals follow it; the agents inside them keep their own theme setting.",
+		control: () => <ThemeSelect />,
+	},
 	{
 		id: "client.autoDownloadUpdates",
 		section: "general",
@@ -683,5 +693,30 @@ export function SettingsPanel({
 				)}
 			</div>
 		</div>
+	);
+}
+
+/**
+ * Its own component (a row's control is a plain function, so it can't hold a
+ * hook). Reads the theme from this window, not from `settings`: with sync off
+ * that object is the selected box's file, and the theme is this Mac's.
+ */
+function ThemeSelect() {
+	const theme = useTheme();
+	return (
+		<select
+			className="settings-select"
+			value={theme}
+			onChange={(e) => {
+				const id = THEMES.find((t) => t.id === e.target.value)?.id;
+				if (id) void window.ateamTheme.set(id);
+			}}
+		>
+			{THEMES.map((t) => (
+				<option key={t.id} value={t.id}>
+					{t.label}
+				</option>
+			))}
+		</select>
 	);
 }
