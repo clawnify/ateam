@@ -866,6 +866,39 @@ describe("answering a task's reply", () => {
 	});
 });
 
+describe("answering a task's question from the chat", () => {
+	it("keeps the question with the answer, since the task's own copy is cleared", async () => {
+		const question = {
+			id: "q1",
+			text: "Which colour?\n\nPick one.",
+			options: ["Red", "Blue"],
+			allowText: false,
+			askedAt: 1,
+		};
+		const task = { ...TASKS[0], lastReplyAt: 1, page: null, question } as unknown as TaskDTO;
+		const router = fakeRouter({
+			[CH.tasksGet]: () => task,
+			[CH.tasksAnswerQuestion]: () => undefined,
+		});
+		const lead = await startLead({
+			place: "mac",
+			dir: mkdtempSync(join(tmpdir(), "lead-")),
+			handle: router.handle,
+			machineOf: () => null,
+			deliver: async (_owner, paths) => ({ paths }),
+			emit: () => {},
+		});
+		await lead.answer({ taskId: "t1", questionId: "q1", answer: "Red" });
+		expect(lead.snapshot().items.at(-1)).toMatchObject({
+			kind: "user",
+			text: "Red",
+			to: { taskId: "t1" },
+			question: "Which colour?\n\nPick one.",
+		});
+		lead.dispose();
+	});
+});
+
 describe("what the user did with the Lead's proposals", () => {
 	it("reaches the agent with the user's next message, once, after a restart too", async () => {
 		const first = makeSession();
