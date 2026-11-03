@@ -29,6 +29,8 @@ export interface BoxRow {
 	engine: "current" | "behind" | "ahead" | "unknown";
 	/** It speaks the protocol GitHub access needs, so its GitHub panel works. */
 	githubReady: boolean;
+	/** Its engine has a Lead of its own (v24), so the desktop's can live there. */
+	leadReady: boolean;
 	lastSeen: number | null;
 	/** Why the app's own last attempt to connect failed, if it did. */
 	failure: string | null;
@@ -67,6 +69,7 @@ export function boxRows(
 				release,
 				engine: engineAgainst(version, release, app),
 				githubReady: version != null && version >= FEATURE_MIN_VERSION.githubAccess,
+				leadReady: version != null && version >= FEATURE_MIN_VERSION.lead,
 				lastSeen: c.lastSeen,
 				failure: failures[c.alias] ?? null,
 			};

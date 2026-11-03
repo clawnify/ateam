@@ -39,6 +39,7 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 		filterGrammarWithJev: true,
 		pinnedSkills: null,
 		theme: "dark",
+		leadBox: null,
 	},
 	engine: {
 		defaultAgentId: "claude",

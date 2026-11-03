@@ -134,13 +134,23 @@ export function registerIpc(router: Router, native: NativeHandlers): void {
 		} else if (method === CH.ptySpawnAgent) {
 			// Files picked on this Mac (the new-task dialog, a drop on a project) are
 			// paths an agent on a box can't open: send them to its box first, and
-			// hand it the box-side paths.
-			ipcMain.handle(method, async (_e, input: { taskId: string; files?: string[] }) => {
-				if (!input?.files?.length) return router.handle(method, [input]);
-				const sent = await deliverFiles(router, input.taskId, input.files);
-				if ("error" in sent) throw new Error(`${sent.error} The agent was not started.`);
-				return router.handle(method, [{ ...input, files: sent.paths }]);
-			});
+			// hand it the box-side paths. Those already there (`keepFiles`: attached
+			// in the chat of a Lead on that box) go on as they are.
+			ipcMain.handle(
+				method,
+				async (_e, input: { taskId: string; files?: string[]; keepFiles?: string[] }) => {
+					const { keepFiles, ...rest } = input ?? { taskId: "" };
+					if (!rest.files?.length) return router.handle(method, [rest]);
+					const keep = new Set(keepFiles ?? []);
+					const kept = rest.files.filter((f) => keep.has(f));
+					const toSend = rest.files.filter((f) => !keep.has(f));
+					const sent = toSend.length
+						? await deliverFiles(router, rest.taskId, toSend)
+						: { paths: [] };
+					if ("error" in sent) throw new Error(`${sent.error} The agent was not started.`);
+					return router.handle(method, [{ ...rest, files: [...kept, ...sent.paths] }]);
+				},
+			);
 		} else {
 			ipcMain.handle(method, (_e, ...args: unknown[]) => router.handle(method, args));
 		}

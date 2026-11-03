@@ -333,10 +333,11 @@ app
 					const win = BrowserWindow.fromWebContents(sender);
 					return win ? (windowProject.get(win) ?? null) : null;
 				},
-				sendTo: (project, channel, e) => {
+				sendTo: (project, channel, payload) => {
 					for (const [w, pid] of windowProject)
-						if (pid === project && !w.isDestroyed()) w.webContents.send(channel, e);
+						if (pid === project && !w.isDestroyed()) w.webContents.send(channel, payload);
 				},
+				boxes: host,
 			});
 			lead = started;
 			app.on("will-quit", () => started.dispose());

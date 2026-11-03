@@ -5,6 +5,7 @@ import {
 	type KanbanColumn,
 	LEAD_CH,
 	type LeadEvent,
+	type LeadHome,
 	type LoopDTO,
 	type MergeStrategy,
 	type PtyDataEvent,
@@ -240,7 +241,8 @@ const host: AteamHost = {
 contextBridge.exposeInMainWorld("ateamHost", host);
 
 const lead: AteamLead = {
-	snapshot: () => ipcRenderer.invoke(LEAD_CH.snapshot),
+	snapshot: (opts) => ipcRenderer.invoke(LEAD_CH.snapshot, opts),
+	older: (beforeId, limit) => ipcRenderer.invoke(LEAD_CH.older, beforeId, limit),
 	send: (text, files) => ipcRenderer.invoke(LEAD_CH.send, text, files),
 	attach: (paths) => ipcRenderer.invoke(LEAD_CH.attach, paths),
 	attachBytes: (name, data) => ipcRenderer.invoke(LEAD_CH.attachBytes, name, data),
@@ -257,6 +259,13 @@ const lead: AteamLead = {
 		const handler = (_: unknown, e: LeadEvent) => cb(e);
 		ipcRenderer.on(LEAD_CH.evtEvent, handler);
 		return () => ipcRenderer.off(LEAD_CH.evtEvent, handler);
+	},
+	home: () => ipcRenderer.invoke(LEAD_CH.home),
+	setHome: (box) => ipcRenderer.invoke(LEAD_CH.setHome, box),
+	onHome: (cb: (home: LeadHome) => void) => {
+		const handler = (_: unknown, home: LeadHome) => cb(home);
+		ipcRenderer.on(LEAD_CH.evtHome, handler);
+		return () => ipcRenderer.off(LEAD_CH.evtHome, handler);
 	},
 };
 contextBridge.exposeInMainWorld("ateamLead", lead);
