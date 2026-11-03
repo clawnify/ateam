@@ -65,6 +65,7 @@ import {
 } from "../lead-blocks";
 import { type DraftRef, expandRefs, splitSent } from "../lead-refs";
 import { recordEmoji, topEmoji } from "../lib/emoji-use";
+import { taskDragProps } from "../task-drag";
 import { AgentIcon } from "./AgentIcon";
 import { IconButton } from "./IconButton";
 import { Markdown, TaskLinkContext } from "./Markdown";
@@ -154,6 +155,7 @@ function ToolGroup({
 							className="lead-chip"
 							title={`Open ${task.name}`}
 							onClick={() => onOpenTask(task)}
+							{...taskDragProps(task.id)}
 						>
 							<AgentIcon agentId={task.agentId} size={12} />
 							<span className="lead-chip-name">{task.name}</span>
@@ -260,7 +262,8 @@ function Attachment({ file, onRemove }: { file: LeadFile; onRemove?: () => void 
 	);
 }
 
-/** A task named in the thread; opens it when it is on a board this window has loaded. */
+/** A task named in the thread; opens it when it is on a board this window has
+ *  loaded. Every task chip also drags onto Mission Control (task-drag.ts). */
 function TaskChip({
 	task,
 	tasks,
@@ -278,6 +281,7 @@ function TaskChip({
 			title={loaded ? `Open ${task.name}` : task.name}
 			disabled={!loaded}
 			onClick={() => loaded && onOpenTask(loaded)}
+			{...taskDragProps(loaded?.id)}
 		>
 			<AgentIcon agentId={task.agentId} size={12} />
 			<span className="lead-chip-name">{task.name}</span>
@@ -309,6 +313,7 @@ function TaskLink({
 			title={task ? `Open ${task.name}` : "Not on a board this window has loaded"}
 			disabled={!task}
 			onClick={() => task && onOpenTask(task)}
+			{...taskDragProps(task?.id)}
 		>
 			{task && <AgentIcon agentId={task.agentId} size={12} />}
 			<span className="lead-chip-name">{label}</span>

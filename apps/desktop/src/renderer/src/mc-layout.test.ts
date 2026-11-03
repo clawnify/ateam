@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { bestMcShape, type McArea, type McShape, mcCapacity, mcShapeGrid } from "./mc-layout";
+import {
+	bestMcShape,
+	type McArea,
+	type McShape,
+	mcCapacity,
+	mcShapeGrid,
+	placeArrivals,
+} from "./mc-layout";
 
 // The grid on a 16-inch MacBook Pro (1728x1117 points) with the sidebar open,
 // the same with the Lead open beside it, a 27-inch display, and a portrait one.
@@ -87,4 +94,28 @@ test("the grid gives each line's tiles an equal share of its tracks", () => {
 		"span 2",
 		"span 2",
 	]);
+});
+
+test("a tile woken by a drop takes the slot it was dropped on, and the rest move along one", () => {
+	const id = (s: string) => s;
+	const onB = new Map([["x", "b"]]);
+	expect(placeArrivals(["a", "b", "c"], ["x"], id, onB)).toEqual(["a", "x", "b", "c"]);
+	expect(placeArrivals(["a", "b"], ["x"], id, new Map([["x", "a"]]))).toEqual(["x", "a", "b"]);
+});
+
+test("an arrival with no spot, dropped off the tiles, or whose tile is gone goes last", () => {
+	const id = (s: string) => s;
+	expect(placeArrivals(["a", "b"], ["x"], id, new Map())).toEqual(["a", "b", "x"]);
+	expect(placeArrivals(["a", "b"], ["x"], id, new Map([["x", null]]))).toEqual(["a", "b", "x"]);
+	expect(placeArrivals(["a", "b"], ["x"], id, new Map([["x", "gone"]]))).toEqual(["a", "b", "x"]);
+});
+
+test("arrivals together keep their order: two dropped on one tile, and one with no spot", () => {
+	const id = (s: string) => s;
+	const place = new Map([
+		["x", "b"],
+		["y", "b"],
+	]);
+	expect(placeArrivals(["a", "b"], ["x", "y", "z"], id, place)).toEqual(["a", "x", "y", "b", "z"]);
+	expect(placeArrivals<string>([], ["x"], id, place)).toEqual(["x"]);
 });
