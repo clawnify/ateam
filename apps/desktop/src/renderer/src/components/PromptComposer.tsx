@@ -48,6 +48,7 @@ export function PromptComposer({
 	initialFiles = [],
 	initialAlias,
 	header,
+	project,
 	environments = [],
 	envAgents,
 	onAdd,
@@ -73,6 +74,9 @@ export function PromptComposer({
 	initialAlias?: string | null;
 	/** Shown above the form, e.g. who proposed this task and why. */
 	header?: ReactNode;
+	/** The Project pill, first in the foot, when the project is a choice here
+	 *  (the board shows every project). Picking one changes `environments`. */
+	project?: ReactNode;
 	/** Where the task can run: this Mac + each ~/.ssh/config box. `alias` null = Local.
 	 *  A box is disabled when the repo can't run there (no GitHub identity to clone).
 	 *  Unused by the session variant, which has no environment to choose. */
@@ -161,6 +165,14 @@ export function PromptComposer({
 		setAliasState(a);
 		localStorage.setItem("ateam.runOn", a === null ? "__local__" : a);
 	};
+	// Another project picked in the Project pill can't run where this one could
+	// (no copy on this Mac, no remote to clone onto a box): move to the first
+	// place it can, without remembering it as a pick.
+	useEffect(() => {
+		if (session || environments.some((e) => e.alias === alias && !e.disabled)) return;
+		const first = environments.find((e) => !e.disabled);
+		if (first) setAliasState(first.alias);
+	}, [session, environments, alias]);
 
 	// Which agents the chosen environment actually has installed. Known only for a
 	// connected engine; when unknown, fall back to the catalog's own `available` flag.
@@ -336,6 +348,7 @@ export function PromptComposer({
 					>
 						<Paperclip size={16} strokeWidth={1.75} />
 					</button>
+					{!session && project}
 					<AgentPicker
 						agents={agents}
 						value={agentId}

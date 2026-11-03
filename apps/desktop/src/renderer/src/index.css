@@ -321,95 +321,41 @@ input {
 	padding: 10px 14px 6px;
 	margin: 0;
 }
-/* flat project row (no border/fill/roundness; white left bar when active) */
-.proj {
+/* The project switcher's own row under the traffic-light strip: the full
+   sidebar width, so a project's name has room. A detached window's static
+   project name sits in the same row. */
+.side-project {
+	flex: none;
+	padding: 0 6px 4px;
+}
+.project-title {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	width: 100%;
-	padding: 6px 14px 6px 10px;
-	cursor: pointer;
+	gap: 6px;
+	height: 32px;
+	min-width: 0;
+	padding: 0 6px;
 	font-size: 13px;
-	text-align: left;
+	font-weight: 500;
 	color: var(--text);
-	background: transparent;
-	border: none;
-	border-left: 2px solid transparent;
-	border-radius: 0;
 }
-.proj:hover {
-	background: var(--bg-elev-2);
-}
-.proj.active {
-	background: var(--bg-elev-2);
-	border-left: 2px solid #fff;
+/* The project's own colour, never a status. 7px, in a 14px slot so names
+   line up with the icon of "All projects". */
+.project-dot {
+	display: inline-block;
+	width: 7px;
+	height: 7px;
+	margin: 0 3.5px;
+	border-radius: 50%;
+	background: var(--text-dim);
+	flex: none;
 }
 /* A file from Finder held over a project: dropping it starts a task there. */
-.proj.file-drop,
+.project-switcher.file-drop,
 .rail-tile.file-drop {
 	background: var(--bg-elev-2);
 	outline: 1px dashed var(--text);
 	outline-offset: -2px;
-}
-.proj .dot {
-	width: 7px;
-	height: 7px;
-	border-radius: 50%;
-	background: var(--text-dim);
-	flex: none;
-}
-.proj-name {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-/* The environments a repo spans, one icon each (laptop = this Mac, server = a
-   box). Never shrinks — the project name ellipsizes first, so the icons stay
-   readable however long the name is. */
-.proj-envs {
-	display: flex;
-	align-items: center;
-	gap: 3px;
-	flex: none;
-	color: var(--text-dim);
-}
-.proj-env {
-	display: inline-flex;
-}
-/* Detached-window identity header: the project this window is pinned to,
-   shown as a static title (not a switchable list). */
-.proj-header {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	padding: 10px 14px 6px 12px;
-	font-size: 13px;
-	font-weight: 600;
-	color: var(--text);
-}
-.proj-header .dot {
-	width: 7px;
-	height: 7px;
-	border-radius: 50%;
-	background: var(--text-dim);
-	flex: none;
-}
-
-/* Project row = the selectable button + a hover-revealed actions menu. */
-.proj-row {
-	position: relative;
-}
-.proj-open {
-	position: absolute;
-	right: 6px;
-	top: 50%;
-	transform: translateY(-50%);
-	opacity: 0;
-	transition: opacity 0.12s ease;
-}
-.proj-row:hover .proj-open,
-.proj-open:focus-within {
-	opacity: 1;
 }
 
 /* tasks accordion: VSCode-explorer-style file rows */
