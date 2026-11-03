@@ -10,6 +10,7 @@ import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDb, repo, type SessionExitReason } from "@ateam/db";
+import { diff, patches } from "@ateam/git-core";
 import type {
 	AgentStatus,
 	KanbanColumn,
@@ -22,7 +23,15 @@ import type {
 import { ensureGhShim, ensureNotifyScript, ensurePeerSecret, verifyPeerToken } from "./agent-setup";
 import { ARCHIVE_SWEEP_MS, archiveIdleTasks } from "./archive";
 import { stampBrowserUse } from "./browser";
+import {
+	type ChangeSteps,
+	createChangeSteps,
+	lastMergedPrAt,
+	STEPS_MODEL,
+	STEPS_TIMEOUT_MS,
+} from "./change-steps";
 import { FollowUps } from "./follow-ups";
+import { askAgent } from "./headless";
 import { type HookEvent, HookServer, type MergeRequestEvent } from "./hooks/hook-server";
 import { ensureLoginEnv } from "./login-env";
 import { applySetStatus, buildBoardView } from "./loops/board-signals";
@@ -43,7 +52,7 @@ import { readSettings } from "./settings-file";
 import { createTurnClassifier } from "./turn-classifier";
 import { createSummarizer, SUMMARY_SWEEP_MS } from "./task-summaries";
 import { askConfiguredTextModel, currentTextModel } from "./text-model";
-import { userPromptsFor } from "./session-search";
+import { turnsFor, userPromptsFor } from "./session-search";
 import { applySetWaiting, CLEAR_WAIT, isFiredWait, WaitTimers } from "./waits";
 import { WorktreeGuard } from "./worktree-guard";
 import { createWorktreeSweep, type WorktreeSweep } from "./worktree-sweep";
@@ -117,6 +126,8 @@ export interface Engine {
 	/** Keeps every task's git + PR facts fresh, not just the open one. The
 	 *  `CH.gitStatus` handler shares its throttle (see worktree-sweep.ts). */
 	readonly worktreeSweep: WorktreeSweep;
+	/** A task's diff told as steps, for `CH.tasksChangeSteps` (change-steps.ts). */
+	readonly changeSteps: ChangeSteps;
 	/** Connect to (or launch) the detached PTY daemon and learn live sessions. */
 	connectPty(): Promise<void>;
 	/** Settles once connectPty() has finished, attached or not. The dispatcher waits
@@ -654,6 +665,20 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		onTaskUpdated: (taskId) => sendTaskUpdated(taskId),
 		isLive: taskIsLive,
 	});
+	// A task's diff told as steps, written when the Changes view asks (change-steps.ts).
+	const changeSteps = createChangeSteps({
+		db,
+		// The same files and patches the flat list and the file view show.
+		diffOf: async (task) => {
+			await worktreeSweep.freshenBase(task);
+			return (await diff({ worktreePath: task.worktreePath, baseBranch: task.baseBranch })).files;
+		},
+		patchesOf: (task, files) =>
+			patches({ worktreePath: task.worktreePath, baseBranch: task.baseBranch, files }),
+		turnsOf: (task, since) => turnsFor(task.worktreePath, since),
+		lastMergeAt: (task) => lastMergedPrAt(task.worktreePath, task.branch),
+		ask: (agentId, prompt) => askAgent(agentId, prompt, STEPS_TIMEOUT_MS, { model: STEPS_MODEL }),
+	});
 
 	let reapTimer: ReturnType<typeof setInterval> | null = null;
 	let archiveTimer: ReturnType<typeof setInterval> | null = null;
@@ -724,6 +749,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		},
 		sendTaskUpdated,
 		worktreeSweep,
+		changeSteps,
 		sendTaskRemoved(taskId: string) {
 			emitter.emit("taskRemoved", taskId);
 		},
@@ -760,7 +786,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			summaryTimer ??= setInterval(() => void summaries.sweep(), SUMMARY_SWEEP_MS);
 		},
 		isWorking() {
-			if (pendingSeeds.size > 0 || mergeQueue.busy() || summaries.busy()) return true;
+			if (pendingSeeds.size > 0 || mergeQueue.busy() || summaries.busy() || changeSteps.busy())
+				return true;
 			// The row's status says mid-turn; the daemon says the process is still
 			// there (a row can strand at "running" after an exit nobody watched).
 			return repo

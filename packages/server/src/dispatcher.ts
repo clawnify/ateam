@@ -53,6 +53,7 @@ import {
 	type SettingsPatch,
 	type SettingsResult,
 	type TaskLastReplyDTO,
+	type ChangeStepsDTO,
 	type TaskPageContentDTO,
 	type TaskWait,
 	type UpdateLoopInput,
@@ -465,6 +466,9 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			const html = task.page ? repo.getTaskPageHtml(db, id) : undefined;
 			return task.page && html != null ? { ...task.page, html } : null;
 		},
+		// The task's diff as steps; asking starts a write when the diff moved on.
+		[CH.tasksChangeSteps]: async (id: string): Promise<ChangeStepsDTO> =>
+			engine.changeSteps.get(id),
 		[CH.tasksGet]: async (id: string) => {
 			const task = repo.getTask(db, id);
 			if (!task) throw new Error(`Task not found: ${id}`);

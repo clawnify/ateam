@@ -382,19 +382,23 @@ export interface FileDiffInput {
 	baseBranch?: string;
 }
 
-/** The unified patch for a single file (lazily fetched by the viewer). */
-export async function fileDiff(input: FileDiffInput): Promise<string> {
-	const git = gitFor(input.worktreePath);
-	// A file that already landed on base shows only what changed since HEAD,
-	// or nothing once its uncommitted state landed too, matching the counts
-	// `diff` reports for it. With no base, HEAD is what `diff` counts against.
-	const base = input.baseBranch ? await baseRef(git, input.baseBranch) : null;
-	const landed = base ? await landedSets(input.worktreePath, git, base) : null;
-	if (landed?.whole?.has(input.file)) return "";
+/**
+ * One file's patch, given the base and what already landed on it. A file that
+ * already landed on base shows only what changed since HEAD, or nothing once
+ * its uncommitted state landed too, matching the counts `diff` reports for it.
+ * With no base, HEAD is what `diff` counts against.
+ */
+async function filePatch(
+	git: SimpleGit,
+	base: string | null,
+	landed: { committed: Set<string> | null; whole: Set<string> | null } | null,
+	file: string,
+): Promise<string> {
+	if (landed?.whole?.has(file)) return "";
 	const patch =
-		base && !landed?.committed?.has(input.file)
-			? await safeRaw(git, ["diff", "--merge-base", base, "--", input.file])
-			: await safeRaw(git, ["diff", "HEAD", "--", input.file]);
+		base && !landed?.committed?.has(file)
+			? await safeRaw(git, ["diff", "--merge-base", base, "--", file])
+			: await safeRaw(git, ["diff", "HEAD", "--", file]);
 	if (patch) return patch;
 
 	// `git diff` is silent on an untracked file (an agent's freshly created
@@ -402,8 +406,39 @@ export async function fileDiff(input: FileDiffInput): Promise<string> {
 	// yields a regular "new file" patch. `--no-index` exits 1 on any difference
 	// with nothing on stderr, which simple-git reports as success.
 	const isUntracked = (
-		await safeRaw(git, ["ls-files", "--others", "--exclude-standard", "--", input.file])
+		await safeRaw(git, ["ls-files", "--others", "--exclude-standard", "--", file])
 	).trim();
 	if (!isUntracked) return patch;
-	return safeRaw(git, ["diff", "--no-index", "--", "/dev/null", input.file]);
+	return safeRaw(git, ["diff", "--no-index", "--", "/dev/null", file]);
+}
+
+/** The unified patch for a single file (lazily fetched by the viewer). */
+export async function fileDiff(input: FileDiffInput): Promise<string> {
+	const git = gitFor(input.worktreePath);
+	const base = input.baseBranch ? await baseRef(git, input.baseBranch) : null;
+	const landed = base ? await landedSets(input.worktreePath, git, base) : null;
+	return filePatch(git, base, landed, input.file);
+}
+
+export interface PatchesInput {
+	worktreePath: string;
+	baseBranch?: string;
+	/** The files to patch, usually the paths `diff` reported. */
+	files: string[];
+}
+
+/**
+ * Each file's patch, the same text `fileDiff` gives for it, for a reader of the
+ * whole change at once (the change steps). What already landed on base is
+ * worked out once for all of them rather than once per file: that check merges
+ * in memory, and doing it per file made a 40-file change cost 40 merges.
+ */
+export async function patches(input: PatchesInput): Promise<{ path: string; patch: string }[]> {
+	const git = gitFor(input.worktreePath);
+	const base = input.baseBranch ? await baseRef(git, input.baseBranch) : null;
+	const landed = base ? await landedSets(input.worktreePath, git, base) : null;
+	const out: { path: string; patch: string }[] = [];
+	for (const path of input.files)
+		out.push({ path, patch: await filePatch(git, base, landed, path) });
+	return out;
 }
