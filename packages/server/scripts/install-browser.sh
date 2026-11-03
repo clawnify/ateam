@@ -210,8 +210,10 @@ if [ -z "$VIEW_ADDR" ]; then
 	if [ -s "$DATA_DIR/ws-addr" ]; then HOST="$(head -1 "$DATA_DIR/ws-addr" | sed 's/:[0-9]*$//')"; fi
 	if [ -z "$HOST" ]; then HOST="$(tailscale ip -4 2>/dev/null | head -1 || true)"; fi
 	# Tailscale in userspace mode (boxd) owns no interface, and a bind to its IP
-	# would fail on every restart.
-	if [ -n "$HOST" ] && ! ip -4 -o addr show 2>/dev/null | grep -qF " $HOST/"; then HOST=""; fi
+	# would fail on every restart. Not `grep -q`: ip writes each address line on
+	# its own, and once grep -q quits at the match, a later line kills ip with
+	# SIGPIPE, which pipefail reads as no match.
+	if [ -n "$HOST" ] && ! ip -4 -o addr show 2>/dev/null | grep -F " $HOST/" >/dev/null; then HOST=""; fi
 	if [ -n "$HOST" ] && [ "$HOST" != 127.0.0.1 ]; then VIEW_ADDR="$HOST:6080"; fi
 fi
 if [ -n "$VIEW_ADDR" ]; then SERVICES="$SERVICES ateam-novnc-tailnet"; fi
