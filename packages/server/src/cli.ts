@@ -22,11 +22,13 @@ import { existsSync, mkdirSync, openSync, realpathSync, unlinkSync } from "node:
 import { connect, createServer, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { type AggregateBackend, CH, createAggregate } from "@ateam/protocol";
 import type { Dispatcher } from "./dispatcher";
 import { createDispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
 import { createEngine } from "./engine";
 import { engineLead } from "./lead/engine-lead";
+import { BoxLinks } from "./links";
 import { Pairings } from "./pairing";
 import {
 	LiveConnections,
@@ -58,6 +60,9 @@ const SELF = process.argv[1] ? realpathSync(process.argv[1]) : "";
 let sleepControl: SleepControl | null = null;
 // Served beside the dispatcher on every connection, once the engine is up.
 let extensions: RpcExtension[] = [];
+// Where the network port listens (`<host>:<port>`), reported in hello for other
+// boxes to link to (cross-box), or null with no listener.
+let wsAddr: string | null = null;
 // The lock on the network port (pairing.ts): which devices may use the box over
 // the WebSocket. The unix socket (what `attach` relays over SSH) is never gated.
 const pairing: PairingGuard = {
@@ -91,15 +96,27 @@ async function runDaemon(): Promise<void> {
 	const LOCK_NEW_BOXES = false;
 	const fresh =
 		!existsSync(join(DATA_DIR, "ateam.sqlite")) && !existsSync(join(DATA_DIR, "grove.sqlite"));
+	// The boxes this one links to (links.ts): its agents and its Lead reach them.
+	const links = new BoxLinks({ dataDir: DATA_DIR, log: (line) => console.log(line) });
 	const engine = await createEngine({
 		dataDir: DATA_DIR,
 		daemonPath: ptyDaemon,
 		execPath: process.execPath,
+		peerRelay: links,
 	});
 	if (LOCK_NEW_BOXES && fresh && pairing.store.lockIfNew())
 		console.log("[ateam] new box: locked to paired devices (pair one with `ateam pair`)");
 	engine.startLoops();
 	const dispatcher = createDispatcher(engine);
+	// What this box's Lead reaches: this box, then the boxes it links to, through
+	// the router the desktop and the phone use for several engines (aggregate.ts).
+	const here: AggregateBackend = {
+		kind: "local",
+		handle: (method, args) => dispatcher.handle(method, args),
+	};
+	const reachable: AggregateBackend[] = [here, ...links.backends];
+	links.onChange(() => reachable.splice(1, reachable.length - 1, ...links.backends));
+	const reach = createAggregate(reachable, here);
 	// This box's own Lead chat, for the phone (lead/engine-lead.ts). Only here:
 	// the desktop's in-process engine has the desktop's Lead instead.
 	const lead = engineLead({
@@ -107,8 +124,25 @@ async function runDaemon(): Promise<void> {
 		dispatcher,
 		dir: join(DATA_DIR, "lead"),
 		log: (line) => console.log(line),
+		reach: {
+			handle: (method, args) => reach.handle(method, args),
+			machineOf: (id) => links.nameOf(reach.ownerOf.get(id)),
+			onTaskUpdated: (cb) =>
+				links.onTaskUpdated((task, backend) => {
+					reach.learn(backend, task);
+					cb(task);
+				}),
+		},
 	});
-	extensions = [lead];
+	// links:list and links:set, for the Mac that sets the links up. Nothing pushed.
+	const linkMethods: RpcExtension = {
+		methods: [CH.linksList, CH.linksSet],
+		handle: async (method, args) => (method === CH.linksSet ? links.set(args[0]) : links.status()),
+		subscribe: () => () => {},
+	};
+	extensions = [lead, linkMethods];
+	links.start();
+	wsAddr = resolveWsAddr(process.env, DATA_DIR) ?? null;
 
 	const dir = dirname(SOCK);
 	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -174,7 +208,7 @@ function serveClient(
 	trusted: boolean,
 ): void {
 	sleepControl?.touch();
-	serveRpc(engine, dispatcher, transport, extensions, { trusted, pairing });
+	serveRpc(engine, dispatcher, transport, extensions, { trusted, pairing, wsAddr });
 }
 
 /**

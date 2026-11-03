@@ -532,6 +532,28 @@ export const repo = {
 			.all();
 	},
 
+	/** Messages one sender sent to `toTaskId` since `since`, newest first, by the
+	 *  id it carries in fromTerminalId: an agent on another box (cross-box). */
+	listPeerMessagesFromTerminalTo(
+		db: AteamDb,
+		fromTerminalId: string,
+		toTaskId: string,
+		since: number,
+	): PeerMessage[] {
+		return db
+			.select()
+			.from(peerMessages)
+			.where(
+				and(
+					eq(peerMessages.fromTerminalId, fromTerminalId),
+					eq(peerMessages.toTaskId, toTaskId),
+					gte(peerMessages.createdAt, since),
+				),
+			)
+			.orderBy(desc(peerMessages.createdAt))
+			.all();
+	},
+
 	/** How many messages a task has sent since `since` (the sender rate cap). */
 	/** Messages one non-task sender (the Lead) sent since `since`, by its terminal id. */
 	countPeerMessagesFromTerminal(db: AteamDb, fromTerminalId: string, since: number): number {

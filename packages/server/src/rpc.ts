@@ -29,6 +29,27 @@ const FORWARDED: Record<keyof EngineEventMap, true> = {
 	ptyExit: true,
 };
 
+/** All a link from another box is sent (cross-box): what its Lead follows tasks
+ *  by. Never terminal output. */
+const BOX_EVENTS: readonly (keyof EngineEventMap)[] = ["taskUpdated", "taskRemoved"];
+
+/** All a link from another box may call: read the board, list the tasks and
+ *  message them (its agents and its Lead), and pass on the user's answer. */
+const BOX_METHODS = new Set<string>([
+	CH.systemHello,
+	CH.projectsList,
+	CH.tasksList,
+	CH.tasksGet,
+	CH.tasksLastReply,
+	CH.peersList,
+	CH.peersSendFromBox,
+	CH.peersSendFromLead,
+	CH.tasksAnswerQuestion,
+]);
+
+/** What a link from another box is told when it calls anything else. */
+export const BOX_REFUSED = "A link from another box may only read the board and send messages.";
+
 /** The server's view of a bidirectional, whole-frame message channel. */
 export interface ServerTransport {
 	send(frame: ServerFrame): void;
@@ -97,6 +118,9 @@ export interface ServeOptions {
 	trusted?: boolean;
 	/** The lock; absent, the connection is never gated (the desktop's own engine, tests). */
 	pairing?: PairingGuard;
+	/** The box's network address, reported in hello for other boxes to link to
+	 *  (v30): `<host>:<port>`, or null with no listener. Absent: not reported. */
+	wsAddr?: string | null;
 }
 
 /** Wrong tokens or codes on one connection before it is dropped. */
@@ -151,9 +175,21 @@ export function serveRpc(
 	let device: string | null = null;
 	let admitted = trusted || !guard?.store.locked();
 	let failures = 0;
+	// A link from another box (cross-box): its pairing is a box's, or its hello
+	// says it is one. Asking only ever narrows what a connection gets.
+	let link = false;
+	let engineSubs: (() => void)[] = [];
 	const subscribeEngine = () => {
-		for (const event of Object.keys(FORWARDED) as (keyof EngineEventMap)[])
-			unsubscribe.push(engine.on(event, forward(event)));
+		const events = link ? BOX_EVENTS : (Object.keys(FORWARDED) as (keyof EngineEventMap)[]);
+		for (const event of events) engineSubs.push(engine.on(event, forward(event)));
+	};
+	const narrow = () => {
+		if (link) return;
+		link = true;
+		if (!admitted) return;
+		for (const u of engineSubs) u();
+		engineSubs = [];
+		subscribeEngine();
 	};
 	if (admitted) subscribeEngine();
 	guard?.live.add(client, opts.trusted === true, () => transport.close?.());
@@ -179,6 +215,7 @@ export function serveRpc(
 
 	const dispose = () => {
 		closed = true;
+		for (const u of engineSubs) u();
 		for (const u of unsubscribe) u();
 		dispatcher.release(client);
 		guard?.live.remove(client);
@@ -192,6 +229,7 @@ export function serveRpc(
 					throw new Error("Too many wrong codes. Wait a few minutes, then ask for a new one.");
 				try {
 					const grant = g.store.redeem(input.code, input.label, input.kind);
+					if (grant.device.kind === "box") narrow();
 					admit(grant.device.id);
 					return grant;
 				} catch (e) {
@@ -227,17 +265,25 @@ export function serveRpc(
 	};
 	const call = async (method: string, args: unknown[]): Promise<unknown> => {
 		if (method === CH.systemHello) {
-			const token = (args[0] as { token?: unknown } | undefined)?.token;
+			const hello = args[0] as { token?: unknown; link?: unknown } | undefined;
+			if (hello?.link === true) narrow();
+			const token = hello?.token;
 			if (guard && token !== undefined && opts.trusted !== true) {
 				const d = guard.store.verify(token);
+				if (d?.kind === "box") narrow();
 				if (d) admit(d.id);
 				else if (!admitted) failed();
 			}
 			const info = (await dispatcher.handle(method, [], { client })) as SystemInfo;
-			return guard ? { ...info, pairing: state() } : info;
+			return {
+				...info,
+				...(guard ? { pairing: state() } : {}),
+				...(opts.wsAddr !== undefined ? { wsAddr: opts.wsAddr } : {}),
+			};
 		}
 		if (guard && method === CH.pairingRedeem) return pairingCall(guard, method, args);
 		if (!admitted) throw new Error(NEEDS_PAIRING);
+		if (link && !BOX_METHODS.has(method)) throw new Error(BOX_REFUSED);
 		if (guard && PAIRING_METHODS.has(method)) return pairingCall(guard, method, args);
 		const ext = extensions.find((x) => x.methods.includes(method));
 		if (!ext) return dispatcher.handle(method, args, { client });

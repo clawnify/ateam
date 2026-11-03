@@ -476,6 +476,17 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 		[CH.peersSendFromLead]: async (req: { taskId: string; body: string }) =>
 			engine.messageFrom("lead", { to: req.taskId, body: req.body }),
+		// An agent on a linked box (cross-box): this box's tasks, and a message to one.
+		[CH.peersList]: async (req?: { search?: unknown }) =>
+			engine.peersForBox(
+				typeof req?.search === "string" && req.search.trim() ? req.search.trim() : undefined,
+			),
+		[CH.peersSendFromBox]: async (req: {
+			to: unknown;
+			body: unknown;
+			hop?: unknown;
+			from: unknown;
+		}) => engine.messageFromBox(req ?? {}),
 		// The user replying to a task's agent from the Lead chat, without opening it.
 		[CH.tasksMessage]: async (req: { taskId: string; body: string }) =>
 			engine.messageFrom("user", { to: req.taskId, body: req.body }),
