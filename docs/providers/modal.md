@@ -38,7 +38,7 @@ need to keep processes alive.
 
 | | Result |
 | --- | --- |
-| Engine install | `install.sh` runs in an image build as a non-root user, and its handshake passes. Node 22 comes in through nvm. The `gh` step aborted the script ([#416](https://github.com/clawnify/ateam/issues/416)), so the spike image preinstalls `gh` |
+| Engine install | `install.sh` runs in an image build as a non-root user, and its handshake passes. Node 22 comes in through nvm. The `gh` step aborted the script ([#416](https://github.com/clawnify/ateam/issues/416), fixed since by [#424](https://github.com/clawnify/ateam/pull/424)), so the spike image preinstalls `gh` |
 | SSH | Run `sshd -D` as the sandbox's command and expose port 22 with `unencrypted_ports=[22]`. You get a raw TCP tunnel, `r4xx.modal.host:<port>`. sshd takes 1–5s after the tunnel appears, and the first attempt may fail with 255 |
 | Engine over SSH | `ateam attach --stdio` starts both daemons and `~/.ateam/rpc.sock`, as on any box |
 | Runtimes | The default is **gVisor**: kernel `4.19.0-gvisor`, no systemd, and kernel-mode `tailscaled` fails with `tstun.New("tailscale0"): operation not permitted`. **`runtime="vm"`** has a real 7.2 kernel, a 504 GB disk and a working `/dev/net/tun`. Neither has systemd, so `install.sh --service` has nothing to install into |

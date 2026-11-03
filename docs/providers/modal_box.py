@@ -78,7 +78,7 @@ def build_image() -> modal.Image:
             "&& chmod 600 /home/ateam/.ssh/authorized_keys",
             "ssh-keygen -A",
             "sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config",
-            # gh preinstalled, so install.sh skips its own gh step (#416 aborts it).
+            # gh preinstalled, so install.sh skips its own gh step, which aborted it before #424 (#416).
             "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/gh.gpg",
             "echo 'deb [signed-by=/usr/share/keyrings/gh.gpg] https://cli.github.com/packages stable main' "
             "> /etc/apt/sources.list.d/gh.list",
