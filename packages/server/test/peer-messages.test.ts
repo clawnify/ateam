@@ -406,6 +406,15 @@ describe("PeerMessenger across boxes (cross-box)", () => {
 		);
 	});
 
+	it("names the box a message came through by the link, whatever it claims", async () => {
+		const b = addTask("b", "codex");
+		const claim = { ...fromProbe, box: "mallory" };
+		expect(messenger.receive({ to: b.id, body: "hi", from: claim }, "probe").ok).toBe(true);
+		await flush();
+		expect(launched[0]?.prompt).toContain("on the box probe");
+		expect(launched[0]?.prompt).not.toContain("mallory");
+	});
+
 	it("refuses a message with no sender, no body, or no such task here", () => {
 		const b = addTask("b");
 		expect(messenger.receive({ to: b.id, body: "hi", from: null }).ok).toBe(false);

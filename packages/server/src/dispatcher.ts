@@ -152,6 +152,8 @@ let updating = false;
 /** Who is calling: one id per client connection (a desktop window, the phone). */
 export interface CallContext {
 	client: string;
+	/** A box link's name on this box, from its pairing (cross-box, rpc.ts). */
+	linkName?: string | null;
 }
 
 export interface Dispatcher {
@@ -481,12 +483,6 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			engine.peersForBox(
 				typeof req?.search === "string" && req.search.trim() ? req.search.trim() : undefined,
 			),
-		[CH.peersSendFromBox]: async (req: {
-			to: unknown;
-			body: unknown;
-			hop?: unknown;
-			from: unknown;
-		}) => engine.messageFromBox(req ?? {}),
 		// The user replying to a task's agent from the Lead chat, without opening it.
 		[CH.tasksMessage]: async (req: { taskId: string; body: string }) =>
 			engine.messageFrom("user", { to: req.taskId, body: req.body }),
@@ -1059,6 +1055,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 	const sizes = createSizeArbiter();
 	engine.on("ptyExit", (e) => sizes.forget(e.terminalId));
 	const contextual = {
+		// A message from an agent on a linked box: which box it came from is the
+		// link's pairing, not what the message says (rpc.ts).
+		[CH.peersSendFromBox]: (
+			ctx: CallContext,
+			req: { to: unknown; body: unknown; hop?: unknown; from: unknown },
+		) => engine.messageFromBox(req ?? {}, ctx.linkName ?? undefined),
 		[CH.ptyWrite]: (ctx: CallContext, terminalId: string, data: string) => {
 			const size = sizes.activity(terminalId, ctx.client);
 			if (size) services.pty.resize(terminalId, size.cols, size.rows);

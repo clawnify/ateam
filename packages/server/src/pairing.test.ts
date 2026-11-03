@@ -15,7 +15,14 @@ import {
 import type { Dispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
 import { CODE_TTL_MS, PAIRINGS_FILE, Pairings } from "./pairing";
-import { BOX_REFUSED, LiveConnections, type PairingGuard, RedeemLimiter, serveRpc } from "./rpc";
+import {
+	BOX_REFUSED,
+	LinkLimiter,
+	LiveConnections,
+	type PairingGuard,
+	RedeemLimiter,
+	serveRpc,
+} from "./rpc";
 
 const dir = () => mkdtempSync(join(tmpdir(), "pairing-"));
 
@@ -85,13 +92,16 @@ function fakeEngine() {
 	const emit = (event: string, payload: unknown) => {
 		for (const l of listeners.get(event) ?? []) l(payload);
 	};
+	const calls: { method: string; ctx?: { linkName?: string | null } }[] = [];
 	const dispatcher = {
 		methods: [],
-		handle: async (method: string) =>
-			method === CH.systemHello ? { protocolVersion: 29, agents: [] } : `did ${method}`,
+		handle: async (method: string, _args: unknown[], ctx?: { linkName?: string | null }) => {
+			calls.push({ method, ctx });
+			return method === CH.systemHello ? { protocolVersion: 29, agents: [] } : `did ${method}`;
+		},
 		release: () => {},
 	} as unknown as Dispatcher;
-	return { engine, emit, dispatcher };
+	return { engine, emit, dispatcher, calls };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 2));
@@ -247,6 +257,29 @@ describe("a connection to a box's network port", () => {
 		expect(again.names()).toEqual([]);
 		// The Mac that paired it is untouched.
 		expect(await mac.call(CH.ptyWrite, "x", "ls")).toBe(`did ${CH.ptyWrite}`);
+	});
+
+	it("names what a box link hands over by its pairing, and caps the link as a whole", async () => {
+		const box = fakeEngine();
+		const guard: PairingGuard = { ...guardIn(), fromLinks: new LinkLimiter(2) };
+		const mac = connect(box, guard);
+		await mac.call(CH.pairingLock, { label: "Mac", kind: "desktop" });
+		const { code } = (await mac.call(CH.pairingInvite)) as { code: string };
+		const probe = connect(box, guard);
+		await probe.call(CH.pairingRedeem, { code, label: "probe", kind: "box" });
+		const claim = {
+			to: "t",
+			body: "x",
+			from: { box: "mallory", taskId: "a", name: "b", agent: "c" },
+		};
+		await probe.call(CH.peersSendFromBox, claim);
+		expect(box.calls.at(-1)).toMatchObject({
+			method: CH.peersSendFromBox,
+			ctx: { linkName: "probe" },
+		});
+		// Its own senders' caps can't hold a box that names new ones: this one does.
+		await probe.call(CH.peersSendFromBox, claim);
+		await expect(probe.call(CH.peersSendFromBox, claim)).rejects.toThrow("rate limit");
 	});
 
 	it("says where the box listens, for other boxes to link to", async () => {

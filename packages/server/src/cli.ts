@@ -31,6 +31,7 @@ import { engineLead } from "./lead/engine-lead";
 import { BoxLinks } from "./links";
 import { Pairings } from "./pairing";
 import {
+	LinkLimiter,
 	LiveConnections,
 	type PairingGuard,
 	RedeemLimiter,
@@ -69,6 +70,7 @@ const pairing: PairingGuard = {
 	store: new Pairings(DATA_DIR),
 	live: new LiveConnections(),
 	limiter: new RedeemLimiter(),
+	fromLinks: new LinkLimiter(),
 };
 
 async function runDaemon(): Promise<void> {

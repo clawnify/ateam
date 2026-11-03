@@ -147,7 +147,11 @@ export interface Engine {
 	 *  every task in play, or the ones matching a search. */
 	peersForBox(search?: string): PeerView[] | PeerSearch;
 	/** A message to a task here from an agent on a linked box (peers:sendFromBox). */
-	messageFromBox(req: { to: unknown; body: unknown; hop?: unknown; from: unknown }): SendResult;
+	messageFromBox(
+		req: { to: unknown; body: unknown; hop?: unknown; from: unknown },
+		/** The box it came through, by that link's pairing: it names the sender. */
+		viaBox?: string,
+	): SendResult;
 	/** Answer (or with null dismiss) the question a task's agent asked (questions.ts). */
 	answerQuestion(req: {
 		taskId: string;
@@ -825,7 +829,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		messageFrom: (sender, req) => peers.sendFrom(sender, req),
 		peersForBox: (search) =>
 			search ? peers.searchPeers(undefined, search) : peers.listPeers(undefined),
-		messageFromBox: (req) => peers.receive(req),
+		messageFromBox: (req, viaBox) => peers.receive(req, viaBox),
 		answerQuestion: (req) => {
 			// A permission prompt is answered by resolving the hook that holds it,
 			// not by a message: the agent is mid-turn, waiting on exactly this.

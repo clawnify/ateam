@@ -538,11 +538,16 @@ export class PeerMessenger {
 	/** Queue a message from an agent on a linked box (peers:sendFromBox) to the
 	 *  task `to` here, then try to deliver it. Its box worked out the hop; the cap
 	 *  on how much one sender sends is kept here, where its messages land. */
-	receive(req: { to: unknown; body: unknown; hop?: unknown; from: unknown }): SendResult {
+	receive(
+		req: { to: unknown; body: unknown; hop?: unknown; from: unknown },
+		viaBox?: string,
+	): SendResult {
 		const { db } = this.deps;
 		const now = this.now();
 		const from = remoteSender(req.from);
 		if (!from) return { ok: false, reason: "the message doesn't say which agent sent it" };
+		// A link that is paired here is named by its pairing, not by what it says.
+		if (viaBox?.trim()) from.box = viaBox.trim().slice(0, 100);
 		const body = typeof req.body === "string" ? req.body.trim() : "";
 		if (!body) return { ok: false, reason: "the message is empty" };
 		if (body.length > MAX_BODY) {
