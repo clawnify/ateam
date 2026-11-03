@@ -2031,7 +2031,7 @@ input {
 	content: "";
 	position: absolute;
 	inset: 0;
-	background: rgb(255 255 255 / 0.08);
+	background: rgb(var(--ink) / 0.08);
 	pointer-events: none;
 }
 .mc .tile .bar {
