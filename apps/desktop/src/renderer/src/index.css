@@ -4627,6 +4627,23 @@ input {
 	flex-direction: column;
 	gap: 6px;
 }
+/* The folded lines above the open reply: a long thread scrolls here, so the
+   card stays about one screen tall (Expand shows it whole). About five and a
+   half lines: the half-cut top line says there are more, where macOS shows no
+   scrollbar until a scroll. The side padding
+   makes room for the lines' hover bleed (.lead-fold's negative margin), and
+   relative makes the box the lines' offsetParent (foldsRest). */
+.lead-thread-folds {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-height: min(170px, 30vh);
+	margin: 0 -8px;
+	padding: 0 8px;
+	overflow-x: hidden;
+	overflow-y: auto;
+}
 .lead-fold {
 	display: flex;
 	align-items: center;
