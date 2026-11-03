@@ -472,7 +472,7 @@ input {
 	width: 14px;
 	height: 14px;
 	border-radius: 3px;
-	outline: 1px solid rgb(255 255 255 / 0.1);
+	outline: 1px solid rgb(var(--ink) / 0.1);
 	outline-offset: -1px;
 	flex: none;
 }
