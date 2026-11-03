@@ -282,7 +282,7 @@ const ROWS: Row[] = [
 		section: "boxes",
 		title: "Boxes",
 		description:
-			"Every box you've used: whether it's connected, its engine version, and the GitHub account and token it uses. Connect, update or forget a box here, and paste a new GitHub token instead of using the box's terminal.",
+			"Every box you've used: whether it's connected, its engine version, and the GitHub account and token it uses. Connect, update or forget a box here, paste a new GitHub token instead of using the box's terminal, and choose a box for the Lead chat to run on.",
 		control: () => null,
 	},
 	{
@@ -481,10 +481,13 @@ function Switch({
 export function SettingsPanel({
 	agents,
 	boxesNeedYou = false,
+	jumpTo,
 }: {
 	agents: AgentDTO[];
 	/** A connected box needs the user (useBoxesNeedingYou): Boxes gets a dot. */
 	boxesNeedYou?: boolean;
+	/** Open at this page; a new `n` opens it again. */
+	jumpTo?: { section: SectionId; n: number } | null;
 }) {
 	const [result, setResult] = useState<SettingsResult | null>(null);
 	const [credentials, setCredentials] = useState<CredentialsResult | null>(null);
@@ -492,7 +495,10 @@ export function SettingsPanel({
 	const [query, setQuery] = useState("");
 	// One section at a time, like every settings page a Mac user has met: the
 	// nav is the page's tabs, not an index into one long scroll.
-	const [active, setActive] = useState<SectionId>("general");
+	const [active, setActive] = useState<SectionId>(jumpTo?.section ?? "general");
+	useEffect(() => {
+		if (jumpTo) setActive(jumpTo.section);
+	}, [jumpTo]);
 	const searchRef = useRef<HTMLInputElement>(null);
 
 	useEffect(() => {

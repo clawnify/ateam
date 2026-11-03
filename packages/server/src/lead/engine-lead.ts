@@ -1,7 +1,8 @@
-// A box's own Lead, for the phone (protocol v24). The phone holds one box and
-// never reaches the Mac, whose Lead lives in the desktop, so the box's engine
-// runs one too: the same core (index.ts) over this engine's dispatcher alone,
-// served beside the dispatcher on the engine's RPC (LEAD_RPC, LEAD_EVENT).
+// A box's own Lead (protocol v24), for the phone, and for the desktop when its
+// Lead lives on this box (client.leadBox). The phone holds no Mac, so the box's
+// engine runs one: the same core (index.ts) over this engine's dispatcher alone,
+// served beside the dispatcher on the engine's RPC (LEAD_RPC, LEAD_EVENT). Every
+// client talking to it sees the one conversation, live.
 //
 // It costs nothing until used: the core starts on the first call that does
 // something (reading a never-used Lead answers empty), with its MCP listener and
@@ -11,8 +12,8 @@
 // before starts the core with the engine, so the tasks the user followed from
 // the chat keep reporting back while no phone is connected.
 //
-// The desktop's own engine never serves this: the desktop's Lead already covers
-// every engine, and cli.ts is the only place that adds it.
+// The desktop's own engine never serves this: the desktop's Lead on the Mac
+// covers every engine it holds, and cli.ts is the only place that adds it.
 import { existsSync } from "node:fs";
 import { LEAD_CH, LEAD_EVENT, LEAD_RPC, type LeadEvent, type LeadSnapshot } from "@ateam/protocol";
 import type { Dispatcher } from "../dispatcher";
@@ -136,6 +137,9 @@ export function engineLead(
 					return l.reset();
 				case LEAD_CH.reply:
 					return l.reply(str(args[0], "The task"), str(args[1], "The reply"));
+				// v28: an emoji answer to an agent's reply, drawn on its card.
+				case LEAD_CH.react:
+					return l.react(str(args[0], "The reply"), str(args[1], "The emoji"));
 				case LEAD_CH.answer: {
 					const input = (args[0] ?? {}) as Record<string, unknown>;
 					const a = input.answer;

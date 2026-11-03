@@ -407,7 +407,12 @@ navbar; the back arrow is the first key in the shortcut bar.
 The speech bubble at the navbar's right corner opens the **Lead**, the chat that reads
 the board and steers its agents. On the phone it runs on the box itself (a **v24 box**;
 an older one offers **Update box** there), so it works with your Mac off. It sees that
-box's tasks only, and it is a different conversation from the Lead on your Mac. With
+box's tasks only, and it is a different conversation from the Lead on your Mac, unless
+the desktop's Lead runs on that box too: **Run the Lead here** on the box's card in the
+desktop's **Settings → Boxes** makes the desktop's Lead chat that box's own, and then
+the phone and the Mac show one conversation, live. The Mac's own conversation stays put,
+and **Back to this Mac** shows it again. Emoji answers from the desktop need a **v28**
+box. With
 more than one box it's the Lead of the box you pick in **Boxes** (swipe the box's
 card, then **Lead**), or the box you used last until you pick one. That box is the
 phone's home, as your Mac is on the desktop: new tasks start there unless you pick

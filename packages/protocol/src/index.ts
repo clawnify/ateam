@@ -135,7 +135,12 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // agent's reason for each and what its account of the work never mentions. A
 // new method only: a v26 engine answers "Unknown method", and the Changes view
 // stays the flat list it always was.
-export const PROTOCOL_VERSION = 27;
+// v28: a box's Lead answers lead:react, an emoji answer to an agent's reply,
+// for the desktop whose Lead lives on that box (the phone doesn't send it yet).
+// A new method only: a v27 box answers "Unknown method", and the desktop hides
+// the emoji button there (FEATURE_MIN_VERSION.leadReact). Settings gained
+// `client.leadBox`, read by the desktop alone.
+export const PROTOCOL_VERSION = 28;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -327,6 +332,9 @@ export const FEATURE_MIN_VERSION = {
 	/** v24 added the box's own Lead chat (LEAD_RPC). An older box answers every
 	 *  call "Unknown method", so the phone offers to update the box instead. */
 	lead: 24,
+	/** v28 added lead:react to a box's Lead. An older box answers "Unknown
+	 *  method", so the desktop hides the emoji answer when its Lead lives there. */
+	leadReact: 28,
 	/** v25 added githubAccess:*. An older box answers "Unknown method", so clients
 	 *  point at its terminal (gh auth login) and at Update box instead. */
 	githubAccess: 25,
@@ -705,6 +713,13 @@ export interface ClientSettings {
 	 * opens in it before its first paint.
 	 */
 	theme: ThemeId;
+	/**
+	 * Where the desktop's main Lead chat lives: a box's alias, whose own Lead
+	 * (the one the phone talks to when it picks that box) is then the chat, or
+	 * null for this Mac. Set from Settings → Boxes; cleared when that box is
+	 * forgotten.
+	 */
+	leadBox: string | null;
 }
 export type ThemeId = "dark" | "light" | "classic";
 
@@ -1392,6 +1407,10 @@ export interface AteamApi {
 			prompt?: string;
 			/** Absolute paths to attach — appended to the prompt for the agent to read. */
 			files?: string[];
+			/** Those of `files` already on the task's machine (attached in the chat of
+			 *  a Lead on that box): the desktop passes them on as they are rather than
+			 *  send them there. Never reaches the engine. */
+			keepFiles?: string[];
 			/** Resume this exact conversation instead of starting a new one. */
 			resumeSessionId?: string;
 		}): Promise<{ terminalId: string }>;

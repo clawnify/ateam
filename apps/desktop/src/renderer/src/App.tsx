@@ -149,6 +149,7 @@ import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
 import { useBoxesNeedingYou } from "./useBoxesNeedingYou";
 import { useGithubIssues } from "./useGithubIssues";
+import { useLeadHome } from "./useLeadHome";
 
 const COLUMNS: { key: KanbanColumn; label: string }[] = [
 	{ key: "todo", label: "Backlog" },
@@ -715,6 +716,12 @@ export function App() {
 	// Which engine a task runs on = the engine that owns its project (tasks never
 	// migrate between engines, so origin is intrinsic to the projectId).
 	const originOf = useCallback((projectId: string): Alias => origins[projectId] ?? null, [origins]);
+	// Where the main Lead chat lives, and what a box's Lead can reach (its own tasks).
+	const leadHome = useLeadHome();
+	const onLeadBox = useCallback(
+		(t: TaskDTO) => leadHome.box !== null && originOf(t.projectId) === leadHome.box,
+		[leadHome.box, originOf],
+	);
 	// The box a task is on when that box isn't held (its card is from the box's
 	// last-seen board), else null.
 	const offlineAliasOf = useCallback(
@@ -1438,6 +1445,12 @@ export function App() {
 	};
 	// Tabs mean "show me this view". The focused task covers the view it belongs
 	// to, so switching tabs — including clicking the lit one — closes it.
+	// Settings opened at a page from elsewhere (the Lead's header → Boxes).
+	const [settingsJump, setSettingsJump] = useState<{ section: "boxes"; n: number } | null>(null);
+	const openLeadSettings = () => {
+		setSettingsJump((j) => ({ section: "boxes", n: (j?.n ?? 0) + 1 }));
+		goToView("settings");
+	};
 	const goToView = (v: View) => {
 		if (panelMode === "full") setSelectedTaskId(null);
 		setView(v);
@@ -1609,7 +1622,13 @@ export function App() {
 		setComposerOpen(true);
 	};
 
-	const composeTask = (input: ComposeInput, onCreated?: (task: TaskDTO) => void) =>
+	/** `keepFiles`: files already on the machine the task runs on (attached in
+	 *  the chat of a Lead that lives on that box), which aren't sent again. */
+	const composeTask = (
+		input: ComposeInput,
+		onCreated?: (task: TaskDTO) => void,
+		keepFiles?: string[],
+	) =>
 		run(async () => {
 			const card = activeCard;
 			if (!card) return;
@@ -1737,6 +1756,7 @@ export function App() {
 				yolo: input.yolo,
 				prompt: input.prompt || undefined,
 				files: input.files.length ? input.files : undefined,
+				...(keepFiles?.length ? { keepFiles } : {}),
 			});
 			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 			// Only once the agent is really up: a failed launch shows its error instead.
@@ -1935,7 +1955,9 @@ export function App() {
 									onClick={() => (task ? toggleTask(task) : goToView("loops"))}
 								>
 									<Repeat size={16} strokeWidth={1.75} />
-									{task?.column === "needs_attention" && <span className="corner needs_attention" />}
+									{task?.column === "needs_attention" && (
+										<span className="corner needs_attention" />
+									)}
 								</RailTile>
 							);
 						})}
@@ -2507,7 +2529,7 @@ export function App() {
 							onNewTask={activeProjectId ? newTask : undefined}
 						/>
 					) : view === "settings" ? (
-						<SettingsPanel agents={agents} boxesNeedYou={boxesNeedYou} />
+						<SettingsPanel agents={agents} boxesNeedYou={boxesNeedYou} jumpTo={settingsJump} />
 					) : view === "lead" ? (
 						<LeadChat
 							tasks={allTasks}
@@ -2515,6 +2537,9 @@ export function App() {
 							onOpenTask={openFromLead}
 							onOpenProposal={openLeadProposal}
 							scope={boundProject?.name}
+							home={leadHome}
+							onLeadBox={onLeadBox}
+							onOpenLeadSettings={openLeadSettings}
 						/>
 					) : (
 						<LoopsPanel
@@ -2548,6 +2573,9 @@ export function App() {
 							onOpenProposal={openLeadProposal}
 							onHide={() => setLeadSide(false)}
 							scope={boundProject?.name}
+							home={leadHome}
+							onLeadBox={onLeadBox}
+							onOpenLeadSettings={openLeadSettings}
 						/>
 					</aside>
 				</>
@@ -2781,10 +2809,23 @@ export function App() {
 							onInstallAgent={installAgentOn}
 							onClose={() => setLeadProposal(null)}
 							onCreate={(input) => {
+								// Files attached in the chat of a Lead on a box are kept on that
+								// box: they go with a task started there, and nowhere else.
+								const kept =
+									leadHome.box && item.files?.length
+										? item.files.filter((f) => input.files.includes(f))
+										: [];
+								if (kept.length && input.alias !== leadHome.box) {
+									setError(
+										`Its files are on ${leadHome.box}, where the Lead runs: start it there, or attach them again.`,
+									);
+									return;
+								}
 								setLeadProposal(null);
 								void composeTask(
 									input,
 									(task) => void decideLeadProposal(item.id, "created", task.id),
+									kept,
 								);
 							}}
 						/>
@@ -3472,7 +3513,10 @@ function TaskPanel({
 			const plan = await window.ateam.skills.link({ path, dryRun: true });
 			const fresh = plan.links.filter((l) => l.status === "create");
 			if (!fresh.length) {
-				await confirm(`"${plan.name}" is already linked`, "Every agent folder already points at this skill.");
+				await confirm(
+					`"${plan.name}" is already linked`,
+					"Every agent folder already points at this skill.",
+				);
 				return;
 			}
 			const where = fresh
@@ -3890,12 +3934,7 @@ function TaskPanel({
 								title={live ? label : `${label} — closed by a restart. Click to resume it.`}
 								onClick={() => {
 									// The tab already on screen folds the question card over it.
-									if (
-										live &&
-										task.question &&
-										session.terminalId === terminalId &&
-										!mainViewOpen
-									) {
+									if (live && task.question && session.terminalId === terminalId && !mainViewOpen) {
 										toggleQuestion();
 										return;
 									}

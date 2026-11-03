@@ -226,7 +226,20 @@ export interface Host {
 	saveWakeAccount(providerId: string, values: Record<string, string> | null): Promise<WakeStatus>;
 	/** Which grammar issues to show, by Jev with this Mac's key; null = show them all. */
 	judgeGrammar(draft: string, issues: GrammarJudgeIssue[]): Promise<boolean[] | null>;
+	/** A held box's own connection and protocol version, for calls that address
+	 *  the box itself rather than a board entity (its Lead), or null when it isn't
+	 *  held. Never through the router: it sends unknown methods to this Mac. */
+	boxLink(alias: string): BoxLink | null;
+	/** Told when a box comes to be held, stops being held, or is forgotten. */
+	onBoxChange(cb: (alias: string, change: BoxChange) => void): () => void;
 }
+
+/** A held box's own wire (Host.boxLink). */
+export interface BoxLink {
+	rpc: RpcClient;
+	version: number;
+}
+export type BoxChange = "held" | "released" | "forgotten";
 
 export interface HostDeps {
 	/** The in-process engine — the default backend and the connections-registry db owner. */
@@ -274,6 +287,12 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	const attempts = new Map<string, number>();
 	// alias → the pending re-read of its board.
 	const snapshotTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	// alias → its raw wire, for boxLink, while it is held.
+	const links = new Map<string, BoxLink>();
+	const boxListeners = new Set<(alias: string, change: BoxChange) => void>();
+	const tellBox = (alias: string, change: BoxChange) => {
+		for (const l of boxListeners) l(alias, change);
+	};
 
 	// One aggregate over a LIVE backend array: connecting pushes onto it (so the
 	// learned id→engine registry survives), disconnecting rebuilds a fresh one (so a
@@ -570,6 +589,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		);
 		infos.set(alias, info); // cached before the backend is reachable — statusOf's invariant
 		backends.set(alias, backend);
+		links.set(alias, { rpc, version: info.protocolVersion });
 		// The live aggregate now fans out to it too. If its board was being served
 		// offline, the engine takes that place, and the ids already on screen with it.
 		const stand = offline.get(alias);
@@ -610,6 +630,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		});
 		if (wire === "ws") probes.set(alias, startHealthProbe(alias, rpc));
 		broadcastConnections();
+		tellBox(alias, "held");
 		return { mode: "remote", alias, info };
 	}
 
@@ -764,6 +785,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		backend.dispose();
 		backends.delete(alias);
 		infos.delete(alias);
+		links.delete(alias);
 		const i = backendList.indexOf(backend);
 		const stand = standIn(alias);
 		if (stand && i >= 0) {
@@ -777,6 +799,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			agg = createAggregate(backendList, local);
 		}
 		broadcastConnections();
+		tellBox(alias, "released");
 	}
 
 	/** The offline stand-in for a box with a kept board, registered; null without one. */
@@ -881,6 +904,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// disconnect only broadcasts when the box was held — a never-connected row
 		// changes the list too, so always tell the renderer to re-read it.
 		broadcastConnections();
+		tellBox(alias, "forgotten");
 	}
 
 	function failures(): Record<string, string> {
@@ -1372,6 +1396,11 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		wakeStatus,
 		saveWakeAccount,
 		judgeGrammar,
+		boxLink: (alias) => links.get(alias) ?? null,
+		onBoxChange(cb) {
+			boxListeners.add(cb);
+			return () => boxListeners.delete(cb);
+		},
 	};
 }
 
