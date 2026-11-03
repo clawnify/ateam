@@ -69,8 +69,9 @@ function Machines({ members }: { members: EngineMember[] }) {
 }
 
 /**
- * The sidebar's project switcher: All projects, then each repo card, then Add
- * project and the selected project's own actions. Files from Finder dropped on
+ * The sidebar's project switcher: each repo card (in the order it is given, most
+ * recent first: project-order.ts), All projects, then Add project and the
+ * selected project's own actions. Files from Finder dropped on
  * it start a task in the project it names (`drop`), as the rows used to.
  */
 export function ProjectSwitcher({
@@ -141,11 +142,6 @@ export function ProjectSwitcher({
 						if (card) onSelect(card);
 					}}
 				>
-					<DropdownMenuRadioItem value={ALL}>
-						<Layers className="size-3.5" strokeWidth={1.75} />
-						All projects
-					</DropdownMenuRadioItem>
-					{cards.length > 0 && <DropdownMenuSeparator />}
 					{cards.map((card) => (
 						<DropdownMenuRadioItem key={card.key} value={card.key}>
 							<ProjectMark owner={card.githubOwner} color={card.color} />
@@ -155,6 +151,11 @@ export function ProjectSwitcher({
 							<Machines members={card.members} />
 						</DropdownMenuRadioItem>
 					))}
+					{cards.length > 0 && <DropdownMenuSeparator />}
+					<DropdownMenuRadioItem value={ALL}>
+						<Layers className="size-3.5" strokeWidth={1.75} />
+						All projects
+					</DropdownMenuRadioItem>
 				</DropdownMenuRadioGroup>
 				<DropdownMenuSeparator />
 				<DropdownMenuItem onSelect={onAdd}>Add project…</DropdownMenuItem>

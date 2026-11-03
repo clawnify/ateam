@@ -124,6 +124,7 @@ import {
 	mcShapeGrid,
 	placeArrivals,
 } from "./mc-layout";
+import { bumpProject, orderProjects, readProjectOrder, saveProjectOrder } from "./project-order";
 import { panelOnScreen, proposalToOpen, shownWhileOpen } from "./proposal-open";
 import {
 	activeTerminal,
@@ -677,6 +678,29 @@ export function App() {
 	// Group the merged projects into one card per repo (same GitHub owner/name across
 	// engines), remembering each engine's projectId — the routing key for its tasks.
 	const unifiedProjects = useMemo(() => unifyProjects(projects, origins), [projects, origins]);
+	// The switcher lists them most recently switched to first (project-order.ts).
+	// `switchedTo` holds a switch until its card is on the board: a project just
+	// added arrives a render after it is selected.
+	const [projectOrder, setProjectOrder] = useState(readProjectOrder);
+	const [switchedTo, setSwitchedTo] = useState<string | null>(null);
+	const switcherCards = useMemo(
+		() => orderProjects(unifiedProjects, projectOrder),
+		[unifiedProjects, projectOrder],
+	);
+	useEffect(() => {
+		if (!switchedTo) return;
+		const card = unifiedProjects.find((c) => c.members.some((m) => m.projectId === switchedTo));
+		if (!card) return;
+		setSwitchedTo(null);
+		const next = bumpProject(
+			projectOrder,
+			unifiedProjects.map((c) => c.key),
+			card.key,
+		);
+		if (next === projectOrder) return;
+		setProjectOrder(next);
+		saveProjectOrder(next);
+	}, [switchedTo, unifiedProjects, projectOrder]);
 	// The card the active project belongs to, and every engine holding that repo.
 	const activeCard = useMemo(
 		() =>
@@ -1281,6 +1305,7 @@ export function App() {
 		const mem = viewMemRef.current[id];
 		setAllProjects(false);
 		setActiveProjectId(id);
+		setSwitchedTo(id);
 		setSelectedTaskId(mem?.taskId ?? null);
 		setPanelMode(mem?.mode ?? "side");
 		setView(mem?.view ?? "board");
@@ -1321,6 +1346,9 @@ export function App() {
 	// (the focused task covers Board / Mission Control / Loops alike, and closing
 	// it lands you back there). From the board → open on the side.
 	const openTask = (t: TaskDTO) => {
+		// With one project shown, another project's task (from the Lead, a
+		// notification) switches to its project. Under All the lists stay put.
+		if (!allProjects && t.projectId !== activeProjectId) setSwitchedTo(t.projectId);
 		setActiveProjectId(t.projectId);
 		setSelectedTaskId(t.id);
 		markRead(t.id);
@@ -1828,7 +1856,7 @@ export function App() {
 							/>
 						) : (
 							<ProjectSwitcher
-								cards={unifiedProjects}
+								cards={switcherCards}
 								activeKey={activeCard?.key ?? null}
 								all={allProjects}
 								onSelect={(card) => {
