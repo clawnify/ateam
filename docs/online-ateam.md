@@ -399,7 +399,8 @@ on the bubble says it has something for you: white for a reply since you last lo
 amber while it waits for your answer before it can go on. When it proposes a task or a
 loop, the card's **Start it** or **Set it up** opens the New task sheet or the New loop
 form filled in from the proposal; nothing starts until you confirm, and Auto mode stays
-off. The Lead's agent stops after 10 minutes without a turn, so the first message after
+off. Whether you started it or dismissed it, the Lead learns with your next message, so
+it steers the task you started instead of proposing it again. The Lead's agent stops after 10 minutes without a turn, so the first message after
 that takes a few seconds while it picks the conversation back up. The
 composer under Home and Board has a **Task | Lead** switch above it: on Task, sending
 starts a task, as before; on Lead, it asks the Lead and opens the chat. The paperclip
