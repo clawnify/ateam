@@ -279,6 +279,7 @@ contextBridge.exposeInMainWorld("ateamLead", lead);
 const theme: AteamTheme = {
 	saved: () => themeOrDefault(ipcRenderer.sendSync(THEME_CH.get)),
 	set: (id) => ipcRenderer.invoke(THEME_CH.set, id),
+	firstRun: () => ipcRenderer.invoke(THEME_CH.firstRun),
 	onChange: (cb) => {
 		const handler = (_: unknown, id: unknown) => cb(themeOrDefault(id));
 		ipcRenderer.on(THEME_CH.evtChanged, handler);
