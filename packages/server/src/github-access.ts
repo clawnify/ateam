@@ -14,6 +14,7 @@
 //
 // One host only: github.com. GitHub Enterprise boxes keep signing in by hand.
 import { spawn } from "node:child_process";
+import { hostname } from "node:os";
 import {
 	cleanGithubToken,
 	type GithubAccessDTO,
@@ -35,6 +36,8 @@ export interface GithubAccessDeps {
 	run: Run;
 	fetch: (url: string, init?: RequestInit) => Promise<Response>;
 	env: NodeJS.ProcessEnv;
+	/** The machine's name, for naming its token. Unset in tests: then not reported. */
+	hostname?: () => string;
 }
 
 const GITHUB_API = "https://api.github.com";
@@ -82,6 +85,7 @@ export const defaultDeps: GithubAccessDeps = {
 	run: runProgram,
 	fetch: (input, init) => fetch(input, init),
 	env: process.env,
+	hostname,
 };
 
 function isMissingProgram(err: unknown): boolean {
@@ -254,6 +258,7 @@ export async function githubAccessStatus(
 		git,
 		gitCredential: gitDescribed?.credential ?? null,
 		unverified: ghDescribed?.unverified ?? gitDescribed?.unverified ?? null,
+		...(deps.hostname ? { hostname: deps.hostname() } : {}),
 	};
 }
 

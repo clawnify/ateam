@@ -1,5 +1,5 @@
-// The dot on the header's Lead button for the connected box (lead-badge.ts
-// says what lights it).
+// The dot on the header's Lead button for the Lead's box, the one picked in
+// Boxes (lead-badge.ts says what lights it).
 import type { LeadClient } from "@ateam/protocol";
 import { useEffect, useState } from "react";
 import { BADGE_TAIL, badgeOf, EMPTY_BADGE, foldBadge, type LeadBadge } from "./lead-badge";

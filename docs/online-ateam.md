@@ -134,6 +134,14 @@ protocol v7+) tells the daemon to run this same installer over itself. A box old
 than v7 has no such command, so it needs one update over SSH first, after which the
 phone can drive every later one.
 
+On the desktop, **Settings → Boxes** compares each box's engine with the app: by
+protocol first, then by the release the engine names (engines from 0.1.80 on; an
+older one counts as behind). A box a release behind gets **Update**, and an amber
+dot on the Settings button, its Boxes section and its row in Run on. So does a box
+whose GitHub token has under two weeks left or was refused. On connect the app
+updates an SSH box by itself only when its protocol is behind, never for a release
+alone, since an update restarts the engine and agents running there can stop.
+
 Re-run the same command to upgrade. It stops the daemon still running the old dist,
 then checks that the process answering afterwards is a different one, so an upgrade
 can no longer report success while the previous version keeps serving. Live agents
@@ -254,7 +262,10 @@ ssh my-ateam-box "bash -lc 'ateam'"
 ### Optional: a browser for the box's agents
 
 Browser MCP tools usually drive the Chrome on your laptop, and that only works
-when the agent runs on the laptop too. A box gets a Chrome of its own instead:
+when the agent runs on the laptop too. A box gets a Chrome of its own instead.
+In the desktop app, click the globe button on a task on the box: on a box with
+no browser yet, Ateam asks, then installs it there. Or run the installer on the
+box yourself:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install-browser.sh | bash
@@ -344,6 +355,15 @@ goes only to the box you name, and that the agents on that box talk to their own
 providers under your accounts. Agreeing is remembered; declining opens the offline demo
 instead, which connects to nothing.
 
+**More than one box.** Add the others in **Boxes** (tap the status dot, then **+**).
+The phone holds every box you've added at once, as the desktop does: **Projects** lists
+the projects of all of them, and the same GitHub repo on two boxes is one project, its
+tasks marked with the box they run on. In a project that's on more than one box,
+**Run on** under the composer's field picks where a new task starts. The phone never
+wakes a box on its own: a box that's asleep keeps its projects and tasks on the board,
+as the phone last saw them, dimmed and marked *asleep* (or *offline* when it doesn't
+answer), until you tap its card, open one of its tasks or start a task there.
+
 **What still needs a computer.** Everything above — don't try to defer it. The phone
 has nothing to connect to until a daemon is listening, and it cannot install that
 daemon for you. Do steps 0–4 in one SSH session.
@@ -386,7 +406,11 @@ navbar; the back arrow is the first key in the shortcut bar.
 The speech bubble at the navbar's right corner opens the **Lead**, the chat that reads
 the board and steers its agents. On the phone it runs on the box itself (a **v24 box**;
 an older one offers **Update box** there), so it works with your Mac off. It sees that
-box's tasks only, and it is a different conversation from the Lead on your Mac. A dot
+box's tasks only, and it is a different conversation from the Lead on your Mac. With
+more than one box it's the Lead of the box you pick in **Boxes** (swipe the box's
+card, then **Lead**), or the box you used last until you pick one. That box is the
+phone's home, as your Mac is on the desktop: new tasks start there unless you pick
+another box in **Run on**, and its tasks carry no box label. A dot
 on the bubble says it has something for you: white for a reply since you last looked,
 amber while it waits for your answer before it can go on. When it proposes a task or a
 loop, the card's **Start it** or **Set it up** opens the New task sheet or the New loop

@@ -82,6 +82,7 @@ const api: AteamApi = {
 	},
 	browser: {
 		view: (taskId) => ipcRenderer.invoke(CH.browserViewUrl, taskId),
+		install: (taskId) => ipcRenderer.invoke(CH.browserInstall, taskId),
 	},
 	search: {
 		sessions: (input) => ipcRenderer.invoke(CH.searchSessions, input),
@@ -188,6 +189,8 @@ const host: AteamHost = {
 	origins: () => ipcRenderer.invoke(HOST_CH.origins),
 	failures: () => ipcRenderer.invoke(HOST_CH.failures),
 	canUpdateBoxes: () => ipcRenderer.invoke(HOST_CH.canUpdateBoxes),
+	appRelease: () => ipcRenderer.invoke(HOST_CH.appRelease),
+	boxGithub: () => ipcRenderer.invoke(HOST_CH.boxGithub),
 	provision: (alias, input) => ipcRenderer.invoke(HOST_CH.provision, alias, input),
 	install: (dest, opts) => ipcRenderer.invoke(HOST_CH.install, dest, opts),
 	createBox: (spec) => ipcRenderer.invoke(HOST_CH.createBox, spec),
@@ -209,6 +212,11 @@ const host: AteamHost = {
 		const handler = (_: unknown, connected: HostStatus[]) => cb(connected);
 		ipcRenderer.on(HOST_CH.evtConnectionsChanged, handler);
 		return () => ipcRenderer.off(HOST_CH.evtConnectionsChanged, handler);
+	},
+	onGithubChanged: (cb: () => void) => {
+		const handler = () => cb();
+		ipcRenderer.on(HOST_CH.evtGithubChanged, handler);
+		return () => ipcRenderer.off(HOST_CH.evtGithubChanged, handler);
 	},
 	onInstallLog: (cb: (e: InstallLogEvent) => void) => {
 		const handler = (_: unknown, e: InstallLogEvent) => cb(e);

@@ -281,6 +281,31 @@ input {
 .rail-tile .corner.needs_attention {
 	background: var(--amber);
 }
+/* A box needs you (a release behind, or a GitHub token close to expiring or
+   refused): the same amber, on the Settings button, its Boxes section and the
+   box's card. */
+.iconbtn.has-attention {
+	position: relative;
+}
+.iconbtn .iconbtn-dot {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--amber);
+}
+.settings-nav-dot,
+.box-card-dot {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	margin-left: 6px;
+	border-radius: 50%;
+	background: var(--amber);
+	vertical-align: middle;
+}
 .rail-divider {
 	width: 24px;
 	height: 1px;
@@ -3175,6 +3200,23 @@ input {
 	flex-direction: row;
 	align-items: center;
 }
+/* Who the token is for, settled before GitHub's form opens: changing the owner
+   there resets the expiry and permissions the link filled in. */
+.gh-access-owner {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.gh-access-owner-input {
+	width: 200px;
+	height: 32px;
+}
+.gh-access-warn {
+	font-size: 12px;
+	color: var(--amber);
+	line-height: 1.45;
+}
 .gh-access-pasted {
 	/* Under the field, past the step number. */
 	padding-left: 28px;
@@ -4402,6 +4444,10 @@ input {
 	display: flex;
 	align-items: center;
 	gap: 6px;
+	margin: 0;
+}
+/* The task's other proposals: they wait on its strip rather than open next. */
+.proposal-more {
 	margin: 0;
 }
 /* What the user decided on the Lead's own permission prompt, kept in the thread. */

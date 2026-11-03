@@ -57,7 +57,7 @@ import {
 	type TaskWait,
 	type UpdateLoopInput,
 } from "@ateam/protocol";
-import { openBrowserView } from "./browser";
+import { installBrowser, openBrowserView } from "./browser";
 import { credentialStatus, credentialsPath, updateCredentials } from "./credentials-file";
 import { createEditorHost, installCodeServer } from "./editor";
 import type { Engine } from "./engine";
@@ -68,6 +68,7 @@ import { refreshLoginPath } from "./login-env";
 import { nextCronRun } from "./loops/runner";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { createSizeArbiter } from "./pty/size-arbiter";
+import { ENGINE_RELEASE } from "./release";
 import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
 import { searchSessions } from "./session-search";
 import {
@@ -742,6 +743,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			return {
 				protocolVersion: PROTOCOL_VERSION,
 				agents: agents.filter((a) => a.available).map((a) => a.id),
+				release: ENGINE_RELEASE,
 			};
 		},
 
@@ -810,6 +812,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.browserView]: async (taskId: string) => {
 			requireTask(services, taskId);
 			return openBrowserView(services.userDataDir);
+		},
+		// Consent-gated like editor:install: clients call this only after the user
+		// said yes to BROWSER_NOT_INSTALLED_ERROR. Minutes long (apt, Chrome).
+		[CH.browserInstall]: async (taskId: string) => {
+			requireTask(services, taskId);
+			await installBrowser(services.userDataDir);
 		},
 
 		// ---- fs / util: server-side, remote-native (browse + attach on the

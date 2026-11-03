@@ -182,9 +182,12 @@ string. Before connecting, the phone asks Sprites to wake the Sprite and hold it
 for five minutes, then keeps trying the Sprite for up to three: a Sprite reported
 awake can take a while longer to answer. Once the phone attaches, the engine holds
 it for a fresh idle window, as for any client connecting to a box it had let go.
-It wakes on Connect, on opening the app, and on coming back to it. While a dropped
-connection retries, it wakes again whenever the last wake is over a minute old, so
-a Sprite that paused again before the phone got through is not left asleep. A
+It wakes when you use it: Connect, tapping its card, opening one of its tasks,
+starting a task there, its terminal or the Lead on it. Opening the app doesn't, so a
+paused Sprite stays paused, its tasks shown as the phone last saw them, until you
+use it. While a dropped connection retries with one of its tasks or its terminal
+open, it wakes again whenever the last wake is over a minute old, so a Sprite that
+paused again before the phone got through is not left asleep. A
 Sprites token works on every Sprite in its organization, so give the phone one for
 an organization that holds only your Ateam boxes.
 

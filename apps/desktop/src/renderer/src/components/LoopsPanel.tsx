@@ -1,8 +1,11 @@
 import {
 	type AgentDTO,
+	type Alias,
+	aliasLabel,
 	boxSupports,
 	dailyCron,
 	dailyTimeOf,
+	type EngineMember,
 	FEATURE_MIN_VERSION,
 	type LoopDTO,
 	loopScheduleLabel,
@@ -25,7 +28,6 @@ import {
 	Zap,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { type Alias, aliasLabel, type EngineMember } from "../unify";
 import { AgentPicker } from "./AgentPicker";
 import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
 import { SCHEDULE_PRESETS, type ScheduleKind, SchedulePicker } from "./SchedulePicker";
@@ -257,7 +259,8 @@ export function LoopForm({
 	const onKeys = (e: React.KeyboardEvent) => {
 		if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
 			e.preventDefault();
-			void submit();
+			// Only a fresh press: a held ⌘⏎ repeats (PromptComposer has the same).
+			if (!e.repeat) void submit();
 		}
 		if (e.key === "Escape") onCancel();
 	};

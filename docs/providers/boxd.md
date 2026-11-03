@@ -263,11 +263,14 @@ which wakes nothing).
 
 The phone can't wake a box over the tailnet, so Ateam Go asks boxd's API instead:
 on its connection screen, set **Provider** to boxd and enter the machine's boxd
-name and a boxd API key. Saving the key checks it with boxd at once, and
-connecting (or opening the app, or coming back to it) checks the machine's state
-and wakes it first. A box it woke gets up to three minutes to answer, with each
-step shown under the box's card. While a dropped connection retries, the phone
-checks again whenever its last wake is over a minute old.
+name and a boxd API key. Saving the key checks it with boxd at once. Using the
+box (tapping its card, opening one of its tasks, starting a task there, its
+terminal or the Lead on it) checks the machine's state and wakes it first;
+opening the app doesn't, so a hibernated box stays asleep, its tasks shown as the
+phone last saw them, until you use it. A box it woke gets up to three minutes to
+answer, with each step shown under the box's card. While a dropped connection
+retries with one of its tasks or its terminal open, the phone checks again
+whenever its last wake is over a minute old.
 The key lives in the iOS Keychain and is shared by every boxd box on the phone.
 boxd keys can't be limited to waking or to one machine; a key acts on its whole
 boxd org, so keep your Ateam boxes in an org of their own and give the phone that

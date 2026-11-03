@@ -286,7 +286,7 @@ const PROPOSAL_FIELDS = {
 	prompt: {
 		type: "string",
 		description:
-			"The new agent's first instruction. It cannot see your conversation, so make it self-contained: the goal, the context it needs (files, findings, links) and what done looks like.",
+			"The new agent's first instruction. It cannot see your conversation, so give it what the work is, in the user's own words when they asked for it, and the facts you found (files, findings, errors, links). Add nothing of your own beyond that: no approach, steps, constraints, check-ins, definition of done or opinions the user didn't give. The new agent decides those in the project.",
 	},
 	reason: {
 		type: "string",

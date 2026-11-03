@@ -10,20 +10,24 @@
 import { join } from "node:path";
 import { getAgent } from "@ateam/agents";
 import {
-	beginStep,
+	type Aggregate,
+	asSnapshot,
 	type BoxUpdateStarted,
 	type BrowserViewDTO,
+	beginStep,
 	browserViewUrl,
 	CH,
 	type ClientTransport,
 	type ConnectStep,
 	type CredentialsPatch,
 	type CredentialsResult,
+	createAggregate,
 	createRpcClient,
 	DEFAULT_EDITOR_PORT,
 	type EditorEndpointDTO,
 	type EditorOpenResult,
 	type EngineSettings,
+	FEATURE_MIN_VERSION,
 	failActive,
 	filled,
 	type GithubAccessDTO,
@@ -32,15 +36,18 @@ import {
 	providerById,
 	type RepoAccessDTO,
 	type RpcClient,
+	reconnectDelay,
 	relabelActive,
 	type SettingsResult,
 	type SystemInfo,
+	takeSnapshot,
 	tolerantRpc,
 	type WakeAdapter,
 	WOKEN_CONNECT_MS,
 	WOKEN_RETRY_GAP_MS,
 	waitingLabel,
 	wakeAdapter,
+	withTimeout,
 	wsClientTransport,
 } from "@ateam/protocol";
 import {
@@ -84,7 +91,6 @@ import {
 	type SecretsStatus,
 	type WakeStatus,
 } from "../shared/host";
-import { type Aggregate, createAggregate } from "./aggregate";
 import {
 	type Backend,
 	type BackendEvent,
@@ -100,8 +106,7 @@ import {
 	writeSshConfigEntry,
 } from "./box-setup";
 import { boxForwardFlags, browserLocalPort, editorLocalPort } from "./box-tunnel";
-import { asSnapshot, offlineBackend, reconnectDelay, takeSnapshot } from "./offline";
-import { withTimeout } from "./timeout";
+import { offlineBackend } from "./offline";
 
 // The one pre-quoted remote command (ssh space-joins remote args, so `bash -lc`
 // must arrive as a single element): a login shell (agent-CLI PATH) execing the
@@ -206,6 +211,9 @@ export interface Host {
 	connectGithub(alias: string, token: string): Promise<GithubAccessDTO>;
 	/** Per repo, whether a connected box can push, only read, or not see it (none = its projects). */
 	checkGithub(alias: string, repos?: string[]): Promise<RepoAccessDTO[]>;
+	/** The GitHub access each box last reported, by alias: on connect, from its panel, or
+	 *  after a token was connected there. What the "needs you" dots read. */
+	githubStatuses(): Record<string, GithubAccessDTO>;
 	/** Which provisioning secrets are saved (booleans, never the values). */
 	secretsStatus(): SecretsStatus;
 	/** Persist provider credentials (encrypted). Returns the new saved-status. */
@@ -271,7 +279,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// learned id→engine registry survives), disconnecting rebuilds a fresh one (so a
 	// gone engine's ids stop routing). Both share the same array reference.
 	const backendList: Backend[] = [local];
-	let agg: Aggregate = createAggregate(backendList, local);
+	let agg: Aggregate<Backend> = createAggregate(backendList, local);
 
 	function bindEvents(backend: Backend): () => void {
 		const offs = FORWARDED.map(({ event, channel }) =>
@@ -547,6 +555,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			hostAlias: alias,
 			transport: wire ?? "ssh",
 			serverVersion: String(info.protocolVersion),
+			engineRelease: info.release ?? null,
 			agentsAvailable: info.agents,
 			...(opts.binding !== undefined ? { wake: opts.binding } : {}),
 		});
@@ -587,6 +596,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			const key = openRouterApiKey();
 			if (key) void pushCredentials({ openRouterApiKey: key });
 		}
+		// Its GitHub access, for the "needs you" dots (a token close to expiring or
+		// refused). Not awaited either: one gh and GitHub call on the box.
+		if (info.protocolVersion >= FEATURE_MIN_VERSION.githubAccess) void refreshGithub(alias);
 		// A closed wire must take its backend WITH it. Nothing else drops a dead engine:
 		// a call routed into one never settles (no per-call timeout), so it stayed on the
 		// board, green, swallowing every request — the exact opposite of the promise that
@@ -1173,11 +1185,39 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		const started = (await heldBox(alias).handle(CH.systemUpdate, [])) as BoxUpdateStarted;
 		return { via: "self", ...started };
 	}
+	// The GitHub access each box last reported. Read once when it connects, and again
+	// whenever its panel reads it or a token is connected there, so a token close to
+	// expiring, or refused, marks the box without its panel open. A change has its own
+	// event: "connections changed" would make the board reload every engine's
+	// projects, once per box, each time Settings → Boxes reads them.
+	const githubStatus = new Map<string, GithubAccessDTO>();
+	function rememberGithub(alias: string, access: GithubAccessDTO): GithubAccessDTO {
+		const before = githubStatus.get(alias);
+		githubStatus.set(alias, access);
+		if (!before || JSON.stringify(before) !== JSON.stringify(access)) {
+			broadcast(HOST_CH.evtGithubChanged);
+		}
+		return access;
+	}
+	async function refreshGithub(alias: string): Promise<void> {
+		try {
+			await githubAccess(alias);
+		} catch {
+			// No dot from a box that couldn't say: its panel shows why when opened.
+		}
+	}
 	async function githubAccess(alias: string): Promise<GithubAccessDTO> {
-		return (await heldBox(alias).handle(CH.githubAccessStatus, [])) as GithubAccessDTO;
+		const access = (await heldBox(alias).handle(CH.githubAccessStatus, [])) as GithubAccessDTO;
+		return rememberGithub(alias, access);
 	}
 	async function connectGithub(alias: string, token: string): Promise<GithubAccessDTO> {
-		return (await heldBox(alias).handle(CH.githubAccessConnect, [token])) as GithubAccessDTO;
+		const access = (await heldBox(alias).handle(CH.githubAccessConnect, [
+			token,
+		])) as GithubAccessDTO;
+		return rememberGithub(alias, access);
+	}
+	function githubStatuses(): Record<string, GithubAccessDTO> {
+		return Object.fromEntries(githubStatus);
 	}
 	async function checkGithub(alias: string, repos?: string[]): Promise<RepoAccessDTO[]> {
 		return (await heldBox(alias).handle(CH.githubAccessCheck, [repos ?? null])) as RepoAccessDTO[];
@@ -1314,6 +1354,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		origins,
 		failures,
 		canUpdateBoxes,
+		githubStatuses,
 		editorUrl,
 		browserUrl,
 		provision,
@@ -1346,6 +1387,8 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.origins, () => host.origins());
 	ipcMain.handle(HOST_CH.failures, () => host.failures());
 	ipcMain.handle(HOST_CH.canUpdateBoxes, () => host.canUpdateBoxes());
+	ipcMain.handle(HOST_CH.appRelease, () => app.getVersion());
+	ipcMain.handle(HOST_CH.boxGithub, () => host.githubStatuses());
 	ipcMain.handle(HOST_CH.provision, (_e, alias: string, input: { cloneUrl: string }) =>
 		host.provision(alias, input),
 	);
