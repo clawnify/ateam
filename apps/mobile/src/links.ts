@@ -11,6 +11,9 @@
 //   - A box that isn't up keeps its last failure while it's tried again, so what
 //     shows it as away (boxes.ts awayOf) doesn't flicker with every try.
 //   - Paused (the demo), nothing is reached, and a connect that lands is closed.
+//   - Cancel on a card ends its tries where they stand: the card rests as it was
+//     before the tap, a socket that answers later is closed, and the box isn't
+//     tried again until something asks for it or the app comes to the foreground.
 import {
 	type BoxSnapshot,
 	beginStep,
@@ -36,6 +39,32 @@ export const REWAKE_MS = 60_000;
 export const WAITED_RETRY_CAP_MS = 15_000;
 /** What a box that dropped says until a try says more. */
 export const CONNECTION_LOST = "The connection dropped.";
+
+// One try at reaching a box. Every wait in it (the wake call, a dial, the gap
+// between dials) races `stopped`, so Cancel ends the try at once rather than after
+// a wake call (up to a minute) or a dial (up to 15 s) comes back.
+const STOP = Symbol("stop");
+class Cancelled extends Error {}
+interface Attempt {
+	cancelled: boolean;
+	stopped: Promise<typeof STOP>;
+	stop(): void;
+}
+function newAttempt(): Attempt {
+	let fire = () => {};
+	const stopped = new Promise<typeof STOP>((r) => {
+		fire = () => r(STOP);
+	});
+	const a: Attempt = {
+		cancelled: false,
+		stopped,
+		stop() {
+			a.cancelled = true;
+			fire();
+		},
+	};
+	return a;
+}
 
 /** Time, as the links see it. Passed in so a test can run it by hand. */
 export interface Clock {
@@ -137,12 +166,13 @@ export interface Links {
 export function createLinks(deps: LinkDeps): Links {
 	const clock = deps.clock ?? realClock;
 	const conns = new Map<string, Connection>();
-	const attempting = new Set<string>();
+	// The tries under way, per box: a background one and a tap's can overlap.
+	const attempts = new Map<string, Set<Attempt>>();
 	const backoff = new Map<string, number>();
 	const timers = new Map<string, () => void>();
 	const lastWakeAt = new Map<string, number>();
-	// Set by Cancel on a card's tray: the wait for that woken box stops at its next try.
-	const cancelled = new Set<string>();
+	// Boxes whose wait Cancel stopped: not retried until a try is asked for again.
+	const stopped = new Set<string>();
 	let state: Record<string, BoxLink> = {};
 	let paused = false;
 
@@ -159,7 +189,7 @@ export function createLinks(deps: LinkDeps): Links {
 
 	// Soon, then at a steady pace (reconnectDelay). One someone waits on: sooner.
 	function retry(key: string): void {
-		if (paused || conns.has(key) || timers.has(key) || !boxOf(key)) return;
+		if (paused || conns.has(key) || timers.has(key) || stopped.has(key) || !boxOf(key)) return;
 		const n = backoff.get(key) ?? 0;
 		backoff.set(key, n + 1);
 		const delay = deps.waitedOn(key)
@@ -215,12 +245,22 @@ export function createLinks(deps: LinkDeps): Links {
 			return true;
 		}
 		// A second try while one runs only if it wakes: the first may not.
-		if (attempting.has(key) && !opts.wake) return false;
+		if (attempts.has(key) && !opts.wake) return false;
 		clearTimer(key);
 		// Someone asked: what comes after it starts from the short end again.
 		if (opts.wake) backoff.set(key, 0);
-		attempting.add(key);
-		cancelled.delete(key);
+		// A try asked for again (a tap, the foreground) lifts a Cancel's stop.
+		stopped.delete(key);
+		const attempt = newAttempt();
+		const tries = attempts.get(key) ?? new Set<Attempt>();
+		tries.add(attempt);
+		attempts.set(key, tries);
+		// A wait in this try, cut short by Cancel.
+		const until = async <T>(p: Promise<T>): Promise<T> => {
+			const r = await Promise.race([p, attempt.stopped]);
+			if (r === STOP) throw new Cancelled("Cancelled");
+			return r;
+		};
 		// The last failure stays until this try ends: the box is still away meanwhile.
 		set(key, (l) => ({ ...l, state: "connecting", asked: opts.wake === true, steps: [] }));
 		const step = (f: (steps: ConnectStep[]) => ConnectStep[]) =>
@@ -231,7 +271,7 @@ export function createLinks(deps: LinkDeps): Links {
 		let wakeError: string | null = null;
 		let woke = false;
 		try {
-			waker = opts.wake ? await deps.wakerFor(box) : null;
+			waker = opts.wake ? await until(deps.wakerFor(box)) : null;
 			if (waker) {
 				const label = waker.label;
 				opts.onWaking?.(label);
@@ -239,9 +279,10 @@ export function createLinks(deps: LinkDeps): Links {
 				lastWakeAt.set(key, clock.now());
 				try {
 					// "running": it was up already, so there is nothing to wait for.
-					woke = (await waker.ensureAwake()) !== "running";
+					woke = (await until(waker.ensureAwake())) !== "running";
 					set(key, (l) => ({ ...l, wakeError: null }));
 				} catch (err) {
+					if (err instanceof Cancelled) throw err;
 					// Still try the box: it may be up, and a key problem must not cost a
 					// connection that would have worked.
 					wakeError = err instanceof Error ? err.message : String(err);
@@ -262,19 +303,25 @@ export function createLinks(deps: LinkDeps): Links {
 			for (;;) {
 				try {
 					// onClose: it dropped on its own (network flip, box restart, NAT reap).
-					c = await deps.dial(`ws://${box.host}:${box.port || "8787"}`, () => drop(key, c));
+					const dialing = deps.dial(`ws://${box.host}:${box.port || "8787"}`, () => drop(key, c));
+					// One that answers after Cancel is closed: nothing waits for it now.
+					void dialing.then(
+						(late) => {
+							if (attempt.cancelled) late.close();
+						},
+						() => {},
+					);
+					c = await until(dialing);
 					break;
 				} catch (err) {
-					if (cancelled.has(key)) throw new Error("Cancelled");
-					if (clock.now() >= deadline) throw err;
+					if (err instanceof Cancelled || clock.now() >= deadline) throw err;
 					if (!stopTick) {
 						const relabel = () =>
 							step((s) => relabelActive(s, waitingLabel(clock.now() - started)));
 						relabel();
 						stopTick = clock.every(1_000, relabel);
 					}
-					await clock.sleep(WOKEN_RETRY_GAP_MS);
-					if (cancelled.has(key)) throw new Error("Cancelled");
+					await until(clock.sleep(WOKEN_RETRY_GAP_MS));
 				}
 			}
 			// Another try got there first, or the box was removed (or the demo started)
@@ -307,23 +354,25 @@ export function createLinks(deps: LinkDeps): Links {
 			return true;
 		} catch (err) {
 			if (paused || conns.has(key)) return conns.has(key);
+			// Cancel (or forget) has put the card where it belongs already.
+			if (attempt.cancelled) return false;
 			step(failActive);
 			const msg = err instanceof Error ? err.message : String(err);
 			const said = wakeError
 				? `${msg}. Waking it through ${waker?.label} failed too: ${wakeError}`
 				: msg;
-			const gaveUp = cancelled.has(key);
 			set(key, (l) => ({
 				...l,
 				state: "down",
 				error: said,
 				// Not answering when nobody woke it is what a box that sleeps does.
-				asleep: wakeable && waker === null && !gaveUp,
+				asleep: wakeable && waker === null,
 			}));
 			return false;
 		} finally {
 			stopTick?.();
-			attempting.delete(key);
+			tries.delete(attempt);
+			if (tries.size === 0 && attempts.get(key) === tries) attempts.delete(key);
 		}
 	}
 
@@ -357,7 +406,7 @@ export function createLinks(deps: LinkDeps): Links {
 			if (paused) return;
 			for (const box of deps.boxes()) {
 				const key = boxKey(box);
-				if (attempting.has(key)) continue;
+				if (attempts.has(key)) continue;
 				const c = conns.get(key);
 				void (async () => {
 					if (c) {
@@ -370,13 +419,23 @@ export function createLinks(deps: LinkDeps): Links {
 			}
 		},
 		cancel(key) {
-			cancelled.add(key);
+			const tries = attempts.get(key);
+			// Nothing to stop, or it answered: a box that is up stays up.
+			if (!tries || conns.has(key)) return;
+			for (const a of tries) a.stop();
+			attempts.delete(key);
+			clearTimer(key);
+			stopped.add(key);
+			// Back to how it stood before the tap: asleep, or its last failure.
+			set(key, (l) => ({ ...l, state: "down", asked: false, steps: [] }));
 		},
 		forget(key) {
 			clearTimer(key);
 			backoff.delete(key);
 			lastWakeAt.delete(key);
-			cancelled.add(key);
+			stopped.delete(key);
+			for (const a of attempts.get(key) ?? []) a.stop();
+			attempts.delete(key);
 			const c = conns.get(key);
 			conns.delete(key);
 			c?.close();

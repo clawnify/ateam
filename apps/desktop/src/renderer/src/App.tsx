@@ -1757,6 +1757,7 @@ export function App() {
 						{boundProjectId ? (
 							<ProjectTitle
 								name={boundProject?.name ?? "…"}
+								owner={boundProject?.githubOwner ?? null}
 								color={boundProject?.color ?? null}
 								path={boundProject?.repoPath}
 							/>
@@ -2440,6 +2441,7 @@ export function App() {
 							projects={projects}
 							onOpenTask={openTask}
 							onOpenProposal={openLeadProposal}
+							scope={boundProject?.name}
 						/>
 					) : (
 						<LoopsPanel
@@ -2472,6 +2474,7 @@ export function App() {
 							onOpenTask={openTask}
 							onOpenProposal={openLeadProposal}
 							onHide={() => setLeadSide(false)}
+							scope={boundProject?.name}
 						/>
 					</aside>
 				</>

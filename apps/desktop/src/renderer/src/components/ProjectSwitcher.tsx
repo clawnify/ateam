@@ -1,6 +1,6 @@
 import { aliasLabel, type EngineMember, type UnifiedProject } from "@ateam/protocol";
 import { ChevronDown, Layers, Monitor, Server } from "lucide-react";
-import type { DragEvent } from "react";
+import { type DragEvent, useState } from "react";
 import { cn } from "@/lib/utils";
 import { pickerTrigger } from "./picker";
 import { Button } from "./ui/button";
@@ -24,6 +24,25 @@ const ALL = "__all__";
 /** The project's own colour, never a status. */
 function ProjectDot({ color }: { color: string | null }) {
 	return <span className="project-dot" style={color ? { background: color } : undefined} />;
+}
+
+/** The repo owner's GitHub avatar (the org's logo, or the user's picture for a
+ *  personal repo), so a project reads at a glance. Falls back to the colour dot
+ *  when the repo has no GitHub remote or the image can't load (offline). */
+function ProjectMark({ owner, color }: { owner: string | null; color: string | null }) {
+	// Per owner: the switcher's trigger keeps one instance across projects.
+	const [failedFor, setFailedFor] = useState<string | null>(null);
+	if (!owner || failedFor === owner) return <ProjectDot color={color} />;
+	return (
+		<img
+			className="project-avatar"
+			// 2x the 14px box, for Retina.
+			src={`https://avatars.githubusercontent.com/${encodeURIComponent(owner)}?s=28`}
+			alt=""
+			draggable={false}
+			onError={() => setFailedFor(owner)}
+		/>
+	);
 }
 
 /** One icon per machine the repo is on (a monitor for this Mac, a server per
@@ -103,7 +122,7 @@ export function ProjectSwitcher({
 					{all ? (
 						<Layers className="size-3.5" strokeWidth={1.75} />
 					) : (
-						<ProjectDot color={active?.color ?? null} />
+						<ProjectMark owner={active?.githubOwner ?? null} color={active?.color ?? null} />
 					)}
 					<span className="truncate">{label}</span>
 					<ChevronDown className="ml-auto size-3.5 text-muted-foreground" strokeWidth={2} />
@@ -129,7 +148,7 @@ export function ProjectSwitcher({
 					{cards.length > 0 && <DropdownMenuSeparator />}
 					{cards.map((card) => (
 						<DropdownMenuRadioItem key={card.key} value={card.key}>
-							<ProjectDot color={card.color} />
+							<ProjectMark owner={card.githubOwner} color={card.color} />
 							<span className="min-w-0 flex-1 truncate" title={card.members[0]?.project.repoPath}>
 								{card.name}
 							</span>
@@ -167,16 +186,18 @@ export function ProjectSwitcher({
 /** The static header of a detached window: the one project it is pinned to. */
 export function ProjectTitle({
 	name,
+	owner,
 	color,
 	path,
 }: {
 	name: string;
+	owner: string | null;
 	color: string | null;
 	path?: string;
 }) {
 	return (
 		<span className="project-title" title={path}>
-			<ProjectDot color={color} />
+			<ProjectMark owner={owner} color={color} />
 			<span className="truncate">{name}</span>
 		</span>
 	);
@@ -201,7 +222,7 @@ export function ProjectPicker({
 		<DropdownMenu modal={false}>
 			<DropdownMenuTrigger asChild>
 				<Button variant="ghost" size="sm" className={pickerTrigger} title="Project">
-					<ProjectDot color={picked?.color ?? null} />
+					<ProjectMark owner={picked?.githubOwner ?? null} color={picked?.color ?? null} />
 					<span>{picked?.name ?? "Project"}</span>
 				</Button>
 			</DropdownMenuTrigger>
@@ -215,7 +236,7 @@ export function ProjectPicker({
 				>
 					{cards.map((card) => (
 						<DropdownMenuRadioItem key={card.key} value={card.key}>
-							<ProjectDot color={card.color} />
+							<ProjectMark owner={card.githubOwner} color={card.color} />
 							<span className="min-w-0 flex-1 truncate">{card.name}</span>
 							<Machines members={card.members} />
 						</DropdownMenuRadioItem>

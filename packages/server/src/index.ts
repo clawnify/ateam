@@ -27,6 +27,7 @@ export type { GrammarJudgeIssue, GrammarVerdict } from "./grammar-jev";
 export { judgeGrammar } from "./grammar-jev";
 // The Lead chat's core: the desktop runs it over every engine it holds (a box's
 // engine runs its own for the phone, cli.ts).
+export { LEAD_IDLE_STOP_MS } from "./lead/engine-lead";
 export { type Lead, type LeadDeps, type LeadPlace, startLead } from "./lead/index";
 export type { BoxProvider, CreatedServer, CreateServerInput, ProviderOptions } from "./provision";
 export {

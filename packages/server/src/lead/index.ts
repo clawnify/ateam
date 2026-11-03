@@ -46,6 +46,13 @@ export interface LeadDeps {
 	spawnClaude?: LeadSessionOptions["spawnClaude"];
 	/** Stop the agent after this long idle (a box's Lead); see LeadSessionOptions. */
 	idleStopMs?: number;
+	/** The agent's working folder when not `dir` (LeadSessionOptions.cwd). */
+	cwd?: string;
+	/** A project window's chat: the project it is about (LeadToolDeps.home). */
+	home?: string;
+	/** A home chat messaged a task in another project: a line for the main
+	 *  chat's note(), which its agent reads with the user's next message there. */
+	onElsewhere?(line: string): void;
 }
 
 /** What a host's transport calls. A refusal throws with words for the user. */
@@ -83,6 +90,8 @@ export interface Lead {
 	}): Promise<void>;
 	/** Feed every engine's taskUpdated here: followed tasks report back. */
 	onTaskUpdated(task: TaskDTO): void;
+	/** Tell the agent something with the user's next message (LeadSession.note). */
+	note(line: string): void;
 	dispose(): void;
 }
 
@@ -123,6 +132,17 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 			},
 			deliver: deps.deliver,
 		},
+		...(deps.home ? { home: deps.home } : {}),
+		...(deps.onElsewhere
+			? {
+					onElsewhere: ({ task, projectName, homeName, body }) => {
+						const said = body.replace(/\s+/g, " ").trim();
+						deps.onElsewhere?.(
+							`messaged [${task.name.replace(/[[\]\n]/g, " ")}](${TASK_LINK_SCHEME}${task.id}) in ${projectName} from ${homeName}'s own Lead chat: ${JSON.stringify(said.length > 200 ? `${said.slice(0, 200)}…` : said)}`,
+						);
+					},
+				}
+			: {}),
 	});
 	const mcp = await startLeadMcpServer(tools);
 	session = new LeadSession({
@@ -131,6 +151,8 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 		mcp,
 		allowedTools: LEAD_TOOL_NAMES,
 		emit: deps.emit,
+		describe: (tool, input) => tools.describe(tool, input),
+		...(deps.cwd ? { cwd: deps.cwd } : {}),
 		...(deps.spawnClaude ? { spawnClaude: deps.spawnClaude } : {}),
 		...(deps.idleStopMs ? { idleStopMs: deps.idleStopMs } : {}),
 	});
@@ -237,6 +259,7 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 			});
 		},
 		onTaskUpdated: (task) => void follower.onTaskUpdated(task),
+		note: (line) => lead.note(String(line)),
 		dispose() {
 			lead.dispose();
 			mcp.close();
