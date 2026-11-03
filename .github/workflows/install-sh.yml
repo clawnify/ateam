@@ -35,6 +35,8 @@ env:
     /^==> / { in7 = /^==> \[7\/7\] verify the handshake$/ }
     in7 && /^    OK  [{].*protocolVersion/ { print; ok = 1 }
     END { exit !ok }
+  # The engine daemon's command line, as install.sh's daemon_pid() matches it.
+  DAEMON_PAT: ateam-app/cli\.js daemon
 
 jobs:
   lint:
@@ -96,12 +98,21 @@ jobs:
       # An upgrade. The desktop's heal on connect and Update button, and the
       # engine's self-update, all re-run install.sh on a box whose daemon is
       # running. It must stop that daemon and answer from the new dist (#171).
+      - name: Note the daemon the re-run must replace
+        run: pgrep -f "$DAEMON_PAT" | tee "$RUNNER_TEMP/daemon.pid"
       - name: Re-run install.sh over the running install
         run: su - tester -c 'cat ~/install.sh | bash -s' 2>&1 | tee "$RUNNER_TEMP/rerun.log"
+      # The pid check is the one that does not take install.sh's word for it: a
+      # re-run that never stopped the old daemon still prints "stopped" and gets
+      # an OK from it.
       - name: Check the re-run replaced the running daemon
         run: |
           grep -E '^    stopped the old daemon \(pid [0-9]+\)' "$RUNNER_TEMP/rerun.log"
           awk "$HANDSHAKE_OK" "$RUNNER_TEMP/rerun.log"
+          old="$(cat "$RUNNER_TEMP/daemon.pid")"
+          daemons="$(pgrep -f "$DAEMON_PAT" | paste -sd ' ')"
+          echo "daemon $old -> $daemons"
+          [ "$(wc -w <<<"$daemons")" = 1 ] && [ "$daemons" != "$old" ]
 
   # --service, which every Ateam client passes, needs systemd, and a container
   # has none. The runner VM does, with passwordless sudo, so a box user with sudo
@@ -110,8 +121,6 @@ jobs:
   service:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    env:
-      DAEMON_PAT: ateam-app/cli\.js daemon
     steps:
       - uses: actions/checkout@v4
       - name: Prepare a box user with passwordless sudo
