@@ -44,6 +44,21 @@ export interface TranscriptSource {
 	digestsFor(cwds: string[]): Promise<SessionDigest[]>;
 }
 
+/**
+ * One side of a turn in a session, with when it was said: what the user typed,
+ * or the agent's reply that ended the turn (its last text before the user spoke
+ * again, the same text its Stop hook reports). Tool calls and the agent's
+ * mid-turn narration are not turns. Read on demand for one worktree, never
+ * memoized: search keeps prompts only, and holding every reply of every session
+ * would grow its index by the size of the transcripts.
+ */
+export interface TurnEntry {
+	role: "user" | "agent";
+	text: string;
+	/** Epoch ms; 0 when the harness recorded no time. */
+	at: number;
+}
+
 /** A ranked match, before it is joined back to a task for the UI. */
 export interface RankedSession {
 	digest: SessionDigest;

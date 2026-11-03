@@ -55,6 +55,7 @@ const ENTITY = new Set<string>([
 	CH.tasksAnswerQuestion, // {taskId} — the question lives on the task's engine
 	CH.tasksClearProposal, // {taskId} — so do the proposals
 	CH.tasksPage, // taskId — main serves the page from the engine that owns the task
+	CH.tasksChangeSteps, // taskId — written where the task's worktree and transcripts are
 	CH.projectsRemove,
 	CH.projectsRemoteUrl, // projectId — a box's project has a box's remote
 	CH.gitCommit,

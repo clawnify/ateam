@@ -131,7 +131,11 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // yes, so the Browser button offers the install instead of a command to paste.
 // A new method only: a v25 engine answers "Unknown method", and the desktop
 // shows the command from that engine's own BROWSER_NOT_INSTALLED_ERROR.
-export const PROTOCOL_VERSION = 26;
+// v27: change steps. tasks:changeSteps tells a task's diff as steps, with the
+// agent's reason for each and what its account of the work never mentions. A
+// new method only: a v26 engine answers "Unknown method", and the Changes view
+// stays the flat list it always was.
+export const PROTOCOL_VERSION = 27;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -233,6 +237,42 @@ export interface QuestionChoiceDTO {
 }
 
 /** A task's last finished turn, as the Lead chat reads it (tasks:lastReply). */
+/** A diff with fewer files reads fine as a flat list, so the Changes view
+ *  doesn't offer steps for it (the median PR on Ateam's own repo is 4 files). */
+export const CHANGE_STEPS_MIN_FILES = 8;
+
+/** One step of a task's change: a reason, and the files that carry it out. */
+export interface ChangeStepDTO {
+	title: string;
+	/** Why the step was needed, from the agent's own account of the work. */
+	why: string;
+	files: { path: string; note: string }[];
+}
+
+/**
+ * A task's diff told as steps (tasks:changeSteps). An index into the diff, never
+ * a copy of it: every path opens the same live file diff the flat list does.
+ */
+export interface ChangeStepsDTO {
+	/** The last steps written, or null before the first. They may describe an
+	 *  older diff: see `current`. */
+	steps: ChangeStepDTO[] | null;
+	/** Changes the agent's account of the work never mentions. */
+	unexplained: { path: string; note: string }[];
+	/** Whether the steps describe the diff as it is now. */
+	current: boolean;
+	madeAt: number | null;
+	/** New steps are being written; ask again for them. */
+	working: boolean;
+	/**
+	 * Why none will be written for the diff as it is now: `small`, too few files
+	 * for steps to help; `agent`, the task's agent can't write them (OpenCode);
+	 * `failed`, the last try gave nothing usable, a missing agent CLI included
+	 * (tried again after a while, or once the diff changes).
+	 */
+	unavailable: "small" | "agent" | "failed" | null;
+}
+
 export interface TaskLastReplyDTO {
 	text: string;
 	at: number;
@@ -1229,6 +1269,9 @@ export interface AteamApi {
 		listArchived(projectId: string): Promise<TaskDTO[]>;
 		/** Archive a task (off every list, worktree kept) or bring it back. */
 		setArchived(id: string, archived: boolean): Promise<TaskDTO>;
+		/** The task's diff told as steps. Asking starts writing new ones when the
+		 *  diff moved on; the answer says so (`working`) and the caller asks again. */
+		changeSteps(taskId: string): Promise<ChangeStepsDTO>;
 	};
 	git: {
 		commit(taskId: string, message: string): Promise<{ sha: string }>;

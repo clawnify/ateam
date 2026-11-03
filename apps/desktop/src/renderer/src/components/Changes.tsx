@@ -53,27 +53,39 @@ export function ChangesList({
 				<strong>Changes</strong>
 				<IconButton icon={RotateCw} label="Refresh changes" onClick={onRefresh} />
 			</div>
-			{diff?.files.length ? (
-				diff.files.map((f) => (
-					<button
-						type="button"
-						key={f.path}
-						className={`file ${selected === f.path ? "selected" : ""}`}
-						title={f.path}
-						onClick={() => onSelect(f.path)}
-					>
-						<span className="fpath">{f.path}</span>
-						<span className="fstat">
-							<span className="add">+{f.additions}</span>{" "}
-							<span className="del">-{f.deletions}</span>
-						</span>
-					</button>
-				))
-			) : (
-				<div className="muted" style={{ padding: "4px 10px" }}>
-					No changes
-				</div>
-			)}
+			<FileRows diff={diff} selected={selected} onSelect={onSelect} />
 		</div>
 	);
+}
+
+/** The changed files, one row each with its counts: the flat list. */
+export function FileRows({
+	diff,
+	selected,
+	onSelect,
+}: {
+	diff: DiffResultDTO | null;
+	selected: string | null;
+	onSelect: (path: string) => void;
+}) {
+	if (!diff?.files.length)
+		return (
+			<div className="muted" style={{ padding: "4px 10px" }}>
+				No changes
+			</div>
+		);
+	return diff.files.map((f) => (
+		<button
+			type="button"
+			key={f.path}
+			className={`file ${selected === f.path ? "selected" : ""}`}
+			title={f.path}
+			onClick={() => onSelect(f.path)}
+		>
+			<span className="fpath">{f.path}</span>
+			<span className="fstat">
+				<span className="add">+{f.additions}</span> <span className="del">-{f.deletions}</span>
+			</span>
+		</button>
+	));
 }

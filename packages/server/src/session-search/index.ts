@@ -19,10 +19,10 @@ import type { Services } from "../services";
 import { readSettings } from "../settings-file";
 import { type RankInput, rank } from "./rank";
 import { buildPrompt, expandQuery, parseVerdicts } from "./rerank";
-import { claudeSource } from "./sources/claude";
-import { codexSource } from "./sources/codex";
+import { claudeSource, readClaudeTurns } from "./sources/claude";
+import { codexSource, readCodexTurns } from "./sources/codex";
 import { opencodeSource } from "./sources/opencode";
-import type { RankedSession, SessionDigest } from "./types";
+import type { RankedSession, SessionDigest, TurnEntry } from "./types";
 
 /** How many candidates the model is asked to judge. Enough to contain the
  *  answer, few enough that it reads every one. */
@@ -69,6 +69,33 @@ async function buildIndex(worktrees: string[]): Promise<SessionDigest[]> {
 export async function userPromptsFor(worktree: string): Promise<string[]> {
 	const digests = await buildIndex([worktree]);
 	return digests.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0)).flatMap((d) => d.prompts);
+}
+
+/** How each harness's transcript gives up its turns. OpenCode keeps its
+ *  conversations in SQLite and has no reader yet, so its sessions add none. */
+const TURN_READERS: Record<string, (path: string) => Promise<TurnEntry[]>> = {
+	claude: readClaudeTurns,
+	codex: readCodexTurns,
+};
+
+/**
+ * Every turn of every session that ran in `worktree` from `since` on (epoch ms;
+ * null for all of them), oldest first: what the user asked and what the agent
+ * replied when each turn ended. The change steps read it as the agent's own
+ * account of the work (change-steps.ts). Read fresh on every call: only the
+ * index of WHICH sessions ran there is cached.
+ */
+export async function turnsFor(worktree: string, since: number | null): Promise<TurnEntry[]> {
+	const digests = (await buildIndex([worktree])).sort(
+		(a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0),
+	);
+	const out: TurnEntry[] = [];
+	for (const d of digests) {
+		const read = TURN_READERS[d.agentId];
+		if (!read) continue;
+		for (const turn of await read(d.path)) if (since === null || turn.at >= since) out.push(turn);
+	}
+	return out;
 }
 
 export interface SessionSearchInput {
