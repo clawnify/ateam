@@ -11,12 +11,13 @@
 
 /* Themes (lib/theme.ts sets data-theme on <html>; shared/theme.ts lists them).
    Every colour in this file is one of these tokens, so a theme is only a
-   block here. */
+   block here. Any element with data-theme takes its block too, which is how
+   the first-run choice draws each theme's preview inside the current one. */
 
 /* Dark, the default: neutral greys, off-white text, borders as translucent
    off-white. */
 :root,
-:root[data-theme="dark"] {
+[data-theme="dark"] {
 	--bg: #141414;
 	--bg-elev: #181818;
 	--bg-elev-2: #242424;
@@ -59,7 +60,7 @@
 
 /* Light: #f3f3f3 chrome, #fcfcfc surfaces, #141414 text, borders and hovers
    in translucent #141414. */
-:root[data-theme="light"] {
+[data-theme="light"] {
 	--bg: #f3f3f3;
 	--bg-elev: #fcfcfc;
 	--bg-elev-2: #eaeaea;
@@ -98,7 +99,7 @@
 }
 
 /* Classic: Ateam's first palette, near-black with a cool tint. */
-:root[data-theme="classic"] {
+[data-theme="classic"] {
 	--bg: #0c0c0e;
 	--bg-elev: #141418;
 	--bg-elev-2: #1c1c22;
@@ -5072,4 +5073,161 @@ input {
 	color: var(--amber);
 	border: 1px solid currentColor;
 	border-radius: 4px;
+}
+
+/* ---- first run (components/Welcome.tsx) ---- */
+.welcome {
+	height: 100%;
+	display: grid;
+	place-items: center;
+	background: var(--bg);
+	/* The titlebar is hidden, so the whole screen moves the window. */
+	-webkit-app-region: drag;
+	/* Resolved here, in the window's theme, before a preview redefines --primary. */
+	--outer-primary: var(--primary);
+}
+.welcome button,
+.welcome label {
+	-webkit-app-region: no-drag;
+}
+.welcome-body {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 14px;
+	padding: 24px;
+	text-align: center;
+}
+.welcome-body h1 {
+	margin: 0;
+	font-size: 22px;
+	font-weight: 600;
+}
+.welcome-body p {
+	margin: 0 0 14px;
+	color: var(--text-dim);
+	font-size: 13px;
+}
+.welcome-themes {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 16px;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+/* Named for screen readers; the heading above already says it on screen. */
+.welcome-legend,
+.welcome-radio {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+.welcome-theme {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 10px;
+	cursor: pointer;
+}
+.welcome-theme-name {
+	font-size: 13px;
+	color: var(--text-dim);
+}
+.welcome-theme:has(:checked) .welcome-theme-name {
+	color: var(--text);
+}
+/* Drawn in its own theme: every var() below is that theme's token. */
+.welcome-preview {
+	width: 200px;
+	height: 128px;
+	display: flex;
+	border-radius: 10px;
+	overflow: hidden;
+	background: var(--bg);
+	box-shadow:
+		0 0 0 1px var(--border),
+		0 6px 20px rgba(0, 0, 0, 0.25);
+}
+.welcome-theme:hover .welcome-preview {
+	box-shadow:
+		0 0 0 1px var(--border-hover),
+		0 6px 20px rgba(0, 0, 0, 0.25);
+}
+/* The selection mark is the window's own --primary, outside the preview. */
+.welcome-theme:has(:checked) .welcome-preview,
+.welcome-theme:has(:focus-visible) .welcome-preview {
+	outline: 2px solid var(--outer-primary);
+	outline-offset: 3px;
+}
+.welcome-theme:has(:focus-visible):not(:has(:checked)) .welcome-preview {
+	outline-style: dashed;
+}
+.wp-side {
+	width: 52px;
+	padding: 10px 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	background: var(--bg-elev);
+	box-shadow: 1px 0 0 var(--border);
+}
+.wp-line {
+	display: block;
+	height: 5px;
+	width: 70%;
+	border-radius: 3px;
+	background: var(--text-dim);
+	opacity: 0.5;
+}
+.wp-line.wide {
+	width: 100%;
+	background: var(--text);
+	opacity: 0.8;
+}
+.wp-board {
+	flex: 1;
+	display: flex;
+	gap: 6px;
+	padding: 10px 8px;
+}
+.wp-col {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.wp-card {
+	height: 30px;
+	border-radius: 5px;
+	background: var(--bg-elev);
+	box-shadow: inset 0 0 0 1px var(--border);
+	position: relative;
+}
+.wp-dot {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+}
+.wp-dot.blue {
+	background: var(--blue);
+}
+.wp-dot.amber {
+	background: var(--amber);
+}
+.wp-dot.green {
+	background: var(--green);
+}
+.welcome-go {
+	margin-top: 18px;
+	min-width: 160px;
+	padding: 7px 16px;
 }

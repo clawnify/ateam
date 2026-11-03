@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { Welcome } from "./components/Welcome";
 import "./globals.css";
 import { applyTheme } from "./lib/theme";
 
@@ -22,7 +24,21 @@ window.addEventListener("drop", (e) => e.preventDefault());
 // mount/unmount disposes and recreates each xterm, which leaves terminal focus
 // and PTY input in a bad state (Enter/keys not reaching the pty), especially
 // with many Mission Control tiles mounting at once.
+// A new install opens on the theme choice (components/Welcome.tsx), then the board.
+// A detached project window never does: it exists because a project does.
+function Root() {
+	const [welcome, setWelcome] = useState<boolean | null>(
+		window.ateam.window.boundProjectId() ? false : null,
+	);
+	useEffect(() => {
+		if (welcome !== null) return;
+		window.ateamTheme.firstRun().then(setWelcome, () => setWelcome(false));
+	}, [welcome]);
+	if (welcome === null) return null;
+	return welcome ? <Welcome onDone={() => setWelcome(false)} /> : <App />;
+}
+
 const root = document.getElementById("root");
 if (root) {
-	createRoot(root).render(<App />);
+	createRoot(root).render(<Root />);
 }
