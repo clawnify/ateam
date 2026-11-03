@@ -13,6 +13,7 @@ import type {
 	AteamApi,
 	AttachDelivery,
 	BoxUpdateStarted,
+	ChangeStepsDTO,
 	CleanupCandidate,
 	CleanupReport,
 	CreateLoopInput,
@@ -175,6 +176,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			cleanup: (projectId) => call<CleanupReport>(CH.tasksCleanup, [projectId]),
 			listArchived: (projectId) => call<TaskDTO[]>(CH.tasksListArchived, [projectId]),
 			setArchived: (id, archived) => call<TaskDTO>(CH.tasksSetArchived, [id, archived]),
+			changeSteps: (taskId) => call<ChangeStepsDTO>(CH.tasksChangeSteps, [taskId]),
 		},
 		git: {
 			commit: (taskId, message) => call<{ sha: string }>(CH.gitCommit, [taskId, message]),

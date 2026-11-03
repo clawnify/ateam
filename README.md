@@ -215,7 +215,9 @@ bun run --filter @ateam/desktop build      # production bundle
 
 Working: project registration (with optional `git init` for plain folders),
 worktree-per-task lifecycle, commit/push/update/merge, a GitHub-style changes
-view (aggregate diffstat → file list + side-by-side diffs), prompt-first task
+view (aggregate diffstat → file list + side-by-side diffs; a change of 8 or
+more files also reads by step, each with the agent's reason, and first the
+changes its own account of the work never mentions), prompt-first task
 composer (pick the agent and type the first instruction in one step; ⌘⏎ opens
 the new task, ⇧⌘⏎ starts it in the background and leaves you where you are, as
 does long-pressing send on the phone) reused for extra sessions inside an

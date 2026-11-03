@@ -5,7 +5,8 @@ import { dirname, join } from "node:path";
 import { cleanPrompt, contentText, pushPrompt } from "../src/session-search/digest";
 import { rank, terms } from "../src/session-search/rank";
 import { extractJson, parseVerdicts } from "../src/session-search/rerank";
-import { codexSource } from "../src/session-search/sources/codex";
+import { claudeSource, readClaudeTurns } from "../src/session-search/sources/claude";
+import { codexSource, readCodexTurns } from "../src/session-search/sources/codex";
 import { readFirstLine } from "../src/session-search/sources/files";
 import type { SessionDigest } from "../src/session-search/types";
 
@@ -236,6 +237,150 @@ describe("codexSource", () => {
 			expect(digests[0]?.prompts).toEqual(["make the search cheap"]);
 			// A rollout from some other repo is skipped without reading its body.
 			expect(await codexSource(store).digestsFor(["/somewhere/else"])).toEqual([]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});
+
+// The change steps read a task's turns as the agent's account of the work: each
+// prompt, and the reply that ended each turn (not the narration mid-turn).
+describe("turn readers", () => {
+	const at = (s: number) => new Date(Date.UTC(2026, 10, 3, 12, 0, s)).toISOString();
+	const write = async (lines: object[]) => {
+		const dir = await mkdtemp(join(tmpdir(), "turns-"));
+		const path = join(dir, "t.jsonl");
+		await writeFile(path, `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+		return { path, done: () => rm(dir, { recursive: true, force: true }) };
+	};
+
+	test("Claude: prompts, and each turn's last text", async () => {
+		const { path, done } = await write([
+			{ type: "user", timestamp: at(0), message: { content: "add the dot" } },
+			{
+				type: "assistant",
+				timestamp: at(1),
+				message: { content: [{ type: "text", text: "Looking." }] },
+			},
+			{
+				type: "assistant",
+				timestamp: at(2),
+				message: { content: [{ type: "tool_use", id: "x", name: "Read", input: {} }] },
+			},
+			{
+				type: "user",
+				timestamp: at(3),
+				message: { content: [{ type: "tool_result", tool_use_id: "x", content: "file" }] },
+			},
+			{
+				type: "assistant",
+				timestamp: at(4),
+				message: { content: [{ type: "text", text: "Added the dot." }] },
+			},
+			{
+				type: "user",
+				timestamp: at(5),
+				isMeta: true,
+				message: { content: "<command-name>/x</command-name>" },
+			},
+			{
+				type: "assistant",
+				timestamp: at(6),
+				isSidechain: true,
+				message: { content: [{ type: "text", text: "side" }] },
+			},
+			{ type: "user", timestamp: at(7), message: { content: "now the docs" } },
+			{
+				type: "assistant",
+				timestamp: at(8),
+				message: { content: [{ type: "text", text: "Docs done." }] },
+			},
+		]);
+		try {
+			const turns = await readClaudeTurns(path);
+			expect(turns.map((t) => [t.role, t.text])).toEqual([
+				["user", "add the dot"],
+				["agent", "Added the dot."],
+				["user", "now the docs"],
+				["agent", "Docs done."],
+			]);
+			expect(turns[1]?.at).toBe(Date.parse(at(4)));
+		} finally {
+			await done();
+		}
+	});
+
+	test("Codex: prompts, and each turn's last_agent_message", async () => {
+		const { path, done } = await write([
+			{ type: "session_meta", payload: { id: "s", cwd: "/w" } },
+			{
+				timestamp: at(0),
+				type: "response_item",
+				payload: {
+					type: "message",
+					role: "user",
+					content: [{ type: "input_text", text: "fix the bug" }],
+				},
+			},
+			{
+				timestamp: at(1),
+				type: "response_item",
+				payload: {
+					type: "message",
+					role: "assistant",
+					content: [{ type: "output_text", text: "On it." }],
+				},
+			},
+			{
+				timestamp: at(2),
+				type: "event_msg",
+				payload: { type: "task_complete", last_agent_message: "Fixed the off-by-one." },
+			},
+		]);
+		try {
+			const turns = await readCodexTurns(path);
+			expect(turns.map((t) => [t.role, t.text])).toEqual([
+				["user", "fix the bug"],
+				["agent", "Fixed the off-by-one."],
+			]);
+		} finally {
+			await done();
+		}
+	});
+});
+
+// A headless `claude -p` session opens with queue entries that carry its whole
+// prompt, so with a big prompt its `cwd` lies past the head that is read. Two of
+// them listed first used to hide their directory, and every real session in it.
+describe("claudeSource", () => {
+	test("finds a directory's cwd past transcripts whose head never names it", async () => {
+		const root = await mkdtemp(join(tmpdir(), "claude-store-"));
+		const cwd = "/work/task";
+		const dir = join(root, "-work-task");
+		await mkdir(dir);
+		const headless = (id: string) =>
+			[
+				{
+					type: "queue-operation",
+					operation: "enqueue",
+					sessionId: id,
+					content: "x".repeat(70_000),
+				},
+				{ type: "user", cwd, sessionId: id, message: { content: "big prompt" } },
+			]
+				.map((l) => JSON.stringify(l))
+				.join("\n");
+		// Nine headless sessions and one real one: listing order is the
+		// filesystem's, so the real one must be found wherever it lands.
+		const ids = ["h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8", "h9"];
+		for (const id of ids) await writeFile(join(dir, `${id}.jsonl`), headless(id));
+		await writeFile(
+			join(dir, "real.jsonl"),
+			`${JSON.stringify({ type: "user", cwd, sessionId: "real", timestamp: "2026-11-03T10:00:00Z", message: { content: "add steps to the Changes view" } })}\n`,
+		);
+		try {
+			const digests = await claudeSource(root).digestsFor([cwd]);
+			expect(digests.map((d) => d.sessionId).sort()).toEqual([...ids, "real"]);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

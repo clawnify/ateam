@@ -31,6 +31,7 @@ export const CH = {
 	tasksAnswerQuestion: "tasks:answerQuestion",
 	tasksClearProposal: "tasks:clearProposal",
 	tasksPage: "tasks:page",
+	tasksChangeSteps: "tasks:changeSteps",
 	peersSendFromLead: "peers:sendFromLead",
 	gitCommit: "git:commit",
 	gitPush: "git:push",
