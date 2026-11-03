@@ -192,6 +192,20 @@ The renderer's dev port is derived from the worktree path (and bound to
 `127.0.0.1`), so several worktrees can run `dev` side by side without serving
 each other's code. The URL is printed on startup.
 
+### Test the phone app on your own iPhone
+
+Ateam Go has a native module, so it runs in a development build rather than
+Expo Go. The dev build is a separate app, "Ateam Go Dev", that installs next to
+the TestFlight / App Store one.
+
+1. **Once, on a Mac** with the iPhone connected: `cd apps/mobile && npm run ios:dev`
+   builds and installs Ateam Go Dev with automatic signing.
+2. **On the box where you edit**: `cd apps/mobile && npm run phone` starts Metro
+   and prints a URL. Open Ateam Go Dev and enter that URL.
+
+JavaScript changes reload in the app. Native changes (`apps/mobile/modules`, new
+native packages, `app.json` plugins) need a new `npm run ios:dev` on the Mac.
+
 ## Test & typecheck
 
 ```bash

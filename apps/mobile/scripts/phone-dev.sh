@@ -11,7 +11,8 @@ cd "$(dirname "$0")/.."
 
 PORT="${PORT:-8082}"
 HTTPS_PORT="${HTTPS_PORT:-8443}"
-DNS="$(tailscale status --self --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
+DNS="$(tailscale status --self --json |
+	node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).Self.DNSName.replace(/\.$/,"")))')"
 URL="https://$DNS:$HTTPS_PORT"
 
 # One port, one Metro: only one worktree can serve the phone at a time.
