@@ -9,7 +9,6 @@ const NOW = 1_000_000_000_000;
 const HOUR = 3_600_000;
 // A baseline "quiet" tree: last activity well outside the recent window.
 const quiet = (over: Partial<WorktreeSignals> = {}): WorktreeSignals => ({
-	indexMtimeMs: NOW - 10 * HOUR,
 	transcriptMtimeMs: NOW - 10 * HOUR,
 	dirtyRealCount: 0,
 	commitsAhead: 0,
@@ -63,19 +62,6 @@ describe("triageWorktree — the false-done cases the reconciler gets wrong", ()
 			}),
 		);
 		expect(r.bucket).toBe("active");
-	});
-
-	// lastActivityMs folds in indexMtimeMs, which the UI refreshes on opening a
-	// panel — using it here would let inspecting a wedged card hide the problem.
-	it("a fresh git-status refresh does not rescue a stalled agent", () => {
-		const r = triage(
-			quiet({
-				agentAlive: true,
-				transcriptMtimeMs: NOW - 10 * HOUR,
-				indexMtimeMs: NOW - 1000,
-			}),
-		);
-		expect(r.bucket).toBe("stalled");
 	});
 
 	it("merged but the conversation continued past merge is NOT done", () => {

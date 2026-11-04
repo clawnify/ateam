@@ -45,9 +45,8 @@ export function signalsFromTask(task: Task): WorktreeSignals {
 		// Parked on a question, not stuck — keeps the stall rule off it.
 		agentAwaitingInput: task.agentStatus === "awaiting_input",
 		createdAtMs: task.createdAt ?? null,
-		// gitStatus.updatedAt tracks the last git refresh; lastEventAt tracks the
-		// last hook activity (our best proxy for conversation activity).
-		indexMtimeMs: gs?.updatedAt ?? null,
+		// The last hook activity, our best proxy for conversation activity. Not
+		// gitStatus.updatedAt: that is the last git refresh (see lastActivityMs).
 		transcriptMtimeMs: task.lastEventAt ?? null,
 		// `git status`, never `dirty` (the diff against base, which counts
 		// committed work and outlives a squash merge). A snapshot from before

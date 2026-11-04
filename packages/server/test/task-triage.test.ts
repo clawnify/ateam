@@ -117,6 +117,20 @@ describe("triageTask", () => {
 		expect(r.done).toBe(true);
 	});
 
+	// The background sweep rewrites gitStatus.updatedAt on every probe of an idle
+	// task. That is a refresh, not activity: counting it called nearly every idle
+	// task "active" and hid the bucket the rules below it would have given.
+	it("does not count a git-status refresh as activity", () => {
+		const swept = git({ updatedAt: NOW - 60_000 });
+		expect(triageTask(task({ prState: "merged", gitStatus: swept }), NOW).bucket).toBe(
+			"merged_done",
+		);
+		expect(triageTask(task({ gitStatus: { ...swept, ahead: 2 } }), NOW).bucket).toBe(
+			"unmerged_no_pr",
+		);
+		expect(triageTask(task({ gitStatus: swept }), NOW).bucket).toBe("not_started");
+	});
+
 	// The bug the PTY cannot see: `exec $SHELL` keeps the terminal alive after the
 	// agent dies, so liveness alone says "healthy" forever.
 	it("calls a running agent that stopped advancing stalled", () => {
@@ -140,8 +154,8 @@ describe("triageTask", () => {
 	});
 
 	// A stale card whose panel was merely OPENED refreshes gitStatus.updatedAt.
-	// If the stall check used lastActivityMs (which folds that in), looking at a
-	// wedged card would hide that it is wedged.
+	// If the stall check read that refresh as progress, looking at a wedged card
+	// would hide that it is wedged.
 	it("stays stalled even when gitStatus was just refreshed by opening the panel", () => {
 		const r = triageTask(
 			task({

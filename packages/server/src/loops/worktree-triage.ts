@@ -44,8 +44,6 @@ export interface WorktreeSignals {
 	agentAwaitingInput?: boolean;
 	/** Worktree creation time. */
 	createdAtMs?: number | null;
-	/** `.git/worktrees/<n>/index` mtime — moves on git ops/commits. */
-	indexMtimeMs?: number | null;
 	/** Newest session-transcript mtime — moves on conversation activity. */
 	transcriptMtimeMs?: number | null;
 	/** Count of REAL dirty files (caller has already excluded node_modules/dist/junk). */
@@ -86,9 +84,14 @@ export interface TriageResult {
 	reason: string;
 }
 
-/** Freshest activity signal across creation / index / transcript. */
+/**
+ * Freshest activity signal: creation or the conversation. Never the git
+ * snapshot's time: the background sweep (worktree-sweep.ts) rewrites
+ * `gitStatus.updatedAt` on every probe, so it says when we last looked, not
+ * when anyone worked, and folding it in called almost every idle task active.
+ */
 export function lastActivityMs(s: WorktreeSignals): number {
-	return Math.max(s.createdAtMs ?? 0, s.indexMtimeMs ?? 0, s.transcriptMtimeMs ?? 0);
+	return Math.max(s.createdAtMs ?? 0, s.transcriptMtimeMs ?? 0);
 }
 
 export interface TriageOptions {
@@ -111,10 +114,9 @@ export function triageWorktree(s: WorktreeSignals, opts: TriageOptions): TriageR
 	// PTY deliberately drops to a shell when the agent exits (sessions.ts), so a
 	// crashed or wedged agent leaves a live terminal behind and this check would
 	// otherwise call it healthy forever — the one case a liveness probe cannot
-	// see. Progress is measured by `transcriptMtimeMs` ALONE (the hook clock),
-	// never `lastActivityMs`: that folds in `gitStatus.updatedAt`, which the UI
-	// refreshes whenever a task panel is opened, so merely LOOKING at a wedged
-	// card would hide that it is wedged.
+	// see. Progress is measured by the hook clock (`transcriptMtimeMs`), never a
+	// git refresh: the UI refreshes git status whenever a task panel is opened,
+	// so merely LOOKING at a wedged card would hide that it is wedged.
 	if (s.agentAlive) {
 		const progressAt = s.transcriptMtimeMs ?? s.createdAtMs ?? null;
 		const silentMs = progressAt == null ? 0 : opts.now - progressAt;
