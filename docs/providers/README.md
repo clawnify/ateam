@@ -66,7 +66,7 @@ provider, and adding one is a file per seam:
 
 | What | Where | What a provider adds |
 | --- | --- | --- |
-| The engine lets its box sleep, and wakes it for loop ticks | `packages/server/src/sleep/` | a `SleepDriver` (hold, release, arm a wake) beside `boxd.ts`, and a line in `index.ts` |
+| The engine lets its box sleep, wakes it for loop ticks, and tells clients what wakes it | `packages/server/src/sleep/` | a `SleepDriver` (hold, release, arm a wake, and `provider`: its id and the box's name there, reported in `system:hello`) beside `boxd.ts`, and a line in `index.ts` |
 | The desktop leaves a sleeping box asleep at launch | `packages/server/src/connections.ts` | a `SleepCheck`: which ssh aliases are its machines, and which are asleep |
 | The phone, and the desktop for a box added by its Tailscale address, wake a box before connecting | `packages/protocol/src/providers.ts` and `packages/protocol/src/wake.ts` | a definition declaring the inputs a wake needs (an account key, a machine name), and an adapter that wakes with them |
 

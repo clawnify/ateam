@@ -2,7 +2,16 @@
 // One entry per address, kept until the user deletes it. Persisted by src/storage.ts.
 //
 // Pure TS, no React Native imports, so it runs under bun test.
-import { type ConnectStep, providerById, wakeMachineName } from "@ateam/protocol";
+import {
+	type BoxWake,
+	type ConnectStep,
+	filled,
+	inputsAt,
+	NEEDS_PAIRING,
+	providerById,
+	reportedWake,
+	wakeMachineName,
+} from "@ateam/protocol";
 import type { SavedConnection } from "./storage";
 
 export interface SavedBox extends SavedConnection {
@@ -29,6 +38,63 @@ export function touchBox(
 		return k !== key && k !== replaces;
 	});
 	return [{ ...conn, lastUsedAt: now }, ...rest];
+}
+
+/** The list once the box at `key` takes the provider it reported in hello
+ *  (SystemInfo.provider), or null when nothing changes. A box saved by its address
+ *  alone (a pairing QR, an IP typed in) has none, so the phone dialled it asleep
+ *  until it timed out. Only fills what is missing: a provider the user picked
+ *  stays, and only its blank name is filled, from a report at the same provider. */
+export function withReportedProvider(
+	list: SavedBox[],
+	key: string,
+	reported: BoxWake | null | undefined,
+): SavedBox[] | null {
+	const wake = reportedWake(reported);
+	const at = list.findIndex((b) => boxKey(b) === key);
+	const box = list[at];
+	if (!wake || !box) return null;
+	const own = providerById(box.provider?.id);
+	if (own && box.provider) {
+		if (own.id !== wake.id || filled(own, "box", box.provider.box)) return null;
+	}
+	const next = [...list];
+	next[at] = { ...box, provider: wake };
+	return next;
+}
+
+/** Why this phone can't wake a box its provider puts to sleep, when it can't (no
+ *  waker for it): its name there is missing, else the provider's key. Null for a
+ *  box with no provider, which nothing wakes. */
+export function cantWakeReason(box: SavedConnection): string | null {
+	const def = providerById(box.provider?.id);
+	if (!def) return null;
+	if (!filled(def, "box", box.provider?.box ?? {})) {
+		return `This phone doesn't have its name at ${def.label}, so it can't wake it.`;
+	}
+	const key = inputsAt(def, "account")[0]?.label ?? "key";
+	return `This phone has no ${def.label} ${key} to wake it with.`;
+}
+
+/** What a box that dropped says until a try says more. */
+export const CONNECTION_LOST = "The connection dropped.";
+
+/** Under a box with no provider that isn't answering, and where the phone waits on it. */
+export const NO_PROVIDER_HINT =
+	"If this box goes to sleep when it's idle, set its provider so this phone can wake it.";
+
+/** A box with no provider that isn't answering: if it sleeps, nothing on the phone can
+ *  wake it until the phone knows what it runs on. Read from its last failure, which is
+ *  kept while it's tried again, so the hint stays put instead of flickering per try. A
+ *  box that just dropped is reconnecting, and a locked one answered. */
+export function needsProvider(box: SavedConnection, link: BoxLink): boolean {
+	return (
+		providerById(box.provider?.id) === undefined &&
+		link.state !== "live" &&
+		link.error !== null &&
+		link.error !== NEEDS_PAIRING &&
+		link.error !== CONNECTION_LOST
+	);
 }
 
 export function removeBox(list: SavedBox[], key: string): SavedBox[] {

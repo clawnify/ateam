@@ -67,9 +67,12 @@ export async function spritesSleepDriver(opts: {
 	call?: TaskCall;
 	every?: Every;
 	isSprite?: () => boolean;
+	/** The Sprite's name. Its hostname is its name (measured 2026-11-04). */
+	name?: string;
 }): Promise<SleepDriver | null> {
 	const isSprite = opts.isSprite ?? (() => existsSync(SPRITE_SOCKET));
 	if (!isSprite()) return null;
+	const name = opts.name ?? hostname();
 	const call = opts.call ?? taskCall;
 	const repeat = opts.every ?? every;
 	const put = async () => {
@@ -78,7 +81,8 @@ export async function spritesSleepDriver(opts: {
 	};
 	let stopRenewing: (() => void) | null = null;
 	return {
-		where: `Sprite ${hostname()}`,
+		where: `Sprite ${name}`,
+		provider: { id: "sprites", box: { machine: name } },
 		canWakeForLoops: false,
 		hold: async () => {
 			await put();

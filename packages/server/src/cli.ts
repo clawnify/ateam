@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, openSync, realpathSync, unlinkSync } from "node:
 import { connect, createServer, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { type AggregateBackend, CH, createAggregate } from "@ateam/protocol";
+import { type AggregateBackend, type BoxWake, CH, createAggregate } from "@ateam/protocol";
 import type { Dispatcher } from "./dispatcher";
 import { createDispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
@@ -65,6 +65,10 @@ let extensions: RpcExtension[] = [];
 // Where the network port listens (`<host>:<port>`), reported in hello for other
 // boxes to link to (cross-box), or null with no listener.
 let wsAddr: string | null = null;
+// The provider that puts this box to sleep and its name there, reported in hello so
+// a client that added the box by its address can wake it. Undefined until the
+// sleep driver's detection has answered, then null on a box no provider sleeps.
+let boxProvider: BoxWake | null | undefined;
 // The lock on the network port (pairing.ts): which devices may use the box over
 // the WebSocket. The unix socket (what `attach` relays over SSH) is never gated.
 const pairing: PairingGuard = {
@@ -232,7 +236,12 @@ function serveClient(
 	trusted: boolean,
 ): void {
 	sleepControl?.touch();
-	serveRpc(engine, dispatcher, transport, extensions, { trusted, pairing, wsAddr });
+	serveRpc(engine, dispatcher, transport, extensions, {
+		trusted,
+		pairing,
+		wsAddr,
+		provider: boxProvider,
+	});
 }
 
 /**
@@ -247,6 +256,7 @@ async function maybeStartIdleSleep(
 ): Promise<void> {
 	const log = (line: string) => console.log(line);
 	const driver = await detectSleepDriver(log);
+	boxProvider = driver?.provider ?? null;
 	if (!driver) return;
 	log(`[ateam] on ${driver.where}: letting it sleep when idle`);
 	sleepControl = await startSleepControl(driver, {
