@@ -317,7 +317,9 @@ export function createLinks(deps: LinkDeps): Links {
 					c = await until(dialing);
 					break;
 				} catch (err) {
-					if (err instanceof Cancelled || clock.now() >= deadline) throw err;
+					// A locked box answered: it is awake, and its answer won't change.
+					const refused = err instanceof Error && err.message === NEEDS_PAIRING;
+					if (err instanceof Cancelled || refused || clock.now() >= deadline) throw err;
 					if (!stopTick) {
 						const relabel = () =>
 							step((s) => relabelActive(s, waitingLabel(clock.now() - started)));
@@ -359,6 +361,9 @@ export function createLinks(deps: LinkDeps): Links {
 			if (paused || conns.has(key)) return conns.has(key);
 			// Cancel (or forget) has put the card where it belongs already.
 			if (attempt.cancelled) return false;
+			// Another try at this box is still running (a tap waking it while a try
+			// from the background timed out): the card is that one's to show.
+			if ([...tries].some((a) => a !== attempt)) return false;
 			step(failActive);
 			const msg = err instanceof Error ? err.message : String(err);
 			// A locked box's refusal stays exact: the card offers a code field for it.
@@ -370,8 +375,9 @@ export function createLinks(deps: LinkDeps): Links {
 				...l,
 				state: "down",
 				error: said,
-				// Not answering when nobody woke it is what a box that sleeps does.
-				asleep: wakeable && waker === null,
+				// Not answering when nobody woke it is what a box that sleeps does. A
+				// box that refused for pairing answered, so it isn't asleep.
+				asleep: wakeable && waker === null && msg !== NEEDS_PAIRING,
 			}));
 			return false;
 		} finally {
