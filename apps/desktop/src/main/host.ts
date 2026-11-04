@@ -1005,8 +1005,13 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		dest: string,
 		opts?: { wsAddr?: string; tailscale?: boolean; rerun?: boolean },
 	): Promise<HostStatus> {
-		// `dest` reaches ssh as an argument, where a leading "-" would make it an option.
-		if (dest.startsWith("-")) throw new Error(`"${dest}" is not an ssh destination`);
+		// `dest` reaches ssh as an argument, where a leading "-" would make it an option,
+		// and one with a space in it (a pasted `ssh mybox`) names no host ssh can reach.
+		if (dest.startsWith("-") || /\s/.test(dest)) {
+			throw new Error(
+				`"${dest}" isn't one box: give its name in your ssh config, or user@host, on its own.`,
+			);
+		}
 		// Already set up and held — installing again would just re-run the (idempotent)
 		// script for no reason; hand back its status.
 		const existing = backends.get(dest);
@@ -1034,12 +1039,16 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		const pin = app.isPackaged ? `ATEAM_VERSION=v${app.getVersion()} ` : "";
 		// --tailscale joins the box to the tailnet and opens its network port there.
 		const flags = opts?.tailscale ? "--service --tailscale" : "--service";
+		// pipefail for the download: a curl that fails hands bash nothing, bash exits 0 on
+		// an empty script, and the set-up went on to connect to an engine never installed
+		// ("RPC connection closed", seen on a boxd machine whose DNS came and went). Only
+		// for that pipe: the `ip | grep -q` ahead of it ends early on a match, on purpose.
 		const pipeline = wsAddr
-			? `curl -fsSL ${INSTALL_URL} | ${pin}ATEAM_WS_ADDR=${wsAddr} bash -s -- ${flags}`
+			? `set -o pipefail; curl -fsSL ${INSTALL_URL} | ${pin}ATEAM_WS_ADDR=${wsAddr} bash -s -- ${flags}`
 			: // Single-quoted JS so the shell's ${tsip:+…} parameter expansion stays literal.
 				"tsip=$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | head -1 || true); " +
 				'[ -n "$tsip" ] && ip -4 -o addr show 2>/dev/null | grep -qF " $tsip/" || tsip=; ' +
-				`curl -fsSL ${INSTALL_URL} | ${pin}` +
+				`set -o pipefail; curl -fsSL ${INSTALL_URL} | ${pin}` +
 				'ATEAM_WS_ADDR_DEFAULT="${tsip:+$tsip:' +
 				WS_DEFAULT_PORT +
 				`}" bash -s -- ${flags}`;

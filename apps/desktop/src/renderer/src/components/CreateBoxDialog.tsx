@@ -116,7 +116,9 @@ export function CreateBoxDialog({
 	};
 
 	return (
-		<div className="overlay" onMouseDown={onClose}>
+		// A click beside the dialog while it works would only hide the progress: the box
+		// is still being made, and lands on its page when it's done.
+		<div className="overlay" onMouseDown={() => !busy && onClose()}>
 			<div className="dialog createbox" onMouseDown={(e) => e.stopPropagation()}>
 				<div className="cb-head">
 					<HetznerLogo size={17} />

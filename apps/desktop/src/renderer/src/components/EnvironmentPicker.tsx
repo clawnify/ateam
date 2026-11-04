@@ -19,11 +19,12 @@ import {
 	Server,
 	X,
 } from "lucide-react";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import type { HostStatus, WakeStatus } from "../../../shared/host";
-import { stripAnsi } from "../lib/ansi";
+import { startSetup, useSetups } from "../lib/setups";
+import { sshDestination } from "../lib/ssh-destination";
 import { BoxPageDialog } from "./BoxPage";
 import { ConnectSteps } from "./ConnectSteps";
 import { CreateBoxDialog } from "./CreateBoxDialog";
@@ -137,13 +138,16 @@ export function EnvironmentPicker({
 	const [code, setCode] = useState("");
 	const [open, setOpen] = useState(false);
 	const [dest, setDest] = useState("");
-	const [installing, setInstalling] = useState(false);
-	const [log, setLog] = useState("");
 	const [installError, setInstallError] = useState<string | null>(null);
 	// The box just set up or created here, whose page is open over what's open.
 	const [finishing, setFinishing] = useState<string | null>(null);
 	const [creating, setCreating] = useState(false);
-	const logRef = useRef<HTMLPreElement>(null);
+	// Set-ups started here that aren't boxes yet: a row each, back to the box's page,
+	// since closing that page (or this popover) leaves the set-up running.
+	const setups = useSetups();
+	const pendingSetups = setups.filter(
+		(s) => s.state !== "done" && !environments.some((e) => e.alias === s.dest),
+	);
 
 	const isRemote = value !== null;
 	const label = environments.find((e) => e.alias === value)?.label ?? "Local";
@@ -281,37 +285,32 @@ export function EnvironmentPicker({
 		}
 	};
 
-	// Keep the streaming installer log pinned to its newest line.
-	useEffect(() => {
-		if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-	}, [log]);
-
 	/** A box is up: its page shows what's left (in Settings, in place of the list). */
 	const finished = (alias: string) => {
 		if (onSetUp) onSetUp(alias);
 		else setFinishing(alias);
 	};
 
-	const submitInstall = async () => {
-		const d = dest.trim();
-		if (!d || !onInstall || installing) return;
-		setInstalling(true);
-		setInstallError(null);
-		setLog("");
-		try {
-			await onInstall(d, (chunk) => setLog((prev) => prev + chunk));
-			// install() sets the box up AND connects it: select it right away (so clicking
-			// away can't strand the pick), then open its page, where what's left is.
-			onChange(d);
-			setDest("");
-			setLog("");
-			close();
-			finished(d);
-		} catch (err) {
-			setInstallError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setInstalling(false);
+	// Set up hands the box straight to its page, which shows the install as it goes
+	// (lib/setups.ts): a popover that closes on any click elsewhere is no place to watch
+	// a minute-long install, and closing it never stopped the install, only the view.
+	const submitInstall = () => {
+		if (!onInstall) return;
+		const typed = sshDestination(dest);
+		if ("problem" in typed) {
+			setInstallError(typed.problem);
+			return;
 		}
+		const d = typed.dest;
+		setInstallError(null);
+		setDest("");
+		close();
+		finished(d);
+		// Picked once it's up and connected, so a failed set-up never stays the pick.
+		startSetup(d, (onLog) => onInstall(d, onLog)).then(
+			() => onChange(d),
+			() => {},
+		);
 	};
 
 	return (
@@ -366,7 +365,7 @@ export function EnvironmentPicker({
 					onEscapeKeyDown={(e) => {
 						if (addMode === "") return;
 						e.preventDefault();
-						if (!busy && !installing) back();
+						if (!busy) back();
 					}}
 				>
 					<PickerHeading>
@@ -377,7 +376,7 @@ export function EnvironmentPicker({
 								variant="ghost"
 								className="h-auto gap-1 p-0 text-[11px] tracking-[0.4px] uppercase hover:bg-transparent"
 								onClick={back}
-								disabled={busy || installing}
+								disabled={busy}
 								aria-label={`Back from ${stepTitle}`}
 							>
 								<ChevronLeft className="size-[13px]" strokeWidth={2} />
@@ -519,6 +518,20 @@ export function EnvironmentPicker({
 								</div>
 							);
 						})}
+					{addMode === "" &&
+						pendingSetups.map((s) => (
+							<PickerRow
+								key={`setup:${s.dest}`}
+								icon={<Server />}
+								title={s.dest}
+								tone={s.state === "failed" ? "error" : undefined}
+								sub={s.state === "failed" ? "couldn't set it up, open to see why" : "setting up…"}
+								onClick={() => {
+									close();
+									finished(s.dest);
+								}}
+							/>
+						))}
 					{(onAdd || onInstall) &&
 						(addMode === "" ? (
 							<PickerRow
@@ -669,38 +682,25 @@ export function EnvironmentPicker({
 								<Input
 									autoFocus
 									className={formInput}
-									placeholder="ssh alias or user@host"
+									placeholder="mybox.exe.xyz or user@host"
 									aria-label="SSH destination to set up"
 									value={dest}
-									disabled={installing}
 									onChange={(e) => setDest(e.target.value)}
 									onKeyDown={(e) => {
-										if (e.key === "Enter") void submitInstall();
+										if (e.key === "Enter") submitInstall();
 									}}
 								/>
-								{log && (
-									<pre
-										ref={logRef}
-										className="m-0 max-h-40 overflow-auto rounded-md bg-background p-2 font-mono text-[10px] whitespace-pre-wrap text-muted-foreground"
-									>
-										{stripAnsi(log)}
-									</pre>
-								)}
 								<span className={cn(formNote, installError && "text-destructive")}>
-									{installing
-										? "Setting up the box…"
-										: (installError ?? "Installs the engine over SSH, then connects")}
+									{installError ?? "Installs the engine over SSH, then connects"}
 								</span>
-								{!installing && (
-									<Button
-										variant="secondary"
-										size="sm"
-										className="self-start border text-foreground"
-										onClick={() => void submitInstall()}
-									>
-										Set up
-									</Button>
-								)}
+								<Button
+									variant="secondary"
+									size="sm"
+									className="self-start border text-foreground"
+									onClick={submitInstall}
+								>
+									Set up
+								</Button>
 							</div>
 						))}
 				</PopoverContent>

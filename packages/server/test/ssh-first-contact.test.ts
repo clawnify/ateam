@@ -79,6 +79,13 @@ describe("ssh's reason for failing, in words", () => {
 		expect(describeSshFailure(out)).toContain("couldn't find a box by that name");
 	});
 
+	test("a destination that isn't a host name, such as a pasted ssh command", () => {
+		// What ssh said for "ssh ateam-exe.exe.xyz" typed into Set up (2026-11-04).
+		expect(describeSshFailure("hostname contains invalid characters\n")).toContain(
+			"give just its name",
+		);
+	});
+
 	test("nothing answering, refused or timed out", () => {
 		for (const out of [
 			"ssh: connect to host 127.0.0.1 port 1: Connection refused\n",
@@ -102,6 +109,14 @@ describe("the installer's reason for stopping, in its words", () => {
 		expect(installerFailure(out)).toBe(
 			"--tailscale needs passwordless sudo, to install and run Tailscale",
 		);
+	});
+
+	test("a box that couldn't download the installer, before it ran at all", () => {
+		// A boxd machine whose DNS and outbound connections came and went (2026-11-04).
+		const out =
+			"curl: (7) Failed to connect to raw.githubusercontent.com port 443 after 4 ms: Couldn't connect to server\n";
+		expect(installerFailure(out)).toContain("couldn't download Ateam's installer");
+		expect(installerFailure(out)).toContain("Failed to connect to raw.githubusercontent.com");
 	});
 
 	test("nothing when it didn't die that way", () => {
