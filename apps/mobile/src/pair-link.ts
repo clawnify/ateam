@@ -2,6 +2,7 @@
 // (Settings → Boxes → Pair a phone), opened by the iPhone's Camera. Any app or web
 // page can open a link with this scheme, so it is parsed strictly here and the app
 // asks before acting on it (App.tsx).
+import { boxKey } from "./boxes";
 import type { SavedConnection } from "./storage";
 
 /** A pairing code as shown or typed: 8 letters and digits, with or without its dash. */
@@ -33,4 +34,14 @@ export function parsePairLink(url: string): PairLink | null {
 	if (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535) return null;
 	if (!PAIR_CODE.test(code)) return null;
 	return { box: { host, port }, code };
+}
+
+/** The box a link pairs: the one saved at that address, as saved (with its provider,
+ *  so the phone can still wake it), else the bare address, to be added. */
+export function pairTarget<B extends SavedConnection>(
+	saved: readonly B[],
+	link: PairLink,
+): B | SavedConnection {
+	const key = boxKey(link.box);
+	return saved.find((b) => boxKey(b) === key) ?? link.box;
 }

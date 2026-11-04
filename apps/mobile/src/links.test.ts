@@ -275,6 +275,27 @@ test("a tap while a background try runs goes ahead and wakes the box; the try th
 	expect(h.log.filter((l) => l === `attach ${key(sleepy)}`)).toHaveLength(1);
 });
 
+test("a background try that times out while a tap wakes the box leaves the tap's steps on the card", async () => {
+	const h = harness();
+	h.links.holdAll();
+	await settle();
+	const tap = h.links.connect(sleepy, { wake: true });
+	await settle();
+	expect(h.calls).toHaveLength(3);
+	// The try from the background gives up while the tap's dial still waits.
+	h.calls[1]?.reject(new Error("connection timed out after 15000ms"));
+	await settle();
+	const during = h.state()[key(sleepy)];
+	expect(during).toMatchObject({ state: "connecting", asked: true, error: null, asleep: false });
+	expect(during?.steps.at(-1)).toMatchObject({
+		label: "Reaching Ateam on the box",
+		status: "active",
+	});
+	h.calls[2]?.resolve(fakeConn());
+	expect(await tap).toBe(true);
+	expect(h.state()[key(sleepy)]).toMatchObject({ state: "live" });
+});
+
 test("back in the foreground, a dead socket is dropped and redialled, a live one left alone", async () => {
 	const h = harness();
 	const one = h.links.connect(plain);
@@ -378,4 +399,36 @@ test("a box locked to other devices says so and isn't dialled again: it waits fo
 	expect(dials).toBe(1);
 	await h.fc.advance(300_000);
 	expect(dials).toBe(1);
+});
+
+test("a locked box that sleeps says it needs pairing, not that it's asleep", async () => {
+	const h = harness({ dial: () => Promise.reject(new Error(NEEDS_PAIRING)) });
+	h.setBoxes([sleepy]);
+	h.links.holdAll();
+	await settle();
+	expect(h.state()[key(sleepy)]).toMatchObject({
+		state: "down",
+		error: NEEDS_PAIRING,
+		asleep: false,
+	});
+});
+
+test("a woken box that refuses for pairing says so at once instead of trying for minutes", async () => {
+	let dials = 0;
+	const h = harness({
+		dial: () => {
+			dials++;
+			return Promise.reject(new Error(NEEDS_PAIRING));
+		},
+		// Asleep until this wake: the try would keep dialling until WOKEN_CONNECT_MS.
+		wakerFor: async () => ({ label: "Sprites", ensureAwake: async () => "started" }),
+	});
+	h.setBoxes([sleepy]);
+	expect(await h.links.connect(sleepy, { wake: true })).toBe(false);
+	expect(dials).toBe(1);
+	expect(h.state()[key(sleepy)]).toMatchObject({
+		state: "down",
+		error: NEEDS_PAIRING,
+		asleep: false,
+	});
 });

@@ -12,7 +12,9 @@ export interface CrossBoxBox {
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 
 /** Where the other boxes reach `box`, or why they can't. */
-export function linkUrlOf(box: CrossBoxBox): { url: string } | { problem: string } {
+export function linkUrlOf(
+	box: Pick<CrossBoxBox, "alias" | "wsAddr">,
+): { url: string } | { problem: string } {
 	// A box reached by address: the others reach it at that same address.
 	if (/^(\[[0-9A-Fa-f:.]+\]|[^\s/:[\]]+):\d+$/.test(box.alias)) return { url: `ws://${box.alias}` };
 	const addr = box.wsAddr;
@@ -30,6 +32,19 @@ export function linkUrlOf(box: CrossBoxBox): { url: string } | { problem: string
 		};
 	const bracketed = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 	return { url: `ws://${bracketed}${addr.slice(at)}` };
+}
+
+/** The `ateamgo://pair` link in the QR for pairing a phone with `box`: the phone
+ *  reaches it where the other boxes do. Null when no other device can reach it. */
+export function pairLinkOf(
+	box: Pick<CrossBoxBox, "alias" | "wsAddr">,
+	code: string,
+): string | null {
+	const at = linkUrlOf(box);
+	const m = "url" in at ? /^ws:\/\/(.+):(\d+)$/.exec(at.url) : null;
+	return m
+		? `ateamgo://pair?host=${encodeURIComponent(m[1] ?? "")}&port=${m[2]}&code=${encodeURIComponent(code)}`
+		: null;
 }
 
 /**

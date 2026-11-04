@@ -16,6 +16,14 @@
 				{
 					"photosPermission": "Ateam attaches a photo or screenshot you pick to the agent running on your box."
 				}
+			],
+			[
+				"expo-camera",
+				{
+					"cameraPermission": "Ateam Go uses the camera to scan the pairing code your Mac shows, so this phone can use a box locked to your devices.",
+					"microphonePermission": false,
+					"recordAudioAndroid": false
+				}
 			]
 		],
 		"ios": {
