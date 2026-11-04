@@ -1,6 +1,5 @@
 import type {
 	AgentDTO,
-	BoxWake,
 	ConnectionDTO,
 	ConnectStep,
 	DiffResultDTO,
@@ -114,6 +113,7 @@ import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
+import { addTailscaleBox, installBox } from "./lib/box-actions";
 import {
 	bestMcShape,
 	MC_PAGE_SIZE,
@@ -807,39 +807,12 @@ export function App() {
 			cancelled = true;
 		};
 	}, [activeRepoProjectId]);
-	// Connecting is what registers a Tailscale box: it resolves the endpoint, gates
-	// the protocol version, and only saves it on success — so a typo or an
-	// unreachable box leaves nothing behind to clean up.
-	// Adding is the user's action, so a box a provider puts to sleep is woken for it;
-	// `wake` (null for none) is saved along with the box once it answers. Adding a
-	// box that is already listed is how its provider is changed.
-	const addTailscaleBox = useCallback(
-		async (endpoint: string, wake: BoxWake | null, code?: string) => {
-			// A box locked to its paired devices takes a code: connecting redeems it.
-			await window.ateamHost.connect(endpoint, { wake: true, binding: wake, ...(code ? { code } : {}) });
-		},
-		[],
-	);
 	// Remove a box from the "Run on" list. The main process disconnects it if held
 	// and forgets the saved record (an ssh_config alias is flagged hidden — the
 	// config file itself is never touched); the connections-changed broadcast then
 	// refreshes the list here. Setting the box up again brings it back.
 	const forgetBox = useCallback(async (alias: string) => {
 		await window.ateamHost.forget(alias);
-	}, []);
-	// Set up a fresh box over SSH: install() runs the (idempotent) installer on the
-	// box, streaming its output via onInstallLog, and connects on success. The
-	// onConnectionsChanged reconcile then folds the new box into the environment list.
-	const installBox = useCallback(async (dest: string, onLog: (chunk: string) => void) => {
-		const off = window.ateamHost.onInstallLog((e) => {
-			if (e.dest === dest) onLog(e.chunk);
-		});
-		try {
-			// Return the box's status so the picker can show its readiness checklist.
-			return await window.ateamHost.install(dest);
-		} finally {
-			off();
-		}
 	}, []);
 	// Install a coding agent's CLI on whichever machine the chosen environment is:
 	// this Mac or a box, one path for both. Routed by that engine's projectId —

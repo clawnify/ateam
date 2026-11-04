@@ -89,19 +89,23 @@ export function EnvironmentPicker({
 	onAdd,
 	onInstall,
 	onForget,
+	addOnly = false,
 }: {
 	environments: EnvOption[];
 	value: string | null;
 	onChange: (alias: string | null) => void;
 	/** Connect a Tailscale endpoint (`host:port`), waking it through `wake` first and
-	 *  saving that provider with it (null: none); rejects with a message to show. */
-	/** Connect a Tailscale box by address, with a pairing code for one locked to its devices. */
+	 *  saving that provider with it (null: none), with a pairing code for a box locked
+	 *  to its devices; rejects with a message to show. */
 	onAdd?: (endpoint: string, wake: BoxWake | null, code?: string) => Promise<void>;
 	/** Install the engine on a fresh SSH box (`alias` or `user@host`), streaming the
 	 *  installer's output; resolves once the box is set up and connected. */
 	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<HostStatus>;
 	/** Remove a box from this list (disconnecting it first if connected). */
 	onForget?: (alias: string) => Promise<void>;
+	/** Settings → Boxes: no list to pick from, just the ways to add a box, behind an
+	 *  "Add a box" button. */
+	addOnly?: boolean;
 }) {
 	// The add-a-connection section: "" collapsed → "menu" (the methods) → a chosen
 	// method's inline form → "ready" (the readiness checklist after an SSH set-up).
@@ -141,7 +145,9 @@ export function EnvironmentPicker({
 
 	const close = () => {
 		setOpen(false);
-		setAddMode("");
+		// Settings' button opens on the ways to add a box every time, and its list must
+		// not flash up while the popover fades out.
+		if (!addOnly) setAddMode("");
 	};
 
 	const pick = (env: EnvOption) => {
@@ -175,6 +181,11 @@ export function EnvironmentPicker({
 	}, [addMode, endpoint]);
 
 	const back = () => {
+		// With no list behind the ways to add a box, backing out of them closes it.
+		if (addOnly && (addMode === "menu" || addMode === "ready")) {
+			close();
+			return;
+		}
 		setAddMode(addMode === "menu" || addMode === "ready" ? "" : backTo);
 		setError(null);
 		setInstallError(null);
@@ -298,36 +309,47 @@ export function EnvironmentPicker({
 			<Popover
 				open={open}
 				onOpenChange={(next) => {
-					if (next) setOpen(true);
-					else close();
+					if (!next) close();
+					else {
+						setOpen(true);
+						if (addOnly) setAddMode("menu");
+					}
 				}}
 			>
 				<PopoverTrigger asChild>
-					<Button
-						variant="ghost"
-						size="sm"
-						className={pickerTrigger}
-						title="Run on — which machine runs this task"
-					>
-						{isRemote ? (
-							<Server className="size-3.5" strokeWidth={1.75} />
-						) : (
-							<Laptop className="size-3.5" strokeWidth={1.75} />
-						)}
-						<span>{label}</span>
-						<span
-							className={cn(
-								"size-1.5 flex-none rounded-full bg-muted-foreground",
-								isRemote && "bg-success shadow-[0_0_6px_rgba(74,222,128,0.7)]",
+					{addOnly ? (
+						<Button variant="outline" size="xs">
+							<Plus className="size-3.5" strokeWidth={1.75} />
+							Add a box
+						</Button>
+					) : (
+						<Button
+							variant="ghost"
+							size="sm"
+							className={pickerTrigger}
+							title="Run on — which machine runs this task"
+						>
+							{isRemote ? (
+								<Server className="size-3.5" strokeWidth={1.75} />
+							) : (
+								<Laptop className="size-3.5" strokeWidth={1.75} />
 							)}
-						/>
-					</Button>
+							<span>{label}</span>
+							<span
+								className={cn(
+									"size-1.5 flex-none rounded-full bg-muted-foreground",
+									isRemote && "bg-success shadow-[0_0_6px_rgba(74,222,128,0.7)]",
+								)}
+							/>
+						</Button>
+					)}
 				</PopoverTrigger>
 				{/* Opens upward from the composer and grows up as the list grows, so its
-				    edge stays next to the toggle however many environments there are. */}
+				    edge stays next to the toggle however many environments there are.
+				    Settings' button sits at the top of its page, so it opens downward. */}
 				<PopoverContent
-					side="top"
-					align="start"
+					side={addOnly ? "bottom" : "top"}
+					align={addOnly ? "end" : "start"}
 					collisionPadding={8}
 					className="max-h-[min(70vh,420px)] w-[260px] overflow-y-auto p-1.5"
 					// Escape backs out one add step at a time, and closes from the list.
