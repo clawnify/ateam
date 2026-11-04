@@ -1,18 +1,23 @@
 import { githubAccessProblem } from "@ateam/protocol";
 import { useCallback, useEffect, useState } from "react";
 import type { BoxReadiness } from "../../../shared/host";
+import { setUpPhoneAccess } from "../lib/box-actions";
 import { GithubAccess } from "./GithubAccess";
 
 // The set-up-so-far checklist shown after a box is created OR prepared over SSH: what's
-// already task-ready (engine + Tailscale) vs the steps left. GitHub is connected right
-// here, with a token pasted into Ateam rather than into the box's terminal (the clone
-// needs it up front), and a coding agent installs from the agent picker if none is
-// there. Recheck re-probes; the git identity fills itself in from the GitHub account.
+// already task-ready (the engine) vs the steps left. GitHub is connected right here,
+// with a token pasted into Ateam rather than into the box's terminal (the clone needs
+// it up front), and a coding agent installs from the agent picker if none is there.
+// A box with no network port can join the tailnet from here too, for Ateam Go.
+// Recheck re-probes; the git identity fills itself in from the GitHub account.
 // Shared so every "add a box" flow ends the same way instead of on a cryptic clone error.
+const IPC_PREFIX = /^Error invoking remote method '[^']+': (Error: )?/;
+
 export function BoxReadinessChecklist({
 	alias,
 	label,
 	agents,
+	networkPort,
 	title,
 	onDone,
 }: {
@@ -22,6 +27,9 @@ export function BoxReadinessChecklist({
 	label?: string;
 	/** Agents already installed on the box (from the create/install handshake). */
 	agents: string[];
+	/** Where its network port listens, from the same handshake: null when it has none,
+	 *  absent from an engine that doesn't say (no row then). */
+	networkPort?: string | null;
 	title: string;
 	onDone: () => void;
 }) {
@@ -31,6 +39,24 @@ export function BoxReadinessChecklist({
 	const [githubOk, setGithubOk] = useState<boolean | null>(null);
 	// Bumped by Recheck, so the GitHub row reads the box again too.
 	const [round, setRound] = useState(0);
+	// The network port as the last handshake gave it, then as setting up phone access left it.
+	const [port, setPort] = useState(networkPort);
+	const [joining, setJoining] = useState<{ approval: string | null } | null>(null);
+	const [joinError, setJoinError] = useState<string | null>(null);
+
+	const joinTailnet = async () => {
+		setJoining({ approval: null });
+		setJoinError(null);
+		try {
+			const status = await setUpPhoneAccess(alias, (url) => setJoining({ approval: url }));
+			setPort(status.info.wsAddr ?? null);
+			setRound((r) => r + 1);
+		} catch (e) {
+			setJoinError((e instanceof Error ? e.message : String(e)).replace(IPC_PREFIX, ""));
+		} finally {
+			setJoining(null);
+		}
+	};
 
 	const check = useCallback(async () => {
 		setChecking(true);
@@ -51,7 +77,32 @@ export function BoxReadinessChecklist({
 		<div className="box-ready">
 			<div className="box-ready-title">{title}</div>
 			<ul className="box-ready-list">
-				<li className="done">Engine + Tailscale</li>
+				<li className="done">Engine</li>
+				{port === undefined ? null : port ? (
+					<li className="done">Ateam Go reaches it at {port}</li>
+				) : (
+					<li className="todo">
+						{joining ? (
+							joining.approval ? (
+								<>
+									Approve it on the Tailscale page that opened in your browser, or open{" "}
+									{joining.approval}
+								</>
+							) : (
+								"Joining your tailnet…"
+							)
+						) : (
+							<>
+								Ateam Go can't reach it yet: joining your tailnet takes passwordless sudo here, and
+								you approve the box on Tailscale.{" "}
+								<button type="button" onClick={() => void joinTailnet()}>
+									Set up phone access
+								</button>
+							</>
+						)}
+						{joinError ? <div className="gh-access-problem">{joinError}</div> : null}
+					</li>
+				)}
 				<li className={(githubOk ?? ready?.gh.signedIn) ? "done" : "todo"}>
 					<GithubAccess
 						key={round}

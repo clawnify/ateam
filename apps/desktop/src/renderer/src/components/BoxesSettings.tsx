@@ -8,7 +8,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import type { HostStatus } from "../../../shared/host";
 import { type BoxRow, boxesNeedingYou, boxRows, engineLabel } from "../boxes-settings";
-import { addTailscaleBox, installBox } from "../lib/box-actions";
+import { addTailscaleBox, installBox, setUpPhoneAccess } from "../lib/box-actions";
 import { useLeadHome } from "../useLeadHome";
 import { BoxAccess } from "./BoxAccess";
 import { CrossBox } from "./CrossBox";
@@ -124,6 +124,26 @@ export function BoxesSettings() {
 		});
 	};
 
+	const phoneAccess = async (row: BoxRow) => {
+		const ok = await confirm(
+			`Reach ${row.title} from your phone?`,
+			`Ateam runs its installer on ${row.title} again to join it to your tailnet, installing Tailscale there if it's missing, and opens its network port on the tailnet. Your browser opens Tailscale's page to approve the box. It needs passwordless sudo on the box, and agents running there keep running.`,
+		);
+		if (!ok) return;
+		await act(row.alias, "Joining your tailnet…", async () => {
+			await setUpPhoneAccess(row.alias, (url) =>
+				setNotes((n) => ({
+					...n,
+					[row.alias]: {
+						text: `Approve ${row.title} on the Tailscale page that opened in your browser, or open ${url}`,
+						error: false,
+					},
+				})),
+			);
+			return "On your tailnet: Ateam Go can connect to it now. Lock it below so only your devices can.";
+		});
+	};
+
 	const forget = async (row: BoxRow) => {
 		const ok = await confirm(
 			`Remove ${row.title} from this list?`,
@@ -174,7 +194,16 @@ export function BoxesSettings() {
 			/>
 		</div>
 	);
-	if (rows.length === 0) return addBox;
+	// One wrapper either way: the picker in addBox keeps its place in the tree when the
+	// first box arrives, or it would remount and drop that box's set-up checklist.
+	if (rows.length === 0) {
+		return (
+			<div className="boxes-settings">
+				{promptUi}
+				{addBox}
+			</div>
+		);
+	}
 	const now = Date.now();
 	const needing = boxesNeedingYou(rows, github, now);
 
@@ -296,6 +325,21 @@ export function BoxesSettings() {
 								</form>
 							) : row.state !== "connected" ? (
 								<div className="gh-access-muted">Connect to see who can use it.</div>
+							) : row.networkPort === null && row.transport === "ssh" ? (
+								<div className="box-lead-row">
+									<span className="gh-access-muted">
+										No network port: only this Mac reaches it, over SSH. Ateam Go and your other
+										boxes can't.
+									</span>
+									<Button
+										size="xs"
+										variant="outline"
+										disabled={!!busy[row.alias]}
+										onClick={() => void phoneAccess(row)}
+									>
+										Set up phone access
+									</Button>
+								</div>
 							) : !row.pairingReady ? (
 								<div className="gh-access-muted">
 									Update the box to lock it to your devices. Until then anyone who can reach its

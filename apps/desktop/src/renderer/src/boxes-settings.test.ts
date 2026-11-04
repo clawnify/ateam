@@ -74,6 +74,36 @@ describe("boxRows", () => {
 	});
 });
 
+describe("a box's network port", () => {
+	const withPort = (alias: string, wsAddr?: string | null): HostStatus => ({
+		mode: "remote",
+		alias,
+		info: { protocolVersion: 30, agents: [], ...(wsAddr !== undefined ? { wsAddr } : {}) },
+	});
+	const rows = boxRows(
+		[
+			conn({ alias: "on-tailnet" }),
+			conn({ alias: "ssh-only" }),
+			conn({ alias: "older" }),
+			conn({ alias: "away" }),
+		],
+		[withPort("on-tailnet", "100.64.0.7:8787"), withPort("ssh-only", null), withPort("older")],
+		{},
+		app,
+	);
+	const port = (alias: string) => rows.find((r) => r.alias === alias)?.networkPort;
+
+	it("is where the connected engine listens, or null when it has none", () => {
+		expect(port("on-tailnet")).toBe("100.64.0.7:8787");
+		expect(port("ssh-only")).toBeNull();
+	});
+
+	it("is unknown for an engine that didn't say, and for a box not connected", () => {
+		expect(port("older")).toBeUndefined();
+		expect(port("away")).toBeUndefined();
+	});
+});
+
 describe("an engine on this app's protocol", () => {
 	const row = (over: Partial<ConnectionDTO>, live?: HostStatus) =>
 		boxRows([conn({ alias: "b", serverVersion: "25", ...over })], live ? [live] : [], {}, app)[0];

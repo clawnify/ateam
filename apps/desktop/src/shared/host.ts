@@ -63,6 +63,8 @@ export const HOST_CH = {
 	boxReadiness: "host:boxReadiness",
 	/** Update a box's engine (SSH install, or the engine's own update over Tailscale). */
 	updateBox: "host:updateBox",
+	/** Join a box reached over SSH to the tailnet and open its network port there. */
+	phoneAccess: "host:phoneAccess",
 	/** A connected box's GitHub access, handing it a token, and its per-repo access. */
 	githubAccess: "host:githubAccess",
 	connectGithub: "host:connectGithub",
@@ -90,6 +92,11 @@ export const HOST_CH = {
 	/** The steps of waking and reaching a box (see ConnectProgressEvent). */
 	evtConnectProgress: "evt:host:connect-progress",
 } as const;
+
+/** The page Tailscale prints for approving a device that joins without an auth key
+ *  (`tailscale up`), as it appears in installer output: followed by whitespace once
+ *  the whole link has arrived. */
+export const TAILSCALE_LOGIN_URL = /https:\/\/login\.tailscale\.com\/a\/[A-Za-z0-9]+(?=\s)/;
 
 /** How a box update went: installed over SSH, or started by the box's own engine. */
 export type BoxUpdateResult = { via: "ssh" } | { via: "self"; started: boolean; logPath: string };
@@ -271,6 +278,12 @@ export interface AteamHost {
 	/** Bring a box's engine up to date. Over SSH it finishes when the box is back on
 	 *  this app's release; a Tailscale box updates itself and reconnects shortly. */
 	updateBox(alias: string): Promise<BoxUpdateResult>;
+	/** Make a box reached over SSH reachable from Ateam Go: the installer again, with
+	 *  --tailscale, so it joins the tailnet and opens the box's network port there.
+	 *  Tailscale's page to approve the box opens in the browser, and its link is in
+	 *  the installer output (onInstallLog, TAILSCALE_LOGIN_URL). Resolves once the
+	 *  box is connected again. */
+	phoneAccess(alias: string): Promise<HostStatus>;
 	/** A connected box's GitHub access: what its gh and git sign in with (v25 engines). */
 	githubAccess(alias: string): Promise<GithubAccessDTO>;
 	/** Hand a connected box a GitHub token; answers its new access. Rejects with a

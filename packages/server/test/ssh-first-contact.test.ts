@@ -3,7 +3,12 @@
 // OpenSSH_10.2p1's own text on macOS (2026-11-02), run in batch mode the way
 // sshExec runs it, with user names and paths replaced.
 import { describe, expect, test } from "bun:test";
-import { describeSshFailure, firstContactFlags } from "../src/transport/ssh";
+import {
+	describeSshFailure,
+	firstContactFlags,
+	installerFailure,
+	sshClientTransport,
+} from "../src/transport/ssh";
 
 /** A stand-in for `ssh -G <dest>` that prints `stricthostkeychecking <value>`. */
 const reports = (value: string) => async () => `batchmode no\nstricthostkeychecking ${value}\n`;
@@ -54,6 +59,7 @@ describe("ssh's reason for failing, in words", () => {
 			"Host key verification failed.",
 		].join("\n");
 		expect(describeSshFailure(out)).toContain("host key has changed");
+		expect(describeSshFailure(out)).toContain("line 1 of /Users/me/.ssh/known_hosts");
 	});
 
 	test("no key the box accepts, including a key with a passphrase it can't use", () => {
@@ -86,5 +92,33 @@ describe("ssh's reason for failing, in words", () => {
 		const out =
 			"[ok] node 22\ncurl: (28) Operation timed out after 30001 milliseconds\nchmod: /usr/local/bin/ateam: Permission denied\n";
 		expect(describeSshFailure(out)).toBeNull();
+	});
+});
+
+describe("the installer's reason for stopping, in its words", () => {
+	test("the line it died with, the last one when there are several", () => {
+		const out =
+			"==> join your tailnet (--tailscale)\n\n!! first\n\n!! --tailscale needs passwordless sudo, to install and run Tailscale\n";
+		expect(installerFailure(out)).toBe(
+			"--tailscale needs passwordless sudo, to install and run Tailscale",
+		);
+	});
+
+	test("nothing when it didn't die that way", () => {
+		expect(installerFailure("Permission denied (publickey).\n")).toBeNull();
+		expect(installerFailure("    [--] tailscale: !! not a die line\n")).toBeNull();
+	});
+});
+
+describe("a connection ssh refuses", () => {
+	test("keeps what ssh said, so the reason can be told", async () => {
+		// .invalid never resolves (RFC 2606), so ssh gives up at once and says why.
+		const client = sshClientTransport("box.invalid", ["true"], {
+			sshFlags: ["-F", "/dev/null", "-o", "BatchMode=yes"],
+		});
+		const said = await client.stderr(10_000);
+		client.close();
+		expect(said).toContain("box.invalid");
+		expect(describeSshFailure(said)).toContain("couldn't find a box");
 	});
 });

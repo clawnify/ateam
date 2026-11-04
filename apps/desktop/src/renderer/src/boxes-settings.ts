@@ -33,6 +33,10 @@ export interface BoxRow {
 	leadReady: boolean;
 	/** Its engine can be locked to paired devices (v29). */
 	pairingReady: boolean;
+	/** Where its network port listens (`<host>:<port>`), which Ateam Go and other
+	 *  boxes connect to; null when it has none, so only SSH reaches it. Absent when
+	 *  not known: not connected, or an engine from before it said (v30). */
+	networkPort?: string | null;
 	lastSeen: number | null;
 	/** Why the app's own last attempt to connect failed, if it did. */
 	failure: string | null;
@@ -73,6 +77,7 @@ export function boxRows(
 				githubReady: version != null && version >= FEATURE_MIN_VERSION.githubAccess,
 				leadReady: version != null && version >= FEATURE_MIN_VERSION.lead,
 				pairingReady: version != null && version >= FEATURE_MIN_VERSION.pairing,
+				...(info && info.wsAddr !== undefined ? { networkPort: info.wsAddr } : {}),
 				lastSeen: c.lastSeen,
 				failure: failures[c.alias] ?? null,
 			};

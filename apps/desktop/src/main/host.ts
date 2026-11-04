@@ -69,6 +69,7 @@ import {
 	forgetConnection,
 	type HostTransport,
 	hetznerProvider,
+	installerFailure,
 	listConnections,
 	openRouterApiKey,
 	readSettings,
@@ -95,6 +96,7 @@ import {
 	type InstallLogEvent,
 	type ProviderOptions,
 	type SecretsStatus,
+	TAILSCALE_LOGIN_URL,
 	type WakeStatus,
 } from "../shared/host";
 import {
@@ -202,7 +204,10 @@ export interface Host {
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;
 	/** Install the ateam engine on a reachable SSH box (idempotent), streaming the
 	 *  installer's output, then connect. `dest` is an ssh_config alias or user@host. */
-	install(dest: string, opts?: { wsAddr?: string }): Promise<HostStatus>;
+	install(dest: string, opts?: { wsAddr?: string; tailscale?: boolean }): Promise<HostStatus>;
+	/** Join a box reached over SSH to the tailnet and open its network port there
+	 *  (the installer with --tailscale), then connect it again. */
+	phoneAccess(alias: string): Promise<HostStatus>;
 	/** Create a box from scratch at a provider, provision it, and connect. */
 	createBox(spec: CreateBoxSpec): Promise<HostStatus>;
 	/** Install an agent's CLI on a connected box, streaming the log; returns the login step. */
@@ -497,7 +502,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	function openTransport(
 		alias: string,
 		wire: HostTransport | null,
-	): { transport: ClientTransport; close(): void } {
+	): { transport: ClientTransport; close(): void; stderr?: (ms?: number) => Promise<string> } {
 		if (wire === "ws") {
 			const url = endpointUrl(alias);
 			if (!url) throw new Error(`"${alias}" is not a host:port endpoint`);
@@ -690,6 +695,15 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		rpc: RpcClient;
 		info: SystemInfo;
 	}> {
+		// ssh's own reason for refusing (a rebuilt box's new host key, say), in words, in
+		// place of the RPC's "closed" or timeout: the relay only has its stderr to say it.
+		const sshReason = async (
+			client: { stderr?: (ms?: number) => Promise<string> },
+			err: unknown,
+		): Promise<unknown> => {
+			const why = client.stderr ? describeSshFailure(await client.stderr()) : null;
+			return why ? new Error(why) : err;
+		};
 		const binding = opts.binding !== undefined ? opts.binding : boxWakeOf(db, alias);
 		const narrate = wire === "ws" && opts.wake === true && binding != null;
 		let steps: ConnectStep[] = [];
@@ -741,7 +755,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 					return { client, rpc, info };
 				} catch (err) {
 					client.close();
-					if (Date.now() >= deadline) throw err;
+					if (Date.now() >= deadline) throw await sshReason(client, err);
 				}
 				if (!tick && narrate) {
 					const relabel = () => step((s) => relabelActive(s, waitingLabel(Date.now() - started)));
@@ -971,7 +985,10 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return out;
 	}
 
-	async function install(dest: string, opts?: { wsAddr?: string }): Promise<HostStatus> {
+	async function install(
+		dest: string,
+		opts?: { wsAddr?: string; tailscale?: boolean },
+	): Promise<HostStatus> {
 		// `dest` reaches ssh as an argument, where a leading "-" would make it an option.
 		if (dest.startsWith("-")) throw new Error(`"${dest}" is not an ssh destination`);
 		// Already set up and held — installing again would just re-run the (idempotent)
@@ -999,28 +1016,40 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// box; what dev must not do is heal on connect, because that release can be behind
 		// main's protocol and the upgrade is then guaranteed futile (see connect()).
 		const pin = app.isPackaged ? `ATEAM_VERSION=v${app.getVersion()} ` : "";
+		// --tailscale joins the box to the tailnet and opens its network port there.
+		const flags = opts?.tailscale ? "--service --tailscale" : "--service";
 		const pipeline = wsAddr
-			? `curl -fsSL ${INSTALL_URL} | ${pin}ATEAM_WS_ADDR=${wsAddr} bash -s -- --service`
+			? `curl -fsSL ${INSTALL_URL} | ${pin}ATEAM_WS_ADDR=${wsAddr} bash -s -- ${flags}`
 			: // Single-quoted JS so the shell's ${tsip:+…} parameter expansion stays literal.
 				"tsip=$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | head -1 || true); " +
 				'[ -n "$tsip" ] && ip -4 -o addr show 2>/dev/null | grep -qF " $tsip/" || tsip=; ' +
 				`curl -fsSL ${INSTALL_URL} | ${pin}` +
 				'ATEAM_WS_ADDR_DEFAULT="${tsip:+$tsip:' +
 				WS_DEFAULT_PORT +
-				'}" bash -s -- --service';
+				`}" bash -s -- ${flags}`;
 
 		// The output's tail, to read ssh's own reason from if the setup fails.
 		let output = "";
+		// Tailscale's page for approving the box, opened once in the user's browser: it
+		// is the one step of joining the tailnet that's theirs, and `tailscale up` waits
+		// on it. The link is in the log too, for when the browser isn't signed in there.
+		let approvalOpened = false;
 		const result = await sshExec(dest, `bash -lc '${pipeline}'`, {
 			// Setting a box up is often the first contact with it: see firstContactFlags.
 			sshFlags: await firstContactFlags(dest),
 			onData: (chunk) => {
 				output = (output + chunk).slice(-8192);
 				broadcast(HOST_CH.evtInstallLog, { dest, chunk } satisfies InstallLogEvent);
+				const approval = opts?.tailscale && !approvalOpened && output.match(TAILSCALE_LOGIN_URL);
+				if (approval) {
+					approvalOpened = true;
+					void shell.openExternal(approval[0]).catch(() => {});
+				}
 			},
 		});
 		if (result.code !== 0) {
-			const why = result.code === 255 ? describeSshFailure(output) : null;
+			// ssh's own reason when ssh failed (255), the installer's when it stopped.
+			const why = result.code === 255 ? describeSshFailure(output) : installerFailure(output);
 			throw new Error(
 				why
 					? `Setup of "${dest}" failed: ${why}`
@@ -1314,6 +1343,24 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		const started = (await heldBox(alias).handle(CH.systemUpdate, [])) as BoxUpdateStarted;
 		return { via: "self", ...started };
 	}
+
+	async function phoneAccess(alias: string): Promise<HostStatus> {
+		// Over SSH only: a box reached over Tailscale is on the tailnet already, and
+		// the installer needs a shell on it.
+		if (resolveTransport(db, alias) === "ws") {
+			throw new Error(`${alias} is reached over Tailscale, so it has its network port already.`);
+		}
+		// As Update does: install() hands back a box it holds without running anything,
+		// so let it go first. The installer restarts the engine, not the agents, and
+		// install() connects the box again. A failed run holds it again as it was.
+		release(alias);
+		try {
+			return await install(alias, { tailscale: true });
+		} catch (err) {
+			void reconnect(alias);
+			throw err;
+		}
+	}
 	// The GitHub access each box last reported. Read once when it connects, and again
 	// whenever its panel reads it or a token is connected there, so a token close to
 	// expiring, or refused, marks the box without its panel open. A change has its own
@@ -1492,6 +1539,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		installAgent,
 		boxReadiness,
 		updateBox,
+		phoneAccess,
 		githubAccess,
 		connectGithub,
 		checkGithub,
@@ -1550,6 +1598,7 @@ export function registerHostIpc(host: Host): void {
 	);
 	ipcMain.handle(HOST_CH.boxReadiness, (_e, alias: string) => host.boxReadiness(alias));
 	ipcMain.handle(HOST_CH.updateBox, (_e, alias: string) => host.updateBox(alias));
+	ipcMain.handle(HOST_CH.phoneAccess, (_e, alias: string) => host.phoneAccess(alias));
 	ipcMain.handle(HOST_CH.githubAccess, (_e, alias: string) => host.githubAccess(alias));
 	ipcMain.handle(HOST_CH.connectGithub, (_e, alias: string, token: string) =>
 		host.connectGithub(alias, token),

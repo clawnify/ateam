@@ -37,6 +37,7 @@ export function CreateBoxDialog({
 	// which the readiness checklist below renders.
 	const [readyAlias, setReadyAlias] = useState<string | null>(null);
 	const [readyAgents, setReadyAgents] = useState<string[]>([]);
+	const [readyPort, setReadyPort] = useState<string | null | undefined>(undefined);
 	const logRef = useRef<HTMLPreElement>(null);
 
 	const loadOptions = async () => {
@@ -108,6 +109,7 @@ export function CreateBoxDialog({
 			if (status.alias) {
 				setReadyAlias(status.alias);
 				setReadyAgents(status.info.agents);
+				setReadyPort(status.info.wsAddr);
 			}
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
@@ -152,6 +154,7 @@ export function CreateBoxDialog({
 							<BoxReadinessChecklist
 								alias={readyAlias}
 								agents={readyAgents}
+								networkPort={readyPort}
 								label={name.trim() || readyAlias}
 								title="Box created. A few things left:"
 								onDone={() => onDone(readyAlias)}

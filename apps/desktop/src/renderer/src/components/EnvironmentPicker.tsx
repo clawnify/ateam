@@ -137,6 +137,7 @@ export function EnvironmentPicker({
 	// The box a Set-up-over-SSH just produced — probed by the readiness checklist.
 	const [installedAlias, setInstalledAlias] = useState<string | null>(null);
 	const [installedAgents, setInstalledAgents] = useState<string[]>([]);
+	const [installedPort, setInstalledPort] = useState<string | null | undefined>(undefined);
 	const [creating, setCreating] = useState(false);
 	const logRef = useRef<HTMLPreElement>(null);
 
@@ -296,6 +297,7 @@ export function EnvironmentPicker({
 			setDest("");
 			setInstalledAlias(d);
 			setInstalledAgents(status.info.agents);
+			setInstalledPort(status.info.wsAddr);
 			setAddMode("ready");
 		} catch (err) {
 			setInstallError(err instanceof Error ? err.message : String(err));
@@ -659,6 +661,7 @@ export function EnvironmentPicker({
 								<BoxReadinessChecklist
 									alias={installedAlias}
 									agents={installedAgents}
+									networkPort={installedPort}
 									title="Box set up. A few things left:"
 									onDone={close}
 								/>

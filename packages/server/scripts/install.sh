@@ -768,14 +768,21 @@ mark() { [ "$1" = ok ] && printf '    [ok] %s\n' "$2" || printf '    [--] %s\n' 
 # GitHub account — one `gh auth login` then covers BOTH clone/push access and the
 # commit author. Runs on any re-run after you've signed in.
 GH_BIN="$(bash -lc 'command -v gh' 2>/dev/null || true)"
-if { [ -z "$(git config --global user.name || true)" ] || [ -z "$(git config --global user.email || true)" ]; } &&
+# A box image's own stand-in identity counts as unset: commits made under it are
+# credited to no one. Sprites ship `Sprite <noreply@sprites.dev>` (as github-access.ts).
+placeholder_identity() { [ "$(git config --global user.email || true)" = noreply@sprites.dev ]; }
+if { placeholder_identity || [ -z "$(git config --global user.name || true)" ] ||
+	[ -z "$(git config --global user.email || true)" ]; } &&
 	[ -n "$GH_BIN" ] && "$GH_BIN" auth status >/dev/null 2>&1; then
 	GH_NAME="$("$GH_BIN" api user -q '.name // .login' 2>/dev/null || true)"
 	GH_EMAIL="$("$GH_BIN" api user -q '"\(.id)+\(.login)@users.noreply.github.com"' 2>/dev/null || true)"
 	[ -n "$GH_NAME" ] && git config --global user.name "$GH_NAME"
 	[ -n "$GH_EMAIL" ] && git config --global user.email "$GH_EMAIL"
 fi
-if [ -n "$(git config --global user.name || true)" ] && [ -n "$(git config --global user.email || true)" ]; then
+if placeholder_identity; then
+	mark no "git identity: the image's stand-in ($(git config --global user.name) <$(git config --global user.email)>)"
+	info '     credits commits to no one. It sets itself from your account once GitHub is connected'
+elif [ -n "$(git config --global user.name || true)" ] && [ -n "$(git config --global user.email || true)" ]; then
 	mark ok "git identity ($(git config --global user.name) <$(git config --global user.email)>)"
 else
 	mark no 'git identity: sets itself once GitHub is connected, or by hand:'
