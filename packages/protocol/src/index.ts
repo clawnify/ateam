@@ -452,7 +452,8 @@ export interface GitStatusSnapshot {
 	/** Files in the task's diff against its base that haven't landed there:
 	 *  committed work included, so NOT an uncommitted count. */
 	dirty: number;
-	/** What `git status` lists: work that only exists in the worktree. Absent
+	/** What `git status` lists: work that only exists in the worktree. Untracked
+	 *  leftovers (agent-tool folders, screenshots, scratch) don't count. Absent
 	 *  from a snapshot written before it existed, which reads as "not known"
 	 *  (never as clean or dirty). A read-only addition, so no protocol bump. */
 	uncommitted?: number;
