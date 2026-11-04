@@ -26,7 +26,13 @@ import {
 	updateFromBase,
 	updateLocalMain,
 } from "../src/index";
-import { advanceOrigin, commitFile, makeTempRepoPair, type TempRepo } from "./helpers/temp-repo";
+import {
+	advanceOrigin,
+	commitFile,
+	makeTempRepoPair,
+	squashMergeOnOrigin,
+	type TempRepo,
+} from "./helpers/temp-repo";
 
 // Real clones and pushes: a test that moves origin several times outlives
 // bun's 5s default.
@@ -764,21 +770,6 @@ describe("diff in a repository with no remote", () => {
 		expect(patch).toContain("+staged");
 	});
 });
-
-/** Squash-merge `branch` into origin/main from a throwaway clone, the way
- *  `gh pr merge --squash` lands it: one new commit, the branch's own commits
- *  never becoming ancestors of main. */
-async function squashMergeOnOrigin(r: TempRepo, branch: string): Promise<void> {
-	const clone = await mkdtemp(join(r.dir, "squash-"));
-	await simpleGit().clone(r.origin, clone);
-	const g = simpleGit(clone);
-	await g.addConfig("user.email", "tester@ateam.dev");
-	await g.addConfig("user.name", "Ateam Tester");
-	await g.raw(["fetch", "origin", branch]);
-	await g.raw(["merge", "--squash", `origin/${branch}`]);
-	await g.commit(`squash ${branch}`);
-	await g.push("origin", "main");
-}
 
 const lines = (from: number, to: number) =>
 	Array.from({ length: to - from + 1 }, (_, i) => `${from + i}\n`).join("");

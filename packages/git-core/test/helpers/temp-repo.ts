@@ -75,6 +75,20 @@ export async function advanceOrigin(
 	return sha;
 }
 
+/** Squash-merge `branch` into origin/main from a throwaway clone, the way
+ *  `gh pr merge --squash` lands it: one new commit, the branch's own commits
+ *  never becoming ancestors of main. */
+export async function squashMergeOnOrigin(repo: TempRepo, branch: string): Promise<void> {
+	const clone = await mkdtemp(join(repo.dir, "squash-"));
+	await simpleGit().clone(repo.origin, clone);
+	const g = simpleGit(clone);
+	await configIdentity(g);
+	await g.raw(["fetch", "origin", branch]);
+	await g.raw(["merge", "--squash", `origin/${branch}`]);
+	await g.commit(`squash ${branch}`);
+	await g.push("origin", "main");
+}
+
 /** Convenience: write a file inside a worktree and stage+commit it. */
 export async function commitFile(
 	worktreePath: string,

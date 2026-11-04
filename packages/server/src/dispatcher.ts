@@ -27,13 +27,13 @@ import {
 	errorMessage,
 	fileDiff,
 	getOriginUrl,
-	gitFor,
 	removeTask as gitRemoveTask,
 	initRepository,
 	listRemoteRepos,
 	parseGithubRepo,
 	push,
 	registerProject,
+	uncommittedCount,
 	updateFromBase,
 } from "@ateam/git-core";
 import {
@@ -195,18 +195,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		if (!isMerged) return { recommended: false, reason: "not merged", live };
 		if (live) return { recommended: false, reason: "agent still active", live };
 		// Only merged + idle tasks reach the subprocess, so listing everything
-		// costs no more git calls than the old pre-filtered list did. The whole
-		// probe is guarded, not just the command: `gitFor` itself throws when the
-		// worktree directory is gone (deleted by hand, or pruned elsewhere), and
-		// an unguarded throw here would fail the entire candidate listing. A
-		// vanished tree has nothing left to lose, so it stays sweepable.
-		let changed: number | null = null;
-		try {
-			const out = (await gitFor(task.worktreePath).raw(["status", "--porcelain"])).trim();
-			changed = out === "" ? 0 : out.split("\n").length;
-		} catch {
-			/* unreadable: stays null */
-		}
+		// costs no more git calls than the old pre-filtered list did. The probe
+		// never throws: a worktree directory that is gone (deleted by hand, or
+		// pruned elsewhere) reads null, where a throw would fail the entire
+		// candidate listing. A vanished tree has nothing left to lose, so it
+		// stays sweepable.
+		const changed = await uncommittedCount(task.worktreePath);
 		if (changed) {
 			return {
 				recommended: false,
