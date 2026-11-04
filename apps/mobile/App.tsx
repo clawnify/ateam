@@ -26,6 +26,7 @@ import {
 	filled,
 	type InputValues,
 	inputsAt,
+	NEEDS_PAIRING,
 	PROTOCOL_VERSION,
 	providerById,
 	unifyProjects,
@@ -35,7 +36,7 @@ import {
 	withTimeout,
 } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActionSheetIOS,
 	ActivityIndicator,
@@ -342,7 +343,13 @@ function ConnectionScreen({
 	onSaveAccount,
 	onRemoveAccount,
 	waking,
+	onScan,
+	scanner,
 }: {
+	/** Add a box by scanning the pairing code a Mac shows (not while editing one). */
+	onScan: (() => void) | null;
+	/** The scanner, while it is open (App's). */
+	scanner: ReactNode;
 	host: string;
 	port: string;
 	setHost: (t: string) => void;
@@ -421,6 +428,18 @@ function ConnectionScreen({
 
 			<ScrollView contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
 				<View style={styles.contentColumn}>
+					{onScan ? (
+						<Pressable
+							style={[styles.formCard, styles.scanRow]}
+							onPress={onScan}
+							accessibilityRole="button"
+						>
+							<Feather name="camera" size={18} color={C.ink} />
+							<Text style={styles.scanText}>
+								Box locked to your devices? Scan the code from Pair a phone on your Mac.
+							</Text>
+						</Pressable>
+					) : null}
 					<View style={styles.eyebrowRow}>
 						<View style={[styles.tick, { backgroundColor: C.ink }]} />
 						<Text style={styles.eyebrow}>Box</Text>
@@ -555,6 +574,7 @@ function ConnectionScreen({
 					</Text>
 				</View>
 			</ScrollView>
+			{scanner}
 		</View>
 	);
 }
@@ -1639,6 +1659,14 @@ export default function App() {
 		try {
 			if (!(await link.connect(box, { wake: true, save: true, replaces, onWaking: setWaking }))) {
 				const failed = link.get(key).error;
+				// Locked to its paired devices: saved all the same, so its card asks for a code.
+				if (failed === NEEDS_PAIRING) {
+					commitBoxes(touchBox(boxesRef.current, box, Date.now(), replaces));
+					if (replaces && replaces !== key) forgetBox(replaces);
+					setEditingKey(null);
+					setConnectScreen("list");
+					return;
+				}
 				if (failed) setError(failed);
 				return;
 			}
@@ -1662,6 +1690,7 @@ export default function App() {
 		forgetBox,
 		fleet,
 		leaveConnect,
+		commitBoxes,
 	]);
 
 	// Enter demo mode: a fully offline Connection (canned board + terminal) in place
@@ -1756,8 +1785,8 @@ export default function App() {
 	// open a link like this, so nothing happens on its own: a malformed one is
 	// dropped, and a good one asks first, naming the box it would pair with (and
 	// save, if it wasn't on the list).
-	useEffect(() => {
-		const handle = (url: string | null): void => {
+	const offerPairLink = useCallback(
+		(url: string | null): void => {
 			const link = url ? parsePairLink(url) : null;
 			if (!link) return;
 			const { box, code } = link;
@@ -1784,11 +1813,41 @@ export default function App() {
 					},
 				],
 			);
-		};
-		void Linking.getInitialURL().then(handle);
-		const sub = Linking.addEventListener("url", (e) => handle(e.url));
+		},
+		[pairBox, endDemo],
+	);
+	useEffect(() => {
+		void Linking.getInitialURL().then(offerPairLink);
+		const sub = Linking.addEventListener("url", (e) => offerPairLink(e.url));
 		return () => sub.remove();
-	}, [pairBox, endDemo]);
+	}, [offerPairLink]);
+	// The same link, read by the camera inside the app (src/PairScanner.tsx). Loaded when
+	// first opened: a build made before the camera's native code fails on importing it.
+	const scannerRef = useRef<typeof import("./src/PairScanner").PairScanner | null>(null);
+	const [scanning, setScanning] = useState(false);
+	const openScanner = useCallback(() => {
+		try {
+			scannerRef.current ??= (
+				require("./src/PairScanner") as typeof import("./src/PairScanner")
+			).PairScanner;
+			setScanning(true);
+		} catch {
+			Alert.alert(
+				"No camera in this build",
+				"This build of Ateam Go can't scan yet. Type the code instead, or scan it with the iPhone's Camera.",
+			);
+		}
+	}, []);
+	const Scanner = scanning ? scannerRef.current : null;
+	const scanner = Scanner ? (
+		<Scanner
+			onClose={() => setScanning(false)}
+			onScanned={(url) => {
+				setScanning(false);
+				offerPairLink(url);
+			}}
+		/>
+	) : null;
 
 	// The projects, one card per repo across boxes (@ateam/protocol unifyProjects).
 	const cards = useMemo(
@@ -2167,6 +2226,8 @@ export default function App() {
 					}
 					onPair={(box, code) => pairBox(box, code)}
 					onLock={lockBox}
+					onScan={openScanner}
+					scanner={scanner}
 				/>
 			);
 		}
@@ -2201,6 +2262,8 @@ export default function App() {
 				onSaveAccount={onSaveAccount}
 				onRemoveAccount={(def) => void onRemoveAccount(def)}
 				waking={waking}
+				onScan={editingKey === null ? openScanner : null}
+				scanner={scanner}
 			/>
 		);
 	}
@@ -2594,6 +2657,15 @@ const styles = StyleSheet.create({
 	// connection form
 	formContent: { padding: 16, paddingTop: 20, paddingBottom: 40 },
 	formCard: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.line, borderRadius: 10 },
+	scanRow: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 12,
+		paddingHorizontal: 14,
+		paddingVertical: 12,
+		marginBottom: 18,
+	},
+	scanText: { flex: 1, color: C.ink, fontSize: 14, lineHeight: 20 },
 	fieldRow: {
 		flexDirection: "row",
 		alignItems: "center",
