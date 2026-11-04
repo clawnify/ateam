@@ -56,6 +56,8 @@ export function BoxesScreen({
 	openKeys,
 	onPair,
 	onLock,
+	onScan,
+	scanner,
 }: {
 	/** The nav bar's left slot: back to the board when there is one, else the logo. */
 	leading: ReactNode;
@@ -91,6 +93,10 @@ export function BoxesScreen({
 	onPair: (box: SavedBox, code: string) => Promise<void>;
 	/** Lock an open box to the devices paired with it, starting with this phone. */
 	onLock: (box: SavedBox) => Promise<void>;
+	/** Scan the pairing code a Mac shows: pairs the box it names, adding it if new. */
+	onScan: () => void;
+	/** The scanner, while it is open (App's). */
+	scanner: ReactNode;
 }) {
 	// With one box there's nothing to choose: its Lead is the Lead.
 	const choosingLead = boxes.length > 1;
@@ -101,6 +107,15 @@ export function BoxesScreen({
 				{leading}
 				<Text style={styles.navTitle}>Boxes</Text>
 				<View style={styles.spacer} />
+				<Pressable
+					style={styles.addBtn}
+					onPress={onScan}
+					hitSlop={8}
+					accessibilityRole="button"
+					accessibilityLabel="Scan a pairing code from your Mac"
+				>
+					<Feather name="camera" size={17} color={C.ink} />
+				</Pressable>
 				<Pressable
 					style={styles.addBtn}
 					onPress={onAdd}
@@ -146,6 +161,7 @@ export function BoxesScreen({
 								onTerminal={live ? () => onBoxTerminal(box) : undefined}
 								onGithub={live ? () => onGithub(box) : undefined}
 								onPair={(code) => onPair(box, code)}
+								onScan={onScan}
 								onLock={live && openKeys.has(key) ? () => onLock(box) : undefined}
 							/>
 						);
@@ -178,6 +194,7 @@ export function BoxesScreen({
 					)}
 				</View>
 			</ScrollView>
+			{scanner}
 		</View>
 	);
 }
@@ -201,6 +218,7 @@ function BoxCard({
 	onTerminal,
 	onGithub,
 	onPair,
+	onScan,
 	onLock,
 }: {
 	box: SavedBox;
@@ -231,6 +249,8 @@ function BoxCard({
 	onGithub?: () => void;
 	/** Pair this phone with the box using a code (shown when it's locked to others). */
 	onPair: (code: string) => Promise<void>;
+	/** Scan the code with the camera instead. */
+	onScan: () => void;
 	/** Lock the box to its paired devices: only on a connected box anyone may use. */
 	onLock?: () => Promise<void>;
 }) {
@@ -432,10 +452,12 @@ function BoxCard({
 					</Pressable>
 				</Animated.View>
 			</View>
-			{tray ? (
+			{failure === NEEDS_PAIRING ? (
+				// Before the steps: a tap that ends in this keeps them, and the code field
+				// is what the card is for now.
+				<PairTray onPair={onPair} onScan={onScan} />
+			) : tray ? (
 				<StepTray steps={steps} failure={failure} onCancel={reaching ? onCancel : null} />
-			) : failure === NEEDS_PAIRING ? (
-				<PairTray onPair={onPair} />
 			) : onLock ? (
 				<LockTray onLock={onLock} />
 			) : null}
@@ -444,7 +466,13 @@ function BoxCard({
 }
 
 /** Under a box locked to its paired devices: a code pairs this phone too. */
-function PairTray({ onPair }: { onPair: (code: string) => Promise<void> }) {
+function PairTray({
+	onPair,
+	onScan,
+}: {
+	onPair: (code: string) => Promise<void>;
+	onScan: () => void;
+}) {
 	const [code, setCode] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -463,8 +491,8 @@ function PairTray({ onPair }: { onPair: (code: string) => Promise<void> }) {
 	return (
 		<View style={styles.tray}>
 			<Text style={styles.trayText}>
-				Locked to its paired devices. Enter a code from Pair a phone on your Mac, or from `ateam
-				pair` in the box's terminal.
+				Locked to its paired devices. On your Mac, Pair a phone (Settings, Boxes) shows a code: type
+				it here or scan it. `ateam pair` on the box prints a code too.
 			</Text>
 			<View style={styles.pairRow}>
 				<TextInput
@@ -484,6 +512,14 @@ function PairTray({ onPair }: { onPair: (code: string) => Promise<void> }) {
 					accessibilityRole="button"
 				>
 					<Text style={styles.pairBtnText}>{busy ? "Pairing…" : "Pair"}</Text>
+				</Pressable>
+				<Pressable
+					style={[styles.pairBtn, styles.scanBtn]}
+					onPress={onScan}
+					accessibilityRole="button"
+					accessibilityLabel="Scan the pairing code"
+				>
+					<Feather name="camera" size={16} color={C.ink} />
 				</Pressable>
 			</View>
 			{error ? <Text style={styles.pairError}>{error}</Text> : null}
@@ -691,6 +727,7 @@ const styles = StyleSheet.create({
 		justifyContent: "center",
 	},
 	pairBtnOff: { opacity: 0.4 },
+	scanBtn: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.line },
 	pairBtnText: { color: C.bg, fontSize: 14, fontWeight: "600" },
 	tray: {
 		marginTop: -12,
