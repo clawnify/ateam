@@ -62,6 +62,22 @@ export async function trackingStatus(
 	}
 }
 
+/**
+ * Entries `git status --porcelain` lists: modified, staged and untracked paths
+ * (an untracked folder is one entry), so 0 means nothing would be lost by
+ * removing the worktree. Not the task's diff against base, which also counts
+ * committed work. Null when git can't read the worktree (folder gone, not a
+ * repo).
+ */
+export async function uncommittedCount(worktreePath: string): Promise<number | null> {
+	try {
+		const out = (await gitFor(worktreePath).raw(["status", "--porcelain"])).trim();
+		return out === "" ? 0 : out.split("\n").length;
+	} catch {
+		return null;
+	}
+}
+
 export interface UpdateFromBaseInput {
 	worktreePath: string;
 	baseBranch: string;

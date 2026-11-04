@@ -102,6 +102,8 @@ export interface GitStatusSnapshot {
 	ahead: number;
 	behind: number;
 	dirty: number;
+	/** `git status` entries; see the protocol's GitStatusSnapshot. */
+	uncommitted?: number;
 	updatedAt: number;
 }
 

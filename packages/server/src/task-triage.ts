@@ -49,7 +49,10 @@ export function signalsFromTask(task: Task): WorktreeSignals {
 		// last hook activity (our best proxy for conversation activity).
 		indexMtimeMs: gs?.updatedAt ?? null,
 		transcriptMtimeMs: task.lastEventAt ?? null,
-		dirtyRealCount: gs?.dirty ?? 0,
+		// `git status`, never `dirty` (the diff against base, which counts
+		// committed work and outlives a squash merge). A snapshot from before
+		// the count existed reads 0, which skips the rule rather than guessing.
+		dirtyRealCount: gs?.uncommitted ?? 0,
 		commitsAhead: gs?.ahead ?? 0,
 		prState: toPrState(task.prState),
 		mergedAtMs: null,

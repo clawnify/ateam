@@ -60,9 +60,10 @@ export function taskFacts(task: Task): string[] {
 	const facts = [`Board column: ${COLUMN[task.column] ?? task.column}.`];
 	if (task.prNumber) facts.push(`Pull request #${task.prNumber} is ${task.prState ?? "open"}.`);
 	const ahead = task.gitStatus?.ahead ?? 0;
-	const dirty = task.gitStatus?.dirty ?? 0;
+	// `git status`, not `dirty` (the diff against base, committed work included).
+	const uncommitted = task.gitStatus?.uncommitted ?? 0;
 	if (ahead > 0) facts.push(`${ahead} commit(s) not pushed yet.`);
-	if (dirty > 0) facts.push(`${dirty} file(s) with uncommitted changes.`);
+	if (uncommitted > 0) facts.push(`${uncommitted} file(s) with uncommitted changes.`);
 	if (task.waitingReason) facts.push(`Parked, waiting for: ${task.waitingReason}.`);
 	if (task.question?.text) facts.push(`The agent asked the user: ${task.question.text}`);
 	for (const p of task.proposals ?? [])

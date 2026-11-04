@@ -35,7 +35,13 @@ function task(over: Partial<Task> = {}): Task {
 }
 
 const git = (
-	over: Partial<{ ahead: number; behind: number; dirty: number; updatedAt: number }>,
+	over: Partial<{
+		ahead: number;
+		behind: number;
+		dirty: number;
+		uncommitted: number;
+		updatedAt: number;
+	}>,
 ) => ({
 	ahead: 0,
 	behind: 0,
@@ -60,10 +66,37 @@ describe("triageTask", () => {
 	});
 
 	it("flags uncommitted work as ongoing", () => {
-		const r = triageTask(task({ gitStatus: git({ dirty: 3 }) }), NOW);
+		const r = triageTask(task({ gitStatus: git({ dirty: 3, uncommitted: 3 }) }), NOW);
 		expect(r.bucket).toBe("uncommitted");
 		expect(r.done).toBe(false);
 		expect(r.reason).toContain("3 uncommitted");
+	});
+
+	// #482: `dirty` is the diff against base, which outlives a squash merge
+	// when base edits the same lines again. A clean worktree is not uncommitted.
+	it("calls a merged task with a clean worktree merged, whatever its diff counts", () => {
+		const r = triageTask(
+			task({ prState: "merged", gitStatus: git({ dirty: 1, uncommitted: 0 }) }),
+			NOW,
+		);
+		expect(r.bucket).toBe("merged_done");
+		expect(r.done).toBe(true);
+	});
+
+	it("still flags a merged task with real uncommitted files", () => {
+		const r = triageTask(
+			task({ prState: "merged", gitStatus: git({ dirty: 1, uncommitted: 2 }) }),
+			NOW,
+		);
+		expect(r.bucket).toBe("uncommitted");
+		expect(r.reason).toContain("2 uncommitted");
+	});
+
+	// A snapshot stored before the count existed: unknown, so the rule is
+	// skipped rather than read off the diff.
+	it("skips the uncommitted rule for a snapshot without the count", () => {
+		const r = triageTask(task({ prState: "merged", gitStatus: git({ dirty: 1 }) }), NOW);
+		expect(r.bucket).toBe("merged_done");
 	});
 
 	it("flags an open PR as ongoing", () => {
@@ -147,9 +180,9 @@ describe("signalsFromTask", () => {
 	});
 
 	it("reads counts off the git snapshot and survives a missing one", () => {
-		const s = signalsFromTask(task({ gitStatus: git({ ahead: 4, dirty: 7 }) }));
+		const s = signalsFromTask(task({ gitStatus: git({ ahead: 4, dirty: 7, uncommitted: 2 }) }));
 		expect(s.commitsAhead).toBe(4);
-		expect(s.dirtyRealCount).toBe(7);
+		expect(s.dirtyRealCount).toBe(2);
 
 		const none = signalsFromTask(task({ gitStatus: null }));
 		expect(none.commitsAhead).toBe(0);
