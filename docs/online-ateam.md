@@ -503,9 +503,12 @@ every box this Mac holds to every other one:
 - **A box that's asleep or off the tailnet** is listed as unreachable, and a message to
   one of its tasks fails with that reason. Boxes don't wake each other.
 - **What a box needs:** v30, and a network port the other boxes can reach (the one Ateam
-  Go uses). A box whose port listens on 127.0.0.1 only can reach the others but can't be
-  reached. If your tailnet policy limits which devices reach which, let the boxes reach
-  each other on that port.
+  Go uses). A box whose port listens on 127.0.0.1 behind Tailscale Serve, as on boxd,
+  reports the tailnet address Serve forwards to it; one whose port listens on 127.0.0.1
+  with nothing forwarding to it can reach the others but can't be reached. A box whose
+  Tailscale runs in userspace mode (boxd again) can't dial the tailnet itself, so its
+  links go through `tailscale nc`. If your tailnet policy limits which devices reach
+  which, let the boxes reach each other on that port.
 - **Your Mac's own tasks** aren't part of it yet: boxes can't reach your Mac.
 
 The box keeps its links in `~/.ateam/links.json`, readable by you alone.

@@ -24,9 +24,7 @@ export function isTailnetHost(host: string): boolean {
 export function hasTailnetInterface(
 	ifaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
 ): boolean {
-	return Object.values(ifaces).some((list) =>
-		(list ?? []).some((a) => isTailnetHost(a.address)),
-	);
+	return Object.values(ifaces).some((list) => (list ?? []).some((a) => isTailnetHost(a.address)));
 }
 
 /** Whether a connection to `host` has to go through `tailscale nc` from here. */
@@ -38,21 +36,44 @@ export function needsTailscaleNc(
 }
 
 /** A connection to host:port through `tailscale nc`, as a stream a WebSocket can
- *  run over. Closing either side ends the other. */
+ *  run over. Closing either side ends the other. What nc says on stderr (why it
+ *  couldn't connect) goes to `onStderr`, a line at a time. */
 export function tailscaleNc(
 	host: string,
 	port: number,
-	spawnNc: (args: string[]) => ChildProcess = (args) =>
-		spawn("tailscale", args, { stdio: ["pipe", "pipe", "ignore"] }),
+	opts: {
+		spawn?: (args: string[]) => ChildProcess;
+		onStderr?: (line: string) => void;
+	} = {},
 ): Duplex {
+	const spawnNc =
+		opts.spawn ?? ((args) => spawn("tailscale", args, { stdio: ["pipe", "pipe", "pipe"] }));
 	const child = spawnNc(["nc", host.replace(/^\[|\]$/g, ""), String(port)]);
 	if (!child.stdin || !child.stdout) throw new Error("tailscale nc started without pipes");
 	const stream = Duplex.from({ readable: child.stdout, writable: child.stdin });
-	const end = (err?: Error) => {
-		if (!stream.destroyed) stream.destroy(err);
+	const fail = (why: string) => {
+		if (!stream.destroyed) stream.destroy(new Error(why));
 	};
-	child.on("error", (e) => end(new Error(`tailscale nc: ${e.message}`)));
-	child.on("exit", () => end());
+	let said = "";
+	let last = "";
+	const tell = (line: string) => {
+		last = line;
+		opts.onStderr?.(line);
+	};
+	child.stderr?.on("data", (chunk: Buffer) => {
+		said += chunk.toString();
+		const lines = said.split("\n");
+		said = lines.pop() ?? "";
+		for (const line of lines) if (line.trim()) tell(line.trim());
+	});
+	child.on("error", (e) => fail(`tailscale nc: ${e.message}`));
+	child.on("exit", (code) => {
+		if (said.trim()) tell(said.trim());
+		said = "";
+		// A clean exit ends its output, and that ends the stream.
+		if (code !== 0)
+			fail(`tailscale nc exited with ${code ?? "a signal"}${last ? `: ${last}` : ""}`);
+	});
 	stream.on("close", () => {
 		if (child.exitCode === null) child.kill();
 	});
@@ -62,9 +83,7 @@ export function tailscaleNc(
 /** Run the tailscale CLI and give back what it printed, or null when it fails. */
 export function runTailscale(args: string[]): Promise<string | null> {
 	return new Promise((resolve) => {
-		execFile("tailscale", args, { timeout: 3_000 }, (err, stdout) =>
-			resolve(err ? null : stdout),
-		);
+		execFile("tailscale", args, { timeout: 3_000 }, (err, stdout) => resolve(err ? null : stdout));
 	});
 }
 
