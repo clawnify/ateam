@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="./assets/icon.png" alt="Ateam app icon" width="128" />
+  <img src="./assets/cover.png" alt="Ateam — coding agents from anywhere: the Ateam app icon over a beach with an empty deck chair by the sea" width="900" />
 </p>
-
-<h1 align="center">Ateam</h1>
 
 <p align="center">
   Orchestrate a crew of AI coding agents — Claude Code, OpenCode, and
