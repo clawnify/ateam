@@ -71,6 +71,8 @@ export const HOST_CH = {
 	checkGithub: "host:checkGithub",
 	/** Open a github.com page in the user's own browser. */
 	openGithub: "host:openGithub",
+	/** Open Hetzner's or Tailscale's console, where Create a box's token and key come from. */
+	openConsole: "host:openConsole",
 	/** Read/write the encrypted provider credentials (token + Tailscale auth key). */
 	secretsStatus: "host:secretsStatus",
 	saveSecrets: "host:saveSecrets",
@@ -131,6 +133,9 @@ export interface BoxReadiness {
 	/** The git commit identity (derived from the GitHub login once signed in). */
 	gitName?: string;
 	gitEmail?: string;
+	/** When the box's Tailscale key expires (ISO), for a box approved from a link; a
+	 *  tagged box, or one whose expiry is turned off, has none. */
+	tailscaleKeyExpiry?: string;
 }
 
 /** Result of installing an agent's CLI on a box — the login the user runs next. */
@@ -178,8 +183,8 @@ export interface SecretsStatus {
 /** The provider's live catalog, fetched with the token so it reflects real availability. */
 export interface ProviderOptions {
 	locations: { slug: string; label: string }[];
-	/** `locations` = the slugs a size is available in (empty = unknown → offer anywhere). */
-	serverTypes: { slug: string; label: string; locations: string[] }[];
+	/** `locations` = the slugs a size can be ordered in (empty = unknown → offer anywhere). */
+	serverTypes: { slug: string; label: string; locations: string[]; memory: number }[];
 }
 
 /** Which engine is driving the app right now. */
@@ -294,6 +299,8 @@ export interface AteamHost {
 	checkGithub(alias: string, repos?: string[]): Promise<RepoAccessDTO[]>;
 	/** Open a github.com page in the user's own browser, where they're signed in. */
 	openGithub(url: string): Promise<void>;
+	/** Open a page of Hetzner's or Tailscale's console in the user's own browser. */
+	openConsole(url: string): Promise<void>;
 	/** Which provisioning secrets are already saved (booleans, never the values). */
 	secretsStatus(): Promise<SecretsStatus>;
 	/** Persist provider credentials (encrypted at rest). Empty string clears one. */

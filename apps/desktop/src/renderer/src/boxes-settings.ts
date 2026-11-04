@@ -37,6 +37,8 @@ export interface BoxRow {
 	 *  boxes connect to; null when it has none, so only SSH reaches it. Absent when
 	 *  not known: not connected, or an engine from before it said (v30). */
 	networkPort?: string | null;
+	/** The coding agents its engine finds, when connected. */
+	agents?: string[];
 	lastSeen: number | null;
 	/** Why the app's own last attempt to connect failed, if it did. */
 	failure: string | null;
@@ -78,6 +80,7 @@ export function boxRows(
 				leadReady: version != null && version >= FEATURE_MIN_VERSION.lead,
 				pairingReady: version != null && version >= FEATURE_MIN_VERSION.pairing,
 				...(info && info.wsAddr !== undefined ? { networkPort: info.wsAddr } : {}),
+				...(info ? { agents: info.agents } : {}),
 				lastSeen: c.lastSeen,
 				failure: failures[c.alias] ?? null,
 			};

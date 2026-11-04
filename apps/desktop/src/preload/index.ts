@@ -211,6 +211,7 @@ const host: AteamHost = {
 	connectGithub: (alias, token) => ipcRenderer.invoke(HOST_CH.connectGithub, alias, token),
 	checkGithub: (alias, repos) => ipcRenderer.invoke(HOST_CH.checkGithub, alias, repos),
 	openGithub: (url) => ipcRenderer.invoke(HOST_CH.openGithub, url),
+	openConsole: (url) => ipcRenderer.invoke(HOST_CH.openConsole, url),
 	secretsStatus: () => ipcRenderer.invoke(HOST_CH.secretsStatus),
 	saveSecrets: (patch) => ipcRenderer.invoke(HOST_CH.saveSecrets, patch),
 	providerOptions: (token) => ipcRenderer.invoke(HOST_CH.providerOptions, token),

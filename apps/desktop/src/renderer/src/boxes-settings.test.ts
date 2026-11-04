@@ -102,6 +102,11 @@ describe("a box's network port", () => {
 		expect(port("older")).toBeUndefined();
 		expect(port("away")).toBeUndefined();
 	});
+
+	it("carries the agents a connected engine finds, and none for a box not connected", () => {
+		expect(rows.find((r) => r.alias === "on-tailnet")?.agents).toEqual([]);
+		expect(rows.find((r) => r.alias === "away")?.agents).toBeUndefined();
+	});
 });
 
 describe("an engine on this app's protocol", () => {

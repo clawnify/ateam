@@ -20,8 +20,8 @@ export interface BoxProvider {
 /** What the picker shows once a token is entered — the provider's live catalog. */
 export interface ProviderOptions {
 	locations: { slug: string; label: string }[];
-	/** `locations` = the location slugs this size is available in (empty = unknown/any). */
-	serverTypes: { slug: string; label: string; locations: string[] }[];
+	/** `locations` = the location slugs this size can be ordered in (empty = unknown/any). */
+	serverTypes: { slug: string; label: string; locations: string[]; memory: number }[];
 }
 
 export interface CreateServerInput {
@@ -60,11 +60,15 @@ const AUTHKEY_RE = /^tskey-auth-[A-Za-z0-9-]+$/;
 export function buildCloudInit(opts: {
 	hostname: string;
 	sshPublicKey: string;
-	tailscaleAuthKey: string;
+	/** Joins the tailnet at boot. Without one, Tailscale is only installed, and the
+	 *  engine's installer joins later (`--tailscale`), the user approving the box. */
+	tailscaleAuthKey?: string;
 }): string {
 	const { hostname, sshPublicKey, tailscaleAuthKey } = opts;
 	if (!NAME_RE.test(hostname)) throw new Error(`invalid box name: ${hostname}`);
-	if (!AUTHKEY_RE.test(tailscaleAuthKey)) throw new Error("invalid Tailscale auth key");
+	if (tailscaleAuthKey !== undefined && !AUTHKEY_RE.test(tailscaleAuthKey)) {
+		throw new Error("invalid Tailscale auth key");
+	}
 	if (!/^ssh-(ed25519|rsa) /.test(sshPublicKey)) throw new Error("invalid SSH public key");
 	// A YAML literal — the key and authkey are validated above so neither can break out
 	// of the document or the shell line below.
@@ -83,7 +87,11 @@ export function buildCloudInit(opts: {
 		"  - curl -fsSL https://tailscale.com/install.sh | sh",
 		// --operator=ateam lets the non-root user run `tailscale ip -4`, which the
 		// engine installer reads to bake ATEAM_WS_ADDR (the phone's WebSocket listener).
-		`  - tailscale up --ssh --authkey=${tailscaleAuthKey} --hostname=${hostname} --operator=ateam`,
+		...(tailscaleAuthKey
+			? [
+					`  - tailscale up --ssh --authkey=${tailscaleAuthKey} --hostname=${hostname} --operator=ateam`,
+				]
+			: []),
 	].join("\n");
 }
 
@@ -122,17 +130,48 @@ async function hetznerCall(token: string, path: string, init?: RequestInit) {
 	return body;
 }
 
-// Availability per location moved onto server_types.locations — the datacenters
-// `server_types.available` field is deprecated (removed 2026-10-01). Read defensively:
-// the entry may be a slug string or an object keyed by `location`/`name`.
-function locationSlugsOf(st: { locations?: unknown[] }): string[] {
-	return (st.locations ?? [])
-		.map((l) =>
-			typeof l === "string"
-				? l
-				: ((l as { location?: string; name?: string })?.location ?? (l as { name?: string })?.name),
-		)
-		.filter((s): s is string => typeof s === "string");
+/** A server type as Hetzner's API lists it (`GET /server_types`), the fields read here. */
+interface HetznerServerType {
+	name: string;
+	cores: number;
+	memory: number;
+	cpu_type?: string;
+	architecture?: string;
+	/** Where it's supported, each with its own deprecation and stock (since 2025-09-24;
+	 *  the type-wide `deprecated` flag was removed 2026-11-02). */
+	locations?: { name: string; available?: boolean; deprecation?: unknown }[];
+}
+
+/**
+ * The sizes Create a box offers, and where each can be ordered: a location whose entry
+ * has no deprecation and isn't out of stock. Hetzner deprecates a type per location
+ * (the old shared AMD types left FSN, NBG, HEL and SIN on 2026-01-01), and ordering one
+ * there fails with "unsupported location for server type". A type orderable nowhere is
+ * left out; one with no `locations` at all is offered everywhere, since that says
+ * nothing. Smallest first.
+ */
+export function orderableServerTypes(types: HetznerServerType[]): ProviderOptions["serverTypes"] {
+	return types
+		.map((t) => ({
+			type: t,
+			locations: (t.locations ?? [])
+				.filter((l) => !l.deprecation && l.available !== false)
+				.map((l) => l.name),
+		}))
+		.filter(({ type, locations }) => type.locations === undefined || locations.length > 0)
+		.sort((a, b) => a.type.cores - b.type.cores || a.type.memory - b.type.memory)
+		.map(({ type, locations }) => {
+			const kind = [
+				type.architecture === "arm" ? "Arm" : null,
+				type.cpu_type === "dedicated" ? "dedicated" : null,
+			].filter(Boolean);
+			return {
+				slug: type.name,
+				label: `${type.name.toUpperCase()} · ${type.cores} vCPU / ${type.memory} GB${kind.length ? ` (${kind.join(", ")})` : ""}`,
+				locations,
+				memory: type.memory,
+			};
+		});
 }
 
 export const hetznerProvider: BoxProvider = {
@@ -148,27 +187,7 @@ export const hetznerProvider: BoxProvider = {
 			slug: l.name,
 			label: `${l.city ?? l.description ?? l.name}${l.country ? ` (${l.country})` : ""}`,
 		}));
-		const serverTypes = (types.server_types ?? [])
-			// Skip globally-deprecated types (Hetzner marks them with a `deprecation` object).
-			.filter((t: Record<string, unknown>) => !t.deprecation && !t.deprecated)
-			.map((t: Record<string, unknown>) => ({
-				slug: t.name as string,
-				label: `${String(t.name).toUpperCase()} — ${t.cores} vCPU / ${t.memory} GB${t.cpu_type === "dedicated" ? " (dedicated)" : ""}`,
-				locations: locationSlugsOf(t as { locations?: unknown[] }),
-				cores: Number(t.cores) || 0,
-			}))
-			.sort((a: { cores: number }, b: { cores: number }) => a.cores - b.cores)
-			.map(
-				({
-					cores: _cores,
-					...rest
-				}: {
-					cores: number;
-					slug: string;
-					label: string;
-					locations: string[];
-				}) => rest,
-			);
+		const serverTypes = orderableServerTypes(types.server_types ?? []);
 		return { locations, serverTypes };
 	},
 

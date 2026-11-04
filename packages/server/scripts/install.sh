@@ -378,6 +378,23 @@ if [ -z "$WS_ADDR" ] && [ -n "${ATEAM_WS_ADDR_DEFAULT:-}" ]; then
 	WS_ADDR="$ATEAM_WS_ADDR_DEFAULT"
 	WS_FROM="ATEAM_WS_ADDR_DEFAULT"
 fi
+# --tailscale asks for the box's tailnet address, so an old one goes: a box that joined
+# again as a new node has a new IP (seen: 100.101.212.107, then 100.105.220.22), and an
+# engine bound to the old one serves no one. An address set with ATEAM_WS_ADDR, or one
+# off the tailnet (100.64.0.0/10), stays as it is.
+if [ "$WANT_TAILSCALE" = 1 ] && [ -n "$TS_WS_DEFAULT" ] && [ -n "$WS_ADDR" ] &&
+	[ "$WS_FROM" != ATEAM_WS_ADDR ]; then
+	OLD_HOST="${WS_ADDR%:*}"
+	OCTET2="$(printf '%s' "$OLD_HOST" | cut -d. -f2)"
+	case "$OLD_HOST" in
+	100.*.*.*)
+		if [ "$OLD_HOST" != "$TS_IP" ] && [ "$OCTET2" -ge 64 ] 2>/dev/null && [ "$OCTET2" -le 127 ]; then
+			WS_ADDR="$TS_WS_DEFAULT"
+			WS_FROM="--tailscale, in place of $OLD_HOST, an address this box no longer has"
+		fi
+		;;
+	esac
+fi
 if [ -n "$WS_ADDR" ]; then
 	mkdir -p "$DATA_DIR"
 	printf '%s\n' "$WS_ADDR" >"$WS_ADDR_FILE"
@@ -812,6 +829,13 @@ fi
 
 if command -v tailscale >/dev/null && tailscale status >/dev/null 2>&1; then
 	mark ok "tailscale up ($(tailscale ip -4 2>/dev/null | head -1))"
+	# Approved from a link, a box is a user's device, and its key expires (180 days by
+	# default): then the phone loses it with no error. A tagged box has no expiry.
+	TS_EXPIRY="$(tailscale status --json --peers=false 2>/dev/null | sed -n 's/.*"KeyExpiry": *"\([^"]*\)".*/\1/p' | head -1 || true)"
+	if [ -n "$TS_EXPIRY" ]; then
+		mark no "Tailscale drops this box from your tailnet on ${TS_EXPIRY%%T*}. Turn its key expiry off:"
+		info '     Tailscale admin → Machines → this box → ⋯ → Disable key expiry'
+	fi
 else
 	mark no 'tailscale: how Ateam Go reaches this box. Re-run this installer with --tailscale'
 fi
