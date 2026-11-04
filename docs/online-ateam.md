@@ -93,8 +93,8 @@ git config --global user.email "you@example.com"
 git config --global init.defaultBranch main
 ```
 
-Connect GitHub from Ateam once the engine is running: the checklist after setting a
-box up, **Settings → Boxes** on the desktop, or the GitHub button
+Connect GitHub from Ateam once the engine is running: the box's page in
+**Settings → Boxes** on the desktop (it opens after setting a box up), or the GitHub button
 on the box's card on the phone. You paste a [fine-grained
 token](providers/README.md#github-credentials) into Ateam, which hands it to the box's
 `gh` and shows which of the box's projects it can push to. `gh auth login` in a
@@ -147,11 +147,13 @@ then checks that the process answering afterwards is a different one, so an upgr
 can no longer report success while the previous version keeps serving. Live agents
 are untouched: they belong to a separate PTY daemon the installer never signals.
 
-Three knobs, all optional:
+Knobs, all optional:
 
 | Knob | Effect |
 | --- | --- |
 | `--service` | also install a systemd unit so the daemon survives logout, reboot and an OOM kill (`… \| bash -s -- --service`). Required for the iOS app — see step 5. |
+| `--tailscale` | also join your tailnet, installing Tailscale if it's missing, and open the iOS app's port on it (`… \| bash -s -- --tailscale`). Prints a link to approve the box, unless `TS_AUTHKEY` is set; kernel mode where the box has `/dev/net/tun`, userspace mode behind Tailscale Serve where it hasn't. Implies `--service` and needs passwordless sudo. |
+| `TS_AUTHKEY=tskey-auth-…` | with `--tailscale`, join with this auth key instead of the link. A key made with a tag keeps the box on the tailnet for good; a box approved from the link drops off after 180 days unless its key expiry is turned off. |
 | `ATEAM_VERSION=v0.1.30` | install a specific release instead of the latest |
 | `ATEAM_TARBALL=<url\|path>` | install from your own `ateam-server.tar.gz` (dev builds, air-gapped boxes) |
 
@@ -172,8 +174,10 @@ SSH_FLAGS="-i ~/.ssh/mykey" packages/server/scripts/install-remote.sh you@your-b
 > the server with `--service` and, when the box has no `ATEAM_WS_ADDR` yet and its
 > tailnet IP (step 2) is on one of its interfaces, sets `ATEAM_WS_ADDR` to that IP so
 > the iOS app works too, streams the installer's log, and connects when it finishes.
-> You still handle Tailscale (step 2) and the readiness items (git identity, `gh`, an
-> agent CLI) yourself.
+> Then the box's page in **Settings → Boxes** (Ateam 0.1.88 or later) lists what's left:
+> **Set up phone access** there does step 2 for you (the installer's `--tailscale`),
+> GitHub connects there with the git identity following, and you sign in to an agent
+> CLI once.
 
 ## 2. Put the box on your tailnet
 
@@ -461,7 +465,7 @@ affected. Keep the ACL anyway: the lock and the ACL guard against different thin
 
 - **A box starts open**, a new one too, and stays open until you lock it. Its card
   says anyone on your tailnet can control it.
-- **Lock one** from **Settings → Boxes → Access → Lock it** on the Mac, or **Lock it**
+- **Lock one** from **Settings → Boxes → the box → Access → Lock it** on the Mac, or **Lock it**
   under its card in the phone's **Boxes**. The device you lock it from is paired first.
   A phone needs Ateam Go 1.4 or later to pair: an older one can't use a locked box.
 - **Pair a phone** from the same place on the Mac: a QR code the iPhone's Camera opens
@@ -472,7 +476,7 @@ affected. Keep the ACL anyway: the lock and the ACL guard against different thin
   over Tailscale, or the one paired phone is lost): run `ateam pair` in the box's
   terminal, which prints a code for a locked box. `ateam pair --unlock` opens a box
   again when no paired device is left.
-- **Unpair** a device from **Settings → Boxes → Access**: its token stops working and
+- **Unpair** a device from **Settings → Boxes → the box → Access**: its token stops working and
   its connection drops at once. Do it for a lost phone.
 
 The box keeps the list in `~/.ateam/pairings.json`, readable by you alone, with hashes

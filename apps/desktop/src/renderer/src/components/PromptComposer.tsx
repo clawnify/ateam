@@ -1,6 +1,6 @@
 import type { AgentDTO, BoxWake } from "@ateam/protocol";
 import { ArrowUp, Paperclip, Plus, X, Zap } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { HostStatus } from "../../../shared/host";
 import { titleFromPrompt } from "../titleFromPrompt";
 import { AgentPicker } from "./AgentPicker";
@@ -161,7 +161,11 @@ export function PromptComposer({
 			saved !== null && environments.some((e) => e.alias === savedAlias && !e.disabled);
 		return usable ? savedAlias : (environments.find((e) => !e.disabled)?.alias ?? null);
 	});
+	// A box set up from Run on is picked the moment it's connected, which can be before
+	// this list has it: that pick waits for the list rather than being moved away from.
+	const justPicked = useRef<string | null>(null);
 	const setAlias = (a: string | null) => {
+		justPicked.current = a;
 		setAliasState(a);
 		localStorage.setItem("ateam.runOn", a === null ? "__local__" : a);
 	};
@@ -169,7 +173,13 @@ export function PromptComposer({
 	// (no copy on this Mac, no remote to clone onto a box): move to the first
 	// place it can, without remembering it as a pick.
 	useEffect(() => {
-		if (session || environments.some((e) => e.alias === alias && !e.disabled)) return;
+		if (session) return;
+		const entry = environments.find((e) => e.alias === alias);
+		if (entry && !entry.disabled) {
+			if (justPicked.current === alias) justPicked.current = null;
+			return;
+		}
+		if (!entry && alias !== null && justPicked.current === alias) return;
 		const first = environments.find((e) => !e.disabled);
 		if (first) setAliasState(first.alias);
 	}, [session, environments, alias]);

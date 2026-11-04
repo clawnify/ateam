@@ -23,7 +23,8 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import type { HostStatus, WakeStatus } from "../../../shared/host";
-import { BoxReadinessChecklist } from "./BoxReadinessChecklist";
+import { stripAnsi } from "../lib/ansi";
+import { BoxPageDialog } from "./BoxPage";
 import { ConnectSteps } from "./ConnectSteps";
 import { CreateBoxDialog } from "./CreateBoxDialog";
 import { PickerHeading, PickerRow, pickerTrigger } from "./picker";
@@ -90,6 +91,7 @@ export function EnvironmentPicker({
 	onInstall,
 	onForget,
 	addOnly = false,
+	onSetUp,
 }: {
 	environments: EnvOption[];
 	value: string | null;
@@ -106,11 +108,15 @@ export function EnvironmentPicker({
 	/** Settings → Boxes: no list to pick from, just the ways to add a box, behind an
 	 *  "Add a box" button. */
 	addOnly?: boolean;
+	/** A box was added (set up, created, or connected by its Tailscale address): open its
+	 *  page. Without it, a box set up or created here is picked and its page opens in a
+	 *  dialog over what's open, so a task being written keeps its draft. */
+	onSetUp?: (alias: string) => void;
 }) {
 	// The add-a-connection section: "" collapsed → "menu" (the methods) → a chosen
-	// method's inline form → "ready" (the readiness checklist after an SSH set-up).
-	// "Create a new box" opens a modal instead (too big for here).
-	const [addMode, setAddMode] = useState<"" | "menu" | "ssh" | "tailscale" | "ready">("");
+	// method's inline form. "Create a new box" opens a modal instead (too big for here).
+	// What's left once a box is up is on its page (BoxPage.tsx), not in here.
+	const [addMode, setAddMode] = useState<"" | "menu" | "ssh" | "tailscale">("");
 	// Where the back arrow returns to: the list for a form opened from a box's row (its
 	// moon or update button), the methods for one picked from the menu.
 	const [backTo, setBackTo] = useState<"" | "menu">("");
@@ -134,9 +140,8 @@ export function EnvironmentPicker({
 	const [installing, setInstalling] = useState(false);
 	const [log, setLog] = useState("");
 	const [installError, setInstallError] = useState<string | null>(null);
-	// The box a Set-up-over-SSH just produced — probed by the readiness checklist.
-	const [installedAlias, setInstalledAlias] = useState<string | null>(null);
-	const [installedAgents, setInstalledAgents] = useState<string[]>([]);
+	// The box just set up or created here, whose page is open over what's open.
+	const [finishing, setFinishing] = useState<string | null>(null);
 	const [creating, setCreating] = useState(false);
 	const logRef = useRef<HTMLPreElement>(null);
 
@@ -182,11 +187,11 @@ export function EnvironmentPicker({
 
 	const back = () => {
 		// With no list behind the ways to add a box, backing out of them closes it.
-		if (addOnly && (addMode === "menu" || addMode === "ready")) {
+		if (addOnly && addMode === "menu") {
 			close();
 			return;
 		}
-		setAddMode(addMode === "menu" || addMode === "ready" ? "" : backTo);
+		setAddMode(addMode === "menu" ? "" : backTo);
 		setError(null);
 		setInstallError(null);
 	};
@@ -195,9 +200,7 @@ export function EnvironmentPicker({
 			? "Add a remote connection"
 			: addMode === "tailscale"
 				? "Tailscale box"
-				: addMode === "ssh"
-					? "Set up over SSH"
-					: "Box set up";
+				: "Set up over SSH";
 
 	/** Open the Tailscale form, empty or for a listed box whose provider to change. */
 	const openTailscale = (env?: EnvOption) => {
@@ -266,6 +269,7 @@ export function EnvironmentPicker({
 			setNeedsCode(false);
 			setCode("");
 			close();
+			onSetUp?.(ep);
 		} catch (err) {
 			const said = errorText(err);
 			if (said === NEEDS_PAIRING) {
@@ -282,6 +286,12 @@ export function EnvironmentPicker({
 		if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
 	}, [log]);
 
+	/** A box is up: its page shows what's left (in Settings, in place of the list). */
+	const finished = (alias: string) => {
+		if (onSetUp) onSetUp(alias);
+		else setFinishing(alias);
+	};
+
 	const submitInstall = async () => {
 		const d = dest.trim();
 		if (!d || !onInstall || installing) return;
@@ -289,14 +299,14 @@ export function EnvironmentPicker({
 		setInstallError(null);
 		setLog("");
 		try {
-			const status = await onInstall(d, (chunk) => setLog((prev) => prev + chunk));
-			// install() sets the box up AND connects it — select it right away (so clicking
-			// away can't strand the pick), then show its readiness checklist.
+			await onInstall(d, (chunk) => setLog((prev) => prev + chunk));
+			// install() sets the box up AND connects it: select it right away (so clicking
+			// away can't strand the pick), then open its page, where what's left is.
 			onChange(d);
 			setDest("");
-			setInstalledAlias(d);
-			setInstalledAgents(status.info.agents);
-			setAddMode("ready");
+			setLog("");
+			close();
+			finished(d);
 		} catch (err) {
 			setInstallError(err instanceof Error ? err.message : String(err));
 		} finally {
@@ -654,15 +664,6 @@ export function EnvironmentPicker({
 										(busy && steps.length === 0 ? "Connecting…" : busy ? "" : "Enter to connect")}
 								</span>
 							</div>
-						) : addMode === "ready" ? (
-							installedAlias && (
-								<BoxReadinessChecklist
-									alias={installedAlias}
-									agents={installedAgents}
-									title="Box set up. A few things left:"
-									onDone={close}
-								/>
-							)
 						) : (
 							<div className={addForm}>
 								<Input
@@ -682,7 +683,7 @@ export function EnvironmentPicker({
 										ref={logRef}
 										className="m-0 max-h-40 overflow-auto rounded-md bg-background p-2 font-mono text-[10px] whitespace-pre-wrap text-muted-foreground"
 									>
-										{log}
+										{stripAnsi(log)}
 									</pre>
 								)}
 								<span className={cn(formNote, installError && "text-destructive")}>
@@ -712,10 +713,12 @@ export function EnvironmentPicker({
 							setCreating(false);
 							onChange(alias);
 							close();
+							finished(alias);
 						}}
 					/>,
 					document.body,
 				)}
+			{finishing && <BoxPageDialog alias={finishing} onClose={() => setFinishing(null)} />}
 		</>
 	);
 }

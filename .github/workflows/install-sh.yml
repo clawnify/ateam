@@ -59,6 +59,14 @@ jobs:
           echo "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION" >>"$GITHUB_PATH"
       - run: bash -n packages/server/scripts/install.sh
       - run: shellcheck --version && shellcheck -S warning packages/server/scripts/install.sh
+      # An option it doesn't know stops it before it touches anything: a typo such as
+      # --tailscle must not install a box without what was asked for.
+      - name: An unknown option is refused
+        run: |
+          if out="$(bash packages/server/scripts/install.sh --tailscle 2>&1)"; then
+            echo "install.sh accepted an unknown option"; exit 1
+          fi
+          echo "$out" | grep -F "unknown option: --tailscle"
 
   e2e:
     name: e2e (${{ matrix.runner }})

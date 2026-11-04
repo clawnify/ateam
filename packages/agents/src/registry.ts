@@ -212,7 +212,13 @@ export const AGENTS = [
 		// sessions of the whole PROJECT newest-first, each with its `directory`
 		// — which is also why `--continue` alone reaches the wrong worktree.
 		sessionListArgs: ["session", "list", "--format", "json"],
-		install: "curl -fsSL https://opencode.ai/install | bash",
+		// The installer puts the binary in ~/.opencode/bin and adds that to ~/.bashrc
+		// only, below the line where Ubuntu's .bashrc stops for a shell that isn't
+		// interactive, so a login shell (how Ateam finds agents) never sees it. Link it
+		// into ~/.local/bin, which install.sh keeps on the login PATH (seen 2026-11-04 on
+		// a box Create a box made).
+		install:
+			"curl -fsSL https://opencode.ai/install | bash && mkdir -p ~/.local/bin && ln -sf ~/.opencode/bin/opencode ~/.local/bin/opencode",
 		loginCommand: "opencode auth login",
 		// `opencode run` takes the message as positional arguments.
 		headless: { args: ["run"], prompt: "argv" },

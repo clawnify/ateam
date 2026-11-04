@@ -44,6 +44,7 @@ export type { SshClient, SshExecOptions, SshExecResult, SshOptions } from "./tra
 export {
 	describeSshFailure,
 	firstContactFlags,
+	installerFailure,
 	sshClientTransport,
 	sshExec,
 } from "./transport/ssh";

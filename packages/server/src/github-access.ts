@@ -281,6 +281,10 @@ async function hasSystemCredentialHelper(deps: GithubAccessDeps): Promise<boolea
 	}
 }
 
+/** A box image's own stand-in identity: commits made under it are credited to no
+ *  one, so it counts as missing. Sprites ship `Sprite <noreply@sprites.dev>`. */
+const PLACEHOLDER_EMAILS = new Set(["noreply@sprites.dev"]);
+
 /**
  * Commits need a name and an email, and `gh auth login` sets neither. Fill in only
  * what is missing, from the account: its noreply address keeps the real one private.
@@ -296,12 +300,13 @@ async function ensureGitIdentity(user: GithubUser, deps: GithubAccessDeps): Prom
 		}
 	};
 	try {
-		if (!(await get("user.name"))) {
+		const placeholder = PLACEHOLDER_EMAILS.has((await get("user.email")).toLowerCase());
+		if (placeholder || !(await get("user.name"))) {
 			await deps.run("git", ["config", "--global", "user.name", user.name ?? user.login], {
 				env: deps.env,
 			});
 		}
-		if (!(await get("user.email"))) {
+		if (placeholder || !(await get("user.email"))) {
 			await deps.run(
 				"git",
 				["config", "--global", "user.email", `${user.id}+${user.login}@users.noreply.github.com`],
