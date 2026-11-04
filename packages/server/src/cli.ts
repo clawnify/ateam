@@ -40,6 +40,7 @@ import {
 } from "./rpc";
 import { readSettings } from "./settings-file";
 import { detectSleepDriver, type SleepControl, startSleepControl } from "./sleep";
+import { reachableWsAddr } from "./tailnet";
 import { socketServerTransport } from "./transport/socket";
 import { wsServerTransport } from "./transport/ws";
 import { resolveWsAddr, WS_ADDR_FILE } from "./ws-addr";
@@ -161,6 +162,11 @@ async function runDaemon(): Promise<void> {
 	extensions = [lead, linkMethods];
 	links.start();
 	wsAddr = resolveWsAddr(process.env, DATA_DIR) ?? null;
+	// A box listening on 127.0.0.1 behind Tailscale Serve (boxd) is reached at the
+	// tailnet address Serve forwards: hello reports that one, so boxes can link to it.
+	void reachableWsAddr(wsAddr).then((addr) => {
+		wsAddr = addr;
+	});
 
 	const dir = dirname(SOCK);
 	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });

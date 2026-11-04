@@ -31,6 +31,7 @@ import {
 import WebSocket from "ws";
 import type { PeerRelay } from "./engine";
 import type { PeerSearch, PeerView, SendResult } from "./peer-messages";
+import { needsTailscaleNc, tailscaleNc } from "./tailnet";
 
 export const LINKS_FILE = "links.json";
 
@@ -73,7 +74,24 @@ interface Live {
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-const defaultConnect: LinkConnector = (url) => wsClientTransport(url, WebSocket as never);
+/** A link's socket: dialled directly, or through `tailscale nc` from a box whose
+ *  Tailscale runs in userspace mode (boxd), which can't dial the tailnet itself. */
+export function tailnetConnector(log: (line: string) => void): LinkConnector {
+	return (url) => {
+		const { hostname, port } = new URL(url);
+		if (!needsTailscaleNc(hostname)) return wsClientTransport(url, WebSocket as never);
+		const at = Number(port) || 80;
+		const onStderr = (line: string) => log(`[ateam] tailscale nc ${hostname}:${at}: ${line}`);
+		class ThroughTailscale extends WebSocket {
+			constructor(address: string) {
+				super(address, {
+					createConnection: () => tailscaleNc(hostname, at, { onStderr }) as never,
+				});
+			}
+		}
+		return wsClientTransport(url, ThroughTailscale as never);
+	};
+}
 
 export class BoxLinks implements PeerRelay {
 	private readonly path: string;
@@ -98,8 +116,8 @@ export class BoxLinks implements PeerRelay {
 		callTimeoutMs?: number;
 	}) {
 		this.path = join(opts.dataDir, LINKS_FILE);
-		this.connect = opts.connect ?? defaultConnect;
 		this.log = opts.log ?? (() => {});
+		this.connect = opts.connect ?? tailnetConnector(this.log);
 		this.retryMs = opts.retryMs ?? LINK_RETRY_MS;
 		this.callTimeoutMs = opts.callTimeoutMs ?? LINK_CALL_TIMEOUT_MS;
 		const f = this.read();
