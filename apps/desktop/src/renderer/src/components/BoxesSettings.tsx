@@ -8,9 +8,11 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import type { HostStatus } from "../../../shared/host";
 import { type BoxRow, boxesNeedingYou, boxRows, engineLabel } from "../boxes-settings";
+import { addTailscaleBox, installBox } from "../lib/box-actions";
 import { useLeadHome } from "../useLeadHome";
 import { BoxAccess } from "./BoxAccess";
 import { CrossBox } from "./CrossBox";
+import { EnvironmentPicker } from "./EnvironmentPicker";
 import { GithubAccess } from "./GithubAccess";
 import { Button } from "./ui/button";
 import { usePrompt } from "./usePrompt";
@@ -155,19 +157,31 @@ export function BoxesSettings() {
 		protocol: PROTOCOL_VERSION,
 		release: appRelease,
 	});
-	if (rows.length === 0) {
-		return (
-			<div className="gh-access-muted">
-				No boxes yet. Add one from New task → Run on → Add a remote connection.
-			</div>
-		);
-	}
+	// The same ways to add a box as New task's Run on picker: create one on Hetzner, set
+	// one up over SSH, or connect one on the tailnet (with a code if it's locked).
+	const addBox = (
+		<div className="box-lead-row">
+			<span className="gh-access-muted">
+				{rows.length === 0 ? "No boxes yet." : "Machines that run your agents."}
+			</span>
+			<EnvironmentPicker
+				addOnly
+				environments={[]}
+				value={null}
+				onChange={() => {}}
+				onAdd={addTailscaleBox}
+				onInstall={installBox}
+			/>
+		</div>
+	);
+	if (rows.length === 0) return addBox;
 	const now = Date.now();
 	const needing = boxesNeedingYou(rows, github, now);
 
 	return (
 		<div className="boxes-settings">
 			{promptUi}
+			{addBox}
 			{rows.length > 1 ? <CrossBox confirm={confirm} /> : null}
 			{rows.map((row) => {
 				const note = notes[row.alias];
