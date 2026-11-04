@@ -16,6 +16,12 @@
 #                   daemon over the agents it supervises. On a Sprite (no systemd), a
 #                   Sprite service, which starts the engine when the Sprite boots.
 #                   A re-run on a box that already has either keeps it.
+#   --tailscale     also join your tailnet and open the phone's port on it (implies
+#                   --service). Installs Tailscale if it's missing and starts it,
+#                   then prints a link to approve the box with, unless TS_AUTHKEY is
+#                   set. Kernel mode where the box has /dev/net/tun; userspace mode,
+#                   with Tailscale Serve forwarding the port, where it hasn't. Needs
+#                   passwordless sudo. A re-run without it keeps the port.
 #
 # Env knobs:
 #   ATEAM_VERSION   release tag to install (default: the latest release)
@@ -28,6 +34,9 @@
 #   ATEAM_WS_ADDR_DEFAULT  an address used only when neither ATEAM_WS_ADDR nor the
 #                   box already has one. The desktop passes the box's tailnet IP this
 #                   way, so an upgrade never replaces an address that works.
+#   TS_AUTHKEY      a Tailscale auth key for --tailscale, to join without a browser.
+#                   A tagged key keeps the box on the tailnet: tagged devices don't
+#                   expire, while one approved from a link drops off after 180 days.
 #
 # Node: the dist externalizes two native modules — better-sqlite3 and the
 # prebuilt node-pty fork — so the box needs a Node whose ABI both ship binaries
@@ -39,7 +48,21 @@ REPO="clawnify/ateam"
 APP_DIR="$HOME/ateam-app"
 BIN_DIR="$HOME/.local/bin"
 WANT_SERVICE=0
-if [ "${1:-}" = "--service" ]; then WANT_SERVICE=1; fi
+WANT_TAILSCALE=0
+for arg in "$@"; do
+	case "$arg" in
+	--service) WANT_SERVICE=1 ;;
+	# The phone needs an engine that's already running, which only a service gives it.
+	--tailscale) WANT_TAILSCALE=1 WANT_SERVICE=1 ;;
+	*)
+		printf '\n!! unknown option: %s (the options are --service and --tailscale)\n' "$arg" >&2
+		exit 1
+		;;
+	esac
+done
+# The port the phone's WebSocket uses when --tailscale picks the address, the same
+# default the desktop offers (WS_DEFAULT_PORT).
+WS_PORT=8787
 # The engine's data dir, resolved as cli.ts does; the phone's address is kept in it.
 DATA_DIR="${ATEAM_DATA_DIR:-$HOME/.ateam}"
 WS_ADDR_FILE="$DATA_DIR/ws-addr"
@@ -218,6 +241,96 @@ if ! bash -lc 'command -v ateam' >/dev/null 2>&1; then
 fi
 info "login shell resolves: $(bash -lc 'command -v ateam')"
 
+# ------------------------------------------------------------ tailscale -----
+
+# Opt-in (`--tailscale`). The phone reaches a box over a WebSocket on your tailnet,
+# so this joins one and picks the engine's phone port. Kernel mode where the box
+# has a TUN device: the port binds the box's own tailnet address. Userspace mode
+# where it has none: no interface carries that address, so the engine listens on
+# 127.0.0.1 and Tailscale Serve forwards the tailnet port to it, which the engine
+# then reports as its address (reachableWsAddr in tailnet.ts).
+TS_WS_DEFAULT=""
+TS_IP=""
+# tailscaled's state (Running, NeedsLogin, Stopped, …), or nothing while no daemon answers.
+ts_state() {
+	tailscale status --json 2>/dev/null | sed -n 's/^ *"BackendState": *"\([A-Za-z]*\)".*/\1/p' | head -1 || true
+}
+if [ "$WANT_TAILSCALE" = 1 ]; then
+	step "join your tailnet (--tailscale)"
+	sudo -n true 2>/dev/null || die "--tailscale needs passwordless sudo, to install and run Tailscale"
+	if ! command -v tailscale >/dev/null; then
+		info "installing Tailscale"
+		curl -fsSL https://tailscale.com/install.sh | sh >"$TMP/tailscale-install.log" 2>&1 ||
+			die "Tailscale's installer failed: $(tail -3 "$TMP/tailscale-install.log")"
+	fi
+	TSD_FLAGS=""
+	if [ ! -c /dev/net/tun ]; then TSD_FLAGS="--tun=userspace-networking"; fi
+	if [ -z "$(ts_state)" ]; then
+		case "$SVC_MGR" in
+		systemd)
+			# The package's unit reads its flags from here.
+			if [ -n "$TSD_FLAGS" ]; then
+				if grep -q '^FLAGS=' /etc/default/tailscaled 2>/dev/null; then
+					sudo sed -i "s|^FLAGS=.*|FLAGS=\"$TSD_FLAGS\"|" /etc/default/tailscaled
+				else
+					echo "FLAGS=\"$TSD_FLAGS\"" | sudo tee -a /etc/default/tailscaled >/dev/null
+				fi
+			fi
+			sudo systemctl enable tailscaled >/dev/null 2>&1 || true
+			sudo systemctl restart tailscaled || die "tailscaled didn't start: sudo systemctl status tailscaled"
+			;;
+		sprite)
+			# No systemd on a Sprite: a Sprite service runs it, and starts it on boot.
+			# It may exist already with its daemon still starting; the wait below covers that.
+			"$SPRITE_ENV" services create tailscaled --cmd sudo --no-stream \
+				--args "/usr/sbin/tailscaled,--state=/var/lib/tailscale/tailscaled.state,--socket=/run/tailscale/tailscaled.sock${TSD_FLAGS:+,$TSD_FLAGS}" \
+				>/dev/null 2>&1 || true
+			;;
+		*) die "no systemd (and not a Sprite) on this box: start tailscaled from your own init, then re-run" ;;
+		esac
+		for _ in $(seq 1 30); do
+			if [ -n "$(ts_state)" ]; then break; fi
+			sleep 1
+		done
+		[ -n "$(ts_state)" ] || die "tailscaled didn't come up"
+	fi
+	# A daemon that just started reports NoState or Starting for a moment, even on a
+	# box that is already on a tailnet: wait for it to settle before deciding.
+	for _ in $(seq 1 15); do
+		case "$(ts_state)" in NoState | Starting) sleep 1 ;; *) break ;; esac
+	done
+	TS_STATE="$(ts_state)"
+	if [ "$TS_STATE" = Running ]; then
+		# Already on a tailnet. Let this user run tailscale without sudo, as the engine
+		# does to read Serve's forwards.
+		sudo tailscale set --operator="$(id -un)" >/dev/null 2>&1 || true
+	else
+		UP_ARGS=(--operator="$(id -un)" --timeout=15m)
+		if [ -n "${TS_AUTHKEY:-}" ]; then
+			# From a file, so the key never shows in the process list.
+			(
+				umask 077
+				printf '%s' "$TS_AUTHKEY" >"$TMP/ts-authkey"
+			)
+			UP_ARGS+=(--auth-key="file:$TMP/ts-authkey")
+		elif [ "$TS_STATE" = NeedsLogin ]; then
+			info "approve this box on your tailnet: open the link Tailscale prints below"
+		fi
+		sudo tailscale up "${UP_ARGS[@]}" ||
+			die "this box didn't join your tailnet: open the link above to approve it, then re-run with --tailscale"
+	fi
+	TS_IP="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+	[ -n "$TS_IP" ] || die "the box joined your tailnet but has no IPv4 address there"
+	# Whether an interface carries the address. hostname -I where there's no iproute2.
+	if { ip -4 -o addr show 2>/dev/null || hostname -I 2>/dev/null; } | grep -wF "$TS_IP" >/dev/null; then
+		TS_WS_DEFAULT="$TS_IP:$WS_PORT"
+		info "on your tailnet as $TS_IP"
+	else
+		TS_WS_DEFAULT="127.0.0.1:$WS_PORT"
+		info "on your tailnet as $TS_IP (userspace mode: Tailscale Serve forwards the phone's port)"
+	fi
+fi
+
 # ------------------------------------------------------- phone address ------
 
 # Upgrading IS re-running this script, and a phone user who doesn't re-export
@@ -253,6 +366,10 @@ if [ -z "$WS_ADDR" ] && [ -f "$WS_ADDR_FILE" ]; then
 	WS_ADDR="$(head -1 "$WS_ADDR_FILE" | tr -d '[:space:]')"
 	if [ -n "$WS_ADDR" ]; then WS_FROM="$WS_ADDR_FILE"; fi
 fi
+if [ -z "$WS_ADDR" ] && [ -n "$TS_WS_DEFAULT" ]; then
+	WS_ADDR="$TS_WS_DEFAULT"
+	WS_FROM="--tailscale"
+fi
 if [ -z "$WS_ADDR" ] && [ -n "${ATEAM_WS_ADDR_DEFAULT:-}" ]; then
 	WS_ADDR="$ATEAM_WS_ADDR_DEFAULT"
 	WS_FROM="ATEAM_WS_ADDR_DEFAULT"
@@ -262,6 +379,17 @@ if [ -n "$WS_ADDR" ]; then
 	printf '%s\n' "$WS_ADDR" >"$WS_ADDR_FILE"
 	info "phone listener: $WS_ADDR (from $WS_FROM), kept in $WS_ADDR_FILE"
 fi
+# An engine on loopback is reached from the tailnet only through Serve. Serve keeps
+# the forward in tailscaled's state, so a later re-run without --tailscale keeps it.
+case "$WS_ADDR" in
+127.0.0.1:* | localhost:*)
+	if [ "$WANT_TAILSCALE" = 1 ]; then
+		sudo tailscale serve --bg --tcp "${WS_ADDR##*:}" "tcp://localhost:${WS_ADDR##*:}" >/dev/null ||
+			die "Tailscale Serve didn't take the phone's port: sudo tailscale serve status"
+		info "Tailscale Serve forwards $TS_IP:${WS_ADDR##*:} to the engine"
+	fi
+	;;
+esac
 
 # ------------------------------------------------------ Sprite service ------
 
@@ -674,8 +802,18 @@ fi
 if command -v tailscale >/dev/null && tailscale status >/dev/null 2>&1; then
 	mark ok "tailscale up ($(tailscale ip -4 2>/dev/null | head -1))"
 else
-	mark no 'tailscale — how the desktop/phone reach this box privately'
+	mark no 'tailscale: how Ateam Go reaches this box. Re-run this installer with --tailscale'
 fi
+
+# Where other devices reach the phone's port: the address itself, or, for an engine
+# on loopback behind Tailscale Serve, the box's tailnet address, which Serve forwards.
+PHONE_AT="$WS_ADDR"
+case "$WS_ADDR" in
+127.0.0.1:* | localhost:*)
+	TS_NOW="${TS_IP:-$(tailscale ip -4 2>/dev/null | head -1 || true)}"
+	if [ -n "$TS_NOW" ]; then PHONE_AT="$TS_NOW:${WS_ADDR##*:}"; fi
+	;;
+esac
 
 # The phone's WebSocket serves any device that can reach it until the box is locked
 # to the devices paired with it (pairing.ts), so say which it is and where the lock is.
@@ -683,7 +821,7 @@ if [ -n "$WS_ADDR" ]; then
 	if grep -qs '"locked": true' "$DATA_DIR/pairings.json"; then
 		mark ok 'locked to paired devices (pair another from Ateam, or with: ateam pair)'
 	else
-		mark no "open to any device that can reach $WS_ADDR: lock it from Ateam"
+		mark no "open to any device that can reach $PHONE_AT: lock it from Ateam"
 		info '     (Settings → Boxes → Access on a Mac, or Lock it on its card in Ateam Go)'
 	fi
 fi
@@ -695,3 +833,6 @@ connection switcher. Clients connect with:
 
     bash -lc 'exec ateam attach --stdio'
 EOF
+if [ -n "$TS_IP" ] && [ -n "$WS_ADDR" ]; then
+	printf '\nAteam Go reaches it at %s on your tailnet.\n' "$PHONE_AT"
+fi
