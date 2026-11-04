@@ -112,6 +112,7 @@ import {
 	writeSshConfigEntry,
 } from "./box-setup";
 import { boxForwardFlags, browserLocalPort, editorLocalPort } from "./box-tunnel";
+import { pairLinkOf } from "./cross-box-plan";
 import { offlineBackend } from "./offline";
 
 // The one pre-quoted remote command (ssh space-joins remote args, so `bash -lc`
@@ -1064,11 +1065,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 
 	async function pairingInvite(alias: string): Promise<PairingInviteDTO & { link: string | null }> {
 		const invite = (await pairingWire(alias).call(CH.pairingInvite)) as PairingInviteDTO;
-		// A box reached by address: the phone reaches it at that same address.
-		const at = /^(.+):(\d+)$/.exec(alias);
-		const link = at
-			? `ateamgo://pair?host=${encodeURIComponent(at[1] ?? "")}&port=${at[2]}&code=${invite.code}`
-			: null;
+		// The phone reaches the box where other boxes do: the address it's held by, else
+		// the one its hello reports (a box reached over SSH by name).
+		const link = pairLinkOf({ alias, wsAddr: links.get(alias)?.wsAddr ?? null }, invite.code);
 		return { ...invite, link };
 	}
 

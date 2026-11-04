@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { BoxLinkDTO } from "@ateam/protocol";
-import { linkUrlOf, planLinks } from "./cross-box-plan";
+import { linkUrlOf, pairLinkOf, planLinks } from "./cross-box-plan";
 
 const v30 = (alias: string, wsAddr: string | null = null) => ({ alias, version: 30, wsAddr });
 const link = (name: string, url: string): BoxLinkDTO => ({
@@ -24,6 +24,25 @@ describe("where other boxes reach a box", () => {
 		expect(linkUrlOf(v30("sprite", "127.0.0.1:8787"))).toMatchObject({
 			problem: expect.stringContaining("127.0.0.1"),
 		});
+	});
+});
+
+describe("the QR for pairing a phone", () => {
+	it("names the box where the phone reaches it, even one the Mac reaches over SSH", () => {
+		expect(pairLinkOf(v30("100.94.46.10:8787"), "FC8HQGMZ")).toBe(
+			"ateamgo://pair?host=100.94.46.10&port=8787&code=FC8HQGMZ",
+		);
+		expect(pairLinkOf(v30("ateam-probe.boxd", "100.81.40.73:8787"), "FC8HQGMZ")).toBe(
+			"ateamgo://pair?host=100.81.40.73&port=8787&code=FC8HQGMZ",
+		);
+		expect(pairLinkOf(v30("v6", "fd7a:115c::5:8787"), "FC8HQGMZ")).toBe(
+			"ateamgo://pair?host=%5Bfd7a%3A115c%3A%3A5%5D&port=8787&code=FC8HQGMZ",
+		);
+	});
+
+	it("has none for a box no other device can reach", () => {
+		expect(pairLinkOf(v30("hetzner"), "FC8HQGMZ")).toBeNull();
+		expect(pairLinkOf(v30("ateam-probe.boxd", "127.0.0.1:8787"), "FC8HQGMZ")).toBeNull();
 	});
 });
 

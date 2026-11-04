@@ -432,10 +432,12 @@ function BoxCard({
 					</Pressable>
 				</Animated.View>
 			</View>
-			{tray ? (
-				<StepTray steps={steps} failure={failure} onCancel={reaching ? onCancel : null} />
-			) : failure === NEEDS_PAIRING ? (
+			{failure === NEEDS_PAIRING ? (
+				// Before the steps: a tap that ends in this keeps them, and the code field
+				// is what the card is for now.
 				<PairTray onPair={onPair} />
+			) : tray ? (
+				<StepTray steps={steps} failure={failure} onCancel={reaching ? onCancel : null} />
 			) : onLock ? (
 				<LockTray onLock={onLock} />
 			) : null}
@@ -463,8 +465,8 @@ function PairTray({ onPair }: { onPair: (code: string) => Promise<void> }) {
 	return (
 		<View style={styles.tray}>
 			<Text style={styles.trayText}>
-				Locked to its paired devices. Enter a code from Pair a phone on your Mac, or from `ateam
-				pair` in the box's terminal.
+				Locked to its paired devices. Type the code from Pair a phone on your Mac (Settings, Boxes),
+				or scan its QR with the iPhone's Camera. `ateam pair` on the box prints a code too.
 			</Text>
 			<View style={styles.pairRow}>
 				<TextInput

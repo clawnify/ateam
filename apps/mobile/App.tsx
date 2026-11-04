@@ -74,7 +74,7 @@ import {
 import { Composer, type ComposerSubmit, type RunOn } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
 import { connect, mobileNative, redeemPairing } from "./src/connection";
-import { parsePairLink } from "./src/pair-link";
+import { pairTarget, parsePairLink } from "./src/pair-link";
 import { demoConnection } from "./src/demo";
 import { type Board, createFleet, type Fleet, pickProject } from "./src/fleet";
 import { GithubAccessScreen } from "./src/GithubAccessScreen";
@@ -1763,7 +1763,7 @@ export default function App() {
 			const { box, code } = link;
 			Alert.alert(
 				"Pair with this box?",
-				`Ateam Go pairs with the box at ${box.host}:${box.port} and adds it to your boxes. Only go on if you just showed this code on your Mac.`,
+				`Ateam Go pairs with the box at ${box.host}:${box.port}, adding it to your boxes if it isn't there yet. Only go on if you just showed this code on your Mac.`,
 				[
 					{ text: "Cancel", style: "cancel" },
 					{
@@ -1773,7 +1773,8 @@ export default function App() {
 								await booted.current;
 								endDemo();
 								try {
-									await pairBox(box, code, true);
+									// A box already on the list keeps what it was saved with.
+									await pairBox(pairTarget(boxesRef.current, link), code, true);
 									setView("board");
 								} catch (e) {
 									setError(e instanceof Error ? e.message : String(e));
