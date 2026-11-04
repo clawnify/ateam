@@ -188,5 +188,10 @@ export function describeSshFailure(output: string): string | null {
  */
 export function installerFailure(output: string): string | null {
 	const lines = output.split(/\r?\n/).filter((l) => l.startsWith("!! "));
-	return lines.length > 0 ? (lines[lines.length - 1] ?? "").slice(3).trim() || null : null;
+	if (lines.length > 0) return (lines[lines.length - 1] ?? "").slice(3).trim() || null;
+	// The installer never ran: the box couldn't download it.
+	const curl = output.match(/^curl: \(\d+\) (.+)$/m)?.[1]?.trim();
+	return curl
+		? `The box couldn't download Ateam's installer (${curl}). Check that it can reach github.com, then try again.`
+		: null;
 }

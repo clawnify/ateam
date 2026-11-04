@@ -111,6 +111,14 @@ describe("the installer's reason for stopping, in its words", () => {
 		);
 	});
 
+	test("a box that couldn't download the installer, before it ran at all", () => {
+		// A boxd machine whose DNS and outbound connections came and went (2026-11-04).
+		const out =
+			"curl: (7) Failed to connect to raw.githubusercontent.com port 443 after 4 ms: Couldn't connect to server\n";
+		expect(installerFailure(out)).toContain("couldn't download Ateam's installer");
+		expect(installerFailure(out)).toContain("Failed to connect to raw.githubusercontent.com");
+	});
+
 	test("nothing when it didn't die that way", () => {
 		expect(installerFailure("Permission denied (publickey).\n")).toBeNull();
 		expect(installerFailure("    [--] tailscale: !! not a die line\n")).toBeNull();

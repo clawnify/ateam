@@ -6,12 +6,14 @@ import {
 	PROTOCOL_VERSION,
 	relativeAge,
 } from "@ateam/protocol";
-import { ChevronLeft, XIcon } from "lucide-react";
+import { XIcon } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BoxReadiness, HostStatus } from "../../../shared/host";
 import { type BoxRow, boxRows, engineLabel } from "../boxes-settings";
+import { stripAnsi } from "../lib/ansi";
 import { setUpPhoneAccess } from "../lib/box-actions";
+import { type BoxSetup, dismissSetup, useSetup } from "../lib/setups";
 import { useLeadHome } from "../useLeadHome";
 import { BoxAccess } from "./BoxAccess";
 import { GithubAccess } from "./GithubAccess";
@@ -316,6 +318,74 @@ function BoxFinish({ row, access }: { row: BoxRow; access: GithubAccessDTO | und
 	);
 }
 
+/** A set-up over SSH, as it goes: its log while it runs, why it stopped if it failed. */
+function SetupProgress({ setup, onDismiss }: { setup: BoxSetup; onDismiss: () => void }) {
+	const logRef = useRef<HTMLPreElement>(null);
+	// Keep the newest line in view as the log grows.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the log is why it scrolls
+	useEffect(() => {
+		if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+	}, [setup.log]);
+	return (
+		<div className="box-card-section">
+			<div className="box-card-label">
+				{setup.state === "failed" ? "Couldn't set it up" : "Setting it up over SSH"}
+			</div>
+			{setup.state === "failed" ? (
+				<div className="box-lead-row">
+					<span className="gh-access-problem">{setup.error}</span>
+					<span className="box-card-actions">
+						<Button size="xs" variant="ghost" onClick={onDismiss}>
+							Dismiss
+						</Button>
+						<Button size="xs" variant="outline" onClick={setup.retry}>
+							Try again
+						</Button>
+					</span>
+				</div>
+			) : (
+				<span className="gh-access-muted">
+					Installing Ateam's engine on it. This keeps going if you leave this page.
+				</span>
+			)}
+			{setup.log ? (
+				<pre ref={logRef} className="cb-log">
+					{stripAnsi(setup.log)}
+				</pre>
+			) : null}
+		</div>
+	);
+}
+
+/** The page of a box still being set up, before it's one of the boxes. */
+export function BoxSetupPage({ setup, onBack }: { setup: BoxSetup; onBack?: () => void }) {
+	return (
+		<section className="box-page" aria-label={setup.dest}>
+			<div className="box-card-head">
+				<div className="box-card-text">
+					<div className="box-card-title">{setup.dest}</div>
+					<div className="box-card-status">
+						{setup.state === "failed"
+							? "Not set up"
+							: setup.state === "done"
+								? "Set up, connecting…"
+								: "Setting up…"}
+					</div>
+				</div>
+			</div>
+			{setup.state === "done" ? null : (
+				<SetupProgress
+					setup={setup}
+					onDismiss={() => {
+						dismissSetup(setup.dest);
+						onBack?.();
+					}}
+				/>
+			)}
+		</section>
+	);
+}
+
 /** A box's page: the header (status, engine, actions), what's left, and its sections. */
 export function BoxPage({
 	row,
@@ -332,23 +402,18 @@ export function BoxPage({
 	canUpdateSsh: boolean;
 	actions: BoxActions;
 	confirm: Confirm;
-	/** Back to the list; none when the page is all there is (the dialog). */
+	/** Back to the list, once the box is forgotten; none in the dialog. */
 	onBack?: () => void;
 }) {
 	const note = actions.notes[row.alias];
 	const busy = actions.busy[row.alias];
+	const setup = useSetup(row.alias);
 	const canUpdate =
 		row.state === "connected" &&
 		row.engine === "behind" &&
 		(row.transport === "ws" || canUpdateSsh);
 	return (
 		<section className="box-page" aria-label={row.title}>
-			{onBack ? (
-				<button type="button" className="box-page-back" onClick={onBack}>
-					<ChevronLeft size={14} strokeWidth={1.75} />
-					Boxes
-				</button>
-			) : null}
 			<div className="box-card-head">
 				<div className="box-card-text">
 					<div className="box-card-title">
@@ -398,7 +463,11 @@ export function BoxPage({
 			{note ? (
 				<div className={note.error ? "gh-access-problem" : "gh-access-muted"}>{note.text}</div>
 			) : null}
-			{row.state === "connected" ? <BoxFinish row={row} access={access} /> : null}
+			{setup && setup.state !== "done" ? (
+				<SetupProgress setup={setup} onDismiss={() => dismissSetup(row.alias)} />
+			) : row.state === "connected" ? (
+				<BoxFinish row={row} access={access} />
+			) : null}
 			<div className="box-card-section">
 				<div className="box-card-label">Lead</div>
 				{actions.leadBox === row.alias ? (
@@ -510,8 +579,10 @@ export function BoxPageDialog({ alias, onClose }: { alias: string; onClose: () =
 	const { ui: promptUi, confirm } = usePrompt();
 	const actions = useBoxActions(load, confirm);
 	const row = rows?.find((r) => r.alias === alias);
-	// Forgotten from here: the box is gone from the list, and so is its page.
-	const gone = rows !== null && !row;
+	const setup = useSetup(alias);
+	// Forgotten from here: the box is gone from the list, and so is its page. A box
+	// still being set up isn't in the list yet.
+	const gone = rows !== null && !row && !setup;
 	useEffect(() => {
 		if (gone) onClose();
 	}, [gone, onClose]);
@@ -535,6 +606,8 @@ export function BoxPageDialog({ alias, onClose }: { alias: string; onClose: () =
 							actions={actions}
 							confirm={confirm}
 						/>
+					) : setup ? (
+						<BoxSetupPage setup={setup} />
 					) : (
 						<div className="gh-access-muted">Loading {alias}…</div>
 					)}

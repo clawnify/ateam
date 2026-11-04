@@ -717,9 +717,7 @@ export function SettingsPanel({
 						if (section.id === "boxes") {
 							return (
 								<section key={section.id} className="settings-section">
-									<h3>{section.label}</h3>
-									<p className="settings-section-intro">{rows[0]?.description}</p>
-									<BoxesSettings />
+									<BoxesSettings title={section.label} intro={rows[0]?.description} />
 								</section>
 							);
 						}

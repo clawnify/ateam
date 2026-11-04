@@ -3474,22 +3474,6 @@ input {
 	gap: 10px;
 	min-width: 0;
 }
-.box-page-back {
-	display: inline-flex;
-	align-items: center;
-	gap: 2px;
-	align-self: flex-start;
-	padding: 2px 4px 2px 0;
-	border: none;
-	background: none;
-	color: var(--text-dim);
-	font: inherit;
-	font-size: 12px;
-	cursor: pointer;
-}
-.box-page-back:hover {
-	color: var(--text);
-}
 .box-page-dialog {
 	max-height: calc(100vh - 80px);
 	overflow-y: auto;
@@ -3697,6 +3681,39 @@ input {
 	font-size: 13px;
 	font-weight: 500;
 	color: var(--text-dim);
+}
+/* A section's own page (a box's, under Boxes): crumbs back in its heading's place. */
+.settings-crumbs {
+	margin: 0 0 12px;
+}
+.settings-crumbs ol {
+	/* No reset covers lists here: without these the crumbs are numbered and indented. */
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	gap: 6px;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--text-dim);
+}
+.settings-crumbs [data-slot="breadcrumb-separator"] {
+	display: inline-flex;
+}
+.settings-crumbs [aria-current="page"] {
+	color: var(--text);
+	font-weight: 500;
+}
+/* The crumb back is a button (app state, not a URL), not one of the app's bordered ones. */
+.settings-crumb-link,
+.settings-crumb-link:hover {
+	padding: 0;
+	border: none;
+	background: none;
+	font: inherit;
+	color: var(--text-dim);
+}
+.settings-crumb-link:hover {
+	color: var(--text);
 }
 .settings-group {
 	border: 1px solid var(--border);

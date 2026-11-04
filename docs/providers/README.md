@@ -9,10 +9,11 @@ That makes the recipe the same everywhere:
 
 1. Create a box with the provider's own tooling, so that `ssh <alias>` reaches it.
 2. Pick the alias in Ateam: New task → **Run on** lists it as not set up yet, or
-   **Settings → Boxes → Add a box → Set up a box over SSH**. Ateam runs
-   [`install.sh`](../../packages/server/scripts/install.sh) on it over that alias,
-   connects, and opens the box's page, whose **Finish setting it up** list says
-   what's left (Ateam 0.1.88 or later).
+   **Settings → Boxes → Add a box → Set up a box over SSH**. Ateam opens the box's
+   page and runs [`install.sh`](../../packages/server/scripts/install.sh) on it over
+   that alias, showing its progress there (leaving the page doesn't stop it), then
+   connects. The page's **Finish setting it up** list says what's left (Ateam 0.1.88
+   or later).
 3. Connect GitHub on that page (the git identity follows from the account), and log
    into an agent CLI once: `ssh -t <alias> claude`.
 4. For Ateam Go, **Set up phone access** under the page's Access, or run the
