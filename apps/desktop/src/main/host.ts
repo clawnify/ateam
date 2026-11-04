@@ -1297,7 +1297,18 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			if (!canUpdateBoxes()) {
 				throw new Error("Only a released build of Ateam updates boxes over SSH.");
 			}
-			await install(alias);
+			// install() hands back a box it already holds without running anything, and
+			// Update is only offered on a held box, so it was a no-op. Let the box go
+			// first: the installer runs, restarting the engine under it anyway, and
+			// install() connects it again on the new release. A failed install holds it
+			// again as it was.
+			release(alias);
+			try {
+				await install(alias);
+			} catch (err) {
+				void reconnect(alias);
+				throw err;
+			}
 			return { via: "ssh" };
 		}
 		const started = (await heldBox(alias).handle(CH.systemUpdate, [])) as BoxUpdateStarted;
