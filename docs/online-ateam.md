@@ -147,11 +147,13 @@ then checks that the process answering afterwards is a different one, so an upgr
 can no longer report success while the previous version keeps serving. Live agents
 are untouched: they belong to a separate PTY daemon the installer never signals.
 
-Three knobs, all optional:
+Knobs, all optional:
 
 | Knob | Effect |
 | --- | --- |
 | `--service` | also install a systemd unit so the daemon survives logout, reboot and an OOM kill (`… \| bash -s -- --service`). Required for the iOS app — see step 5. |
+| `--tailscale` | also join your tailnet, installing Tailscale if it's missing, and open the iOS app's port on it (`… \| bash -s -- --tailscale`). Prints a link to approve the box, unless `TS_AUTHKEY` is set; kernel mode where the box has `/dev/net/tun`, userspace mode behind Tailscale Serve where it hasn't. Implies `--service` and needs passwordless sudo. |
+| `TS_AUTHKEY=tskey-auth-…` | with `--tailscale`, join with this auth key instead of the link. A key made with a tag keeps the box on the tailnet for good; a box approved from the link drops off after 180 days unless its key expiry is turned off. |
 | `ATEAM_VERSION=v0.1.30` | install a specific release instead of the latest |
 | `ATEAM_TARBALL=<url\|path>` | install from your own `ateam-server.tar.gz` (dev builds, air-gapped boxes) |
 
@@ -172,8 +174,10 @@ SSH_FLAGS="-i ~/.ssh/mykey" packages/server/scripts/install-remote.sh you@your-b
 > the server with `--service` and, when the box has no `ATEAM_WS_ADDR` yet and its
 > tailnet IP (step 2) is on one of its interfaces, sets `ATEAM_WS_ADDR` to that IP so
 > the iOS app works too, streams the installer's log, and connects when it finishes.
-> You still handle Tailscale (step 2) and the readiness items (git identity, `gh`, an
-> agent CLI) yourself.
+> Then the box's page in **Settings → Boxes** (Ateam 0.1.88 or later) lists what's left:
+> **Set up phone access** there does step 2 for you (the installer's `--tailscale`),
+> GitHub connects there with the git identity following, and you sign in to an agent
+> CLI once.
 
 ## 2. Put the box on your tailnet
 

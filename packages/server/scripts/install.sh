@@ -379,8 +379,8 @@ if [ -z "$WS_ADDR" ] && [ -n "${ATEAM_WS_ADDR_DEFAULT:-}" ]; then
 	WS_FROM="ATEAM_WS_ADDR_DEFAULT"
 fi
 # --tailscale asks for the box's tailnet address, so an old one goes: a box that joined
-# again as a new node has a new IP (seen: 100.101.212.107, then 100.105.220.22), and an
-# engine bound to the old one serves no one. An address set with ATEAM_WS_ADDR, or one
+# again as a new node has a new IP (seen on a test box that logged out and back in), and
+# an engine bound to the old one serves no one. An address set with ATEAM_WS_ADDR, or one
 # off the tailnet (100.64.0.0/10), stays as it is.
 if [ "$WANT_TAILSCALE" = 1 ] && [ -n "$TS_WS_DEFAULT" ] && [ -n "$WS_ADDR" ] &&
 	[ "$WS_FROM" != ATEAM_WS_ADDR ]; then
