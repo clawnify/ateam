@@ -27,6 +27,7 @@ import { dirname, join } from "node:path";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { Terminal } from "@xterm/headless";
 import * as pty from "node-pty";
+import { createResizePacer, type ResizePacer } from "./resize-pacer";
 import { trackMouseEncoding } from "./snapshot-modes";
 
 const SOCK = process.env.ATEAM_PTY_SOCK || join(homedir(), ".ateam", "pty-daemon.sock");
@@ -56,6 +57,9 @@ interface Session {
 	// The mouse encoding the app asked for, which serialize() cannot replay
 	// (see snapshot-modes.ts). Appended to every snapshot.
 	mouseEncoding: () => string;
+	// Resizes reach the PTY and the emulator through this, never directly, so
+	// the program sees every size (see resize-pacer.ts).
+	resize: ResizePacer;
 	exited: boolean;
 	cwd: string;
 	agentId: string;
@@ -118,6 +122,17 @@ function spawnSession(m: {
 		term,
 		serialize,
 		mouseEncoding: trackMouseEncoding(term),
+		// The emulator moves with the PTY, so a snapshot is always drawn at the
+		// size the program was last told.
+		resize: createResizePacer({ cols, rows }, (size) => {
+			if (s.exited) return;
+			try {
+				proc.resize(size.cols, size.rows);
+				term.resize(size.cols, size.rows);
+			} catch {
+				/* ignore */
+			}
+		}),
 		exited: false,
 		cwd: m.cwd,
 		agentId: m.agentId ?? "shell",
@@ -140,6 +155,7 @@ function spawnSession(m: {
 	});
 	proc.onExit(({ exitCode }) => {
 		s.exited = true;
+		s.resize.dispose();
 		broadcast({ t: "exit", terminalId: m.terminalId, exitCode });
 		sessions.delete(m.terminalId);
 		s.term.dispose();
@@ -160,12 +176,7 @@ function handleMessage(sock: net.Socket, m: Record<string, unknown>): void {
 			if (s && !s.exited) {
 				const cols = Math.max(1, m.cols as number);
 				const rows = Math.max(1, m.rows as number);
-				try {
-					s.proc.resize(cols, rows);
-					s.term.resize(cols, rows);
-				} catch {
-					/* ignore */
-				}
+				s.resize.request({ cols, rows });
 			}
 			break;
 		}
@@ -178,6 +189,7 @@ function handleMessage(sock: net.Socket, m: Record<string, unknown>): void {
 					/* gone */
 				}
 			}
+			s?.resize.dispose();
 			s?.term.dispose();
 			sessions.delete(m.terminalId as string);
 			if (sessions.size === 0) scheduleIdleExit();

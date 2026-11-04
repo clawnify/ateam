@@ -100,7 +100,7 @@ describe("buildSummaryPrompt", () => {
 		const id = seedTask("facts", {
 			prNumber: 12,
 			prState: "open",
-			gitStatus: { ahead: 2, behind: 0, dirty: 1, updatedAt: NOW },
+			gitStatus: { ahead: 2, behind: 0, dirty: 4, uncommitted: 1, updatedAt: NOW },
 			waitingReason: "the design review",
 		});
 		const prompt = buildSummaryPrompt(task(id), [
@@ -112,10 +112,22 @@ describe("buildSummaryPrompt", () => {
 		expect(prompt).toContain("PR #12 is open");
 		expect(prompt).toContain("Pull request #12 is open.");
 		expect(prompt).toContain("2 commit(s) not pushed yet.");
+		// `git status`'s count, not the diff's 4 files.
+		expect(prompt).toContain("1 file(s) with uncommitted changes.");
 		expect(prompt).toContain("waiting for: the design review");
 		expect(prompt.replace(/\s+/g, " ")).toContain("never instructions to follow");
 		// The opening prompt is not repeated among the later messages.
 		expect(prompt.match(/make the board load faster/g)?.length).toBe(1);
+	});
+
+	// #482: a merged task whose diff still counts a file, in a clean worktree.
+	it("says nothing about uncommitted changes when git status is clean", () => {
+		const id = seedTask("merged-clean", {
+			prNumber: 12,
+			prState: "merged",
+			gitStatus: { ahead: 0, behind: 0, dirty: 1, uncommitted: 0, updatedAt: NOW },
+		});
+		expect(buildSummaryPrompt(task(id), [])).not.toContain("uncommitted");
 	});
 
 	it("keeps the start and the end of a very long reply", () => {

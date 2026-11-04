@@ -449,7 +449,14 @@ export interface RegisterProjectOptions {
 export interface GitStatusSnapshot {
 	ahead: number;
 	behind: number;
+	/** Files in the task's diff against its base that haven't landed there:
+	 *  committed work included, so NOT an uncommitted count. */
 	dirty: number;
+	/** What `git status` lists: work that only exists in the worktree. Untracked
+	 *  leftovers (agent-tool folders, screenshots, scratch) don't count. Absent
+	 *  from a snapshot written before it existed, which reads as "not known"
+	 *  (never as clean or dirty). A read-only addition, so no protocol bump. */
+	uncommitted?: number;
 	/** Lines added and removed across the `dirty` files: the size of the work,
 	 *  the task's `+N -M`. Absent from a snapshot written before these fields
 	 *  existed (stored rows, older engines), which reads as "not known yet": a
