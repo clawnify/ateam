@@ -271,6 +271,14 @@ describe("boxdSleepDriver", () => {
 		});
 		expect(driver).toBeNull();
 	});
+
+	it("says it is the boxd machine it runs on, for clients to wake it through", async () => {
+		const driver = await boxdSleepDriver({
+			log: () => {},
+			exec: async (cmd, args) => (cmd === "boxd" && args[0] === "info" ? '{"name":"mybox"}' : ""),
+		});
+		expect(driver?.provider).toEqual({ id: "boxd", box: { machine: "mybox" } });
+	});
 });
 
 describe("spritesSleepDriver", () => {
@@ -309,6 +317,11 @@ describe("spritesSleepDriver", () => {
 
 	it("answers nothing off a Sprite, so another provider's driver can", async () => {
 		expect(await spritesSleepDriver({ log: () => {}, isSprite: () => false })).toBeNull();
+	});
+
+	it("says it is the Sprite it runs on, by its name, for clients to wake it through", async () => {
+		const d = await spritesSleepDriver({ log: () => {}, isSprite: () => true, name: "ateam-box" });
+		expect(d?.provider).toEqual({ id: "sprites", box: { machine: "ateam-box" } });
 	});
 
 	it("holds with a task it keeps renewing, and releases by deleting it", async () => {
@@ -388,6 +401,7 @@ describe("startSleepControl", () => {
 		const calls: string[] = [];
 		const driver: SleepDriver = {
 			where: "test box",
+			provider: { id: "boxd", box: { machine: "test-box" } },
 			canWakeForLoops: true,
 			hold: async () => {
 				calls.push("hold");
@@ -432,6 +446,7 @@ describe("what keeps a box awake", () => {
 		const logs: string[] = [];
 		const driver: SleepDriver = {
 			where: "test box",
+			provider: { id: "boxd", box: { machine: "test-box" } },
 			canWakeForLoops: true,
 			hold: async () => {
 				calls.push(`hold@${minute()}`);

@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { errorMessage } from "@ateam/git-core";
 import {
+	type BoxWake,
 	CH,
 	type ClientFrame,
 	NEEDS_PAIRING,
@@ -150,6 +151,10 @@ export interface ServeOptions {
 	/** The box's network address, reported in hello for other boxes to link to
 	 *  (v30): `<host>:<port>`, or null with no listener. Absent: not reported. */
 	wsAddr?: string | null;
+	/** The provider that puts this box to sleep and the box's name there, reported
+	 *  in hello for clients to wake it through; null on a box none does.
+	 *  Absent: not reported (not known yet, or tests). */
+	provider?: BoxWake | null;
 }
 
 /** Wrong tokens or codes on one connection before it is dropped. */
@@ -317,6 +322,8 @@ export function serveRpc(
 				...info,
 				...(guard ? { pairing: state() } : {}),
 				...(opts.wsAddr !== undefined ? { wsAddr: opts.wsAddr } : {}),
+				// Not to a connection a locked box hasn't admitted: it pairs first, then asks again.
+				...(opts.provider !== undefined && admitted ? { provider: opts.provider } : {}),
 			};
 		}
 		if (guard && method === CH.pairingRedeem) return pairingCall(guard, method, args);

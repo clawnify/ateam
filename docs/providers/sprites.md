@@ -203,7 +203,13 @@ doesn't need to wait for `tailscaled`.
 A paused Sprite doesn't answer on the tailnet, so on the phone's connection screen set
 **Provider** to **Sprites** and enter the Sprite's name and a Sprites API token: create
 one at [sprites.dev/account](https://sprites.dev/account) and paste the whole `my-org/…`
-string. Before connecting, the phone asks Sprites to wake the Sprite and hold it
+string. A Sprite added by its address alone (a pairing code, or the IP typed in) fills
+in the provider and its name itself the first time the phone reaches it awake: the
+engine says it runs on a Sprite, and which one (its hostname is its name). The token
+is still yours to add; tapping a Sprite the phone has no token for opens its form at
+the token, rather than dialling it asleep until it times out. A box with no provider
+that doesn't answer (one on an engine from before this, say) says so under its card,
+with a **Set provider** button. Before connecting, the phone asks Sprites to wake the Sprite and hold it
 for five minutes, then keeps trying the Sprite for up to three: a Sprite reported
 awake can take a while longer to answer. Once the phone attaches, the engine holds
 it for a fresh idle window, as for any client connecting to a box it had let go.

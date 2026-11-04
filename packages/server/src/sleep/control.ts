@@ -37,6 +37,7 @@
 // engine's log: `journalctl -u ateam` under the installer's service,
 // ~/.ateam/daemon.log for an engine `ateam attach` started. Connections are not
 // logged one by one.
+import type { BoxWake } from "@ateam/protocol";
 
 /** How often the idle clock is checked. */
 export const IDLE_CHECK_MS = 60_000;
@@ -133,6 +134,9 @@ export function sleepMode(input: {
 export interface SleepDriver {
 	/** For logs: "boxd machine mybox". */
 	readonly where: string;
+	/** The provider and this box's name there: what a client wakes it through.
+	 *  Reported in system:hello, so a box added by its address can be woken. */
+	readonly provider: BoxWake;
 	/** Whether the provider can wake this box for a loop tick while it sleeps. */
 	readonly canWakeForLoops: boolean;
 	/** Keep the box awake. */

@@ -44,6 +44,7 @@ import {
 	type RpcClient,
 	reconnectDelay,
 	relabelActive,
+	reportedWake,
 	type SettingsResult,
 	type SystemInfo,
 	takeSnapshot,
@@ -625,13 +626,19 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		parked.delete(alias);
 		cancelReconnect(alias);
 		attempts.delete(alias);
+		// A Tailscale box added by its address alone takes the provider it says it runs
+		// on, so a connect the user asks for can wake it rather than time out.
+		const reported =
+			opts.binding === undefined && wire === "ws" && !boxWakeOf(db, alias)
+				? reportedWake(info.provider)
+				: null;
 		recordConnection(db, {
 			hostAlias: alias,
 			transport: wire ?? "ssh",
 			serverVersion: String(info.protocolVersion),
 			engineRelease: info.release ?? null,
 			agentsAvailable: info.agents,
-			...(opts.binding !== undefined ? { wake: opts.binding } : {}),
+			...(opts.binding !== undefined ? { wake: opts.binding } : reported ? { wake: reported } : {}),
 		});
 		// The remote's method set matches the local dispatcher's (same contract). An
 		// engine BEHIND this app is read through tolerantRpc, which fills in what its

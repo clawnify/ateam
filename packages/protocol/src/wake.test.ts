@@ -1,7 +1,14 @@
 // The phone's provider registry: what it offers, and what it asks for.
 import { describe, expect, test } from "bun:test";
 import { PROVIDERS, providerById } from "./providers";
-import { filled, inputsAt, WAKE_PROVIDERS, wakeAdapter, wakeMachineName } from "./wake";
+import {
+	filled,
+	inputsAt,
+	reportedWake,
+	WAKE_PROVIDERS,
+	wakeAdapter,
+	wakeMachineName,
+} from "./wake";
 
 describe("wake providers", () => {
 	test("every provider defined with wake has an adapter", () => {
@@ -52,5 +59,32 @@ describe("wakeMachineName", () => {
 		expect(wakeMachineName(undefined)).toBeNull();
 		expect(wakeMachineName({ id: "nope", box: { machine: "x" } })).toBeNull();
 		expect(wakeMachineName({ id: "boxd", box: { machine: "  " } })).toBeNull();
+	});
+});
+
+describe("reportedWake", () => {
+	test("a box that names itself at a provider the client can wake through is woken there", () => {
+		expect(reportedWake({ id: "sprites", box: { machine: " ateam-box " } })).toEqual({
+			id: "sprites",
+			box: { machine: "ateam-box" },
+		});
+		expect(reportedWake({ id: "boxd", box: { machine: "probe" } })).toEqual({
+			id: "boxd",
+			box: { machine: "probe" },
+		});
+	});
+	test("nothing said, an unknown provider, or no name there wakes nothing", () => {
+		expect(reportedWake(undefined)).toBeNull();
+		expect(reportedWake(null)).toBeNull();
+		expect(reportedWake({ id: "fly-machines", box: { machine: "x" } })).toBeNull();
+		expect(reportedWake({ id: "sprites", box: { machine: "  " } })).toBeNull();
+		expect(reportedWake({ id: "sprites", box: {} })).toBeNull();
+		expect(reportedWake({ id: "sprites", box: null as never })).toBeNull();
+	});
+	test("only the provider's box inputs are kept, never an account value", () => {
+		expect(reportedWake({ id: "sprites", box: { machine: "b", token: "secret" } })).toEqual({
+			id: "sprites",
+			box: { machine: "b" },
+		});
 	});
 });
