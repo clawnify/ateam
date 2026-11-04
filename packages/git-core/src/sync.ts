@@ -67,7 +67,8 @@ export async function trackingStatus(
  * (an untracked folder is one entry), so 0 means nothing would be lost by
  * removing the worktree. Not the task's diff against base, which also counts
  * committed work. Null when git can't read the worktree (folder gone, not a
- * repo).
+ * repo). Leftovers count here, because removing the worktree loses them too;
+ * triage asks `uncommittedWorkCount`.
  */
 export async function uncommittedCount(worktreePath: string): Promise<number | null> {
 	try {
@@ -76,6 +77,58 @@ export async function uncommittedCount(worktreePath: string): Promise<number | n
 	} catch {
 		return null;
 	}
+}
+
+/** Folders an agent harness or tool keeps in a worktree (Ateam writes `.codex/hooks.json`). */
+const LEFTOVER_DIRS = new Set([".codex", ".claude", ".agents", ".factory", ".cursor", ".gemini"]);
+const LEFTOVER_NAMES = new Set(["GEMINI.md"]);
+/** Screenshots and scratch. */
+const LEFTOVER_EXT = /\.(png|jpe?g|gif|webp|log|bak|tmp)$/i;
+/** A config a bundler compiled and failed to delete: tsup's `x.bundled_<id>.mjs`, Vite's `x.timestamp-<ms>-<id>.mjs`. */
+const BUNDLER_TEMP = /\.(bundled_\w+|timestamp-\d+(-\w+)?)\.[cm]?js$/;
+
+/**
+ * An untracked path an agent or tool left behind rather than the task's work.
+ * Only ever asked of untracked paths: a tracked change is work whatever its name.
+ * An untracked folder git lists as one entry (`screenshots/`) is work unless
+ * it is a tool folder, since its contents go unread.
+ */
+function isLeftover(path: string): boolean {
+	const parts = path.split("/").filter(Boolean);
+	const name = parts.at(-1) ?? "";
+	return (
+		parts.some((p) => LEFTOVER_DIRS.has(p)) ||
+		LEFTOVER_NAMES.has(name) ||
+		LEFTOVER_EXT.test(name) ||
+		BUNDLER_TEMP.test(name)
+	);
+}
+
+/**
+ * `uncommittedCount` less untracked leftovers (see isLeftover): the work that
+ * only exists in the worktree, which is what makes a task read "uncommitted".
+ * Null when git can't read the worktree.
+ */
+export async function uncommittedWorkCount(worktreePath: string): Promise<number | null> {
+	let out: string;
+	try {
+		// -z leaves paths unquoted, so a screenshot's spaces don't hide its name.
+		out = await gitFor(worktreePath).raw(["status", "--porcelain", "-z"]);
+	} catch {
+		return null;
+	}
+	const fields = out.split("\0");
+	let n = 0;
+	for (let i = 0; i < fields.length; i++) {
+		const entry = fields[i];
+		if (!entry) continue;
+		const xy = entry.slice(0, 2);
+		// A rename or copy names its source in the next field.
+		if (/[RC]/.test(xy)) i++;
+		if (xy === "??" && isLeftover(entry.slice(3))) continue;
+		n++;
+	}
+	return n;
 }
 
 export interface UpdateFromBaseInput {

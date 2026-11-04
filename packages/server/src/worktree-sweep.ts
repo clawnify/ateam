@@ -15,7 +15,13 @@
  */
 
 import { type AteamDb, repo, type Task } from "@ateam/db";
-import { detectMerged, diff, fetchBase, trackingStatus, uncommittedCount } from "@ateam/git-core";
+import {
+	detectMerged,
+	diff,
+	fetchBase,
+	trackingStatus,
+	uncommittedWorkCount,
+} from "@ateam/git-core";
 import type { GitStatusSnapshot, PrState } from "@ateam/protocol";
 
 /** How often the background pass runs. */
@@ -40,7 +46,7 @@ export async function computeGitStatus(
 	const [tracking, d, uncommitted] = await Promise.all([
 		trackingStatus(worktreePath),
 		diff({ worktreePath, baseBranch }),
-		uncommittedCount(worktreePath),
+		uncommittedWorkCount(worktreePath),
 	]);
 	return {
 		ahead: tracking?.ahead ?? 0,
@@ -48,7 +54,8 @@ export async function computeGitStatus(
 		dirty: d.files.length,
 		// What "uncommitted" means everywhere it's said: `dirty` is the diff
 		// against base, which keeps counting a squash-merged file that base
-		// edited again (#482).
+		// edited again (#482). Untracked leftovers (tool folders, screenshots,
+		// scratch) are not work, so they don't count.
 		...(uncommitted !== null && { uncommitted }),
 		// Same diff the task panel's +N -M button reads, so the card agrees with it.
 		additions: d.files.reduce((n, f) => n + f.additions, 0),

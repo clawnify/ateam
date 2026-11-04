@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	advanceOrigin,
@@ -53,6 +53,40 @@ describe("computeGitStatus", () => {
 		const status = await computeGitStatus(repo.work, "main");
 
 		expect(status.uncommitted).toBe(3);
+	});
+
+	// What an agent's tools and screenshots leave behind is not the task's work,
+	// so a finished task holding only that must not read "uncommitted".
+	it("leaves untracked leftovers out of uncommitted, and still counts new work", async () => {
+		await repo.git.checkoutLocalBranch("task");
+		await mkdir(join(repo.work, "apps", "web"), { recursive: true });
+		await commitFile(repo.work, "apps/web/index.ts", "export {};\n", "web app");
+		await commitFile(repo.work, "logo.png", "v1", "logo");
+		await commitFile(repo.work, "old.ts", "export {};\n", "old");
+
+		// Ateam's own hooks file in a Codex task's worktree.
+		await mkdir(join(repo.work, ".codex"));
+		await writeFile(join(repo.work, ".codex", "hooks.json"), "{}\n");
+		// A tool folder below the top level, inside a tracked folder.
+		await mkdir(join(repo.work, "apps", "web", ".claude"));
+		await writeFile(join(repo.work, "apps", "web", ".claude", "sidenotes.md"), "note\n");
+		await writeFile(join(repo.work, "Screenshot 2026-10-12 at 14.03.PNG"), "png");
+		await writeFile(join(repo.work, "GEMINI.md"), "x\n");
+		await writeFile(join(repo.work, "debug.log"), "x\n");
+		await writeFile(join(repo.work, "tsup.config.bundled_2y2zp7a2j36.mjs"), "x\n");
+		await writeFile(join(repo.work, "vite.config.ts.timestamp-1730000000000-ab12.mjs"), "x\n");
+
+		expect((await computeGitStatus(repo.work, "main")).uncommitted).toBe(0);
+
+		// New source, an untracked folder (its contents go unread), a tracked
+		// image's edit and a staged rename (one entry, two paths) all count.
+		await writeFile(join(repo.work, "feature.ts"), "export {};\n");
+		await mkdir(join(repo.work, "shots"));
+		await writeFile(join(repo.work, "shots", "a.png"), "png");
+		await writeFile(join(repo.work, "logo.png"), "v2");
+		await repo.git.mv("old.ts", "new.ts");
+
+		expect((await computeGitStatus(repo.work, "main")).uncommitted).toBe(4);
 	});
 
 	// #482. A squash-merged branch whose file base edited before and after the
