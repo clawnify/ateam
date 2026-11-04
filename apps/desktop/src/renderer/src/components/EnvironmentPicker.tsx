@@ -3,6 +3,7 @@ import {
 	type ConnectStep,
 	filled,
 	inputsAt,
+	NEEDS_PAIRING,
 	PROTOCOL_VERSION,
 	providerById,
 	WAKE_PROVIDERS,
@@ -30,6 +31,10 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect, NativeSelectOption } from "./ui/native-select";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+
+const IPC_PREFIX = /^Error invoking remote method '[^']+': (Error: )?/;
+const errorText = (e: unknown) =>
+	(e instanceof Error ? e.message : String(e)).replace(IPC_PREFIX, "");
 
 // The task's "Run on" control — the pill + popover style the global connection
 // switcher used, moved into the New Task dialog. `null` alias = this Mac; a box alias
@@ -90,7 +95,8 @@ export function EnvironmentPicker({
 	onChange: (alias: string | null) => void;
 	/** Connect a Tailscale endpoint (`host:port`), waking it through `wake` first and
 	 *  saving that provider with it (null: none); rejects with a message to show. */
-	onAdd?: (endpoint: string, wake: BoxWake | null) => Promise<void>;
+	/** Connect a Tailscale box by address, with a pairing code for one locked to its devices. */
+	onAdd?: (endpoint: string, wake: BoxWake | null, code?: string) => Promise<void>;
 	/** Install the engine on a fresh SSH box (`alias` or `user@host`), streaming the
 	 *  installer's output; resolves once the box is set up and connected. */
 	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<HostStatus>;
@@ -116,6 +122,9 @@ export function EnvironmentPicker({
 	const [steps, setSteps] = useState<ConnectStep[]>([]);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// The box answered that it's locked to its paired devices: it takes a code to add.
+	const [needsCode, setNeedsCode] = useState(false);
+	const [code, setCode] = useState("");
 	const [open, setOpen] = useState(false);
 	const [dest, setDest] = useState("");
 	const [installing, setInstalling] = useState(false);
@@ -189,6 +198,8 @@ export function EnvironmentPicker({
 		setReplaceKey(false);
 		setSteps([]);
 		setError(null);
+		setNeedsCode(false);
+		setCode("");
 		setAddMode("tailscale");
 	};
 
@@ -237,13 +248,19 @@ export function EnvironmentPicker({
 				setAccountValues({});
 				setReplaceKey(false);
 			}
-			await onAdd(ep, wake);
+			await onAdd(ep, wake, needsCode && code.trim() ? code.trim() : undefined);
 			// Connecting is what saves it, so only now is it a real option.
 			onChange(ep);
 			setEndpoint("");
+			setNeedsCode(false);
+			setCode("");
 			close();
 		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
+			const said = errorText(err);
+			if (said === NEEDS_PAIRING) {
+				setNeedsCode(true);
+				setError("It's locked to its paired devices. Enter a pairing code to add it.");
+			} else setError(said);
 		} finally {
 			setBusy(false);
 		}
@@ -521,7 +538,10 @@ export function EnvironmentPicker({
 									value={endpoint}
 									disabled={busy}
 									onKeyDown={formKeys}
-									onChange={(e) => setEndpoint(e.target.value)}
+									onChange={(e) => {
+										setEndpoint(e.target.value);
+										setNeedsCode(false);
+									}}
 								/>
 								<NativeSelect
 									wrapperClassName="w-full"
@@ -583,6 +603,24 @@ export function EnvironmentPicker({
 										/>
 									))
 								)}
+								{needsCode ? (
+									<>
+										<Input
+											autoFocus
+											className={formInput}
+											placeholder="Pairing code: XXXX-XXXX"
+											aria-label="Pairing code"
+											value={code}
+											disabled={busy}
+											onKeyDown={formKeys}
+											onChange={(e) => setCode(e.target.value)}
+										/>
+										<span className={formNote}>
+											`ateam pair` in the box's terminal prints one, and so does Pair a phone on a
+											Mac that holds it (Settings → Boxes → Access). Added over SSH, it needs none.
+										</span>
+									</>
+								) : null}
 								{/* Sentences here (a provider's note, a whole error) wrap instead of
 								    truncating: they are read, not scanned. */}
 								{provider && !busy && !error ? (

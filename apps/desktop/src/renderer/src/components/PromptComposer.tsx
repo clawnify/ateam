@@ -85,7 +85,7 @@ export function PromptComposer({
 	 *  Mac). Lets the agent picker offer only what the chosen environment can run. */
 	envAgents: Record<string, string[]>;
 	/** Connect a Tailscale endpoint typed into the picker, with the provider that wakes it. */
-	onAdd?: (endpoint: string, wake: BoxWake | null) => Promise<void>;
+	onAdd?: (endpoint: string, wake: BoxWake | null, code?: string) => Promise<void>;
 	/** Set up a fresh box over SSH (install engine + connect) from the picker. */
 	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<HostStatus>;
 	/** Remove a box from the picker's list (disconnecting it first if connected). */

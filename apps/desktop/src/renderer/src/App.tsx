@@ -813,9 +813,13 @@ export function App() {
 	// Adding is the user's action, so a box a provider puts to sleep is woken for it;
 	// `wake` (null for none) is saved along with the box once it answers. Adding a
 	// box that is already listed is how its provider is changed.
-	const addTailscaleBox = useCallback(async (endpoint: string, wake: BoxWake | null) => {
-		await window.ateamHost.connect(endpoint, { wake: true, binding: wake });
-	}, []);
+	const addTailscaleBox = useCallback(
+		async (endpoint: string, wake: BoxWake | null, code?: string) => {
+			// A box locked to its paired devices takes a code: connecting redeems it.
+			await window.ateamHost.connect(endpoint, { wake: true, binding: wake, ...(code ? { code } : {}) });
+		},
+		[],
+	);
 	// Remove a box from the "Run on" list. The main process disconnects it if held
 	// and forgets the saved record (an ssh_config alias is flagged hidden — the
 	// config file itself is never touched); the connections-changed broadcast then
