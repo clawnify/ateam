@@ -665,7 +665,7 @@ interface SkewNotice {
 function skewText(n: SkewNotice): string {
 	const box = n.label ?? "This box";
 	if (n.version >= PROTOCOL_VERSION) {
-		return `${box} runs a newer Ateam (v${n.version}). Update this app from TestFlight.`;
+		return `${box} runs a newer Ateam (v${n.version}). Update Ateam Go from the App Store.`;
 	}
 	return n.atLatest
 		? `${box} is on the latest Ateam release (v${n.version}). This app is ahead of it; the next release clears this.`

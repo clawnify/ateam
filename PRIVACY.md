@@ -1,6 +1,6 @@
 # Privacy Policy — Ateam & Ateam Go
 
-**Effective date: October 31, 2026**
+**Effective date: November 4, 2026**
 
 Ateam (the desktop app) and Ateam Go (the iOS companion app) are local-first
 tools published by Clawnify. This policy describes what data the apps handle,
@@ -30,7 +30,10 @@ Ateam Go stores a small amount of data locally on your phone, and only there:
   machine new tasks start on when a project is on more than one,
 - your preview-port preference, and
 - your API key for each provider you have the app wake a machine through, which
-  is kept in the iOS Keychain, and
+  is kept in the iOS Keychain,
+- for each machine you have locked to its paired devices, this phone's key to
+  it, which that machine gave the phone when you paired them. It is kept in the
+  iOS Keychain and is only ever sent to that machine, and
 - reminders for tasks you parked until a date: the task's name, what it waits on and when it comes
   due, handed to iOS as local notifications that the phone itself delivers. No
   push service is involved, and the app asks for notification permission the
@@ -57,6 +60,20 @@ intermediary server, and Clawnify is not part of the connection.
 If you attach a photo from your library, it is sent to your own machine over
 that same private connection so the agent running there can use it. Photo
 library access is invoked only when you explicitly attach an image.
+
+To pair the phone with a machine you have locked to its paired devices, you can
+scan the pairing code the Ateam desktop app shows. Ateam Go uses the camera only
+while that scanner is open, reads the code on the phone, and keeps no image:
+nothing the camera sees is stored or sent anywhere. The code it reads goes only
+to your own machine, which answers with the phone's key to it. The app asks for
+camera permission the first time you open the scanner, and you can type the code
+instead.
+
+If you connect GitHub on one of your machines from either app, the token you
+paste is sent once to that machine, over the same connection, and Ateam Go
+keeps no copy. The machine stores it for its own git and checks with GitHub
+which of your repositories it reaches, under your own GitHub account. The button
+that helps you make a token opens GitHub's own page in your browser.
 
 ### Waking a machine through its provider (optional)
 
@@ -98,6 +115,11 @@ you attach in the Lead chat are copied into the app's own folder on your Mac
 and deleted after 30 days. The Lead reads them like any file you show Claude
 Code, and when you hand one to a task on one of your boxes, a copy goes to
 that box over your own connection.
+
+The Lead can also run on one of your machines instead of your Mac, and that is
+the Lead chat Ateam Go shows: the phone sends your messages and attachments to
+that machine over your own connection, and the Claude Code installed there, under
+your own account, answers them. Ateam Go itself sends nothing to Anthropic.
 
 GitHub operations (push, pull, PRs) are performed by the `gh` CLI on your own
 machine, under your own GitHub authentication.
