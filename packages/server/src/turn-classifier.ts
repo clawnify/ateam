@@ -1,7 +1,8 @@
 // When an agent's turn ends, let Jev re-file the card if the rule got it wrong.
 //
 // The rule files first, as it always has (engine.ts mapEventToColumn: Stop →
-// Review). This runs after, only when an OpenRouter key is set, and can make
+// Review). This runs after, only when a decision model has a key (Jev on
+// OpenRouter or Luna on OpenAI, decision-model.ts), and can make
 // exactly one move: Review → Needs you, when the agent's final message is sure
 // to be waiting on the user (see jev.ts). Three guards keep it from doing harm:
 //
@@ -15,14 +16,14 @@
 //  • EVERY MOVE IS AUDITED in board_changes, source "classifier", with the
 //    reason, the same trail the organizer leaves.
 import { type AteamDb, repo } from "@ateam/db";
-import { openRouterApiKey } from "./credentials-file";
+import { currentDecisionModel, type DecisionModel } from "./decision-model";
 import { classifyTurn, type TurnVerdict } from "./jev";
 
 export interface TurnClassifierDeps {
 	db: AteamDb;
 	notifyTaskUpdated: (taskId: string) => void;
-	/** Injected for tests; defaults to the real key lookup and Jev call. */
-	apiKey?: () => string | undefined;
+	/** Injected for tests; defaults to the configured model and the real call. */
+	decisionModel?: () => DecisionModel | null;
 	classify?: typeof classifyTurn;
 	log?: (line: string) => void;
 }
@@ -35,7 +36,7 @@ export interface TurnClassifier {
 }
 
 export function createTurnClassifier(deps: TurnClassifierDeps): TurnClassifier {
-	const apiKey = deps.apiKey ?? (() => openRouterApiKey());
+	const decisionModel = deps.decisionModel ?? currentDecisionModel;
 	const classify = deps.classify ?? classifyTurn;
 	const log = deps.log ?? ((line: string) => console.log(line));
 	const lastPrompt = new Map<string, string>();
@@ -49,14 +50,14 @@ export function createTurnClassifier(deps: TurnClassifierDeps): TurnClassifier {
 		async turnEnded(taskId, finalMessage) {
 			const token = (tokens.get(taskId) ?? 0) + 1;
 			tokens.set(taskId, token);
-			const key = apiKey();
-			if (!key || !finalMessage?.trim()) return null;
+			const model = decisionModel();
+			if (!model || !finalMessage?.trim()) return null;
 			const task = repo.getTask(deps.db, taskId);
 			if (!task || task.column !== "review") return null;
 			if (repo.loopForTask(deps.db, taskId) !== undefined) return null;
 
 			const verdict = await classify({
-				apiKey: key,
+				model,
 				finalMessage,
 				// The latest reply this engine saw, else the task's own opening
 				// prompt: what the first turn was asked to do.

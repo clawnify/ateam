@@ -23,6 +23,7 @@ import { dirname, join } from "node:path";
 import {
 	type AteamSettings,
 	type ClientSettings,
+	DEFAULT_OPENAI_TEXT_MODEL,
 	DEFAULT_OPENROUTER_TEXT_MODEL,
 	type EngineSettings,
 	type SettingsPatch,
@@ -52,6 +53,8 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 		archiveAfterDays: 30,
 		textModel: "auto",
 		openRouterTextModel: DEFAULT_OPENROUTER_TEXT_MODEL,
+		openAiTextModel: DEFAULT_OPENAI_TEXT_MODEL,
+		decisionModel: "auto",
 	},
 };
 

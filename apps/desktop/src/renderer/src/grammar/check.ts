@@ -8,8 +8,8 @@ const waiting = new Map<number, (issues: GrammarIssue[]) => void>();
 
 /**
  * Grammar problems in `text` worth showing: Harper's, after the prompt-noise
- * filter, then, with an OpenRouter key and the setting on, only those Jev
- * judges real mistakes. Without Jev's answer, every one of Harper's shows.
+ * filter, then, with a decision model's key and the setting on, only those it
+ * judges real mistakes. Without its answer, every one of Harper's shows.
  */
 export async function checkGrammar(text: string): Promise<GrammarIssue[]> {
 	const issues = await lint(text);

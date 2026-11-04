@@ -59,7 +59,7 @@ import {
 	type UpdateLoopInput,
 } from "@ateam/protocol";
 import { installBrowser, openBrowserView } from "./browser";
-import { credentialStatus, credentialsPath, updateCredentials } from "./credentials-file";
+import { credentialStatuses, credentialsPath, updateCredentials } from "./credentials-file";
 import { createEditorHost, installCodeServer } from "./editor";
 import type { Engine } from "./engine";
 import { checkRepoAccess, connectGithubToken, githubAccessStatus } from "./github-access";
@@ -934,12 +934,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		// Secrets, beside settings but never in them (see credentials-file.ts).
 		// The answer says whether a key is set, never what it is.
 		[CH.credentialsGet]: async (): Promise<CredentialsResult> => ({
-			openRouter: credentialStatus(),
+			...credentialStatuses(),
 			path: credentialsPath(),
 		}),
 		[CH.credentialsUpdate]: async (patch: CredentialsPatch): Promise<CredentialsResult> => {
 			updateCredentials(patch);
-			return { openRouter: credentialStatus(), path: credentialsPath() };
+			return { ...credentialStatuses(), path: credentialsPath() };
 		},
 		// GitHub access on this machine (github-access.ts). The token arrives here
 		// once, for connect, and never travels back.

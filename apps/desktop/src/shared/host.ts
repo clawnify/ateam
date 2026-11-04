@@ -293,9 +293,10 @@ export interface AteamHost {
 	 *  with null. Rejects with the provider's answer when the key doesn't work. */
 	saveWakeAccount(providerId: string, values: Record<string, string> | null): Promise<WakeStatus>;
 	/**
-	 * Per issue, whether to show it, decided by Jev with this Mac's OpenRouter
-	 * key (never sent to the renderer). Null when it won't or couldn't decide:
-	 * no key, `client.filterGrammarWithJev` off, or no answer in time. The
+	 * Per issue, whether to show it, decided by this Mac's decision model (Jev
+	 * on OpenRouter or Luna on OpenAI) with its key (never sent to the
+	 * renderer). Null when it won't or couldn't decide: no key, the decision
+	 * model off, `client.filterGrammarWithJev` off, or no answer in time. The
 	 * renderer then shows every issue.
 	 */
 	judgeGrammar(draft: string, issues: GrammarJudgeIssue[]): Promise<boolean[] | null>;

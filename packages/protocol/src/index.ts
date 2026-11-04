@@ -154,7 +154,12 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // links:set (an older box answers "Unknown method", FEATURE_MIN_VERSION.crossBox).
 // system:hello takes `{ link: true }` from a link, and its reply gained `wsAddr`,
 // optional. Settings gained `client.crossBox`, read by the desktop alone.
-export const PROTOCOL_VERSION = 30;
+// v31: OpenAI keys. Credentials gained `openAiApiKey` (credentials:update) and
+// `openAi` (the status, optional, so an older engine reads as "no key"), and
+// settings gained `engine.decisionModel` and `engine.openAiTextModel` and the
+// `openai` text model. An older engine stores the key and the settings and
+// never reads them, so a box needs this version to use an OpenAI key.
+export const PROTOCOL_VERSION = 31;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -699,17 +704,32 @@ export interface EngineSettings {
 	/**
 	 * What writes the title of a task started without a name, its tags, and the
 	 * summary of where each task stands once its agent goes quiet. `auto`: an
-	 * OpenRouter model when a key is set, otherwise Claude Code (Haiku, headless,
-	 * on the user's own subscription). `openrouter` needs the key; `off` writes
-	 * none of them. See server/text-model.ts.
+	 * OpenRouter model when that key is set, else an OpenAI model when that key
+	 * is, otherwise Claude Code (Haiku, headless, on the user's own
+	 * subscription). `openrouter` and `openai` need their key; `off` writes none
+	 * of them. See server/text-model.ts.
 	 */
 	textModel: TextModelChoice;
 	/** The OpenRouter model id used whenever OpenRouter writes that text. */
 	openRouterTextModel: string;
+	/** The OpenAI model id used whenever OpenAI writes that text. */
+	openAiTextModel: string;
+	/**
+	 * Which decision model answers the board's and the grammar filter's yes/no
+	 * questions. `auto`: Jev on OpenRouter when that key is set, else Luna on
+	 * OpenAI when that key is. `openrouter` and `openai` need their key; `off`
+	 * asks neither, and a finished turn always goes to Review. See
+	 * server/decision-model.ts.
+	 */
+	decisionModel: DecisionModelChoice;
 }
-export type TextModelChoice = "auto" | "openrouter" | "claude" | "off";
+export type TextModelChoice = "auto" | "openrouter" | "openai" | "claude" | "off";
+export type DecisionModelChoice = "auto" | "openrouter" | "openai" | "off";
 /** `engine.openRouterTextModel` out of the box, and whenever it is left empty. */
 export const DEFAULT_OPENROUTER_TEXT_MODEL = "anthropic/claude-haiku-5.5";
+/** `engine.openAiTextModel` out of the box, and whenever it is left empty:
+ *  OpenAI's small model, priced as Haiku 5.5 is. */
+export const DEFAULT_OPENAI_TEXT_MODEL = "gpt-6-luna";
 export interface ClientSettings {
 	/** Fetch an update in the background instead of asking first. */
 	autoDownloadUpdates: boolean;
@@ -721,9 +741,11 @@ export interface ClientSettings {
 	 */
 	syncEngineSettingsToBoxes: boolean;
 	/**
-	 * With an OpenRouter key, Jev decides which of the grammar check's issues
-	 * are real mistakes and hides the rest. Sends the draft prompt to
-	 * OpenRouter while you type. No key: every issue shows, as with it off.
+	 * With a decision model (`engine.decisionModel`: Jev on OpenRouter or Luna
+	 * on OpenAI), it decides which of the grammar check's issues are real
+	 * mistakes and hides the rest. Sends the draft prompt to that provider while
+	 * you type. No key: every issue shows, as with it off. The name predates
+	 * OpenAI and stays, so a saved choice keeps applying.
 	 */
 	filterGrammarWithJev: boolean;
 	/**
@@ -844,6 +866,8 @@ export interface CredentialStatus {
 }
 export interface CredentialsResult {
 	openRouter: CredentialStatus;
+	/** Absent from an engine older than v31, which can't use an OpenAI key. */
+	openAi?: CredentialStatus;
 	path: string;
 	/** As SettingsResult: filled in by the desktop while sync is on. */
 	syncedTo?: string[];
@@ -852,6 +876,7 @@ export interface CredentialsResult {
 /** A key to store, or null to remove it. */
 export interface CredentialsPatch {
 	openRouterApiKey?: string | null;
+	openAiApiKey?: string | null;
 }
 
 /**

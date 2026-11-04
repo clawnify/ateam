@@ -49,7 +49,7 @@ function classifier(opts: {
 	return createTurnClassifier({
 		db,
 		notifyTaskUpdated: (id) => notified.push(id),
-		apiKey: () => opts.key,
+		decisionModel: () => (opts.key ? { provider: "openrouter", apiKey: opts.key } : null),
 		classify: async (input) => {
 			await opts.onAsk?.(input);
 			return opts.verdict ?? null;

@@ -56,4 +56,6 @@ export {
 	settingsPath,
 	updateSettings,
 } from "./settings-file";
-export { credentialsPath, openRouterApiKey } from "./credentials-file";
+export { credentialsPath, openAiApiKey, openRouterApiKey } from "./credentials-file";
+export type { DecisionModel } from "./decision-model";
+export { currentDecisionModel } from "./decision-model";
