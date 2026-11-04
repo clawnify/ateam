@@ -163,6 +163,11 @@ export function describeSshFailure(output: string): string | null {
 	if (/Permission denied \([\w,-]+\)/.test(output)) {
 		return "The box didn't accept a key ssh could use without asking. A key with a passphrase only works here once it's loaded into ssh-agent, and a provider may need a key of its own, named by an IdentityFile in ~/.ssh/config.";
 	}
+	// A destination with a space or other character no host name has, such as a pasted
+	// `ssh mybox` ("hostname contains invalid characters").
+	if (output.includes("hostname contains invalid characters")) {
+		return "That isn't a box ssh can reach: give just its name in your ssh config, or user@host, with no spaces.";
+	}
 	if (output.includes("ssh: Could not resolve hostname")) {
 		return "ssh couldn't find a box by that name. Check the spelling, or that it matches a Host in ~/.ssh/config.";
 	}

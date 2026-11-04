@@ -79,6 +79,13 @@ describe("ssh's reason for failing, in words", () => {
 		expect(describeSshFailure(out)).toContain("couldn't find a box by that name");
 	});
 
+	test("a destination that isn't a host name, such as a pasted ssh command", () => {
+		// What ssh said for "ssh ateam-exe.exe.xyz" typed into Set up (2026-11-04).
+		expect(describeSshFailure("hostname contains invalid characters\n")).toContain(
+			"give just its name",
+		);
+	});
+
 	test("nothing answering, refused or timed out", () => {
 		for (const out of [
 			"ssh: connect to host 127.0.0.1 port 1: Connection refused\n",

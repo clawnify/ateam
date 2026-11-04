@@ -24,6 +24,7 @@ import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import type { HostStatus, WakeStatus } from "../../../shared/host";
 import { stripAnsi } from "../lib/ansi";
+import { sshDestination } from "../lib/ssh-destination";
 import { BoxPageDialog } from "./BoxPage";
 import { ConnectSteps } from "./ConnectSteps";
 import { CreateBoxDialog } from "./CreateBoxDialog";
@@ -293,8 +294,13 @@ export function EnvironmentPicker({
 	};
 
 	const submitInstall = async () => {
-		const d = dest.trim();
-		if (!d || !onInstall || installing) return;
+		if (!onInstall || installing) return;
+		const typed = sshDestination(dest);
+		if ("problem" in typed) {
+			setInstallError(typed.problem);
+			return;
+		}
+		const d = typed.dest;
 		setInstalling(true);
 		setInstallError(null);
 		setLog("");
@@ -308,7 +314,7 @@ export function EnvironmentPicker({
 			close();
 			finished(d);
 		} catch (err) {
-			setInstallError(err instanceof Error ? err.message : String(err));
+			setInstallError(errorText(err));
 		} finally {
 			setInstalling(false);
 		}
@@ -669,7 +675,7 @@ export function EnvironmentPicker({
 								<Input
 									autoFocus
 									className={formInput}
-									placeholder="ssh alias or user@host"
+									placeholder="mybox.exe.xyz or user@host"
 									aria-label="SSH destination to set up"
 									value={dest}
 									disabled={installing}
