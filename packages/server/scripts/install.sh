@@ -314,10 +314,14 @@ if [ "$WANT_TAILSCALE" = 1 ]; then
 			)
 			UP_ARGS+=(--auth-key="file:$TMP/ts-authkey")
 		elif [ "$TS_STATE" = NeedsLogin ]; then
-			info "approve this box on your tailnet: open the link Tailscale prints below"
+			info "approve this box on your tailnet: open the link Tailscale prints below, and press Connect there"
 		fi
-		sudo tailscale up "${UP_ARGS[@]}" ||
-			die "this box didn't join your tailnet: open the link above to approve it, then re-run with --tailscale"
+		if ! sudo tailscale up "${UP_ARGS[@]}"; then
+			if [ -n "${TS_AUTHKEY:-}" ]; then
+				die "Tailscale refused the auth key in TS_AUTHKEY, so this box didn't join your tailnet"
+			fi
+			die "this box didn't join your tailnet: it wasn't approved on Tailscale within 15 minutes, or Tailscale refused it. Run the phone setup again for a new link"
+		fi
 	fi
 	TS_IP="$(tailscale ip -4 2>/dev/null | head -1 || true)"
 	[ -n "$TS_IP" ] || die "the box joined your tailnet but has no IPv4 address there"

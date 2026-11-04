@@ -85,8 +85,8 @@ export function BoxReadinessChecklist({
 						{joining ? (
 							joining.approval ? (
 								<>
-									Approve it on the Tailscale page that opened in your browser, or open{" "}
-									{joining.approval}
+									Approve it on the Tailscale page that opened in your browser (press Connect at the
+									end), or open {joining.approval}
 								</>
 							) : (
 								"Joining your tailnet…"

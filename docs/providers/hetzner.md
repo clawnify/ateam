@@ -33,15 +33,14 @@ the walkthrough.
 
 ## GitHub credentials
 
-Plain `gh auth login` on the box (device code — works over SSH), plus a git identity:
+Connect GitHub from Ateam, in the checklist after Create a box or in **Settings → Boxes
+→ GitHub**, with a fine-grained token for the repositories the box works on (Ateam opens
+GitHub's form with the rest filled in; see [Sprites](sprites.md#github-credentials) for
+the permissions). The git identity then sets itself from the account.
 
-```bash
-git config --global user.name "you" && git config --global user.email "you@example.com"
-gh auth login
-```
-
-There is no provider-supplied credential helper to conflict with, so unlike some
-providers, running `gh auth setup-git` here is harmless.
+There is no provider-supplied credential helper to conflict with, so `gh auth login` on
+the box works too, but it hands the box's agents a token that reaches every repo your
+account can.
 
 ## Install the engine
 
@@ -56,15 +55,24 @@ an out-of-memory kill; see [Keeping the daemon alive](../online-ateam.md#keeping
 
 ## Connect
 
-Add a `Host` entry to your Mac's `~/.ssh/config` pointing at the box's **tailnet**
-address (`100.x.y.z`), then pick that alias in the connection switcher. The in-app
-Create-a-box flow writes this entry for you.
+Create a box writes a `Host` entry for the box to your Mac's `~/.ssh/config` (its public
+address and the key Ateam generated) and connects it. For a box made by hand, add an
+entry yourself, ideally pointing at the box's **tailnet** address (`100.x.y.z`) once
+the public port is closed, and pick the alias in Ateam (New task → **Run on**, or
+**Settings → Boxes → Add a box → Set up a box over SSH**), which installs the engine
+and connects.
 
 ## iOS
 
-**Yes — this is the reference setup.** The box joins your tailnet directly
-(`tailscale up`), the daemon binds the box's own tailnet IP, and the phone connects
-over the tailnet:
+**Yes, this is the reference setup.** The box joins your tailnet directly, the daemon
+binds the box's own tailnet IP, and the phone connects over the tailnet. Create a box
+joins with the Tailscale auth key you paste. Make that key with a tag: a device it adds
+takes the tag, and tagged devices don't expire, while an untagged one drops off the
+tailnet after 180 days by default and the phone loses the box without saying why. The
+tag has to exist in your tailnet's policy (`tagOwners`).
+
+By hand, the installer's `--tailscale` joins the tailnet and opens the phone's port on
+it (with `TS_AUTHKEY=<key>` it needs no browser), or set the address yourself:
 
 ```bash
 export ATEAM_WS_ADDR=100.x.y.z:8787    # the box's OWN Tailscale IP

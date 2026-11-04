@@ -7,10 +7,16 @@ add one yourself), the box shows up in the connection switcher.
 
 That makes the recipe the same everywhere:
 
-1. Create a box with the provider's own tooling.
-2. Run [`install.sh`](../../packages/server/scripts/install.sh) on it over that alias.
-3. Give it a git identity, sign into `gh`, and log into an agent CLI once.
-4. Pick the alias in Ateam's connection switcher.
+1. Create a box with the provider's own tooling, so that `ssh <alias>` reaches it.
+2. Pick the alias in Ateam: New task → **Run on** lists it as not set up yet, or
+   **Settings → Boxes → Add a box → Set up a box over SSH**. Ateam runs
+   [`install.sh`](../../packages/server/scripts/install.sh) on it over that alias
+   and connects.
+3. Connect GitHub from the checklist that follows (the git identity follows from
+   the account), and log into an agent CLI once: `ssh -t <alias> claude`.
+4. For Ateam Go, **Settings → Boxes → Access → Set up phone access** (Ateam 0.1.88
+   or later), or run the installer on the box with `--tailscale`. The box joins your
+   tailnet and opens its network port there; you approve it on Tailscale once.
 
 What differs between providers is the boring, unguessable detail — what's
 preinstalled, how git credentials work, whether there's an `sshd` in the box at
@@ -21,9 +27,9 @@ all. That's what the pages here record.
 | Provider | Kind | Desktop | iOS | Sleeps when idle |
 | --- | --- | --- | --- | --- |
 | [Hetzner](hetzner.md) | VPS — Ateam can create one for you in-app | ✅ | ✅ | no: a powered-off server still bills |
-| [boxd](boxd.md) | persistent KVM microVMs, driven by their CLI | ✅ via boxd's SSH proxy | ⚠️ works, but needs manual Tailscale setup | ✅ and the phone wakes it ([how](boxd.md#sleep-and-wake)) |
-| [Sprites](sprites.md) | persistent hardware-isolated microVMs on Fly.io | ✅ via sshd and `sprite proxy` | ⚠️ works, but needs manual Tailscale setup | ✅ and the phone wakes it; a loop keeps it awake ([how](sprites.md#sleeping)) |
-| [exe.dev](exe-dev.md) | persistent VMs sharing a flat-priced CPU/RAM pool | ✅ over exe.dev's SSH proxy | ✅ Tailscale preinstalled; join once ([how](exe-dev.md#ios)) | no: always on, billed flat |
+| [boxd](boxd.md) | persistent KVM microVMs, driven by their CLI | ✅ via boxd's SSH proxy | ✅ Set up phone access, or `--tailscale` ([how](boxd.md#ios)) | ✅ and the phone wakes it ([how](boxd.md#sleep-and-wake)) |
+| [Sprites](sprites.md) | persistent hardware-isolated microVMs on Fly.io | ✅ via sshd and `sprite proxy` | ✅ Set up phone access, or `--tailscale` ([how](sprites.md#ios)) | ✅ and the phone wakes it; a loop keeps it awake ([how](sprites.md#sleeping)) |
+| [exe.dev](exe-dev.md) | persistent VMs sharing a flat-priced CPU/RAM pool | ✅ over exe.dev's SSH proxy | ✅ Set up phone access, or `--tailscale` ([how](exe-dev.md#ios)) | no: always on, billed flat |
 
 Any other VPS (EC2, a home server, …) works the same way as Hetzner without a page
 of its own — see [`../online-ateam.md`](../online-ateam.md), the reference

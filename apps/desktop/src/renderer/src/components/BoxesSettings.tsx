@@ -5,7 +5,7 @@ import {
 	PROTOCOL_VERSION,
 	relativeAge,
 } from "@ateam/protocol";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostStatus } from "../../../shared/host";
 import { type BoxRow, boxesNeedingYou, boxRows, engineLabel } from "../boxes-settings";
 import { addTailscaleBox, installBox, setUpPhoneAccess } from "../lib/box-actions";
@@ -55,7 +55,12 @@ export function BoxesSettings() {
 	const { ui: promptUi, confirm } = usePrompt();
 	const leadHome = useLeadHome();
 
+	// Loads can overlap: an action's own reload and the broadcast of a box reconnecting
+	// after it. Only the latest one may land, or an older read showed a box that was
+	// back as "Not connected" until the page was opened again.
+	const loads = useRef(0);
 	const load = useCallback(async () => {
+		const seq = ++loads.current;
 		const [list, connected, failed, updatable, release, githubByBox] = await Promise.all([
 			window.ateamHost.list(),
 			window.ateamHost.connected(),
@@ -64,6 +69,7 @@ export function BoxesSettings() {
 			window.ateamHost.appRelease(),
 			window.ateamHost.boxGithub(),
 		]);
+		if (seq !== loads.current) return;
 		setConnections(list);
 		setHeld(connected);
 		setFailures(failed);
@@ -135,7 +141,7 @@ export function BoxesSettings() {
 				setNotes((n) => ({
 					...n,
 					[row.alias]: {
-						text: `Approve ${row.title} on the Tailscale page that opened in your browser, or open ${url}`,
+						text: `Approve ${row.title} on the Tailscale page that opened in your browser (press Connect at the end), or open ${url}`,
 						error: false,
 					},
 				})),
