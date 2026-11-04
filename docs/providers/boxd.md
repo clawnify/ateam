@@ -45,8 +45,8 @@ of those the installer runs Tailscale in userspace mode by itself.
 
 ## GitHub credentials
 
-**Connect GitHub from Ateam**, in the checklist after Set up or in **Settings → Boxes →
-GitHub**. Ateam opens GitHub's form for a fine-grained token with its name, 90 days and
+**Connect GitHub from Ateam**, under GitHub on the box's page in **Settings → Boxes**, which opens after
+Set up. Ateam opens GitHub's form for a fine-grained token with its name, 90 days and
 the permissions it uses filled in (they're listed in
 [Sprites](sprites.md#github-credentials)); you pick the repositories this box works on
 and paste the token into Ateam. It goes to `gh` on the box only, and the box's git
@@ -106,11 +106,14 @@ Settings → Boxes.
 
 ## iOS
 
-The phone reaches a box over a WebSocket on your tailnet. **Settings → Boxes → Access →
-Set up phone access** (Ateam 0.1.88 or later) does it: Ateam runs the installer again
-with `--tailscale`, which installs Tailscale, joins the box to your tailnet and opens its
-network port there. Your browser opens Tailscale's page to approve the box: press
-**Connect** at the end of it. From a terminal, the same thing:
+The phone reaches a box over a WebSocket on your tailnet. **Set up phone access**, under
+Access on the box's page in Settings → Boxes (Ateam 0.1.88 or later), does it: Ateam runs
+the installer again with `--tailscale`, which installs Tailscale, joins the box to your
+tailnet and opens its network port there. Your browser opens Tailscale's page to approve
+the box: press **Connect** at the end of it. Then add the box in Ateam Go at the address
+the page shows, on an iPhone signed in to the same Tailscale account. The
+[recipe](README.md) has the rest: no Tailscale account yet, and key expiry. From a
+terminal, the same thing:
 
 ```bash
 ssh mybox.boxd 'curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash -s -- --tailscale'
@@ -127,7 +130,8 @@ forward the port, which the engine reports as its address.
 The tailnet path goes straight to the VM, never through boxd's proxy, so the phone's
 traffic doesn't wake a hibernated box: Ateam Go wakes it through boxd's API (see
 [Sleep and wake](#sleep-and-wake)). Until a box is locked to your devices, anyone on your tailnet can use its
-network port: lock it in Settings → Boxes → Access.
+network port: lock it under Access on
+the box's page.
 
 ### boxd's Tailscale integration (org-level)
 

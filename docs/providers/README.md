@@ -10,13 +10,22 @@ That makes the recipe the same everywhere:
 1. Create a box with the provider's own tooling, so that `ssh <alias>` reaches it.
 2. Pick the alias in Ateam: New task → **Run on** lists it as not set up yet, or
    **Settings → Boxes → Add a box → Set up a box over SSH**. Ateam runs
-   [`install.sh`](../../packages/server/scripts/install.sh) on it over that alias
-   and connects.
-3. Connect GitHub from the checklist that follows (the git identity follows from
-   the account), and log into an agent CLI once: `ssh -t <alias> claude`.
-4. For Ateam Go, **Settings → Boxes → Access → Set up phone access** (Ateam 0.1.88
-   or later), or run the installer on the box with `--tailscale`. The box joins your
-   tailnet and opens its network port there; you approve it on Tailscale once.
+   [`install.sh`](../../packages/server/scripts/install.sh) on it over that alias,
+   connects, and opens the box's page, whose **Finish setting it up** list says
+   what's left (Ateam 0.1.88 or later).
+3. Connect GitHub on that page (the git identity follows from the account), and log
+   into an agent CLI once: `ssh -t <alias> claude`.
+4. For Ateam Go, **Set up phone access** under the page's Access, or run the
+   installer on the box with `--tailscale`. The box joins your tailnet and opens its
+   network port there:
+   - Tailscale's page opens in your browser to approve the box. Sign in with the
+     account your iPhone uses, and press **Connect** at the end. No account yet? That
+     page makes one; Tailscale's Personal plan is free, for non-commercial use.
+   - Your iPhone needs the Tailscale app, signed in to that same account. In Ateam Go,
+     add the box at the address the page shows (`100.x.y.z:8787`).
+   - A box approved from that page drops off your tailnet after 180 days, unless you
+     turn its key expiry off in Tailscale's Machines page (⋯ → Disable key expiry):
+     the box's page says when. A box joined with a tagged auth key never expires.
 
 What differs between providers is the boring, unguessable detail — what's
 preinstalled, how git credentials work, whether there's an `sshd` in the box at
@@ -99,8 +108,8 @@ read (the merge queue waits on CI, and CI that reports commit statuses is hidden
 a token without it on a private repo), and Workflows left off, since an agent that
 can edit `.github/workflows` can reach the repo's Actions secrets.
 
-Connect it from Ateam rather than a terminal: the checklist after setting a box up,
-**Settings → Boxes** on the desktop, or the GitHub button on the
+Connect it from Ateam rather than a terminal: the box's page in **Settings → Boxes** on the
+desktop (it opens after setting a box up), or the GitHub button on the
 box's card on the phone. **Token for** says who the token is for, preset to the owner
 of most of the box's repositories (else your own account); pick it there, since
 changing Resource owner on GitHub's form resets the 90 days and clears the

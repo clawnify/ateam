@@ -66,7 +66,8 @@ flags it. On an older engine, set your own:
 ## GitHub credentials
 
 Nothing is wired up: no credential helper, and `gh` isn't logged in. **Connect GitHub
-from Ateam**, in the checklist after Set up or in **Settings → Boxes → GitHub**, with a
+from Ateam**, under GitHub on the box's page in **Settings → Boxes**, which opens after
+Set up, with a
 **fine-grained token** limited to what the box works on, rather than `gh auth login`.
 Agents run here, and `gh auth login` hands them a token that never expires and reaches
 every repo your account can, in plain text in `~/.config/gh/hosts.yml` (a Sprite has no
@@ -176,12 +177,15 @@ was paused: about 2s from cold.
 
 ## iOS
 
-The phone reaches a Sprite over Tailscale. **Settings → Boxes → Access → Set up phone
-access** (Ateam 0.1.88 or later) does it: Ateam runs the installer again with
-`--tailscale`, which installs Tailscale, runs it as a Sprite service (so it starts when
-the Sprite boots), joins the Sprite to your tailnet and opens the engine's network port
-on its tailnet address. Your browser opens Tailscale's page to approve the Sprite:
-press **Connect** at the end of it. From a terminal, the same thing:
+The phone reaches a Sprite over Tailscale. **Set up phone access**, under Access on the
+box's page in Settings → Boxes (Ateam 0.1.88 or later), does it: Ateam runs the installer
+again with `--tailscale`, which installs Tailscale, runs it as a Sprite service (so it
+starts when the Sprite boots), joins the Sprite to your tailnet and opens the engine's
+network port on its tailnet address. Your browser opens Tailscale's page to approve the
+Sprite: press **Connect** at the end of it. Then add the Sprite in Ateam Go at the address
+the page shows, on an iPhone signed in to the same Tailscale account. The
+[recipe](README.md) has the rest: no Tailscale account yet, and key expiry. From a
+terminal, the same thing:
 
 ```bash
 ssh mybox.sprite 'curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash -s -- --tailscale'
@@ -211,8 +215,8 @@ open, it wakes again whenever the last wake is over a minute old, so a Sprite th
 paused again before the phone got through is not left asleep. A
 Sprites token works on every Sprite in its organization, so give the phone one for
 an organization that holds only your Ateam boxes. Until the Sprite is locked to your
-devices, anyone on your tailnet can use its network port: lock it in Settings → Boxes →
-Access.
+devices, anyone on your tailnet can use its network port: lock it under Access on
+the Sprite's page.
 
 What we measured (2026-10-24):
 

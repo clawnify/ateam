@@ -84,8 +84,8 @@ them with `sudo exeuntu update claude` and `sudo exeuntu update codex`.
 
 ## GitHub credentials
 
-Connect GitHub from Ateam, in the checklist after Set up or in **Settings → Boxes →
-GitHub**, with a [fine-grained token](sprites.md#github-credentials) limited to the
+Connect GitHub from Ateam, under GitHub on the box's page in **Settings → Boxes**, which opens after
+Set up, with a [fine-grained token](sprites.md#github-credentials) limited to the
 repos the box works on: Ateam opens GitHub's form with the rest filled in and hands the
 token to `gh` on the VM. The git identity then sets itself from the account.
 
@@ -124,12 +124,14 @@ listed in Settings → Boxes.
 ## iOS
 
 The image ships `tailscale` with its daemon off, and `/dev/net/tun` is there, so it runs
-in its normal kernel mode. **Settings → Boxes → Access → Set up phone access** (or the
-same button in the checklist after Set up; Ateam 0.1.88 or later) does the rest: Ateam
-runs the installer again with `--tailscale`, which starts `tailscaled`, joins the VM to
-your tailnet and opens the engine's network port on its tailnet address. Your browser
-opens Tailscale's page to approve the VM: press **Connect** at the end of it, or nothing
-happens. From a terminal, the same thing:
+in its normal kernel mode. **Set up phone access**, under Access on the box's page in
+Settings → Boxes (Ateam 0.1.88 or later), does the rest: Ateam runs the installer again
+with `--tailscale`, which starts `tailscaled`, joins the VM to your tailnet and opens the
+engine's network port on its tailnet address. Your browser opens Tailscale's page to
+approve the VM: press **Connect** at the end of it, or nothing happens. Then add the VM in
+Ateam Go at the address the page shows, on an iPhone signed in to the same Tailscale
+account. The [recipe](README.md) has the rest: no Tailscale account yet, and key expiry.
+From a terminal, the same thing:
 
 ```bash
 ssh mybox.exe.xyz 'curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash -s -- --tailscale'
@@ -138,7 +140,7 @@ ssh mybox.exe.xyz 'curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/m
 It waits up to 15 minutes for the approval. An approval that comes later still puts the VM
 on your tailnet, but leaves the engine without its port: run the setup again, and it
 finishes without a new link (about a minute, 2026-11-04). The installer ends with the
-address for Ateam Go (`Ateam Go reaches it at 100.x.y.z:8787`), and the checklist shows it
+address for Ateam Go (`Ateam Go reaches it at 100.x.y.z:8787`), and the VM's page shows it
 too. With `TS_AUTHKEY=<key>` before `bash` it joins without a link; a key made with a tag
 keeps the VM on the tailnet for good, while a device approved from a link drops off after
 180 days unless you turn key expiry off for it.
@@ -152,8 +154,8 @@ address, which strands the phone's port the engine was given. Then run the insta
 with `--tailscale` as above: it finds the VM on the tailnet and only opens the port.
 
 A VM never sleeps, so the phone needs no provider or wake settings. Until the VM is
-locked to your devices, anyone on your tailnet can use its network port: lock it in
-Settings → Boxes → Access.
+locked to your devices, anyone on your tailnet can use its network port: lock it under
+Access on the VM's page.
 
 ## Left alone
 

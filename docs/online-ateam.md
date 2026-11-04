@@ -93,8 +93,8 @@ git config --global user.email "you@example.com"
 git config --global init.defaultBranch main
 ```
 
-Connect GitHub from Ateam once the engine is running: the checklist after setting a
-box up, **Settings → Boxes** on the desktop, or the GitHub button
+Connect GitHub from Ateam once the engine is running: the box's page in
+**Settings → Boxes** on the desktop (it opens after setting a box up), or the GitHub button
 on the box's card on the phone. You paste a [fine-grained
 token](providers/README.md#github-credentials) into Ateam, which hands it to the box's
 `gh` and shows which of the box's projects it can push to. `gh auth login` in a
@@ -461,7 +461,7 @@ affected. Keep the ACL anyway: the lock and the ACL guard against different thin
 
 - **A box starts open**, a new one too, and stays open until you lock it. Its card
   says anyone on your tailnet can control it.
-- **Lock one** from **Settings → Boxes → Access → Lock it** on the Mac, or **Lock it**
+- **Lock one** from **Settings → Boxes → the box → Access → Lock it** on the Mac, or **Lock it**
   under its card in the phone's **Boxes**. The device you lock it from is paired first.
   A phone needs Ateam Go 1.4 or later to pair: an older one can't use a locked box.
 - **Pair a phone** from the same place on the Mac: a QR code the iPhone's Camera opens
@@ -472,7 +472,7 @@ affected. Keep the ACL anyway: the lock and the ACL guard against different thin
   over Tailscale, or the one paired phone is lost): run `ateam pair` in the box's
   terminal, which prints a code for a locked box. `ateam pair --unlock` opens a box
   again when no paired device is left.
-- **Unpair** a device from **Settings → Boxes → Access**: its token stops working and
+- **Unpair** a device from **Settings → Boxes → the box → Access**: its token stops working and
   its connection drops at once. Do it for a lost phone.
 
 The box keeps the list in `~/.ateam/pairings.json`, readable by you alone, with hashes
