@@ -6,6 +6,7 @@ import { app, BrowserWindow, dialog, Menu } from "electron";
 import { autoUpdater } from "electron-updater";
 import { windowBackground } from "../shared/theme";
 import { APP_NAME } from "./app-name";
+import { startCrossBox } from "./cross-box";
 import { createHost, registerHostIpc } from "./host";
 import { registerIpc } from "./ipc";
 import { type Lead, startLead } from "./lead";
@@ -323,6 +324,8 @@ app
 			browserUrl: host.browserUrl,
 		});
 		registerHostIpc(host);
+		// The boxes reaching each other, when the user turns it on (cross-box.ts).
+		startCrossBox(host, (line) => console.log(line));
 		registerThemeIpc(async () => {
 			const [projects, boxes] = await Promise.all([
 				host.router.handle(CH.projectsList, []) as Promise<unknown[]>,

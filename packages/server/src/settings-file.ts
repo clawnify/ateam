@@ -40,6 +40,7 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 		pinnedSkills: null,
 		theme: "dark",
 		leadBox: null,
+		crossBox: false,
 	},
 	engine: {
 		defaultAgentId: "claude",

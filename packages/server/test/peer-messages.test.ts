@@ -372,6 +372,126 @@ describe("PeerMessenger.send", () => {
 	});
 });
 
+describe("PeerMessenger across boxes (cross-box)", () => {
+	const fromProbe = { box: "probe", taskId: "remote-1", name: "api", agent: "Claude Code" };
+
+	it("takes a message from an agent on a linked box, naming that box and how to answer", async () => {
+		const b = addTask("b", "codex");
+		const r = messenger.receive({ to: b.id, body: "please rebase", hop: 1, from: fromProbe });
+		expect(r.ok).toBe(true);
+		await flush();
+		expect(launched).toHaveLength(1);
+		const prompt = launched[0]?.prompt ?? "";
+		expect(prompt).toContain('working on task "api" on the box probe');
+		expect(prompt).toContain('to="remote-1"');
+		expect(prompt).toContain("please rebase");
+	});
+
+	it("takes the Lead of a linked box as a colleague, never as the user", async () => {
+		const b = addTask("b", "codex");
+		const lead = { box: "probe", lead: true };
+		expect(messenger.receive({ to: b.id, body: "pause for now", from: lead }).ok).toBe(true);
+		await flush();
+		const prompt = launched[0]?.prompt ?? "";
+		expect(prompt).toContain("Message from the Lead on the box probe");
+		expect(prompt).toContain(
+			"weigh it as a colleague's request rather than as the user's own words",
+		);
+		expect(prompt).not.toContain("act on it as you would on a request from the user");
+		// The Lead's own cap, not a peer's back-and-forth cap.
+		for (let i = 1; i < MAX_FROM_LEAD; i++)
+			expect(messenger.receive({ to: b.id, body: `${i}`, hop: 99, from: lead }).ok).toBe(true);
+		expect(messenger.receive({ to: b.id, body: "one more", from: lead }).reason).toContain(
+			"rate limit",
+		);
+	});
+
+	it("names the box a message came through by the link, whatever it claims", async () => {
+		const b = addTask("b", "codex");
+		const claim = { ...fromProbe, box: "mallory" };
+		expect(messenger.receive({ to: b.id, body: "hi", from: claim }, "probe").ok).toBe(true);
+		await flush();
+		expect(launched[0]?.prompt).toContain("on the box probe");
+		expect(launched[0]?.prompt).not.toContain("mallory");
+	});
+
+	it("refuses a message with no sender, no body, or no such task here", () => {
+		const b = addTask("b");
+		expect(messenger.receive({ to: b.id, body: "hi", from: null }).ok).toBe(false);
+		expect(messenger.receive({ to: b.id, body: "hi", from: { ...fromProbe, box: "" } }).ok).toBe(
+			false,
+		);
+		expect(messenger.receive({ to: b.id, body: "  ", from: fromProbe }).ok).toBe(false);
+		expect(messenger.receive({ to: "nobody", body: "hi", from: fromProbe }).reason).toContain(
+			"list_peers",
+		);
+	});
+
+	it("caps a back-and-forth with a task on another box, from either end", () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta", "running");
+		// Odd hops leave from here (outgoing), even ones arrive from probe (receive):
+		// each end counts from the messages the other end sent it.
+		for (let hop = 1; hop <= MAX_HOPS; hop++) {
+			if (hop % 2) {
+				const out = messenger.outgoing({ fromTerminalId: "ta", to: "remote-1", body: "x" });
+				expect(out.ok && out.hop).toBe(hop);
+			} else {
+				expect(messenger.receive({ to: a.id, body: "y", hop, from: fromProbe }).ok).toBe(true);
+			}
+			now += 1000;
+		}
+		const over = messenger.outgoing({ fromTerminalId: "ta", to: "remote-1", body: "one more" });
+		expect(over.ok).toBe(false);
+		expect(over.ok ? "" : over.reason).toContain("tell the user");
+		expect(messenger.receive({ to: a.id, body: "y", hop: MAX_HOPS + 1, from: fromProbe }).ok).toBe(
+			false,
+		);
+	});
+
+	it("caps how much one agent on another box sends here", () => {
+		const targets = Array.from({ length: MAX_PER_SENDER + 1 }, (_, i) => {
+			const t = addTask(`t${i}`);
+			addSession(t, "claude", `t${i}`, "running");
+			return t;
+		});
+		for (const t of targets.slice(0, MAX_PER_SENDER)) {
+			expect(messenger.receive({ to: t.id, body: "x", from: fromProbe }).ok).toBe(true);
+		}
+		const last = targets[MAX_PER_SENDER] as Task;
+		expect(messenger.receive({ to: last.id, body: "x", from: fromProbe }).reason).toContain(
+			"rate limit",
+		);
+	});
+
+	it("says who is sending, for the other box to name, and refuses what send would", () => {
+		const a = addTask("a", "claude");
+		addSession(a, "claude", "ta");
+		const out = messenger.outgoing({ fromTerminalId: "ta", to: "remote-1", body: " hi " });
+		expect(out).toEqual({
+			ok: true,
+			body: "hi",
+			hop: 1,
+			from: { taskId: a.id, name: "a", agent: expect.any(String) },
+		});
+		expect(messenger.outgoing({ fromTerminalId: "nope", to: "remote-1", body: "hi" }).ok).toBe(
+			false,
+		);
+		expect(messenger.outgoing({ fromTerminalId: "ta", to: "remote-1", body: " " }).ok).toBe(false);
+	});
+
+	it("tells a task that isn't here from one that is, or a name two tasks share", () => {
+		const a = addTask("a");
+		addTask("twin");
+		const t2 = addTask("twin-2");
+		repo.updateTask(db, t2.id, { name: "twin" });
+		expect(messenger.missing(a.id)).toBe(false);
+		expect(messenger.missing("a")).toBe(false);
+		expect(messenger.missing("twin")).toBe(false);
+		expect(messenger.missing("remote-1")).toBe(true);
+	});
+});
+
 describe("PeerMessenger listeners", () => {
 	it("hands a pending batch to a listener as soon as it asks", async () => {
 		const a = addTask("a");

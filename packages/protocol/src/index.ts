@@ -147,7 +147,14 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // `{ token }` and its reply gained `pairing`, optional, so an older engine reads
 // as an open box. pairing:* are new methods; an older box answers "Unknown
 // method" (FEATURE_MIN_VERSION.pairing).
-export const PROTOCOL_VERSION = 29;
+// v30: cross-box. A box can hold links to other boxes, each a pairing of kind
+// "box" on the box it reaches, so its agents list and message tasks there and its
+// Lead reaches them. A link sees task updates only and may only read the board
+// and send messages. New methods: peers:list, peers:sendFromBox, links:list,
+// links:set (an older box answers "Unknown method", FEATURE_MIN_VERSION.crossBox).
+// system:hello takes `{ link: true }` from a link, and its reply gained `wsAddr`,
+// optional. Settings gained `client.crossBox`, read by the desktop alone.
+export const PROTOCOL_VERSION = 30;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -345,6 +352,9 @@ export const FEATURE_MIN_VERSION = {
 	/** v29 added pairing:* and the lock on a box's network port. An older box is
 	 *  always open: clients say so instead of offering to lock it. */
 	pairing: 29,
+	/** v30 added links between boxes (links:*, peers:list, peers:sendFromBox). An
+	 *  older box is left out of them until it is updated. */
+	crossBox: 30,
 	/** v25 added githubAccess:*. An older box answers "Unknown method", so clients
 	 *  point at its terminal (gh auth login) and at Update box instead. */
 	githubAccess: 25,
@@ -730,6 +740,12 @@ export interface ClientSettings {
 	 * forgotten.
 	 */
 	leadBox: string | null;
+	/**
+	 * Whether the boxes this Mac holds reach each other (cross-box, v30): each
+	 * pair gets a link, a pairing of kind "box", that reads the board and sends
+	 * messages. Off until the user turns it on in Settings → Boxes.
+	 */
+	crossBox: boolean;
 }
 export type ThemeId = "dark" | "light" | "classic";
 
@@ -1011,6 +1027,9 @@ export interface SystemInfo {
 	/** How this connection may use the box (v29; absent from an older engine,
 	 *  which is always open). */
 	pairing?: PairingState;
+	/** The address the box's network port listens on (`<host>:<port>`), or null
+	 *  when it has none (v30; absent before). What other boxes link to. */
+	wsAddr?: string | null;
 }
 
 /** A connection's standing with a box's lock (pairing:*, v29).
@@ -1058,6 +1077,42 @@ export interface PairingInviteDTO {
 export interface PairingGrantDTO {
 	token: string;
 	device: PairedDeviceDTO;
+}
+
+/** One link a box holds to another box (links:list, cross-box v30). */
+export interface BoxLinkDTO {
+	/** What the Mac calls the other box (its alias). */
+	name: string;
+	/** Where it is reached: `ws://<host>:<port>`. */
+	url: string;
+	/** connected; connecting (or retrying); unreachable (down, asleep, off the
+	 *  tailnet); refused (locked to devices and this link isn't one of them). */
+	state: "connected" | "connecting" | "unreachable" | "refused";
+	/** Why it isn't connected, in a sentence. */
+	reason?: string;
+	/** This link's device on the other box, when it is paired there. */
+	device: string | null;
+}
+
+/** links:set: every link a box should hold, replacing what it held. A link it
+ *  holds already (the same url) is kept; a new one, or one given a code, pairs
+ *  with that code first (none: an open box, used as it is). */
+export interface BoxLinksSetDTO {
+	/** What the Mac calls this box: how its agents are named on the others. */
+	self: string;
+	links: { name: string; url: string; code?: string | null }[];
+}
+
+/** An agent on another box, as a message from it names it (peers:sendFromBox). */
+export interface RemoteSenderDTO {
+	box: string;
+	taskId: string;
+	name: string;
+	/** The agent's label ("Claude Code"). */
+	agent: string;
+	/** The Lead chat on that box rather than a task's agent. Through a link it is
+	 *  weighed as a colleague's request, never as the user's own words. */
+	lead?: boolean;
 }
 
 /** What `system:update` reports back before the engine goes down to be replaced. */
@@ -1625,6 +1680,7 @@ export type { NativeClientApi } from "./client-api";
 export {
 	buildAteamApi,
 	leadClient,
+	linksClient,
 	pairingClient,
 	requestBoxUpdate,
 	serverHandshake,

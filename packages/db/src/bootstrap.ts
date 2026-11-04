@@ -151,6 +151,7 @@ export function bootstrap(db: SqliteExecutor): void {
 			id TEXT PRIMARY KEY,
 			from_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
 			from_terminal_id TEXT,
+			from_remote TEXT,
 			to_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
 			body TEXT NOT NULL,
 			hop INTEGER NOT NULL DEFAULT 1,
@@ -237,6 +238,7 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE agent_sessions ADD COLUMN exit_reason TEXT",
 		// Null until the first login-shell probe succeeds on this machine.
 		"ALTER TABLE settings ADD COLUMN login_path TEXT",
+		"ALTER TABLE peer_messages ADD COLUMN from_remote TEXT",
 	]) {
 		try {
 			db.exec(sql);

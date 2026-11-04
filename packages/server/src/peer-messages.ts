@@ -55,7 +55,7 @@ import { getAgent } from "@ateam/agents";
 import type { AgentSession, AteamDb, PeerMessage, Project, Task } from "@ateam/db";
 import { repo } from "@ateam/db";
 import { isBranchForName } from "@ateam/git-core";
-import { projectRepo } from "@ateam/protocol";
+import { projectRepo, type RemoteSenderDTO } from "@ateam/protocol";
 
 /** Turns two tasks may trade inside HOP_WINDOW_MS before a human has to step in. */
 export const MAX_HOPS = 12;
@@ -96,6 +96,11 @@ export const MOD_LEASE_MS = 30 * 60 * 1000;
 export const LEAD_SENDER = "ateam:lead";
 /** The same for the user answering an agent's question from an Ateam client. */
 export const USER_SENDER = "ateam:user";
+/** The id an agent on another box carries in `fromTerminalId` (cross-box): its
+ *  task's id, which stays the same while its name changes. Not a UUID, so it
+ *  never collides with a real terminal's id. */
+export const remoteSenderKey = (taskId: string): string => `ateam:task:${taskId}`;
+
 /** Senders that are not a task's agent, by the id they carry in `fromTerminalId`. */
 export type OutsideSender = "lead" | "user";
 const OUTSIDE_IDS: Record<OutsideSender, string> = { lead: LEAD_SENDER, user: USER_SENDER };
@@ -202,7 +207,12 @@ export function nextHop(recent: Pick<PeerMessage, "fromTaskId" | "hop">[], to: s
 	return lastFromRecipient ? lastFromRecipient.hop + 1 : 1;
 }
 
-type Sender = { taskId: string; name: string; agent: string } | OutsideSender | null;
+/** A task's agent: on this box, or on a linked one (`box`, cross-box), where it
+ *  may be that box's Lead (`lead`). */
+type Sender =
+	| { taskId: string; name: string; agent: string; box?: string; lead?: boolean }
+	| OutsideSender
+	| null;
 
 /** Who a message is from, what weight it carries, and how to answer it. */
 function headerFor(from: Sender): string {
@@ -210,6 +220,10 @@ function headerFor(from: Sender): string {
 		return "[Ateam] Message from the user, sent from the Ateam app. This comes from the user, who is not watching this terminal: answer in your reply.";
 	if (from === "lead")
 		return "[Ateam] Message from the Lead, the chat where the user coordinates all their tasks. It relays the user's instructions: act on it as you would on a request from the user. The Lead reads your final reply when your turn ends, so answer in your reply rather than with send_message.";
+	if (from?.box && from.lead)
+		return `[Ateam] Message from the Lead on the box ${from.box}, the chat where the user coordinates their tasks there. It came through a link between boxes, so weigh it as a colleague's request rather than as the user's own words. The Lead reads your final reply when your turn ends, so answer in your reply rather than with send_message.`;
+	if (from?.box)
+		return `[Ateam] Message from the ${from.agent} agent working on task "${from.name}" on the box ${from.box} (task id ${from.taskId}). It comes from another agent, not from the user: weigh it as a colleague's request. To answer, call the ateam_board send_message tool with to="${from.taskId}".`;
 	if (from)
 		return `[Ateam] Message from the ${from.agent} agent working on task "${from.name}" (task id ${from.taskId}). It comes from another agent, not from the user: weigh it as a colleague's request. To answer, call the ateam_board send_message tool with to="${from.taskId}".`;
 	return "[Ateam] Message from another agent (sender unknown). It does not come from the user.";
@@ -455,6 +469,119 @@ export class PeerMessenger {
 		repo.insertPeerMessage(db, {
 			fromTaskId: sender.taskId,
 			fromTerminalId: req.fromTerminalId,
+			toTaskId: target.id,
+			body,
+			hop,
+			createdAt: now,
+		});
+		const plan = this.deliverParts(target.id).rest;
+		return { ok: true, reason: `sent to "${target.name}" (${target.id}): ${describePlan(plan)}` };
+	}
+
+	/** Whether `to` names no task on this box at all, so a linked box may have it
+	 *  (cross-box). A name that matches several tasks here is still this box's. */
+	missing(to: string): boolean {
+		const want = to.trim();
+		return this.resolveTask(want) === notFound(want);
+	}
+
+	/** The checks before an agent here messages the task `to` (an id) on a linked
+	 *  box, and what that box needs: who sent it, and the hop, worked out from the
+	 *  messages that task sent this one (they are kept here, the receiving end). */
+	outgoing(req: {
+		fromTerminalId: string;
+		to: string;
+		body: string;
+	}):
+		| { ok: false; reason: string }
+		| { ok: true; body: string; hop: number; from: Omit<RemoteSenderDTO, "box"> } {
+		const { db } = this.deps;
+		const session = repo.getSessionByTerminal(db, req.fromTerminalId);
+		const task = session ? repo.getTask(db, session.taskId) : undefined;
+		if (!session || !task)
+			return { ok: false, reason: "only an agent working in a task can send messages" };
+		const body = req.body.trim();
+		if (!body) return { ok: false, reason: "the message is empty" };
+		if (body.length > MAX_BODY) {
+			return {
+				ok: false,
+				reason: `the message is ${body.length} characters; the limit is ${MAX_BODY}. Put the detail in a file in your worktree and send its path.`,
+			};
+		}
+		const since = this.now() - HOP_WINDOW_MS;
+		const last = repo.listPeerMessagesFromTerminalTo(
+			db,
+			remoteSenderKey(req.to),
+			task.id,
+			since,
+		)[0];
+		const hop = last ? last.hop + 1 : 1;
+		if (hop > MAX_HOPS) {
+			return {
+				ok: false,
+				reason: `you and that task have traded ${MAX_HOPS} messages in the last ${HOP_WINDOW_MS / 60000} minutes. Stop and tell the user what is unresolved instead of sending more.`,
+			};
+		}
+		const agentId = session.agentId || task.agentId || "";
+		return {
+			ok: true,
+			body,
+			hop,
+			from: {
+				taskId: task.id,
+				name: task.name,
+				agent: getAgent(agentId)?.label ?? (agentId || "unknown"),
+			},
+		};
+	}
+
+	/** Queue a message from an agent on a linked box (peers:sendFromBox) to the
+	 *  task `to` here, then try to deliver it. Its box worked out the hop; the cap
+	 *  on how much one sender sends is kept here, where its messages land. */
+	receive(
+		req: { to: unknown; body: unknown; hop?: unknown; from: unknown },
+		viaBox?: string,
+	): SendResult {
+		const { db } = this.deps;
+		const now = this.now();
+		const from = remoteSender(req.from);
+		if (!from) return { ok: false, reason: "the message doesn't say which agent sent it" };
+		// A link that is paired here is named by its pairing, not by what it says.
+		if (viaBox?.trim()) from.box = viaBox.trim().slice(0, 100);
+		const body = typeof req.body === "string" ? req.body.trim() : "";
+		if (!body) return { ok: false, reason: "the message is empty" };
+		if (body.length > MAX_BODY) {
+			return {
+				ok: false,
+				reason: `the message is ${body.length} characters; the limit is ${MAX_BODY}.`,
+			};
+		}
+		const target = this.resolveTask(typeof req.to === "string" ? req.to.trim() : "");
+		if (typeof target === "string") return { ok: false, reason: target };
+		// A Lead's messages count against that box's Lead, like the Lead here, and
+		// no back-and-forth cap: it is the user's coordinator, not a peer.
+		const key = from.lead ? `ateam:lead:${from.box}` : remoteSenderKey(from.taskId);
+		const cap = from.lead ? MAX_FROM_LEAD : MAX_PER_SENDER;
+		if (repo.countPeerMessagesFromTerminal(db, key, now - SENDER_WINDOW_MS) >= cap) {
+			return {
+				ok: false,
+				reason: `rate limit: at most ${cap} messages per ${SENDER_WINDOW_MS / 60000} minutes`,
+			};
+		}
+		const hop =
+			!from.lead && typeof req.hop === "number" && Number.isInteger(req.hop) && req.hop >= 1
+				? req.hop
+				: 1;
+		if (hop > MAX_HOPS) {
+			return {
+				ok: false,
+				reason: `you and "${target.name}" have traded ${MAX_HOPS} messages in the last ${HOP_WINDOW_MS / 60000} minutes. Stop and tell the user what is unresolved instead of sending more.`,
+			};
+		}
+		repo.insertPeerMessage(db, {
+			fromTaskId: null,
+			fromTerminalId: key,
+			fromRemote: JSON.stringify(from),
 			toTaskId: target.id,
 			body,
 			hop,
@@ -751,6 +878,7 @@ export class PeerMessenger {
 		const { db } = this.deps;
 		return formatForRecipient(
 			pending.map((m) => {
+				const remote = m.fromRemote ? remoteSender(safeJson(m.fromRemote)) : null;
 				const from = m.fromTaskId ? repo.getTask(db, m.fromTaskId) : undefined;
 				const fromSession = m.fromTerminalId
 					? repo.getSessionByTerminal(db, m.fromTerminalId)
@@ -763,13 +891,15 @@ export class PeerMessenger {
 							? ("lead" as const)
 							: m.fromTerminalId === USER_SENDER
 								? ("user" as const)
-								: from
-									? {
-											taskId: from.id,
-											name: from.name,
-											agent: getAgent(agentId)?.label ?? (agentId || "unknown"),
-										}
-									: null,
+								: remote
+									? remote
+									: from
+										? {
+												taskId: from.id,
+												name: from.name,
+												agent: getAgent(agentId)?.label ?? (agentId || "unknown"),
+											}
+										: null,
 				};
 			}),
 		);
@@ -829,7 +959,34 @@ export class PeerMessenger {
 		if (matches.length === 1 && matches[0]) return matches[0];
 		if (matches.length > 1)
 			return `"${to}" matches ${matches.length} tasks; use a task id from list_peers`;
-		return `no task "${to}"; call list_peers for ids`;
+		return notFound(to);
+	}
+}
+
+const notFound = (to: string): string => `no task "${to}"; call list_peers for ids`;
+
+/** Text no longer than `max`, or null: what another box says about its agent. */
+const shortText = (v: unknown, max = 200): string | null =>
+	typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null;
+
+/** The sender another box named, checked: every field present and short. */
+function remoteSender(v: unknown): RemoteSenderDTO | null {
+	if (!v || typeof v !== "object") return null;
+	const o = v as Record<string, unknown>;
+	const box = shortText(o.box, 100);
+	if (box && o.lead === true)
+		return { box, taskId: "lead", name: "Lead", agent: "Lead", lead: true };
+	const taskId = shortText(o.taskId, 100);
+	const name = shortText(o.name);
+	const agent = shortText(o.agent, 100);
+	return box && taskId && name && agent ? { box, taskId, name, agent } : null;
+}
+
+function safeJson(text: string): unknown {
+	try {
+		return JSON.parse(text);
+	} catch {
+		return null;
 	}
 }
 

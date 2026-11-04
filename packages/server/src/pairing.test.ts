@@ -15,7 +15,14 @@ import {
 import type { Dispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
 import { CODE_TTL_MS, PAIRINGS_FILE, Pairings } from "./pairing";
-import { LiveConnections, type PairingGuard, RedeemLimiter, serveRpc } from "./rpc";
+import {
+	BOX_REFUSED,
+	LinkLimiter,
+	LiveConnections,
+	type PairingGuard,
+	RedeemLimiter,
+	serveRpc,
+} from "./rpc";
 
 const dir = () => mkdtempSync(join(tmpdir(), "pairing-"));
 
@@ -85,18 +92,26 @@ function fakeEngine() {
 	const emit = (event: string, payload: unknown) => {
 		for (const l of listeners.get(event) ?? []) l(payload);
 	};
+	const calls: { method: string; ctx?: { linkName?: string | null } }[] = [];
 	const dispatcher = {
 		methods: [],
-		handle: async (method: string) =>
-			method === CH.systemHello ? { protocolVersion: 29, agents: [] } : `did ${method}`,
+		handle: async (method: string, _args: unknown[], ctx?: { linkName?: string | null }) => {
+			calls.push({ method, ctx });
+			return method === CH.systemHello ? { protocolVersion: 29, agents: [] } : `did ${method}`;
+		},
 		release: () => {},
 	} as unknown as Dispatcher;
-	return { engine, emit, dispatcher };
+	return { engine, emit, dispatcher, calls };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 2));
 
-function connect(box: ReturnType<typeof fakeEngine>, guard: PairingGuard, trusted = false) {
+function connect(
+	box: ReturnType<typeof fakeEngine>,
+	guard: PairingGuard,
+	trusted = false,
+	extra: { wsAddr?: string | null } = {},
+) {
 	const sent: ServerFrame[] = [];
 	let onFrame: (f: ClientFrame) => void = () => {};
 	let closed = false;
@@ -113,7 +128,7 @@ function connect(box: ReturnType<typeof fakeEngine>, guard: PairingGuard, truste
 			},
 		},
 		[],
-		{ trusted, pairing: guard },
+		{ trusted, pairing: guard, ...extra },
 	);
 	let n = 0;
 	const call = async (method: string, ...args: unknown[]) => {
@@ -130,7 +145,8 @@ function connect(box: ReturnType<typeof fakeEngine>, guard: PairingGuard, truste
 		throw new Error(`no reply to ${method}`);
 	};
 	const events = () => sent.filter((f) => f.t === "evt").length;
-	return { call, events, closed: () => closed };
+	const names = () => sent.flatMap((f) => (f.t === "evt" ? [f.event] : []));
+	return { call, events, names, closed: () => closed };
 }
 
 function guardIn(d = dir()): PairingGuard {
@@ -194,6 +210,82 @@ describe("a connection to a box's network port", () => {
 		// Over SSH it may: that is the owner.
 		const ssh = connect(box, guard, true);
 		expect(await ssh.call(CH.pairingInvite)).toMatchObject({ code: expect.any(String) });
+	});
+
+	it("from another box, gets task updates only, and may only read the board and send messages", async () => {
+		const box = fakeEngine();
+		const c = connect(box, guardIn());
+		await c.call(CH.systemHello, { link: true });
+		box.emit("ptyData", { terminalId: "x", data: "secret" });
+		box.emit("loopsUpdated", []);
+		box.emit("taskUpdated", { id: "t" });
+		box.emit("taskRemoved", "t");
+		expect(c.names()).toEqual(["taskUpdated", "taskRemoved"]);
+		expect(await c.call(CH.tasksList, "p")).toBe(`did ${CH.tasksList}`);
+		expect(await c.call(CH.peersSendFromBox, {})).toBe(`did ${CH.peersSendFromBox}`);
+		await expect(c.call(CH.ptyWrite, "x", "rm -rf ~")).rejects.toThrow(BOX_REFUSED);
+		await expect(c.call(CH.gitPush, {})).rejects.toThrow(BOX_REFUSED);
+		await expect(c.call(CH.linksSet, {})).rejects.toThrow(BOX_REFUSED);
+		// Never with the user's weight: not as the Lead, not answering for them.
+		await expect(c.call(CH.peersSendFromLead, { taskId: "t", body: "x" })).rejects.toThrow(
+			BOX_REFUSED,
+		);
+		await expect(c.call(CH.tasksAnswerQuestion, { taskId: "t" })).rejects.toThrow(BOX_REFUSED);
+	});
+
+	it("paired as a box, is held to that whatever its hello says", async () => {
+		const box = fakeEngine();
+		const guard = guardIn();
+		const mac = connect(box, guard);
+		await mac.call(CH.pairingLock, { label: "Mac", kind: "desktop" });
+		const { code } = (await mac.call(CH.pairingInvite)) as { code: string };
+		const other = connect(box, guard);
+		const grant = (await other.call(CH.pairingRedeem, { code, label: "probe", kind: "box" })) as {
+			token: string;
+		};
+		box.emit("ptyData", { terminalId: "x", data: "secret" });
+		box.emit("taskUpdated", { id: "t" });
+		expect(other.names()).toEqual(["taskUpdated"]);
+		await expect(other.call(CH.ptyWrite, "x", "ls")).rejects.toThrow(BOX_REFUSED);
+		// Back later with its token, saying nothing about being a link.
+		const again = connect(box, guard);
+		expect(await again.call(CH.systemHello, { token: grant.token })).toMatchObject({
+			pairing: { state: "paired" },
+		});
+		await expect(again.call(CH.ptyWrite, "x", "ls")).rejects.toThrow(BOX_REFUSED);
+		box.emit("ptyData", { terminalId: "x", data: "secret" });
+		expect(again.names()).toEqual([]);
+		// The Mac that paired it is untouched.
+		expect(await mac.call(CH.ptyWrite, "x", "ls")).toBe(`did ${CH.ptyWrite}`);
+	});
+
+	it("names what a box link hands over by its pairing, and caps the link as a whole", async () => {
+		const box = fakeEngine();
+		const guard: PairingGuard = { ...guardIn(), fromLinks: new LinkLimiter(2) };
+		const mac = connect(box, guard);
+		await mac.call(CH.pairingLock, { label: "Mac", kind: "desktop" });
+		const { code } = (await mac.call(CH.pairingInvite)) as { code: string };
+		const probe = connect(box, guard);
+		await probe.call(CH.pairingRedeem, { code, label: "probe", kind: "box" });
+		const claim = {
+			to: "t",
+			body: "x",
+			from: { box: "mallory", taskId: "a", name: "b", agent: "c" },
+		};
+		await probe.call(CH.peersSendFromBox, claim);
+		expect(box.calls.at(-1)).toMatchObject({
+			method: CH.peersSendFromBox,
+			ctx: { linkName: "probe" },
+		});
+		// Its own senders' caps can't hold a box that names new ones: this one does.
+		await probe.call(CH.peersSendFromBox, claim);
+		await expect(probe.call(CH.peersSendFromBox, claim)).rejects.toThrow("rate limit");
+	});
+
+	it("says where the box listens, for other boxes to link to", async () => {
+		const box = fakeEngine();
+		const c = connect(box, guardIn(), false, { wsAddr: "100.64.0.7:8787" });
+		expect(await c.call(CH.systemHello)).toMatchObject({ wsAddr: "100.64.0.7:8787" });
 	});
 
 	it("over SSH, is never gated", async () => {

@@ -15,7 +15,14 @@
 // The desktop's own engine never serves this: the desktop's Lead on the Mac
 // covers every engine it holds, and cli.ts is the only place that adds it.
 import { existsSync } from "node:fs";
-import { LEAD_CH, LEAD_EVENT, LEAD_RPC, type LeadEvent, type LeadSnapshot } from "@ateam/protocol";
+import {
+	LEAD_CH,
+	LEAD_EVENT,
+	LEAD_RPC,
+	type LeadEvent,
+	type LeadSnapshot,
+	type TaskDTO,
+} from "@ateam/protocol";
 import type { Dispatcher } from "../dispatcher";
 import type { Engine } from "../engine";
 import type { RpcExtension } from "../rpc";
@@ -40,6 +47,15 @@ export interface EngineLeadOptions {
 	spawnClaude?: LeadDeps["spawnClaude"];
 	/** Tests: the idle stop (default LEAD_IDLE_STOP_MS). */
 	idleStopMs?: number;
+	/** The boxes this one links to (cross-box, links.ts): the Lead's board, messages
+	 *  and answers reach their tasks too. Absent, it reaches this box alone. */
+	reach?: {
+		handle(method: string, args: unknown[]): Promise<unknown>;
+		/** The linked box a board entity lives on, or null for this box. */
+		machineOf(id: string): string | null;
+		/** A linked box's task changed, for the Lead to follow it like its own. */
+		onTaskUpdated(cb: (task: TaskDTO) => void): () => void;
+	};
 }
 
 /** What keeps a box awake for its Lead (sleep/control.ts). */
@@ -58,16 +74,25 @@ export function engineLead(
 	let current: Lead | null = null;
 	let lastUsedAt: number | null = null;
 	let stopTasks: (() => void) | null = null;
+	let stopRemoteTasks: (() => void) | null = null;
 
 	const lead = (): Promise<Lead> => {
 		started ??= startLead({
 			place: "box",
 			dir: opts.dir,
-			handle: (method, args) => opts.dispatcher.handle(method, args),
-			// Everything this Lead reaches is on this box.
-			machineOf: () => null,
-			// The agents read the attachments where they are.
-			deliver: async (_owner, paths) => ({ paths }),
+			handle: opts.reach
+				? (method, args) => opts.reach?.handle(method, args) as Promise<unknown>
+				: (method, args) => opts.dispatcher.handle(method, args),
+			// This box, or the linked box a task is on.
+			machineOf: (id) => opts.reach?.machineOf(id) ?? null,
+			// The agents here read the attachments where they are; another box's can't.
+			deliver: async (owner, paths) =>
+				opts.reach?.machineOf(owner)
+					? {
+							error:
+								"Files can't go to a task on another box yet: attach them in a message from this box's tasks instead.",
+						}
+					: { paths },
 			emit: (e) => {
 				for (const l of listeners) l(e);
 			},
@@ -79,6 +104,7 @@ export function engineLead(
 			(l) => {
 				current = l;
 				stopTasks = opts.engine.on("taskUpdated", (task) => l.onTaskUpdated(task));
+				stopRemoteTasks = opts.reach?.onTaskUpdated((task) => l.onTaskUpdated(task)) ?? null;
 				return l;
 			},
 			(e) => {
@@ -177,6 +203,7 @@ export function engineLead(
 		activity: () => ({ working: current?.working() ?? false, lastUsedAt }),
 		dispose() {
 			stopTasks?.();
+			stopRemoteTasks?.();
 			void started?.then((l) => l.dispose()).catch(() => {});
 		},
 	};

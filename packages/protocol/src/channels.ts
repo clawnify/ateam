@@ -33,6 +33,10 @@ export const CH = {
 	tasksPage: "tasks:page",
 	tasksChangeSteps: "tasks:changeSteps",
 	peersSendFromLead: "peers:sendFromLead",
+	// Cross-box (v30): an agent on a linked box lists this box's tasks and messages
+	// them. All a box link may do here besides reading the board (rpc.ts BOX_METHODS).
+	peersList: "peers:list",
+	peersSendFromBox: "peers:sendFromBox",
 	gitCommit: "git:commit",
 	gitPush: "git:push",
 	gitUpdate: "git:update",
@@ -62,6 +66,10 @@ export const CH = {
 	pairingRedeem: "pairing:redeem",
 	pairingRevoke: "pairing:revoke",
 	pairingLock: "pairing:lock",
+	// The links this box holds to other boxes (cross-box, v30, links.ts). Box-
+	// addressed: the Mac, which holds every box, sets them up.
+	linksList: "links:list",
+	linksSet: "links:set",
 	fsListDir: "fs:listDir",
 	utilPickFiles: "util:pickFiles",
 	utilAttachImages: "util:attachImages",

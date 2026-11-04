@@ -37,7 +37,7 @@ import { ensureLoginEnv } from "./login-env";
 import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
-import { PeerMessenger } from "./peer-messages";
+import { type PeerSearch, type PeerView, PeerMessenger, type SendResult } from "./peer-messages";
 import { applyAgentQuit, columnAfterExit } from "./pty/agent-quit";
 import { PtyClient } from "./pty/pty-client";
 import { reapableSessions } from "./pty/reap";
@@ -68,6 +68,35 @@ export interface EngineOptions {
 	/** Unix socket for the PTY daemon (defaults to ~/.ateam/pty-daemon.sock). */
 	sockPath?: string;
 	log?: (line: string) => void;
+	/** The boxes this one links to (cross-box, links.ts): its agents' list_peers
+	 *  and send_message reach their tasks too. Absent on the desktop's engine. */
+	peerRelay?: PeerRelay;
+}
+
+/** What an engine's agents reach on linked boxes through (links.ts). */
+export interface PeerRelay {
+	/** Whether this box holds any link; without one nothing changes. */
+	active(): boolean;
+	/** The tasks on every linked box, or the ones matching a search, each with its
+	 *  box, and the boxes that didn't answer. */
+	list(search: string | undefined): Promise<{
+		peers: (PeerView & { box: string })[];
+		more: boolean;
+		unreachable: { box: string; reason: string }[];
+	}>;
+	/** The linked box with the task `to` (an id, or an exact name or branch), or
+	 *  why none is, for the agent. */
+	find(to: string): Promise<{ box: string; taskId: string } | { box: null; reason: string }>;
+	/** Hand a message to the box that has the task. */
+	deliver(
+		box: string,
+		msg: {
+			to: string;
+			body: string;
+			hop: number;
+			from: { taskId: string; name: string; agent: string };
+		},
+	): Promise<SendResult>;
 }
 
 /**
@@ -114,6 +143,15 @@ export interface Engine {
 		sender: "lead" | "user",
 		req: { to: string; body: string },
 	): { ok: boolean; reason: string };
+	/** This box's tasks for an agent on a linked box (peers:list, cross-box):
+	 *  every task in play, or the ones matching a search. */
+	peersForBox(search?: string): PeerView[] | PeerSearch;
+	/** A message to a task here from an agent on a linked box (peers:sendFromBox). */
+	messageFromBox(
+		req: { to: unknown; body: unknown; hop?: unknown; from: unknown },
+		/** The box it came through, by that link's pairing: it names the sender. */
+		viaBox?: string,
+	): SendResult;
 	/** Answer (or with null dismiss) the question a task's agent asked (questions.ts). */
 	answerQuestion(req: {
 		taskId: string;
@@ -328,9 +366,41 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		get: () => buildBoardView(db),
 		setStatus: async (req) => applySetStatus(db, req, sendTaskUpdated),
 		setWaiting: async (req) => applySetWaiting(db, req, waits, sendTaskUpdated),
-		listPeers: async (callerTerminalId, search) =>
-			search ? peers.searchPeers(callerTerminalId, search) : peers.listPeers(callerTerminalId),
-		sendMessage: async (req) => peers.send(req),
+		listPeers: async (callerTerminalId, search) => {
+			const here = search
+				? peers.searchPeers(callerTerminalId, search)
+				: peers.listPeers(callerTerminalId);
+			const relay = opts.peerRelay;
+			if (!relay?.active()) return here;
+			// The linked boxes' tasks too, each with its box (cross-box).
+			const there = await relay.list(search);
+			const gone = there.unreachable.length > 0 ? { unreachable: there.unreachable } : {};
+			if (search) {
+				const found = here as PeerSearch;
+				return { peers: [...found.peers, ...there.peers], more: found.more || there.more, ...gone };
+			}
+			const all = [...(here as PeerView[]), ...there.peers];
+			return there.unreachable.length > 0 ? { peers: all, ...gone } : all;
+		},
+		sendMessage: async (req) => {
+			const relay = opts.peerRelay;
+			if (!relay?.active() || !peers.missing(req.to)) return peers.send(req);
+			// No such task here: the linked box that has it takes the message.
+			const found = await relay.find(req.to.trim());
+			if (found.box === null) return { ok: false, reason: found.reason };
+			const out = peers.outgoing({
+				fromTerminalId: req.fromTerminalId,
+				to: found.taskId,
+				body: req.body,
+			});
+			if (!out.ok) return out;
+			return relay.deliver(found.box, {
+				to: found.taskId,
+				body: out.body,
+				hop: out.hop,
+				from: out.from,
+			});
+		},
 		askUser: async (req) => {
 			const session = repo.getSessionByTerminal(db, req.callerTerminalId);
 			if (!session)
@@ -757,6 +827,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			emitter.emit("loopsUpdated", loopRunner.describe());
 		},
 		messageFrom: (sender, req) => peers.sendFrom(sender, req),
+		peersForBox: (search) =>
+			search ? peers.searchPeers(undefined, search) : peers.listPeers(undefined),
+		messageFromBox: (req, viaBox) => peers.receive(req, viaBox),
 		answerQuestion: (req) => {
 			// A permission prompt is answered by resolving the hook that holds it,
 			// not by a message: the agent is mid-turn, waiting on exactly this.

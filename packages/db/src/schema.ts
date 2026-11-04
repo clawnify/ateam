@@ -401,6 +401,9 @@ export const peerMessages = sqliteTable(
 		/** Null for a sender that is not a task's agent (reserved: the user, a box). */
 		fromTaskId: text("from_task_id").references(() => tasks.id, { onDelete: "set null" }),
 		fromTerminalId: text("from_terminal_id"),
+		/** An agent on another box (cross-box): JSON of RemoteSenderDTO, for the
+		 *  recipient's header. Its fromTerminalId is then `ateam:task:<its task id>`. */
+		fromRemote: text("from_remote"),
 		toTaskId: text("to_task_id")
 			.notNull()
 			.references(() => tasks.id, { onDelete: "cascade" }),

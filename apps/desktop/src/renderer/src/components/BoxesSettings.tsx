@@ -10,6 +10,7 @@ import type { HostStatus } from "../../../shared/host";
 import { type BoxRow, boxesNeedingYou, boxRows, engineLabel } from "../boxes-settings";
 import { useLeadHome } from "../useLeadHome";
 import { BoxAccess } from "./BoxAccess";
+import { CrossBox } from "./CrossBox";
 import { GithubAccess } from "./GithubAccess";
 import { Button } from "./ui/button";
 import { usePrompt } from "./usePrompt";
@@ -19,7 +20,8 @@ import { usePrompt } from "./usePrompt";
 // GitHub access. Listing reads only what the desktop already holds, so opening
 // the page never wakes a sleeping box: connecting one is a click, and so is
 // everything that changes a box. Here too the desktop's Lead chat is moved onto
-// a box (client.leadBox), as the phone picks its Lead box in its own Boxes.
+// a box (client.leadBox), as the phone picks its Lead box in its own Boxes, and
+// the boxes are let reach each other (client.crossBox, CrossBox.tsx).
 
 const IPC_PREFIX = /^Error invoking remote method '[^']+': (Error: )?/;
 const errorText = (e: unknown) =>
@@ -166,6 +168,7 @@ export function BoxesSettings() {
 	return (
 		<div className="boxes-settings">
 			{promptUi}
+			{rows.length > 1 ? <CrossBox confirm={confirm} /> : null}
 			{rows.map((row) => {
 				const note = notes[row.alias];
 				const canUpdate =

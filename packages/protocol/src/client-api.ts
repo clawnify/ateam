@@ -12,6 +12,8 @@ import type {
 	AgentDTO,
 	AteamApi,
 	AttachDelivery,
+	BoxLinkDTO,
+	BoxLinksSetDTO,
 	BoxUpdateStarted,
 	ChangeStepsDTO,
 	CleanupCandidate,
@@ -73,6 +75,15 @@ export function serverHandshake(rpc: RpcClient, token?: string): Promise<SystemI
 }
 
 /** A box's lock (v29), for a client on its own wire. */
+/** The links a box holds to other boxes (cross-box, v30), for the Mac that sets
+ *  them up on each box's own wire. */
+export function linksClient(rpc: RpcClient) {
+	return {
+		list: () => rpc.call(CH.linksList) as Promise<BoxLinkDTO[]>,
+		set: (req: BoxLinksSetDTO) => rpc.call(CH.linksSet, [req]) as Promise<BoxLinkDTO[]>,
+	};
+}
+
 export function pairingClient(rpc: RpcClient) {
 	return {
 		status: () => rpc.call(CH.pairingStatus) as Promise<PairingStatusDTO>,
