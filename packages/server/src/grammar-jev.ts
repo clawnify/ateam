@@ -1,5 +1,5 @@
 // Which grammar suggestions are worth showing, by the same decision model the
-// board uses (jev.ts). Harper, the local grammar checker, flags what it can't
+// board uses (jev.ts, decision-model.ts: Jev on OpenRouter or Luna on OpenAI). Harper, the local grammar checker, flags what it can't
 // read: a typo like "wich", but also slang ("shouty", "lol") and names it has
 // never seen. Telling those apart is a reading of the prompt, so Jev answers
 // one yes/no question per flagged word, all in one call.
@@ -8,24 +8,38 @@
 // the setting off, a draft that may hold a secret, or any failure, every
 // issue Harper found stands, which is the grammar check as it works offline.
 
-import { askJev } from "./jev";
+import {
+	askDecisions,
+	type DecisionModel,
+	type PerProvider,
+	type YesNoQuestion,
+} from "./decision-model";
 import { looksSecret } from "./secrets";
 
 /**
- * Pinned, separately from the board's: the threshold below is calibrated
- * against this build (scripts/grammar-jev-calibrate.ts in apps/desktop).
+ * Pinned, separately from the board's: the thresholds below are calibrated
+ * against these builds (scripts/grammar-jev-calibrate.ts in apps/desktop).
  */
-export const GRAMMAR_JEV_MODEL = "typesafe/jev-1.14";
+export const GRAMMAR_MODEL: PerProvider<string> = {
+	openrouter: "typesafe/jev-1.14",
+	openai: "gpt-6-luna",
+};
 
 /**
- * An issue shows when Jev puts it at this probability or above. Set from a
- * live run (2026-10-25, 16 drafts through Harper and the toolbar filter, 17
+ * An issue shows when the model puts it at this probability or above.
+ *
+ * Jev: set from a live run (2026-10-25, 16 drafts through Harper and the toolbar filter, 17
  * judged words): real mistakes ("wich", "outide", "retrys", "way to short")
  * scored 0.91-0.97, slang and names ("lol", "shouty", "supabase", "lmk")
  * 0.03-0.21, so 0.5 sits mid-gap and matched 17/17. Note the board's 0.80
  * bar would be wrong here: an earlier "its → it's" scored 0.71-0.78.
+ *
+ * Luna: the same 0.5, from a live run of the same drafts (2026-11-04,
+ * grammar-jev-calibrate.ts --provider openai), 17/17: real mistakes scored
+ * 0.99-1.00, slang and names ("lol", "shouty", "pls", "mins", "supabase")
+ * 0.00-0.11. Calls took 0.26-0.70s, inside TIMEOUT_MS.
  */
-export const KEEP_PROBABILITY = 0.5;
+export const KEEP_PROBABILITY: PerProvider<number> = { openrouter: 0.5, openai: 0.5 };
 
 /**
  * Someone is waiting on this: the suggestions appear only once it answers.
@@ -52,14 +66,13 @@ export interface GrammarVerdict {
 	keep: boolean;
 }
 
-function question(draft: string, issue: GrammarJudgeIssue) {
+function question(draft: string, issue: GrammarJudgeIssue): YesNoQuestion {
 	const before = draft.slice(Math.max(0, issue.start - CONTEXT), issue.start);
 	const after = draft.slice(issue.end, issue.end + CONTEXT);
 	const fixes = issue.suggestions.length
 		? ` It suggests: ${issue.suggestions.map((s) => `"${s}"`).join(", ")}.`
 		: "";
 	return {
-		type: "noul",
 		instructions: `The user is typing a casual prompt to an AI coding agent. A grammar checker flagged "${issue.problem}" in "…${before}[${issue.problem}]${after}…": ${issue.message}${fixes} Is "${issue.problem}" a real mistake the user would want corrected, rather than deliberate slang, a name, a technical term, or a casual word they meant?`,
 		criteria: {
 			true: "A typo, misspelling or grammar error the user would fix if they noticed it.",
@@ -75,8 +88,8 @@ function question(draft: string, issue: GrammarJudgeIssue) {
  */
 const verdicts = new Map<string, GrammarVerdict>();
 const MAX_VERDICTS = 500;
-const verdictKey = (draft: string, issue: GrammarJudgeIssue) =>
-	`${draft.slice(Math.max(0, issue.start - CONTEXT), issue.end)}\u0000${issue.message}`;
+const verdictKey = (model: DecisionModel, draft: string, issue: GrammarJudgeIssue) =>
+	`${model.provider}\u0000${draft.slice(Math.max(0, issue.start - CONTEXT), issue.end)}\u0000${issue.message}`;
 
 /**
  * A verdict per issue, in the order given, asking Jev (one call) only about
@@ -85,21 +98,23 @@ const verdictKey = (draft: string, issue: GrammarJudgeIssue) =>
  * shows every issue.
  */
 export async function judgeGrammar(input: {
-	apiKey: string;
+	/** Which decision model answers, with its key (decision-model.ts). */
+	model: DecisionModel;
 	draft: string;
 	issues: GrammarJudgeIssue[];
 	signal?: AbortSignal;
 }): Promise<GrammarVerdict[] | null> {
-	if (!input.apiKey || input.issues.length === 0 || looksSecret(input.draft)) return null;
-	const keys = input.issues.map((issue) => verdictKey(input.draft, issue));
+	if (!input.model.apiKey || input.issues.length === 0 || looksSecret(input.draft)) return null;
+	const keep = KEEP_PROBABILITY[input.model.provider];
+	const keys = input.issues.map((issue) => verdictKey(input.model, input.draft, issue));
 	const unasked = input.issues.filter((_, i) => !verdicts.has(keys[i] ?? ""));
 	if (unasked.length > 0) {
 		const questions = Object.fromEntries(
 			unasked.map((issue, i) => [`issue_${i}`, question(input.draft, issue)]),
 		);
-		const answers = await askJev({
-			apiKey: input.apiKey,
-			model: GRAMMAR_JEV_MODEL,
+		const answers = await askDecisions({
+			target: input.model,
+			model: GRAMMAR_MODEL[input.model.provider],
 			state: { draft_prompt: input.draft.slice(0, MAX_DRAFT) },
 			questions,
 			timeoutMs: TIMEOUT_MS,
@@ -110,7 +125,7 @@ export async function judgeGrammar(input: {
 		if (verdicts.size + unasked.length > MAX_VERDICTS) verdicts.clear();
 		unasked.forEach((issue, i) => {
 			const p = answers[`issue_${i}`] ?? 0;
-			verdicts.set(verdictKey(input.draft, issue), { p, keep: p >= KEEP_PROBABILITY });
+			verdicts.set(verdictKey(input.model, input.draft, issue), { p, keep: p >= keep });
 		});
 	}
 	const out: GrammarVerdict[] = [];

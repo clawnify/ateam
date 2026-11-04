@@ -2,11 +2,13 @@
 // shipped classifyTurn, printed with each question's probability so the
 // questions and MOVE_CONFIDENCE can be judged against real answers.
 //
-// Makes live OpenRouter calls (a few hundredths of a cent). Run by hand:
-//   bun packages/server/scripts/jev-calibrate.ts
-// Key: OPENROUTER_API_KEY, else ~/.ateam/credentials.json.
-import { openRouterApiKey } from "../src/credentials-file";
-import { classifyTurn } from "../src/jev";
+// Makes live calls (a few hundredths of a cent). Run by hand:
+//   bun packages/server/scripts/jev-calibrate.ts                    (Jev, OpenRouter)
+//   bun packages/server/scripts/jev-calibrate.ts --provider openai  (Luna, OpenAI)
+// Key: OPENROUTER_API_KEY, else ~/.ateam/credentials.json; OpenAI's from the file only.
+import { openAiApiKey, openRouterApiKey } from "../src/credentials-file";
+import type { DecisionProvider } from "../src/decision-model";
+import { BOARD_MODEL, classifyTurn, MOVE_CONFIDENCE } from "../src/jev";
 
 type Expect = "review" | "needs_attention";
 const CASES: { name: string; user: string; final: string; expect: Expect }[] = [
@@ -94,13 +96,21 @@ const CASES: { name: string; user: string; final: string; expect: Expect }[] = [
 	},
 ];
 
-const key = openRouterApiKey();
-if (!key) throw new Error("no OpenRouter key");
+const provider: DecisionProvider = process.argv.includes("openai") ? "openai" : "openrouter";
+const key = provider === "openai" ? openAiApiKey() : openRouterApiKey();
+if (!key) throw new Error(`no ${provider} key`);
+console.log(
+	`${BOARD_MODEL[provider]} on ${provider}, move at confidence ${MOVE_CONFIDENCE[provider]}\n`,
+);
 
 let agree = 0;
 for (const c of CASES) {
 	const t0 = Date.now();
-	const v = await classifyTurn({ apiKey: key, finalMessage: c.final, userMessage: c.user });
+	const v = await classifyTurn({
+		model: { provider, apiKey: key },
+		finalMessage: c.final,
+		userMessage: c.user,
+	});
 	const ms = Date.now() - t0;
 	if (!v) {
 		console.log(`✗ ${c.name}: NO VERDICT (${ms}ms)`);

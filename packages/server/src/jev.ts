@@ -10,8 +10,10 @@
 // with a probability each, in one parallel pass, and writes no text: nothing to
 // parse, no verdict outside the set, ~0.3-0.5s and a few hundredths of a cent.
 //
-// It runs only when the user has brought an OpenRouter key. Without one, and on
-// any failure, the rule's column stands, which is exactly the board as it was.
+// It runs only when the user has brought a key for a decision model: Jev on
+// OpenRouter, or Luna, OpenAI's, on their decisions API (decision-model.ts).
+// Without one, and on any failure, the rule's column stands, which is exactly
+// the board as it was.
 //
 // The questions are decomposed against what the verdict is allowed to DO, as
 // Clawnify's doc learned the hard way: the only move it can make is Review →
@@ -19,14 +21,25 @@
 // combines them. One "which column?" choice would come back one-hot and hide
 // the reason; four independent answers keep it.
 
-/** Pinned. The threshold below is calibrated against this build; the alias moves. */
-export const JEV_MODEL = "typesafe/jev-1.13";
+import {
+	askDecisions,
+	type DecisionModel,
+	type PerProvider,
+	type YesNoQuestion,
+} from "./decision-model";
 
-const DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
+/** Pinned. The thresholds below are calibrated against these builds; aliases move. */
+export const BOARD_MODEL: PerProvider<string> = {
+	openrouter: "typesafe/jev-1.13",
+	openai: "gpt-6-luna",
+};
 
 /**
- * How sure an answer must be before it moves a card: confidence 0.60, which
- * for a yes/no answer is a probability of at least 0.80. Clawnify's "confirm"
+ * How sure an answer must be before it moves a card, per provider: two models
+ * put the same certainty at different probabilities, so each gets its own bar.
+ *
+ * Jev: confidence 0.60, which for a yes/no answer is a probability of at least
+ * 0.80. Clawnify's "confirm"
  * tier, the band its stop judge uses for a cheap, bounded action; moving a
  * card is that, and the user moves it back with one drag.
  *
@@ -39,8 +52,16 @@ const DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
  * it in Review); true Needs-you answers were 0.94-0.98. 0.80 sits in that gap.
  * At 0.80 the run matched 12/12.
  * Twelve cases are not a corpus: retune from real board moves as they accrue.
+ *
+ * Luna: the same 0.60, from a live run of the same twelve cases (2026-11-04,
+ * `scripts/jev-calibrate.ts --provider openai`), which matched 12/12. Luna
+ * answers near the ends: every triggering answer on a turn that belongs in
+ * Needs you was 0.97-1.00, and on turns that belong in Review every one was
+ * 0.00, the optional offer and "I'll keep an eye on CI" included (Jev put
+ * those at 0.40 and 0.49). Any bar in that gap matches; 0.80 keeps Jev's.
+ * Calls took 0.2-0.7s warm, 1.4-2.2s for the first few.
  */
-export const MOVE_CONFIDENCE = 0.6;
+export const MOVE_CONFIDENCE: PerProvider<number> = { openrouter: 0.6, openai: 0.6 };
 
 /** The end of a long message is where a closing question sits. */
 const MAX_MESSAGE = 4_000;
@@ -51,7 +72,6 @@ const TIMEOUT_MS = 10_000;
 
 const QUESTIONS = {
 	asks_user: {
-		type: "noul",
 		instructions:
 			"Does the agent's final message ask the user a question, or ask them to choose, decide, confirm, approve or provide something, before the agent can continue the task?",
 		criteria: {
@@ -61,22 +81,19 @@ const QUESTIONS = {
 		},
 	},
 	blocked: {
-		type: "noul",
 		instructions:
 			"Does the agent's final message report that it could not finish because something stopped it, such as an error it could not fix, missing access or credentials, or a failing check it could not resolve?",
 	},
 	// Clawnify's fourth leg, for the same reason: a turn that stops on "next I
 	// will run the tests" did not finish, and nothing else here says so.
 	promises_future_work: {
-		type: "noul",
 		instructions:
 			"Does the agent's final message say it is about to do more work, or will do it next, rather than reporting on work already done? Phrases like 'let me', 'I will', 'I am going to', 'next I will' are of this kind.",
 	},
 	claims_done: {
-		type: "noul",
 		instructions: "Does the agent's final message report that the requested work is finished?",
 	},
-} as const;
+} satisfies Record<string, YesNoQuestion>;
 
 export type JevLegs = Record<keyof typeof QUESTIONS, number>;
 
@@ -91,7 +108,6 @@ export interface TurnVerdict {
 
 /** A yes/no answer carries its certainty in the probability itself. */
 const certainty = (p: number) => Math.abs(p - 0.5) * 2;
-const sureYes = (p: number) => p >= 0.5 && certainty(p) >= MOVE_CONFIDENCE;
 
 /**
  * The policy, in code. Needs you when the agent is sure to be waiting on the
@@ -99,8 +115,13 @@ const sureYes = (p: number) => p >= 0.5 && certainty(p) >= MOVE_CONFIDENCE;
  * which is where the rule already filed it. Confidence belongs to the answer
  * that decided (a failure is as sure as the thing that failed), not the
  * weakest of all four: an unrelated leg near 0.5 must not blur a clear one.
+ * `moveConfidence` is the answering model's bar (MOVE_CONFIDENCE).
  */
-export function decideStep(legs: JevLegs): TurnVerdict {
+export function decideStep(
+	legs: JevLegs,
+	moveConfidence: number = MOVE_CONFIDENCE.openrouter,
+): TurnVerdict {
+	const sureYes = (p: number) => p >= 0.5 && certainty(p) >= moveConfidence;
 	const reasons: [number, string][] = [];
 	if (sureYes(legs.asks_user))
 		reasons.push([legs.asks_user, "the agent is waiting on your answer"]);
@@ -118,7 +139,8 @@ export function decideStep(legs: JevLegs): TurnVerdict {
 }
 
 export interface ClassifyTurnInput {
-	apiKey: string;
+	/** Which decision model answers, with its key (decision-model.ts). */
+	model: DecisionModel;
 	/** What the agent said last in its turn. */
 	finalMessage: string;
 	/** What the user last asked: their latest reply, else the task's opening prompt. */
@@ -133,10 +155,10 @@ export interface ClassifyTurnInput {
  */
 export async function classifyTurn(input: ClassifyTurnInput): Promise<TurnVerdict | null> {
 	const finalMessage = input.finalMessage.trim();
-	if (!input.apiKey || !finalMessage) return null;
-	const legs = await askJev({
-		apiKey: input.apiKey,
-		model: JEV_MODEL,
+	if (!input.model.apiKey || !finalMessage) return null;
+	const legs = await askDecisions({
+		target: input.model,
+		model: BOARD_MODEL[input.model.provider],
 		state: {
 			users_most_recent_message:
 				input.userMessage?.trim().slice(0, MAX_PROMPT) || "(no recent user message)",
@@ -146,59 +168,5 @@ export async function classifyTurn(input: ClassifyTurnInput): Promise<TurnVerdic
 		timeoutMs: TIMEOUT_MS,
 		signal: input.signal,
 	});
-	return legs ? decideStep(legs) : null;
-}
-
-export interface AskJevInput<Q extends Record<string, unknown>> {
-	apiKey: string;
-	model: string;
-	state: Record<string, string>;
-	/** Yes/no ("noul") questions, keyed by the id each answer comes back under. */
-	questions: Q;
-	timeoutMs: number;
-	signal?: AbortSignal;
-}
-
-/**
- * One request to Jev: each yes/no question's probability, keyed by question
- * id. Null on any failure (network, timeout, a status that is not 200, an
- * answer missing), so every caller keeps its own keyless path.
- */
-export async function askJev<Q extends Record<string, unknown>>(
-	input: AskJevInput<Q>,
-): Promise<Record<keyof Q, number> | null> {
-	const ac = new AbortController();
-	const onAbort = () => ac.abort();
-	input.signal?.addEventListener("abort", onAbort, { once: true });
-	const timer = setTimeout(() => ac.abort(), input.timeoutMs);
-	try {
-		const res = await fetch(DECISIONS_URL, {
-			method: "POST",
-			signal: ac.signal,
-			headers: {
-				Authorization: `Bearer ${input.apiKey}`,
-				"Content-Type": "application/json",
-				// OpenRouter's app attribution, so the spend reads as Ateam's.
-				"HTTP-Referer": "https://github.com/clawnify/ateam",
-				"X-Title": "Ateam",
-			},
-			body: JSON.stringify({ model: input.model, state: input.state, questions: input.questions }),
-		});
-		if (!res.ok) return null;
-		const body = (await res.json()) as { answers?: Record<string, { noul?: unknown }> };
-		const answers = {} as Record<keyof Q, number>;
-		for (const id of Object.keys(input.questions) as (keyof Q & string)[]) {
-			const p = body.answers?.[id]?.noul;
-			// Answers are keyed by question id; a missing one is an incomplete
-			// verdict, never read as 0.
-			if (typeof p !== "number") return null;
-			answers[id] = p;
-		}
-		return answers;
-	} catch {
-		return null;
-	} finally {
-		clearTimeout(timer);
-		input.signal?.removeEventListener("abort", onAbort);
-	}
+	return legs ? decideStep(legs, MOVE_CONFIDENCE[input.model.provider]) : null;
 }

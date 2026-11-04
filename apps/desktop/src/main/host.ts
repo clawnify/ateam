@@ -62,6 +62,7 @@ import {
 	boxWakeOf,
 	buildCloudInit,
 	type ConnectionDTO,
+	currentDecisionModel,
 	describeSshFailure,
 	type Engine,
 	endpointUrl,
@@ -71,6 +72,7 @@ import {
 	hetznerProvider,
 	installerFailure,
 	listConnections,
+	openAiApiKey,
 	openRouterApiKey,
 	readSettings,
 	recordConnection,
@@ -238,7 +240,7 @@ export interface Host {
 	wakeStatus(): WakeStatus;
 	/** Check a wake provider's key and save it (encrypted), or clear it with null. */
 	saveWakeAccount(providerId: string, values: Record<string, string> | null): Promise<WakeStatus>;
-	/** Which grammar issues to show, by Jev with this Mac's key; null = show them all. */
+	/** Which grammar issues to show, by this Mac's decision model; null = show them all. */
 	judgeGrammar(draft: string, issues: GrammarJudgeIssue[]): Promise<boolean[] | null>;
 	/** A held box's own connection and protocol version, for calls that address
 	 *  the box itself rather than a board entity (its Lead), or null when it isn't
@@ -473,13 +475,20 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		const r = (await local.handle(method, args)) as CredentialsResult;
 		if (method === CH.credentialsUpdate) {
 			const patch = args[0] as CredentialsPatch;
-			// What is in force here, so a key this Mac takes from its environment
-			// reaches the boxes too; a removal is pushed as the removal it was.
-			await pushCredentials(
-				patch.openRouterApiKey === null
-					? { openRouterApiKey: null }
-					: { openRouterApiKey: openRouterApiKey() ?? null },
-			);
+			// Only the keys this save touched, so saving one never clears another a
+			// box holds. Each is what is in force here, so a key this Mac takes from
+			// its environment reaches the boxes too; a removal is pushed as the
+			// removal it was.
+			const push: CredentialsPatch = {};
+			if (patch.openRouterApiKey !== undefined) {
+				push.openRouterApiKey = patch.openRouterApiKey?.trim()
+					? (openRouterApiKey() ?? null)
+					: null;
+			}
+			if (patch.openAiApiKey !== undefined) {
+				push.openAiApiKey = patch.openAiApiKey?.trim() ? (openAiApiKey() ?? null) : null;
+			}
+			await pushCredentials(push);
 		}
 		const syncedTo: string[] = [];
 		const syncFailed: { alias: string; reason: string }[] = [];
@@ -659,8 +668,13 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// hold the board back.
 		if (readSettings().settings.client.syncEngineSettingsToBoxes) {
 			void pushEngineSettings(readSettings().settings.engine);
-			const key = openRouterApiKey();
-			if (key) void pushCredentials({ openRouterApiKey: key });
+			// Only the keys set here: a Mac without one never clears a box's.
+			const keys: CredentialsPatch = {};
+			const openRouter = openRouterApiKey();
+			const openAi = openAiApiKey();
+			if (openRouter) keys.openRouterApiKey = openRouter;
+			if (openAi) keys.openAiApiKey = openAi;
+			if (openRouter || openAi) void pushCredentials(keys);
 		}
 		// Its GitHub access, for the "needs you" dots (a token close to expiring or
 		// refused). Not awaited either: one gh and GitHub call on the box.
@@ -1174,16 +1188,16 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return hetznerProvider.fetchOptions(t);
 	}
 
-	// This Mac's key and setting, whichever engine the terminal belongs to: the
+	// This Mac's keys and settings, whichever engine the terminal belongs to: the
 	// grammar check runs in this window, not on the box.
 	async function judgeGrammar(
 		draft: string,
 		issues: GrammarJudgeIssue[],
 	): Promise<boolean[] | null> {
 		if (!readSettings().settings.client.filterGrammarWithJev) return null;
-		const apiKey = openRouterApiKey();
-		if (!apiKey) return null;
-		const verdicts = await askJevAboutGrammar({ apiKey, draft, issues });
+		const model = currentDecisionModel();
+		if (!model) return null;
+		const verdicts = await askJevAboutGrammar({ model, draft, issues });
 		return verdicts?.map((v) => v.keep) ?? null;
 	}
 

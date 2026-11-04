@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { GRAMMAR_JEV_MODEL, type GrammarJudgeIssue, judgeGrammar } from "../src/grammar-jev";
+import { GRAMMAR_MODEL, type GrammarJudgeIssue, judgeGrammar } from "../src/grammar-jev";
 import { looksSecret } from "../src/secrets";
+
+const jev = { provider: "openrouter", apiKey: "k" } as const;
 
 /** An issue on the first occurrence of `word` in `draft`. */
 const issue = (draft: string, word: string): GrammarJudgeIssue => {
@@ -56,14 +58,14 @@ describe("judgeGrammar", () => {
 		stub({ wich: 0.95, lol: 0.05 }, calls);
 		const draft = "fix the bug wich breaks the build lol";
 		const v = await judgeGrammar({
-			apiKey: "k",
+			model: jev,
 			draft,
 			issues: [issue(draft, "wich"), issue(draft, "lol")],
 		});
 		expect(v?.map((x) => x.keep)).toEqual([true, false]);
 		expect(calls).toHaveLength(1);
 		const sent = calls[0]?.body as { model: string; state: unknown };
-		expect(sent.model).toBe(GRAMMAR_JEV_MODEL);
+		expect(sent.model).toBe(GRAMMAR_MODEL.openrouter);
 		expect(sent.state).toEqual({ draft_prompt: draft });
 	});
 
@@ -71,10 +73,10 @@ describe("judgeGrammar", () => {
 		const calls: { body: unknown }[] = [];
 		stub({ outide: 0.97, pls: 0.1 }, calls);
 		const a = "close the modal when you click outide it";
-		await judgeGrammar({ apiKey: "k", draft: a, issues: [issue(a, "outide")] });
+		await judgeGrammar({ model: jev, draft: a, issues: [issue(a, "outide")] });
 		const b = `${a} pls`;
 		const v = await judgeGrammar({
-			apiKey: "k",
+			model: jev,
 			draft: b,
 			issues: [issue(b, "outide"), issue(b, "pls")],
 		});
@@ -87,7 +89,7 @@ describe("judgeGrammar", () => {
 	it("is null on a failed call, so every issue shows", async () => {
 		stub({}, [], 500);
 		const draft = "teh sidebar wont collapse";
-		expect(await judgeGrammar({ apiKey: "k", draft, issues: [issue(draft, "teh")] })).toBeNull();
+		expect(await judgeGrammar({ model: jev, draft, issues: [issue(draft, "teh")] })).toBeNull();
 	});
 
 	it("never sends a draft that may hold a secret, or calls out with nothing to ask", async () => {
@@ -95,11 +97,15 @@ describe("judgeGrammar", () => {
 		stub({ wrod: 0.9 }, calls);
 		const secret = "set sk-or-v1-abcdef0123456789 and fix the wrod";
 		expect(
-			await judgeGrammar({ apiKey: "k", draft: secret, issues: [issue(secret, "wrod")] }),
+			await judgeGrammar({ model: jev, draft: secret, issues: [issue(secret, "wrod")] }),
 		).toBeNull();
-		expect(await judgeGrammar({ apiKey: "k", draft: "fine", issues: [] })).toBeNull();
+		expect(await judgeGrammar({ model: jev, draft: "fine", issues: [] })).toBeNull();
 		expect(
-			await judgeGrammar({ apiKey: "", draft: "a wrod", issues: [issue("a wrod", "wrod")] }),
+			await judgeGrammar({
+				model: { provider: "openrouter", apiKey: "" },
+				draft: "a wrod",
+				issues: [issue("a wrod", "wrod")],
+			}),
 		).toBeNull();
 		expect(calls).toHaveLength(0);
 	});

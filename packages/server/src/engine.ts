@@ -603,8 +603,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		);
 	});
 
-	// With an OpenRouter key, Jev may re-file a finished turn the rule filed in
-	// Review (turn-classifier.ts). Without one it never calls out.
+	// With a decision model's key (Jev on OpenRouter, Luna on OpenAI), it may
+	// re-file a finished turn the rule filed in Review (turn-classifier.ts).
+	// Without one it never calls out.
 	const turns = createTurnClassifier({ db, notifyTaskUpdated: sendTaskUpdated, log: opts.log });
 	// Where each task stands, written once its agent has gone quiet (see task-summaries.ts).
 	const summaries = createSummarizer({
