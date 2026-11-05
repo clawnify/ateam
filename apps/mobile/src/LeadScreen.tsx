@@ -51,6 +51,7 @@ import {
 import { LeadMarkdown } from "./LeadMarkdown";
 import { type QuestionAnswer, QuestionCard } from "./QuestionCard";
 import { C, CONTENT_MAX } from "./theme";
+import { useKeyboardVisible } from "./useKeyboardVisible";
 
 const INK_ON_WHITE = "#15151a";
 
@@ -550,6 +551,7 @@ export function LeadScreen({
 	const [files, setFilesState] = useState<PickedFile[]>(draftFiles);
 	const [attaching, setAttaching] = useState(false);
 	const [note, setNote] = useState<string | null>(null);
+	const keyboardUp = useKeyboardVisible();
 	const setText = (t: string) => {
 		draftText = t;
 		setTextState(t);
@@ -775,42 +777,14 @@ export function LeadScreen({
 
 			{asking.length > 0 && <Waiting tasks={asking} ctx={ctx} onAnswer={lead.answer} />}
 
-			<View style={styles.composer}>
+			<View style={[styles.composer, !keyboardUp && styles.composerClear]}>
 				{note && <Text style={[styles.errorText, styles.note]}>{note}</Text>}
 				<AttachmentStrip
 					files={files}
 					onRemove={(f) => setFiles(draftFiles.filter((x) => x !== f))}
 				/>
+				{/* The field at the top of the card, the controls in a row under it. */}
 				<View style={styles.box}>
-					<Pressable
-						onPress={() => void attach()}
-						disabled={attaching}
-						hitSlop={8}
-						style={styles.boxIcon}
-						accessibilityRole="button"
-						accessibilityLabel="Attach photos or files"
-					>
-						{attaching ? (
-							<ActivityIndicator size="small" color={C.muted} />
-						) : (
-							<Feather name="paperclip" size={18} color={C.muted} />
-						)}
-					</Pressable>
-					{/* The ⚡ a new task gets, for the box Lead's own Claude: it applies at
-					    once, mid-turn included, and stays on for the next conversation. */}
-					<Pressable
-						onPress={() =>
-							snap && void lead.setAuto(!snap.auto).catch((e) => setNote(cleanError(e)))
-						}
-						disabled={!snap}
-						hitSlop={8}
-						style={styles.boxIcon}
-						accessibilityRole="switch"
-						accessibilityLabel="Auto mode"
-						accessibilityState={{ checked: snap?.auto === true }}
-					>
-						<Feather name="zap" size={17} color={snap?.auto ? C.amber : C.muted} />
-					</Pressable>
 					<TextInput
 						style={styles.input}
 						value={text}
@@ -820,26 +794,58 @@ export function LeadScreen({
 						multiline
 						accessibilityLabel="Message the Lead"
 					/>
-					{busy ? (
+					<View style={styles.boxRow}>
 						<Pressable
-							style={styles.sendBtn}
-							onPress={() => void lead.interrupt().catch(() => {})}
+							onPress={() => void attach()}
+							disabled={attaching}
+							hitSlop={8}
+							style={styles.boxIcon}
 							accessibilityRole="button"
-							accessibilityLabel="Stop"
+							accessibilityLabel="Attach photos or files"
 						>
-							<Feather name="square" size={13} color={INK_ON_WHITE} />
+							{attaching ? (
+								<ActivityIndicator size="small" color={C.muted} />
+							) : (
+								<Feather name="paperclip" size={18} color={C.muted} />
+							)}
 						</Pressable>
-					) : (
+						{/* The ⚡ a new task gets, for the box Lead's own Claude: it applies at
+						    once, mid-turn included, and stays on for the next conversation. */}
 						<Pressable
-							style={[styles.sendBtn, !canSend && styles.off]}
-							onPress={() => void send()}
-							disabled={!canSend}
-							accessibilityRole="button"
-							accessibilityLabel="Send"
+							onPress={() =>
+								snap && void lead.setAuto(!snap.auto).catch((e) => setNote(cleanError(e)))
+							}
+							disabled={!snap}
+							hitSlop={8}
+							style={styles.boxIcon}
+							accessibilityRole="switch"
+							accessibilityLabel="Auto mode"
+							accessibilityState={{ checked: snap?.auto === true }}
 						>
-							<Feather name="arrow-up" size={17} color={INK_ON_WHITE} />
+							<Feather name="zap" size={17} color={snap?.auto ? C.amber : C.muted} />
 						</Pressable>
-					)}
+						<View style={styles.boxSpacer} />
+						{busy ? (
+							<Pressable
+								style={styles.sendBtn}
+								onPress={() => void lead.interrupt().catch(() => {})}
+								accessibilityRole="button"
+								accessibilityLabel="Stop"
+							>
+								<Feather name="square" size={13} color={INK_ON_WHITE} />
+							</Pressable>
+						) : (
+							<Pressable
+								style={[styles.sendBtn, !canSend && styles.off]}
+								onPress={() => void send()}
+								disabled={!canSend}
+								accessibilityRole="button"
+								accessibilityLabel="Send"
+							>
+								<Feather name="arrow-up" size={17} color={INK_ON_WHITE} />
+							</Pressable>
+						)}
+					</View>
 				</View>
 			</View>
 		</View>
@@ -1009,37 +1015,44 @@ const styles = StyleSheet.create({
 	composer: {
 		paddingHorizontal: 12,
 		paddingTop: 6,
-		paddingBottom: 10,
+		paddingBottom: 8,
 		width: "100%",
 		maxWidth: CONTENT_MAX,
 		alignSelf: "center",
 		gap: 6,
 	},
+	// Keyboard down: lift the card clear of the home indicator.
+	composerClear: { paddingBottom: 30 },
 	note: { paddingHorizontal: 4 },
 	box: {
-		flexDirection: "row",
-		alignItems: "flex-end",
-		gap: 6,
-		backgroundColor: C.surface,
+		backgroundColor: C.sunken,
 		borderColor: C.line,
 		borderWidth: StyleSheet.hairlineWidth,
-		borderRadius: 20,
-		paddingHorizontal: 6,
-		paddingVertical: 5,
+		borderRadius: 24,
+		paddingHorizontal: 10,
+		paddingTop: 8,
+		paddingBottom: 10,
+		shadowColor: "#000",
+		shadowOpacity: 0.4,
+		shadowRadius: 16,
+		shadowOffset: { width: 0, height: 4 },
 	},
+	boxRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
+	boxSpacer: { flex: 1 },
 	boxIcon: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
 	input: {
-		flex: 1,
 		color: C.ink,
 		fontSize: 16,
-		maxHeight: 130,
-		paddingTop: 7,
-		paddingBottom: 7,
+		minHeight: 40,
+		maxHeight: 140,
+		paddingHorizontal: 6,
+		paddingTop: 8,
+		paddingBottom: 8,
 	},
 	sendBtn: {
-		width: 32,
-		height: 32,
-		borderRadius: 16,
+		width: 34,
+		height: 34,
+		borderRadius: 17,
 		backgroundColor: C.ink,
 		alignItems: "center",
 		justifyContent: "center",

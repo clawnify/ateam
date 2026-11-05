@@ -324,7 +324,9 @@ export function Composer({
 						</Pressable>
 					</View>
 				) : null}
-				<View style={styles.inner}>
+				{/* The card: a rounded panel floating just above the home indicator, the
+				    field at its top with no box of its own, the controls in a row under it. */}
+				<View style={styles.card}>
 					{note ? <Text style={styles.note}>{note}</Text> : null}
 					<AttachmentStrip
 						style={styles.strip}
@@ -491,7 +493,22 @@ export function Composer({
 }
 
 const styles = StyleSheet.create({
-	inner: { width: "100%", maxWidth: CONTENT_MAX, alignSelf: "center" },
+	card: {
+		width: "100%",
+		maxWidth: CONTENT_MAX,
+		alignSelf: "center",
+		backgroundColor: C.sunken,
+		borderWidth: StyleSheet.hairlineWidth,
+		borderColor: C.line,
+		borderRadius: 24,
+		paddingHorizontal: 10,
+		paddingTop: 8,
+		paddingBottom: 10,
+		shadowColor: "#000",
+		shadowOpacity: 0.4,
+		shadowRadius: 16,
+		shadowOffset: { width: 0, height: 4 },
+	},
 	floatRoot: { marginTop: -FLOAT },
 	floatBand: { height: FLOAT, alignItems: "center", justifyContent: "center" },
 	// Task | Lead: the header's tab pill, small, floating over the content. On
@@ -509,7 +526,7 @@ const styles = StyleSheet.create({
 	},
 	switchRow: { flexDirection: "row", gap: 2 },
 	strip: { marginBottom: 8 },
-	iconBtn: { width: 30, height: 30, alignItems: "center", justifyContent: "center" },
+	iconBtn: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
 	note: { color: "#f87171", fontSize: 12.5, marginBottom: 6 },
 	switchSeg: {
 		flexDirection: "row",
@@ -522,19 +539,15 @@ const styles = StyleSheet.create({
 	switchSegOn: { backgroundColor: C.ink },
 	switchText: { color: C.muted, fontSize: 12.5, fontWeight: "600" },
 	switchTextOn: { color: INK_ON_WHITE },
+	// No bar of its own: the card floats on the board's background.
 	wrap: {
-		borderTopWidth: 1,
-		borderTopColor: C.line,
-		backgroundColor: C.surface,
 		paddingHorizontal: 12,
-		paddingTop: 10,
-		// Extra bottom padding clears the iOS home indicator so the mode buttons
-		// aren't hidden behind it — but drop it when the keyboard is up (it already
-		// covers that area).
-		paddingBottom: 42,
-		gap: 8,
+		paddingTop: 6,
+		// Lifts the card clear of the iOS home indicator, but
+		// drop it when the keyboard is up (it already covers that area).
+		paddingBottom: 30,
 	},
-	wrapKeyboard: { paddingBottom: 10 },
+	wrapKeyboard: { paddingBottom: 8 },
 	// agent popover
 	backdrop: {
 		flex: 1,
@@ -563,36 +576,35 @@ const styles = StyleSheet.create({
 	popSub: { color: C.faint, fontSize: 11, marginTop: 2 },
 	popCheck: { color: C.ink, fontSize: 15, fontWeight: "700" },
 	caret: { color: C.muted, fontSize: 10, marginLeft: 2 },
+	// Borderless: the card is the field.
 	input: {
 		color: C.ink,
-		fontSize: 15,
-		backgroundColor: C.sunken,
-		borderWidth: 1,
-		borderColor: C.line,
-		borderRadius: 10,
-		paddingHorizontal: 12,
-		paddingVertical: 10,
+		fontSize: 16,
+		paddingHorizontal: 6,
+		paddingTop: 8,
+		paddingBottom: 8,
 		minHeight: 40,
-		maxHeight: 120,
+		maxHeight: 140,
 	},
 	fieldLabel: {
 		color: C.ink,
 		fontSize: 10,
 		fontWeight: "700",
 		letterSpacing: 1.1,
-		paddingLeft: 2,
+		paddingLeft: 6,
+		paddingTop: 4,
 		marginBottom: -2,
 	},
 	// Breathing room between the prompt field and the controls under it.
-	row: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
+	row: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
 	spacer: { flex: 1 },
 	chip: {
 		flexDirection: "row",
 		gap: 5,
-		paddingHorizontal: 10,
-		height: 30,
-		borderRadius: 8,
-		backgroundColor: C.sunken,
+		paddingHorizontal: 11,
+		height: 32,
+		borderRadius: 16,
+		backgroundColor: C.surface,
 		borderWidth: 1,
 		borderColor: C.line,
 		alignItems: "center",
@@ -614,10 +626,10 @@ const styles = StyleSheet.create({
 	chipText: { color: C.muted, fontSize: 12, fontWeight: "600" },
 	chipTextOn: { color: C.ink },
 	mode: {
-		paddingHorizontal: 10,
-		height: 30,
-		borderRadius: 8,
-		backgroundColor: C.sunken,
+		paddingHorizontal: 11,
+		height: 32,
+		borderRadius: 16,
+		backgroundColor: C.surface,
 		borderWidth: 1,
 		borderColor: C.line,
 		alignItems: "center",
@@ -629,7 +641,7 @@ const styles = StyleSheet.create({
 	send: {
 		width: 34,
 		height: 34,
-		borderRadius: 8,
+		borderRadius: 17,
 		backgroundColor: C.ink,
 		alignItems: "center",
 		justifyContent: "center",
