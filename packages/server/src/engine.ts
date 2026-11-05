@@ -51,6 +51,7 @@ import { answerQuestion, applyAskUser, CLEAR_QUESTION } from "./questions";
 import { readSettings } from "./settings-file";
 import { createTurnClassifier } from "./turn-classifier";
 import { createSummarizer, SUMMARY_SWEEP_MS } from "./task-summaries";
+import { labelFromReply } from "./task-labels";
 import { askConfiguredTextModel, currentTextModel } from "./text-model";
 import { turnsFor, userPromptsFor } from "./session-search";
 import { applySetWaiting, CLEAR_WAIT, isFiredWait, WaitTimers } from "./waits";
@@ -616,6 +617,14 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		userPrompts: userPromptsFor,
 	});
 
+	// A title held for the agent's first reply (task-labels.ts); the launch's own
+	// call is made in sessions.ts.
+	const labelDeps = {
+		db,
+		notifyTaskUpdated: sendTaskUpdated,
+		ask: (prompt: string) => askConfiguredTextModel(prompt, { maxTokens: 120, timeoutMs: 30_000 }),
+	};
+
 	// Agent status hooks → update session/task, drive the kanban column.
 	hooks.on("hook", (e: HookEvent) => {
 		const session = repo.getSessionByTerminal(db, e.terminalId);
@@ -718,6 +727,9 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			// Every Stop, message or not: it also retires any verdict still in
 			// flight for the previous turn.
 			if (e.eventType === "Stop") void turns.turnEnded(task.id, e.lastAssistantMessage);
+			// A task whose words could not name it is named from this reply (task-labels.ts).
+			if (e.eventType === "Stop" && task.nameAuto && e.lastAssistantMessage)
+				void labelFromReply(labelDeps, task.id, e.lastAssistantMessage);
 			// A turn ending is when a message held for a busy agent can go in.
 			if (e.eventType === "Stop") peers.kick(task.id);
 		}
