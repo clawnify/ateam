@@ -1540,8 +1540,9 @@ export function App() {
 			await loadProjects();
 		});
 
-	// Delete a task (and its worktree) straight from the sidebar. Confirm first,
-	// then reuse the same remove + force-fallback flow as the task panel menu.
+	// Delete a task (and its worktree) straight from the sidebar. The row's menu
+	// item takes a second click to confirm, right under the pointer, then this
+	// reuses the same remove + force-fallback flow as the task panel menu.
 	// The onTaskRemoved event listener drops the row and clears the selection.
 	// Park a task on an outside party from the open task's ··· menu, or end the
 	// wait. The agent's own path is the `set_waiting` board tool; both meet in
@@ -1567,11 +1568,6 @@ export function App() {
 		});
 	const deleteTask = (t: TaskDTO) =>
 		run(async () => {
-			const ok = await confirm(
-				"Delete task?",
-				`Permanently delete "${t.name}" and its worktree? This can't be undone.`,
-			);
-			if (!ok) return;
 			try {
 				await window.ateam.tasks.remove({ id: t.id, deleteBranch: true });
 			} catch (e) {
@@ -3080,7 +3076,15 @@ function TaskRow({
 					label={`Actions for ${t.name}`}
 					icon={EllipsisVertical}
 					className="size-5 [&_svg:not([class*='size-'])]:size-3.5"
-					items={[{ label: "Delete task…", icon: Trash2, danger: true, onClick: onDelete }]}
+					items={[
+						{
+							label: "Delete task",
+							icon: Trash2,
+							danger: true,
+							confirm: "Click again to delete",
+							onClick: onDelete,
+						},
+					]}
 				/>
 			</span>
 		</div>
@@ -4197,6 +4201,7 @@ function TaskPanel({
 							label: "Remove task & worktree",
 							icon: Trash2,
 							danger: true,
+							confirm: "Click again to delete",
 							onClick: async () => {
 								try {
 									await window.ateam.tasks.remove({
