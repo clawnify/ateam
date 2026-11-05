@@ -8,6 +8,7 @@ import {
 	shouldHold,
 	speakable,
 	turnsFrom,
+	waitingOnUser,
 } from "./lead-call";
 
 const task = { taskId: "t1", name: "Disk usage on the box page", agentId: "claude" };
@@ -127,4 +128,31 @@ test("contextFrom gives the gate the chat and what was held back, in time order,
 		].join("\n"),
 	);
 	expect(heldReason("someone")).toBe("sounded like you were talking to someone else");
+});
+
+test("shouldHold while the Lead works: after 15 s when it waits on a tap, else after 60 s", () => {
+	const at = (s: number) => s * 1000;
+	const base = { engagedAt: 0, falseWake: false, pending: true };
+	// The Lead waits on the user's tap (announced): no reason to bill the silence.
+	expect(shouldHold({ ...base, waitingOnUser: true, now: at(16), heardAt: at(5) })).toBe(true);
+	expect(shouldHold({ ...base, waitingOnUser: true, now: at(14), heardAt: at(5) })).toBe(false);
+	// A long turn: hold after a minute; its reply reopens the call.
+	expect(shouldHold({ ...base, waitingOnUser: false, now: at(59), heardAt: at(5) })).toBe(false);
+	expect(shouldHold({ ...base, waitingOnUser: false, now: at(61), heardAt: at(5) })).toBe(true);
+	// Never while someone is talking.
+	expect(shouldHold({ ...base, waitingOnUser: true, now: at(61), heardAt: at(60) })).toBe(false);
+});
+
+test("waitingOnUser: a permission card nobody answered", () => {
+	const card = {
+		kind: "permission" as const,
+		id: "c",
+		text: "Send?",
+		canAlways: false,
+		always: null,
+		at: 1,
+	};
+	expect(waitingOnUser([card])).toBe(true);
+	expect(waitingOnUser([{ ...card, answer: "allow" as const }])).toBe(false);
+	expect(waitingOnUser([{ kind: "user", id: "u", text: "hi", at: 1 }])).toBe(false);
 });

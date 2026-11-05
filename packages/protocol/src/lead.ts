@@ -48,6 +48,10 @@ export const LEAD_CH = {
 	/** Judge what a call heard: was each piece said to the Lead? By this Mac's
 	 *  decision model; null when there is none or it didn't answer in time. */
 	callJudge: "lead:callJudge",
+	/** The user is on a voice call with this chat (true, repeated while it lasts)
+	 *  or hung up (false). While a call is on, the Lead's messages and answers to
+	 *  tasks wait as permission cards for the user's tap (v32 on a box). */
+	callActive: "lead:callActive",
 	evtEvent: "evt:lead:event",
 	evtHome: "evt:lead:home",
 } as const;
@@ -85,6 +89,7 @@ export const LEAD_RPC = [
 	LEAD_CH.proposal,
 	LEAD_CH.older,
 	LEAD_CH.react,
+	LEAD_CH.callActive,
 ] as const;
 
 /** The engine's push event for its Lead, with a LeadEvent payload. Sent only
@@ -276,6 +281,9 @@ export interface LeadClient {
 	permission(id: string, answer: LeadPermissionAnswer): Promise<void>;
 	/** Auto mode on or off for the box's Lead (Claude's own auto mode). */
 	setAuto(on: boolean): Promise<void>;
+	/** On a voice call with the box's Lead (true, repeated while it lasts) or
+	 *  not. A box before v32 rejects it: gate on boxSupports("leadCall"). */
+	callActive(on: boolean): Promise<void>;
 	dismissProposal(id: string): Promise<void>;
 	/** A proposal was created from its sheet or form on this device: the card
 	 *  says so, and a task (`taskId`) is followed for its replies. */
@@ -293,6 +301,9 @@ export interface LeadHome {
 	connected: boolean;
 	/** Emoji answers work there (this Mac, or a box on v28 or later). */
 	canReact: boolean;
+	/** Voice calls work there (this Mac, or a box on v32 or later, whose Lead
+	 *  holds its messages to tasks for a tap during a call). */
+	canCall: boolean;
 }
 
 /** window.ateamLead. */
@@ -333,4 +344,8 @@ export interface AteamLead {
 	callStart(sdp: string, input: LeadCallTurn[]): Promise<{ sdp: string; sessionId: string }>;
 	/** `pieces`: what the call heard, split at pauses; `context`: the last turns. */
 	callJudge(pieces: string[], context: string): Promise<LeadCallVerdict[] | null>;
+	/** The user is on a call with the calling window's chat (true, repeated
+	 *  while it lasts) or hung up (false). Throws when that chat lives on a box
+	 *  too old to hold its Lead's messages for a tap. */
+	callActive(on: boolean): Promise<void>;
 }

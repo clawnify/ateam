@@ -1,7 +1,7 @@
 import type { LeadHome } from "@ateam/protocol";
 import { useEffect, useState } from "react";
 
-const MAC: LeadHome = { box: null, connected: true, canReact: true };
+const MAC: LeadHome = { box: null, connected: true, canReact: true, canCall: true };
 
 /** Where this window's Lead chat lives: this Mac, or a box (`client.leadBox`,
  *  chosen in Settings → Boxes), and whether that box is held right now. */

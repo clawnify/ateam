@@ -1703,9 +1703,16 @@ export function LeadChat({
 					<button
 						type="button"
 						className={`iconbtn ${call.state !== "off" ? "active" : ""}`}
-						title={call.state === "off" ? "Call the Lead" : "Hang up"}
+						title={
+							call.state !== "off"
+								? "Hang up"
+								: home.canCall
+									? "Call the Lead"
+									: `Update ${home.box} to call its Lead`
+						}
 						aria-label={call.state === "off" ? "Call the Lead" : "Hang up"}
 						aria-pressed={call.state !== "off"}
+						disabled={call.state === "off" && !home.canCall}
 						onClick={() => (call.state === "off" ? void leadCall.start() : leadCall.hangUp())}
 					>
 						{call.state === "off" ? (

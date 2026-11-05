@@ -40,6 +40,15 @@ export const FALSE_WAKE_MS = 10_000;
 /** Talk that isn't for the Lead (a TV, a conversation in the room) keeps the
  *  session open at most this long after the last thing for the Lead. */
 export const CHATTER_CAP_MS = 90_000;
+/** The Lead working this long on what was said, nobody talking: hold anyway.
+ *  Its reply reopens the call when it lands. */
+export const PENDING_HOLD_MS = 60_000;
+/** The Lead waiting on the user's tap (a permission card, a held message):
+ *  hold once the call has been quiet this long, the card already announced. */
+export const WAITING_HOLD_MS = 15_000;
+/** How often the window tells the Lead the call is still on (it lapses after
+ *  90 s without, server lead/index.ts CALL_GUARD_MS). */
+const CALL_BEAT_MS = 30_000;
 /** This many false wakes within FALSE_WAKES_WINDOW_MS pause waking by sound. */
 const FALSE_WAKES = 3;
 const FALSE_WAKES_WINDOW_MS = 5 * 60_000;
@@ -220,12 +229,25 @@ export function shouldHold(s: {
 	heardAt: number;
 	/** Woken by a sound, and nothing for the Lead since. */
 	falseWake: boolean;
+	/** Words went to the Lead and its turn hasn't ended. */
+	pending?: boolean;
+	/** The Lead waits on the user's tap: a permission card, a held message. */
+	waitingOnUser?: boolean;
 }): boolean {
 	const idle = s.now - s.engagedAt;
 	const quiet = s.now - s.heardAt;
+	// Waiting on the Lead is no reason to bill silence forever: not while it
+	// waits on the user, nor through a long turn. Its reply reopens the call.
+	if (s.pending)
+		return quiet > 3_000 && (s.waitingOnUser ? idle > WAITING_HOLD_MS : idle > PENDING_HOLD_MS);
 	if (s.falseWake && idle > FALSE_WAKE_MS && quiet > 1_500) return true;
 	if (idle > HOLD_AFTER_MS && quiet > 3_000) return true;
 	return idle > CHATTER_CAP_MS;
+}
+
+/** The Lead waits on the user's tap: a permission card nobody answered. */
+export function waitingOnUser(items: LeadItem[]): boolean {
+	return items.some((i) => i.kind === "permission" && !i.answer);
 }
 
 /** Why something heard wasn't sent, in the user's words. */
@@ -278,6 +300,8 @@ export class LeadCall {
 	private heardAt = 0;
 	/** When words last went to the Lead. */
 	private sentAt = 0;
+	/** When the Lead was last told the call is on. */
+	private beatAt = 0;
 	private wokeBySound = false;
 	private sentSinceWake = false;
 	private falseWakes: number[] = [];
@@ -305,6 +329,10 @@ export class LeadCall {
 		if (this.state !== "off") return;
 		this.update({ state: "connecting", error: "", held: null, muted: false });
 		try {
+			// First: a chat that can't hold its Lead's messages for a tap (a box
+			// too old) gets no call at all.
+			await this.lead().callActive(true);
+			this.beatAt = Date.now();
 			const snap = await this.lead().snapshot();
 			this.items = snap.items;
 			this.seen = new Set(snap.items.map((i) => i.id));
@@ -327,6 +355,10 @@ export class LeadCall {
 
 	/** End the call: the voice session, the mic, the listening. */
 	hangUp(error = ""): void {
+		if (this.state !== "off")
+			void this.lead()
+				.callActive(false)
+				.catch(() => {});
 		void this.closeSession();
 		for (const t of this.mic?.getTracks() ?? []) t.stop();
 		this.mic = null;
@@ -639,11 +671,26 @@ export class LeadCall {
 
 	private tick(): void {
 		const now = Date.now();
+		if (this.state !== "off" && now - this.beatAt >= CALL_BEAT_MS) {
+			this.beatAt = now;
+			void this.lead()
+				.callActive(true)
+				.catch(() => {});
+		}
 		if (this.view.voiceWakePaused && now >= this.voiceWakeOffUntil)
 			this.update({ voiceWakePaused: false });
-		if (this.state !== "live" || this.pending.length) return;
+		if (this.state !== "live") return;
 		const falseWake = this.wokeBySound && !this.sentSinceWake;
-		if (shouldHold({ now, engagedAt: this.engagedAt, heardAt: this.heardAt, falseWake }))
+		if (
+			shouldHold({
+				now,
+				engagedAt: this.engagedAt,
+				heardAt: this.heardAt,
+				falseWake,
+				pending: this.pending.length > 0,
+				waitingOnUser: waitingOnUser(this.items),
+			})
+		)
 			void this.toHold();
 	}
 

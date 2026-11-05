@@ -159,7 +159,13 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // settings gained `engine.decisionModel` and `engine.openAiTextModel` and the
 // `openai` text model. An older engine stores the key and the settings and
 // never reads them, so a box needs this version to use an OpenAI key.
-export const PROTOCOL_VERSION = 31;
+// v32: voice calls with the Lead. lead:callActive tells a box's Lead that the
+// user is on a call with it: while one is, its messages and answers to tasks
+// (send_message, answer_question) wait as permission cards for the user's tap,
+// since a call's words are transcribed and may not have been meant for it. A new
+// method only: a v31 box answers "Unknown method", and the desktop offers no call
+// when its Lead lives there (FEATURE_MIN_VERSION.leadCall).
+export const PROTOCOL_VERSION = 32;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -354,6 +360,10 @@ export const FEATURE_MIN_VERSION = {
 	/** v28 added lead:react to a box's Lead. An older box answers "Unknown
 	 *  method", so the desktop hides the emoji answer when its Lead lives there. */
 	leadReact: 28,
+	/** v32 added lead:callActive, which holds a box Lead's messages to tasks for
+	 *  the user's tap during a call. An older box would act on them unasked, so
+	 *  the desktop offers no call when its Lead lives there. */
+	leadCall: 32,
 	/** v29 added pairing:* and the lock on a box's network port. An older box is
 	 *  always open: clients say so instead of offering to lock it. */
 	pairing: 29,
