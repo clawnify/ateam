@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { answerOf, choiceOf, judgeSpeech, verdictOf } from "./call-gate";
+import { answerOf, capPieces, choiceOf, judgeSpeech, verdictOf } from "./call-gate";
 
 test("verdictOf sends at the bar and names what the rest most likely was", () => {
 	expect(verdictOf({ lead: 0.9, someone: 0.1, background: 0 }, 0.7)).toEqual({
@@ -39,4 +39,12 @@ test("choiceOf picks only a clear winner above the bar, on topic", () => {
 	expect(choiceOf(0.9, [0.6, 0.1], 0.7)).toBeNull(); // not sure enough
 	expect(choiceOf(0.3, [0.95, 0.1], 0.7)).toBeNull(); // not about the decision
 	expect(choiceOf(0.9, [], 0.7)).toBeNull();
+});
+
+test("capPieces judges every word: past the cap, the oldest pieces join into one", () => {
+	expect(capPieces(["a", "b"])).toEqual({ judged: ["a", "b"], of: [0, 1] });
+	expect(capPieces(["a", "b", "c", "d", "e", "f"])).toEqual({
+		judged: ["a b c", "d", "e", "f"],
+		of: [0, 0, 0, 1, 2, 3],
+	});
 });

@@ -1208,6 +1208,18 @@ export function LeadChat({
 	const call = useLeadCall();
 	// The call tells a task's new question once, as a decision to think about.
 	useEffect(() => leadCall.setTasks(tasks), [tasks]);
+	// A question answered by a tap on its card or by voice on the call: a box's
+	// Lead can't reach a task elsewhere, so that one is answered directly.
+	const answerTask = useCallback(
+		(input: Parameters<typeof window.ateamLead.answer>[0]) => {
+			const t = tasks.find((x) => x.id === input.taskId);
+			return home.box && t && !onLeadBox(t)
+				? window.ateam.tasks.answerQuestion(input).then(() => {})
+				: window.ateamLead.answer(input);
+		},
+		[home.box, tasks, onLeadBox],
+	);
+	useEffect(() => leadCall.answerWith(answerTask), [answerTask]);
 	const [text, setTextState] = useState(() => unsent);
 	const setText = (value: string) => {
 		unsent = value;
@@ -1623,17 +1635,7 @@ export function LeadChat({
 					<div className="lead-asking-title">Waiting on you</div>
 					<div className="lead-asking-list">
 						{asking.map((t) => (
-							<QuestionCard
-								key={t.id}
-								task={t}
-								onOpenTask={onOpenTask}
-								onAnswer={(input) =>
-									// A box's Lead can't reach a task elsewhere: answer it directly.
-									home.box && !onLeadBox(t)
-										? window.ateam.tasks.answerQuestion(input).then(() => {})
-										: window.ateamLead.answer(input)
-								}
-							/>
+							<QuestionCard key={t.id} task={t} onOpenTask={onOpenTask} onAnswer={answerTask} />
 						))}
 					</div>
 				</div>

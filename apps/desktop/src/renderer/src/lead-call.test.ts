@@ -1,17 +1,24 @@
-import { expect, test } from "bun:test";
-import type { LeadItem } from "@ateam/protocol";
+import { expect, jest, test } from "bun:test";
+import type { AteamLead, LeadCallVerdict, LeadItem } from "@ateam/protocol";
 import {
 	activeTopic,
 	announcement,
 	contextFrom,
 	decisionLine,
+	gist,
 	heldReason,
+	LeadCall,
 	optionsOf,
 	piecesOf,
+	QUIET_JUDGE_MS,
+	rideAlong,
 	shouldHold,
 	speakable,
 	turnsFrom,
+	UNDO_MS,
+	UTTERANCE_GAP_MS,
 	waitingOnUser,
+	withCarry,
 } from "./lead-call";
 
 const task = { taskId: "t1", name: "Disk usage on the box page", agentId: "claude" };
@@ -72,7 +79,7 @@ test("announcement speaks up for task news and waiting approvals, not for settle
 	).toBeNull();
 });
 
-test("piecesOf splits what was heard at pauses, so side talk isn't glued to a request", () => {
+test("piecesOf splits at a pause where a sentence ended, so side talk isn't glued to a request", () => {
 	const frags = [
 		{ text: " Do you want", start: 0, end: 200 },
 		{ text: " pizza tonight?", start: 200, end: 600 },
@@ -91,8 +98,83 @@ test("piecesOf splits what was heard at pauses, so side talk isn't glued to a re
 			{ text: " Okay, start a task", start: 2000, end: 2400 },
 		]),
 	).toEqual(["pizza tonight?", "Okay, start a task"]);
+	// The end mark at the start of the next fragment, as the transcript puts it (live).
+	expect(
+		piecesOf([
+			{ text: "Mom, hold on a second", start: 0, end: 1400 },
+			{ text: ". Delete the old test box", start: 2500, end: 3700 },
+		]),
+	).toEqual(["Mom, hold on a second.", "Delete the old test box"]);
 	expect(piecesOf([])).toEqual([]);
 	expect(piecesOf([{ text: "   ", start: 0, end: 10 }])).toEqual([]);
+});
+
+test("piecesOf keeps a sentence said slowly whole: its pauses are not its ends", () => {
+	// Live, 2026-11-05: 2.3 s pauses inside one sentence.
+	const slow = [
+		{ text: "In the web project", start: 6200, end: 7200 },
+		{ text: ", send a task", start: 9800, end: 10400 },
+		{ text: " to check whether the agents read their instructions", start: 12800, end: 15300 },
+	];
+	expect(piecesOf(slow)).toEqual([
+		"In the web project, send a task to check whether the agents read their instructions",
+	]);
+	// Trailing off ("...") is a pause in a thought, not its end.
+	expect(
+		piecesOf([
+			{ text: "In the web project...", start: 0, end: 900 },
+			{ text: " send a task", start: 3000, end: 3600 },
+		]),
+	).toEqual(["In the web project... send a task"]);
+	// Past the cap, the oldest sentences join: no word is dropped.
+	const five = ["One.", "Two.", "Three.", "Four.", "Five."].map((text, i) => ({
+		text: ` ${text}`,
+		start: i * 2000,
+		end: i * 2000 + 500,
+	}));
+	expect(piecesOf(five, 800, 4)).toEqual(["One. Two.", "Three.", "Four.", "Five."]);
+});
+
+test("rideAlong: once an utterance is for the Lead, its fragments go too; side talk stays back", () => {
+	const p = (text: string, lead: boolean, kind: "lead" | "someone" | "background" | "unclear") => ({
+		text,
+		lead,
+		kind,
+	});
+	// "instructions" alone reads as nobody's; next to a request it is part of it.
+	expect(
+		rideAlong([p("send a task to check", true, "lead"), p("instructions", false, "unclear")]),
+	).toEqual({ lead: ["send a task to check", "instructions"], held: [] });
+	// Said to someone else in the same breath: still held.
+	expect(
+		rideAlong([
+			p("Mum, hold on a second.", false, "someone"),
+			p("Delete the old box.", true, "lead"),
+		]),
+	).toEqual({
+		lead: ["Delete the old box."],
+		held: [p("Mum, hold on a second.", false, "someone")],
+	});
+	// Nothing for the Lead: all of it held, fragments too.
+	expect(rideAlong([p("instructions", false, "unclear")]).lead).toEqual([]);
+});
+
+test("withCarry judges a held start of an utterance again with what came next", () => {
+	// Held as nobody's: judged again, as one sentence.
+	expect(
+		withCarry(["send a task", "to check"], { sent: false, held: ["In the web project"] }),
+	).toEqual({
+		pieces: ["In the web project send a task", "to check"],
+		carried: ["In the web project"],
+	});
+	// Already sent, or nothing held, or a new utterance: as heard.
+	expect(withCarry(["more"], { sent: true, held: [] }).carried).toEqual([]);
+	expect(withCarry(["more"], { sent: false, held: [] }).pieces).toEqual(["more"]);
+	expect(withCarry(["more"], null).pieces).toEqual(["more"]);
+	// A long held stretch keeps its newest words.
+	const long = withCarry(["end"], { sent: false, held: ["x".repeat(800)] }).pieces[0] ?? "";
+	expect(long.length).toBe(600);
+	expect(long.endsWith(" end")).toBe(true);
 });
 
 test("shouldHold: quiet holds at 30 s, a false wake at 10 s, endless side talk at 90 s", () => {
@@ -123,13 +205,23 @@ test("contextFrom gives the gate the chat and what was held back, in time order,
 		// Too old to say anything about what comes next.
 		{ text: "Old news on TV.", kind: "background" as const, at: now - 150_000 },
 	];
-	expect(contextFrom(items, asides, now)).toBe(
+	const said = [{ text: "The disk task says it is done.", at: 90_000 }];
+	expect(contextFrom(items, { asides, said }, now)).toBe(
 		[
 			"user (34 s ago): Tell the checklist one to be friendly.",
 			"lead (25 s ago): Should I message it?",
+			'the task "Disk usage on the box page" replied (19 s ago): Done.',
+			"lead, said on the call (10 s ago): The disk task says it is done.",
 			'heard, not sent to the Lead (4 s ago), said to someone else in the room: "Did you give food to the cat?"',
 		].join("\n"),
 	);
+	// A long message keeps its end, where its question is.
+	const long = `Thanks, it went through. ${"It started the task with your question. ".repeat(20)}Can it stop the simulator?`;
+	const g = gist(long, 300);
+	expect(g.startsWith("Thanks, it went through.")).toBe(true);
+	expect(g.endsWith("Can it stop the simulator?")).toBe(true);
+	expect(g.length).toBeLessThanOrEqual(303);
+	expect(gist("Short.", 300)).toBe("Short.");
 	expect(heldReason("someone")).toBe("sounded like you were talking to someone else");
 });
 
@@ -186,6 +278,20 @@ test("activeTopic: a countdown first, then a card for 30 s, then a decision for 
 	]);
 	expect(activeTopic(121_000, decision, null)).toBeNull();
 	expect(activeTopic(0, null, null)).toBeNull();
+	// A task's reply the voice summed up: talked about for 2 min, no buttons.
+	const reply = {
+		kind: "reply" as const,
+		taskId: "t",
+		name: "Errors",
+		text: "It found network issues.",
+		at: 0,
+	};
+	expect(activeTopic(119_000, reply, null)).toEqual({
+		kind: "reply",
+		text: "It found network issues.",
+		open: reply,
+	});
+	expect(activeTopic(121_000, reply, null)).toBeNull();
 });
 
 test("decisionLine tells a decision once, unhurried, by its first line", () => {
@@ -209,4 +315,180 @@ test("optionsOf: a question's buttons with the agent's pick, none for a checklis
 	]);
 	expect(optionsOf({ ...q, choices: undefined })).toEqual([{ label: "Switch" }, { label: "Keep" }]);
 	expect(optionsOf({ ...q, select: "many" })).toEqual([]);
+});
+
+test("shouldHold waits for words not judged yet, except past the chatter cap", () => {
+	const at = (s: number) => s * 1000;
+	const base = { engagedAt: 0, falseWake: false };
+	// Quiet for 4 s after 31 s idle: holds, unless the last words wait on the gate.
+	expect(shouldHold({ ...base, now: at(31), heardAt: at(27) })).toBe(true);
+	expect(shouldHold({ ...base, now: at(31), heardAt: at(27), unjudged: true })).toBe(false);
+	expect(
+		shouldHold({ engagedAt: 0, falseWake: true, now: at(11), heardAt: at(9), unjudged: true }),
+	).toBe(false);
+	// A TV that never stops: on hold at the cap all the same.
+	expect(shouldHold({ ...base, now: at(91), heardAt: at(91), unjudged: true })).toBe(true);
+	// A pause the quiet timer judged at is still inside one utterance.
+	expect(UTTERANCE_GAP_MS).toBeGreaterThan(QUIET_JUDGE_MS);
+});
+
+// The call itself, driven through a fake Lead: what it asks the gate, what it sends.
+const lead = (p = 0.9): LeadCallVerdict => ({ p, send: true, kind: "lead" });
+const nobodys: LeadCallVerdict = { p: 0.3, send: false, kind: "unclear" };
+function fakeCall(
+	gate: (pieces: string[], opts?: { continuing?: string }) => LeadCallVerdict[] | null,
+) {
+	const judged: { pieces: string[]; opts: Parameters<AteamLead["callJudge"]>[2] }[] = [];
+	const sent: string[] = [];
+	const leadAnswered: unknown[] = [];
+	const fake = {
+		callJudge: async (pieces: string[], _context: string, opts?: { continuing?: string }) => {
+			judged.push({ pieces, opts });
+			return gate(pieces, opts);
+		},
+		send: async (text: string) => {
+			sent.push(text);
+		},
+		callNudge: async () => "The disk task says it is done.",
+		answer: async (input: unknown) => {
+			leadAnswered.push(input);
+		},
+		callActive: async () => {},
+	} as unknown as AteamLead;
+	const call = new LeadCall(() => fake);
+	// biome-ignore lint/suspicious/noExplicitAny: these tests drive the call's private state.
+	const c = call as any;
+	const hear = (text: string, start: number) =>
+		c.onVoice({
+			type: "session.input_transcript.delta",
+			delta: text,
+			start_ms: start,
+			end_ms: start + 400,
+		});
+	const stop = () => {
+		for (const t of [c.judgeTimer, c.heldTimer, c.approval?.timer]) if (t) clearTimeout(t);
+	};
+	return { call, c, judged, sent, leadAnswered, hear, stop };
+}
+
+test("a hold judges what was heard before closing the session, never drops it", async () => {
+	const { c, judged, sent, hear, stop } = fakeCall((p) => p.map(() => lead()));
+	c.view.state = "live";
+	hear("Start a task for disk usage", 0);
+	await c.toHold();
+	await c.judging;
+	expect(judged.map((j) => j.pieces)).toEqual([["Start a task for disk usage"]]);
+	expect(sent).toEqual(["Start a task for disk usage"]);
+	stop();
+});
+
+test("after a pause, the gate's answer on carrying on decides; without one, the hand-off does", async () => {
+	// The gate answered: it doesn't carry on. Held, though it reads as nobody's.
+	const a = fakeCall((p, o) => p.map(() => (o?.continuing ? nobodys : lead())));
+	a.hear("Delete the old test box.", 0);
+	await a.c.judge(null);
+	a.hear("um where is it", 5000);
+	// The quiet timer judged in between: a pause just past it.
+	a.c.batchFrom = a.c.utter.until + QUIET_JUDGE_MS + 100;
+	await a.c.judge(null);
+	expect(a.judged[1]?.opts?.continuing).toBe("Delete the old test box.");
+	expect(a.sent).toEqual(["Delete the old test box."]);
+	expect(a.call.view.held?.text).toBe("um where is it");
+	a.stop();
+	// No answer (no model, a timeout, a refusal): held, unless the voice handed
+	// the words off. A TV line after a request must not ride along on silence.
+	const b = fakeCall((p, o) => (o?.continuing ? null : p.map(() => lead())));
+	b.hear("Delete the old test box", 0);
+	await b.c.judge(null);
+	b.hear("Officials say the storm will reach the coast", 5000);
+	b.c.batchFrom = b.c.utter.until + QUIET_JUDGE_MS + 100;
+	await b.c.judge(null);
+	expect(b.sent).toEqual(["Delete the old test box"]);
+	b.hear("and stop the simulator", 9000);
+	b.c.batchFrom = b.c.utter.until + 500;
+	await b.c.judge("hand-off");
+	expect(b.sent).toEqual(["Delete the old test box", "and stop the simulator"]);
+	b.stop();
+});
+
+test("a task's reply becomes the topic only when no card or decision is open", async () => {
+	const { c, stop } = fakeCall(() => null);
+	c.view.state = "live";
+	const reply = {
+		kind: "agent" as const,
+		id: "a1",
+		task: { taskId: "t2", name: "Disk usage", agentId: null },
+		text: "Done.",
+		at: 0,
+	};
+	const decision = {
+		kind: "decision",
+		taskId: "t",
+		questionId: "q",
+		name: "Email",
+		text: "Switch?",
+		options: [{ label: "Switch", recommended: true }],
+		at: Date.now(),
+	};
+	c.topic = decision;
+	await c.nudge(reply);
+	expect(c.topic).toBe(decision);
+	c.topic = null;
+	await c.nudge(reply);
+	expect(c.topic).toMatchObject({ kind: "reply", taskId: "t2", name: "Disk usage" });
+	expect(c.said.at(-1)?.text).toBe("The disk task says it is done.");
+	stop();
+});
+
+test("go ahead picks a decision's button: its options reach the gate, the chat's way answers", async () => {
+	jest.useFakeTimers();
+	const { call, c, judged, leadAnswered, hear, stop } = fakeCall(() => [
+		{ p: 0.95, send: true, kind: "lead", onTopic: true, answer: null, choice: 0 },
+	]);
+	const routed: unknown[] = [];
+	call.answerWith(async (input) => {
+		routed.push(input);
+	});
+	c.topic = {
+		kind: "decision",
+		taskId: "t",
+		questionId: "q",
+		name: "Email",
+		text: "Switch?",
+		options: [{ label: "Switch", recommended: true }, { label: "Keep" }],
+		at: Date.now(),
+	};
+	hear("Go ahead.", 0);
+	await c.judge(null);
+	expect(judged[0]?.opts?.topic?.options?.map((o) => o.label)).toEqual(["Switch", "Keep"]);
+	expect(call.view.approving?.text).toBe("Email: Switch");
+	jest.advanceTimersByTime(UNDO_MS + 1);
+	expect(routed).toEqual([{ taskId: "t", questionId: "q", answer: "Switch" }]);
+	expect(leadAnswered).toEqual([]);
+	stop();
+	jest.useRealTimers();
+});
+
+test("a hand-off cancels the voice's own acknowledgement; the call acknowledges only what went", async () => {
+	const { c, hear, stop } = fakeCall((p) => p.map((x) => (x.startsWith("Mom") ? nobodys : lead())));
+	const out: [string, string | null, string][] = [];
+	c.dc = {
+		readyState: "open",
+		send: (d: string) => {
+			const e = JSON.parse(d);
+			out.push([e.type, e.delegation_id, e.content]);
+		},
+	};
+	c.onVoice({ type: "session.delegation.created", delegation: { id: "d1" } });
+	expect(out).toEqual([["session.thinking.append", "d1", ""]]);
+	// Sent: "One sec." for that hand-off, nothing more.
+	hear("Start a task for disk usage", 0);
+	await c.judge("d1");
+	expect(out.slice(1)).toEqual([["session.commentary.append", "d1", "One sec."]]);
+	// Held: no acknowledgement, the voice is told to say nothing.
+	hear("Mom, hold on", 9000);
+	c.batchFrom = c.utter.until + UTTERANCE_GAP_MS + 1;
+	await c.judge("d2");
+	expect(out.slice(2).map((e) => e[0])).toEqual(["session.thinking.append"]);
+	stop();
 });
