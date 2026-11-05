@@ -171,6 +171,28 @@ export const HETZNER_SIZES = [
 	{ slug: "cpx11", label: "CPX11 — 2 vCPU / 2 GB (AMD)" },
 ];
 
+/** A refusal from Hetzner's API, with its HTTP status. */
+export class HetznerError extends Error {
+	constructor(
+		message: string,
+		readonly status: number,
+	) {
+		super(message);
+		this.name = "HetznerError";
+	}
+}
+
+/** The server went, but some of the addresses Hetzner made for it didn't: they bill
+ *  on their own until someone deletes them. */
+export class LeftoverAddressesError extends Error {
+	constructor(readonly reasons: string[]) {
+		super(
+			`The server is deleted, but ${reasons.length === 1 ? "one of its addresses isn't" : `${reasons.length} of its addresses aren't`} (${reasons.join("; ")}). Delete ${reasons.length === 1 ? "it" : "them"} in Hetzner's console, under Primary IPs, or ${reasons.length === 1 ? "it bills" : "they bill"} on its own.`,
+		);
+		this.name = "LeftoverAddressesError";
+	}
+}
+
 /** One authenticated Hetzner API call, with their `{error:{message}}` shape unwrapped. */
 async function hetznerCall(token: string, path: string, init?: RequestInit) {
 	const res = await fetch(`${HETZNER_API}${path}`, {
@@ -183,7 +205,12 @@ async function hetznerCall(token: string, path: string, init?: RequestInit) {
 	});
 	const text = await res.text();
 	const body = text ? JSON.parse(text) : {};
-	if (!res.ok) throw new Error(`Hetzner ${path}: ${body?.error?.message ?? `HTTP ${res.status}`}`);
+	if (!res.ok) {
+		throw new HetznerError(
+			`Hetzner ${path}: ${body?.error?.message ?? `HTTP ${res.status}`}`,
+			res.status,
+		);
+	}
 	return body;
 }
 
@@ -330,12 +357,20 @@ export const hetznerProvider: BoxProvider = {
 			(ip): ip is number => typeof ip === "number",
 		);
 		const deleted = await call(`/servers/${id}`, { method: "DELETE" });
+		// Deleting the server detaches its addresses; one still attached can't be deleted.
 		await settle(call, deleted.action?.id);
+		const left: string[] = [];
 		for (const ip of ips) {
-			await call(`/primary_ips/${ip}`, { method: "DELETE" }).catch(() => {
-				// Gone with the server already.
-			});
+			try {
+				await call(`/primary_ips/${ip}`, { method: "DELETE" });
+			} catch (err) {
+				// Not found: it went with the server (auto_delete). Anything else still bills.
+				if (!(err instanceof HetznerError && err.status === 404)) {
+					left.push(err instanceof Error ? err.message : String(err));
+				}
+			}
 		}
+		if (left.length) throw new LeftoverAddressesError(left);
 	},
 
 	async createServer(input) {

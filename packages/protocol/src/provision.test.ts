@@ -1,5 +1,10 @@
 import { describe, expect, it, test } from "bun:test";
-import { buildCloudInit, hetznerProvider, orderableServerTypes } from "./provision";
+import {
+	buildCloudInit,
+	hetznerProvider,
+	LeftoverAddressesError,
+	orderableServerTypes,
+} from "./provision";
 
 const KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITESTKEYtestkeytestkeytestkeytestkey ateam";
 const AUTHKEY = "tskey-auth-abc123DEF-ghiJKL456";
@@ -208,6 +213,31 @@ describe("Hetzner, for a box with no SSH key", () => {
 		const create = api.calls.find((c) => c.path === "/servers" && c.method === "POST")?.body;
 		expect(create).toMatchObject({ firewalls: [{ firewall: 7 }] });
 		expect(create).not.toHaveProperty("ssh_keys");
+	});
+
+	test("an address that won't go is said, not swallowed: it bills on its own", async () => {
+		const api = fakeHetzner({
+			"GET /servers/42": { server: { public_net: { ipv4: { id: 5 } } } },
+			"DELETE /servers/42": { action: { id: 9 } },
+			"GET /actions/9": { action: { status: "success" } },
+		});
+		const real = globalThis.fetch;
+		const fake = globalThis.fetch;
+		// The address refuses (still assigned), rather than being gone (404).
+		globalThis.fetch = (async (url: string, init?: RequestInit) =>
+			String(url).endsWith("/primary_ips/5")
+				? new Response(JSON.stringify({ error: { message: "primary ip is assigned" } }), {
+						status: 422,
+					})
+				: fake(url, init)) as typeof fetch;
+		try {
+			const err = await hetznerProvider.deleteServer("t", "42").catch((e) => e);
+			expect(err).toBeInstanceOf(LeftoverAddressesError);
+			expect(String(err.message)).toContain("primary ip is assigned");
+		} finally {
+			globalThis.fetch = real;
+			api.restore();
+		}
 	});
 
 	test("deleting it deletes the addresses Hetzner made for it too", async () => {

@@ -19,17 +19,19 @@ import {
 	TextInput,
 	View,
 } from "react-native";
+import Svg, { Path } from "react-native-svg";
 import {
 	boxNameOf,
 	defaultBoxName,
 	defaultsOf,
 	HETZNER_ACCOUNT,
 	HETZNER_TOKENS_URL,
-	MAC_APP_URL,
 	priceLine,
 	sizesIn,
 	TAILSCALE_KEYS_URL,
 } from "./create-box";
+import { shareMacApp } from "./mac-app";
+import { PROVIDER_LOGOS } from "./provider-logos";
 import { loadProviderAccount, saveProviderAccount } from "./storage";
 import { openTailscale, useTailnet } from "./tailnet";
 import { C, CONTENT_MAX } from "./theme";
@@ -148,6 +150,34 @@ function Picker<T extends { slug: string; label: string }>({
 						</Pressable>
 					))
 				: null}
+		</View>
+	);
+}
+
+/** Where else Ateam for Mac sets a box up (docs/providers), by their marks. Not boxd:
+ *  the user keeps it unpromoted. The last circle is any machine reached over SSH. */
+const MORE_PROVIDERS = ["sprites"];
+
+function LogoStack() {
+	return (
+		<View style={styles.stack} accessible={false} importantForAccessibility="no-hide-descendants">
+			{[...MORE_PROVIDERS, null].map((id, i) => {
+				const logo = id ? PROVIDER_LOGOS[id] : undefined;
+				return (
+					<View
+						key={id ?? "any"}
+						style={[styles.stackCircle, i > 0 && styles.stackOverlap, { zIndex: 10 - i }]}
+					>
+						{logo ? (
+							<Svg width={14} height={14} viewBox={logo.viewBox}>
+								<Path d={logo.d} fill={logo.fill ?? C.ink} />
+							</Svg>
+						) : (
+							<Feather name="terminal" size={13} color={C.muted} />
+						)}
+					</View>
+				);
+			})}
 		</View>
 	);
 }
@@ -507,11 +537,11 @@ export function CreateBoxScreen({
 						{/* Hetzner is the one provider the phone creates boxes on; the Mac sets up any. */}
 						<Pressable
 							style={({ pressed }) => [styles.more, pressed && styles.pressed]}
-							onPress={() => void Linking.openURL(MAC_APP_URL)}
-							accessibilityRole="link"
+							onPress={shareMacApp}
+							accessibilityRole="button"
 							accessibilityLabel="More ways to get a box: Ateam for Mac sets up any Linux machine you can reach over SSH"
 						>
-							<Feather name="monitor" size={17} color={C.ink} />
+							<LogoStack />
 							<View style={styles.moreText}>
 								<Text style={styles.moreTitle}>More ways to get a box</Text>
 								<Text style={styles.moreBody}>
@@ -641,6 +671,18 @@ const styles = StyleSheet.create({
 	},
 	pressed: { opacity: 0.7 },
 	moreText: { flex: 1, gap: 2 },
+	stack: { flexDirection: "row", alignItems: "center" },
+	stackCircle: {
+		width: 28,
+		height: 28,
+		borderRadius: 14,
+		borderWidth: 2,
+		borderColor: C.surface,
+		backgroundColor: C.sunken,
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	stackOverlap: { marginLeft: -9 },
 	moreTitle: { color: C.ink, fontSize: 15, fontWeight: "600" },
 	moreBody: { color: C.muted, fontSize: 12, lineHeight: 17 },
 	danger: { color: C.red, fontSize: 14, fontWeight: "600" },

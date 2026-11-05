@@ -1812,8 +1812,10 @@ export {
 	type CreateServerInput,
 	HETZNER_LOCATIONS,
 	HETZNER_SIZES,
+	HetznerError,
 	hetznerProvider,
 	INSTALL_SH_URL,
+	LeftoverAddressesError,
 	orderableServerTypes,
 	type ProviderOptions,
 } from "./provision";

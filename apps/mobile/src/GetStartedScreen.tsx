@@ -4,9 +4,9 @@
 // Ateam's installer, is added by its address; and the demo needs nothing.
 import Feather from "@expo/vector-icons/Feather";
 import type { ReactNode } from "react";
-import { Linking, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
 
-import { MAC_APP_URL } from "./create-box";
+import { shareMacApp } from "./mac-app";
 import { ScanQrIcon } from "./ScanQrIcon";
 import { openTailscale, useTailnet } from "./tailnet";
 import { C, CONTENT_MAX } from "./theme";
@@ -25,7 +25,7 @@ function Door({
 	action: string;
 	onPress: () => void;
 	/** A page to read about it, beside the action. */
-	link?: { label: string; url: string };
+	link?: { label: string; onPress: () => void };
 }) {
 	return (
 		<Pressable
@@ -41,11 +41,7 @@ function Door({
 			<Text style={styles.doorBody}>{body}</Text>
 			<View style={styles.doorFoot}>
 				{link ? (
-					<Pressable
-						onPress={() => void Linking.openURL(link.url)}
-						hitSlop={8}
-						accessibilityRole="link"
-					>
+					<Pressable onPress={link.onPress} hitSlop={8} accessibilityRole="link">
 						<Text style={styles.link}>{link.label}</Text>
 					</Pressable>
 				) : null}
@@ -168,7 +164,7 @@ export function GetStartedScreen({
 						body="Scan the code Ateam for Mac shows, and every box it has joins this phone."
 						action="Scan the code"
 						onPress={onScan}
-						link={{ label: "Get Ateam for Mac", url: MAC_APP_URL }}
+						link={{ label: "Get Ateam for Mac", onPress: shareMacApp }}
 					/>
 					<Door
 						icon={<Feather name="server" size={17} color={C.ink} />}

@@ -2,8 +2,9 @@
 // the app, not the page, so leaving the page doesn't stop it. The box goes on the
 // Boxes list as soon as Hetzner has made it, so even a restart of the app doesn't
 // lose it: the phone then reaches it like any saved box, once its install is done.
-import { hetznerProvider } from "@ateam/protocol";
+import { hetznerProvider, LeftoverAddressesError } from "@ateam/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Alert } from "react-native";
 import { boxKey } from "./boxes";
 import { BOX_PORT, newDeviceToken, phoneCloudInit } from "./create-box";
 import type { Links } from "./links";
@@ -149,8 +150,15 @@ export function useBoxCreation(deps: {
 		const token = deviceToken.current;
 		if (!cur || !token || !host.trim()) return;
 		const next: SavedConnection = { host: host.trim(), port: BOX_PORT, sleeps: false };
+		const old = boxKey(cur.box);
 		await saveBoxToken(boxKey(next), token);
-		latest.current.saveBox(next, boxKey(cur.box));
+		latest.current.saveBox(next, old);
+		// As the form does for a box moved to another address: the old one stops being
+		// tried, and its token goes.
+		if (old !== boxKey(next)) {
+			latest.current.removeBox(old);
+			void saveBoxToken(old, null).catch(() => {});
+		}
 		setCreation({ ...cur, box: next, step: "installing", error: null });
 	}, []);
 
@@ -164,12 +172,17 @@ export function useBoxCreation(deps: {
 			try {
 				await hetznerProvider.deleteServer(token, cur.serverId);
 			} catch (e) {
-				setCreation({
-					...cur,
-					deleting: false,
-					error: `Couldn't delete it on Hetzner: ${e instanceof Error ? e.message : String(e)}. Delete it in Hetzner's console.`,
-				});
-				return;
+				if (e instanceof LeftoverAddressesError) {
+					// The server is gone, so the box goes too; what's left is said once.
+					Alert.alert("Deleted, but not all of it", e.message);
+				} else {
+					setCreation({
+						...cur,
+						deleting: false,
+						error: `Couldn't delete it on Hetzner: ${e instanceof Error ? e.message : String(e)}. Delete it in Hetzner's console.`,
+					});
+					return;
+				}
 			}
 		}
 		latest.current.removeBox(boxKey(cur.box));
