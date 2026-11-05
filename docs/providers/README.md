@@ -70,6 +70,12 @@ provider, and adding one is a file per seam:
 | The desktop leaves a sleeping box asleep at launch | `packages/server/src/connections.ts` | a `SleepCheck`: which ssh aliases are its machines, and which are asleep |
 | The phone, and the desktop for a box added by its Tailscale address, wake a box before connecting | `packages/protocol/src/providers.ts` and `packages/protocol/src/wake.ts` | a definition declaring the inputs a wake needs (an account key, a machine name), and an adapter that wakes with them |
 
+Whether a box sleeps at all is the box's own setting (`box.alwaysOn` in its
+settings file, never synced from a Mac): a new box starts always on, and the phone's and
+desktop's box forms and its page in Settings → Boxes switch it. The engine reports it in
+`system:hello` (`provider.sleeps`), so neither client shows an always-on box asleep or
+asks for its key.
+
 When to sleep is the engine's call for every provider (`sleep/control.ts`): only
 it can tell an agent mid-turn from one waiting on you. It holds a box while it is
 in use (an agent working, someone typing in one of its terminals, its Lead chat)

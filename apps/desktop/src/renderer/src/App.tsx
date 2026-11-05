@@ -858,6 +858,7 @@ export function App() {
 				needsSetup: !c.known,
 				asleep: c.asleep,
 				wake: c.wake ?? null,
+				sleeps: c.sleeps ?? null,
 				// Set only for a connect the app made on its own, where there was no
 				// caller to show the error to — an upgrade that failed reads as an
 				// ordinary offline box without it.

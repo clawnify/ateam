@@ -17,12 +17,14 @@ import type {
 	LoopDTO,
 	ProjectDTO,
 	ProviderDefinition,
+	SettingsResult,
 	TaskDTO,
 } from "@ateam/protocol";
 import {
 	activeLabel,
 	boxSupports,
 	buildAteamApi,
+	CH,
 	filled,
 	type InputValues,
 	inputsAt,
@@ -64,6 +66,7 @@ import {
 	type BoxLink,
 	boxKey,
 	boxTitle,
+	alwaysOnInForm,
 	cantWakeReason,
 	leadBoxOf,
 	leadFirst,
@@ -347,6 +350,8 @@ function ConnectionScreen({
 	onRemoveAccount,
 	waking,
 	notice,
+	alwaysOn,
+	onAlwaysOn,
 	onScan,
 	scanner,
 }: {
@@ -373,6 +378,9 @@ function ConnectionScreen({
 	waking: string | null;
 	/** Why the form opened from a tap on a box: what it needs to be woken. */
 	notice: string | null;
+	/** The box is to stay up, so it needs no key to be woken (box.alwaysOn on the box). */
+	alwaysOn: boolean;
+	onAlwaysOn: (on: boolean) => void;
 	onConnect: () => void;
 	onBack: () => void;
 	/** Back to the Boxes list, when there is one (src/BoxesScreen.tsx). */
@@ -395,7 +403,12 @@ function ConnectionScreen({
 	const draftsFilled = unsaved.every((i) => (drafts[i.key] ?? "").trim() !== "");
 	const inputRows = [
 		...boxInputs.map((input) => ({ input, value: boxValues[input.key] ?? "", draft: false })),
-		...unsaved.map((input) => ({ input, value: drafts[input.key] ?? "", draft: true })),
+		// An always-on box is never woken, so the phone asks for no key for it.
+		...(alwaysOn ? [] : unsaved).map((input) => ({
+			input,
+			value: drafts[input.key] ?? "",
+			draft: true,
+		})),
 	];
 	const options: (ProviderDefinition | null)[] = [null, ...WAKE_PROVIDERS];
 	return (
@@ -476,6 +489,36 @@ function ConnectionScreen({
 						</Pressable>
 					</View>
 
+					{!picking && def ? (
+						<View style={[styles.formCard, styles.pickerCard]} accessibilityRole="radiogroup">
+							{[
+								{
+									on: true,
+									title: "Always on",
+									hint: "It never sleeps, so nothing needs a key to wake it. Billed around the clock.",
+								},
+								{
+									on: false,
+									title: "Sleeps when idle",
+									hint: `Sleeps when nobody uses it and wakes when you do, with your ${def.label} ${keyLabel}.`,
+								},
+							].map((o, i) => (
+								<Pressable
+									key={o.title}
+									style={[styles.pickerOption, i === 0 && styles.fieldDivider]}
+									onPress={() => onAlwaysOn(o.on)}
+									accessibilityRole="radio"
+									accessibilityState={{ selected: alwaysOn === o.on }}
+								>
+									<View style={styles.pickerText}>
+										<Text style={styles.pickerTitle}>{o.title}</Text>
+										<Text style={styles.pickerHint}>{o.hint}</Text>
+									</View>
+									{alwaysOn === o.on ? <Feather name="check" size={15} color={C.ink} /> : null}
+								</Pressable>
+							))}
+						</View>
+					) : null}
 					{picking ? (
 						<View style={[styles.formCard, styles.pickerCard]}>
 							{options.map((p, i) => (
@@ -520,7 +563,7 @@ function ConnectionScreen({
 						</View>
 					) : null}
 					{!picking && notice ? <Text style={styles.formNotice}>{notice}</Text> : null}
-					{!picking && def && accountInputs.length > 0 ? (
+					{!picking && def && !alwaysOn && accountInputs.length > 0 ? (
 						unsaved.length === 0 ? (
 							<Pressable
 								style={styles.demoBtn}
@@ -544,7 +587,9 @@ function ConnectionScreen({
 							</Pressable>
 						) : null
 					) : null}
-					{!picking && def?.wake ? <Text style={styles.formNote}>{def.wake.note}</Text> : null}
+					{!picking && !alwaysOn && def?.wake ? (
+						<Text style={styles.formNote}>{def.wake.note}</Text>
+					) : null}
 
 					{waking ? <Text style={styles.formNote}>Waking the box through {waking}…</Text> : null}
 
@@ -1122,6 +1167,11 @@ export default function App() {
 	const [error, setError] = useState<string | null>(null);
 	// Why the form opened from a tap on a box (a key or name it needs to be woken).
 	const [formNotice, setFormNotice] = useState<string | null>(null);
+	// The form's Always on / Sleeps when idle, for a box with a provider, and whether
+	// the user picked it: only a pick is sent to the box, so adding a box that exists
+	// already (a second phone, a reinstall) never changes how it sleeps.
+	const [formAlwaysOn, setFormAlwaysOn] = useState(true);
+	const [formAlwaysOnPicked, setFormAlwaysOnPicked] = useState(false);
 	const accounts = useRef<Record<string, InputValues>>({});
 	// One adapter per provider and key, so its session (boxd's lasts an hour) is reused across connects.
 	const wakers = useRef(new Map<string, WakeAdapter>());
@@ -1505,6 +1555,8 @@ export default function App() {
 		setPort(box?.port ?? "8787");
 		setError(null);
 		setFormNotice(null);
+		setFormAlwaysOn(alwaysOnInForm(box));
+		setFormAlwaysOnPicked(false);
 		const def = providerById(box?.provider?.id);
 		if (!def || !box?.provider) {
 			setProviderId(null);
@@ -1663,6 +1715,30 @@ export default function App() {
 		[fleet, link, refresh],
 	);
 
+	// The form's Always on / Sleeps when idle, sent to the box itself (box.alwaysOn
+	// there), which says which it is in hello from then on. Only to an engine that
+	// reports its provider: null means no provider sleeps it, and an older engine
+	// (undefined) would ignore it. The box's answer is the truth the phone keeps, since
+	// a Mac's idle window of 0 keeps it up whatever this says.
+	const applyAlwaysOn = useCallback(
+		async (key: string, on: boolean): Promise<string | null> => {
+			const c = link.conn(key);
+			if (!c?.info.provider) return null;
+			try {
+				const r = (await c.rpc.call(CH.settingsUpdate, [
+					{ box: { alwaysOn: on } },
+				])) as SettingsResult;
+				const sleeps = r.settings.box?.alwaysOn !== true && r.settings.engine.idleSleepMinutes > 0;
+				commitBoxes(boxesRef.current.map((b) => (boxKey(b) === key ? { ...b, sleeps } : b)));
+				return null;
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				return `Connected, but couldn't ${on ? "keep it always on" : "let it sleep when idle"}: ${msg}`;
+			}
+		},
+		[link, commitBoxes],
+	);
+
 	const onConnect = useCallback(async () => {
 		if (!host.trim()) {
 			setError("Enter the box's Tailscale IP or hostname.");
@@ -1696,6 +1772,11 @@ export default function App() {
 			}
 			// An edit that moved the box to another address: the old one leaves the board.
 			if (replaces && replaces !== key) forgetBox(replaces);
+			const unset = def && formAlwaysOnPicked ? await applyAlwaysOn(key, formAlwaysOn) : null;
+			if (unset) {
+				setError(unset);
+				return;
+			}
 			setEditingKey(null);
 			setConnectScreen("list");
 			leaveConnect();
@@ -1712,6 +1793,9 @@ export default function App() {
 		link,
 		endDemo,
 		forgetBox,
+		applyAlwaysOn,
+		formAlwaysOn,
+		formAlwaysOnPicked,
 		fleet,
 		leaveConnect,
 		commitBoxes,
@@ -2290,6 +2374,11 @@ export default function App() {
 				onRemoveAccount={(def) => void onRemoveAccount(def)}
 				waking={waking}
 				notice={formNotice}
+				alwaysOn={formAlwaysOn}
+				onAlwaysOn={(on) => {
+					setFormAlwaysOn(on);
+					setFormAlwaysOnPicked(true);
+				}}
 				onScan={editingKey === null ? openScanner : null}
 				scanner={scanner}
 			/>
