@@ -209,7 +209,8 @@ engine says it runs on a Sprite, and which one (its hostname is its name). The t
 is still yours to add; tapping a Sprite the phone has no token for opens its form at
 the token, rather than dialling it asleep until it times out. A box with no provider
 that doesn't answer (one on an engine from before this, say) says so under its card,
-with a **Set provider** button. Before connecting, the phone asks Sprites to wake the Sprite and hold it
+with a **Set provider** button. A Sprite whose idle sleep is off says it's always on, and
+the phone then never shows it asleep or asks for a token. Before connecting, the phone asks Sprites to wake the Sprite and hold it
 for five minutes, then keeps trying the Sprite for up to three: a Sprite reported
 awake can take a while longer to answer. Once the phone attaches, the engine holds
 it for a fresh idle window, as for any client connecting to a box it had let go.

@@ -627,9 +627,13 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		cancelReconnect(alias);
 		attempts.delete(alias);
 		// A Tailscale box added by its address alone takes the provider it says it runs
-		// on, so a connect the user asks for can wake it rather than time out.
+		// on, so a connect the user asks for can wake it rather than time out. Not one
+		// that says it's always on (idle sleep off): there is nothing to wake.
 		const reported =
-			opts.binding === undefined && wire === "ws" && !boxWakeOf(db, alias)
+			opts.binding === undefined &&
+			wire === "ws" &&
+			!boxWakeOf(db, alias) &&
+			info.provider?.sleeps !== false
 				? reportedWake(info.provider)
 				: null;
 		recordConnection(db, {

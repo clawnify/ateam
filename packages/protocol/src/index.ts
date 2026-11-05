@@ -1062,13 +1062,13 @@ export interface SystemInfo {
 	/** The address the box's network port listens on (`<host>:<port>`), or null
 	 *  when it has none (v30; absent before). What other boxes link to. */
 	wsAddr?: string | null;
-	/** The provider that puts this box to sleep and the box's name there, null on a
-	 *  box no provider sleeps. Absent from engines before it was reported (no protocol
-	 *  bump: like `release`, nothing gates on it), and while the engine is still
-	 *  finding out. A client that saved the box by its address alone (a pairing QR,
-	 *  the IP typed in) fills in what to wake it through (wake.ts reportedWake),
-	 *  instead of dialling a sleeping box until it times out. */
-	provider?: BoxWake | null;
+	/** The provider that puts this box to sleep, the box's name there, and whether it
+	 *  lets the box sleep now; null on a box no provider sleeps. Absent from engines
+	 *  before it was reported, and while the engine is still finding out. A client that
+	 *  saved the box by its address alone (a pairing QR, the IP typed in) fills in what
+	 *  to wake it through (wake.ts reportedWake), instead of dialling a sleeping box
+	 *  until it times out. */
+	provider?: ProviderReport | null;
 }
 
 /** A connection's standing with a box's lock (pairing:*, v29).
@@ -1232,6 +1232,14 @@ export interface ConnectionDTO {
 export interface BoxWake {
 	id: string;
 	box: Record<string, string>;
+}
+
+/** What a box says about its provider in system:hello (SystemInfo.provider). */
+export interface ProviderReport extends BoxWake {
+	/** Whether the engine lets the box sleep when it's idle, right now: false while its
+	 *  idle sleep is off (`engine.idleSleepMinutes` 0), when it's always on and a client
+	 *  has nothing to wake. Read when the client connects, so it follows the setting. */
+	sleeps: boolean;
 }
 
 /**

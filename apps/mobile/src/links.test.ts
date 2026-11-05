@@ -220,6 +220,37 @@ test("a box with no provider that doesn't answer when asked for says how to make
 	expect(bg.state()[key(plain)]).toMatchObject({ state: "down", wakeError: null });
 });
 
+test("a box that says it's always on reads as offline, not asleep, and asks for no key", async () => {
+	const always: SavedConnection = { ...sleepy, sleeps: false };
+	// No key for it on this phone: a tap dials, fails plainly, and asks for nothing.
+	const h = harness({ wakerFor: async () => null });
+	h.setBoxes([always]);
+	void h.links.connect(always, { wake: true });
+	await settle();
+	h.calls[0]?.reject(new Error("Timed out reaching the box"));
+	await settle();
+	expect(h.state()[key(always)]).toMatchObject({
+		state: "down",
+		asleep: false,
+		error: "Timed out reaching the box",
+		wakeError: null,
+	});
+	expect(awayOf(h.state()[key(always)])).toBe("offline");
+	// With a key, a tap still wakes it: it may have been put back to sleeping since.
+	const k = harness();
+	k.setBoxes([always]);
+	void k.links.connect(always, { wake: true });
+	await settle();
+	expect(k.wakes).toEqual([key(always)]);
+	// A retry for it never does, even with its task open.
+	const r = harness({ dial: () => Promise.reject(new Error("timed out")) });
+	r.setBoxes([always]);
+	r.waited.add(key(always));
+	void r.links.reconnect(key(always));
+	await r.fc.advance(REWAKE_MS * 3);
+	expect(r.wakes).toEqual([]);
+});
+
 test("a socket refused before the connect resolves is a failed try, not a dropped box", async () => {
 	const h = harness();
 	const tried = h.links.connect(plain);

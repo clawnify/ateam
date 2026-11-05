@@ -14,6 +14,7 @@ import {
 	sleepMode,
 	startSleepControl,
 } from "../src/sleep/control";
+import { providerReport } from "../src/sleep/index";
 import {
 	HOLD_EXPIRE,
 	HOLD_RENEW_MS,
@@ -278,6 +279,19 @@ describe("boxdSleepDriver", () => {
 			exec: async (cmd, args) => (cmd === "boxd" && args[0] === "info" ? '{"name":"mybox"}' : ""),
 		});
 		expect(driver?.provider).toEqual({ id: "boxd", box: { machine: "mybox" } });
+	});
+});
+
+describe("providerReport", () => {
+	const sprite = { id: "sprites", box: { machine: "ateam-box" } };
+	it("says the box sleeps while idle sleep is on, and not while it's off (always on)", () => {
+		expect(providerReport(sprite, 60)).toEqual({ ...sprite, sleeps: true });
+		expect(providerReport(sprite, 0)).toEqual({ ...sprite, sleeps: false });
+		expect(providerReport(sprite, Number.NaN)).toEqual({ ...sprite, sleeps: false });
+	});
+	it("passes on not knowing yet, and no provider", () => {
+		expect(providerReport(undefined, 60)).toBeUndefined();
+		expect(providerReport(null, 60)).toBeNull();
 	});
 });
 

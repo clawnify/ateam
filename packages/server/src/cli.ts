@@ -39,7 +39,7 @@ import {
 	serveRpc,
 } from "./rpc";
 import { readSettings } from "./settings-file";
-import { detectSleepDriver, type SleepControl, startSleepControl } from "./sleep";
+import { detectSleepDriver, providerReport, type SleepControl, startSleepControl } from "./sleep";
 import { reachableWsAddr } from "./tailnet";
 import { socketServerTransport } from "./transport/socket";
 import { wsServerTransport } from "./transport/ws";
@@ -240,7 +240,7 @@ function serveClient(
 		trusted,
 		pairing,
 		wsAddr,
-		provider: boxProvider,
+		provider: providerReport(boxProvider, readSettings().settings.engine.idleSleepMinutes),
 	});
 }
 
