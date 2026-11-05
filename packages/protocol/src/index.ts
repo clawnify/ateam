@@ -1062,6 +1062,13 @@ export interface SystemInfo {
 	/** The address the box's network port listens on (`<host>:<port>`), or null
 	 *  when it has none (v30; absent before). What other boxes link to. */
 	wsAddr?: string | null;
+	/** The provider that puts this box to sleep and the box's name there, null on a
+	 *  box no provider sleeps. Absent from engines before it was reported (no protocol
+	 *  bump: like `release`, nothing gates on it), and while the engine is still
+	 *  finding out. A client that saved the box by its address alone (a pairing QR,
+	 *  the IP typed in) fills in what to wake it through (wake.ts reportedWake),
+	 *  instead of dialling a sleeping box until it times out. */
+	provider?: BoxWake | null;
 }
 
 /** A connection's standing with a box's lock (pairing:*, v29).
@@ -1774,6 +1781,7 @@ export {
 	filled,
 	type InputValues,
 	inputsAt,
+	reportedWake,
 	WAKE_PROVIDERS,
 	type WakeAdapter,
 	wakeAdapter,

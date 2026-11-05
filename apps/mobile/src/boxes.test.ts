@@ -1,18 +1,23 @@
 // The connection screen's list of boxes: one per address, newest first, and what each card says.
 import { describe, expect, test } from "bun:test";
+import { NEEDS_PAIRING } from "@ateam/protocol";
 import {
 	awayOf,
+	type BoxLink,
 	boxKey,
 	boxSubtitle,
 	boxTitle,
+	CONNECTION_LOST,
 	leadBoxOf,
 	leadFirst,
 	NEW_LINK,
+	needsProvider,
 	parseBoxes,
 	pickRunOn,
 	removeBox,
 	type SavedBox,
 	touchBox,
+	withReportedProvider,
 } from "./boxes";
 
 const probe: SavedBox = {
@@ -74,6 +79,52 @@ describe("boxes", () => {
 		};
 		expect(boxTitle(unnamed)).toBe("100.64.0.9");
 		expect(boxSubtitle(unnamed)).toBe("port 8787 · boxd");
+	});
+
+	test("a box saved by its address alone takes the provider it reports, in place", () => {
+		const bare: SavedBox = { host: "100.94.46.10", port: "8787", lastUsedAt: 2 };
+		const reported = { id: "sprites", box: { machine: "ateam-box" } };
+		const next = withReportedProvider([probe, bare, plain], boxKey(bare), reported);
+		expect(next).toEqual([probe, { ...bare, provider: reported }, plain]);
+		// Then its card is titled and woken as the Sprite it is.
+		expect(next && boxTitle(next[1] as SavedBox)).toBe("ateam-box");
+	});
+
+	test("a provider the user picked stays; only its blank name is filled", () => {
+		const reported = { id: "sprites", box: { machine: "other-name" } };
+		expect(withReportedProvider([sprite], boxKey(sprite), reported)).toBeNull();
+		// A different provider than the box reports: the user's choice stands.
+		expect(withReportedProvider([probe], boxKey(probe), reported)).toBeNull();
+		const unnamed: SavedBox = { ...sprite, provider: { id: "sprites", box: { machine: " " } } };
+		expect(withReportedProvider([unnamed], boxKey(unnamed), reported)).toEqual([
+			{ ...unnamed, provider: { id: "sprites", box: { machine: "other-name" } } },
+		]);
+	});
+
+	test("nothing reported, nothing wakeable, or a box off the list changes nothing", () => {
+		expect(withReportedProvider([plain], boxKey(plain), undefined)).toBeNull();
+		expect(withReportedProvider([plain], boxKey(plain), null)).toBeNull();
+		expect(
+			withReportedProvider([plain], boxKey(plain), { id: "nope", box: { machine: "x" } }),
+		).toBeNull();
+		expect(withReportedProvider([plain], boxKey(plain), { id: "sprites", box: {} })).toBeNull();
+		expect(
+			withReportedProvider([plain], "100.1.1.1:8787", { id: "sprites", box: { machine: "x" } }),
+		).toBeNull();
+	});
+
+	test("a box with no provider that isn't answering needs one, through the tries after", () => {
+		const failed: BoxLink = { ...NEW_LINK, state: "down", error: "Timed out reaching the box" };
+		expect(needsProvider(plain, failed)).toBe(true);
+		// Tried again: the last failure is kept, so the hint stays put.
+		expect(needsProvider(plain, { ...failed, state: "connecting" })).toBe(true);
+		// Up, untried, locked (it answered), or just dropped (reconnecting): no hint.
+		expect(needsProvider(plain, { ...failed, state: "live", error: null })).toBe(false);
+		expect(needsProvider(plain, NEW_LINK)).toBe(false);
+		expect(needsProvider(plain, { ...failed, error: NEEDS_PAIRING })).toBe(false);
+		expect(needsProvider(plain, { ...failed, error: CONNECTION_LOST })).toBe(false);
+		// A box with a provider is woken through it, or asks for its key.
+		expect(needsProvider(sprite, failed)).toBe(false);
 	});
 
 	test("the stored list loads, and a single remembered connection becomes the first box", () => {

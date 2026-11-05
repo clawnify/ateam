@@ -60,6 +60,23 @@ export function filled(
 	return inputsAt(def, scope).every((i) => (values[i.key] ?? "").trim() !== "");
 }
 
+/** What a box said in hello (SystemInfo.provider) wakes it, when a client can wake
+ *  through that provider and the box named itself there; else null. Only the
+ *  provider's box inputs are kept: a box never tells a client an account value. */
+export function reportedWake(
+	reported: { id: string; box: Record<string, string> } | null | undefined,
+): { id: string; box: Record<string, string> } | null {
+	const def = WAKE_PROVIDERS.find((p) => p.id === reported?.id);
+	if (!def || !reported || typeof reported.box !== "object" || reported.box === null) return null;
+	const box: InputValues = {};
+	for (const input of inputsAt(def, "box")) {
+		const value = reported.box[input.key];
+		if (typeof value !== "string" || value.trim() === "") return null;
+		box[input.key] = value.trim();
+	}
+	return { id: def.id, box };
+}
+
 /** What people call a box a provider wakes: its machine name there (the first of the
  *  provider's box inputs), or null when it has none and the address has to do. */
 export function wakeMachineName(

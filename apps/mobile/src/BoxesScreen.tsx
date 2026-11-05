@@ -28,8 +28,18 @@ import {
 	TextInput,
 	View,
 } from "react-native";
-import { type BoxLink, boxKey, boxSubtitle, boxTitle, NEW_LINK, type SavedBox } from "./boxes";
+import {
+	type BoxLink,
+	boxKey,
+	boxSubtitle,
+	boxTitle,
+	NEW_LINK,
+	NO_PROVIDER_HINT,
+	needsProvider,
+	type SavedBox,
+} from "./boxes";
 import { ProviderIcon } from "./ProviderIcon";
+import { ScanQrIcon } from "./ScanQrIcon";
 import { C, CONTENT_MAX } from "./theme";
 
 /** How far a card slides open, per action behind it (Edit, Remove, and Lead). */
@@ -47,6 +57,7 @@ export function BoxesScreen({
 	onSwipeOpen,
 	onConnect,
 	onEdit,
+	onSetProvider,
 	onRemove,
 	onLeadBox,
 	onAdd,
@@ -78,6 +89,9 @@ export function BoxesScreen({
 	/** A card's tap: back to the board when its box is connected, else wake it. */
 	onConnect: (box: SavedBox) => void;
 	onEdit: (box: SavedBox) => void;
+	/** Open the box's form at its provider: it isn't answering, and the phone can't
+	 *  wake it without one (boxes.ts needsProvider). */
+	onSetProvider: (box: SavedBox) => void;
 	onRemove: (box: SavedBox) => void;
 	/** Make this the box whose Lead the phone talks to. */
 	onLeadBox: (box: SavedBox) => void;
@@ -114,7 +128,7 @@ export function BoxesScreen({
 					accessibilityRole="button"
 					accessibilityLabel="Scan a pairing code from your Mac"
 				>
-					<Feather name="camera" size={17} color={C.ink} />
+					<ScanQrIcon size={18} color={C.ink} />
 				</Pressable>
 				<Pressable
 					style={styles.addBtn}
@@ -156,6 +170,7 @@ export function BoxesScreen({
 								onOpenChange={(open) => onSwipeOpen(open ? key : null)}
 								onPress={() => onConnect(box)}
 								onEdit={() => onEdit(box)}
+								onSetProvider={needsProvider(box, link) ? () => onSetProvider(box) : undefined}
 								onRemove={() => onRemove(box)}
 								onLead={choosingLead && !isLead ? () => onLeadBox(box) : undefined}
 								onTerminal={live ? () => onBoxTerminal(box) : undefined}
@@ -213,6 +228,7 @@ function BoxCard({
 	onOpenChange,
 	onPress,
 	onEdit,
+	onSetProvider,
 	onRemove,
 	onLead,
 	onTerminal,
@@ -240,6 +256,8 @@ function BoxCard({
 	onOpenChange: (open: boolean) => void;
 	onPress: () => void;
 	onEdit: () => void;
+	/** Set the box's provider: only on a box with none that isn't answering. */
+	onSetProvider?: () => void;
 	onRemove: () => void;
 	/** Make this the Lead's box; absent on the Lead's box itself, or with one box. */
 	onLead?: () => void;
@@ -456,11 +474,34 @@ function BoxCard({
 				// Before the steps: a tap that ends in this keeps them, and the code field
 				// is what the card is for now.
 				<PairTray onPair={onPair} onScan={onScan} />
-			) : tray ? (
+			) : tray && (reaching || !onSetProvider) ? (
 				<StepTray steps={steps} failure={failure} onCancel={reaching ? onCancel : null} />
+			) : onSetProvider ? (
+				// Once a tap's try has ended, and through the tries after it: the failure
+				// above says what happened, this says what to do about it.
+				<ProviderTray onSetProvider={onSetProvider} />
 			) : onLock ? (
 				<LockTray onLock={onLock} />
 			) : null}
+		</View>
+	);
+}
+
+/** Under a box with no provider that isn't answering: if it sleeps, the phone can't
+ *  wake it until it knows what the box runs on. */
+function ProviderTray({ onSetProvider }: { onSetProvider: () => void }) {
+	return (
+		<View style={styles.tray}>
+			<Text style={styles.trayNote}>{NO_PROVIDER_HINT}</Text>
+			<View style={styles.pairRow}>
+				<Pressable
+					style={[styles.pairBtn, styles.scanBtn]}
+					onPress={onSetProvider}
+					accessibilityRole="button"
+				>
+					<Text style={styles.trayBtnText}>Set provider</Text>
+				</Pressable>
+			</View>
 		</View>
 	);
 }
@@ -519,7 +560,7 @@ function PairTray({
 					accessibilityRole="button"
 					accessibilityLabel="Scan the pairing code"
 				>
-					<Feather name="camera" size={16} color={C.ink} />
+					<ScanQrIcon size={17} color={C.ink} />
 				</Pressable>
 			</View>
 			{error ? <Text style={styles.pairError}>{error}</Text> : null}
@@ -705,6 +746,8 @@ const styles = StyleSheet.create({
 
 	trayText: { color: C.muted, fontSize: 13, lineHeight: 18 },
 	trayWarn: { color: C.amber, fontSize: 13, lineHeight: 18 },
+	trayNote: { color: C.muted, fontSize: 13, lineHeight: 18 },
+	trayBtnText: { color: C.ink, fontSize: 14, fontWeight: "600" },
 	pairError: { color: C.red, fontSize: 13 },
 	pairRow: { flexDirection: "row", alignItems: "center", gap: 8 },
 	pairInput: {
