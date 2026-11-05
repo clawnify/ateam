@@ -6,10 +6,7 @@ import Feather from "@expo/vector-icons/Feather";
 import type { ReactNode } from "react";
 import { Linking, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
 
-/** Where Ateam for Mac is downloaded: the repo's page, whose first link is the .dmg
- *  (a phone can't open a .dmg, but can pass the page on to the Mac). */
-const MAC_APP_URL = "https://github.com/clawnify/ateam";
-
+import { MAC_APP_URL } from "./create-box";
 import { ScanQrIcon } from "./ScanQrIcon";
 import { openTailscale, useTailnet } from "./tailnet";
 import { C, CONTENT_MAX } from "./theme";

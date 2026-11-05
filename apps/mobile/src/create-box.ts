@@ -12,6 +12,9 @@ export const HETZNER_ACCOUNT = "hetzner";
 export const HETZNER_TOKENS_URL = "https://console.hetzner.com/projects";
 export const TAILSCALE_KEYS_URL = "https://console.tailscale.com/admin/settings/keys";
 export const TAILSCALE_APP_URL = "https://apps.apple.com/app/id1470499037";
+/** Where Ateam for Mac is downloaded: the repo's page, whose first link is the .dmg
+ *  (a phone can't open a .dmg, but can pass the page on to the Mac). */
+export const MAC_APP_URL = "https://github.com/clawnify/ateam";
 
 /** Where the phone dials a box it created: its name on the tailnet (MagicDNS), and the
  *  port the installer opens there. */

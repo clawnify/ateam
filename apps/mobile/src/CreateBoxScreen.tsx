@@ -23,6 +23,7 @@ import {
 	defaultsOf,
 	HETZNER_ACCOUNT,
 	HETZNER_TOKENS_URL,
+	MAC_APP_URL,
 	priceLine,
 	sizesIn,
 	TAILSCALE_KEYS_URL,
@@ -318,9 +319,9 @@ export function CreateBoxScreen({
 			}
 		} catch (e) {
 			setOptions(null);
-			setProblem(
-				`Hetzner didn't take that token: ${e instanceof Error ? e.message : String(e)}. It needs Read & Write.`,
-			);
+			// Its message without the API path the shared client puts first.
+			const why = (e instanceof Error ? e.message : String(e)).replace(/^Hetzner \S+: /, "");
+			setProblem(`Hetzner didn't take that token: ${why}. It needs Read & Write.`);
 		} finally {
 			setLoading(false);
 		}
@@ -470,6 +471,22 @@ export function CreateBoxScreen({
 							Ateam Go sends your token and the box's settings to Hetzner, and the key to the box.
 							None of it goes to us: we run no server.
 						</Text>
+						{/* Hetzner is the one provider the phone creates boxes on; the Mac sets up any. */}
+						<Pressable
+							style={({ pressed }) => [styles.more, pressed && styles.pressed]}
+							onPress={() => void Linking.openURL(MAC_APP_URL)}
+							accessibilityRole="link"
+							accessibilityLabel="More ways to get a box: Ateam for Mac sets up any Linux machine you can reach over SSH"
+						>
+							<Feather name="monitor" size={17} color={C.ink} />
+							<View style={styles.moreText}>
+								<Text style={styles.moreTitle}>More ways to get a box</Text>
+								<Text style={styles.moreBody}>
+									Ateam for Mac sets up any Linux machine you can reach over SSH.
+								</Text>
+							</View>
+							<Feather name="chevron-right" size={16} color={C.muted} />
+						</Pressable>
 					</View>
 				)}
 			</ScrollView>
@@ -577,5 +594,21 @@ const styles = StyleSheet.create({
 	},
 	smallBtnText: { color: C.ink, fontSize: 14, fontWeight: "600" },
 	plain: { alignSelf: "center", paddingVertical: 8 },
+	more: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 12,
+		marginTop: 12,
+		paddingHorizontal: 16,
+		paddingVertical: 12,
+		borderRadius: 12,
+		borderWidth: 1,
+		borderColor: C.line,
+		backgroundColor: C.surface,
+	},
+	pressed: { opacity: 0.7 },
+	moreText: { flex: 1, gap: 2 },
+	moreTitle: { color: C.ink, fontSize: 15, fontWeight: "600" },
+	moreBody: { color: C.muted, fontSize: 12, lineHeight: 17 },
 	danger: { color: C.red, fontSize: 14, fontWeight: "600" },
 });

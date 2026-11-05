@@ -17,8 +17,9 @@ export function useTailnet(): boolean | null {
 	return up;
 }
 
-/** The Tailscale app, or its App Store page where it isn't installed (which offers
- *  Open where it is: Tailscale documents no link into its app). */
+/** Tailscale's App Store page, which offers Open where the app is installed and Get
+ *  where it isn't. Tailscale documents no link into its app, and iOS hands a scheme no
+ *  app claims to Safari ("the address is invalid") rather than failing. */
 export function openTailscale(): void {
-	void Linking.openURL("tailscale://").catch(() => Linking.openURL(TAILSCALE_APP_URL));
+	void Linking.openURL(TAILSCALE_APP_URL);
 }
