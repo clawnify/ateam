@@ -394,7 +394,8 @@ export const boardChanges = sqliteTable(
  * because that agent may be mid-turn, idle at its prompt, or not running at all
  * (see peer-messages.ts for how each case is reached). `deliveredAt` null means
  * still pending; `deliveredVia` says which door it went through, and `error`
- * why it could not.
+ * why it never reached the agent after all (an agent started for it quit
+ * before reading it, or could not start).
  */
 export const peerMessages = sqliteTable(
 	"peer_messages",
