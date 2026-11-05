@@ -198,6 +198,7 @@ const host: AteamHost = {
 	pairingInvite: (alias) => ipcRenderer.invoke(HOST_CH.pairingInvite, alias),
 	pairingRevoke: (alias, id) => ipcRenderer.invoke(HOST_CH.pairingRevoke, alias, id),
 	pairingLock: (alias) => ipcRenderer.invoke(HOST_CH.pairingLock, alias),
+	phonePairing: () => ipcRenderer.invoke(HOST_CH.phonePairing),
 	crossBoxStatus: () => ipcRenderer.invoke(HOST_CH.crossBoxStatus),
 	crossBoxSet: (on) => ipcRenderer.invoke(HOST_CH.crossBoxSet, on),
 	provision: (alias, input) => ipcRenderer.invoke(HOST_CH.provision, alias, input),

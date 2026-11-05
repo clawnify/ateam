@@ -1110,6 +1110,11 @@ export interface PairingState {
  *  offer pairing instead of showing it as an error. */
 export const NEEDS_PAIRING = "This box needs pairing.";
 
+/** A new project's first commit has no one to be from: the box has no git name and
+ *  email yet. Clients match it to offer the two ways to give it one. */
+export const NO_GIT_IDENTITY =
+	"This box has no name and email for commits yet. Connect GitHub on it, which sets them from your account, or set them in its terminal: git config --global user.name and user.email.";
+
 /** One device paired with a box. */
 export interface PairedDeviceDTO {
 	id: string;
@@ -1800,6 +1805,22 @@ export {
 	taskTags,
 } from "./task-tags";
 // A cap for a promise that can't be left to wait forever (an RPC has none of its own).
+export {
+	AGENT_INSTALLS,
+	type BoxProvider,
+	buildCloudInit,
+	type CreatedServer,
+	type CreateServerInput,
+	HETZNER_LOCATIONS,
+	HETZNER_SIZES,
+	HetznerError,
+	hetznerProvider,
+	INSTALL_SH_URL,
+	type InstallableAgent,
+	LeftoverAddressesError,
+	orderableServerTypes,
+	type ProviderOptions,
+} from "./provision";
 export { withTimeout } from "./timeout";
 // Reading an engine older than this client (the version gate is advisory now).
 export { NO_TRIAGE, tolerantRpc } from "./tolerate";

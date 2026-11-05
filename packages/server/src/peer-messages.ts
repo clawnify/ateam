@@ -34,9 +34,12 @@
  * retrying it on every sweep would only fail the same way, unseen. Both keep
  * the reason in the rows' `error`, and a task that sent one is told so by a
  * notice from Ateam carrying the last thing the agent printed, so it does not
- * promise the user an answer that cannot come. The Lead, the user and agents on
- * other boxes have no inbox here to tell: for them the reason is recorded and
- * logged only.
+ * promise the user an answer that cannot come. One that neither shows up nor
+ * quits within STARTING_WATCH_MS is most likely held at a prompt in its
+ * terminal (folder trust, Codex's hook review, a sign-in): its senders hear
+ * that an answer may still come once the user clears it. The Lead, the user and
+ * agents on other boxes have no inbox here to tell: for them a failure is
+ * recorded and logged only.
  *
  * The user's own words to a live Claude conversation (an answer to its
  * ask_user question, a reply from the Lead chat or the phone) never take the
@@ -101,10 +104,11 @@ export const MOD_FRESH_MS = 60 * 1000;
 export const MOD_GRACE_MS = 60 * 1000;
 /** How long a batch handed to the mod waits for its ack before it is offered again. */
 export const MOD_LEASE_MS = 30 * 60 * 1000;
-/** How long an agent started for a batch is watched for quitting before it
- *  shows up. One that cannot resume or start quits within seconds; one that
- *  quits later was most likely used (a Codex whose hooks were turned down
- *  reports nothing until its first turn ends), and is not reported. */
+/** How long an agent started for a batch is watched before it shows up. One
+ *  that cannot resume or start quits within seconds; one that quits later was
+ *  most likely used (a Codex whose hooks were turned down reports nothing until
+ *  its first turn ends), and is not reported as a failure. One still running
+ *  unseen by then is most likely held at a prompt, and its senders hear so. */
 export const STARTING_WATCH_MS = 2 * 60 * 1000;
 /** How much of a watched agent's output is kept, for the lines it quit on. */
 const STARTING_OUTPUT_KEEP = 4000;
@@ -791,7 +795,9 @@ export class PeerMessenger {
 	sweep(): void {
 		const now = this.now();
 		for (const [terminalId, s] of this.starting) {
-			if (now - s.at > STARTING_WATCH_MS) this.starting.delete(terminalId);
+			if (now - s.at <= STARTING_WATCH_MS) continue;
+			this.starting.delete(terminalId);
+			if (this.deps.isLive(terminalId)) this.stalled(s);
 		}
 		for (const taskId of repo.listTasksWithPendingPeerMessages(this.deps.db)) this.deliver(taskId);
 	}
@@ -987,6 +993,39 @@ export class PeerMessenger {
 			why,
 			at,
 		);
+		this.tellSenders(
+			task,
+			batch,
+			(yours) =>
+				`${yours} did not reach its agent: ${why}. No answer to it will come from that task. If the user is waiting on that answer, tell them.`,
+		);
+		if (batch.some((m) => !m.fromTaskId && m.fromTerminalId !== NOTICE_SENDER)) {
+			this.deps.log(`[ateam] message to ${task.id} from outside a task not delivered: ${why}`);
+		}
+	}
+
+	/**
+	 * An agent started for a batch that is still there but has not shown up in
+	 * STARTING_WATCH_MS: it is most likely held at a prompt in its terminal (a
+	 * folder-trust or hook-review dialog, a sign-in) that only the user can
+	 * clear. Not a failure, since it may still read the batch once cleared, so
+	 * the rows stay as they are and the senders hear that an answer may come.
+	 */
+	private stalled(s: Starting): void {
+		const task = repo.getTask(this.deps.db, s.taskId);
+		if (!task) return;
+		const mins = Math.max(1, Math.round((this.now() - s.at) / 60_000));
+		this.tellSenders(
+			task,
+			s.batch,
+			(yours) =>
+				`${yours} has not reached its agent yet: Ateam started that agent ${mins} min ago and it has not started up since. It is most likely waiting on a prompt in its terminal (a trust or review dialog, a sign-in) that only the user can answer. An answer may still come once that is cleared. If the user is waiting on that answer, tell them so they can look at that task.`,
+		);
+	}
+
+	/** A notice from Ateam to each task that sent part of `batch` to `task`. */
+	private tellSenders(task: Task, batch: PeerMessage[], say: (yours: string) => string): void {
+		const { db } = this.deps;
 		const bySender = new Map<string, PeerMessage>();
 		for (const m of batch)
 			if (m.fromTaskId && !bySender.has(m.fromTaskId)) bySender.set(m.fromTaskId, m);
@@ -997,14 +1036,11 @@ export class PeerMessenger {
 				fromTaskId: null,
 				fromTerminalId: NOTICE_SENDER,
 				toTaskId: senderId,
-				body: `Your message to "${task.name}" (task id ${task.id}) that begins "${opening}" did not reach its agent: ${why}. No answer to it will come from that task. If the user is waiting on that answer, tell them.`,
+				body: say(`Your message to "${task.name}" (task id ${task.id}) that begins "${opening}"`),
 				hop: 1,
-				createdAt: at,
+				createdAt: this.now(),
 			});
 			this.deliver(senderId);
-		}
-		if (batch.some((m) => !m.fromTaskId && m.fromTerminalId !== NOTICE_SENDER)) {
-			this.deps.log(`[ateam] message to ${task.id} from outside a task not delivered: ${why}`);
 		}
 	}
 

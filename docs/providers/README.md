@@ -16,6 +16,10 @@ That makes the recipe the same everywhere:
    or later).
 3. Connect GitHub on that page (the git identity follows from the account), and log
    into an agent CLI once: `ssh -t <alias> claude`.
+   - **No Mac?** Ateam Go's first screen has two ways to a box: **Pair with your Mac**
+     (on the Mac, Settings → Boxes → **Pair your iPhone** shows one code for every box
+     it holds), or **Create a box here** on Hetzner ([how](hetzner.md#create-a-box)).
+     A box made by hand with the installer's `--tailscale` is added by its address.
 4. For Ateam Go, **Set up phone access** under the page's Access, or run the
    installer on the box with `--tailscale`. The box joins your tailnet and opens its
    network port there:

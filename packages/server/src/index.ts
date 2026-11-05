@@ -36,13 +36,19 @@ export { classifyTurn } from "./jev";
 // engine runs its own for the phone, cli.ts).
 export { LEAD_IDLE_STOP_MS } from "./lead/engine-lead";
 export { type Lead, type LeadDeps, type LeadPlace, startLead } from "./lead/index";
-export type { BoxProvider, CreatedServer, CreateServerInput, ProviderOptions } from "./provision";
+// Creating a box at a provider lives in @ateam/protocol, which Ateam Go shares.
+export type {
+	BoxProvider,
+	CreatedServer,
+	CreateServerInput,
+	ProviderOptions,
+} from "@ateam/protocol";
 export {
 	buildCloudInit,
 	HETZNER_LOCATIONS,
 	HETZNER_SIZES,
 	hetznerProvider,
-} from "./provision";
+} from "@ateam/protocol";
 export type { ServerTransport } from "./rpc";
 export { serveRpc } from "./rpc";
 export type { Services } from "./services";

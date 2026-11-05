@@ -8,6 +8,9 @@
 	"exports": {
 		".": "./src/index.ts"
 	},
+	"dependencies": {
+		"@ateam/protocol": "workspace:*"
+	},
 	"scripts": {
 		"typecheck": "tsc --noEmit"
 	}

@@ -4,7 +4,7 @@
 // until `exit` ends it.
 import type { AteamApi } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { NativeTerminal } from "./NativeTerminalScreen";
 import { StripBar } from "./TerminalStrip";
@@ -17,6 +17,8 @@ export function BoxTerminalScreen({
 	updating,
 	updateError,
 	boxAtLatest,
+	run,
+	onRan,
 }: {
 	api: AteamApi;
 	onClose: () => void;
@@ -26,11 +28,27 @@ export function BoxTerminalScreen({
 	updateError: string | null;
 	/** An update came back on the same version: no release has the box terminal yet. */
 	boxAtLatest: boolean;
+	/** A command to type into it once it's open (sign in to an agent), then forgotten. */
+	run?: string | null;
+	onRan?: () => void;
 }) {
 	const [tooOld, setTooOld] = useState(false);
+	// Read through refs, so `open` stays the same function and the terminal isn't
+	// reopened when the command is spent.
+	const pending = useRef(run);
+	pending.current = run;
+	const ran = useRef(onRan);
+	ran.current = onRan;
 	const open = useCallback(async () => {
 		try {
-			return (await api.pty.boxShell()).terminalId;
+			const { terminalId } = await api.pty.boxShell();
+			const command = pending.current;
+			if (command) {
+				pending.current = null;
+				api.pty.write(terminalId, `${command}\r`);
+				ran.current?.();
+			}
+			return terminalId;
 		} catch (err) {
 			// What an engine from before the box terminal answers.
 			if (err instanceof Error && /Unknown method/.test(err.message)) {
