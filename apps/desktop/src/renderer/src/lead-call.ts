@@ -25,6 +25,7 @@
 // 1.5 s), are not heard. The chime says when it is listening again.
 import type {
 	AteamLead,
+	LeadCallTopic,
 	LeadCallTurn,
 	LeadCallVerdict,
 	LeadEvent,
@@ -62,6 +63,15 @@ const QUIET_JUDGE_MS = 1_500;
 const LATE_HAND_OFF_MS = 3_000;
 /** Not sent, shown in the bar this long. */
 const HELD_MS = 30_000;
+/** A card the call raised (a confirmation) is what the user answers for this
+ *  long after: a yes or a no then goes to the card, not to the Lead. */
+export const CONFIRM_WINDOW_MS = 30_000;
+/** A decision the call raised is what the user is talking about for this long
+ *  after it, or after they last talked about it: their words to the Lead are
+ *  tagged with its task. Never answered from here: only discussed. */
+export const DECISION_WINDOW_MS = 120_000;
+/** A spoken yes acts this long after the voice says so: time to say stop. */
+export const UNDO_MS = 5_000;
 /** Mic level (RMS, 0..1) and duration that count as someone starting to talk on hold. */
 const SPEECH_RMS = 0.03;
 const SPEECH_MS = 250;
@@ -260,6 +270,82 @@ export function heldReason(kind: LeadCallVerdict["kind"]): string {
 	return "not sure it was for the Lead";
 }
 
+/** A card or a decision the call raised, while it is still what the user may
+ *  be answering or talking about. */
+export type OpenTopic =
+	| { kind: "confirm"; id: string; text: string; at: number }
+	| {
+			kind: "decision";
+			taskId: string;
+			questionId: string;
+			name: string;
+			text: string;
+			/** Its buttons, when one may be picked by voice (not a checklist). */
+			options: CallOption[];
+			at: number;
+	  };
+
+/** What the gate judges the next words against: a pending approval first (a
+ *  "stop" cancels it), then a card raised in the last 30 s, then a decision
+ *  raised or discussed in the last 2 min. */
+export function activeTopic(
+	now: number,
+	open: OpenTopic | null,
+	approving: { text: string } | null,
+): (LeadCallTopic & { open: OpenTopic | null }) | null {
+	if (approving)
+		return { kind: "confirm", text: `about to go ahead: ${approving.text}`, open: null };
+	if (!open) return null;
+	const window = open.kind === "confirm" ? CONFIRM_WINDOW_MS : DECISION_WINDOW_MS;
+	if (now - open.at > window) return null;
+	return open.kind === "decision" && open.options.length
+		? { kind: open.kind, text: open.text, options: open.options, open }
+		: { kind: open.kind, text: open.text, open };
+}
+
+/** A task's question, told once on a call: a decision, with time to think. */
+export function decisionLine(task: string, question: string): string {
+	const title = speakable(
+		String(question ?? "")
+			.split("\n")
+			.find((l) => l.trim()) ?? "",
+		220,
+	);
+	return `The task "${task}" needs a decision from you${title ? `: ${title}` : ""}. It's waiting in the chat, so take your time. Want me to walk you through it?`;
+}
+
+/** A decision's button, as the gate and the call see it. */
+export interface CallOption {
+	label: string;
+	recommended?: boolean;
+	description?: string;
+}
+
+/** A task as the call needs it: its open question, with its buttons. */
+export interface CallTask {
+	id: string;
+	name: string;
+	question?: {
+		id: string;
+		text: string;
+		options: string[];
+		choices?: CallOption[];
+		select?: "one" | "many";
+	} | null;
+}
+
+/** A question's buttons the user may pick by voice: none for a checklist. */
+export function optionsOf(q: NonNullable<CallTask["question"]>): CallOption[] {
+	if (q.select === "many") return [];
+	if (q.choices?.length)
+		return q.choices.map((c) => ({
+			label: c.label,
+			...(c.recommended ? { recommended: true } : {}),
+			...(c.description ? { description: c.description } : {}),
+		}));
+	return q.options.map((label) => ({ label }));
+}
+
 export interface CallView {
 	state: CallState;
 	/** Words for the user when the last attempt failed. */
@@ -269,10 +355,19 @@ export interface CallView {
 	held: { text: string; kind: LeadCallVerdict["kind"] } | null;
 	/** Too many false wakes: speech won't pick up the call for a while. */
 	voiceWakePaused: boolean;
+	/** A spoken yes to a card, acting in UNDO_MS unless the user says stop or taps Undo. */
+	approving: { text: string } | null;
 }
 
 export class LeadCall {
-	view: CallView = { state: "off", error: "", muted: false, held: null, voiceWakePaused: false };
+	view: CallView = {
+		state: "off",
+		error: "",
+		muted: false,
+		held: null,
+		voiceWakePaused: false,
+		approving: null,
+	};
 	private listeners = new Set<() => void>();
 	private mic: MediaStream | null = null;
 	private pc: RTCPeerConnection | null = null;
@@ -292,6 +387,14 @@ export class LeadCall {
 	private frags: Fragment[] = [];
 	/** Held back lately: the gate weighs what comes next against them. */
 	private asides: HeardAside[] = [];
+	/** The card or decision the call raised last, while it may be the topic. */
+	private topic: OpenTopic | null = null;
+	/** A spoken yes, or an option picked by voice, counting down to acting. */
+	private approval: { open: OpenTopic; timer: ReturnType<typeof setTimeout> } | null = null;
+	/** Tasks and their open questions, from the chat's window (setTasks). */
+	private tasks: CallTask[] = [];
+	/** Questions already told on this call, or there before it began. */
+	private toldQuestions = new Set<string>();
 	/** Hand-offs waiting on the Lead's turn, oldest first; null for words the
 	 *  gate sent without one. */
 	private pending: (string | null)[] = [];
@@ -346,6 +449,13 @@ export class LeadCall {
 			this.mic = await navigator.mediaDevices.getUserMedia({
 				audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
 			});
+			// Decisions already waiting are told as a count, once; new ones one by one.
+			this.toldQuestions = new Set(this.tasks.flatMap((t) => (t.question ? [t.question.id] : [])));
+			const waiting = this.toldQuestions.size;
+			if (waiting)
+				this.queued.push(
+					`${waiting === 1 ? "One decision is" : `${waiting} decisions are`} waiting on you in the chat, whenever you're ready.`,
+				);
 			this.unsub = this.lead().onEvent((e) => this.onLead(e));
 			this.listen();
 			this.tickTimer = setInterval(() => this.tick(), 1000);
@@ -377,7 +487,10 @@ export class LeadCall {
 		this.queued = [];
 		this.frags = [];
 		this.asides = [];
-		this.update({ state: "off", error, held: null, muted: false });
+		this.topic = null;
+		// Hanging up mid-countdown: nothing acts on a yes the user can't take back.
+		this.stopApproval(false);
+		this.update({ state: "off", error, held: null, muted: false, approving: null });
 	}
 
 	/** Nothing from the mic leaves this Mac while muted. */
@@ -392,6 +505,39 @@ export class LeadCall {
 		this.voiceWakeOffUntil = 0;
 		this.update({ voiceWakePaused: false });
 		this.wake();
+	}
+
+	/** The tasks the chat's window shows, for their open questions: a new one
+	 *  is told on the call once, as a decision to think about. */
+	setTasks(tasks: CallTask[]): void {
+		this.tasks = tasks;
+		if (this.state === "off") return;
+		// Answered elsewhere (a tap, the board): no longer the topic.
+		const was = this.topic;
+		if (was?.kind === "decision" && !tasks.some((t) => t.question?.id === was.questionId)) {
+			this.topic = null;
+			if (this.approval?.open === was) this.stopApproval(false);
+		}
+		for (const t of tasks) {
+			const q = t.question;
+			if (!q || this.toldQuestions.has(q.id)) continue;
+			this.toldQuestions.add(q.id);
+			this.topic = {
+				kind: "decision",
+				taskId: t.id,
+				questionId: q.id,
+				name: t.name,
+				text: speakable(q.text, 600),
+				options: optionsOf(q),
+				at: Date.now(),
+			};
+			this.send("session.commentary.append", null, decisionLine(t.name, q.text));
+		}
+	}
+
+	/** Undo a spoken yes before it acts: the card stays waiting in the chat. */
+	undo(): void {
+		this.stopApproval(true);
 	}
 
 	/** Send what was held back after all: the user says it was for the Lead. */
@@ -532,6 +678,12 @@ export class LeadCall {
 				break;
 			case "session.delegation.created": {
 				const id = String((ev.delegation as { id?: string } | undefined)?.id ?? "");
+				// A card is open: the user may be answering it, and only the gate
+				// decides whether that was a yes. Cancel the voice's automatic "on it"
+				// (an empty thinking append does, OpenAI's delegation guide), so it
+				// never sounds like the answer was taken.
+				if (activeTopic(Date.now(), this.topic, this.view.approving)?.kind === "confirm")
+					this.send("session.thinking.append", id, "");
 				// The last words' transcript can land just after the hand-off.
 				this.judgeSoon(400, id);
 				break;
@@ -564,7 +716,8 @@ export class LeadCall {
 		}, ms);
 	}
 
-	/** The gate: only words the decision model puts as said to the Lead go to it. */
+	/** The gate: only words the decision model puts as said to the Lead go to
+	 *  it, and a yes or no to the card the call just raised goes to that card. */
 	private async judge(handOff: string | null): Promise<void> {
 		const pieces = piecesOf(this.frags);
 		this.frags = [];
@@ -572,21 +725,119 @@ export class LeadCall {
 			if (handOff) this.lateHandOff(handOff);
 			return;
 		}
+		const topic = activeTopic(Date.now(), this.topic, this.view.approving);
 		const verdicts = await this.lead()
-			.callJudge(pieces, contextFrom(this.items, this.asides))
+			.callJudge(
+				pieces,
+				contextFrom(this.items, this.asides),
+				topic ? { kind: topic.kind, text: topic.text } : undefined,
+			)
 			.catch(() => null);
 		// No decision model (no key, turned off) or no answer in time: trust the
-		// voice's hand-off, and hold back what it didn't hand off.
+		// voice's hand-off, and hold back what it didn't hand off. Cards are then
+		// answered only by tap.
 		const sent: string[] = [];
 		let held: CallView["held"] = null;
+		let answered = false;
 		for (const [i, text] of pieces.entries()) {
 			const v = verdicts?.[i];
-			if (v ? v.send : !!handOff) sent.push(text);
-			else held = { text, kind: v?.kind ?? "unclear" };
+			if (v?.answer && this.approval) {
+				// The only answer to a countdown that matters is stop.
+				if (v.answer === "refuse") {
+					this.stopApproval(true, handOff);
+					answered = true;
+				}
+				continue;
+			}
+			const open = topic?.open;
+			// A decision's button picked by voice ("go ahead" is its recommended
+			// option): only on a clear pick, and after the undo countdown.
+			const picked =
+				open?.kind === "decision" && v?.choice != null ? open.options[v.choice] : undefined;
+			if (open?.kind === "decision" && picked) {
+				answered = true;
+				this.startApproval(open, handOff, picked.label);
+				continue;
+			}
+			if (v?.answer && open?.kind === "confirm") {
+				answered = true;
+				if (v.answer === "approve") {
+					this.startApproval(open, handOff);
+					continue;
+				}
+				// A no acts at once, and its words still reach the Lead: they may
+				// carry a correction ("make it formal instead").
+				this.topic = null;
+				void this.lead()
+					.permission(open.id, "deny")
+					.catch(() => {});
+				if (!v.send) {
+					this.send("session.commentary.append", handOff, "Okay, I won't.");
+					continue;
+				}
+			}
+			if (v ? v.send : !!handOff) {
+				// Talking about a decision the call raised: the Lead hears which task.
+				if (v?.onTopic && open?.kind === "decision") {
+					this.topic = { ...open, at: Date.now() };
+					sent.push(`[${open.name.replace(/[[\]\n]/g, " ")}](task:${open.taskId}) ${text}`);
+				} else sent.push(text);
+			} else held = { text, kind: v?.kind ?? "unclear" };
 		}
 		if (held) this.hold(held);
-		if (sent.length) this.toLead(handOff, sent.join(" "));
-		else if (handOff) this.quiet(handOff);
+		if (sent.length) this.toLead(answered ? null : handOff, sent.join(" "));
+		else if (handOff && !answered) this.quiet(handOff);
+	}
+
+	/** A spoken yes to a card, or a decision's option picked by voice: said
+	 *  back, then acted on after UNDO_MS, in case the user changes their mind. */
+	private startApproval(open: OpenTopic, handOff: string | null, label?: string): void {
+		this.stopApproval(false);
+		this.topic = null;
+		const act = () =>
+			open.kind === "confirm"
+				? this.lead().permission(open.id, "allow")
+				: this.lead().answer({
+						taskId: open.taskId,
+						questionId: open.questionId,
+						answer: label ?? "",
+					});
+		const timer = setTimeout(() => {
+			this.approval = null;
+			this.update({ approving: null });
+			act()
+				.then(() => this.send("session.commentary.append", null, "Done."))
+				.catch((e) =>
+					this.send("session.commentary.append", null, `That didn't go through: ${words(e)}`),
+				);
+		}, UNDO_MS);
+		this.approval = { open, timer };
+		this.update({
+			approving: { text: open.kind === "confirm" ? open.text : `${open.name}: ${label}` },
+		});
+		this.send(
+			"session.commentary.append",
+			handOff,
+			open.kind === "confirm"
+				? "Going ahead in five seconds. Say stop to cancel."
+				: `Going with "${label}" in five seconds. Say stop to cancel.`,
+		);
+	}
+
+	/** Stop a countdown; `say` tells the user, by voice, that it stopped. The
+	 *  card is the topic again, so a no or a yes that follows still answers it. */
+	private stopApproval(say: boolean, handOff: string | null = null): void {
+		if (!this.approval) return;
+		clearTimeout(this.approval.timer);
+		if (say) this.topic = { ...this.approval.open, at: Date.now() };
+		this.approval = null;
+		this.update({ approving: null });
+		if (say)
+			this.send(
+				"session.commentary.append",
+				handOff,
+				"Okay, stopped. It's still waiting in the chat.",
+			);
 	}
 
 	/** A hand-off with no words left to judge: the quiet timer already sent
@@ -655,6 +906,12 @@ export class LeadCall {
 		const at = this.items.findIndex((i) => i.id === item.id);
 		if (at >= 0) this.items[at] = item;
 		else this.items.push(item);
+		// A card answered (a tap, another window, a restart): no longer the topic.
+		if (item.kind === "permission" && item.answer) {
+			if (this.topic?.kind === "confirm" && this.topic.id === item.id) this.topic = null;
+			const counting = this.approval?.open;
+			if (counting?.kind === "confirm" && counting.id === item.id) this.stopApproval(false);
+		}
 		if (item.kind === "assistant" && this.pending.length) {
 			this.reply.set(item.id, item.text);
 			this.seen.add(item.id);
@@ -667,7 +924,15 @@ export class LeadCall {
 			return;
 		}
 		const say = announcement(item);
-		if (say) this.send("session.commentary.append", null, say);
+		if (!say) return;
+		if (item.kind === "permission")
+			this.topic = {
+				kind: "confirm",
+				id: item.id,
+				text: speakable(item.text, 600),
+				at: Date.now(),
+			};
+		this.send("session.commentary.append", null, say);
 	}
 
 	/** A task's reply, told as one short line: usually news, not a request. */
@@ -691,7 +956,7 @@ export class LeadCall {
 		}
 		if (this.view.voiceWakePaused && now >= this.voiceWakeOffUntil)
 			this.update({ voiceWakePaused: false });
-		if (this.state !== "live") return;
+		if (this.state !== "live" || this.approval) return;
 		const falseWake = this.wokeBySound && !this.sentSinceWake;
 		if (
 			shouldHold({

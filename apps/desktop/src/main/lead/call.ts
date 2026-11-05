@@ -10,7 +10,7 @@
 // (`session.commentary.append`). Verified against the real API on 2026-11-05:
 // the hand-off fired under a second after the user stopped talking, and a
 // reply was spoken under a second after it was sent.
-import type { LeadCallTurn, LeadCallVerdict } from "@ateam/protocol";
+import type { LeadCallTopic, LeadCallTurn, LeadCallVerdict } from "@ateam/protocol";
 import {
 	askConfiguredTextModel,
 	classifyTurn,
@@ -32,6 +32,8 @@ You think and work by delegating: what you know about their tasks, board, code a
 
 After you delegate, stay quiet until the result comes back, unless the user talks to you; at most say "one sec" or "let me look" once. The results that come back are your own words and findings: say them naturally and briefly, as yourself. Never read out IDs, links, file paths or markdown. When news about a task arrives, tell the user in a sentence. When you need the user's OK for something, say it is waiting in the chat for their tap.
 
+When the user answers one (yes, no, stop, or anything else), say nothing until the result comes back: Ateam decides what their answer means. Never say that anything is sent, done, approved or going ahead unless a result you received says so. When a result says something goes ahead in five seconds, say that, and that they can say stop to cancel.
+
 The microphone is in the user's room, often a home: you may hear the user talking to someone else (a partner, a child, another call), other people, or a TV. That is not said to you. Never answer it, comment on it, or ask about it; stay silent and let it pass. Ateam checks what reaches you, so when you are unsure whether words were for you, delegate them and say nothing.
 
 Long silences are normal on this call: the user may be thinking or working. Never ask whether they are still there.`;
@@ -41,12 +43,39 @@ Long silences are normal on this call: the user may be thinking or working. Neve
 export async function judgeCall(
 	pieces: unknown,
 	context: unknown,
+	topic?: unknown,
 ): Promise<LeadCallVerdict[] | null> {
 	const list = Array.isArray(pieces) ? pieces.map(String).filter((p) => p.trim()) : [];
 	if (!list.length) return null;
 	const model = currentDecisionModel();
 	if (!model) return null;
-	return judgeSpeech({ model, pieces: list, context: typeof context === "string" ? context : "" });
+	const t = topic as { kind?: unknown; text?: unknown; options?: unknown } | undefined;
+	const kind = t?.kind === "confirm" ? "confirm" : t?.kind === "decision" ? "decision" : null;
+	const text = typeof t?.text === "string" ? t.text.trim() : "";
+	const options = Array.isArray(t?.options)
+		? t.options.flatMap((o) => {
+				const x = o as { label?: unknown; recommended?: unknown; description?: unknown };
+				return typeof x?.label === "string" && x.label.trim()
+					? [
+							{
+								label: x.label.slice(0, 200),
+								...(x.recommended === true ? { recommended: true } : {}),
+								...(typeof x.description === "string"
+									? { description: x.description.slice(0, 300) }
+									: {}),
+							},
+						]
+					: [];
+			})
+		: [];
+	const open: LeadCallTopic | undefined =
+		kind && text ? { kind, text, ...(options.length ? { options } : {}) } : undefined;
+	return judgeSpeech({
+		model,
+		pieces: list,
+		context: typeof context === "string" ? context : "",
+		...(open ? { topic: open } : {}),
+	});
 }
 
 /** OpenAI's limits on a session's starting history. */

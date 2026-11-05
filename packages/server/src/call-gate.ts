@@ -58,13 +58,98 @@ export interface SpeechVerdict {
 	send: boolean;
 	/** What it most likely was, for the words the user sees when it isn't sent. */
 	kind: SpeechKind;
+	/** With an open topic: the probability it is about that topic. */
+	about?: number;
+	/** It is about the open topic, at that kind's bar (ABOUT_PROBABILITY). */
+	onTopic?: boolean;
+	/** With a confirmation open: the user's yes or no to it, when it is one. */
+	answer?: "approve" | "refuse" | null;
+	/** With a decision's options open: the one the user chose, by index, when
+	 *  they clearly chose one ("go ahead" is its recommended option). */
+	choice?: number | null;
 }
+
+/**
+ * What the call just raised, for judging what comes next against it. A
+ * confirmation (a card: send this message? run this?) may be answered by a
+ * spoken yes or no; a decision (a task's question with options) is only ever
+ * talked about here, never answered by what was said near it (the user,
+ * 2026-11-05: "these require some thought as they are proper decisions").
+ */
+export interface SpeechTopic {
+	kind: "confirm" | "decision";
+	/** The card or the question, in plain words. */
+	text: string;
+	/** A decision's buttons, in order: the user's words may pick one. */
+	options?: { label: string; recommended?: boolean; description?: string }[];
+}
+
+/** At most this many options are asked about (a question's buttons). */
+export const MAX_OPTIONS = 6;
+
+/**
+ * An option counts as chosen at this probability, and this far ahead of the
+ * next best: words that could mean two buttons choose neither, and go to the
+ * Lead to talk it through. Live runs 2026-11-05 (call-gate-calibrate.ts, 9 cases
+ * on a three-button decision: "go ahead", "keep it as it is", "the second
+ * one", "let's decide later", and four that choose nothing): Jev 9/9, Luna 8/9
+ * (it once left "the second one" unchosen, which sends it to the Lead instead).
+ * Neither ever chose a wrong button. "Not sure yet" chose "Decide later" on
+ * Luna until the question said that being unsure chooses nothing.
+ */
+export const CHOOSE_PROBABILITY: PerProvider<number> = { openrouter: 0.7, openai: 0.6 };
+export const CHOOSE_MARGIN = 0.25;
+
+/** The option a piece chose, from its probabilities, or null. */
+export function choiceOf(about: number, chose: number[], bar: number): number | null {
+	if (about < 0.5 || !chose.length) return null;
+	const order = chose.map((p, i) => ({ p, i })).sort((a, b) => b.p - a.p);
+	const [best, next] = order;
+	if (!best || best.p < bar) return null;
+	if (next && best.p - next.p < CHOOSE_MARGIN) return null;
+	return best.i;
+}
+
+/**
+ * A yes or no to a confirmation counts at this probability (and above the
+ * other). Live run 2026-11-05 (call-gate-calibrate.ts, 14 topic cases): spoken
+ * yeses 0.96-0.98 on both; "no" and "wait, not yet" read as no on both. Jev
+ * read an "okok" said to someone else just after the card as a yes, Luna did
+ * not: the caller acts on a yes only after a 5 s spoken undo (lead-call.ts).
+ */
+export const ANSWER_PROBABILITY: PerProvider<number> = { openrouter: 0.6, openai: 0.5 };
+
+/**
+ * A piece is about the open topic at this probability. A decision's bar is
+ * higher, since being about it tags the words to the Lead with its task: lines
+ * about a raised decision scored 0.80-0.98, "What's in flight on the board?"
+ * 0.29 (Jev) and 0.66 (Luna) (live run 2026-11-05).
+ */
+export const ABOUT_PROBABILITY = { confirm: 0.5, decision: 0.75 } as const;
 
 const CALL = `The user is on a voice call with "the Lead", an AI that runs their software work: coding tasks, the board of tasks, the product's direction. The microphone in their room hears everything, not only the user talking to the Lead.`;
 
-function questions(n: number): Record<string, YesNoQuestion> {
+function questions(n: number, topic?: SpeechTopic): Record<string, YesNoQuestion> {
 	const out: Record<string, YesNoQuestion> = {};
 	for (let i = 0; i < n; i++) {
+		const p = `piece_${i + 1}`;
+		if (topic) {
+			out[`${p}_about`] = {
+				instructions: `${CALL} The Lead just raised open_topic with the user. Is ${p} the user talking about open_topic: answering it, asking about it, or discussing it?`,
+			};
+			for (const [k] of (topic.options ?? []).slice(0, MAX_OPTIONS).entries())
+				out[`${p}_opt_${k + 1}`] = {
+					instructions: `${CALL} The Lead raised open_topic, whose answers are the options option_1, option_2 and so on. Does ${p} choose option_${k + 1} as the user's answer? Saying "go ahead", "yes", "do it" or "sounds good" chooses the recommended option (marked recommended), or the one that approves when none is. Asking about an option, thinking aloud, or being unsure ("not sure yet", "let me think") chooses none: being unsure is not the same as choosing an option such as "decide later", which the user chooses only by saying so.`,
+				};
+			if (topic.kind === "confirm") {
+				out[`${p}_approve`] = {
+					instructions: `${CALL} The Lead just asked the user to confirm open_topic. Does ${p} say yes to it: go ahead, send it, do it, approve it?`,
+				};
+				out[`${p}_refuse`] = {
+					instructions: `${CALL} The Lead just asked the user to confirm open_topic. Does ${p} say no to it: don't, stop, wait, cancel, not now?`,
+				};
+			}
+		}
 		const piece = `piece_${i + 1}`;
 		out[`${piece}_lead`] = {
 			instructions: `${CALL} Was ${piece} said by the user to the Lead: a question, idea, instruction, decision, an answer to the Lead, thinking aloud about their work or product, or a question about this call itself (what was said, where they were)?`,
@@ -81,6 +166,18 @@ function questions(n: number): Record<string, YesNoQuestion> {
 		};
 	}
 	return out;
+}
+
+/** A piece's yes or no to an open confirmation, from its probabilities. */
+export function answerOf(
+	p: { about: number; approve: number; refuse: number },
+	bar: number,
+): "approve" | "refuse" | null {
+	if (p.about < 0.5) return null;
+	// No is the safe direction: it wins a tie, and needs no higher bar than 0.5.
+	if (p.refuse >= 0.5 && p.refuse >= p.approve) return "refuse";
+	if (p.approve >= bar && p.approve > p.refuse) return "approve";
+	return null;
 }
 
 /** The verdict for one piece, from its three probabilities. */
@@ -110,6 +207,8 @@ export async function judgeSpeech(input: {
 	pieces: string[];
 	/** The call so far: the last turns, oldest first, one per line. */
 	context: string;
+	/** What the call just raised, if anything is open. */
+	topic?: SpeechTopic;
 	signal?: AbortSignal;
 }): Promise<SpeechVerdict[] | null> {
 	if (!input.model.apiKey || input.pieces.length === 0) return null;
@@ -121,28 +220,53 @@ export async function judgeSpeech(input: {
 	judged.forEach((p, i) => {
 		state[`piece_${i + 1}`] = p;
 	});
+	const topic = input.topic?.text.trim() ? input.topic : undefined;
+	if (topic)
+		state.open_topic = `${topic.kind === "confirm" ? "a confirmation" : "a decision"}: ${topic.text.slice(0, MAX_PIECE)}`;
+	const options = (topic?.options ?? []).slice(0, MAX_OPTIONS);
+	options.forEach((o, k) => {
+		state[`option_${k + 1}`] =
+			`${o.label}${o.recommended ? " (recommended)" : ""}${o.description ? `: ${o.description.slice(0, 200)}` : ""}`;
+	});
 	const answers = await askDecisions({
 		target: input.model,
 		model: CALL_GATE_MODEL[input.model.provider],
 		state,
-		questions: questions(judged.length),
+		questions: questions(judged.length, topic),
 		timeoutMs: TIMEOUT_MS,
 		signal: input.signal,
 	});
 	if (!answers) return null;
 	const bar = SEND_PROBABILITY[input.model.provider];
+	const answerBar = ANSWER_PROBABILITY[input.model.provider];
+	const chooseBar = CHOOSE_PROBABILITY[input.model.provider];
 	const unsent: SpeechVerdict = { p: 0, send: false, kind: "unclear" };
 	return [
 		...Array.from({ length: skipped }, () => unsent),
-		...judged.map((_, i) =>
-			verdictOf(
-				{
-					lead: answers[`piece_${i + 1}_lead`] ?? 0,
-					someone: answers[`piece_${i + 1}_someone`] ?? 0,
-					background: answers[`piece_${i + 1}_background`] ?? 0,
-				},
+		...judged.map((_, i) => {
+			const a = (q: string) => answers[`piece_${i + 1}_${q}`] ?? 0;
+			const v = verdictOf(
+				{ lead: a("lead"), someone: a("someone"), background: a("background") },
 				bar,
-			),
-		),
+			);
+			if (!topic) return v;
+			const about = a("about");
+			return {
+				...v,
+				about,
+				onTopic: about >= ABOUT_PROBABILITY[topic.kind],
+				answer:
+					topic.kind === "confirm"
+						? answerOf({ about, approve: a("approve"), refuse: a("refuse") }, answerBar)
+						: null,
+				choice: options.length
+					? choiceOf(
+							about,
+							options.map((_, k) => a(`opt_${k + 1}`)),
+							chooseBar,
+						)
+					: null,
+			};
+		}),
 	];
 }

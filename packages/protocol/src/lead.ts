@@ -72,6 +72,22 @@ export interface LeadCallVerdict {
 	send: boolean;
 	/** What it most likely was, for the words the user sees when it isn't sent. */
 	kind: "lead" | "someone" | "background" | "unclear";
+	/** With a topic open (callJudge's `topic`): whether it is about that topic. */
+	onTopic?: boolean;
+	/** With a confirmation open: the user's yes or no to it, when it is one. */
+	answer?: "approve" | "refuse" | null;
+	/** With a decision's options open: the one the user clearly chose, by index. */
+	choice?: number | null;
+}
+
+/** What a call just raised, for judging what comes next against it: a
+ *  confirmation (a card) may be answered by voice; a decision (a task's
+ *  question with options) is only ever talked about. */
+export interface LeadCallTopic {
+	kind: "confirm" | "decision";
+	text: string;
+	/** A decision's buttons, in order; the user's words may pick one. */
+	options?: { label: string; recommended?: boolean; description?: string }[];
 }
 
 /** The channels a box's engine answers for its own Lead (v24; `react` since
@@ -345,7 +361,11 @@ export interface AteamLead {
 	 *  user (no OpenAI key, OpenAI refused). */
 	callStart(sdp: string, input: LeadCallTurn[]): Promise<{ sdp: string; sessionId: string }>;
 	/** `pieces`: what the call heard, split at pauses; `context`: the last turns. */
-	callJudge(pieces: string[], context: string): Promise<LeadCallVerdict[] | null>;
+	callJudge(
+		pieces: string[],
+		context: string,
+		topic?: LeadCallTopic,
+	): Promise<LeadCallVerdict[] | null>;
 	/** The user is on a call with the calling window's chat (true, repeated
 	 *  while it lasts) or hung up (false). Throws when that chat lives on a box
 	 *  too old to hold its Lead's messages for a tap. */

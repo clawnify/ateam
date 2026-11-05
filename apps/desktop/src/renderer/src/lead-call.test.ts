@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test";
 import type { LeadItem } from "@ateam/protocol";
 import {
+	activeTopic,
 	announcement,
 	contextFrom,
+	decisionLine,
 	heldReason,
+	optionsOf,
 	piecesOf,
 	shouldHold,
 	speakable,
@@ -155,4 +158,55 @@ test("waitingOnUser: a permission card nobody answered", () => {
 	expect(waitingOnUser([card])).toBe(true);
 	expect(waitingOnUser([{ ...card, answer: "allow" as const }])).toBe(false);
 	expect(waitingOnUser([{ kind: "user", id: "u", text: "hi", at: 1 }])).toBe(false);
+});
+
+test("activeTopic: a countdown first, then a card for 30 s, then a decision for 2 min", () => {
+	const card = { kind: "confirm" as const, id: "c", text: "Send this?", at: 0 };
+	const decision = {
+		kind: "decision" as const,
+		taskId: "t",
+		questionId: "q",
+		name: "Email",
+		text: "Switch?",
+		options: [{ label: "Switch", recommended: true }, { label: "Keep" }],
+		at: 0,
+	};
+	expect(activeTopic(1_000, card, { text: "Send this?" })).toEqual({
+		kind: "confirm",
+		text: "about to go ahead: Send this?",
+		open: null,
+	});
+	expect(activeTopic(29_000, card, null)?.open).toBe(card);
+	expect(activeTopic(31_000, card, null)).toBeNull();
+	expect(activeTopic(119_000, decision, null)?.kind).toBe("decision");
+	// A decision's buttons go to the gate, so "go ahead" can pick one.
+	expect(activeTopic(1_000, decision, null)?.options?.map((o) => o.label)).toEqual([
+		"Switch",
+		"Keep",
+	]);
+	expect(activeTopic(121_000, decision, null)).toBeNull();
+	expect(activeTopic(0, null, null)).toBeNull();
+});
+
+test("decisionLine tells a decision once, unhurried, by its first line", () => {
+	expect(
+		decisionLine("Email sending", "**Switch to managed sending?**\n\nIn July we said..."),
+	).toBe(
+		'The task "Email sending" needs a decision from you: Switch to managed sending?. It\'s waiting in the chat, so take your time. Want me to walk you through it?',
+	);
+});
+
+test("optionsOf: a question's buttons with the agent's pick, none for a checklist", () => {
+	const q = {
+		id: "q",
+		text: "Switch?",
+		options: ["Switch", "Keep"],
+		choices: [{ label: "Switch", recommended: true, description: "We send" }, { label: "Keep" }],
+	};
+	expect(optionsOf(q)).toEqual([
+		{ label: "Switch", recommended: true, description: "We send" },
+		{ label: "Keep" },
+	]);
+	expect(optionsOf({ ...q, choices: undefined })).toEqual([{ label: "Switch" }, { label: "Keep" }]);
+	expect(optionsOf({ ...q, select: "many" })).toEqual([]);
 });

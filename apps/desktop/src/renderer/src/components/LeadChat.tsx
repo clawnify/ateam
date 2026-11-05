@@ -67,7 +67,7 @@ import {
 	shown,
 	unseen,
 } from "../lead-blocks";
-import { type CallView, heldReason, leadCall } from "../lead-call";
+import { type CallView, heldReason, leadCall, UNDO_MS } from "../lead-call";
 import { type DraftRef, expandRefs, splitSent } from "../lead-refs";
 import { recordEmoji, topEmoji } from "../lib/emoji-use";
 import { taskDragProps } from "../task-drag";
@@ -1197,6 +1197,8 @@ export function LeadChat({
 }) {
 	const [snap, setSnap] = useState<LeadSnapshot>(EMPTY);
 	const call = useLeadCall();
+	// The call tells a task's new question once, as a decision to think about.
+	useEffect(() => leadCall.setTasks(tasks), [tasks]);
 	const [text, setTextState] = useState(() => unsent);
 	const setText = (value: string) => {
 		unsent = value;
@@ -1635,6 +1637,16 @@ export function LeadChat({
 					</div>
 				)}
 				{attachNote && <div className="lead-attach-note">{attachNote}</div>}
+				{call.approving && (
+					<div className="lead-call lead-call-held">
+						<span className="lead-call-words">
+							Going ahead in {UNDO_MS / 1000} s: {call.approving.text}
+						</span>
+						<button type="button" className="lead-call-end" onClick={() => leadCall.undo()}>
+							Undo
+						</button>
+					</div>
+				)}
 				{call.held && (
 					<div className="lead-call lead-call-held">
 						<span className="lead-call-words">

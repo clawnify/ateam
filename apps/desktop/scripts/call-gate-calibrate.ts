@@ -84,6 +84,112 @@ console.log(
 	`${provider}: ${CALL_GATE_MODEL[provider]}, send at p >= ${SEND_PROBABILITY[provider]}\n`,
 );
 
+/** What the call just raised, and what each piece should do with it. */
+const CONFIRM = {
+	kind: "confirm" as const,
+	text: 'Send this to "Disk usage on the box page"? Use a friendly tone.',
+};
+const DECIDE = {
+	kind: "decision" as const,
+	text: "The email task asks: switch to managed sending, or keep bring-your-own keys? Options: Switch to managed sending; Keep bring-your-own; Decide later.",
+};
+const ASKED_OK = `user (20 s ago): Tell the disk usage task to use a friendly tone.
+lead (6 s ago): I'll tell the disk usage task to use a friendly tone. It's waiting in the chat for your OK.`;
+const RAISED = `lead (5 s ago): The email task needs a decision from you: switch to managed sending, or keep bring-your-own keys. It's waiting in the chat, take your time.`;
+/** `answer`: what it must be; `never`: what it must not be (a correction may
+ *  read as a no, which denies the card and still reaches the Lead, but never as
+ *  a yes); `about`: whether it is on the topic at that kind's bar. */
+type Want = { answer?: "approve" | "refuse" | null; never?: "approve"; about?: boolean };
+const TOPIC_CASES: {
+	context: string;
+	topic: typeof CONFIRM | typeof DECIDE;
+	piece: string;
+	want: Want;
+}[] = [
+	{ context: ASKED_OK, topic: CONFIRM, piece: "Yes, send it.", want: { answer: "approve" } },
+	{ context: ASKED_OK, topic: CONFIRM, piece: "Go ahead.", want: { answer: "approve" } },
+	{ context: ASKED_OK, topic: CONFIRM, piece: "Sure, do it.", want: { answer: "approve" } },
+	{ context: ASKED_OK, topic: CONFIRM, piece: "No, don't send that.", want: { answer: "refuse" } },
+	{ context: ASKED_OK, topic: CONFIRM, piece: "Wait, not yet.", want: { answer: "refuse" } },
+	{
+		context: ASKED_OK,
+		topic: CONFIRM,
+		piece: "Hmm, let me think about it.",
+		want: { answer: null },
+	},
+	{
+		context: ASKED_OK,
+		topic: CONFIRM,
+		piece: "Actually, make it formal instead.",
+		want: { never: "approve" },
+	},
+	{
+		context: ASKED_OK,
+		topic: CONFIRM,
+		piece: "What's in flight on the board?",
+		// About a confirmation matters only with a yes or no, which this isn't.
+		want: { answer: null },
+	},
+	{
+		context: ASKED_OK,
+		topic: CONFIRM,
+		piece: "Babe, did you feed the cat?",
+		want: { answer: null, about: false },
+	},
+	// Known: Jev reads this as a yes (2026-11-05); the 5 s spoken undo is there for it.
+	{ context: `${ASKED_OK}\n${CAT}`, topic: CONFIRM, piece: "okok", want: { answer: null } },
+	{
+		context: RAISED,
+		topic: DECIDE,
+		piece: "Walk me through it.",
+		want: { about: true, answer: null },
+	},
+	{
+		context: RAISED,
+		topic: DECIDE,
+		piece: "What's the risk with the managed option?",
+		want: { about: true, answer: null },
+	},
+	{
+		context: RAISED,
+		topic: DECIDE,
+		piece: "Go with switching.",
+		want: { about: true, answer: null },
+	},
+	{
+		context: RAISED,
+		topic: DECIDE,
+		piece: "What's in flight on the board?",
+		want: { about: false },
+	},
+];
+
+/** A decision with buttons: the user's words may pick one ("go ahead" is the recommended). */
+const DECIDE_OPTS = {
+	kind: "decision" as const,
+	text: "The email task asks: switch to managed sending, or keep bring-your-own keys?",
+	options: [
+		{
+			label: "Switch to managed sending",
+			recommended: true,
+			description: "We send on our own account",
+		},
+		{ label: "Keep bring-your-own", description: "Customers keep their own keys" },
+		{ label: "Decide later", description: "Check the numbers first" },
+	],
+};
+const CHOICE_CASES: { piece: string; choice: number | null }[] = [
+	{ piece: "Go ahead.", choice: 0 },
+	{ piece: "Sounds good, do it.", choice: 0 },
+	{ piece: "Keep it as it is.", choice: 1 },
+	{ piece: "The second one.", choice: 1 },
+	{ piece: "Let's decide later.", choice: 2 },
+	{ piece: "Walk me through it.", choice: null },
+	{ piece: "What's the risk with the managed option?", choice: null },
+	{ piece: "Hmm, I'm not sure yet.", choice: null },
+	{ piece: "Babe, did you feed the cat?", choice: null },
+];
+
 let right = 0;
 let total = 0;
 for (const c of CASES) {
@@ -103,5 +209,43 @@ for (const c of CASES) {
 			`${ok ? "ok  " : "MISS"} p=${v ? v.p.toFixed(2) : "null"} ${v?.kind ?? "-"} want=${want ? "send" : "hold"}  ${ms}ms  "${text}"`,
 		);
 	});
+}
+for (const c of TOPIC_CASES) {
+	const started = Date.now();
+	const v = (
+		await judgeSpeech({
+			model: { provider, apiKey },
+			pieces: [c.piece],
+			context: c.context,
+			topic: c.topic,
+		})
+	)?.[0];
+	const ms = Date.now() - started;
+	total++;
+	const okAnswer = c.want.answer === undefined || (v?.answer ?? null) === c.want.answer;
+	const okNever = c.want.never === undefined || v?.answer !== c.want.never;
+	const okAbout = c.want.about === undefined || !!v?.onTopic === c.want.about;
+	const ok = !!v && okAnswer && okNever && okAbout;
+	if (ok) right++;
+	console.log(
+		`${ok ? "ok  " : "MISS"} ${c.topic.kind.padEnd(8)} about=${v?.about?.toFixed(2) ?? "null"} answer=${v?.answer ?? "-"} send=${v?.send ?? "-"} want=${JSON.stringify(c.want)}  ${ms}ms  "${c.piece}"`,
+	);
+}
+for (const c of CHOICE_CASES) {
+	const started = Date.now();
+	const v = (
+		await judgeSpeech({
+			model: { provider, apiKey },
+			pieces: [c.piece],
+			context: RAISED,
+			topic: DECIDE_OPTS,
+		})
+	)?.[0];
+	total++;
+	const ok = !!v && (v.choice ?? null) === c.choice;
+	if (ok) right++;
+	console.log(
+		`${ok ? "ok  " : "MISS"} choose   about=${v?.about?.toFixed(2) ?? "null"} choice=${v?.choice ?? "-"} want=${c.choice ?? "-"}  ${Date.now() - started}ms  "${c.piece}"`,
+	);
 }
 console.log(`\n${right}/${total}`);
