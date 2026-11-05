@@ -61,7 +61,7 @@ test("announcement speaks up for task news and waiting approvals, not for settle
 		always: null,
 		at: 1,
 	};
-	expect(announcement(perm)).toBe("The Lead needs your approval in the chat: Run rm -rf build");
+	expect(announcement(perm)).toBe("I need your OK in the chat for this: Run rm -rf build");
 	expect(announcement({ ...perm, answer: "allow" })).toBeNull();
 	expect(announcement({ kind: "assistant", id: "x", text: "hi", at: 1 })).toBeNull();
 	expect(

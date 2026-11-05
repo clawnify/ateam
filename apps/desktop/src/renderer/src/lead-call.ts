@@ -167,7 +167,8 @@ export function contextFrom(
 }
 
 /** What to tell the user about something new in the chat they didn't ask for
- *  on this call, or null when it isn't worth interrupting for. */
+ *  on this call, or null when it isn't worth interrupting for. In the first
+ *  person: the voice is the Lead (main/lead/call.ts CALL_INSTRUCTIONS). */
 export function announcement(item: LeadItem): string | null {
 	switch (item.kind) {
 		case "agent":
@@ -177,13 +178,13 @@ export function announcement(item: LeadItem): string | null {
 		case "permission":
 			return item.answer
 				? null
-				: `The Lead needs your approval in the chat: ${speakable(item.text, 300)}`;
+				: `I need your OK in the chat for this: ${speakable(item.text, 300)}`;
 		case "proposal":
 			return item.outcome
 				? null
-				: `The Lead proposes a ${item.proposal.kind}, "${item.proposal.name}". It's waiting in the chat for you to create it.`;
+				: `I've proposed a ${item.proposal.kind}, "${item.proposal.name}". It's waiting in the chat for you to create it.`;
 		case "notice":
-			return item.tone === "error" ? `The Lead says: ${item.text}` : null;
+			return item.tone === "error" ? `Something went wrong on my side: ${item.text}` : null;
 		default:
 			return null;
 	}
@@ -625,7 +626,7 @@ export class LeadCall {
 			.catch((e) => {
 				const at = this.pending.indexOf(handOff);
 				if (at >= 0) this.pending.splice(at, 1);
-				this.send("session.commentary.append", handOff, `The Lead didn't get that: ${words(e)}`);
+				this.send("session.commentary.append", handOff, `I didn't get that: ${words(e)}`);
 			});
 	}
 
@@ -643,11 +644,7 @@ export class LeadCall {
 				const id = this.pending.at(-1) ?? null;
 				this.pending = [];
 				this.reply.clear();
-				this.send(
-					"session.commentary.append",
-					id,
-					text || "The Lead is done, with nothing to add.",
-				);
+				this.send("session.commentary.append", id, text || "Done, nothing to add.");
 			}
 			return;
 		}
