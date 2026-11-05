@@ -60,7 +60,9 @@ test("pairs the phone by a hash of a token the box never sees", () => {
 		tailscaleAuthKey: "tskey-auth-abc123DEF-ghi",
 		tokenHash: "c".repeat(64),
 		label: "iPhone",
+		agents: ["claude"],
 	});
+	expect(yaml).toContain("claude.ai/install.sh");
 	expect(yaml).toContain(`ATEAM_PAIR_DEVICE=${"c".repeat(64)}`);
 	expect(yaml).not.toContain(token);
 	expect(yaml).toContain("--hostname=ateam-abc9");

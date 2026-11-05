@@ -1806,6 +1806,7 @@ export {
 } from "./task-tags";
 // A cap for a promise that can't be left to wait forever (an RPC has none of its own).
 export {
+	AGENT_INSTALLS,
 	type BoxProvider,
 	buildCloudInit,
 	type CreatedServer,
@@ -1815,6 +1816,7 @@ export {
 	HetznerError,
 	hetznerProvider,
 	INSTALL_SH_URL,
+	type InstallableAgent,
 	LeftoverAddressesError,
 	orderableServerTypes,
 	type ProviderOptions,

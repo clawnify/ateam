@@ -42,8 +42,12 @@ what Hetzner bills for them. The phone has no SSH, so the box differs from one t
 makes:
 
 - **It installs Ateam itself at first boot**, from its cloud-init: the same installer,
-  with `--service --tailscale`, run as the `ateam` user once Tailscale is up. Its output
-  is `~/ateam-install.log` on the box.
+  with `--service --tailscale`, run as the `ateam` user once Tailscale is up, after the
+  coding agent picked on the page (Claude Code to start with, Codex, both, or none), so
+  the engine finds it when it starts. Their output is `~/ateam-install.log` on the box.
+- **Once it answers, Finish setting up**: sign in to the agent (its terminal opens with
+  the agent's login command typed in), connect GitHub (which also gives commits your
+  name), and add a project.
 - **It knows the phone before Ateam first starts.** The phone makes a token of its own and
   puts only its sha256 in the cloud-init (`ATEAM_PAIR_DEVICE`, then `ateam pair
   --add-device`). Locked or open stays as a new box would have it.

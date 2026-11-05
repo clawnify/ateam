@@ -21,12 +21,14 @@ import type {
 	TaskDTO,
 } from "@ateam/protocol";
 import {
+	AGENT_INSTALLS,
 	activeLabel,
 	boxSupports,
 	buildAteamApi,
 	CH,
 	filled,
 	type InputValues,
+	type InstallableAgent,
 	inputsAt,
 	NEEDS_PAIRING,
 	PROTOCOL_VERSION,
@@ -80,6 +82,7 @@ import {
 import { Composer, type ComposerSubmit, type RunOn } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
 import { CreateBoxScreen } from "./src/CreateBoxScreen";
+import { FinishSetupScreen } from "./src/FinishSetupScreen";
 import { GetStartedScreen } from "./src/GetStartedScreen";
 import { connect, mobileNative, redeemPairing } from "./src/connection";
 import { pairTarget, parsePairLinks } from "./src/pair-link";
@@ -755,6 +758,9 @@ interface BoxTerminalView extends BoxView {
 	updating: boolean;
 	updateError: string | null;
 	boxAtLatest: boolean;
+	/** A command to type in once it's open (Finish setting up's sign-in). */
+	run: string | null;
+	onRan: () => void;
 }
 
 function Shell({
@@ -1020,6 +1026,8 @@ function Shell({
 					updating={boxTerminal.updating}
 					updateError={boxTerminal.updateError}
 					boxAtLatest={boxTerminal.boxAtLatest}
+					run={boxTerminal.run}
+					onRan={boxTerminal.onRan}
 				/>
 			) : null}
 			{showTab && tab === "board" && (
@@ -1268,6 +1276,10 @@ export default function App() {
 	// What's open over the board that belongs to one box: its terminal, its GitHub
 	// access, or adding a project to it. Each holds that box's key.
 	const [boxTerminalKey, setBoxTerminalKey] = useState<string | null>(null);
+	// What to type into the box terminal when it next opens (Finish setting up).
+	const [boxTerminalRun, setBoxTerminalRun] = useState<string | null>(null);
+	// A box this phone created, until its Finish setting up page is done with.
+	const [finishKey, setFinishKey] = useState<string | null>(null);
 	const [githubKey, setGithubKey] = useState<string | null>(null);
 	const [browserKey, setBrowserKey] = useState<string | null>(null);
 	const [leadOpen, setLeadOpen] = useState(false);
@@ -1742,7 +1754,7 @@ export default function App() {
 			landOnBoard.current = false;
 			setConnectScreen("list");
 			setView("board");
-			setBrowserKey(key);
+			setFinishKey(key);
 		},
 	});
 	// Nothing goes to Hetzner before the disclosure has been accepted, as for a box.
@@ -2336,6 +2348,33 @@ export default function App() {
 		return <ConsentScreen onAgree={onAgreeConsent} onDemo={onDeclineConsent} />;
 	}
 
+	// Comes back after each step it opens: their screens draw over it, and the box
+	// terminal is the board's, so it steps aside while that is open.
+	if (finishKey && !boxTerminalKey) {
+		const reported = link.conn(finishKey)?.info.agents ?? [];
+		return (
+			<FinishSetupScreen
+				name={labelOf(finishKey)}
+				agents={reported.filter((a): a is InstallableAgent => Object.hasOwn(AGENT_INSTALLS, a))}
+				onSignIn={(command) => {
+					setBoxTerminalRun(command);
+					setView("board");
+					setBoxTerminalKey(finishKey);
+				}}
+				onTerminal={() => {
+					setView("board");
+					setBoxTerminalKey(finishKey);
+				}}
+				onGithub={() => setGithubKey(finishKey)}
+				onAddProject={() => setBrowserKey(finishKey)}
+				onDone={() => {
+					setFinishKey(null);
+					setView("board");
+				}}
+			/>
+		);
+	}
+
 	// A board to go back to: the saved boxes' (live, or as last seen), or the demo's.
 	const onBoard = demo.current || boxes.length > 0;
 	if (view === "connect") {
@@ -2579,6 +2618,8 @@ export default function App() {
 								updating: updatingKey === boxTerminalKey,
 								updateError: updateError?.key === boxTerminalKey ? updateError.message : null,
 								boxAtLatest: atLatest[boxTerminalKey] ?? false,
+								run: boxTerminalRun,
+								onRan: () => setBoxTerminalRun(null),
 							}
 						: null
 				}

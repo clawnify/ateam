@@ -2,7 +2,7 @@
 // the app, not the page, so leaving the page doesn't stop it. The box goes on the
 // Boxes list as soon as Hetzner has made it, so even a restart of the app doesn't
 // lose it: the phone then reaches it like any saved box, once its install is done.
-import { hetznerProvider, LeftoverAddressesError } from "@ateam/protocol";
+import { hetznerProvider, type InstallableAgent, LeftoverAddressesError } from "@ateam/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert } from "react-native";
 import { boxKey } from "./boxes";
@@ -20,6 +20,8 @@ export interface CreateSpec {
 	name: string;
 	size: string;
 	location: string;
+	/** Coding agents the box installs at first boot. */
+	agents: InstallableAgent[];
 }
 
 export interface Creation {
@@ -102,6 +104,7 @@ export function useBoxCreation(deps: {
 						tailscaleAuthKey: spec.tailscaleAuthKey,
 						tokenHash,
 						label,
+						agents: spec.agents,
 					}),
 					onCreated: (serverId) => {
 						latest.current.saveBox(box);

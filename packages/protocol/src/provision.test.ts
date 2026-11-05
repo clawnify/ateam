@@ -69,6 +69,28 @@ describe("buildCloudInit", () => {
 		);
 	});
 
+	test("installs the chosen agents first, as ateam, so the engine finds them when it starts", () => {
+		const yaml = buildCloudInit({
+			hostname: "my-box",
+			tailscaleAuthKey: AUTHKEY,
+			install: { agents: ["claude", "codex"] },
+		});
+		const lines = yaml.split("\n");
+		const at = (needle: string) => lines.findIndex((l) => l.includes(needle));
+		expect(at("claude.ai/install.sh")).toBeGreaterThan(at("tailscale up"));
+		expect(at("chatgpt.com/codex/install.sh")).toBeGreaterThan(at("claude.ai/install.sh"));
+		expect(at("bash -s -- --service --tailscale")).toBeGreaterThan(at("chatgpt.com/codex"));
+		const claude = JSON.parse((lines[at("claude.ai/install.sh")] ?? "").replace(/^ {2}- /, ""));
+		expect(claude.slice(0, 4)).toEqual(["runuser", "-l", "ateam", "-c"]);
+		expect(() =>
+			buildCloudInit({
+				hostname: "b",
+				tailscaleAuthKey: AUTHKEY,
+				install: { agents: ["rm -rf /" as "claude"] },
+			}),
+		).toThrow(/unknown agent/);
+	});
+
 	test("won't have a box install itself without an auth key, or pair something malformed", () => {
 		expect(() => buildCloudInit({ hostname: "b", install: {} })).toThrow(/auth key/);
 		for (const pairDevice of [

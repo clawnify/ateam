@@ -3,7 +3,7 @@
 // the same the desktop's Create a box uses; what differs is that the phone has no
 // SSH, so the box installs Ateam itself at first boot and pairs this phone before its
 // engine first starts (`install` in buildCloudInit). Pure, so it's tested on its own.
-import { buildCloudInit, type ProviderOptions } from "@ateam/protocol";
+import { buildCloudInit, type InstallableAgent, type ProviderOptions } from "@ateam/protocol";
 
 /** The provider definition's id for Hetzner, for its account key in the Keychain. */
 export const HETZNER_ACCOUNT = "hetzner";
@@ -84,10 +84,22 @@ export function phoneCloudInit(opts: {
 	tailscaleAuthKey: string;
 	tokenHash: string;
 	label: string;
+	agents: InstallableAgent[];
 }): string {
 	return buildCloudInit({
 		hostname: opts.name,
 		tailscaleAuthKey: opts.tailscaleAuthKey,
-		install: { pairDevice: { tokenHash: opts.tokenHash, label: opts.label } },
+		install: {
+			pairDevice: { tokenHash: opts.tokenHash, label: opts.label },
+			agents: opts.agents,
+		},
 	});
 }
+
+/** The Agent choices on Create a box: what each puts on the box. */
+export const AGENT_CHOICES: { slug: string; label: string; agents: InstallableAgent[] }[] = [
+	{ slug: "claude", label: "Claude Code", agents: ["claude"] },
+	{ slug: "codex", label: "Codex", agents: ["codex"] },
+	{ slug: "both", label: "Claude Code and Codex", agents: ["claude", "codex"] },
+	{ slug: "none", label: "None, I'll install one", agents: [] },
+];

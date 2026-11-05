@@ -72,6 +72,24 @@ const AUTHKEY_RE = /^tskey-auth-[A-Za-z0-9-]+$/;
 const LABEL_RE = /^[A-Za-z0-9._-]{1,40}$/;
 const TOKEN_HASH_RE = /^[0-9a-f]{64}$/;
 
+/** How a coding agent's CLI is put on a box, and the command that signs it in: each
+ *  agent's own installer. The agents registry (packages/agents) reads these, and a
+ *  box Ateam Go creates runs them at first boot. */
+export const AGENT_INSTALLS = {
+	claude: {
+		label: "Claude Code",
+		install: "curl -fsSL https://claude.ai/install.sh | bash",
+		login: "claude login",
+	},
+	codex: {
+		label: "Codex",
+		install: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+		login: "codex login",
+	},
+} as const;
+
+export type InstallableAgent = keyof typeof AGENT_INSTALLS;
+
 /** The installer every box runs, the one the docs tell people to curl. */
 export const INSTALL_SH_URL =
 	"https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh";
@@ -99,6 +117,8 @@ export function buildCloudInit(opts: {
 		/** The device creating the box, paired before the engine first starts: the sha256
 		 *  (hex) of a token only that device holds, and what the box calls it. */
 		pairDevice?: { tokenHash: string; label: string };
+		/** Coding agents to install first, so the engine finds them when it starts. */
+		agents?: InstallableAgent[];
 	};
 }): string {
 	const { hostname, sshPublicKey, tailscaleAuthKey, install } = opts;
@@ -113,6 +133,10 @@ export function buildCloudInit(opts: {
 		throw new Error("a box that installs itself needs a Tailscale auth key");
 	}
 	const pair = install?.pairDevice;
+	const agents = install?.agents ?? [];
+	if (agents.some((a) => !Object.hasOwn(AGENT_INSTALLS, a))) {
+		throw new Error("unknown agent to install");
+	}
 	if (pair && (!TOKEN_HASH_RE.test(pair.tokenHash) || !LABEL_RE.test(pair.label))) {
 		throw new Error("invalid device to pair");
 	}
@@ -146,6 +170,12 @@ export function buildCloudInit(opts: {
 					`  - tailscale up --ssh --authkey=${tailscaleAuthKey} --hostname=${hostname} --operator=ateam`,
 				]
 			: []),
+		// As `ateam`, in a login shell, before the engine: it lists the agents it finds
+		// on the login PATH. A failed one leaves the box without it, not without Ateam.
+		...agents.map(
+			(a) =>
+				`  - ${JSON.stringify(["runuser", "-l", "ateam", "-c", `set -o pipefail; ${AGENT_INSTALLS[a].install} >>~/ateam-install.log 2>&1`])}`,
+		),
 		// As `ateam`, in a login shell; its passwordless sudo makes --service a system
 		// unit. The log is where the box's own terminal can read what went wrong.
 		...(installer ? [`  - ${JSON.stringify(["runuser", "-l", "ateam", "-c", installer])}`] : []),

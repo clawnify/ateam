@@ -21,6 +21,7 @@ import {
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import {
+	AGENT_CHOICES,
 	boxNameOf,
 	defaultBoxName,
 	defaultsOf,
@@ -346,6 +347,7 @@ export function CreateBoxScreen({
 	const [options, setOptions] = useState<ProviderOptions | null>(null);
 	const [location, setLocation] = useState("");
 	const [size, setSize] = useState("");
+	const [agentChoice, setAgentChoice] = useState("claude");
 	const [loading, setLoading] = useState(false);
 	const [problem, setProblem] = useState<string | null>(null);
 
@@ -497,6 +499,12 @@ export function CreateBoxScreen({
 										}}
 									/>
 									<Picker
+										label="Agent"
+										items={AGENT_CHOICES}
+										value={agentChoice}
+										onPick={setAgentChoice}
+									/>
+									<Picker
 										label="Size"
 										items={sizes}
 										value={size}
@@ -525,6 +533,7 @@ export function CreateBoxScreen({
 									name: boxName,
 									size,
 									location,
+									agents: AGENT_CHOICES.find((c) => c.slug === agentChoice)?.agents ?? [],
 								});
 							}}
 							accessibilityRole="button"
