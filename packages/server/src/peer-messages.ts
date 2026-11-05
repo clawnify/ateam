@@ -24,6 +24,20 @@
  *     resumed with the message as the prompt, or a fresh agent is started when
  *     it never had one.
  *
+ * Starting an agent is not the same as it reading the prompt. A restart or a
+ * launch is only known to have worked once the new agent shows up: its first
+ * hook event of any kind, or its listener asking for messages (OpenCode reports
+ * no hook events). One that quits before then never read the batch: a
+ * conversation Claude Code no longer keeps (it deletes them after 30 days by
+ * default) prints "No conversation found to continue" and exits within seconds,
+ * worktree or not. One that cannot be started at all never got it either, and
+ * retrying it on every sweep would only fail the same way, unseen. Both keep
+ * the reason in the rows' `error`, and a task that sent one is told so by a
+ * notice from Ateam carrying the last thing the agent printed, so it does not
+ * promise the user an answer that cannot come. The Lead, the user and agents on
+ * other boxes have no inbox here to tell: for them the reason is recorded and
+ * logged only.
+ *
  * The user's own words to a live Claude conversation (an answer to its
  * ask_user question, a reply from the Lead chat or the phone) never take the
  * asyncRewake door: Claude Code frames that hook's output as
@@ -87,6 +101,13 @@ export const MOD_FRESH_MS = 60 * 1000;
 export const MOD_GRACE_MS = 60 * 1000;
 /** How long a batch handed to the mod waits for its ack before it is offered again. */
 export const MOD_LEASE_MS = 30 * 60 * 1000;
+/** How long an agent started for a batch is watched for quitting before it
+ *  shows up. One that cannot resume or start quits within seconds; one that
+ *  quits later was most likely used (a Codex whose hooks were turned down
+ *  reports nothing until its first turn ends), and is not reported. */
+export const STARTING_WATCH_MS = 2 * 60 * 1000;
+/** How much of a watched agent's output is kept, for the lines it quit on. */
+const STARTING_OUTPUT_KEEP = 4000;
 
 /**
  * The sender id a message from the Lead chat carries in `fromTerminalId` (with
@@ -96,6 +117,9 @@ export const MOD_LEASE_MS = 30 * 60 * 1000;
 export const LEAD_SENDER = "ateam:lead";
 /** The same for the user answering an agent's question from an Ateam client. */
 export const USER_SENDER = "ateam:user";
+/** The same for Ateam itself, telling a task that a message it sent never
+ *  reached its agent. Never answered with a notice of its own. */
+export const NOTICE_SENDER = "ateam:notice";
 /** The id an agent on another box carries in `fromTerminalId` (cross-box): its
  *  task's id, which stays the same while its name changes. Not a UUID, so it
  *  never collides with a real terminal's id. */
@@ -212,10 +236,13 @@ export function nextHop(recent: Pick<PeerMessage, "fromTaskId" | "hop">[], to: s
 type Sender =
 	| { taskId: string; name: string; agent: string; box?: string; lead?: boolean }
 	| OutsideSender
+	| "ateam"
 	| null;
 
 /** Who a message is from, what weight it carries, and how to answer it. */
 function headerFor(from: Sender): string {
+	if (from === "ateam")
+		return "[Ateam] Notice from Ateam itself about a message you sent. It comes neither from the user nor from another agent, and needs no answer.";
 	if (from === "user")
 		return "[Ateam] Message from the user, sent from the Ateam app. This comes from the user, who is not watching this terminal: answer in your reply.";
 	if (from === "lead")
@@ -242,6 +269,28 @@ export function formatForRecipient(
 			return `${head}\n\n${m.body}`;
 		})
 		.join("\n\n---\n\n");
+}
+
+// Terminal codes, for reading what an agent printed as text: CSI (colours,
+// modes, cursor), OSC (titles, links), a charset pick like `ESC ( B`, any other
+// two-byte escape like `ESC 7`, then the controls left (`SI`, `BS`) except line
+// ends. Node's own stripVTControlCharacters leaves `4m` and `u` of Claude's exit
+// codes behind (`ESC [ > 4 m`, `ESC [ < u`).
+const TERMINAL_CODES =
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control codes is the point
+	/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()*+].|\x1b.|[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]/g;
+
+/** The last lines a terminal showed, as one line of text: what an agent said
+ *  as it quit ("No conversation found to continue"). Empty when it said nothing. */
+export function terminalTail(output: string, lines = 3, max = 300): string {
+	const text = output
+		.replace(TERMINAL_CODES, "")
+		.split(/\r\n|\r|\n/)
+		.map((l) => l.trim())
+		.filter(Boolean)
+		.slice(-lines)
+		.join(" / ");
+	return text.length > max ? `…${text.slice(-max)}` : text;
 }
 
 // ---- the messenger -------------------------------------------------------
@@ -302,8 +351,10 @@ export interface PeerMessengerDeps {
 	lastInputAt: (terminalId: string) => number | null;
 	/** Kill a live idle session and wait for its exit to be recorded. */
 	stopSession: (session: AgentSession) => Promise<void>;
-	/** Resume (or start) the task's agent with `prompt`. */
-	launch: (task: Task, prompt: string) => Promise<void>;
+	/** Resume (or start) the task's agent with `prompt`, saying which terminal it
+	 *  runs in. Null when another launch is already bringing that conversation
+	 *  back: the batch then stays pending for that one. */
+	launch: (task: Task, prompt: string) => Promise<{ terminalId: string } | null>;
 	log: (line: string) => void;
 	now?: () => number;
 }
@@ -322,6 +373,15 @@ interface Lease {
 	until: number;
 }
 
+/** An agent started to take a batch, until it shows up or quits. */
+interface Starting {
+	taskId: string;
+	batch: PeerMessage[];
+	at: number;
+	/** The tail of what it printed, for the reason it quit. */
+	output: string;
+}
+
 const isFromUser = (m: PeerMessage) => m.fromTerminalId === USER_SENDER;
 
 export class PeerMessenger {
@@ -336,6 +396,8 @@ export class PeerMessenger {
 	 *  turn ends there (kick). */
 	private paused = new Map<string, string>();
 	private waking = new Set<string>();
+	/** Agents started for a batch that have not shown up yet, by terminal. */
+	private starting = new Map<string, Starting>();
 	private sweepTimer: ReturnType<typeof setInterval> | null = null;
 	private readonly now: () => number;
 	private readonly startedAt: number;
@@ -475,7 +537,15 @@ export class PeerMessenger {
 			createdAt: now,
 		});
 		const plan = this.deliverParts(target.id).rest;
-		return { ok: true, reason: `sent to "${target.name}" (${target.id}): ${describePlan(plan)}` };
+		// Only a task has an inbox for the notice a failed start sends (fail).
+		const ifItFails =
+			plan === "launch" || plan === "restart"
+				? " If it quits before reading your message, Ateam tells you."
+				: "";
+		return {
+			ok: true,
+			reason: `sent to "${target.name}" (${target.id}): ${describePlan(plan)}${ifItFails}`,
+		};
 	}
 
 	/** Whether `to` names no task on this box at all, so a linked box may have it
@@ -641,6 +711,9 @@ export class PeerMessenger {
 		if (!session || !this.deps.isLive(terminalId)) {
 			return { result: Promise.resolve({ kind: "gone" }), cancel: () => {} };
 		}
+		// Its listener is up, so its agent is: the one sign OpenCode gives, which
+		// reports no hook events.
+		this.agentEvent(terminalId);
 		this.waiters.get(terminalId)?.resolve({ kind: "superseded" });
 		this.dropWaiter(terminalId);
 		let cancel = () => {};
@@ -716,6 +789,10 @@ export class PeerMessenger {
 
 	/** Every task with something pending, leases past their time included. */
 	sweep(): void {
+		const now = this.now();
+		for (const [terminalId, s] of this.starting) {
+			if (now - s.at > STARTING_WATCH_MS) this.starting.delete(terminalId);
+		}
 		for (const taskId of repo.listTasksWithPendingPeerMessages(this.deps.db)) this.deliver(taskId);
 	}
 
@@ -834,28 +911,101 @@ export class PeerMessenger {
 		if (this.waking.size >= MAX_WAKES) return "wait";
 		this.waking.add(task.id);
 		void (async () => {
+			let batch: PeerMessage[] = [];
 			try {
 				if (plan === "restart" && live) await this.deps.stopSession(live);
 				// Re-read: more may have arrived while the old agent shut down, and a
 				// batch its mod held went with it.
-				const batch = this.pendingFor(task.id);
+				batch = this.pendingFor(task.id);
 				if (batch.length === 0) return;
-				await this.deps.launch(task, this.render(batch));
+				const started = await this.deps.launch(task, this.render(batch));
+				if (!started) return;
+				const at = this.now();
+				// Stamped now so no sweep starts a second agent for it; watched until
+				// the agent shows up (agentEvent) or quits without having read it.
 				repo.markPeerMessagesDelivered(
 					this.deps.db,
 					batch.map((m) => m.id),
 					"launch",
-					this.now(),
+					at,
 				);
+				this.starting.set(started.terminalId, { taskId: task.id, batch, at, output: "" });
 			} catch (e) {
-				this.deps.log(
-					`[ateam] peer message to ${task.id} not delivered: ${e instanceof Error ? e.message : String(e)}`,
-				);
+				const why = e instanceof Error ? e.message : String(e);
+				this.deps.log(`[ateam] peer message to ${task.id} not delivered: ${why}`);
+				this.fail(task, batch, `Ateam could not start its agent (${why})`);
 			} finally {
 				this.waking.delete(task.id);
 			}
 		})();
 		return plan;
+	}
+
+	/** A hook event from an agent's terminal (or its listener asking for
+	 *  messages): one started for a batch has shown up. */
+	agentEvent(terminalId: string): void {
+		this.starting.delete(terminalId);
+	}
+
+	/** What a terminal printed, kept only while its agent is being watched. */
+	agentOutput(terminalId: string, data: string): void {
+		const s = this.starting.get(terminalId);
+		if (s) s.output = (s.output + data).slice(-STARTING_OUTPUT_KEEP);
+	}
+
+	/** An agent quit (or its pane died). One started for a batch that never
+	 *  showed up did not read it. */
+	agentQuit(terminalId: string): void {
+		const s = this.starting.get(terminalId);
+		if (!s) return;
+		this.starting.delete(terminalId);
+		const after = this.now() - s.at;
+		if (after > STARTING_WATCH_MS) return;
+		const task = repo.getTask(this.deps.db, s.taskId);
+		if (!task) return;
+		const secs = Math.max(1, Math.round(after / 1000));
+		const said = terminalTail(s.output);
+		this.fail(
+			task,
+			s.batch,
+			`its agent quit ${secs} s after Ateam started it, before it reported starting up${said ? `. The last thing it printed: "${said}"` : ""}`,
+		);
+	}
+
+	/**
+	 * A batch that never reached `task`'s agent: keep why on its rows, and tell
+	 * each task that sent part of it, so it stops waiting for an answer. A
+	 * notice is never answered with one: its sender is not a task.
+	 */
+	private fail(task: Task, batch: PeerMessage[], why: string): void {
+		if (batch.length === 0) return;
+		const { db } = this.deps;
+		const at = this.now();
+		repo.markPeerMessagesFailed(
+			db,
+			batch.map((m) => m.id),
+			why,
+			at,
+		);
+		const bySender = new Map<string, PeerMessage>();
+		for (const m of batch)
+			if (m.fromTaskId && !bySender.has(m.fromTaskId)) bySender.set(m.fromTaskId, m);
+		for (const [senderId, m] of bySender) {
+			if (!repo.getTask(db, senderId)) continue;
+			const opening = m.body.split("\n", 1)[0]?.slice(0, 120) ?? "";
+			repo.insertPeerMessage(db, {
+				fromTaskId: null,
+				fromTerminalId: NOTICE_SENDER,
+				toTaskId: senderId,
+				body: `Your message to "${task.name}" (task id ${task.id}) that begins "${opening}" did not reach its agent: ${why}. No answer to it will come from that task. If the user is waiting on that answer, tell them.`,
+				hop: 1,
+				createdAt: at,
+			});
+			this.deliver(senderId);
+		}
+		if (batch.some((m) => !m.fromTaskId && m.fromTerminalId !== NOTICE_SENDER)) {
+			this.deps.log(`[ateam] message to ${task.id} from outside a task not delivered: ${why}`);
+		}
 	}
 
 	/**
@@ -891,15 +1041,17 @@ export class PeerMessenger {
 							? ("lead" as const)
 							: m.fromTerminalId === USER_SENDER
 								? ("user" as const)
-								: remote
-									? remote
-									: from
-										? {
-												taskId: from.id,
-												name: from.name,
-												agent: getAgent(agentId)?.label ?? (agentId || "unknown"),
-											}
-										: null,
+								: m.fromTerminalId === NOTICE_SENDER
+									? ("ateam" as const)
+									: remote
+										? remote
+										: from
+											? {
+													taskId: from.id,
+													name: from.name,
+													agent: getAgent(agentId)?.label ?? (agentId || "unknown"),
+												}
+											: null,
 				};
 			}),
 		);

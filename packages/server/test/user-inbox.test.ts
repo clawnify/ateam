@@ -48,7 +48,7 @@ beforeAll(async () => {
 		isLive: (t) => t === "term-1",
 		lastInputAt: () => null,
 		stopSession: async () => {},
-		launch: async () => {},
+		launch: async () => ({ terminalId: "launched" }),
 		log: () => {},
 	});
 	server = new HookServer();
