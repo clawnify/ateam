@@ -1037,7 +1037,29 @@ describe("A message whose woken agent never reads it", () => {
 		expect(allMessages()[0]?.error).toBeNull();
 	});
 
-	it("lets go of a started agent that never reports", async () => {
+	it("tells the sender an agent still unseen after the watch may be held at a prompt", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "claude");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "what did you do?" });
+		await flush();
+		live.add("launched-1"); // still running, at a trust dialog say
+		now += STARTING_WATCH_MS + 1;
+		messenger.sweep();
+		const original = allMessages().find((m) => m.toTaskId === b.id);
+		expect(original?.error).toBeNull();
+		expect(original?.deliveredVia).toBe("launch");
+		const notice = repo.listPendingPeerMessages(db, a.id);
+		expect(notice).toHaveLength(1);
+		expect(notice[0]?.body).toContain("has not reached its agent yet");
+		expect(notice[0]?.body).toContain("An answer may still come");
+		// Told once: neither a later sweep nor its quitting tells again.
+		messenger.sweep();
+		messenger.agentQuit("launched-1");
+		expect(allMessages()).toHaveLength(2);
+	});
+
+	it("lets go of a started agent whose terminal is gone without a word", async () => {
 		const a = addTask("a");
 		addSession(a, "claude", "ta");
 		const b = addTask("b", "claude");
