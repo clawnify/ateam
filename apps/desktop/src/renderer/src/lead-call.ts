@@ -23,13 +23,14 @@
 //
 // Known gap: words spoken while on hold, before the new session is up (about
 // 1.5 s), are not heard. The chime says when it is listening again.
-import type {
-	AteamLead,
-	LeadCallTopic,
-	LeadCallTurn,
-	LeadCallVerdict,
-	LeadEvent,
-	LeadItem,
+import {
+	type AteamLead,
+	CALL_MAX_PIECES,
+	type LeadCallTopic,
+	type LeadCallTurn,
+	type LeadCallVerdict,
+	type LeadEvent,
+	type LeadItem,
 } from "@ateam/protocol";
 
 export type CallState = "off" | "connecting" | "live" | "hold";
@@ -54,11 +55,19 @@ const CALL_BEAT_MS = 30_000;
 const FALSE_WAKES = 3;
 const FALSE_WAKES_WINDOW_MS = 5 * 60_000;
 const VOICE_WAKE_PAUSE_MS = 10 * 60_000;
-/** A gap this long between transcript fragments splits two pieces of speech. */
+/** A gap this long between transcript fragments, where a sentence ended,
+ *  splits two pieces of speech. */
 export const PIECE_GAP_MS = 800;
-/** No new words this long after some: the utterance is over, judge it. The
- *  voice's hand-off came 0-1.2 s after the last word in tests, and usually wins. */
-const QUIET_JUDGE_MS = 1_500;
+/**
+ * No new words this long after some, and no hand-off: judge what was heard.
+ * The voice's hand-off (judged at once) is the usual end of a turn: it hears
+ * the room, and took a sentence said slowly, with 2.3 s pauses, as one turn,
+ * handing it off 3 s after its last word. At 1.5 s this timer cut that
+ * sentence at each pause, and its fragments, judged one by one, read as
+ * nobody's (live, 2026-11-05). This is the fallback, for side talk and a
+ * missed hand-off.
+ */
+export const QUIET_JUDGE_MS = 3_500;
 /** A hand-off this soon after words went to the Lead without one is for them. */
 const LATE_HAND_OFF_MS = 3_000;
 /** Not sent, shown in the bar this long. */
@@ -66,9 +75,10 @@ const HELD_MS = 30_000;
 /** A card the call raised (a confirmation) is what the user answers for this
  *  long after: a yes or a no then goes to the card, not to the Lead. */
 export const CONFIRM_WINDOW_MS = 30_000;
-/** A decision the call raised is what the user is talking about for this long
- *  after it, or after they last talked about it: their words to the Lead are
- *  tagged with its task. Never answered from here: only discussed. */
+/** A decision or a task's reply the call raised is what the user is talking
+ *  about for this long after it, or after they last talked about it: their
+ *  words to the Lead are tagged with its task. A decision is never answered
+ *  from here unless the user clearly picks one of its buttons. */
 export const DECISION_WINDOW_MS = 120_000;
 /** A spoken yes acts this long after the voice says so: time to say stop. */
 export const UNDO_MS = 5_000;
@@ -118,6 +128,21 @@ export function turnsFrom(items: LeadItem[]): LeadCallTurn[] {
 	return turns;
 }
 
+/**
+ * A message for the gate's context: whole when short, else its start and its
+ * end. The end is where a message asks what the user is answering: a Lead
+ * message cut to its first 300 characters lost "can it stop the simulator?",
+ * and the user's answer to it was held as not for the Lead (2026-11-05).
+ */
+export function gist(md: string, max: number): string {
+	const s = speakable(md, Number.POSITIVE_INFINITY);
+	if (s.length <= max) return s;
+	const head = Math.round(max / 3);
+	const start = s.slice(0, head).replace(/\s+\S*$/, "");
+	const end = s.slice(s.length - (max - head)).replace(/^\S*\s+/, "");
+	return `${start} … ${end}`;
+}
+
 /** Something the call heard and held back, remembered for the gate's context
  *  for a while (in memory only, never stored). */
 export interface HeardAside {
@@ -134,29 +159,47 @@ const ago = (ms: number) => {
 	return s < 60 ? `${s} s ago` : `${Math.round(s / 60)} min ago`;
 };
 
+/** A line the call said on its own, never in the chat: a task's reply in one
+ *  line, a decision raised, a card announced. */
+export interface SpokenLine {
+	text: string;
+	at: number;
+}
+
 /**
  * The last few turns, for the gate to judge what it heard against: the chat
- * with the Lead and what the call held back, in time order, each with its
- * age. Both matter, measured: a bare "okok" after the Lead asked "Should I go
- * ahead?" went to the Lead (Jev 0.83-0.87, Luna 0.97) even when it answered a
- * question the user had just asked someone else; told that "Did you give food
- * to the cat?" was said to someone 4 s ago and the Lead asked 25 s ago, both
- * held it (0.28-0.38), and still sent it when the Lead had just asked.
+ * with the Lead, the tasks' replies, what the voice said on its own and what
+ * the call held back, in time order, each with its age. All of it is what the
+ * user may be answering. Measured: a bare "okok" after the Lead asked "Should
+ * I go ahead?" went to the Lead (Jev 0.83-0.87, Luna 0.97) even when it
+ * answered a question the user had just asked someone else; told that "Did
+ * you give food to the cat?" was said to someone 4 s ago and the Lead asked 25
+ * s ago, both held it (0.28-0.38), and still sent it when the Lead had just
+ * asked. Without the replies and the voice's own lines, "What network
+ * issues?", asked about a reply the voice had just summed up, was held as said
+ * to someone else (2026-11-05).
  */
 export function contextFrom(
 	items: LeadItem[],
-	asides: HeardAside[] = [],
+	heard: { asides?: HeardAside[]; said?: SpokenLine[] } = {},
 	now = Date.now(),
-	turns = 6,
+	turns = 8,
 ): string {
 	const lines: { at: number; line: string }[] = [];
 	for (const it of items) {
 		if (it.kind === "user" && !it.to)
-			lines.push({ at: it.at, line: `user (${ago(now - it.at)}): ${speakable(it.text, 300)}` });
+			lines.push({ at: it.at, line: `user (${ago(now - it.at)}): ${gist(it.text, 300)}` });
 		else if (it.kind === "assistant")
-			lines.push({ at: it.at, line: `lead (${ago(now - it.at)}): ${speakable(it.text, 300)}` });
+			lines.push({ at: it.at, line: `lead (${ago(now - it.at)}): ${gist(it.text, 700)}` });
+		else if (it.kind === "agent")
+			lines.push({
+				at: it.at,
+				line: `the task "${it.task.name}" replied (${ago(now - it.at)}): ${gist(it.text, 500)}`,
+			});
 	}
-	for (const a of asides) {
+	for (const s of heard.said ?? [])
+		lines.push({ at: s.at, line: `lead, said on the call (${ago(now - s.at)}): ${s.text}` });
+	for (const a of heard.asides ?? []) {
 		if (now - a.at > ASIDE_MEMORY_MS) continue;
 		const what =
 			a.kind === "someone"
@@ -209,28 +252,108 @@ export interface Fragment {
 	end: number;
 }
 
-/** Fragments as pieces of speech, split where the gap between two is long. */
-export function piecesOf(frags: Fragment[], gapMs = PIECE_GAP_MS): string[] {
+/** A sentence's end, as the transcript marks it: not "..." or "…", which
+ *  trail off mid-thought. */
+const SENTENCE_END = /(?:^|[^.])[.?!。？！]$/;
+const LEADING_END = /^\s*(?:[?!。？！]+|\.(?!\.))/;
+
+/**
+ * Fragments as pieces of speech: split at a pause where a sentence ended, so
+ * side talk and a request said in one breath are judged apart ("Mom, hold on
+ * a second." / "Delete the old box."), and a sentence with pauses in it is
+ * judged whole (a pause alone split "In the web project, send a task to
+ * check..." into fragments that each read as nobody's). The transcript puts a
+ * sentence's end mark at the start of the next fragment (". Delete"). Past
+ * `max` pieces, the oldest are joined into one, so every word is judged.
+ */
+export function piecesOf(frags: Fragment[], gapMs = PIECE_GAP_MS, max = CALL_MAX_PIECES): string[] {
 	const pieces: string[] = [];
 	let cur = "";
 	let lastEnd = Number.NEGATIVE_INFINITY;
 	for (const f of frags) {
+		let text = f.text;
 		// Punctuation can arrive late, timed with the next words ("?" after a
 		// question): it ends the piece before it, never starts one.
-		if (/^[\p{P}\s]*$/u.test(f.text)) {
-			if (cur) cur += f.text;
-			else if (pieces.length) pieces[pieces.length - 1] += f.text;
+		if (/^[\p{P}\s]*$/u.test(text)) {
+			if (cur) cur += text;
+			else if (pieces.length) pieces[pieces.length - 1] += text;
 			continue;
 		}
-		if (cur && f.start - lastEnd >= gapMs) {
+		const mark = text.match(LEADING_END)?.[0];
+		if (cur && f.start - lastEnd >= gapMs && (mark || SENTENCE_END.test(cur.trimEnd()))) {
+			if (mark) {
+				cur += mark.trim();
+				text = text.slice(mark.length);
+			}
 			pieces.push(cur);
 			cur = "";
 		}
-		cur += f.text;
+		cur += text;
 		lastEnd = f.end;
 	}
 	if (cur) pieces.push(cur);
-	return pieces.map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean);
+	const out = pieces.map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean);
+	const extra = out.length - max;
+	return extra > 0 ? [out.slice(0, extra + 1).join(" "), ...out.slice(extra + 1)] : out;
+}
+
+/** Speech with pauses shorter than this is one utterance, even when it was
+ *  judged in several goes: the voice handing off at a pause, or a pause past
+ *  QUIET_JUDGE_MS, which only a gap longer than it can span (at 3 s it never
+ *  did, the quiet timer being 3.5 s). */
+export const UTTERANCE_GAP_MS = QUIET_JUDGE_MS + 2_500;
+
+/** A piece of speech after the gate: for the Lead, or held back and why. */
+export interface Judged {
+	text: string;
+	lead: boolean;
+	kind: LeadCallVerdict["kind"];
+}
+
+/** An utterance so far, across judgements: whether any of it went to the
+ *  Lead, and what of it is held as nobody's (whole held lines, as shown). */
+export interface Utterance {
+	sent: boolean;
+	held: string[];
+}
+
+/** The longest stretch of a held utterance judged again with what follows. */
+const CARRY_MAX = 600;
+
+/**
+ * The pieces to judge in a new go of an utterance. A slow speaker's pauses
+ * cut a sentence into goes, and each fragment alone reads as nobody's: Jev put
+ * every fragment of "In the web project / send a task / to check / ..." at
+ * 0.53-0.67, under its bar, and none reached the Lead (live run 2026-11-05).
+ * So while the utterance so far is held as nobody's, it is judged again with
+ * what came next, as one piece: the sentence, not its fragments.
+ */
+export function withCarry(
+	pieces: string[],
+	earlier: Utterance | null,
+): { pieces: string[]; carried: string[] } {
+	const carried = earlier && !earlier.sent ? earlier.held : [];
+	if (!carried.length || !pieces.length) return { pieces, carried: [] };
+	const first = `${carried.join(" ")} ${pieces[0]}`.slice(-CARRY_MAX);
+	return { pieces: [first, ...pieces.slice(1)], carried };
+}
+
+/**
+ * What of a judgement goes to the Lead. A pause can fall mid-sentence, and a
+ * fragment alone reads as nobody's: a sentence reached the Lead as "to check",
+ * with "instructions" held (2026-11-05). So when a piece is for the Lead, the
+ * pieces judged with it that read as nobody's (unclear) go too, in order. What
+ * reads as said to someone else or as a TV stays back: that is what the gate
+ * is for. Across judgements only the gate's own answer carries words on
+ * (`continuing`, judgeSpeech): a gate that gave none can't tell a TV line from
+ * the rest of a sentence (Luna refuses to judge some news lines at all).
+ */
+export function rideAlong(pieces: Judged[]): { lead: string[]; held: Judged[] } {
+	if (!pieces.some((p) => p.lead)) return { lead: [], held: pieces };
+	return {
+		lead: pieces.filter((p) => p.lead || p.kind === "unclear").map((p) => p.text),
+		held: pieces.filter((p) => !p.lead && p.kind !== "unclear"),
+	};
 }
 
 /** Whether a live call should go on hold now. */
@@ -246,16 +369,21 @@ export function shouldHold(s: {
 	pending?: boolean;
 	/** The Lead waits on the user's tap: a permission card, a held message. */
 	waitingOnUser?: boolean;
+	/** Words heard and not judged yet: a quiet room holds only after they are
+	 *  (QUIET_JUDGE_MS), so the last words before a hold reach the gate. */
+	unjudged?: boolean;
 }): boolean {
 	const idle = s.now - s.engagedAt;
 	const quiet = s.now - s.heardAt;
+	// Endless talk that isn't for the Lead (a TV): on hold whatever is pending.
+	if (idle > CHATTER_CAP_MS) return true;
+	if (s.unjudged) return false;
 	// Waiting on the Lead is no reason to bill silence forever: not while it
 	// waits on the user, nor through a long turn. Its reply reopens the call.
 	if (s.pending)
 		return quiet > 3_000 && (s.waitingOnUser ? idle > WAITING_HOLD_MS : idle > PENDING_HOLD_MS);
 	if (s.falseWake && idle > FALSE_WAKE_MS && quiet > 1_500) return true;
-	if (idle > HOLD_AFTER_MS && quiet > 3_000) return true;
-	return idle > CHATTER_CAP_MS;
+	return idle > HOLD_AFTER_MS && quiet > 3_000;
 }
 
 /** The Lead waits on the user's tap: a permission card nobody answered. */
@@ -270,8 +398,8 @@ export function heldReason(kind: LeadCallVerdict["kind"]): string {
 	return "not sure it was for the Lead";
 }
 
-/** A card or a decision the call raised, while it is still what the user may
- *  be answering or talking about. */
+/** A card, a decision or a task's reply the call raised, while it is still
+ *  what the user may be answering or talking about. */
 export type OpenTopic =
 	| { kind: "confirm"; id: string; text: string; at: number }
 	| {
@@ -283,11 +411,17 @@ export type OpenTopic =
 			/** Its buttons, when one may be picked by voice (not a checklist). */
 			options: CallOption[];
 			at: number;
-	  };
+	  }
+	/** A task's reply, said in one line: words about it reach the Lead tagged
+	 *  with the task, which only learns what a task said by reading it. */
+	| { kind: "reply"; taskId: string; name: string; text: string; at: number };
+
+/** A topic a spoken yes, or a button picked by voice, acts on. */
+type Answerable = Exclude<OpenTopic, { kind: "reply" }>;
 
 /** What the gate judges the next words against: a pending approval first (a
  *  "stop" cancels it), then a card raised in the last 30 s, then a decision
- *  raised or discussed in the last 2 min. */
+ *  or a task's reply raised or discussed in the last 2 min. */
 export function activeTopic(
 	now: number,
 	open: OpenTopic | null,
@@ -387,10 +521,16 @@ export class LeadCall {
 	private frags: Fragment[] = [];
 	/** Held back lately: the gate weighs what comes next against them. */
 	private asides: HeardAside[] = [];
-	/** The card or decision the call raised last, while it may be the topic. */
+	/** The utterance the last judgement ended, until when it was heard. */
+	private utter: (Utterance & { until: number; text: string }) | null = null;
+	/** When the first words of the batch now being heard came in. */
+	private batchFrom = 0;
+	/** The voice's own last lines (say), for the gate's context. */
+	private said: SpokenLine[] = [];
+	/** The card, decision or reply the call raised last, while it may be the topic. */
 	private topic: OpenTopic | null = null;
 	/** A spoken yes, or an option picked by voice, counting down to acting. */
-	private approval: { open: OpenTopic; timer: ReturnType<typeof setTimeout> } | null = null;
+	private approval: { open: Answerable; timer: ReturnType<typeof setTimeout> } | null = null;
 	/** Tasks and their open questions, from the chat's window (setTasks). */
 	private tasks: CallTask[] = [];
 	/** Questions already told on this call, or there before it began. */
@@ -415,7 +555,18 @@ export class LeadCall {
 	private loudSince = 0;
 	private n = 0;
 
+	/** How a task's question is answered: the chat's own way (answerWith), so a
+	 *  voice pick reaches a task the way a tap on its card does. */
+	private answerTask: (input: Parameters<AteamLead["answer"]>[0]) => Promise<void> = (input) =>
+		this.lead().answer(input);
+
 	constructor(private readonly lead: () => AteamLead) {}
+
+	/** The chat's way to answer a task's question (LeadChat: a box's Lead can't
+	 *  reach a task elsewhere, which is answered directly). */
+	answerWith(fn: (input: Parameters<AteamLead["answer"]>[0]) => Promise<void>): void {
+		this.answerTask = fn;
+	}
 
 	get state(): CallState {
 		return this.view.state;
@@ -487,6 +638,8 @@ export class LeadCall {
 		this.queued = [];
 		this.frags = [];
 		this.asides = [];
+		this.said = [];
+		this.utter = null;
 		this.topic = null;
 		// Hanging up mid-countdown: nothing acts on a yes the user can't take back.
 		this.stopApproval(false);
@@ -531,7 +684,7 @@ export class LeadCall {
 				options: optionsOf(q),
 				at: Date.now(),
 			};
-			this.send("session.commentary.append", null, decisionLine(t.name, q.text));
+			this.say(decisionLine(t.name, q.text));
 		}
 	}
 
@@ -612,6 +765,15 @@ export class LeadCall {
 	private async toHold(): Promise<void> {
 		if (this.wokeBySound && !this.sentSinceWake) this.falseWake();
 		this.update({ state: "hold" });
+		// Closing drops what was heard and not judged: judge it first (only
+		// the chatter cap holds before the quiet timer has).
+		if (this.frags.length) {
+			if (this.judgeTimer) clearTimeout(this.judgeTimer);
+			this.judgeTimer = null;
+			const handOff = this.pendingHandOff;
+			this.pendingHandOff = null;
+			void this.judge(handOff);
+		}
 		await this.closeSession();
 	}
 
@@ -663,6 +825,7 @@ export class LeadCall {
 				this.started?.();
 				break;
 			case "session.input_transcript.delta":
+				if (!this.frags.length) this.batchFrom = Date.now();
 				this.frags.push({
 					text: String(ev.delta ?? ""),
 					start: Number(ev.start_ms ?? 0),
@@ -672,18 +835,20 @@ export class LeadCall {
 				this.judgeSoon(QUIET_JUDGE_MS);
 				break;
 			case "session.output_transcript.delta":
+				// Not the end of the user's turn: the voice says "Sure." over a
+				// pause and the user goes on. Judging then cut a sentence in two
+				// (live, 2026-11-05); the hand-off or the quiet timer ends a turn.
 				this.engagedAt = Date.now();
-				// The voice answering means the user's turn is over.
-				if (this.frags.length) this.judgeSoon(300);
 				break;
 			case "session.delegation.created": {
 				const id = String((ev.delegation as { id?: string } | undefined)?.id ?? "");
-				// A card is open: the user may be answering it, and only the gate
-				// decides whether that was a yes. Cancel the voice's automatic "on it"
-				// (an empty thinking append does, OpenAI's delegation guide), so it
-				// never sounds like the answer was taken.
-				if (activeTopic(Date.now(), this.topic, this.view.approving)?.kind === "confirm")
-					this.send("session.thinking.append", id, "");
+				// Cancel the voice's automatic acknowledgement (an empty thinking
+				// append does, OpenAI's delegation guide): it comes before the gate
+				// rules, and promised "Okay, I'll take care of that." for words the
+				// gate then held, instructions or not (live, 2026-11-05). The call
+				// acknowledges once the words went (judgeBatch), and a yes to a card
+				// is never heard as taken.
+				this.send("session.thinking.append", id, "");
 				// The last words' transcript can land just after the hand-off.
 				this.judgeSoon(400, id);
 				break;
@@ -718,28 +883,58 @@ export class LeadCall {
 
 	/** The gate: only words the decision model puts as said to the Lead go to
 	 *  it, and a yes or no to the card the call just raised goes to that card. */
-	private async judge(handOff: string | null): Promise<void> {
-		const pieces = piecesOf(this.frags);
+	/** Judge what was heard so far, after any judgement still running: each
+	 *  one weighs the utterance as the one before it left it. */
+	private judging: Promise<void> = Promise.resolve();
+	private judge(handOff: string | null): Promise<void> {
+		const batch = { frags: this.frags, from: this.batchFrom, until: this.heardAt };
 		this.frags = [];
+		const run = this.judging.then(() => this.judgeBatch(batch, handOff));
+		this.judging = run.catch(() => {});
+		return run;
+	}
+
+	private async judgeBatch(
+		batch: { frags: Fragment[]; from: number; until: number },
+		handOff: string | null,
+	): Promise<void> {
+		const pieces = piecesOf(batch.frags);
 		if (!pieces.length) {
 			if (handOff) this.lateHandOff(handOff);
 			return;
 		}
 		const topic = activeTopic(Date.now(), this.topic, this.view.approving);
+		// The same utterance as the last judgement, after a short pause: what of
+		// it is held is judged again with these words, so no longer held alone.
+		const earlier =
+			this.utter && batch.from - this.utter.until < UTTERANCE_GAP_MS ? this.utter : null;
+		const carry = withCarry(pieces, earlier);
+		if (carry.carried.length) {
+			this.asides = this.asides.filter((a) => !carry.carried.includes(a.text));
+			if (this.view.held && carry.carried.includes(this.view.held.text))
+				this.update({ held: null });
+		}
 		const verdicts = await this.lead()
-			.callJudge(
-				pieces,
-				contextFrom(this.items, this.asides),
-				topic ? { kind: topic.kind, text: topic.text } : undefined,
-			)
+			.callJudge(carry.pieces, contextFrom(this.items, { asides: this.asides, said: this.said }), {
+				...(topic
+					? {
+							topic: {
+								kind: topic.kind,
+								text: topic.text,
+								...(topic.options ? { options: topic.options } : {}),
+							},
+						}
+					: {}),
+				...(earlier?.sent ? { continuing: earlier.text } : {}),
+				handedOff: !!handOff,
+			})
 			.catch(() => null);
 		// No decision model (no key, turned off) or no answer in time: trust the
 		// voice's hand-off, and hold back what it didn't hand off. Cards are then
 		// answered only by tap.
-		const sent: string[] = [];
-		let held: CallView["held"] = null;
+		const out: Judged[] = [];
 		let answered = false;
-		for (const [i, text] of pieces.entries()) {
+		for (const [i, text] of carry.pieces.entries()) {
 			const v = verdicts?.[i];
 			if (v?.answer && this.approval) {
 				// The only answer to a countdown that matters is stop.
@@ -777,27 +972,51 @@ export class LeadCall {
 				}
 			}
 			if (v ? v.send : !!handOff) {
-				// Talking about a decision the call raised: the Lead hears which task.
-				if (v?.onTopic && open?.kind === "decision") {
+				// Talking about a decision or a reply the call raised: the Lead hears
+				// which task (it reads the task for what it said).
+				if (v?.onTopic && (open?.kind === "decision" || open?.kind === "reply")) {
 					this.topic = { ...open, at: Date.now() };
-					sent.push(`[${open.name.replace(/[[\]\n]/g, " ")}](task:${open.taskId}) ${text}`);
-				} else sent.push(text);
-			} else held = { text, kind: v?.kind ?? "unclear" };
+					const tag = `[${open.name.replace(/[[\]\n]/g, " ")}](task:${open.taskId})`;
+					out.push({ text: `${tag} ${text}`, lead: true, kind: "lead" });
+				} else out.push({ text, lead: true, kind: v?.kind ?? "lead" });
+			} else out.push({ text, lead: false, kind: v?.kind ?? "unclear" });
 		}
+		const plan = rideAlong(out);
+		// Everything held, together: the bar's Send sends all of it.
+		const held = plan.held.length
+			? {
+					text: plan.held.map((h) => h.text).join(" "),
+					kind: plan.held.every((h) => h.kind === plan.held[0]?.kind)
+						? (plan.held[0]?.kind ?? "unclear")
+						: "unclear",
+				}
+			: null;
 		if (held) this.hold(held);
-		if (sent.length) this.toLead(answered ? null : handOff, sent.join(" "));
-		else if (handOff && !answered) this.quiet(handOff);
+		this.utter = {
+			until: batch.until,
+			sent: !!earlier?.sent || plan.lead.length > 0,
+			text: [earlier?.sent ? earlier.text : "", ...plan.lead].join(" ").trim().slice(-600),
+			// Only what was held as nobody's is judged again with what follows
+			// (the carried part is already in it).
+			held: !plan.lead.length && held?.kind === "unclear" ? [held.text] : [],
+		};
+		if (plan.lead.length) {
+			this.toLead(answered ? null : handOff, plan.lead.join(" "));
+			// The acknowledgement the voice's own was cancelled for: only now
+			// that the words went, and never a promise.
+			if (handOff && !answered) this.send("session.commentary.append", handOff, "One sec.");
+		} else if (handOff && !answered) this.quiet(handOff);
 	}
 
 	/** A spoken yes to a card, or a decision's option picked by voice: said
 	 *  back, then acted on after UNDO_MS, in case the user changes their mind. */
-	private startApproval(open: OpenTopic, handOff: string | null, label?: string): void {
+	private startApproval(open: Answerable, handOff: string | null, label?: string): void {
 		this.stopApproval(false);
 		this.topic = null;
 		const act = () =>
 			open.kind === "confirm"
 				? this.lead().permission(open.id, "allow")
-				: this.lead().answer({
+				: this.answerTask({
 						taskId: open.taskId,
 						questionId: open.questionId,
 						answer: label ?? "",
@@ -923,8 +1142,8 @@ export class LeadCall {
 			void this.nudge(item);
 			return;
 		}
-		const say = announcement(item);
-		if (!say) return;
+		const line = announcement(item);
+		if (!line) return;
 		if (item.kind === "permission")
 			this.topic = {
 				kind: "confirm",
@@ -932,16 +1151,36 @@ export class LeadCall {
 				text: speakable(item.text, 600),
 				at: Date.now(),
 			};
-		this.send("session.commentary.append", null, say);
+		this.say(line);
 	}
 
-	/** A task's reply, told as one short line: usually news, not a request. */
+	/** A task's reply, told as one short line: usually news, not a request.
+	 *  What the user says about it next reaches the Lead tagged with the task,
+	 *  unless a card or a decision is still open: a reply never takes their
+	 *  place, or "go ahead" would stop picking the decision's button. */
 	private async nudge(item: Extract<LeadItem, { kind: "agent" }>): Promise<void> {
 		const line = await this.lead()
 			.callNudge(item.task.name, item.text)
 			.catch(() => announcement(item));
 		if (this.state === "off" || !line) return;
-		this.send("session.commentary.append", null, line);
+		const open = activeTopic(Date.now(), this.topic, this.view.approving);
+		if (!open || open.kind === "reply")
+			this.topic = {
+				kind: "reply",
+				taskId: item.task.taskId,
+				name: item.task.name,
+				text: line,
+				at: Date.now(),
+			};
+		this.say(line);
+	}
+
+	/** A line the call says on its own (not the Lead's reply, which is in the
+	 *  chat): remembered for the gate, which judges what the user says next
+	 *  against what they just heard. */
+	private say(text: string): void {
+		this.said = [...this.said.slice(-3), { text, at: Date.now() }];
+		this.send("session.commentary.append", null, text);
 	}
 
 	// ---- hold and wake -------------------------------------------------------------
@@ -966,6 +1205,7 @@ export class LeadCall {
 				falseWake,
 				pending: this.pending.length > 0,
 				waitingOnUser: waitingOnUser(this.items),
+				unjudged: this.frags.length > 0,
 			})
 		)
 			void this.toHold();

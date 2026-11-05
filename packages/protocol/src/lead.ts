@@ -65,6 +65,23 @@ export interface LeadCallTurn {
 	text: string;
 }
 
+/** What else the gate weighs a call's speech against (callJudge). */
+export interface LeadCallJudgeOptions {
+	/** What the call just raised, if anything is open. */
+	topic?: LeadCallTopic;
+	/** The user's words to the Lead just before, in the same utterance, when
+	 *  these pieces may carry on from them. */
+	continuing?: string;
+	/** The voice (which hears the room, not only the words) handed these words
+	 *  off as said to it. */
+	handedOff?: boolean;
+}
+
+/** The most pieces of speech a call judges at once: the call joins its oldest
+ *  pieces into one past this, so every word is judged and each verdict is one
+ *  piece's (server call-gate.ts). */
+export const CALL_MAX_PIECES = 4;
+
 /** Whether a piece of speech a call heard was said to the Lead (callJudge). */
 export interface LeadCallVerdict {
 	/** The probability it was said to the Lead. */
@@ -82,9 +99,10 @@ export interface LeadCallVerdict {
 
 /** What a call just raised, for judging what comes next against it: a
  *  confirmation (a card) may be answered by voice; a decision (a task's
- *  question with options) is only ever talked about. */
+ *  question with options) is talked about, or one of its buttons clearly
+ *  picked; a task's reply, said in one line, is only talked about. */
 export interface LeadCallTopic {
-	kind: "confirm" | "decision";
+	kind: "confirm" | "decision" | "reply";
 	text: string;
 	/** A decision's buttons, in order; the user's words may pick one. */
 	options?: { label: string; recommended?: boolean; description?: string }[];
@@ -364,7 +382,7 @@ export interface AteamLead {
 	callJudge(
 		pieces: string[],
 		context: string,
-		topic?: LeadCallTopic,
+		opts?: LeadCallJudgeOptions,
 	): Promise<LeadCallVerdict[] | null>;
 	/** The user is on a call with the calling window's chat (true, repeated
 	 *  while it lasts) or hung up (false). Throws when that chat lives on a box

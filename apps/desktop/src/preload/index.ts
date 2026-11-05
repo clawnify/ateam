@@ -277,8 +277,8 @@ const lead: AteamLead = {
 		return () => ipcRenderer.off(LEAD_CH.evtHome, handler);
 	},
 	callStart: (sdp, input) => ipcRenderer.invoke(LEAD_CH.callStart, sdp, input),
-	callJudge: (pieces, context, topic) =>
-		ipcRenderer.invoke(LEAD_CH.callJudge, pieces, context, topic),
+	callJudge: (pieces, context, opts) =>
+		ipcRenderer.invoke(LEAD_CH.callJudge, pieces, context, opts),
 	callActive: (on) => ipcRenderer.invoke(LEAD_CH.callActive, on),
 	callNudge: (task, reply) => ipcRenderer.invoke(LEAD_CH.callNudge, task, reply),
 };
