@@ -82,6 +82,8 @@ export interface RemoteLead {
 	connected(): boolean;
 	/** Emoji answers work there (v28). */
 	canReact(): boolean;
+	/** A box on v32 or later: its Lead holds messages to tasks for a tap during a call. */
+	canCall(): boolean;
 	snapshot(tail?: number): Promise<LeadSnapshot>;
 	older(beforeId: string, limit: number): Promise<{ items: LeadItem[]; more: boolean }>;
 	send(text: string, paths?: string[]): Promise<void>;
@@ -93,6 +95,7 @@ export interface RemoteLead {
 	reset(): Promise<void>;
 	permission(id: string, answer: LeadPermissionAnswer): Promise<void>;
 	setAuto(on: boolean): Promise<void>;
+	setCall(on: boolean): Promise<void>;
 	proposal(id: string, outcome: "created" | "dismissed", taskId?: string): Promise<void>;
 	reply(taskId: string, text: string): Promise<void>;
 	react(id: string, emoji: string): Promise<void>;
@@ -180,6 +183,7 @@ export function remoteLead(deps: RemoteLeadDeps): RemoteLead {
 			return bound !== null;
 		},
 		canReact: () => bound !== null && boxSupports("leadReact", bound.version),
+		canCall: () => bound !== null && boxSupports("leadCall", bound.version),
 		async snapshot(tail) {
 			relink();
 			if (!bound) return last;
@@ -239,6 +243,15 @@ export function remoteLead(deps: RemoteLeadDeps): RemoteLead {
 		},
 		async setAuto(on) {
 			await (await live()).setAuto(on);
+		},
+		// Never a call with a box that would act on the Lead's messages unasked.
+		async setCall(on) {
+			const client = await live();
+			if (!bound || !boxSupports("leadCall", bound.version)) {
+				if (on) throw new Error(`Update ${box} to call its Lead.`);
+				return;
+			}
+			await client.callActive(on);
 		},
 		async proposal(id, outcome, taskId) {
 			const client = await live();

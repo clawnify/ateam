@@ -139,6 +139,7 @@ export function leadClient(rpc: RpcClient): LeadClient {
 		answer: async (input) => void (await call(LEAD_CH.answer, input)),
 		permission: async (id, answer) => void (await call(LEAD_CH.permission, id, answer)),
 		setAuto: async (on) => void (await call(LEAD_CH.setAuto, on)),
+		callActive: async (on) => void (await call(LEAD_CH.callActive, on)),
 		dismissProposal: async (id) => void (await call(LEAD_CH.proposal, id, "dismissed")),
 		proposalCreated: async (id, taskId) =>
 			void (await call(LEAD_CH.proposal, id, "created", ...(taskId ? [taskId] : []))),

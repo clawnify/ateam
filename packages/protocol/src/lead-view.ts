@@ -161,6 +161,28 @@ export function findLeadTask(tasks: TaskDTO[], ref: unknown): TaskDTO | undefine
 	);
 }
 
+/** The task a link in the Lead's prose names, `[label](task:<target>)`. The
+ *  Lead copies ids from get_board and now and then garbles one (keeping the
+ *  first eight characters, inventing the rest), or links a task before it has
+ *  an id. A tool call given a bad ref hears "no task" and retries; a link just
+ *  draws a dead chip. So after an exact match comes the one task whose id
+ *  starts like the target, then the one task the link's text names. Tool calls
+ *  keep to findLeadTask: their chip names the task the server resolved. */
+export function findLinkedTask(
+	tasks: TaskDTO[],
+	target: string,
+	label: string,
+): TaskDTO | undefined {
+	const exact = findLeadTask(tasks, target);
+	if (exact) return exact;
+	const head = /^[0-9a-f]{8}/i.exec(target)?.[0].toLowerCase();
+	const sameHead = head ? tasks.filter((t) => t.id.startsWith(head)) : [];
+	if (sameHead.length === 1) return sameHead[0];
+	const want = label.trim().toLowerCase();
+	const named = want ? tasks.filter((t) => t.name.toLowerCase() === want) : [];
+	return named.length === 1 ? named[0] : undefined;
+}
+
 /** The task a tool call acted on, when it acted on one. */
 export function leadToolTask(tool: LeadToolItem, tasks: TaskDTO[]): TaskDTO | undefined {
 	if (tool.name === "create_task") {

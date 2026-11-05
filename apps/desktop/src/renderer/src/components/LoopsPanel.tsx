@@ -536,7 +536,7 @@ export function LoopsPanel({
 						<h2>Loops</h2>
 					</div>
 				</div>
-				<div className="empty">Select a project to see its loops.</div>
+				<div className="empty">Add a project to see its loops.</div>
 			</div>
 		);
 	}

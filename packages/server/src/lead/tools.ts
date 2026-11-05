@@ -18,6 +18,7 @@ import {
 	type ProjectDTO,
 	projectRepo,
 	relativeAge,
+	TASK_LINK_SCHEME,
 	type TaskDTO,
 	type TaskLastReplyDTO,
 	type TaskProposalDTO,
@@ -36,6 +37,11 @@ export interface LeadToolDeps {
 	machineOf(id: string): string | null;
 	/** A task the Lead messaged or answered: its replies come back to the chat. */
 	onTouch?(task: TaskDTO): void;
+	/** Asked before a message or an answer goes to a task. While the user is on
+	 *  a voice call (index.ts), it keeps `run` for the user's tap and answers
+	 *  what to tell the Lead instead; otherwise null, and the tool goes ahead.
+	 *  `text` is the card the user decides on, in markdown. */
+	hold?(r: { text: string; run: () => Promise<McpToolResult> }): string | null;
 	/** Put a proposal in the chat, where the user creates it from its dialog. */
 	propose?(p: {
 		projectId: string;
@@ -308,6 +314,14 @@ const firstLine = (text: string) =>
 
 /** A summary's room in get_board's one line per task. The board stays in the
  *  Lead's context, so a long one is cut there; read_task carries it whole. */
+/** Text as a markdown quote, for a card the user decides on. */
+const quote = (text: string) =>
+	text
+		.slice(0, 1500)
+		.split("\n")
+		.map((l) => `> ${l}`)
+		.join("\n");
+
 const SUMMARY_IN_BOARD = 200;
 const clipLine = (text: string, max: number) => {
 	if (text.length <= max) return text;
@@ -550,7 +564,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 		});
 		const what = kind === "task" ? "New task" : "New loop";
 		return {
-			text: `Proposed "${proposal.name}" in ${project.name}. ${w.decide(what)} Nothing starts until they do, and you hear what they decided with their next message: say in a line what you proposed and why, do not say it started, and do not wait for it.`,
+			text: `Proposed "${proposal.name}" in ${project.name}. ${w.decide(what)} Nothing starts until they do, and you hear what they decided with their next message: say in a line what you proposed and why, do not say it started, and do not wait for it. It has no id until they create it, so name it in plain words, not as a ${TASK_LINK_SCHEME} link.`,
 		};
 	}
 
@@ -562,6 +576,11 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 			`Message it with ${OTHER_PROJECT_TOOL}, which the user approves first.`,
 		);
 		if (no) return { text: no, isError: true };
+		const held = deps.hold?.({
+			text: `**Send this to "${task.name}"?**\n\n${quote(String(args.message ?? ""))}`,
+			run: () => deliver(task, args),
+		});
+		if (held) return { text: held };
 		return deliver(task, args);
 	}
 
@@ -647,20 +666,25 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 		);
 		if (no) return { text: no, isError: true };
 		if (!task.question) return { text: `"${task.name}" has no question waiting.`, isError: true };
-		try {
-			await call(CH.tasksAnswerQuestion, [
-				{
-					taskId: task.id,
-					questionId: task.question.id,
-					via: "lead",
-					answer: Array.isArray(args.answer) ? args.answer.map(String) : String(args.answer ?? ""),
-				},
-			]);
-			deps.onTouch?.(task);
-			return { text: `Passed the answer to "${task.name}"; its agent continues with it.` };
-		} catch (e) {
-			return { text: explain(e, "Answering that question"), isError: true };
-		}
+		const question = task.question;
+		const given = Array.isArray(args.answer) ? args.answer.map(String) : String(args.answer ?? "");
+		const run = async (): Promise<McpToolResult> => {
+			try {
+				await call(CH.tasksAnswerQuestion, [
+					{ taskId: task.id, questionId: question.id, via: "lead", answer: given },
+				]);
+				deps.onTouch?.(task);
+				return { text: `Passed the answer to "${task.name}"; its agent continues with it.` };
+			} catch (e) {
+				return { text: explain(e, "Answering that question"), isError: true };
+			}
+		};
+		const held = deps.hold?.({
+			text: `**Answer "${task.name}"?**\n\n${quote(question.text)}\n\nAnswer: **${Array.isArray(given) ? given.join(", ") || "nothing ticked" : given}**`,
+			run,
+		});
+		if (held) return { text: held };
+		return run();
 	}
 
 	return {
@@ -674,12 +698,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 				seen.get(ref) ??
 				[...seen.values()].find((t) => t.name.toLowerCase() === ref.trim().toLowerCase());
 			const to = known ? `"${known.name}" in ${known.project}` : `"${ref}"`;
-			const body = String(input.message ?? "").slice(0, 1500);
-			const quoted = body
-				.split("\n")
-				.map((l) => `> ${l}`)
-				.join("\n");
-			return `**Message ${to}, outside this chat's project?**\n\n${quoted}`;
+			return `**Message ${to}, outside this chat's project?**\n\n${quote(String(input.message ?? ""))}`;
 		},
 		async call(name, args) {
 			switch (name) {

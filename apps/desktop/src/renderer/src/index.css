@@ -4490,6 +4490,50 @@ input {
 	font-size: 12px;
 	color: var(--text-dim);
 }
+/* A voice call with the Lead (lead-call.ts): a line above the composer. */
+.lead-call {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 4px 8px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.lead-call-words {
+	flex: 1;
+	min-width: 0;
+}
+.lead-call-dot {
+	flex: none;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--text-faint);
+}
+.lead-call.live .lead-call-dot {
+	background: var(--green);
+}
+.lead-call.connecting .lead-call-dot,
+.lead-call.live.muted .lead-call-dot {
+	background: var(--amber);
+}
+/* Heard but not sent to the Lead: one line, the words cut short. */
+.lead-call-held .lead-call-words {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.lead-call-end {
+	flex: none;
+	padding: 2px 8px;
+	border-radius: 6px;
+	font-size: 12px;
+	color: var(--text);
+	background: rgb(var(--ink) / 0.06);
+}
+.lead-call-end:hover {
+	background: rgb(var(--ink) / 0.12);
+}
 .lead-send {
 	flex: none;
 	display: inline-flex;
@@ -5409,4 +5453,96 @@ input {
 	margin-top: 18px;
 	min-width: 160px;
 	padding: 7px 16px;
+}
+
+/* ---- no project (components/GetStarted.tsx) ---- */
+/* In the board's place: centred in .content, and scrolls with it when the
+   window is shorter than the page (auto margins drop to 0, nothing clips). */
+.get-started {
+	margin: auto;
+	width: min(440px, 100%);
+	padding: 32px 24px;
+}
+.get-started h1 {
+	margin: 0;
+	font-size: 22px;
+	font-weight: 600;
+}
+.get-started-lede {
+	margin: 6px 0 28px;
+	color: var(--text-dim);
+	font-size: 13px;
+}
+.get-started-steps {
+	display: flex;
+	flex-direction: column;
+	gap: 22px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.get-started-steps li {
+	display: flex;
+	gap: 14px;
+}
+.get-started-num {
+	flex: none;
+	display: grid;
+	place-items: center;
+	width: 22px;
+	height: 22px;
+	border: 1px solid var(--border-hover);
+	border-radius: 50%;
+	color: var(--text-dim);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.get-started-step {
+	min-width: 0;
+	padding-top: 2px;
+}
+.get-started-step h2 {
+	margin: 0 0 4px;
+	font-size: 13px;
+	font-weight: 600;
+}
+.get-started-step p {
+	margin: 0;
+	color: var(--text-dim);
+	font-size: 13px;
+	line-height: 1.5;
+}
+.get-started-add {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-top: 12px;
+	padding: 6px 14px;
+	font-size: 13px;
+}
+.get-started-glyphs {
+	display: inline-flex;
+	gap: 4px;
+	margin-right: 6px;
+	vertical-align: -2px;
+}
+.get-started-more {
+	margin: 28px 0 0;
+	padding-top: 16px;
+	border-top: 1px solid var(--border);
+	color: var(--text-dim);
+	font-size: 12px;
+}
+.get-started-link,
+.get-started-link:hover {
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--text);
+	text-decoration: underline;
+	text-decoration-color: rgb(var(--ink) / 0.3);
+	text-underline-offset: 2px;
+}
+.get-started-link:hover {
+	text-decoration-color: currentColor;
 }

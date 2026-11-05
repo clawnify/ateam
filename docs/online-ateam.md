@@ -416,7 +416,9 @@ the desktop's Lead runs on that box too: **Run the Lead here** on the box's card
 desktop's **Settings → Boxes** makes the desktop's Lead chat that box's own, and then
 the phone and the Mac show one conversation, live. The Mac's own conversation stays put,
 and **Back to this Mac** shows it again. Emoji answers from the desktop need a **v28**
-box. With
+box, and a voice call with that Lead from the desktop needs a **v32** box: during a call
+the Lead's messages and answers to tasks wait for your tap, and an older box would send
+them unasked, so the call button stays off until the box is updated. With
 more than one box it's the Lead of the box you pick in **Boxes** (swipe the box's
 card, then **Lead**), or the box you used last until you pick one. That box is the
 phone's home, as your Mac is on the desktop: new tasks start there unless you pick
