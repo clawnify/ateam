@@ -56,6 +56,13 @@ makes:
   Hetzner's metadata service, the key included. A one-off key is spent by then; a reusable
   one could join other devices to your tailnet.
 
+Run end to end on 2026-11-05 from this change, in the iOS simulator against a real Hetzner
+account: Ateam answered on the box's tailnet port about two minutes after Create, the app
+connected by the box's name and opened Add project, Tailscale connected directly (UDP 41641
+through the firewall), and the box's public address answered neither SSH nor Ateam's port.
+Not yet exercised: the phone pairing itself before the engine starts, which needs a release
+with `ateam pair --add-device`, and a short name on a physical iPhone.
+
 The phone then reaches the box by its name on your tailnet (MagicDNS). If the name
 doesn't resolve on the phone, the page takes the address from the Tailscale app instead.
 **Delete the server** there deletes it on Hetzner, with the IPv4 and IPv6 addresses
