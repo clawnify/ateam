@@ -5,12 +5,12 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	type BoxWake,
 	CH,
 	type ClientFrame,
 	NEEDS_PAIRING,
 	type PairingGrantDTO,
 	type PairingInviteDTO,
+	type ProviderReport,
 	type ServerFrame,
 } from "@ateam/protocol";
 import type { Dispatcher } from "./dispatcher";
@@ -111,7 +111,7 @@ function connect(
 	box: ReturnType<typeof fakeEngine>,
 	guard: PairingGuard,
 	trusted = false,
-	extra: { wsAddr?: string | null; provider?: BoxWake | null } = {},
+	extra: { wsAddr?: string | null; provider?: ProviderReport | null } = {},
 ) {
 	const sent: ServerFrame[] = [];
 	let onFrame: (f: ClientFrame) => void = () => {};
@@ -290,7 +290,7 @@ describe("a connection to a box's network port", () => {
 	});
 
 	it("says which provider puts the box to sleep, so a client that added it by address can wake it", async () => {
-		const provider = { id: "sprites", box: { machine: "ateam-box" } };
+		const provider = { id: "sprites", box: { machine: "ateam-box" }, sleeps: true };
 		const c = connect(fakeEngine(), guardIn(), false, { provider });
 		expect(await c.call(CH.systemHello)).toMatchObject({ provider });
 		const none = connect(fakeEngine(), guardIn(), false, { provider: null });

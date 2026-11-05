@@ -66,6 +66,8 @@ export type EnvOption = {
 	asleep?: boolean;
 	/** A Tailscale box a provider puts to sleep: which one wakes it, and its machine. */
 	wake?: BoxWake | null;
+	/** Whether the box last said it sleeps when idle: false while it's always on. */
+	sleeps?: boolean | null;
 	/** Why the app's own last connect attempt failed. Outranks the other sub-labels:
 	 *  a box that couldn't be reached or couldn't be upgraded is the reason it looks
 	 *  idle, and it's the only one of these the user can act on. */
@@ -128,6 +130,11 @@ export function EnvironmentPicker({
 	const [boxValues, setBoxValues] = useState<Record<string, string>>({});
 	const [accountValues, setAccountValues] = useState<Record<string, string>>({});
 	const [replaceKey, setReplaceKey] = useState(false);
+	// Always on / Sleeps when idle for a box with a provider, and whether it was picked:
+	// only a pick is sent to the box, so adding one that exists already keeps how it
+	// sleeps. A box being added shows always on, as a new box starts (cli.ts).
+	const [alwaysOn, setAlwaysOn] = useState(true);
+	const [alwaysOnPicked, setAlwaysOnPicked] = useState(false);
 	const [wakeSaved, setWakeSaved] = useState<WakeStatus>({});
 	// The steps of waking and reaching the box this form is connecting.
 	const [steps, setSteps] = useState<ConnectStep[]>([]);
@@ -214,6 +221,8 @@ export function EnvironmentPicker({
 		setBoxValues(env?.wake?.box ?? {});
 		setAccountValues({});
 		setReplaceKey(false);
+		setAlwaysOn(env ? env.sleeps === false : true);
+		setAlwaysOnPicked(false);
 		setSteps([]);
 		setError(null);
 		setNeedsCode(false);
@@ -246,7 +255,8 @@ export function EnvironmentPicker({
 		setBusy(true);
 		setSteps([]);
 		try {
-			if (provider && (!keySaved || replaceKey)) {
+			// An always-on box is never woken, so it needs no key.
+			if (provider && !alwaysOn && (!keySaved || replaceKey)) {
 				const accountInputs = inputsAt(provider, "account");
 				if (!filled(provider, "account", accountValues)) {
 					throw new Error(
@@ -267,6 +277,8 @@ export function EnvironmentPicker({
 				setReplaceKey(false);
 			}
 			await onAdd(ep, wake, needsCode && code.trim() ? code.trim() : undefined);
+			// The pick goes to the box itself (box.alwaysOn), which says so from then on.
+			if (provider && alwaysOnPicked) await window.ateamHost.setBoxAlwaysOn(ep, alwaysOn);
 			// Connecting is what saves it, so only now is it a real option.
 			onChange(ep);
 			setEndpoint("");
@@ -600,13 +612,31 @@ export function EnvironmentPicker({
 										setError(null);
 									}}
 								>
-									<NativeSelectOption value="">Always on (no provider)</NativeSelectOption>
+									<NativeSelectOption value="">None</NativeSelectOption>
 									{WAKE_PROVIDERS.map((p) => (
 										<NativeSelectOption key={p.id} value={p.id} title={p.wake?.hint}>
 											{p.label}
 										</NativeSelectOption>
 									))}
 								</NativeSelect>
+								{provider ? (
+									<NativeSelect
+										wrapperClassName="w-full"
+										className={cn(formInput, "pr-8")}
+										aria-label="Whether this box sleeps when idle"
+										value={alwaysOn ? "on" : "sleeps"}
+										disabled={busy}
+										onKeyDown={formKeys}
+										onChange={(e) => {
+											setAlwaysOn(e.target.value === "on");
+											setAlwaysOnPicked(true);
+											setError(null);
+										}}
+									>
+										<NativeSelectOption value="on">Always on</NativeSelectOption>
+										<NativeSelectOption value="sleeps">Sleeps when idle</NativeSelectOption>
+									</NativeSelect>
+								) : null}
 								{provider &&
 									inputsAt(provider, "box").map((i) => (
 										<Input
@@ -620,7 +650,7 @@ export function EnvironmentPicker({
 											onChange={(e) => setBoxValues((v) => ({ ...v, [i.key]: e.target.value }))}
 										/>
 									))}
-								{provider && keySaved && !replaceKey ? (
+								{!provider || alwaysOn ? null : keySaved && !replaceKey ? (
 									<span className={formNote}>
 										{provider.label} key saved on this Mac.{" "}
 										<Button
@@ -632,7 +662,6 @@ export function EnvironmentPicker({
 										</Button>
 									</span>
 								) : (
-									provider &&
 									inputsAt(provider, "account").map((i) => (
 										<Input
 											key={i.key}
@@ -669,7 +698,11 @@ export function EnvironmentPicker({
 								{/* Sentences here (a provider's note, a whole error) wrap instead of
 								    truncating: they are read, not scanned. */}
 								{provider && !busy && !error ? (
-									<span className={formNote}>{provider.wake?.note}</span>
+									<span className={formNote}>
+										{alwaysOn
+											? "It never sleeps, so nothing needs a key to wake it. It's billed around the clock."
+											: provider.wake?.note}
+									</span>
 								) : null}
 								{busy && steps.length > 0 ? <ConnectSteps steps={steps} /> : null}
 								<span className={cn(formNote, error && "text-destructive")}>

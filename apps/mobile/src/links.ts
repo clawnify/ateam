@@ -20,7 +20,6 @@ import {
 	type ConnectStep,
 	failActive,
 	NEEDS_PAIRING,
-	providerById,
 	reconnectDelay,
 	relabelActive,
 	WOKEN_CONNECT_MS,
@@ -34,6 +33,7 @@ import {
 	cantWakeReason,
 	NEW_LINK,
 	NO_PROVIDER_HINT,
+	wakesThrough,
 } from "./boxes";
 import type { Connection } from "./connection";
 import type { Fleet } from "./fleet";
@@ -218,7 +218,10 @@ export function createLinks(deps: LinkDeps): Links {
 		const box = boxOf(key);
 		if (!box || paused || !deps.consented() || conns.has(key)) return;
 		const stale = clock.now() - (lastWakeAt.get(key) ?? 0) >= REWAKE_MS;
-		const wake = wakeNow || (deps.waitedOn(key) && (backoff.get(key) ?? 0) > 0 && stale);
+		// A box that said it's always on is woken only when asked for (wakeNow), never
+		// by a retry: a tap still can, should it have been put back to sleeping.
+		const sleeps = wakesThrough(box) !== undefined;
+		const wake = wakeNow || (sleeps && deps.waitedOn(key) && (backoff.get(key) ?? 0) > 0 && stale);
 		if (await connect(box, { wake })) return;
 		// A locked box waits for a pairing code: trying again changes nothing.
 		if (state[key]?.error === NEEDS_PAIRING) return;
@@ -274,7 +277,8 @@ export function createLinks(deps: LinkDeps): Links {
 		const step = (f: (steps: ConnectStep[]) => ConnectStep[]) =>
 			set(key, (l) => ({ ...l, steps: f(l.steps) }));
 		let stopTick: (() => void) | null = null;
-		const wakeable = providerById(box.provider?.id) !== undefined;
+		// Shown as one that sleeps: a provider, and the box hasn't said it's always on.
+		const wakeable = wakesThrough(box) !== undefined;
 		let waker: Waker | null = null;
 		let wakeError: string | null = null;
 		let cantWake: string | null = null;
@@ -284,7 +288,7 @@ export function createLinks(deps: LinkDeps): Links {
 			// Asked to wake a box this phone has nothing to wake it with (no provider, or
 			// no key or name for it): the one dial below is all there is, so a failure
 			// says why, on its card and on whatever waits on it.
-			if (opts.wake && !waker) {
+			if (opts.wake && !waker && box.sleeps !== false) {
 				cantWake = wakeable
 					? `${cantWakeReason(box)} Tap the box in Boxes to add it.`
 					: `${NO_PROVIDER_HINT} You can set it from the box's card in Boxes.`;
