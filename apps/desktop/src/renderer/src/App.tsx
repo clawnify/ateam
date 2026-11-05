@@ -318,6 +318,10 @@ export function App() {
 	// kept under: the project, or one shared set for All.
 	const scopeKey = allProjects ? "all" : activeProjectId;
 	const [tasksByProject, setTasksByProject] = useState<Record<string, TaskDTO[]>>({});
+	// Tasks the user deleted that the engine hasn't removed yet: left out of every
+	// list, but still kept up to date underneath, so a delete that fails shows the
+	// task again as it is now (see deleteTask).
+	const [deletingIds, setDeletingIds] = useState<ReadonlySet<string>>(() => new Set());
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 	const [selectedIssue, setSelectedIssue] = useState<GithubIssueDTO | null>(null);
 	const [composerIssue, setComposerIssue] = useState<GithubIssueDTO | null>(null);
@@ -586,11 +590,21 @@ export function App() {
 		// clear the selection if it was pointing at the now-gone task.
 		const offRemoved = window.ateam.events.onTaskRemoved((taskId) => {
 			setArchivedTick((n) => n + 1);
-			setTasksByProject((prev) => {
+			const drop = (prev: Record<string, TaskDTO[]>) => {
 				const next: Record<string, TaskDTO[]> = {};
 				for (const [pid, list] of Object.entries(prev)) {
 					next[pid] = list.filter((t) => t.id !== taskId);
 				}
+				return next;
+			};
+			setTasksByProject(drop);
+			// The archived list too: it re-lists on the tick above, but a deleted
+			// archived row would show again until that answer arrives.
+			setArchivedByProject(drop);
+			setDeletingIds((s) => {
+				if (!s.has(taskId)) return s;
+				const next = new Set(s);
+				next.delete(taskId);
 				return next;
 			});
 			setSelectedTaskId((cur) => (cur === taskId ? null : cur));
@@ -858,6 +872,7 @@ export function App() {
 				needsSetup: !c.known,
 				asleep: c.asleep,
 				wake: c.wake ?? null,
+				sleeps: c.sleeps ?? null,
 				// Set only for a connect the app made on its own, where there was no
 				// caller to show the error to — an upgrade that failed reads as an
 				// ordinary offline box without it.
@@ -887,16 +902,26 @@ export function App() {
 	]);
 
 	// Every loaded task, for the Lead chat to name and open the ones it touches.
-	const allTasks = useMemo(() => Object.values(tasksByProject).flat(), [tasksByProject]);
+	// A task being deleted is already gone from all of these.
+	const shown = (list: TaskDTO[]) =>
+		deletingIds.size ? list.filter((t) => !deletingIds.has(t.id)) : list;
+	const allTasks = useMemo(
+		() =>
+			Object.values(tasksByProject)
+				.flat()
+				.filter((t) => !deletingIds.has(t.id)),
+		[tasksByProject, deletingIds],
+	);
 
 	// The active card's board unions tasks from every engine that has the repo;
 	// under All, every card's.
-	const activeTasks =
+	const activeTasks = shown(
 		allProjects || activeCard
 			? scopeMembers.flatMap((m) => tasksByProject[m.projectId] ?? [])
 			: activeProjectId
 				? (tasksByProject[activeProjectId] ?? [])
-				: [];
+				: [],
+	);
 	// Archived tasks of the project Clean up opens on, which is where they are
 	// shown and brought back.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: archivedTick is the trigger, not a value the body reads: it re-counts after a card leaves the board.
@@ -941,8 +966,8 @@ export function App() {
 		const live = new Set(activeTasks.map((t) => t.id));
 		return searchProjectIds
 			.flatMap((id) => archivedByProject[id] ?? [])
-			.filter((t) => !live.has(t.id));
-	}, [sideView.showArchived, searchProjectIds, archivedByProject, activeTasks]);
+			.filter((t) => !live.has(t.id) && !deletingIds.has(t.id));
+	}, [sideView.showArchived, searchProjectIds, archivedByProject, activeTasks, deletingIds]);
 	const linkedIssues = new Set(
 		activeTasks.flatMap((task) => (task.issueUrl ? [task.issueUrl.toLowerCase()] : [])),
 	);
@@ -1540,10 +1565,6 @@ export function App() {
 			await loadProjects();
 		});
 
-	// Delete a task (and its worktree) straight from the sidebar. The row's menu
-	// item takes a second click to confirm, right under the pointer, then this
-	// reuses the same remove + force-fallback flow as the task panel menu.
-	// The onTaskRemoved event listener drops the row and clears the selection.
 	// Park a task on an outside party from the open task's ··· menu, or end the
 	// wait. The agent's own path is the `set_waiting` board tool; both meet in
 	// the engine.
@@ -1566,21 +1587,47 @@ export function App() {
 				until: Date.now() + days * 86_400_000,
 			});
 		});
-	const deleteTask = (t: TaskDTO) =>
-		run(async () => {
+	// Delete a task and its worktree, from the sidebar row's menu or the open
+	// task's (both take a second click to confirm). The task leaves the board and
+	// its panel closes right away: the engine's removal (kill the sessions, `git
+	// worktree remove`, delete the branch) takes seconds, and minutes for a
+	// worktree with seeded dependencies. It is only hidden until onTaskRemoved
+	// drops it, so a delete that fails, or a Force delete the user turns down,
+	// shows it again, and reopens its panel if nothing else was opened meanwhile.
+	const deleteTask = (t: TaskDTO) => {
+		if (deletingIds.has(t.id)) return;
+		const wasOpen = selectedTaskId === t.id;
+		setDeletingIds((s) => new Set(s).add(t.id));
+		if (wasOpen) setSelectedTaskId(null);
+		const showAgain = () => {
+			setDeletingIds((s) => {
+				const next = new Set(s);
+				next.delete(t.id);
+				return next;
+			});
+			if (wasOpen) setSelectedTaskId((cur) => cur ?? t.id);
+		};
+		void run(async () => {
 			try {
-				await window.ateam.tasks.remove({ id: t.id, deleteBranch: true });
+				try {
+					await window.ateam.tasks.remove({ id: t.id, deleteBranch: true });
+				} catch (e) {
+					const msg = e instanceof Error ? e.message : String(e);
+					if (!/modified or untracked|not fully merged|use --force/i.test(msg)) throw e;
+					// The row is gone already, so the question names the task.
+					const force = await confirm(
+						"Force delete?",
+						`"${t.name}" has uncommitted/untracked changes or an unmerged branch. Delete it anyway?`,
+					);
+					if (!force) return showAgain();
+					await window.ateam.tasks.remove({ id: t.id, deleteBranch: true, force: true });
+				}
 			} catch (e) {
-				const msg = e instanceof Error ? e.message : String(e);
-				if (!/modified or untracked|not fully merged|use --force/i.test(msg)) throw e;
-				const force = await confirm(
-					"Force delete?",
-					"This worktree has uncommitted/untracked changes or an unmerged branch. Delete it anyway?",
-				);
-				if (!force) return;
-				await window.ateam.tasks.remove({ id: t.id, deleteBranch: true, force: true });
+				showAgain();
+				throw e;
 			}
 		});
+	};
 
 	// Land a task in whatever the user is actually looking at: a task open
 	// full-width hands its panel to this one, the board opens it beside itself,
@@ -2365,10 +2412,8 @@ export function App() {
 							run={run}
 							ask={ask}
 							confirm={confirm}
-							reload={() => loadTasks(selectedTask.projectId)}
-							onClose={(taskId) =>
-								setSelectedTaskId((cur) => (taskId == null || cur === taskId ? null : cur))
-							}
+							onDelete={() => deleteTask(selectedTask)}
+							onClose={() => setSelectedTaskId(null)}
 						/>
 					) : view === "board" ? (
 						<>
@@ -2487,10 +2532,8 @@ export function App() {
 									run={run}
 									ask={ask}
 									confirm={confirm}
-									reload={() => loadTasks(selectedTask.projectId)}
-									onClose={(taskId) =>
-										setSelectedTaskId((cur) => (taskId == null || cur === taskId ? null : cur))
-									}
+									onDelete={() => deleteTask(selectedTask)}
+									onClose={() => setSelectedTaskId(null)}
 								/>
 							) : null}
 						</>
@@ -3475,7 +3518,7 @@ function TaskPanel({
 	run,
 	ask,
 	confirm,
-	reload,
+	onDelete,
 	onClose,
 }: {
 	task: TaskDTO;
@@ -3500,8 +3543,9 @@ function TaskPanel({
 	run: (fn: () => Promise<void>) => Promise<void>;
 	ask: (title: string, initial?: string) => Promise<string | null>;
 	confirm: (title: string, body?: string) => Promise<boolean>;
-	reload: () => void;
-	onClose: (taskId?: string) => void;
+	/** Delete this task and its worktree (App's deleteTask). */
+	onDelete: () => void;
+	onClose: () => void;
 }) {
 	// Which agent a relaunch uses when nothing is chosen: the one already on this
 	// task, else the first installed. Picking a different one is the composer's job.
@@ -4202,37 +4246,7 @@ function TaskPanel({
 							icon: Trash2,
 							danger: true,
 							confirm: "Click again to delete",
-							onClick: async () => {
-								try {
-									await window.ateam.tasks.remove({
-										id: task.id,
-										deleteBranch: true,
-									});
-								} catch (e) {
-									const msg = e instanceof Error ? e.message : String(e);
-									if (/modified or untracked|not fully merged|use --force/i.test(msg)) {
-										const ok = await confirm(
-											"Force delete?",
-											"This worktree has uncommitted/untracked changes or an unmerged branch. Delete it anyway?",
-										);
-										if (!ok) return;
-										await run(() =>
-											window.ateam.tasks.remove({
-												id: task.id,
-												deleteBranch: true,
-												force: true,
-											}),
-										);
-									} else {
-										await run(async () => {
-											throw e;
-										});
-										return;
-									}
-								}
-								onClose(task.id);
-								reload();
-							},
+							onClick: onDelete,
 						},
 					]}
 				/>

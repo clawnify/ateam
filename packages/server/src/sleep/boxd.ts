@@ -20,7 +20,7 @@
 // docs/providers/boxd.md. The in-VM `boxd` and `run` CLIs are already
 // authorised for their own machine, so none of this needs an API key.
 import { execFile } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { SleepDriver } from "./control";
@@ -69,17 +69,56 @@ export async function boxdMachineName(run: Exec = exec): Promise<string | null> 
 	}
 }
 
+/** This machine's own auto-hibernate timeout in seconds (0 = never), or null when
+ *  boxd won't say. `config list --json` answers numbers, where `get` says "60s". */
+export async function hibernateTimeoutOf(run: Exec): Promise<number | null> {
+	try {
+		const list: unknown = JSON.parse(await run("boxd", ["machine", "config", "list", "--json"]));
+		const value = (list as Record<string, unknown> | null)?.["auto-hibernate.timeout"];
+		return typeof value === "number" ? value : null;
+	} catch {
+		return null;
+	}
+}
+
 /** The driver when the engine runs inside a boxd VM, else null. */
 export async function boxdSleepDriver(opts: {
 	log: (line: string) => void;
 	exec?: Exec;
 	/** Where the loop-wake job is written. */
 	wakeScriptPath?: string;
+	/** Where the last auto-hibernate timeout Ateam set is kept, so a change made in
+	 *  boxd since can be told from Ateam's own. */
+	timeoutStatePath?: string;
+	/** The user turned hibernation off in boxd (auto-hibernate 0) since Ateam last
+	 *  set it, so it's theirs, not Ateam's own hold. (A new box starts always on in
+	 *  Ateam anyway: cli.ts.) */
+	onAlwaysOn?: () => void;
 }): Promise<SleepDriver | null> {
 	const run = opts.exec ?? exec;
 	const name = await boxdMachineName(run);
 	if (!name) return null;
 	const scriptPath = opts.wakeScriptPath ?? join(homedir(), ".ateam", "boxd", "loop-wake.run.ts");
+	const statePath =
+		opts.timeoutStatePath ?? join(homedir(), ".ateam", "boxd", "auto-hibernate-set");
+	// What Ateam last set, across restarts; null on a box upgraded from an engine that
+	// kept no record, where a 0 may be Ateam's own hold, so nothing is read into it.
+	let lastSet: number | null = null;
+	try {
+		if (existsSync(statePath)) {
+			const n = Number(readFileSync(statePath, "utf8").trim());
+			if (Number.isFinite(n)) lastSet = n;
+		}
+	} catch {
+		/* no record: as on an upgraded box */
+	}
+	const adoptIfOff = async (why: string) => {
+		if ((await hibernateTimeoutOf(run)) !== 0) return;
+		opts.log(
+			`[ateam] boxd machine ${name} was set never to hibernate ${why}: keeping it always on`,
+		);
+		opts.onAlwaysOn?.();
+	};
 	const canWake = await run("run", ["--help"]).then(
 		() => true,
 		() => false,
@@ -87,14 +126,26 @@ export async function boxdSleepDriver(opts: {
 	if (!canWake) {
 		opts.log("[ateam] this boxd image has no `run`: a box with a live loop will stay awake");
 	}
-	const setTimeoutS = (s: number) =>
-		run("boxd", ["machine", "config", "set", "auto-hibernate.timeout", String(s)]);
+	const setTimeoutS = async (s: number) => {
+		await run("boxd", ["machine", "config", "set", "auto-hibernate.timeout", String(s)]);
+		lastSet = s;
+		try {
+			mkdirSync(dirname(statePath), { recursive: true });
+			writeFileSync(statePath, `${s}\n`);
+		} catch {
+			/* only costs telling a later change in boxd from Ateam's own */
+		}
+	};
 	const suspendOff = () => run("boxd", ["machine", "config", "set", "auto-suspend.timeout", "0"]);
 	return {
 		where: `boxd machine ${name}`,
 		provider: { id: "boxd", box: { machine: name } },
 		canWakeForLoops: canWake,
 		hold: async () => {
+			// Ateam had let it sleep, and the timeout reads off now: someone turned
+			// hibernation off in boxd since, so it stays always on rather than being
+			// put back to sleeping at the next release.
+			if (lastSet !== null && lastSet > 0) await adoptIfOff("in boxd");
 			await suspendOff();
 			await setTimeoutS(0);
 		},

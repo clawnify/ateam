@@ -39,6 +39,10 @@ export interface BoxRow {
 	networkPort?: string | null;
 	/** The coding agents its engine finds, when connected. */
 	agents?: string[];
+	/** Whether it sleeps when idle, as its engine says while connected: false when it's
+	 *  always on, null when no provider puts it to sleep. Absent when not known: not
+	 *  connected, or an engine from before it said. */
+	sleeps?: boolean | null;
 	lastSeen: number | null;
 	/** Why the app's own last attempt to connect failed, if it did. */
 	failure: string | null;
@@ -81,6 +85,7 @@ export function boxRows(
 				pairingReady: version != null && version >= FEATURE_MIN_VERSION.pairing,
 				...(info && info.wsAddr !== undefined ? { networkPort: info.wsAddr } : {}),
 				...(info ? { agents: info.agents } : {}),
+				...(info && info.provider !== undefined ? { sleeps: info.provider?.sleeps ?? null } : {}),
 				lastSeen: c.lastSeen,
 				failure: failures[c.alias] ?? null,
 			};
