@@ -4499,8 +4499,15 @@ input {
 .lead-call.live .lead-call-dot {
 	background: var(--green);
 }
-.lead-call.connecting .lead-call-dot {
+.lead-call.connecting .lead-call-dot,
+.lead-call.live.muted .lead-call-dot {
 	background: var(--amber);
+}
+/* Heard but not sent to the Lead: one line, the words cut short. */
+.lead-call-held .lead-call-words {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .lead-call-end {
 	flex: none;

@@ -45,6 +45,9 @@ export const LEAD_CH = {
 	/** Open a voice call's session with OpenAI (GPT-Live) from this Mac's key:
 	 *  the window's WebRTC offer in, the answer out. The key never reaches the window. */
 	callStart: "lead:callStart",
+	/** Judge what a call heard: was each piece said to the Lead? By this Mac's
+	 *  decision model; null when there is none or it didn't answer in time. */
+	callJudge: "lead:callJudge",
 	evtEvent: "evt:lead:event",
 	evtHome: "evt:lead:home",
 } as const;
@@ -54,6 +57,15 @@ export const LEAD_CH = {
 export interface LeadCallTurn {
 	role: "user" | "assistant" | "developer";
 	text: string;
+}
+
+/** Whether a piece of speech a call heard was said to the Lead (callJudge). */
+export interface LeadCallVerdict {
+	/** The probability it was said to the Lead. */
+	p: number;
+	send: boolean;
+	/** What it most likely was, for the words the user sees when it isn't sent. */
+	kind: "lead" | "someone" | "background" | "unclear";
 }
 
 /** The channels a box's engine answers for its own Lead (v24; `react` since
@@ -319,4 +331,6 @@ export interface AteamLead {
 	 *  the chat so far. Answers OpenAI's SDP answer. Throws with words for the
 	 *  user (no OpenAI key, OpenAI refused). */
 	callStart(sdp: string, input: LeadCallTurn[]): Promise<{ sdp: string; sessionId: string }>;
+	/** `pieces`: what the call heard, split at pauses; `context`: the last turns. */
+	callJudge(pieces: string[], context: string): Promise<LeadCallVerdict[] | null>;
 }

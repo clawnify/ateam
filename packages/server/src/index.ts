@@ -6,6 +6,8 @@
 // (Electron ipcMain today, JSON-RPC over SSH next) forwards the engine's events
 // and adapts its own request channel to dispatcher.handle().
 
+export type { SpeechKind, SpeechVerdict } from "./call-gate";
+export { judgeSpeech } from "./call-gate";
 export type { ConnectionDTO, ConnectionRecord, HostTransport, SshHost } from "./connections";
 export {
 	boxSnapshotOf,
@@ -19,6 +21,9 @@ export {
 	saveBoxSnapshot,
 	sleepingAliases,
 } from "./connections";
+export { credentialsPath, openAiApiKey, openRouterApiKey } from "./credentials-file";
+export type { DecisionModel } from "./decision-model";
+export { currentDecisionModel } from "./decision-model";
 export type { CallContext, Dispatcher } from "./dispatcher";
 export { createDispatcher } from "./dispatcher";
 export type { Engine, EngineOptions } from "./engine";
@@ -39,6 +44,13 @@ export {
 export type { ServerTransport } from "./rpc";
 export { serveRpc } from "./rpc";
 export type { Services } from "./services";
+export {
+	DEFAULT_SETTINGS,
+	readSettings,
+	SETTINGS_VERSION,
+	settingsPath,
+	updateSettings,
+} from "./settings-file";
 export { socketClientTransport, socketServerTransport } from "./transport/socket";
 export type { SshClient, SshExecOptions, SshExecResult, SshOptions } from "./transport/ssh";
 export {
@@ -50,13 +62,3 @@ export {
 } from "./transport/ssh";
 export { streamClientTransport, streamServerTransport } from "./transport/stream";
 export { wsServerTransport } from "./transport/ws";
-export {
-	DEFAULT_SETTINGS,
-	readSettings,
-	SETTINGS_VERSION,
-	settingsPath,
-	updateSettings,
-} from "./settings-file";
-export { credentialsPath, openAiApiKey, openRouterApiKey } from "./credentials-file";
-export type { DecisionModel } from "./decision-model";
-export { currentDecisionModel } from "./decision-model";

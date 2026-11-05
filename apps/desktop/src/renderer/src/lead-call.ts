@@ -3,24 +3,57 @@
 // Lead's reply is spoken. The voice is OpenAI's GPT-Live over WebRTC; main
 // opens its session (main/lead/call.ts) so the key stays out of the window.
 //
+// The mic hears the whole room: the user talking to someone else, other
+// people, a TV. Only words said to the Lead may reach it, since the Lead acts
+// on what it is told. So every utterance the call hears, split at pauses, is
+// judged by the decision model (main → server call-gate.ts, fast and cheap)
+// before anything is sent; what isn't sent shows in the call bar, with Send,
+// and is never kept in the chat. The voice's own hand-off
+// (`session.delegation.created`) only says when the user finished a turn and
+// which hand-off the Lead's reply answers.
+//
 // A call is a state, not a connection. GPT-Live bills every second a session
-// is open, silence included, so after HOLD_AFTER_MS with nobody talking and
-// nothing pending the voice session closes and the call goes on hold: the mic
-// stays on here, and speech, or something worth telling (a task replied, the
-// Lead needs an approval), opens a new session seeded with the chat so far.
-// OpenAI's own guidance for agents that work a long time is the same: close
-// the voice during long work, reopen on a completion event (its "Voice latency
-// and cost" guide).
+// is open, silence included, so with nobody talking to the Lead and nothing
+// pending the voice session closes and the call goes on hold: the mic stays on
+// here, and speech, the Talk button, or something worth telling (a task
+// replied, the Lead needs an approval) opens a new session seeded with the
+// chat so far. OpenAI's own guidance for agents that work a long time is the
+// same: close the voice during long work, reopen on a completion event (its
+// "Voice latency and cost" guide).
 //
 // Known gap: words spoken while on hold, before the new session is up (about
 // 1.5 s), are not heard. The chime says when it is listening again.
-import type { AteamLead, LeadCallTurn, LeadEvent, LeadItem } from "@ateam/protocol";
+import type {
+	AteamLead,
+	LeadCallTurn,
+	LeadCallVerdict,
+	LeadEvent,
+	LeadItem,
+} from "@ateam/protocol";
 
 export type CallState = "off" | "connecting" | "live" | "hold";
 
-/** Quiet this long with nothing pending: close the voice session, stay on the call. */
+/** Nothing for the Lead this long, the room quiet, nothing pending: hold. */
 export const HOLD_AFTER_MS = 30_000;
-/** Mic level (RMS, 0..1) and duration that count as the user starting to talk on hold. */
+/** Woken by a sound and nothing for the Lead this long since: a false wake, back to hold. */
+export const FALSE_WAKE_MS = 10_000;
+/** Talk that isn't for the Lead (a TV, a conversation in the room) keeps the
+ *  session open at most this long after the last thing for the Lead. */
+export const CHATTER_CAP_MS = 90_000;
+/** This many false wakes within FALSE_WAKES_WINDOW_MS pause waking by sound. */
+const FALSE_WAKES = 3;
+const FALSE_WAKES_WINDOW_MS = 5 * 60_000;
+const VOICE_WAKE_PAUSE_MS = 10 * 60_000;
+/** A gap this long between transcript fragments splits two pieces of speech. */
+export const PIECE_GAP_MS = 800;
+/** No new words this long after some: the utterance is over, judge it. The
+ *  voice's hand-off came 0-1.2 s after the last word in tests, and usually wins. */
+const QUIET_JUDGE_MS = 1_500;
+/** A hand-off this soon after words went to the Lead without one is for them. */
+const LATE_HAND_OFF_MS = 3_000;
+/** Not sent, shown in the bar this long. */
+const HELD_MS = 30_000;
+/** Mic level (RMS, 0..1) and duration that count as someone starting to talk on hold. */
 const SPEECH_RMS = 0.03;
 const SPEECH_MS = 250;
 /** About 500 tokens, OpenAI's cap on one commentary append. */
@@ -66,6 +99,16 @@ export function turnsFrom(items: LeadItem[]): LeadCallTurn[] {
 	return turns;
 }
 
+/** The last few turns, for the gate to judge what it heard against. */
+export function contextFrom(items: LeadItem[], turns = 6): string {
+	const lines: string[] = [];
+	for (const it of items) {
+		if (it.kind === "user" && !it.to) lines.push(`user: ${speakable(it.text, 300)}`);
+		else if (it.kind === "assistant") lines.push(`lead: ${speakable(it.text, 300)}`);
+	}
+	return lines.slice(-turns).join("\n");
+}
+
 /** What to tell the user about something new in the chat they didn't ask for
  *  on this call, or null when it isn't worth interrupting for. */
 export function announcement(item: LeadItem): string | null {
@@ -89,10 +132,74 @@ export function announcement(item: LeadItem): string | null {
 	}
 }
 
-export class LeadCall {
-	state: CallState = "off";
+/** A transcript fragment, on the session's audio clock. */
+export interface Fragment {
+	text: string;
+	start: number;
+	end: number;
+}
+
+/** Fragments as pieces of speech, split where the gap between two is long. */
+export function piecesOf(frags: Fragment[], gapMs = PIECE_GAP_MS): string[] {
+	const pieces: string[] = [];
+	let cur = "";
+	let lastEnd = Number.NEGATIVE_INFINITY;
+	for (const f of frags) {
+		// Punctuation can arrive late, timed with the next words ("?" after a
+		// question): it ends the piece before it, never starts one.
+		if (/^[\p{P}\s]*$/u.test(f.text)) {
+			if (cur) cur += f.text;
+			else if (pieces.length) pieces[pieces.length - 1] += f.text;
+			continue;
+		}
+		if (cur && f.start - lastEnd >= gapMs) {
+			pieces.push(cur);
+			cur = "";
+		}
+		cur += f.text;
+		lastEnd = f.end;
+	}
+	if (cur) pieces.push(cur);
+	return pieces.map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean);
+}
+
+/** Whether a live call should go on hold now. */
+export function shouldHold(s: {
+	now: number;
+	/** The last thing for the Lead: words sent to it, the voice speaking, a wake. */
+	engagedAt: number;
+	/** The last words heard at all, for the Lead or not. */
+	heardAt: number;
+	/** Woken by a sound, and nothing for the Lead since. */
+	falseWake: boolean;
+}): boolean {
+	const idle = s.now - s.engagedAt;
+	const quiet = s.now - s.heardAt;
+	if (s.falseWake && idle > FALSE_WAKE_MS && quiet > 1_500) return true;
+	if (idle > HOLD_AFTER_MS && quiet > 3_000) return true;
+	return idle > CHATTER_CAP_MS;
+}
+
+/** Why something heard wasn't sent, in the user's words. */
+export function heldReason(kind: LeadCallVerdict["kind"]): string {
+	if (kind === "someone") return "sounded like you were talking to someone else";
+	if (kind === "background") return "sounded like a TV or someone nearby";
+	return "not sure it was for the Lead";
+}
+
+export interface CallView {
+	state: CallState;
 	/** Words for the user when the last attempt failed. */
-	error = "";
+	error: string;
+	muted: boolean;
+	/** Heard but not sent to the Lead: shown with Send, never kept. */
+	held: { text: string; kind: LeadCallVerdict["kind"] } | null;
+	/** Too many false wakes: speech won't pick up the call for a while. */
+	voiceWakePaused: boolean;
+}
+
+export class LeadCall {
+	view: CallView = { state: "off", error: "", muted: false, held: null, voiceWakePaused: false };
 	private listeners = new Set<() => void>();
 	private mic: MediaStream | null = null;
 	private pc: RTCPeerConnection | null = null;
@@ -103,52 +210,65 @@ export class LeadCall {
 	private ctx: AudioContext | null = null;
 	private vadTimer: ReturnType<typeof setInterval> | null = null;
 	private tickTimer: ReturnType<typeof setInterval> | null = null;
+	private judgeTimer: ReturnType<typeof setTimeout> | null = null;
+	private heldTimer: ReturnType<typeof setTimeout> | null = null;
 	private unsub: (() => void) | null = null;
 	private items: LeadItem[] = [];
 	private seen = new Set<string>();
-	/** What the user has said since the last delegation. */
-	private heard = "";
-	/** Delegations waiting on the Lead's turn, oldest first; null for words the
-	 *  voice answered by itself, sent on to the Lead all the same. */
+	/** Heard and not judged yet. */
+	private frags: Fragment[] = [];
+	/** Hand-offs waiting on the Lead's turn, oldest first; null for words the
+	 *  gate sent without one. */
 	private pending: (string | null)[] = [];
-	/** A delegation came and its words are about to be sent. */
-	private delegating = false;
-	/** The voice began answering words it never delegated: they go to the Lead anyway. */
-	private unrelayed: ReturnType<typeof setTimeout> | null = null;
 	/** The Lead's text in the turn answering them, by item id. */
 	private reply = new Map<string, string>();
 	/** Said while no session was open: told once one is. */
 	private queued: string[] = [];
-	private lastActivity = 0;
+	private engagedAt = 0;
+	private heardAt = 0;
+	/** When words last went to the Lead. */
+	private sentAt = 0;
+	private wokeBySound = false;
+	private sentSinceWake = false;
+	private falseWakes: number[] = [];
+	private voiceWakeOffUntil = 0;
 	private loudSince = 0;
 	private n = 0;
 
 	constructor(private readonly lead: () => AteamLead) {}
 
+	get state(): CallState {
+		return this.view.state;
+	}
+
 	subscribe(cb: () => void): () => void {
 		this.listeners.add(cb);
 		return () => this.listeners.delete(cb);
 	}
-	private set(state: CallState, error = this.error): void {
-		this.state = state;
-		this.error = error;
+	private update(patch: Partial<CallView>): void {
+		this.view = { ...this.view, ...patch };
 		for (const cb of this.listeners) cb();
 	}
 
 	/** From a click: the mic asks for permission now. */
 	async start(): Promise<void> {
 		if (this.state !== "off") return;
-		this.set("connecting", "");
+		this.update({ state: "connecting", error: "", held: null, muted: false });
 		try {
 			const snap = await this.lead().snapshot();
 			this.items = snap.items;
 			this.seen = new Set(snap.items.map((i) => i.id));
+			// Warm the decision model: its first call of a session is the slow one.
+			void this.lead()
+				.callJudge(["Hello."], "")
+				.catch(() => null);
 			this.mic = await navigator.mediaDevices.getUserMedia({
 				audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
 			});
 			this.unsub = this.lead().onEvent((e) => this.onLead(e));
 			this.listen();
 			this.tickTimer = setInterval(() => this.tick(), 1000);
+			this.wokeBySound = false;
 			await this.open();
 		} catch (e) {
 			this.hangUp(words(e));
@@ -162,26 +282,45 @@ export class LeadCall {
 		this.mic = null;
 		this.unsub?.();
 		this.unsub = null;
-		if (this.vadTimer) clearInterval(this.vadTimer);
-		if (this.tickTimer) clearInterval(this.tickTimer);
-		this.vadTimer = this.tickTimer = null;
+		for (const t of [this.vadTimer, this.tickTimer]) if (t) clearInterval(t);
+		for (const t of [this.judgeTimer, this.heldTimer]) if (t) clearTimeout(t);
+		this.vadTimer = this.tickTimer = this.judgeTimer = this.heldTimer = null;
 		void this.ctx?.close();
 		this.ctx = null;
 		this.pending = [];
 		this.reply.clear();
 		this.queued = [];
-		this.heard = "";
-		if (this.unrelayed) clearTimeout(this.unrelayed);
-		this.unrelayed = null;
-		this.delegating = false;
-		this.set("off", error);
+		this.frags = [];
+		this.update({ state: "off", error, held: null, muted: false });
+	}
+
+	/** Nothing from the mic leaves this Mac while muted. */
+	setMuted(muted: boolean): void {
+		for (const t of this.mic?.getAudioTracks() ?? []) t.enabled = !muted;
+		this.update({ muted });
+	}
+
+	/** The Talk button on hold: pick the call up. */
+	talk(): void {
+		this.wokeBySound = false;
+		this.voiceWakeOffUntil = 0;
+		this.update({ voiceWakePaused: false });
+		this.wake();
+	}
+
+	/** Send what was held back after all: the user says it was for the Lead. */
+	sendHeld(): void {
+		const held = this.view.held;
+		if (!held) return;
+		this.update({ held: null });
+		this.toLead(null, held.text);
 	}
 
 	// ---- the voice session ------------------------------------------------------
 
 	private async open(): Promise<void> {
 		if (!this.mic) return;
-		this.set("connecting");
+		this.update({ state: "connecting" });
 		const pc = new RTCPeerConnection();
 		this.pc = pc;
 		this.audio ??= Object.assign(new Audio(), { autoplay: true });
@@ -210,8 +349,9 @@ export class LeadCall {
 		await pc.setRemoteDescription({ type: "answer", sdp: answer.sdp });
 		await ready;
 		if (this.pc !== pc) return;
-		this.lastActivity = Date.now();
-		this.set("live", "");
+		this.engagedAt = Date.now();
+		this.sentSinceWake = false;
+		this.update({ state: "live", error: "" });
 		for (const text of this.queued.splice(0)) this.send("session.commentary.append", null, text);
 	}
 
@@ -221,6 +361,7 @@ export class LeadCall {
 		const dc = this.dc;
 		this.pc = this.dc = null;
 		this.started = null;
+		this.frags = [];
 		if (!pc) return;
 		if (dc?.readyState === "open") {
 			const done = new Promise<void>((r) => {
@@ -235,8 +376,21 @@ export class LeadCall {
 	}
 
 	private async toHold(): Promise<void> {
-		this.set("hold");
+		if (this.wokeBySound && !this.sentSinceWake) this.falseWake();
+		this.update({ state: "hold" });
 		await this.closeSession();
+	}
+
+	/** A sound woke the call and nothing for the Lead came of it. Too many in a
+	 *  row (a TV, a busy room): stop waking by sound for a while. */
+	private falseWake(): void {
+		const now = Date.now();
+		this.falseWakes = [...this.falseWakes.filter((t) => now - t < FALSE_WAKES_WINDOW_MS), now];
+		if (this.falseWakes.length >= FALSE_WAKES) {
+			this.falseWakes = [];
+			this.voiceWakeOffUntil = now + VOICE_WAKE_PAUSE_MS;
+			this.update({ voiceWakePaused: true });
+		}
 	}
 
 	/** Reopen from hold, with a chime so the user knows it hears them again. */
@@ -246,20 +400,23 @@ export class LeadCall {
 		this.open().catch((e) => {
 			// Couldn't reopen: stay on hold and say why.
 			void this.closeSession();
-			this.set("hold", words(e));
+			this.update({ state: "hold", error: words(e) });
 		});
 	}
 
 	private send(type: string, delegationId: string | null, content: string): void {
 		if (this.dc?.readyState !== "open") {
-			this.queued.push(content);
-			this.wake();
+			if (type === "session.commentary.append") {
+				this.queued.push(content);
+				this.wokeBySound = false;
+				this.wake();
+			}
 			return;
 		}
 		this.dc.send(
 			JSON.stringify({ type, event_id: this.id("c"), delegation_id: delegationId, content }),
 		);
-		this.lastActivity = Date.now();
+		if (type === "session.commentary.append") this.engagedAt = Date.now();
 	}
 
 	private id(p: string): string {
@@ -272,29 +429,23 @@ export class LeadCall {
 				this.started?.();
 				break;
 			case "session.input_transcript.delta":
-				this.heard += String(ev.delta ?? "");
-				this.lastActivity = Date.now();
+				this.frags.push({
+					text: String(ev.delta ?? ""),
+					start: Number(ev.start_ms ?? 0),
+					end: Number(ev.end_ms ?? 0),
+				});
+				this.heardAt = Date.now();
+				this.judgeSoon(QUIET_JUDGE_MS);
 				break;
 			case "session.output_transcript.delta":
-				this.lastActivity = Date.now();
-				// The call is with the Lead: words the voice answers by itself still
-				// go into the chat, unless a delegation for them follows.
-				if (this.heard.trim() && !this.delegating && !this.unrelayed)
-					this.unrelayed = setTimeout(() => {
-						this.unrelayed = null;
-						if (!this.delegating && this.heard.trim()) this.delegate(null);
-					}, 700);
+				this.engagedAt = Date.now();
+				// The voice answering means the user's turn is over.
+				if (this.frags.length) this.judgeSoon(300);
 				break;
 			case "session.delegation.created": {
 				const id = String((ev.delegation as { id?: string } | undefined)?.id ?? "");
-				this.delegating = true;
-				if (this.unrelayed) clearTimeout(this.unrelayed);
-				this.unrelayed = null;
-				// The last words' transcript can land just after the delegation.
-				setTimeout(() => {
-					this.delegating = false;
-					this.delegate(id);
-				}, 400);
+				// The last words' transcript can land just after the hand-off.
+				this.judgeSoon(400, id);
 				break;
 			}
 			case "session.closed":
@@ -302,7 +453,7 @@ export class LeadCall {
 				// OpenAI ended it (its time limit, a dropped line): on hold, not off.
 				if (this.state === "live") {
 					void this.closeSession();
-					this.set("hold");
+					this.update({ state: "hold" });
 				}
 				break;
 			case "error":
@@ -311,21 +462,80 @@ export class LeadCall {
 		}
 	}
 
-	/** The user said something for the Lead: it goes into the chat as their message. */
-	private delegate(id: string | null): void {
-		const text = this.heard.replace(/\s+/g, " ").trim();
-		this.heard = "";
-		if (!text) {
-			if (id) this.send("session.commentary.append", id, "Sorry, I didn't catch that.");
+	/** Judge what was heard in `ms`, unless more words come first. A hand-off
+	 *  is never dropped by a later reschedule. */
+	private pendingHandOff: string | null = null;
+	private judgeSoon(ms: number, handOff?: string): void {
+		if (handOff) this.pendingHandOff = handOff;
+		if (this.judgeTimer) clearTimeout(this.judgeTimer);
+		this.judgeTimer = setTimeout(() => {
+			this.judgeTimer = null;
+			const id = this.pendingHandOff;
+			this.pendingHandOff = null;
+			void this.judge(id);
+		}, ms);
+	}
+
+	/** The gate: only words the decision model puts as said to the Lead go to it. */
+	private async judge(handOff: string | null): Promise<void> {
+		const pieces = piecesOf(this.frags);
+		this.frags = [];
+		if (!pieces.length) {
+			if (handOff) this.lateHandOff(handOff);
 			return;
 		}
-		this.pending.push(id);
+		const verdicts = await this.lead()
+			.callJudge(pieces, contextFrom(this.items))
+			.catch(() => null);
+		// No decision model (no key, turned off) or no answer in time: trust the
+		// voice's hand-off, and hold back what it didn't hand off.
+		const sent: string[] = [];
+		let held: CallView["held"] = null;
+		for (const [i, text] of pieces.entries()) {
+			const v = verdicts?.[i];
+			if (v ? v.send : !!handOff) sent.push(text);
+			else held = { text, kind: v?.kind ?? "unclear" };
+		}
+		if (held) this.hold(held);
+		if (sent.length) this.toLead(handOff, sent.join(" "));
+		else if (handOff) this.quiet(handOff);
+	}
+
+	/** A hand-off with no words left to judge: the quiet timer already sent
+	 *  them, without a hand-off, a moment before it came. The Lead's reply then
+	 *  answers this one. Otherwise it handed off nothing for the Lead. */
+	private lateHandOff(handOff: string): void {
+		const orphan = this.pending.lastIndexOf(null);
+		if (orphan >= 0 && Date.now() - this.sentAt < LATE_HAND_OFF_MS) this.pending[orphan] = handOff;
+		else this.quiet(handOff);
+	}
+
+	/** The voice handed off words that weren't for the Lead: it says nothing more. */
+	private quiet(handOff: string): void {
+		this.send(
+			"session.thinking.append",
+			handOff,
+			"That was not said to you: the user was talking to someone else, or it was background noise. Say nothing about it.",
+		);
+	}
+
+	private hold(held: NonNullable<CallView["held"]>): void {
+		if (this.heldTimer) clearTimeout(this.heldTimer);
+		this.heldTimer = setTimeout(() => this.update({ held: null }), HELD_MS);
+		this.update({ held });
+	}
+
+	/** Words for the Lead: into the chat as the user's message. */
+	private toLead(handOff: string | null, text: string): void {
+		this.sentSinceWake = true;
+		this.engagedAt = this.sentAt = Date.now();
+		this.pending.push(handOff);
 		this.lead()
 			.send(text)
 			.catch((e) => {
-				const at = this.pending.indexOf(id);
+				const at = this.pending.indexOf(handOff);
 				if (at >= 0) this.pending.splice(at, 1);
-				this.send("session.commentary.append", id, `The Lead didn't get that: ${words(e)}`);
+				this.send("session.commentary.append", handOff, `The Lead didn't get that: ${words(e)}`);
 			});
 	}
 
@@ -370,11 +580,16 @@ export class LeadCall {
 	// ---- hold and wake -------------------------------------------------------------
 
 	private tick(): void {
+		const now = Date.now();
+		if (this.view.voiceWakePaused && now >= this.voiceWakeOffUntil)
+			this.update({ voiceWakePaused: false });
 		if (this.state !== "live" || this.pending.length) return;
-		if (Date.now() - this.lastActivity > HOLD_AFTER_MS) void this.toHold();
+		const falseWake = this.wokeBySound && !this.sentSinceWake;
+		if (shouldHold({ now, engagedAt: this.engagedAt, heardAt: this.heardAt, falseWake }))
+			void this.toHold();
 	}
 
-	/** The mic's level, here in the window: on hold, the user starting to talk wakes the call. */
+	/** The mic's level, here in the window: on hold, someone starting to talk wakes the call. */
 	private listen(): void {
 		if (!this.mic) return;
 		this.ctx = new AudioContext();
@@ -383,19 +598,22 @@ export class LeadCall {
 		this.ctx.createMediaStreamSource(this.mic).connect(analyser);
 		const buf = new Float32Array(analyser.fftSize);
 		this.vadTimer = setInterval(() => {
+			if (this.state !== "hold" || this.view.muted || Date.now() < this.voiceWakeOffUntil) {
+				this.loudSince = 0;
+				return;
+			}
 			analyser.getFloatTimeDomainData(buf);
 			let sum = 0;
 			for (const v of buf) sum += v * v;
-			const loud = Math.sqrt(sum / buf.length) > SPEECH_RMS;
 			const now = Date.now();
-			if (!loud) {
+			if (Math.sqrt(sum / buf.length) <= SPEECH_RMS) {
 				this.loudSince = 0;
 				return;
 			}
 			this.loudSince ||= now;
-			if (this.state === "live") this.lastActivity = now;
-			else if (this.state === "hold" && now - this.loudSince >= SPEECH_MS) {
+			if (now - this.loudSince >= SPEECH_MS) {
 				this.loudSince = 0;
+				this.wokeBySound = true;
 				this.wake();
 			}
 		}, 50);

@@ -67,7 +67,7 @@ import {
 	shown,
 	unseen,
 } from "../lead-blocks";
-import { type CallState, leadCall } from "../lead-call";
+import { type CallView, heldReason, leadCall } from "../lead-call";
 import { type DraftRef, expandRefs, splitSent } from "../lead-refs";
 import { recordEmoji, topEmoji } from "../lib/emoji-use";
 import { taskDragProps } from "../task-drag";
@@ -1143,20 +1143,24 @@ let unsentRefs: DraftRef[] = [];
 const autoOpened = new Set<string>();
 
 /** The window's voice call with the Lead (one per window, lead-call.ts). */
-function useLeadCall(): { state: CallState; error: string } {
-	const key = useSyncExternalStore(
+function useLeadCall(): CallView {
+	return useSyncExternalStore(
 		(cb) => leadCall.subscribe(cb),
-		() => `${leadCall.state}\n${leadCall.error}`,
+		() => leadCall.view,
 	);
-	const [state, error = ""] = key.split("\n") as [CallState, string?];
-	return { state, error };
 }
 
-function callWords(state: CallState, error: string): string {
-	if (error) return error;
-	if (state === "connecting") return "Calling the Lead…";
-	if (state === "live") return "On a call with the Lead. Talk any time.";
-	if (state === "hold") return "On hold while it's quiet. Talk, or news from a task, picks it up.";
+function callWords(call: CallView): string {
+	if (call.error) return call.error;
+	if (call.state === "connecting") return "Calling the Lead…";
+	if (call.state === "live")
+		return call.muted
+			? "Muted: nothing leaves this Mac."
+			: "On a call with the Lead. Talk any time.";
+	if (call.state === "hold")
+		return call.voiceWakePaused
+			? "On hold. Lots of talk nearby, so speaking won't pick it up for now: press Talk."
+			: "On hold while it's quiet. Talk, or news from a task, picks it up.";
 	return "";
 }
 
@@ -1631,10 +1635,35 @@ export function LeadChat({
 					</div>
 				)}
 				{attachNote && <div className="lead-attach-note">{attachNote}</div>}
+				{call.held && (
+					<div className="lead-call lead-call-held">
+						<span className="lead-call-words">
+							Didn't send "{call.held.text}": {heldReason(call.held.kind)}.
+						</span>
+						<button type="button" className="lead-call-end" onClick={() => leadCall.sendHeld()}>
+							Send
+						</button>
+					</div>
+				)}
 				{(call.state !== "off" || call.error) && (
-					<output className={`lead-call ${call.state}`}>
+					<output className={`lead-call ${call.state}${call.muted ? " muted" : ""}`}>
 						{call.state !== "off" && <span className="lead-call-dot" aria-hidden="true" />}
-						<span className="lead-call-words">{callWords(call.state, call.error)}</span>
+						<span className="lead-call-words">{callWords(call)}</span>
+						{call.state === "hold" && (
+							<button type="button" className="lead-call-end" onClick={() => leadCall.talk()}>
+								Talk
+							</button>
+						)}
+						{call.state !== "off" && (
+							<button
+								type="button"
+								className="lead-call-end"
+								aria-pressed={call.muted}
+								onClick={() => leadCall.setMuted(!call.muted)}
+							>
+								{call.muted ? "Unmute" : "Mute"}
+							</button>
+						)}
 						{call.state !== "off" && (
 							<button type="button" className="lead-call-end" onClick={() => leadCall.hangUp()}>
 								Hang up

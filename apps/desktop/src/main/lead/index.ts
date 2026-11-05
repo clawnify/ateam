@@ -42,7 +42,7 @@ import {
 import type { Router } from "../backend";
 import { deliverFiles } from "../deliver-files";
 import type { Host } from "../host";
-import { startCall } from "./call";
+import { judgeCall, startCall } from "./call";
 import { type RemoteLead, remoteLead } from "./remote";
 
 export interface LeadDeps {
@@ -294,6 +294,9 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	// this Mac's OpenAI key, whichever machine the chat itself lives on.
 	ipcMain.handle(LEAD_CH.callStart, (_e, sdp: string, input: LeadCallTurn[]) =>
 		startCall(String(sdp), input),
+	);
+	ipcMain.handle(LEAD_CH.callJudge, (_e, pieces: unknown, context: unknown) =>
+		judgeCall(pieces, context),
 	);
 	ipcMain.handle(
 		LEAD_CH.home,
