@@ -7,8 +7,10 @@ import { hetznerProvider, type ProviderOptions } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useEffect, useRef, useState } from "react";
 import {
+	ActionSheetIOS,
 	ActivityIndicator,
 	Linking,
+	Platform,
 	Pressable,
 	ScrollView,
 	StatusBar,
@@ -85,24 +87,43 @@ function Help({ text, link, url }: { text: string; link: string; url: string }) 
 	);
 }
 
+/** A row that opens the system's own list to choose from (the action sheet on iOS):
+ *  an inline list of a dozen sizes was hard to scroll and to hit. Elsewhere, the list
+ *  opens below the row. `detail` adds a word to each choice (its price). */
 function Picker<T extends { slug: string; label: string }>({
 	label,
 	items,
 	value,
 	onPick,
+	detail,
 }: {
 	label: string;
 	items: T[];
 	value: string;
 	onPick: (slug: string) => void;
+	detail?: (item: T) => string | null;
 }) {
 	const [open, setOpen] = useState(false);
 	const current = items.find((i) => i.slug === value);
+	const shown = (i: T) => {
+		const d = detail?.(i);
+		return d ? `${i.label} · ${d}` : i.label;
+	};
+	const choose = () => {
+		if (Platform.OS !== "ios") return setOpen((o) => !o);
+		ActionSheetIOS.showActionSheetWithOptions(
+			{ title: label, options: [...items.map(shown), "Cancel"], cancelButtonIndex: items.length },
+			(i) => {
+				const item = items[i];
+				if (item) onPick(item.slug);
+			},
+		);
+	};
 	return (
 		<View>
 			<Pressable
 				style={styles.field}
-				onPress={() => setOpen((o) => !o)}
+				onPress={choose}
 				accessibilityRole="button"
 				accessibilityLabel={`${label}: ${current?.label ?? "none"}`}
 			>
@@ -122,7 +143,7 @@ function Picker<T extends { slug: string; label: string }>({
 							}}
 							accessibilityRole="button"
 						>
-							<Text style={styles.optionText}>{i.label}</Text>
+							<Text style={styles.optionText}>{shown(i)}</Text>
 							{i.slug === value ? <Feather name="check" size={15} color={C.ink} /> : null}
 						</Pressable>
 					))
@@ -444,7 +465,18 @@ export function CreateBoxScreen({
 											}
 										}}
 									/>
-									<Picker label="Size" items={sizes} value={size} onPick={setSize} />
+									<Picker
+										label="Size"
+										items={sizes}
+										value={size}
+										onPick={setSize}
+										detail={(t) => {
+											const m = t.monthly?.[location];
+											return m === undefined
+												? null
+												: `${m.toFixed(2)}${options.currency ? ` ${options.currency}` : ""} a month`;
+										}}
+									/>
 								</View>
 								{price ? <Text style={styles.price}>{price}, billed by Hetzner.</Text> : null}
 							</>
