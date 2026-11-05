@@ -1362,15 +1362,9 @@ export function App() {
 		setMcHighlightId(t.id);
 		setMcJump((j) => ({ id: t.id, seq: (j?.seq ?? 0) + 1 }));
 	};
-	// Clicking the task you're already focused on closes it, revealing the view
-	// underneath — the lit tab already tells you which one you'll land on. Only
-	// the sidebar toggles: a search hit or a board card means "take me there",
-	// never "take me away".
-	const toggleTask = (t: TaskDTO) => {
-		if (t.id === selectedTaskId && panelMode === "full") {
-			setSelectedTaskId(null);
-			return;
-		}
+	// A sidebar row only ever opens its task: clicking the one already open
+	// keeps it open (closing is the panel's ✕ or a view tab).
+	const openFromSidebar = (t: TaskDTO) => {
 		if (mcGridShown) return pointAtTile(t);
 		openTask(t);
 	};
@@ -1414,7 +1408,7 @@ export function App() {
 	// engine sends a removal for every write to an archived task (a git-status
 	// refresh is enough), and a removal closes the open panel.
 	const openRow = (t: TaskDTO) => {
-		if (t.archivedAt == null) return toggleTask(t);
+		if (t.archivedAt == null) return openFromSidebar(t);
 		void window.ateam.tasks
 			.setArchived(t.id, false)
 			.then(openTask, (e) =>
@@ -1547,8 +1541,9 @@ export function App() {
 			await loadProjects();
 		});
 
-	// Delete a task (and its worktree) straight from the sidebar. Confirm first,
-	// then reuse the same remove + force-fallback flow as the task panel menu.
+	// Delete a task (and its worktree) straight from the sidebar. The row's menu
+	// item takes a second click to confirm, right under the pointer, then this
+	// reuses the same remove + force-fallback flow as the task panel menu.
 	// The onTaskRemoved event listener drops the row and clears the selection.
 	// Park a task on an outside party from the open task's ··· menu, or end the
 	// wait. The agent's own path is the `set_waiting` board tool; both meet in
@@ -1574,11 +1569,6 @@ export function App() {
 		});
 	const deleteTask = (t: TaskDTO) =>
 		run(async () => {
-			const ok = await confirm(
-				"Delete task?",
-				`Permanently delete "${t.name}" and its worktree? This can't be undone.`,
-			);
-			if (!ok) return;
 			try {
 				await window.ateam.tasks.remove({ id: t.id, deleteBranch: true });
 			} catch (e) {
@@ -1958,7 +1948,7 @@ export function App() {
 									hint={l.enabled ? undefined : "Paused"}
 									active={task != null && task.id === sidebarSelectedId}
 									className={l.enabled ? undefined : "loop-paused"}
-									onClick={() => (task ? toggleTask(task) : goToView("loops"))}
+									onClick={() => (task ? openFromSidebar(task) : goToView("loops"))}
 								>
 									<Repeat size={16} strokeWidth={1.75} />
 									{task?.column === "needs_attention" && (
@@ -2143,7 +2133,7 @@ export function App() {
 													loop={l}
 													task={task}
 													selected={task != null && task.id === sidebarSelectedId}
-													onClick={() => (task ? toggleTask(task) : goToView("loops"))}
+													onClick={() => (task ? openFromSidebar(task) : goToView("loops"))}
 													onRunNow={() =>
 														window.ateam.loops.runNow(l.id).then(
 															(list) => {
@@ -3087,7 +3077,15 @@ function TaskRow({
 					label={`Actions for ${t.name}`}
 					icon={EllipsisVertical}
 					className="size-5 [&_svg:not([class*='size-'])]:size-3.5"
-					items={[{ label: "Delete task…", icon: Trash2, danger: true, onClick: onDelete }]}
+					items={[
+						{
+							label: "Delete task",
+							icon: Trash2,
+							danger: true,
+							confirm: "Click again to delete",
+							onClick: onDelete,
+						},
+					]}
 				/>
 			</span>
 		</div>
@@ -4204,6 +4202,7 @@ function TaskPanel({
 							label: "Remove task & worktree",
 							icon: Trash2,
 							danger: true,
+							confirm: "Click again to delete",
 							onClick: async () => {
 								try {
 									await window.ateam.tasks.remove({
