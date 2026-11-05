@@ -50,6 +50,7 @@ mac:
     NSDesktopFolderUsageDescription: Ateam opens project repositories and git worktrees you select on your Desktop.
     NSDocumentsFolderUsageDescription: Ateam opens project repositories and git worktrees you select in Documents.
     NSDownloadsFolderUsageDescription: Ateam opens project repositories and git worktrees you select in Downloads.
+    NSMicrophoneUsageDescription: Ateam listens while you are on a call with the Lead.
 # Notarize + staple after signing (uses keychain profile "ateam-notary";
 # skips gracefully if the profile doesn't exist yet).
 afterSign: scripts/notarize.cjs

@@ -1,0 +1,7 @@
+{
+  "name": "expo-tailnet",
+  "version": "1.0.0",
+  "description": "Whether this iPhone is on a tailnet right now (Ateam mobile)",
+  "main": "src/index.ts",
+  "private": true
+}

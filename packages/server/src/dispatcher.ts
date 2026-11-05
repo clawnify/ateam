@@ -26,6 +26,7 @@ import {
 	diff,
 	errorMessage,
 	fileDiff,
+	GitCoreError,
 	getOriginUrl,
 	removeTask as gitRemoveTask,
 	initRepository,
@@ -48,6 +49,7 @@ import {
 	type DirEntryDTO,
 	type KanbanColumn,
 	type MergeStrategy,
+	NO_GIT_IDENTITY,
 	PROTOCOL_VERSION,
 	type RegisterProjectOptions,
 	type SettingsPatch,
@@ -298,7 +300,15 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			// Mirrors the clone handler below, which creates its dest before registering.
 			if (opts?.init) {
 				if (!existsSync(repoPath)) mkdirSync(repoPath);
-				await initRepository(repoPath);
+				try {
+					await initRepository(repoPath);
+				} catch (err) {
+					// One sentence a client can match (NO_GIT_IDENTITY), not git's.
+					if (err instanceof GitCoreError && err.code === "NO_IDENTITY") {
+						throw new Error(NO_GIT_IDENTITY);
+					}
+					throw err;
+				}
 				// Give the new repo a GitHub origin in the same breath. Without one it is
 				// a dead end: no cross-engine identity to merge its copies by, and the
 				// composer refuses to put it on a box at all. Best-effort on purpose —
