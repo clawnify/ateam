@@ -516,6 +516,16 @@ export const repo = {
 			.run();
 	},
 
+	/** Messages that never reached their agent: no longer pending (a launch
+	 *  already stamped them; one that could not start is stamped now), with why. */
+	markPeerMessagesFailed(db: AteamDb, ids: string[], error: string, at = Date.now()): void {
+		if (ids.length === 0) return;
+		db.update(peerMessages)
+			.set({ deliveredAt: sql`coalesce(${peerMessages.deliveredAt}, ${at})`, error })
+			.where(inArray(peerMessages.id, ids))
+			.run();
+	},
+
 	/** Messages between two tasks (either direction) since `since`, newest first. */
 	listPeerMessagesBetween(db: AteamDb, a: string, b: string, since: number): PeerMessage[] {
 		return db

@@ -4,7 +4,7 @@
 // into one line each, with the tasks it touched as chips that open the task.
 import {
 	applyLeadEvent,
-	findLeadTask,
+	findLinkedTask,
 	type LeadAttachResult,
 	type LeadFile,
 	type LeadHome,
@@ -45,6 +45,7 @@ import {
 	type ClipboardEvent,
 	type FormEvent,
 	Fragment,
+	isValidElement,
 	type KeyboardEvent,
 	type ReactNode,
 	useCallback,
@@ -313,7 +314,7 @@ function TaskLink({
 	tasks: TaskDTO[];
 	onOpenTask: (t: TaskDTO) => void;
 }) {
-	const task = findLeadTask(tasks, target);
+	const task = findLinkedTask(tasks, target, textOf(label));
 	return (
 		<button
 			type="button"
@@ -327,6 +328,14 @@ function TaskLink({
 			<span className="lead-chip-name">{label}</span>
 		</button>
 	);
+}
+
+/** A link's words without their markup: `[**fix** login](task:…)` → "fix login". */
+function textOf(node: ReactNode): string {
+	if (typeof node === "string" || typeof node === "number") return String(node);
+	if (Array.isArray(node)) return node.map(textOf).join("");
+	if (isValidElement<{ children?: ReactNode }>(node)) return textOf(node.props.children);
+	return "";
 }
 
 /** The user's own words as sent: plain text, with the tasks they picked by

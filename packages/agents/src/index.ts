@@ -19,6 +19,7 @@ export {
 } from "./registry";
 export type { LabelOptions, TaskLabels } from "./tagging";
 export {
+	describeAttachments,
 	generateTaskLabels,
 	MAX_TAGS,
 	MAX_TITLE_CHARS,

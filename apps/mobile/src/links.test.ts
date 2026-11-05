@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { NEEDS_PAIRING, PROTOCOL_VERSION, WOKEN_CONNECT_MS } from "@ateam/protocol";
-import { awayOf, type BoxLink, boxKey } from "./boxes";
+import { awayOf, type BoxLink, boxKey, NO_PROVIDER_HINT } from "./boxes";
 import type { Connection } from "./connection";
 import { type Clock, createLinks, type LinkDeps, REWAKE_MS } from "./links";
 import type { SavedConnection } from "./storage";
@@ -157,6 +157,98 @@ test("a box someone waits on is woken, and woken again only once the last wake i
 	// ...until the retry that finds the last wake stale.
 	await h.fc.advance(2_000);
 	expect(h.wakes).toHaveLength(2);
+});
+
+test("a box asked for that this phone can't wake says why, rather than reading as asleep", async () => {
+	// A Sprite whose token isn't on this phone: there is no waker for it.
+	const h = harness({ wakerFor: async () => null });
+	h.waited.add(key(sleepy));
+	h.links.ensure(key(sleepy));
+	await settle();
+	h.calls[0]?.reject(new Error("Timed out reaching the box"));
+	await settle();
+	expect(h.state()[key(sleepy)]).toMatchObject({
+		state: "down",
+		asleep: false,
+		error:
+			"Timed out reaching the box. This phone has no Sprites API token to wake it with. Tap the box in Boxes to add it.",
+		wakeError:
+			"This phone has no Sprites API token to wake it with. Tap the box in Boxes to add it.",
+	});
+	// In the background it is asleep, as before: nobody asked, so nothing to explain.
+	const bg = harness({ wakerFor: async () => null });
+	bg.links.holdAll();
+	await settle();
+	bg.calls[1]?.reject(new Error("timed out"));
+	await settle();
+	expect(bg.state()[key(sleepy)]).toMatchObject({ state: "down", asleep: true, wakeError: null });
+});
+
+test("a box with no name at its provider says the name is missing", async () => {
+	const unnamed: SavedConnection = { ...sleepy, provider: { id: "sprites", box: { machine: "" } } };
+	const h = harness({ wakerFor: async () => null });
+	h.setBoxes([unnamed]);
+	void h.links.connect(unnamed, { wake: true });
+	await settle();
+	h.calls[0]?.reject(new Error("Timed out reaching the box"));
+	await settle();
+	expect(h.state()[key(unnamed)]?.wakeError).toBe(
+		"This phone doesn't have its name at Sprites, so it can't wake it. Tap the box in Boxes to add it.",
+	);
+});
+
+test("a box with no provider that doesn't answer when asked for says how to make it wakeable", async () => {
+	const h = harness();
+	h.waited.add(key(plain));
+	h.links.ensure(key(plain));
+	await settle();
+	h.calls[0]?.reject(new Error("Timed out reaching the box"));
+	await settle();
+	// The card keeps the plain failure (its tray says what to do); what waits on it says why.
+	expect(h.state()[key(plain)]).toMatchObject({
+		state: "down",
+		asleep: false,
+		error: "Timed out reaching the box",
+		wakeError: `${NO_PROVIDER_HINT} You can set it from the box's card in Boxes.`,
+	});
+	// A box nobody asked for has nobody waiting to tell.
+	const bg = harness();
+	bg.links.holdAll();
+	await settle();
+	bg.calls[0]?.reject(new Error("Timed out reaching the box"));
+	await settle();
+	expect(bg.state()[key(plain)]).toMatchObject({ state: "down", wakeError: null });
+});
+
+test("a box that says it's always on reads as offline, not asleep, and asks for no key", async () => {
+	const always: SavedConnection = { ...sleepy, sleeps: false };
+	// No key for it on this phone: a tap dials, fails plainly, and asks for nothing.
+	const h = harness({ wakerFor: async () => null });
+	h.setBoxes([always]);
+	void h.links.connect(always, { wake: true });
+	await settle();
+	h.calls[0]?.reject(new Error("Timed out reaching the box"));
+	await settle();
+	expect(h.state()[key(always)]).toMatchObject({
+		state: "down",
+		asleep: false,
+		error: "Timed out reaching the box",
+		wakeError: null,
+	});
+	expect(awayOf(h.state()[key(always)])).toBe("offline");
+	// With a key, a tap still wakes it: it may have been put back to sleeping since.
+	const k = harness();
+	k.setBoxes([always]);
+	void k.links.connect(always, { wake: true });
+	await settle();
+	expect(k.wakes).toEqual([key(always)]);
+	// A retry for it never does, even with its task open.
+	const r = harness({ dial: () => Promise.reject(new Error("timed out")) });
+	r.setBoxes([always]);
+	r.waited.add(key(always));
+	void r.links.reconnect(key(always));
+	await r.fc.advance(REWAKE_MS * 3);
+	expect(r.wakes).toEqual([]);
 });
 
 test("a socket refused before the connect resolves is a failed try, not a dropped box", async () => {

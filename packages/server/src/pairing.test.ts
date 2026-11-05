@@ -10,6 +10,7 @@ import {
 	NEEDS_PAIRING,
 	type PairingGrantDTO,
 	type PairingInviteDTO,
+	type ProviderReport,
 	type ServerFrame,
 } from "@ateam/protocol";
 import type { Dispatcher } from "./dispatcher";
@@ -110,7 +111,7 @@ function connect(
 	box: ReturnType<typeof fakeEngine>,
 	guard: PairingGuard,
 	trusted = false,
-	extra: { wsAddr?: string | null } = {},
+	extra: { wsAddr?: string | null; provider?: ProviderReport | null } = {},
 ) {
 	const sent: ServerFrame[] = [];
 	let onFrame: (f: ClientFrame) => void = () => {};
@@ -286,6 +287,22 @@ describe("a connection to a box's network port", () => {
 		const box = fakeEngine();
 		const c = connect(box, guardIn(), false, { wsAddr: "100.64.0.7:8787" });
 		expect(await c.call(CH.systemHello)).toMatchObject({ wsAddr: "100.64.0.7:8787" });
+	});
+
+	it("says which provider puts the box to sleep, so a client that added it by address can wake it", async () => {
+		const provider = { id: "sprites", box: { machine: "ateam-box" }, sleeps: true };
+		const c = connect(fakeEngine(), guardIn(), false, { provider });
+		expect(await c.call(CH.systemHello)).toMatchObject({ provider });
+		const none = connect(fakeEngine(), guardIn(), false, { provider: null });
+		expect(await none.call(CH.systemHello)).toMatchObject({ provider: null });
+		const unknown = connect(fakeEngine(), guardIn());
+		expect(await unknown.call(CH.systemHello)).not.toHaveProperty("provider");
+		// A locked box tells only a device it has admitted.
+		const guard = guardIn();
+		const owner = guard.store.lock("MacBook", "desktop");
+		const stranger = connect(fakeEngine(), guard, false, { provider });
+		expect(await stranger.call(CH.systemHello)).not.toHaveProperty("provider");
+		expect(await stranger.call(CH.systemHello, { token: owner.token })).toMatchObject({ provider });
 	});
 
 	it("over SSH, is never gated", async () => {

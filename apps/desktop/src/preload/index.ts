@@ -207,6 +207,7 @@ const host: AteamHost = {
 	boxReadiness: (alias) => ipcRenderer.invoke(HOST_CH.boxReadiness, alias),
 	updateBox: (alias) => ipcRenderer.invoke(HOST_CH.updateBox, alias),
 	phoneAccess: (alias) => ipcRenderer.invoke(HOST_CH.phoneAccess, alias),
+	setBoxAlwaysOn: (alias, on) => ipcRenderer.invoke(HOST_CH.boxAlwaysOn, alias, on),
 	githubAccess: (alias) => ipcRenderer.invoke(HOST_CH.githubAccess, alias),
 	connectGithub: (alias, token) => ipcRenderer.invoke(HOST_CH.connectGithub, alias, token),
 	checkGithub: (alias, repos) => ipcRenderer.invoke(HOST_CH.checkGithub, alias, repos),

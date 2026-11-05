@@ -6,6 +6,7 @@ import { repo } from "@ateam/db";
 import { createTestDb } from "../../db/test/helpers/test-db";
 import {
 	boxdMachineOf,
+	boxSleepsOf,
 	boxSnapshotOf,
 	endpointUrl,
 	forgetConnection,
@@ -159,6 +160,20 @@ describe("recordConnection", () => {
 		expect(h?.serverVersion).toBe("1.0.0");
 		expect(h?.agentsAvailable).toEqual(["claude", "codex"]);
 		expect(typeof h?.lastSeen).toBe("number");
+	});
+
+	it("keeps what a box last said about sleeping, until it says otherwise", () => {
+		const db = createTestDb();
+		const at = "100.94.46.10:8787";
+		recordConnection(db, { hostAlias: at, transport: "ws" });
+		// Never said (an older engine): not known.
+		expect(boxSleepsOf(db, at)).toBeNull();
+		recordConnection(db, { hostAlias: at, sleeps: false });
+		recordConnection(db, { hostAlias: at }); // a touch keeps it
+		expect(boxSleepsOf(db, at)).toBe(false);
+		expect(listConnections(db, writeConfig("")).find((c) => c.alias === at)?.sleeps).toBe(false);
+		recordConnection(db, { hostAlias: at, sleeps: true });
+		expect(boxSleepsOf(db, at)).toBe(true);
 	});
 });
 

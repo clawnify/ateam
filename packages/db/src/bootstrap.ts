@@ -183,6 +183,7 @@ export function bootstrap(db: SqliteExecutor): void {
 				last_seen INTEGER,
 				hidden INTEGER NOT NULL DEFAULT 0,
 				wake TEXT,
+				sleeps INTEGER,
 				snapshot TEXT,
 				created_at INTEGER
 			);
@@ -231,6 +232,8 @@ export function bootstrap(db: SqliteExecutor): void {
 		// Null for every box that predates it: no board seen yet to keep.
 		"ALTER TABLE hosts ADD COLUMN snapshot TEXT",
 		"ALTER TABLE hosts ADD COLUMN engine_release TEXT",
+		// Null for every box that predates it: none had said whether it sleeps.
+		"ALTER TABLE hosts ADD COLUMN sleeps INTEGER",
 		// Both null for every session that predates them, which reads correctly:
 		// no known conversation to resume, and no claim about how it ended — so
 		// history is never mistaken for tabs that were open at shutdown.

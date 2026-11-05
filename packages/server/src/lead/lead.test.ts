@@ -92,6 +92,8 @@ describe("lead tools", () => {
 		});
 		expect(res?.isError).toBeFalsy();
 		expect(res?.text).toContain("Nothing starts until they do");
+		// No id to link yet: a task: link to it would draw a dead chip.
+		expect(res?.text).toContain("no id until they create it");
 		expect(proposed).toEqual([
 			{
 				projectId: "p1",

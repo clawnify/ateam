@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, openSync, realpathSync, unlinkSync } from "node:
 import { connect, createServer, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { type AggregateBackend, CH, createAggregate } from "@ateam/protocol";
+import { type AggregateBackend, type BoxWake, CH, createAggregate } from "@ateam/protocol";
 import type { Dispatcher } from "./dispatcher";
 import { createDispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
@@ -38,8 +38,8 @@ import {
 	type RpcExtension,
 	serveRpc,
 } from "./rpc";
-import { readSettings } from "./settings-file";
-import { detectSleepDriver, type SleepControl, startSleepControl } from "./sleep";
+import { hasBoxChoice, idleSleepMinutesOf, readSettings, updateSettings } from "./settings-file";
+import { detectSleepDriver, providerReport, type SleepControl, startSleepControl } from "./sleep";
 import { reachableWsAddr } from "./tailnet";
 import { socketServerTransport } from "./transport/socket";
 import { wsServerTransport } from "./transport/ws";
@@ -65,6 +65,10 @@ let extensions: RpcExtension[] = [];
 // Where the network port listens (`<host>:<port>`), reported in hello for other
 // boxes to link to (cross-box), or null with no listener.
 let wsAddr: string | null = null;
+// The provider that puts this box to sleep and its name there, reported in hello so
+// a client that added the box by its address can wake it. Undefined until the
+// sleep driver's detection has answered, then null on a box no provider sleeps.
+let boxProvider: BoxWake | null | undefined;
 // The lock on the network port (pairing.ts): which devices may use the box over
 // the WebSocket. The unix socket (what `attach` relays over SSH) is never gated.
 const pairing: PairingGuard = {
@@ -99,6 +103,10 @@ async function runDaemon(): Promise<void> {
 	const LOCK_NEW_BOXES = false;
 	const fresh =
 		!existsSync(join(DATA_DIR, "ateam.sqlite")) && !existsSync(join(DATA_DIR, "grove.sqlite"));
+	// A new box starts always on, unless its file already says otherwise: billed while
+	// up, but nothing needs a key to wake it. A box that ran before keeps sleeping as
+	// it did until someone chooses (the phone's box form, the desktop's box page).
+	if (fresh && !hasBoxChoice()) updateSettings({ box: { alwaysOn: true } });
 	// The boxes this one links to (links.ts): its agents and its Lead reach them.
 	const links = new BoxLinks({ dataDir: DATA_DIR, log: (line) => console.log(line) });
 	const engine = await createEngine({
@@ -232,7 +240,12 @@ function serveClient(
 	trusted: boolean,
 ): void {
 	sleepControl?.touch();
-	serveRpc(engine, dispatcher, transport, extensions, { trusted, pairing, wsAddr });
+	serveRpc(engine, dispatcher, transport, extensions, {
+		trusted,
+		pairing,
+		wsAddr,
+		provider: providerReport(boxProvider, idleSleepMinutesOf(readSettings().settings)),
+	});
 }
 
 /**
@@ -246,7 +259,15 @@ async function maybeStartIdleSleep(
 	lead: ReturnType<typeof engineLead>,
 ): Promise<void> {
 	const log = (line: string) => console.log(line);
-	const driver = await detectSleepDriver(log);
+	const driver = await detectSleepDriver({
+		log,
+		// Set at the provider by the user (boxd: hibernation off, after Ateam had let
+		// it sleep): kept as this box's own choice, so Ateam stops putting it to sleep.
+		onAlwaysOn: () => {
+			updateSettings({ box: { alwaysOn: true } });
+		},
+	});
+	boxProvider = driver?.provider ?? null;
 	if (!driver) return;
 	log(`[ateam] on ${driver.where}: letting it sleep when idle`);
 	sleepControl = await startSleepControl(driver, {
@@ -270,7 +291,7 @@ async function maybeStartIdleSleep(
 			const due = [nextLoop(), nextWait].filter((t): t is number => t != null);
 			return due.length > 0 ? Math.min(...due) : null;
 		},
-		idleMinutes: () => readSettings().settings.engine.idleSleepMinutes,
+		idleMinutes: () => idleSleepMinutesOf(readSettings().settings),
 		log,
 	});
 }

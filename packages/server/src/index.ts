@@ -10,6 +10,7 @@ export type { SpeechKind, SpeechVerdict } from "./call-gate";
 export { judgeSpeech } from "./call-gate";
 export type { ConnectionDTO, ConnectionRecord, HostTransport, SshHost } from "./connections";
 export {
+	boxSleepsOf,
 	boxSnapshotOf,
 	boxWakeOf,
 	endpointUrl,
