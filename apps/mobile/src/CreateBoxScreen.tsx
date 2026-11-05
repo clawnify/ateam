@@ -426,7 +426,8 @@ export function CreateBoxScreen({
 					<View style={styles.column}>
 						<Text style={styles.intro}>
 							A server of your own on Hetzner Cloud. It sets itself up with Ateam, joins your
-							Tailscale network, and knows this phone, so you can go straight to your agents.
+							Tailscale network, and knows this phone. Then sign in to a coding agent on it, from
+							its terminal.
 						</Text>
 
 						<Text style={styles.eyebrow}>Hetzner</Text>
