@@ -2978,6 +2978,20 @@ input {
 .loop-form .comp-prompt {
 	width: 100%;
 }
+/* The loop form's foot holds more than the composer's (a schedule, a time, a
+   project pill under All projects, Cancel), so it wraps rather than push the
+   button past the dialog's edge. Cancel, the hint and the button move as one
+   group and stay on the right. */
+.loop-form .comp-foot {
+	flex-wrap: wrap;
+	row-gap: 8px;
+}
+.loop-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-left: auto;
+}
 .loop-auto {
 	display: inline-flex;
 	align-items: center;

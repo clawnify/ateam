@@ -403,26 +403,27 @@ export function LoopForm({
 						>
 							<Zap size={16} strokeWidth={1.75} />
 						</button>
-						<span className="spacer" />
-						<button type="button" className="navbtn" onClick={onCancel}>
-							<X size={14} /> Cancel
-						</button>
-						<span className="muted" style={{ fontSize: 11 }}>
-							⌘⏎
+						<span className="loop-actions">
+							<button type="button" className="navbtn" onClick={onCancel}>
+								<X size={14} /> Cancel
+							</button>
+							<span className="muted" style={{ fontSize: 11 }}>
+								⌘⏎
+							</span>
+							<button
+								type="button"
+								className="comp-go"
+								disabled={saving || !ready}
+								title={editing ? "Save this loop (⌘⏎)" : "Create this loop (⌘⏎)"}
+								onClick={() => void submit()}
+							>
+								{editing ? (
+									<Check size={15} strokeWidth={2.25} />
+								) : (
+									<ArrowUp size={15} strokeWidth={2.25} />
+								)}
+							</button>
 						</span>
-						<button
-							type="button"
-							className="comp-go"
-							disabled={saving || !ready}
-							title={editing ? "Save this loop (⌘⏎)" : "Create this loop (⌘⏎)"}
-							onClick={() => void submit()}
-						>
-							{editing ? (
-								<Check size={15} strokeWidth={2.25} />
-							) : (
-								<ArrowUp size={15} strokeWidth={2.25} />
-							)}
-						</button>
 					</div>
 					{error && (
 						<div className="loop-stat err">
