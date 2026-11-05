@@ -90,6 +90,7 @@ import { ChangesList, DiffStat } from "./components/Changes";
 import { CleanupDialog } from "./components/CleanupDialog";
 import { ConnectSteps } from "./components/ConnectSteps";
 import { FileDiffView } from "./components/FileDiffView";
+import { GetStarted } from "./components/GetStarted";
 import { GithubAccess } from "./components/GithubAccess";
 import { GithubIssueCard, GithubIssuePanel, NewIssueDialog } from "./components/GithubIssues";
 import { IconButton } from "./components/IconButton";
@@ -274,6 +275,10 @@ export function App() {
 	// hides the project switcher; null in the main multi-project dashboard.
 	const boundProjectId = useMemo(() => window.ateam.window.boundProjectId(), []);
 	const [projects, setProjects] = useState<ProjectDTO[]>([]);
+	// False until the first list lands: an empty `projects` before then means
+	// "not read yet", so the no-project button and Get started page wait for it
+	// instead of flashing at every launch.
+	const [projectsLoaded, setProjectsLoaded] = useState(false);
 	// projectId/taskId → owning engine alias (null = local). Learned by the main-process
 	// aggregate from every engine's reads; drives unification + per-task origin badges.
 	const [origins, setOrigins] = useState<Record<string, Alias>>({});
@@ -552,6 +557,9 @@ export function App() {
 			if (cur && scoped.some((p) => p.id === cur)) return cur;
 			return scoped[0]?.id ?? null;
 		});
+		// With the active project, in one render: loaded and no active project
+		// then means no project at all.
+		setProjectsLoaded(true);
 		// Drop task buckets for projects that vanished (e.g. a disconnected box).
 		setTasksByProject((prev) => {
 			const live = new Set(scoped.map((p) => p.id));
@@ -678,6 +686,10 @@ export function App() {
 	// Group the merged projects into one card per repo (same GitHub owner/name across
 	// engines), remembering each engine's projectId — the routing key for its tasks.
 	const unifiedProjects = useMemo(() => unifyProjects(projects, origins), [projects, origins]);
+	// Nothing on the board at all, so Get started takes the board's place. A
+	// detached window is one project, so never there.
+	const noProjects = projectsLoaded && !boundProjectId && unifiedProjects.length === 0;
+	const recheckAgents = useCallback(() => void window.ateam.agents.list().then(setAgents), []);
 	// The switcher lists them most recently switched to first (project-order.ts).
 	// `switchedTo` holds a switch until its card is on the board: a project just
 	// added arrives a render after it is selected.
@@ -1822,6 +1834,10 @@ export function App() {
 								color={boundProject?.color ?? null}
 								path={boundProject?.repoPath}
 							/>
+						) : !projectsLoaded ? (
+							// The row's height, held until the list says whether it is a
+							// switcher or an Add project button.
+							<div className="h-8" />
 						) : (
 							<ProjectSwitcher
 								cards={switcherCards}
@@ -1897,7 +1913,7 @@ export function App() {
 						<div className="rail-divider" />
 						<RailTile
 							label="New task"
-							hint={activeProjectId ? undefined : "Select a project first"}
+							hint={activeProjectId ? undefined : "Add a project first"}
 							onClick={newTask}
 							disabled={!activeProjectId}
 						>
@@ -1931,7 +1947,7 @@ export function App() {
 						<div className="rail-divider" />
 						<RailTile
 							label="New loop"
-							hint={activeProjectId ? undefined : "Select a project first"}
+							hint={activeProjectId ? undefined : "Add a project first"}
 							onClick={() => setLoopDialog({ editId: null })}
 							disabled={!activeProjectId}
 						>
@@ -2000,7 +2016,8 @@ export function App() {
 								<TaskPeekProvider>
 									<div className="side-list">
 										{!activeProjectId ? (
-											<div className="tree-empty">Select a project</div>
+											// activeProjectId is only empty while there is no project.
+											projectsLoaded && <div className="tree-empty">Add a project first</div>
 										) : visibleSidebarTasks.length === 0 ? (
 											<div className="tree-empty">
 												{sidebarTasks.length === 0
@@ -2370,6 +2387,13 @@ export function App() {
 							onClose={(taskId) =>
 								setSelectedTaskId((cur) => (taskId == null || cur === taskId ? null : cur))
 							}
+						/>
+					) : view === "board" && noProjects ? (
+						<GetStarted
+							agents={agents}
+							onAdd={addProject}
+							onRecheckAgents={recheckAgents}
+							onOpenBoxes={openLeadSettings}
 						/>
 					) : view === "board" ? (
 						<>
