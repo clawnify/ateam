@@ -4490,6 +4490,50 @@ input {
 	font-size: 12px;
 	color: var(--text-dim);
 }
+/* A voice call with the Lead (lead-call.ts): a line above the composer. */
+.lead-call {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 4px 8px;
+	font-size: 12px;
+	color: var(--text-dim);
+}
+.lead-call-words {
+	flex: 1;
+	min-width: 0;
+}
+.lead-call-dot {
+	flex: none;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--text-faint);
+}
+.lead-call.live .lead-call-dot {
+	background: var(--green);
+}
+.lead-call.connecting .lead-call-dot,
+.lead-call.live.muted .lead-call-dot {
+	background: var(--amber);
+}
+/* Heard but not sent to the Lead: one line, the words cut short. */
+.lead-call-held .lead-call-words {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.lead-call-end {
+	flex: none;
+	padding: 2px 8px;
+	border-radius: 6px;
+	font-size: 12px;
+	color: var(--text);
+	background: rgb(var(--ink) / 0.06);
+}
+.lead-call-end:hover {
+	background: rgb(var(--ink) / 0.12);
+}
 .lead-send {
 	flex: none;
 	display: inline-flex;
