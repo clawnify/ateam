@@ -18,6 +18,7 @@ import {
 	type ProjectDTO,
 	projectRepo,
 	relativeAge,
+	TASK_LINK_SCHEME,
 	type TaskDTO,
 	type TaskLastReplyDTO,
 	type TaskProposalDTO,
@@ -550,7 +551,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 		});
 		const what = kind === "task" ? "New task" : "New loop";
 		return {
-			text: `Proposed "${proposal.name}" in ${project.name}. ${w.decide(what)} Nothing starts until they do, and you hear what they decided with their next message: say in a line what you proposed and why, do not say it started, and do not wait for it.`,
+			text: `Proposed "${proposal.name}" in ${project.name}. ${w.decide(what)} Nothing starts until they do, and you hear what they decided with their next message: say in a line what you proposed and why, do not say it started, and do not wait for it. It has no id until they create it, so name it in plain words, not as a ${TASK_LINK_SCHEME} link.`,
 		};
 	}
 
