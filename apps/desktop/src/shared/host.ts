@@ -49,6 +49,8 @@ export const HOST_CH = {
 	pairingInvite: "host:pairingInvite",
 	pairingRevoke: "host:pairingRevoke",
 	pairingLock: "host:pairingLock",
+	/** Every held box in one QR for Ateam Go (Settings → Boxes → Pair your iPhone). */
+	phonePairing: "host:phonePairing",
 	crossBoxStatus: "host:crossBoxStatus",
 	crossBoxSet: "host:crossBoxSet",
 	/** Clone+register a repo onto a specific box (connect it first). */
@@ -177,6 +179,25 @@ export interface ConnectOptions {
 }
 
 /** Whether each provisioning secret is already saved (never the value itself). */
+/** Pair your iPhone: one `ateamgo://pair` link for every box this Mac holds. */
+export interface PhonePairing {
+	/** Null when the phone can reach none of them. */
+	link: string | null;
+	/** When the first of its codes runs out; null when it holds none. */
+	expiresAt: number | null;
+	/** Each held box, and how it goes on the phone (or why it doesn't). Boxes this
+	 *  Mac isn't connected to now aren't here. */
+	boxes: PhonePairingBox[];
+}
+
+export interface PhonePairingBox {
+	alias: string;
+	/** locked: in the link with a code. open: in it by its address alone. noPort:
+	 *  the phone can't reach it. failed: the box didn't answer (`error` says how). */
+	state: "locked" | "open" | "noPort" | "failed";
+	error?: string;
+}
+
 export interface SecretsStatus {
 	hetznerToken: boolean;
 	tailscaleAuthKey: boolean;
@@ -260,6 +281,9 @@ export interface AteamHost {
 	pairingRevoke(alias: string, id: string): Promise<PairingStatusDTO>;
 	/** Lock an open box to the devices paired with it, starting with this Mac. */
 	pairingLock(alias: string): Promise<PairingStatusDTO>;
+	/** The QR that puts every box this Mac holds on a phone: a fresh code for each
+	 *  locked one, the address alone for an open one. */
+	phonePairing(): Promise<PhonePairing>;
 	/** Whether the boxes reach each other (cross-box, v30), and how each one's
 	 *  links are doing. */
 	crossBoxStatus(): Promise<CrossBoxStatusDTO>;

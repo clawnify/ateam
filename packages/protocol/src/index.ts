@@ -1790,6 +1790,18 @@ export {
 	taskTags,
 } from "./task-tags";
 // A cap for a promise that can't be left to wait forever (an RPC has none of its own).
+export {
+	type BoxProvider,
+	buildCloudInit,
+	type CreatedServer,
+	type CreateServerInput,
+	HETZNER_LOCATIONS,
+	HETZNER_SIZES,
+	hetznerProvider,
+	INSTALL_SH_URL,
+	orderableServerTypes,
+	type ProviderOptions,
+} from "./provision";
 export { withTimeout } from "./timeout";
 // Reading an engine older than this client (the version gate is advisory now).
 export { NO_TRIAGE, tolerantRpc } from "./tolerate";

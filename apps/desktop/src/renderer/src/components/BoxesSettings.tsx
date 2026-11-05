@@ -6,6 +6,7 @@ import { useSetups } from "../lib/setups";
 import { BoxPage, BoxSetupPage, statusLine, useBoxActions, useBoxes } from "./BoxPage";
 import { CrossBox } from "./CrossBox";
 import { EnvironmentPicker } from "./EnvironmentPicker";
+import { PhonePairingPage } from "./PhonePairing";
 import {
 	Breadcrumb,
 	BreadcrumbItem,
@@ -14,7 +15,11 @@ import {
 	BreadcrumbPage,
 	BreadcrumbSeparator,
 } from "./ui/breadcrumb";
+import { Button } from "./ui/button";
 import { usePrompt } from "./usePrompt";
+
+/** Pair your iPhone's page: no box alias is this (they're ssh aliases or host:port). */
+const PHONE_PAGE = "\0phone";
 
 // Settings → Boxes: every box this Mac has used, one row each, with what is known about
 // it (its state, its engine) and a dot when one needs you. A row opens the box's own page
@@ -28,7 +33,7 @@ export function BoxesSettings({ title, intro }: { title: string; intro?: string 
 	const { rows, github, canUpdateSsh, load } = useBoxes();
 	const { ui: promptUi, confirm } = usePrompt();
 	const actions = useBoxActions(load, confirm);
-	// The box whose page is open; null shows the list.
+	// The box whose page is open; null shows the list, PHONE_PAGE Pair your iPhone.
 	const [page, setPage] = useState<string | null>(null);
 	const setups = useSetups();
 
@@ -69,6 +74,15 @@ export function BoxesSettings({ title, intro }: { title: string; intro?: string 
 	// Boxes being set up that aren't boxes yet: a row each, and a page.
 	const pending = setups.filter((s) => !rows.some((r) => r.alias === s.dest));
 	const openSetup = page && !open ? pending.find((s) => s.dest === page) : undefined;
+
+	if (page === PHONE_PAGE) {
+		return (
+			<>
+				{crumbs("Pair your iPhone")}
+				<PhonePairingPage rows={rows} onOpenBox={setPage} />
+			</>
+		);
+	}
 
 	if (openSetup) {
 		return (
@@ -116,15 +130,20 @@ export function BoxesSettings({ title, intro }: { title: string; intro?: string 
 							? "No boxes yet."
 							: "Machines that run your agents."}
 					</span>
-					<EnvironmentPicker
-						addOnly
-						environments={[]}
-						value={null}
-						onChange={() => {}}
-						onAdd={addTailscaleBox}
-						onInstall={installBox}
-						onSetUp={setPage}
-					/>
+					<span className="box-list-actions">
+						<Button size="xs" variant="outline" onClick={() => setPage(PHONE_PAGE)}>
+							Pair your iPhone
+						</Button>
+						<EnvironmentPicker
+							addOnly
+							environments={[]}
+							value={null}
+							onChange={() => {}}
+							onAdd={addTailscaleBox}
+							onInstall={installBox}
+							onSetUp={setPage}
+						/>
+					</span>
 				</div>
 				{rows.length > 1 ? <CrossBox confirm={confirm} /> : null}
 				{rows.length + pending.length > 0 ? (

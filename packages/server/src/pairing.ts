@@ -181,6 +181,21 @@ export class Pairings {
 		return true;
 	}
 
+	/** `ateam pair --add-device`: pair a device by the hash of a token it made itself.
+	 *  A box Ateam Go creates gets the hash in its cloud-init, so the phone is paired
+	 *  before it first connects and the token never leaves it. Locked or open stays as
+	 *  it is. False when that device is paired already. */
+	addDevice(tokenHash: string, label: unknown, kind: unknown): boolean {
+		if (!/^[0-9a-f]{64}$/.test(tokenHash)) {
+			throw new Error("That isn't a token hash (64 lowercase hex digits).");
+		}
+		const f = this.read();
+		if (f.devices.some((d) => sameHash(d.tokenHash, tokenHash))) return false;
+		f.devices.push({ ...this.device(label, kind, null), tokenHash });
+		this.write(f);
+		return true;
+	}
+
 	/** `ateam pair --unlock`: open the box again, for when no paired device is left. */
 	unlock(): void {
 		const f = this.read();
@@ -190,14 +205,18 @@ export class Pairings {
 
 	private add(f: PairingFile, label: unknown, kind: unknown): PairingGrantDTO {
 		const token = randomBytes(32).toString("base64url");
-		const device: PairedDeviceDTO = {
+		const device = this.device(label, kind, this.now());
+		f.devices.push({ ...device, tokenHash: sha256(token) });
+		return { token, device };
+	}
+
+	private device(label: unknown, kind: unknown, lastUsedAt: number | null): PairedDeviceDTO {
+		return {
 			id: randomUUID(),
 			label: typeof label === "string" && label.trim() ? label.trim().slice(0, 60) : "Device",
 			kind: kind === "desktop" || kind === "phone" || kind === "box" ? kind : "desktop",
 			createdAt: this.now(),
-			lastUsedAt: this.now(),
+			lastUsedAt,
 		};
-		f.devices.push({ ...device, tokenHash: sha256(token) });
-		return { token, device };
 	}
 }

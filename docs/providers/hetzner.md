@@ -35,6 +35,32 @@ your bill), then pick a region and a size from the account's live catalog.
 
 When the box is up, its page opens with what's left: GitHub, and signing in to an agent.
 
+**From Ateam Go, with no Mac:** Get started → **Create a box here**, or **No box yet?** on
+Add a Tailscale box. The same token, then a Tailscale auth key, which the phone needs
+(nobody would see the link to approve the box with), then a name, a place and a size, with
+what Hetzner bills for them. The phone has no SSH, so the box differs from one the Mac
+makes:
+
+- **It installs Ateam itself at first boot**, from its cloud-init: the same installer,
+  with `--service --tailscale`, run as the `ateam` user once Tailscale is up. Its output
+  is `~/ateam-install.log` on the box.
+- **It knows the phone before Ateam first starts.** The phone makes a token of its own and
+  puts only its sha256 in the cloud-init (`ATEAM_PAIR_DEVICE`, then `ateam pair
+  --add-device`). Locked or open stays as a new box would have it.
+- **No SSH key, and nothing in from the internet.** It sits behind a Hetzner firewall,
+  `ateam-tailnet-only`, made the first time, which lets in only Tailscale's direct
+  connections (UDP 41641); cloud-init turns password logins off. Hetzner emails a root
+  password for a server made without a key: it works only in Hetzner's web console, which
+  is where to look if the install fails.
+- **Make the auth key one-off.** Any process on the box can read its cloud-init back from
+  Hetzner's metadata service, the key included. A one-off key is spent by then; a reusable
+  one could join other devices to your tailnet.
+
+The phone then reaches the box by its name on your tailnet (MagicDNS). If the name
+doesn't resolve on the phone, the page takes the address from the Tailscale app instead.
+**Delete the server** there deletes it on Hetzner, with the IPv4 and IPv6 addresses
+Hetzner made for it, which bill on their own.
+
 **By hand:** create a **CX23** (x86) or **CAX11** (Arm64) — 2 vCPU / 4 GB / 40 GB —
 on Ubuntu with your SSH key attached, then follow
 [`../online-ateam.md`](../online-ateam.md) from step 0. Size for agents, not for the

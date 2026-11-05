@@ -79,8 +79,10 @@ import {
 } from "./src/boxes";
 import { Composer, type ComposerSubmit, type RunOn } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
+import { CreateBoxScreen } from "./src/CreateBoxScreen";
+import { GetStartedScreen } from "./src/GetStartedScreen";
 import { connect, mobileNative, redeemPairing } from "./src/connection";
-import { pairTarget, parsePairLink } from "./src/pair-link";
+import { pairTarget, parsePairLinks } from "./src/pair-link";
 import { demoConnection } from "./src/demo";
 import { type Board, createFleet, type Fleet, pickProject } from "./src/fleet";
 import { GithubAccessScreen } from "./src/GithubAccessScreen";
@@ -124,6 +126,7 @@ import { type Tab, TabStrip } from "./src/TabStrip";
 import { TerminalScreen } from "./src/TerminalScreen";
 import { STATUS_BAR, TopFade } from "./src/TopFade";
 import { sortTasks } from "./src/task-order";
+import { useBoxCreation } from "./src/useBoxCreation";
 import { useLeadBadge } from "./src/useLeadBadge";
 import { onReminderTap, syncReminders } from "./src/wait-notifications";
 import type { ReminderData } from "./src/wait-reminders";
@@ -333,8 +336,10 @@ function ConnectionScreen({
 	setHost,
 	setPort,
 	onConnect,
-	onBack,
 	onBackToList,
+	backLabel,
+	canDisconnect,
+	onCreate,
 	editing,
 	onDisconnect,
 	onDemo,
@@ -382,9 +387,13 @@ function ConnectionScreen({
 	alwaysOn: boolean;
 	onAlwaysOn: (on: boolean) => void;
 	onConnect: () => void;
-	onBack: () => void;
-	/** Back to the Boxes list, when there is one (src/BoxesScreen.tsx). */
-	onBackToList: (() => void) | null;
+	/** Back to the Boxes list (src/BoxesScreen.tsx), or Get started with no box yet. */
+	onBackToList: () => void;
+	backLabel: string;
+	/** No box is saved and the demo is connected: Disconnect leaves it. */
+	canDisconnect: boolean;
+	/** Create a box on Hetzner instead (not while editing one). */
+	onCreate: (() => void) | null;
 	/** Editing a saved box rather than adding one. */
 	editing: boolean;
 	onDisconnect: () => void;
@@ -415,17 +424,9 @@ function ConnectionScreen({
 		<View style={styles.root}>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
 			<View style={styles.navBar}>
-				{onBackToList ? (
-					<Pressable onPress={onBackToList} hitSlop={8}>
-						<Text style={styles.backText}>‹ Boxes</Text>
-					</Pressable>
-				) : connected ? (
-					<Pressable onPress={onBack} hitSlop={8}>
-						<Text style={styles.backText}>‹ Board</Text>
-					</Pressable>
-				) : (
-					<LogoMark />
-				)}
+				<Pressable onPress={onBackToList} hitSlop={8}>
+					<Text style={styles.backText}>{backLabel}</Text>
+				</Pressable>
 				{/* The desktop's words for the same thing (EnvironmentPicker.tsx). */}
 				<Text style={styles.navTitle} numberOfLines={1}>
 					{editing ? "Edit box" : "Add a Tailscale box"}
@@ -457,6 +458,16 @@ function ConnectionScreen({
 							<Text style={styles.scanText}>
 								Box locked to your devices? Scan the code from Pair a phone on your Mac.
 							</Text>
+						</Pressable>
+					) : null}
+					{onCreate ? (
+						<Pressable
+							style={[styles.formCard, styles.scanRow]}
+							onPress={onCreate}
+							accessibilityRole="button"
+						>
+							<Feather name="server" size={18} color={C.ink} />
+							<Text style={styles.scanText}>No box yet? Create one on Hetzner from here.</Text>
 						</Pressable>
 					) : null}
 					<View style={styles.eyebrowRow}>
@@ -613,16 +624,16 @@ function ConnectionScreen({
 					) : null}
 
 					{/* On a phone with no box saved, the demo is all that's connected: this leaves it. */}
-					{connected && !onBackToList ? (
+					{canDisconnect ? (
 						<Pressable style={styles.disconnectBtn} onPress={onDisconnect} hitSlop={6}>
 							<Text style={styles.disconnectText}>Disconnect</Text>
 						</Pressable>
 					) : null}
 
 					<Text style={styles.formNote}>
-						The phone opens a WebSocket to your box's `ateam` listener over Tailscale — WireGuard is
-						the encryption and the auth boundary. Enable it on the box with{" "}
-						<Text style={styles.mono}>ATEAM_WS_ADDR=&lt;tailscale-ip&gt;:&lt;port&gt;</Text>.
+						The phone reaches Ateam on your box over Tailscale, at the address the box has there. To
+						open that port on a box: Set up phone access on its page in Ateam on a Mac, or run
+						Ateam's installer on it with <Text style={styles.mono}>--tailscale</Text>.
 					</Text>
 				</View>
 			</ScrollView>
@@ -1132,9 +1143,10 @@ function Shell({
 export default function App() {
 	useColorScheme(); // reserved: theme-aware later
 	const [view, setView] = useState<"connect" | "board">("connect");
-	// The connection screen shows the Boxes list (src/BoxesScreen.tsx), or the form
-	// for adding or editing one. With no saved boxes it is always the form.
-	const [connectScreen, setConnectScreen] = useState<"list" | "form">("list");
+	// The connection screen shows the Boxes list (src/BoxesScreen.tsx), Get started when
+	// there's no box yet (src/GetStartedScreen.tsx), the form for adding or editing one,
+	// or Create a box (src/CreateBoxScreen.tsx).
+	const [connectScreen, setConnectScreen] = useState<"list" | "form" | "create">("list");
 	const [boxes, setBoxes] = useState<SavedBox[]>([]);
 	const boxesRef = useRef<SavedBox[]>([]);
 	// The saved box the form is editing, by its key.
@@ -1715,6 +1727,33 @@ export default function App() {
 		[fleet, link, refresh],
 	);
 
+	// A box being created on Hetzner from here (src/useBoxCreation.ts): on the list as
+	// soon as it exists, and once it answers, the board, with Add a project open on it.
+	const boxCreation = useBoxCreation({
+		link,
+		label: PHONE_LABEL,
+		saveBox: (box, replaces) => commitBoxes(touchBox(boxesRef.current, box, Date.now(), replaces)),
+		removeBox: (key) => {
+			commitBoxes(removeBox(boxesRef.current, key));
+			forgetBox(key);
+		},
+		onConnected: (key) => {
+			boxCreation.dismiss();
+			landOnBoard.current = false;
+			setConnectScreen("list");
+			setView("board");
+			setBrowserKey(key);
+		},
+	});
+	// Nothing goes to Hetzner before the disclosure has been accepted, as for a box.
+	const startCreation = useCallback(
+		(spec: Parameters<typeof boxCreation.create>[0]) => {
+			if (consented.current) void boxCreation.create(spec);
+			else hooks.current.askConsent(() => void boxCreation.create(spec));
+		},
+		[boxCreation.create],
+	);
+
 	// The form's Always on / Sleeps when idle, sent to the box itself (box.alwaysOn
 	// there), which says which it is in hello from then on. Only to an engine that
 	// reports its provider: null means no provider sleeps it, and an older engine
@@ -1888,41 +1927,53 @@ export default function App() {
 		},
 		[link],
 	);
-	// `ateamgo://pair?host=…&port=…&code=…`: the QR a paired Mac shows (Settings →
-	// Boxes → Pair a phone), opened by the iPhone's Camera. Any app or web page can
-	// open a link like this, so nothing happens on its own: a malformed one is
-	// dropped, and a good one asks first, naming the box it would pair with (and
-	// save, if it wasn't on the list).
+	// `ateamgo://pair?…`: the QR a Mac shows (src/pair-link.ts), for one box or every
+	// box it holds, opened by the iPhone's Camera. Any app or web page can open a link
+	// like this, so nothing happens on its own: a malformed one is dropped, and a good
+	// one asks first, naming the boxes it would add (or pair, when they're locked).
 	const offerPairLink = useCallback(
 		(url: string | null): void => {
-			const link = url ? parsePairLink(url) : null;
-			if (!link) return;
-			const { box, code } = link;
+			const entries = url ? parsePairLinks(url) : null;
+			if (!entries?.length) return;
+			const where = entries.map((e) => `${e.box.host}:${e.box.port}`).join(", ");
 			Alert.alert(
-				"Pair with this box?",
-				`Ateam Go pairs with the box at ${box.host}:${box.port}, adding it to your boxes if it isn't there yet. Only go on if you just showed this code on your Mac.`,
+				entries.length === 1 ? "Pair with this box?" : `Add these ${entries.length} boxes?`,
+				`Ateam Go adds ${entries.length === 1 ? "the box at" : "the boxes at"} ${where}, pairing with the locked ones. Only go on if you just showed this code on your Mac.`,
 				[
 					{ text: "Cancel", style: "cancel" },
 					{
-						text: "Pair",
+						text: entries.length === 1 ? "Pair" : "Add them",
 						onPress: () =>
 							void (async () => {
 								await booted.current;
 								endDemo();
-								try {
+								const failed: string[] = [];
+								for (const entry of entries) {
 									// A box already on the list keeps what it was saved with.
-									await pairBox(pairTarget(boxesRef.current, link), code, true);
-									setView("board");
-								} catch (e) {
-									setError(e instanceof Error ? e.message : String(e));
-									setView("connect");
+									const box = pairTarget(boxesRef.current, entry);
+									try {
+										if (entry.code) await pairBox(box, entry.code, true);
+										else if (!(await link.connect(box, { wake: true, save: true }))) {
+											throw new Error(
+												link.get(boxKey(box)).error ?? "Couldn't connect to the box.",
+											);
+										}
+									} catch (e) {
+										const why = e instanceof Error ? e.message : String(e);
+										failed.push(entries.length === 1 ? why : `${entry.box.host}: ${why}`);
+									}
 								}
+								if (failed.length) {
+									setError(failed.join("\n"));
+									setConnectScreen("list");
+									setView("connect");
+								} else setView("board");
 							})(),
 					},
 				],
 			);
 		},
-		[pairBox, endDemo],
+		[pairBox, endDemo, link],
 	);
 	useEffect(() => {
 		void Linking.getInitialURL().then(offerPairLink);
@@ -2288,17 +2339,49 @@ export default function App() {
 	// A board to go back to: the saved boxes' (live, or as last seen), or the demo's.
 	const onBoard = demo.current || boxes.length > 0;
 	if (view === "connect") {
-		if (connectScreen === "list" && boxes.length > 0) {
+		const leading =
+			onBoard && !landOnBoard.current ? (
+				<Pressable onPress={leaveConnect} hitSlop={8}>
+					<Text style={styles.backText}>‹ Board</Text>
+				</Pressable>
+			) : (
+				<LogoMark />
+			);
+		const making = boxCreation.creation;
+		if (connectScreen === "create") {
+			return (
+				<CreateBoxScreen
+					creation={making}
+					onCreate={startCreation}
+					onReachAt={(host) => void boxCreation.reachAt(host)}
+					onDelete={() => void boxCreation.deleteServer()}
+					onStartOver={boxCreation.dismiss}
+					onBack={() => setConnectScreen("list")}
+				/>
+			);
+		}
+		if (connectScreen === "list" && boxes.length === 0) {
+			return (
+				<GetStartedScreen
+					leading={leading}
+					onScan={openScanner}
+					onCreate={() => setConnectScreen("create")}
+					creating={making && making.step !== "done" ? making.name : null}
+					onHaveBox={addBox}
+					onDemo={() => void startDemo()}
+					error={error}
+					scanner={scanner}
+				/>
+			);
+		}
+		if (connectScreen === "list") {
 			return (
 				<BoxesScreen
-					leading={
-						onBoard && !landOnBoard.current ? (
-							<Pressable onPress={leaveConnect} hitSlop={8}>
-								<Text style={styles.backText}>‹ Board</Text>
-							</Pressable>
-						) : (
-							<LogoMark />
-						)
+					leading={leading}
+					settingUp={
+						making?.serverId && making.step !== "done"
+							? { key: boxKey(making.box), onOpen: () => setConnectScreen("create") }
+							: null
 					}
 					boxes={boxes}
 					links={links}
@@ -2349,16 +2432,14 @@ export default function App() {
 				setHost={setHost}
 				setPort={setPort}
 				onConnect={() => void onConnect()}
-				onBack={leaveConnect}
-				onBackToList={
-					boxes.length > 0
-						? () => {
-								setEditingKey(null);
-								setError(null);
-								setConnectScreen("list");
-							}
-						: null
-				}
+				onBackToList={() => {
+					setEditingKey(null);
+					setError(null);
+					setConnectScreen("list");
+				}}
+				backLabel={boxes.length > 0 ? "‹ Boxes" : "‹ Back"}
+				canDisconnect={anyLive && boxes.length === 0}
+				onCreate={editingKey === null ? () => setConnectScreen("create") : null}
 				editing={editingKey !== null}
 				onDisconnect={onLeaveDemo}
 				onDemo={() => void startDemo()}

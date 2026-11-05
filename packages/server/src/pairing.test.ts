@@ -69,6 +69,32 @@ describe("the pairing store", () => {
 		expect(p.revoke(grant.device.id)).toBe(false);
 	});
 
+	it("pairs a device by its token's hash, leaving the box open or locked as it was", () => {
+		const d = dir();
+		const p = new Pairings(d);
+		const token = "t".repeat(43);
+		const hash = new Bun.CryptoHasher("sha256").update(token).digest("hex");
+		expect(p.addDevice(hash, "iPhone", "phone")).toBe(true);
+		expect(p.locked()).toBe(false);
+		expect(p.verify(token)).toMatchObject({ label: "iPhone", kind: "phone" });
+		// Again is a no-op, not a second device.
+		expect(p.addDevice(hash, "iPhone", "phone")).toBe(false);
+		expect(p.status(null).devices).toHaveLength(1);
+		// A locked box stays locked, and the device gets in.
+		const q = new Pairings(dir());
+		q.lockIfNew();
+		q.addDevice(hash, "iPhone", "phone");
+		expect(q.locked()).toBe(true);
+		expect(q.verify(token)?.label).toBe("iPhone");
+		expect(readFileSync(join(d, PAIRINGS_FILE), "utf8")).not.toContain(token);
+	});
+
+	it("refuses anything but a sha256 hex digest as a device's hash", () => {
+		const p = new Pairings(dir());
+		expect(() => p.addDevice("abc", "x", "phone")).toThrow("token hash");
+		expect(() => p.addDevice("A".repeat(64), "x", "phone")).toThrow("token hash");
+	});
+
 	it("fails closed on a damaged file", () => {
 		const d = dir();
 		writeFileSync(join(d, PAIRINGS_FILE), "{ not json");

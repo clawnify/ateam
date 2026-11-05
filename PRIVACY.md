@@ -91,6 +91,17 @@ the addresses it uses:
 
 With no provider picked, Ateam Go contacts none of them.
 
+### Creating a machine on Hetzner (optional)
+
+If you create a machine from Ateam Go (Create a box), the app sends the Hetzner
+API token you enter, and the machine's name, place and size, to Hetzner's API
+(`api.hetzner.cloud`), under your own Hetzner account, which Hetzner bills, and
+Hetzner's terms and privacy policy. The token is kept in the iOS Keychain. The
+machine's setup script, which Hetzner keeps with the machine, carries the
+Tailscale auth key you enter (so the machine can join your network) and a
+one-way hash of a token this phone keeps (so the machine recognises the phone);
+the token itself never leaves the phone. Nothing goes to us.
+
 ## AI coding agents
 
 The apps orchestrate AI coding agents — such as Claude Code, OpenCode, and

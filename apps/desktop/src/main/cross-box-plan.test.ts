@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { BoxLinkDTO } from "@ateam/protocol";
-import { linkUrlOf, pairLinkOf, planLinks } from "./cross-box-plan";
+import { linkUrlOf, pairLinkOf, phonePairLinkOf, planLinks } from "./cross-box-plan";
 
 const v30 = (alias: string, wsAddr: string | null = null) => ({ alias, version: 30, wsAddr });
 const link = (name: string, url: string): BoxLinkDTO => ({
@@ -43,6 +43,31 @@ describe("the QR for pairing a phone", () => {
 	it("has none for a box no other device can reach", () => {
 		expect(pairLinkOf(v30("hetzner"), "FC8HQGMZ")).toBeNull();
 		expect(pairLinkOf(v30("ateam-probe.boxd", "127.0.0.1:8787"), "FC8HQGMZ")).toBeNull();
+	});
+});
+
+describe("the QR that puts every box on a phone", () => {
+	it("lists each box the phone reaches, with a code when it's locked and none when it's open", () => {
+		const { link, unreachable } = phonePairLinkOf([
+			{ ...v30("100.94.46.10:8787"), code: "FC8HQGMZ" },
+			{ ...v30("ateam-probe.boxd", "100.81.40.73:8787"), code: null },
+			{ ...v30("v6", "fd7a:115c::5:8787"), code: "K2M4P6Q8" },
+			{ ...v30("hetzner"), code: "NOTUSED2" },
+		]);
+		expect(link).toBe(
+			"ateamgo://pair?b=100.94.46.10%2C8787%2CFC8HQGMZ&b=100.81.40.73%2C8787%2C&b=%5Bfd7a%3A115c%3A%3A5%5D%2C8787%2CK2M4P6Q8",
+		);
+		expect(unreachable).toEqual(["hetzner"]);
+	});
+
+	it("keeps the older one-box form for one locked box, and has none when no box is reachable", () => {
+		expect(phonePairLinkOf([{ ...v30("100.94.46.10:8787"), code: "FC8HQGMZ" }]).link).toBe(
+			"ateamgo://pair?host=100.94.46.10&port=8787&code=FC8HQGMZ",
+		);
+		expect(phonePairLinkOf([{ ...v30("100.94.46.10:8787"), code: null }]).link).toBe(
+			"ateamgo://pair?b=100.94.46.10%2C8787%2C",
+		);
+		expect(phonePairLinkOf([{ ...v30("hetzner"), code: null }]).link).toBeNull();
 	});
 });
 
