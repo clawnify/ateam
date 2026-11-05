@@ -33,6 +33,7 @@ import {
 	failActive,
 	filled,
 	type GithubAccessDTO,
+	INSTALL_SH_URL,
 	NEEDS_PAIRING,
 	type PairingGrantDTO,
 	type PairingInviteDTO,
@@ -98,6 +99,8 @@ import {
 	type HostStatus,
 	type InstallAgentResult,
 	type InstallLogEvent,
+	type PhonePairing,
+	type PhonePairingBox,
 	type ProviderOptions,
 	type SecretsStatus,
 	TAILSCALE_LOGIN_URL,
@@ -118,7 +121,7 @@ import {
 	writeSshConfigEntry,
 } from "./box-setup";
 import { boxForwardFlags, browserLocalPort, editorLocalPort } from "./box-tunnel";
-import { pairLinkOf } from "./cross-box-plan";
+import { pairLinkOf, phonePairLinkOf } from "./cross-box-plan";
 import { offlineBackend } from "./offline";
 
 // The one pre-quoted remote command (ssh space-joins remote args, so `bash -lc`
@@ -127,8 +130,7 @@ import { offlineBackend } from "./offline";
 const REMOTE_ATTACH = "bash -lc 'exec ateam attach --stdio'";
 // The canonical box installer, reused verbatim (single source of truth for how a
 // box is set up — the same script the docs tell users to curl by hand).
-const INSTALL_URL =
-	"https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh";
+const INSTALL_URL = INSTALL_SH_URL;
 // Default WebSocket port baked into a provisioned box's Tailscale listener (matches
 // the picker's placeholder). The listener only exists if the box is on Tailscale.
 const WS_DEFAULT_PORT = 8787;
@@ -261,6 +263,7 @@ export interface Host {
 	pairingInvite(alias: string): Promise<PairingInviteDTO & { link: string | null }>;
 	pairingRevoke(alias: string, id: string): Promise<PairingStatusDTO>;
 	pairingLock(alias: string): Promise<PairingStatusDTO>;
+	phonePairing(): Promise<PhonePairing>;
 }
 
 /** A held box's own wire (Host.boxLink). */
@@ -1143,6 +1146,44 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return { ...invite, link };
 	}
 
+	// Pair your iPhone: every box this Mac holds, in one link. A locked box gets a fresh
+	// code (a Mac can always ask its own box for one); an open one goes in by its
+	// address, since it lets in any device that reaches it. Each box is asked on its
+	// own, so one that doesn't answer leaves the others in.
+	async function phonePairing(): Promise<PhonePairing> {
+		const asked = await Promise.all(
+			[...links.entries()].map(async ([alias, l]) => {
+				try {
+					const locked =
+						boxSupports("pairing", l.version) &&
+						((await withTimeout(l.rpc.call(CH.pairingStatus), 10_000)) as PairingStatusDTO).locked;
+					const invite = locked
+						? ((await withTimeout(l.rpc.call(CH.pairingInvite), 10_000)) as PairingInviteDTO)
+						: null;
+					return { alias, wsAddr: l.wsAddr, invite };
+				} catch (err) {
+					return { alias, error: err instanceof Error ? err.message : String(err) };
+				}
+			}),
+		);
+		const answered = asked.flatMap((a) => ("error" in a ? [] : [a]));
+		const { link, unreachable } = phonePairLinkOf(
+			answered.map((a) => ({ alias: a.alias, wsAddr: a.wsAddr, code: a.invite?.code ?? null })),
+		);
+		const codes = answered.flatMap((a) =>
+			a.invite && !unreachable.includes(a.alias) ? [a.invite.expiresAt] : [],
+		);
+		return {
+			link,
+			expiresAt: codes.length ? Math.min(...codes) : null,
+			boxes: asked.map((a): PhonePairingBox => {
+				if ("error" in a) return { alias: a.alias, state: "failed", error: a.error };
+				if (unreachable.includes(a.alias)) return { alias: a.alias, state: "noPort" };
+				return { alias: a.alias, state: a.invite ? "locked" : "open" };
+			}),
+		};
+	}
+
 	async function pairingRevoke(alias: string, id: string): Promise<PairingStatusDTO> {
 		const wire = pairingWire(alias);
 		const before = (await wire.call(CH.pairingStatus)) as PairingStatusDTO;
@@ -1631,6 +1672,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		pairingInvite,
 		pairingRevoke,
 		pairingLock,
+		phonePairing,
 		onBoxChange(cb) {
 			boxListeners.add(cb);
 			return () => boxListeners.delete(cb);
@@ -1662,6 +1704,7 @@ export function registerHostIpc(host: Host): void {
 		host.pairingRevoke(String(alias), String(id)),
 	);
 	ipcMain.handle(HOST_CH.pairingLock, (_e, alias: string) => host.pairingLock(String(alias)));
+	ipcMain.handle(HOST_CH.phonePairing, () => host.phonePairing());
 	ipcMain.handle(HOST_CH.provision, (_e, alias: string, input: { cloneUrl: string }) =>
 		host.provision(alias, input),
 	);

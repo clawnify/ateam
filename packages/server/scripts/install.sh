@@ -37,6 +37,10 @@
 #   TS_AUTHKEY      a Tailscale auth key for --tailscale, to join without a browser.
 #                   A tagged key keeps the box on the tailnet: tagged devices don't
 #                   expire, while one approved from a link drops off after 180 days.
+#   ATEAM_PAIR_DEVICE  the sha256 (hex) of a token a device made for itself: pairs that
+#                   device before the engine first starts (`ateam pair --add-device`).
+#                   Ateam Go's Create a box sets it, so the box knows the phone that
+#                   made it. ATEAM_PAIR_LABEL names the device (default "Phone").
 #
 # Node: the dist externalizes two native modules — better-sqlite3 and the
 # prebuilt node-pty fork — so the box needs a Node whose ABI both ship binaries
@@ -240,6 +244,16 @@ if ! bash -lc 'command -v ateam' >/dev/null 2>&1; then
 	bash -lc 'command -v ateam' >/dev/null 2>&1 || die "ateam still not on the login PATH ($PROFILE)"
 fi
 info "login shell resolves: $(bash -lc 'command -v ateam')"
+
+# Before the service starts, so a box that comes up locked lets that device in. An
+# engine older than `--add-device` says so and leaves the box as it was.
+if [ -n "${ATEAM_PAIR_DEVICE:-}" ]; then
+	if "$BIN_DIR/ateam" pair --add-device "$ATEAM_PAIR_DEVICE" --label "${ATEAM_PAIR_LABEL:-Phone}"; then
+		info "paired with ${ATEAM_PAIR_LABEL:-Phone}"
+	else
+		info "WARNING: couldn't pair ${ATEAM_PAIR_LABEL:-Phone} with this box"
+	fi
+fi
 
 # ------------------------------------------------------------ tailscale -----
 

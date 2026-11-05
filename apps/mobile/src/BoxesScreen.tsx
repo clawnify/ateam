@@ -69,9 +69,13 @@ export function BoxesScreen({
 	onLock,
 	onScan,
 	scanner,
+	settingUp,
 }: {
 	/** The nav bar's left slot: back to the board when there is one, else the logo. */
 	leading: ReactNode;
+	/** A box being created on Hetzner from this phone: its card says so while Ateam
+	 *  installs itself on it, rather than that it can't be reached, and opens Create a box. */
+	settingUp: { key: string; onOpen: () => void } | null;
 	boxes: SavedBox[];
 	/** Where the link to each box stands, by its key. */
 	links: Record<string, BoxLink>;
@@ -153,6 +157,7 @@ export function BoxesScreen({
 						const link = links[key] ?? NEW_LINK;
 						const live = link.state === "live";
 						const isLead = choosingLead && key === leadKey;
+						const making = settingUp?.key === key && !live ? settingUp : null;
 						return (
 							<BoxCard
 								key={key}
@@ -161,14 +166,15 @@ export function BoxesScreen({
 								reaching={link.state === "connecting"}
 								asked={link.asked}
 								asleep={link.state === "down" && link.asleep}
-								failure={link.state === "down" && !link.asleep ? link.error : null}
+								failure={link.state === "down" && !link.asleep && !making ? link.error : null}
+								note={making ? "Setting itself up on Hetzner, about 4 minutes" : null}
 								// A try in the background shows only as the spinner; the steps are for one asked for.
 								steps={link.asked ? link.steps : []}
 								lead={isLead}
 								onCancel={() => onCancel(box)}
 								open={key === openKey}
 								onOpenChange={(open) => onSwipeOpen(open ? key : null)}
-								onPress={() => onConnect(box)}
+								onPress={() => (making ? making.onOpen() : onConnect(box))}
 								onEdit={() => onEdit(box)}
 								onSetProvider={needsProvider(box, link) ? () => onSetProvider(box) : undefined}
 								onRemove={() => onRemove(box)}
@@ -221,6 +227,7 @@ function BoxCard({
 	asked,
 	asleep,
 	failure,
+	note,
 	steps,
 	lead,
 	onCancel,
@@ -247,6 +254,8 @@ function BoxCard({
 	asleep: boolean;
 	/** Why the last attempt to reach this box failed, or null. */
 	failure: string | null;
+	/** What the box is doing, in place of where it is (one being set up). */
+	note: string | null;
 	/** What reaching this box went through; empty when it isn't being reached. */
 	steps: ConnectStep[];
 	/** The box whose Lead the phone talks to (marked only when there's a choice). */
@@ -431,9 +440,11 @@ function BoxCard({
 							>
 								{failure && !tray
 									? failure
-									: asleep
-										? `Asleep · tap to wake · ${subtitle}`
-										: subtitle}
+									: note
+										? note
+										: asleep
+											? `Asleep · tap to wake · ${subtitle}`
+											: subtitle}
 							</Text>
 						</View>
 						{onGithub ? (

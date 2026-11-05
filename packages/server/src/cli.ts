@@ -78,6 +78,18 @@ const pairing: PairingGuard = {
 	fromLinks: new LinkLimiter(),
 };
 
+// A box with no database yet is a fresh install, which can come up locked to
+// paired devices (pairing.ts). One that has run before keeps whatever it had:
+// open until someone locks it, so an upgrade never locks a phone out.
+// shortcut: fresh boxes start open too. Ateam Go on the App Store (1.3.x) can't
+// pair, so a locked box would shut that phone out. Turn this on once an Ateam Go
+// that pairs is live on the App Store.
+const LOCK_NEW_BOXES = false;
+
+function isFreshBox(): boolean {
+	return !existsSync(join(DATA_DIR, "ateam.sqlite")) && !existsSync(join(DATA_DIR, "grove.sqlite"));
+}
+
 async function runDaemon(): Promise<void> {
 	// Single-instance guard: if a daemon already serves SOCK, bow out — do NOT
 	// steal it. The old code blindly unlink()'d the socket then listen()'d, on the
@@ -94,15 +106,7 @@ async function runDaemon(): Promise<void> {
 	// the server; overridable for dev.
 	const ptyDaemon = process.env.ATEAM_PTY_DAEMON ?? join(dirname(SELF), "daemon.js");
 
-	// A box with no database yet is a fresh install, which can come up locked to
-	// paired devices (pairing.ts). One that has run before keeps whatever it had:
-	// open until someone locks it, so an upgrade never locks a phone out.
-	// shortcut: fresh boxes start open too. Ateam Go on the App Store (1.3.x) can't
-	// pair, so a locked box would shut that phone out. Turn this on once an Ateam Go
-	// that pairs is live on the App Store.
-	const LOCK_NEW_BOXES = false;
-	const fresh =
-		!existsSync(join(DATA_DIR, "ateam.sqlite")) && !existsSync(join(DATA_DIR, "grove.sqlite"));
+	const fresh = isFreshBox();
 	// A new box starts always on, unless its file already says otherwise: billed while
 	// up, but nothing needs a key to wake it. A box that ran before keeps sleeping as
 	// it did until someone chooses (the phone's box form, the desktop's box page).
@@ -416,7 +420,9 @@ if (cmd === "daemon") {
 } else if (cmd === "pair") {
 	runPair(process.argv.slice(3));
 } else {
-	console.error("usage: ateam <daemon | attach --stdio | pair [--unlock]>");
+	console.error(
+		"usage: ateam <daemon | attach --stdio | pair [--unlock | --add-device <hash> [--label <name>]]>",
+	);
 	process.exit(2);
 }
 
@@ -424,10 +430,27 @@ if (cmd === "daemon") {
  * `ateam pair`: a one-time code for a device to pair with this locked box, from its
  * own terminal, the way in when no paired device is at hand (the phone locked it and
  * the Mac reaches it only over Tailscale, or the one paired phone is lost). `--unlock`
- * opens a locked box again, for when no paired device is left. Both act on the same
- * file the daemon reads (pairing.ts).
+ * opens a locked box again, for when no paired device is left. `--add-device <hash>`
+ * pairs the phone that created this box (Ateam Go's Create a box), by the sha256 of
+ * a token only the phone holds. All act on the same file the daemon reads (pairing.ts).
  */
 function runPair(args: string[]): void {
+	const at = args.indexOf("--add-device");
+	if (at >= 0) {
+		// The installer runs this before the engine first starts (ATEAM_PAIR_DEVICE),
+		// so a fresh box gets here what the engine's first start would have given it.
+		if (LOCK_NEW_BOXES && isFreshBox()) pairing.store.lockIfNew();
+		const l = args.indexOf("--label");
+		const label = l >= 0 ? args[l + 1] : undefined;
+		try {
+			const added = pairing.store.addDevice(args[at + 1] ?? "", label, "phone");
+			console.log(added ? `Paired ${label ?? "the device"}.` : "That device is paired already.");
+		} catch (err) {
+			console.error(err instanceof Error ? err.message : String(err));
+			process.exitCode = 1;
+		}
+		return;
+	}
 	if (args.includes("--unlock")) {
 		pairing.store.unlock();
 		console.log("This box is open again: any device that can reach its port may use it.");

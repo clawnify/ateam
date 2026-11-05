@@ -183,6 +183,16 @@ export async function initRepository(repoPath: string): Promise<void> {
 		/* not a repo — good */
 	}
 
+	// Who the first commit is from, checked before `git init`: a box with no name and
+	// email for commits yet (no GitHub connected) used to get git's message after the
+	// init, and a repo with no commit that a second try refused as already a repo.
+	// `git var` fails exactly where `git commit` would.
+	try {
+		await git.raw(["var", "GIT_COMMITTER_IDENT"]);
+	} catch (err) {
+		throw new GitCoreError("NO_IDENTITY", "git has no name and email to commit with", err);
+	}
+
 	await git.raw(["init", "-b", "main"]);
 
 	const gitignore = join(abs, ".gitignore");

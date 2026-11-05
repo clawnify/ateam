@@ -3588,6 +3588,12 @@ input {
 	justify-content: space-between;
 	gap: 12px;
 }
+/* Pair your iPhone and Add a box, side by side above the list. */
+.box-list-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
 /* Access: who may use a box over its network port (BoxAccess). */
 .box-access-warning {
 	font-size: 12px;
