@@ -31,10 +31,13 @@ export const CALL_GATE_MODEL: PerProvider<string> = {
  * requests, thinking aloud, side talk to a partner, a child, another call, TV
  * news, filler). Over three runs, pieces for the Lead scored 0.82-0.96 and the
  * rest 0.03-0.60 (the highest: "Um." and "Hold on, I'll be right back"), so 0.7
- * sits in the gap; 0.5 sent the "Um.". 18/18 at 0.7.
- * Luna: 0.5 (--provider openai): pieces for the Lead 0.98-1.00, the rest
+ * sits in the gap; 0.5 sent the "Um.". 18/18 at 0.7. With three bare "okok"
+ * cases added (a yes to the Lead's question, or to someone the user just asked
+ * something, told apart by the held aside and the ages in the context): 21/21,
+ * the "okok" for the Lead at 0.80-0.81, the one for someone else at 0.39.
+ * Luna: 0.5 (--provider openai): pieces for the Lead 0.90-1.00, the rest
  * 0.00-0.31; it answers near the ends, as it did for the board and grammar.
- * 17/18: it refused one TV news line (no answer), which the caller holds.
+ * 20/21: it refused one TV news line (no answer), which the caller holds.
  */
 export const SEND_PROBABILITY: PerProvider<number> = { openrouter: 0.7, openai: 0.5 };
 

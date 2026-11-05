@@ -18,6 +18,12 @@ import type { DecisionProvider } from "../../../packages/server/src/decision-mod
 const PRODUCT = `user: What's in flight on the board?
 lead: Two tasks are running: the onboarding checklist and faster session search. The checklist agent asked which tone to use.`;
 const NONE = "";
+/** The Lead asked a yes/no 25 s ago; contexts carry ages as lead-call.ts's contextFrom writes them. */
+const ASKED = `user (34 s ago): Tell the checklist agent to use a friendly tone.
+lead (25 s ago): I can message the checklist task now and tell it to switch to a friendly tone. Should I go ahead?`;
+const JUST_ASKED = `user (12 s ago): Tell the checklist agent to use a friendly tone.
+lead (3 s ago): I can message the checklist task now and tell it to switch to a friendly tone. Should I go ahead?`;
+const CAT = `heard, not sent to the Lead (4 s ago), said to someone else in the room: "Did you give food to the cat?"`;
 
 /** Each piece of speech, and whether it should reach the Lead. */
 const CASES: { context: string; pieces: [string, boolean][] }[] = [
@@ -54,6 +60,12 @@ const CASES: { context: string; pieces: [string, boolean][] }[] = [
 	{ context: PRODUCT, pieces: [["What did I ask you a minute ago?", true]] },
 	{ context: PRODUCT, pieces: [["Hold on, one second, I'll be right back.", false]] },
 	{ context: PRODUCT, pieces: [["Merge the session search one when the tests pass.", true]] },
+	// A bare yes: to the Lead's question, or to the person just asked something
+	// (whose answer the mic didn't hear)? The asked-away-from-the-Lead case is
+	// why held asides and ages are in the context.
+	{ context: `${ASKED}\n${CAT}`, pieces: [["okok", false]] },
+	{ context: JUST_ASKED, pieces: [["okok", true]] },
+	{ context: ASKED, pieces: [["okok", true]] },
 	{
 		context: PRODUCT,
 		pieces: [

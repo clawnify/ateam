@@ -99,14 +99,62 @@ export function turnsFrom(items: LeadItem[]): LeadCallTurn[] {
 	return turns;
 }
 
-/** The last few turns, for the gate to judge what it heard against. */
-export function contextFrom(items: LeadItem[], turns = 6): string {
-	const lines: string[] = [];
+/** Something the call heard and held back, remembered for the gate's context
+ *  for a while (in memory only, never stored). */
+export interface HeardAside {
+	text: string;
+	kind: LeadCallVerdict["kind"];
+	at: number;
+}
+
+/** Asides older than this no longer tell the gate anything about what comes next. */
+export const ASIDE_MEMORY_MS = 2 * 60_000;
+
+const ago = (ms: number) => {
+	const s = Math.max(0, Math.round(ms / 1000));
+	return s < 60 ? `${s} s ago` : `${Math.round(s / 60)} min ago`;
+};
+
+/**
+ * The last few turns, for the gate to judge what it heard against: the chat
+ * with the Lead and what the call held back, in time order, each with its
+ * age. Both matter, measured: a bare "okok" after the Lead asked "Should I go
+ * ahead?" went to the Lead (Jev 0.83-0.87, Luna 0.97) even when it answered a
+ * question the user had just asked someone else; told that "Did you give food
+ * to the cat?" was said to someone 4 s ago and the Lead asked 25 s ago, both
+ * held it (0.28-0.38), and still sent it when the Lead had just asked.
+ */
+export function contextFrom(
+	items: LeadItem[],
+	asides: HeardAside[] = [],
+	now = Date.now(),
+	turns = 6,
+): string {
+	const lines: { at: number; line: string }[] = [];
 	for (const it of items) {
-		if (it.kind === "user" && !it.to) lines.push(`user: ${speakable(it.text, 300)}`);
-		else if (it.kind === "assistant") lines.push(`lead: ${speakable(it.text, 300)}`);
+		if (it.kind === "user" && !it.to)
+			lines.push({ at: it.at, line: `user (${ago(now - it.at)}): ${speakable(it.text, 300)}` });
+		else if (it.kind === "assistant")
+			lines.push({ at: it.at, line: `lead (${ago(now - it.at)}): ${speakable(it.text, 300)}` });
 	}
-	return lines.slice(-turns).join("\n");
+	for (const a of asides) {
+		if (now - a.at > ASIDE_MEMORY_MS) continue;
+		const what =
+			a.kind === "someone"
+				? ", said to someone else in the room"
+				: a.kind === "background"
+					? ", from a TV or someone nearby"
+					: "";
+		lines.push({
+			at: a.at,
+			line: `heard, not sent to the Lead (${ago(now - a.at)})${what}: "${a.text.slice(0, 200)}"`,
+		});
+	}
+	return lines
+		.sort((a, b) => a.at - b.at)
+		.slice(-turns)
+		.map((l) => l.line)
+		.join("\n");
 }
 
 /** What to tell the user about something new in the chat they didn't ask for
@@ -217,6 +265,8 @@ export class LeadCall {
 	private seen = new Set<string>();
 	/** Heard and not judged yet. */
 	private frags: Fragment[] = [];
+	/** Held back lately: the gate weighs what comes next against them. */
+	private asides: HeardAside[] = [];
 	/** Hand-offs waiting on the Lead's turn, oldest first; null for words the
 	 *  gate sent without one. */
 	private pending: (string | null)[] = [];
@@ -291,6 +341,7 @@ export class LeadCall {
 		this.reply.clear();
 		this.queued = [];
 		this.frags = [];
+		this.asides = [];
 		this.update({ state: "off", error, held: null, muted: false });
 	}
 
@@ -312,6 +363,8 @@ export class LeadCall {
 	sendHeld(): void {
 		const held = this.view.held;
 		if (!held) return;
+		// It was for the Lead after all: not an aside for the gate to weigh.
+		this.asides = this.asides.filter((a) => a.text !== held.text);
 		this.update({ held: null });
 		this.toLead(null, held.text);
 	}
@@ -485,7 +538,7 @@ export class LeadCall {
 			return;
 		}
 		const verdicts = await this.lead()
-			.callJudge(pieces, contextFrom(this.items))
+			.callJudge(pieces, contextFrom(this.items, this.asides))
 			.catch(() => null);
 		// No decision model (no key, turned off) or no answer in time: trust the
 		// voice's hand-off, and hold back what it didn't hand off.
@@ -520,6 +573,11 @@ export class LeadCall {
 	}
 
 	private hold(held: NonNullable<CallView["held"]>): void {
+		const now = Date.now();
+		this.asides = [
+			...this.asides.filter((a) => now - a.at < ASIDE_MEMORY_MS).slice(-4),
+			{ ...held, at: now },
+		];
 		if (this.heldTimer) clearTimeout(this.heldTimer);
 		this.heldTimer = setTimeout(() => this.update({ held: null }), HELD_MS);
 		this.update({ held });

@@ -106,13 +106,25 @@ test("shouldHold: quiet holds at 30 s, a false wake at 10 s, endless side talk a
 	expect(shouldHold({ engagedAt: 0, falseWake: true, now: at(11), heardAt: at(10.5) })).toBe(false);
 });
 
-test("contextFrom gives the gate the last turns between the user and the Lead", () => {
+test("contextFrom gives the gate the chat and what was held back, in time order, with ages", () => {
+	const now = 100_000;
 	const items: LeadItem[] = [
-		{ kind: "user", id: "1", text: "What's in flight?", at: 1 },
-		{ kind: "assistant", id: "2", text: "Two tasks: [checklist](task:t1).", at: 2 },
-		{ kind: "user", id: "3", text: "use the short tone", at: 3, to: task },
-		{ kind: "agent", id: "4", task, text: "Done.", at: 4 },
+		{ kind: "user", id: "1", text: "Tell the checklist one to be friendly.", at: 66_000 },
+		{ kind: "assistant", id: "2", text: "Should I message [it](task:t1)?", at: 75_000 },
+		{ kind: "user", id: "3", text: "use the short tone", at: 80_000, to: task },
+		{ kind: "agent", id: "4", task, text: "Done.", at: 81_000 },
 	];
-	expect(contextFrom(items)).toBe("user: What's in flight?\nlead: Two tasks: checklist.");
+	const asides = [
+		{ text: "Did you give food to the cat?", kind: "someone" as const, at: 96_000 },
+		// Too old to say anything about what comes next.
+		{ text: "Old news on TV.", kind: "background" as const, at: now - 150_000 },
+	];
+	expect(contextFrom(items, asides, now)).toBe(
+		[
+			"user (34 s ago): Tell the checklist one to be friendly.",
+			"lead (25 s ago): Should I message it?",
+			'heard, not sent to the Lead (4 s ago), said to someone else in the room: "Did you give food to the cat?"',
+		].join("\n"),
+	);
 	expect(heldReason("someone")).toBe("sounded like you were talking to someone else");
 });
