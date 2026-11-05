@@ -42,9 +42,19 @@ export const LEAD_CH = {
 	home: "lead:home",
 	/** Move the desktop's main chat to a box, or with null back to this Mac. */
 	setHome: "lead:setHome",
+	/** Open a voice call's session with OpenAI (GPT-Live) from this Mac's key:
+	 *  the window's WebRTC offer in, the answer out. The key never reaches the window. */
+	callStart: "lead:callStart",
 	evtEvent: "evt:lead:event",
 	evtHome: "evt:lead:home",
 } as const;
+
+/** A line of the chat a voice call's session starts with, so the voice knows
+ *  what was said before it (typed or spoken). */
+export interface LeadCallTurn {
+	role: "user" | "assistant" | "developer";
+	text: string;
+}
 
 /** The channels a box's engine answers for its own Lead (v24; `react` since
  *  v28). Attaching by path and previews are the client's: it has no paths on
@@ -305,4 +315,8 @@ export interface AteamLead {
 	 *  with null back to this Mac's. Nothing is copied between them. */
 	setHome(box: string | null): Promise<LeadHome>;
 	onHome(cb: (home: LeadHome) => void): () => void;
+	/** Start a voice call's session: `sdp` is the window's WebRTC offer, `input`
+	 *  the chat so far. Answers OpenAI's SDP answer. Throws with words for the
+	 *  user (no OpenAI key, OpenAI refused). */
+	callStart(sdp: string, input: LeadCallTurn[]): Promise<{ sdp: string; sessionId: string }>;
 }

@@ -32,6 +32,8 @@ import {
 	CornerDownRight,
 	Maximize2,
 	Paperclip,
+	Phone,
+	PhoneOff,
 	Plus,
 	Smile,
 	Square,
@@ -51,6 +53,7 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	useSyncExternalStore,
 } from "react";
 import { flushSync } from "react-dom";
 import {
@@ -64,6 +67,7 @@ import {
 	shown,
 	unseen,
 } from "../lead-blocks";
+import { type CallState, leadCall } from "../lead-call";
 import { type DraftRef, expandRefs, splitSent } from "../lead-refs";
 import { recordEmoji, topEmoji } from "../lib/emoji-use";
 import { taskDragProps } from "../task-drag";
@@ -1138,6 +1142,24 @@ let unsentRefs: DraftRef[] = [];
 // arrives while the chat is on screen (kept across the tab and the sidebar).
 const autoOpened = new Set<string>();
 
+/** The window's voice call with the Lead (one per window, lead-call.ts). */
+function useLeadCall(): { state: CallState; error: string } {
+	const key = useSyncExternalStore(
+		(cb) => leadCall.subscribe(cb),
+		() => `${leadCall.state}\n${leadCall.error}`,
+	);
+	const [state, error = ""] = key.split("\n") as [CallState, string?];
+	return { state, error };
+}
+
+function callWords(state: CallState, error: string): string {
+	if (error) return error;
+	if (state === "connecting") return "Calling the Lead…";
+	if (state === "live") return "On a call with the Lead. Talk any time.";
+	if (state === "hold") return "On hold while it's quiet. Talk, or news from a task, picks it up.";
+	return "";
+}
+
 export function LeadChat({
 	tasks,
 	projects,
@@ -1170,6 +1192,7 @@ export function LeadChat({
 	onHide?: () => void;
 }) {
 	const [snap, setSnap] = useState<LeadSnapshot>(EMPTY);
+	const call = useLeadCall();
 	const [text, setTextState] = useState(() => unsent);
 	const setText = (value: string) => {
 		unsent = value;
@@ -1608,6 +1631,17 @@ export function LeadChat({
 					</div>
 				)}
 				{attachNote && <div className="lead-attach-note">{attachNote}</div>}
+				{(call.state !== "off" || call.error) && (
+					<output className={`lead-call ${call.state}`}>
+						{call.state !== "off" && <span className="lead-call-dot" aria-hidden="true" />}
+						<span className="lead-call-words">{callWords(call.state, call.error)}</span>
+						{call.state !== "off" && (
+							<button type="button" className="lead-call-end" onClick={() => leadCall.hangUp()}>
+								Hang up
+							</button>
+						)}
+					</output>
+				)}
 				<div className={`lead-box ${dragging ? "dropping" : ""}`}>
 					{files.length > 0 && (
 						<div className="lead-files">
@@ -1634,6 +1668,22 @@ export function LeadChat({
 						}
 					>
 						<Zap size={15} strokeWidth={1.75} />
+					</button>
+					{/* A voice call with the Lead (lead-call.ts): what you say goes into
+					    this chat as your message, and the Lead's replies are spoken. */}
+					<button
+						type="button"
+						className={`iconbtn ${call.state !== "off" ? "active" : ""}`}
+						title={call.state === "off" ? "Call the Lead" : "Hang up"}
+						aria-label={call.state === "off" ? "Call the Lead" : "Hang up"}
+						aria-pressed={call.state !== "off"}
+						onClick={() => (call.state === "off" ? void leadCall.start() : leadCall.hangUp())}
+					>
+						{call.state === "off" ? (
+							<Phone size={15} strokeWidth={1.75} />
+						) : (
+							<PhoneOff size={15} strokeWidth={1.75} />
+						)}
 					</button>
 					<TaskRefInput
 						value={text}

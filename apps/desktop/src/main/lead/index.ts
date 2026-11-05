@@ -16,6 +16,7 @@ import { join } from "node:path";
 import {
 	LEAD_CH,
 	type LeadAttachResult,
+	type LeadCallTurn,
 	type LeadFile,
 	type LeadHome,
 	type LeadItem,
@@ -41,6 +42,7 @@ import {
 import type { Router } from "../backend";
 import { deliverFiles } from "../deliver-files";
 import type { Host } from "../host";
+import { startCall } from "./call";
 import { type RemoteLead, remoteLead } from "./remote";
 
 export interface LeadDeps {
@@ -287,6 +289,11 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 		LEAD_CH.answer,
 		async (e, input: { taskId: string; questionId: string; answer: string | string[] | null }) =>
 			(await lead(e)).answer(input),
+	);
+	// A voice call runs in the window; only its session is opened here, from
+	// this Mac's OpenAI key, whichever machine the chat itself lives on.
+	ipcMain.handle(LEAD_CH.callStart, (_e, sdp: string, input: LeadCallTurn[]) =>
+		startCall(String(sdp), input),
 	);
 	ipcMain.handle(
 		LEAD_CH.home,
