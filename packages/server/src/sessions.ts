@@ -442,6 +442,7 @@ async function launchAgent(
 			ask: (prompt) => askConfiguredTextModel(prompt, { maxTokens: 120, timeoutMs: 30_000 }),
 		},
 		task.id,
+		{ files: input.files, resume: isResume },
 	);
 	return { terminalId };
 }

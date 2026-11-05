@@ -9,6 +9,7 @@ import {
 	type ClientFrame,
 	NEEDS_PAIRING,
 	type PairingState,
+	type ProviderReport,
 	type ServerFrame,
 	type SystemInfo,
 } from "@ateam/protocol";
@@ -150,6 +151,10 @@ export interface ServeOptions {
 	/** The box's network address, reported in hello for other boxes to link to
 	 *  (v30): `<host>:<port>`, or null with no listener. Absent: not reported. */
 	wsAddr?: string | null;
+	/** The provider that puts this box to sleep, the box's name there and whether it
+	 *  sleeps now (sleep/index.ts providerReport), reported in hello for clients to wake
+	 *  it through; null on a box none does. Absent: not reported (not known yet, or tests). */
+	provider?: ProviderReport | null;
 }
 
 /** Wrong tokens or codes on one connection before it is dropped. */
@@ -317,6 +322,8 @@ export function serveRpc(
 				...info,
 				...(guard ? { pairing: state() } : {}),
 				...(opts.wsAddr !== undefined ? { wsAddr: opts.wsAddr } : {}),
+				// Not to a connection a locked box hasn't admitted: it pairs first, then asks again.
+				...(opts.provider !== undefined && admitted ? { provider: opts.provider } : {}),
 			};
 		}
 		if (guard && method === CH.pairingRedeem) return pairingCall(guard, method, args);

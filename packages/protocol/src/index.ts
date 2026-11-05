@@ -671,7 +671,8 @@ export type UpdateStrategy = "merge" | "rebase";
  * User settings: `~/.ateam/settings.json`, hand-editable (server/settings-file.ts).
  * One schema, two readers. `client` is read by the desktop on the machine
  * running it; `engine` by whichever engine runs the work, so a box reads its
- * own file. Only keys with a reader exist — a setting nothing reads is a lie.
+ * own file; `box` by that one box's engine, never synced from a Mac. Only keys
+ * with a reader exist — a setting nothing reads is a lie.
  */
 export interface EngineSettings {
 	/** Agent a new task launches with when the composer doesn't say. */
@@ -816,14 +817,26 @@ export interface SkillLinkResult {
 		status: "create" | "exists";
 	}[];
 }
+/** What one box is, set on that box (from the phone's box form or the desktop's box
+ *  page) and never pushed by a Mac's settings sync, which carries `engine` only. */
+export interface BoxSettings {
+	/**
+	 * Never let this box sleep: it stays up and billed around the clock, and nothing
+	 * needs a provider key to wake it. Off, it sleeps after `engine.idleSleepMinutes`
+	 * like any other. Only an engine on a provider that sleeps boxes reads it.
+	 */
+	alwaysOn: boolean;
+}
 export interface AteamSettings {
 	version: number;
 	client: ClientSettings;
 	engine: EngineSettings;
+	box: BoxSettings;
 }
 export interface SettingsPatch {
 	client?: Partial<ClientSettings>;
 	engine?: Partial<EngineSettings>;
+	box?: Partial<BoxSettings>;
 }
 /**
  * `settings:get`'s answer: what is in force, where it came from, and a warning
@@ -1062,6 +1075,13 @@ export interface SystemInfo {
 	/** The address the box's network port listens on (`<host>:<port>`), or null
 	 *  when it has none (v30; absent before). What other boxes link to. */
 	wsAddr?: string | null;
+	/** The provider that puts this box to sleep, the box's name there, and whether it
+	 *  lets the box sleep now; null on a box no provider sleeps. Absent from engines
+	 *  before it was reported, and while the engine is still finding out. A client that
+	 *  saved the box by its address alone (a pairing QR, the IP typed in) fills in what
+	 *  to wake it through (wake.ts reportedWake), instead of dialling a sleeping box
+	 *  until it times out. */
+	provider?: ProviderReport | null;
 }
 
 /** A connection's standing with a box's lock (pairing:*, v29).
@@ -1216,6 +1236,9 @@ export interface ConnectionDTO {
 	 * wakes it. Set only by the desktop, and only until that connect.
 	 */
 	asleep?: boolean;
+	/** Whether the box last said it sleeps when idle (SystemInfo.provider.sleeps);
+	 *  false while it's always on, null until it says. */
+	sleeps?: boolean | null;
 	/** A `ws` box a provider puts to sleep: the provider that wakes it before a
 	 *  connect, and the machine's inputs there (see providers.ts). */
 	wake?: BoxWake | null;
@@ -1225,6 +1248,14 @@ export interface ConnectionDTO {
 export interface BoxWake {
 	id: string;
 	box: Record<string, string>;
+}
+
+/** What a box says about its provider in system:hello (SystemInfo.provider). */
+export interface ProviderReport extends BoxWake {
+	/** Whether the engine lets the box sleep when it's idle, right now: false while its
+	 *  idle sleep is off (`engine.idleSleepMinutes` 0), when it's always on and a client
+	 *  has nothing to wake. Read when the client connects, so it follows the setting. */
+	sleeps: boolean;
 }
 
 /**
@@ -1774,6 +1805,7 @@ export {
 	filled,
 	type InputValues,
 	inputsAt,
+	reportedWake,
 	WAKE_PROVIDERS,
 	type WakeAdapter,
 	wakeAdapter,

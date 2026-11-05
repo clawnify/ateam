@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { getAgent } from "../src/registry";
 import {
 	buildLabelPrompt,
+	describeAttachments,
 	generateTaskLabels,
 	MAX_TAGS,
 	parseLabelReply,
@@ -180,5 +181,61 @@ describe("Claude's headless call", () => {
 		expect(args).toContain("--restricted");
 		expect(args).toContain("--safe-mode");
 		expect(args).toContain("-p");
+	});
+});
+
+describe("waiting for the agent's reply", () => {
+	it("reads JSON null, or the word, as no title yet", async () => {
+		for (const out of [
+			'{"title":null,"tags":[]}',
+			'{"title":"null","tags":[]}',
+			'{"title":"None","tags":["ui"]}',
+		]) {
+			const labels = await generateTaskLabels("what's going on?", { run: replying(out) });
+			expect(labels?.needsReply).toBe(true);
+			expect(labels?.title).toBeNull();
+		}
+	});
+
+	it("never waits once the reply is in hand", async () => {
+		const labels = await generateTaskLabels("what's going on?", {
+			reply: "The answer went to the Lead chat.",
+			run: replying('{"title":null,"tags":["bug"]}'),
+		});
+		expect(labels).toEqual({ title: null, tags: ["bug"] });
+	});
+
+	it("labels from a reply when the user typed no words", async () => {
+		let prompt = "";
+		const labels = await generateTaskLabels("", {
+			reply: "The screenshot shows the board's sidebar overflowing.",
+			run: (p) => {
+				prompt = p;
+				return Promise.resolve('{"title":"Sidebar overflow","tags":["ui"]}');
+			},
+		});
+		expect(labels?.title).toBe("Sidebar overflow");
+		expect(prompt).toContain("The agent's first reply:\nThe screenshot shows");
+		expect(prompt).not.toContain("set title to null");
+	});
+});
+
+describe("describeAttachments", () => {
+	it("counts images and other files, and names neither", () => {
+		expect(describeAttachments([])).toBeUndefined();
+		expect(describeAttachments(["/a/Screenshot 2026-11-04 at 22.31.PNG"])).toBe("1 image");
+		expect(describeAttachments(["/a/x.png", "/a/y.jpeg", "/a/spec.pdf"])).toBe(
+			"2 images and 1 file",
+		);
+		expect(describeAttachments(["/a/notes.md", "/a/data.csv"])).toBe("2 files");
+	});
+
+	it("goes in the launch prompt, and not once a reply is in hand", () => {
+		expect(buildLabelPrompt("look", [], { attachments: "1 image" })).toContain(
+			"The user attached 1 image, which you cannot see.",
+		);
+		expect(
+			buildLabelPrompt("look", [], { attachments: "1 image", reply: "It shows X." }),
+		).not.toContain("which you cannot see");
 	});
 });

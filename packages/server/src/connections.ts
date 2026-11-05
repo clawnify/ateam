@@ -40,6 +40,9 @@ export interface ConnectionRecord {
 	agentsAvailable?: string[] | null;
 	/** null clears it: the box no longer has a provider to wake it. */
 	wake?: BoxWake | null;
+	/** What the box last said about sleeping (SystemInfo.provider.sleeps); null when
+	 *  no provider sleeps it. Absent: not said (an older engine), left as it was. */
+	sleeps?: boolean | null;
 }
 
 const DEFAULT_SSH_CONFIG = join(homedir(), ".ssh", "config");
@@ -329,6 +332,7 @@ export function listConnections(db: AteamDb, configPath?: string): ConnectionDTO
 			inSshConfig: false,
 			known: true,
 			wake: rec.wake ?? null,
+			sleeps: rec.sleeps ?? null,
 		});
 	}
 	// Recently-reached first; never-connected (null lastSeen) after, ties by alias.
@@ -356,12 +360,18 @@ export function recordConnection(db: AteamDb, rec: ConnectionRecord): Host {
 	if (rec.engineRelease !== undefined) patch.engineRelease = rec.engineRelease;
 	if (rec.agentsAvailable !== undefined) patch.agentsAvailable = rec.agentsAvailable;
 	if (rec.wake !== undefined) patch.wake = rec.wake;
+	if (rec.sleeps !== undefined) patch.sleeps = rec.sleeps;
 	return repo.upsertHost(db, patch);
 }
 
 /** The provider that wakes this box before a connect, or null when nothing does. */
 export function boxWakeOf(db: AteamDb, alias: string): BoxWake | null {
 	return repo.getHost(db, alias)?.wake ?? null;
+}
+
+/** Whether the box last said it sleeps: false while it's always on, null until it says. */
+export function boxSleepsOf(db: AteamDb, alias: string): boolean | null {
+	return repo.getHost(db, alias)?.sleeps ?? null;
 }
 
 /** The box's board as last seen (opaque here; the desktop gives it its shape). */

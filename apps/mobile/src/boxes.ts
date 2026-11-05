@@ -2,7 +2,17 @@
 // One entry per address, kept until the user deletes it. Persisted by src/storage.ts.
 //
 // Pure TS, no React Native imports, so it runs under bun test.
-import { type ConnectStep, providerById, wakeMachineName } from "@ateam/protocol";
+import {
+	type ConnectStep,
+	filled,
+	inputsAt,
+	NEEDS_PAIRING,
+	type ProviderDefinition,
+	type ProviderReport,
+	providerById,
+	reportedWake,
+	wakeMachineName,
+} from "@ateam/protocol";
 import type { SavedConnection } from "./storage";
 
 export interface SavedBox extends SavedConnection {
@@ -29,6 +39,86 @@ export function touchBox(
 		return k !== key && k !== replaces;
 	});
 	return [{ ...conn, lastUsedAt: now }, ...rest];
+}
+
+/** The list once the box at `key` takes what it reported in hello about its provider
+ *  (SystemInfo.provider), or null when nothing changes. A box saved by its address
+ *  alone (a pairing QR, an IP typed in) has no provider, so the phone dialled it asleep
+ *  until it timed out. The provider only fills what is missing: one the user picked
+ *  stays, and only its blank name is filled, from a report at the same provider.
+ *  Whether it sleeps is the box's own fact, so the latest report always replaces it. */
+export function withReportedProvider(
+	list: SavedBox[],
+	key: string,
+	reported: ProviderReport | null | undefined,
+): SavedBox[] | null {
+	const wake = reportedWake(reported);
+	const at = list.findIndex((b) => boxKey(b) === key);
+	const box = list[at];
+	if (!wake || !reported || !box) return null;
+	let next: SavedBox = box;
+	const own = providerById(box.provider?.id);
+	const fill =
+		!own || !box.provider || (own.id === wake.id && !filled(own, "box", box.provider.box));
+	if (fill) next = { ...next, provider: wake };
+	if (typeof reported.sleeps === "boolean" && box.sleeps !== reported.sleeps) {
+		next = { ...next, sleeps: reported.sleeps };
+	}
+	if (next === box) return null;
+	const list2 = [...list];
+	list2[at] = next;
+	return list2;
+}
+
+/** The provider a box goes to sleep through, as far as the phone shows it: its own,
+ *  unless the box said it's always on. Drives "asleep" and asking for a key; a tap
+ *  still wakes through the provider when a key is saved (links.ts), since a box can
+ *  be put back to sleeping after it last said so. */
+export function wakesThrough(box: SavedConnection): ProviderDefinition | undefined {
+	return box.sleeps === false ? undefined : providerById(box.provider?.id);
+}
+
+/** The box form's Always on / Sleeps when idle to begin with: a box being added shows
+ *  always on, as a new box starts (cli.ts); a saved one is as it last said (one that
+ *  never said sleeps, as it did before boxes reported it). Only a pick is sent. */
+export function alwaysOnInForm(box: SavedConnection | null): boolean {
+	return box === null ? true : box.sleeps === false;
+}
+
+/** Why this phone can't wake a box its provider puts to sleep, when it can't (no
+ *  waker for it): its name there is missing, else the provider's key. Null for a
+ *  box with no provider, which nothing wakes. */
+export function cantWakeReason(box: SavedConnection): string | null {
+	const def = wakesThrough(box);
+	if (!def) return null;
+	if (!filled(def, "box", box.provider?.box ?? {})) {
+		return `This phone doesn't have its name at ${def.label}, so it can't wake it.`;
+	}
+	const key = inputsAt(def, "account")[0]?.label ?? "key";
+	return `This phone has no ${def.label} ${key} to wake it with.`;
+}
+
+/** What a box that dropped says until a try says more. */
+export const CONNECTION_LOST = "The connection dropped.";
+
+/** Under a box with no provider that isn't answering, and where the phone waits on it. */
+export const NO_PROVIDER_HINT =
+	"If this box goes to sleep when it's idle, set its provider so this phone can wake it.";
+
+/** A box with no provider that isn't answering: if it sleeps, nothing on the phone can
+ *  wake it until the phone knows what it runs on. Read from its last failure, which is
+ *  kept while it's tried again, so the hint stays put instead of flickering per try. A
+ *  box that just dropped is reconnecting, a locked one answered, and one that said it's
+ *  always on has nothing to wake. */
+export function needsProvider(box: SavedConnection, link: BoxLink): boolean {
+	return (
+		box.sleeps !== false &&
+		providerById(box.provider?.id) === undefined &&
+		link.state !== "live" &&
+		link.error !== null &&
+		link.error !== NEEDS_PAIRING &&
+		link.error !== CONNECTION_LOST
+	);
 }
 
 export function removeBox(list: SavedBox[], key: string): SavedBox[] {

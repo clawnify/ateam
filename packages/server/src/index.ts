@@ -8,6 +8,7 @@
 
 export type { ConnectionDTO, ConnectionRecord, HostTransport, SshHost } from "./connections";
 export {
+	boxSleepsOf,
 	boxSnapshotOf,
 	boxWakeOf,
 	endpointUrl,

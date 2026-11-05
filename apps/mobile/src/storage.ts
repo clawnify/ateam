@@ -21,6 +21,10 @@ export interface SavedConnection {
 	/** The provider the phone wakes this box through before connecting, with this
 	 *  box's own inputs (its machine name). The account inputs live in the Keychain. */
 	provider?: { id: string; box: Record<string, string> };
+	/** Whether the box last said it sleeps when idle (SystemInfo.provider.sleeps);
+	 *  false while it's always on. The box's own fact, so every report replaces it.
+	 *  Absent until a box says, and the phone then goes by its provider. */
+	sleeps?: boolean;
 }
 
 /** Every box the phone has connected to, newest first (src/boxes.ts). Before the
