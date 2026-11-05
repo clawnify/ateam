@@ -49,23 +49,23 @@ describe("the QR for pairing a phone", () => {
 describe("the QR that puts every box on a phone", () => {
 	it("lists each box the phone reaches, with a code when it's locked and none when it's open", () => {
 		const { link, unreachable } = phonePairLinkOf([
-			{ ...v30("100.94.46.10:8787"), code: "FC8HQGMZ" },
-			{ ...v30("ateam-probe.boxd", "100.81.40.73:8787"), code: null },
-			{ ...v30("v6", "fd7a:115c::5:8787"), code: "K2M4P6Q8" },
+			{ ...v30("100.64.0.10:8787"), code: "FC8HQGMZ" },
+			{ ...v30("sprite-box", "100.64.0.11:8787"), code: null },
+			{ ...v30("v6", "fd7a:115c::a:8787"), code: "K2M4P6Q8" },
 			{ ...v30("hetzner"), code: "NOTUSED2" },
 		]);
 		expect(link).toBe(
-			"ateamgo://pair?b=100.94.46.10%2C8787%2CFC8HQGMZ&b=100.81.40.73%2C8787%2C&b=%5Bfd7a%3A115c%3A%3A5%5D%2C8787%2CK2M4P6Q8",
+			"ateamgo://pair?b=100.64.0.10%2C8787%2CFC8HQGMZ&b=100.64.0.11%2C8787%2C&b=%5Bfd7a%3A115c%3A%3Aa%5D%2C8787%2CK2M4P6Q8",
 		);
 		expect(unreachable).toEqual(["hetzner"]);
 	});
 
 	it("keeps the older one-box form for one locked box, and has none when no box is reachable", () => {
-		expect(phonePairLinkOf([{ ...v30("100.94.46.10:8787"), code: "FC8HQGMZ" }]).link).toBe(
-			"ateamgo://pair?host=100.94.46.10&port=8787&code=FC8HQGMZ",
+		expect(phonePairLinkOf([{ ...v30("100.64.0.10:8787"), code: "FC8HQGMZ" }]).link).toBe(
+			"ateamgo://pair?host=100.64.0.10&port=8787&code=FC8HQGMZ",
 		);
-		expect(phonePairLinkOf([{ ...v30("100.94.46.10:8787"), code: null }]).link).toBe(
-			"ateamgo://pair?b=100.94.46.10%2C8787%2C",
+		expect(phonePairLinkOf([{ ...v30("100.64.0.10:8787"), code: null }]).link).toBe(
+			"ateamgo://pair?b=100.64.0.10%2C8787%2C",
 		);
 		expect(phonePairLinkOf([{ ...v30("hetzner"), code: null }]).link).toBeNull();
 	});
