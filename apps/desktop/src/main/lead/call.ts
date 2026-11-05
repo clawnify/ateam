@@ -11,7 +11,13 @@
 // the hand-off fired under a second after the user stopped talking, and a
 // reply was spoken under a second after it was sent.
 import type { LeadCallTurn, LeadCallVerdict } from "@ateam/protocol";
-import { currentDecisionModel, judgeSpeech, openAiApiKey } from "@ateam/server";
+import {
+	askConfiguredTextModel,
+	classifyTurn,
+	currentDecisionModel,
+	judgeSpeech,
+	openAiApiKey,
+} from "@ateam/server";
 
 const LIVE_SESSIONS_URL = "https://api.openai.com/v1/live/sessions";
 export const CALL_MODEL = "gpt-live-1";
@@ -98,4 +104,57 @@ export async function startCall(
 		throw new Error(`OpenAI didn't start the call: ${why}`);
 	}
 	return { sdp: body.transport.sdp, sessionId: body.session?.id ?? "" };
+}
+
+/** A task's reply, told on a call: one short spoken line, not the reply. A
+ *  reply is usually news, not a request (the user, 2026-11-05: "they do not
+ *  necessarily mean they need us"), so the line says the user is needed only
+ *  when the board's own turn classifier says so (jev.ts classifyTurn, the
+ *  call that moves a card to Needs you). The text model writes only the
+ *  headline: asked for both in one line, it kept adding "nothing needs your
+ *  input" to news and dropped "It needs you" from a reply waiting on a choice
+ *  (2026-11-05, 9 runs). The whole reply stays in the chat. */
+export function nudgePrompt(task: string, reply: string): string {
+	return `A coding agent working on the task "${task}" just finished a turn and wrote the reply below. Write a spoken news headline about it: at most 14 words saying what the agent did or found. No pronouns (no "I", "you", "we"), no verdict on whether anyone needs to act, no markdown, IDs, links, file paths, phone numbers or other personal data. Reply with the headline only.
+
+The agent's reply:
+${reply.slice(0, 4000)}`;
+}
+
+/** The model's headline as one clean spoken phrase, or "". */
+export function headlineOf(raw: string | null): string {
+	const line = (raw ?? "").trim().split("\n")[0] ?? "";
+	return line
+		.replace(/[*_#`>]/g, "")
+		.replace(/^["'\u201c\u2018]+|["'\u201d\u2019]+$/g, "")
+		.replace(/[.!\s]+$/, "")
+		.trim();
+}
+
+/** What the board's classifier saw, as the words the call adds. */
+export function needWords(v: { step: string; legs: Record<string, number> } | null): string {
+	if (v?.step !== "needs_attention") return "";
+	if ((v.legs.asks_user ?? 0) >= 0.5) return "It's waiting on your answer.";
+	if ((v.legs.blocked ?? 0) >= 0.5) return "It says it's blocked.";
+	return "It stopped before finishing.";
+}
+
+/** The spoken line for a task's reply; plain words when no model answers in time. */
+export async function nudgeFor(task: unknown, reply: unknown): Promise<string> {
+	const name = String(task ?? "").slice(0, 120) || "a task";
+	const text = String(reply ?? "").trim();
+	if (!text) return `The task "${name}" replied. It's in the chat.`;
+	const model = currentDecisionModel();
+	const [raw, verdict] = await Promise.all([
+		askConfiguredTextModel(nudgePrompt(name, text), { maxTokens: 60, timeoutMs: 8_000 }).catch(
+			() => null,
+		),
+		model ? classifyTurn({ model, finalMessage: text }).catch(() => null) : null,
+	]);
+	const headline = headlineOf(raw);
+	const need = needWords(verdict);
+	const said = headline
+		? `The task "${name}": ${headline}.`
+		: `The task "${name}" replied, it's in the chat.`;
+	return need ? `${said} ${need}` : said;
 }

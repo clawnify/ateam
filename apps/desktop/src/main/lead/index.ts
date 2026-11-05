@@ -42,7 +42,7 @@ import {
 import type { Router } from "../backend";
 import { deliverFiles } from "../deliver-files";
 import type { Host } from "../host";
-import { judgeCall, startCall } from "./call";
+import { judgeCall, nudgeFor, startCall } from "./call";
 import { type RemoteLead, remoteLead } from "./remote";
 
 export interface LeadDeps {
@@ -308,6 +308,7 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	ipcMain.handle(LEAD_CH.callJudge, (_e, pieces: unknown, context: unknown) =>
 		judgeCall(pieces, context),
 	);
+	ipcMain.handle(LEAD_CH.callNudge, (_e, task: unknown, reply: unknown) => nudgeFor(task, reply));
 	ipcMain.handle(
 		LEAD_CH.home,
 		(e): LeadHome =>

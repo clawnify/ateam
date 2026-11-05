@@ -51,7 +51,7 @@ test("turnsFrom gives the voice the chat: the user's words, the Lead's, task rep
 
 test("announcement speaks up for task news and waiting approvals, not for settled ones", () => {
 	expect(announcement({ kind: "agent", id: "a", task, text: "Done.", at: 1 })).toBe(
-		'Update: the task "Disk usage on the box page" replied: Done.',
+		'The task "Disk usage on the box page" replied. It\'s in the chat.',
 	);
 	const perm: LeadItem = {
 		kind: "permission",

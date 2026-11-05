@@ -30,6 +30,7 @@ export type { Engine, EngineOptions } from "./engine";
 export { createEngine } from "./engine";
 export type { GrammarJudgeIssue, GrammarVerdict } from "./grammar-jev";
 export { judgeGrammar } from "./grammar-jev";
+export { classifyTurn } from "./jev";
 // The Lead chat's core: the desktop runs it over every engine it holds (a box's
 // engine runs its own for the phone, cli.ts).
 export { LEAD_IDLE_STOP_MS } from "./lead/engine-lead";
@@ -51,6 +52,7 @@ export {
 	settingsPath,
 	updateSettings,
 } from "./settings-file";
+export { askConfiguredTextModel } from "./text-model";
 export { socketClientTransport, socketServerTransport } from "./transport/socket";
 export type { SshClient, SshExecOptions, SshExecResult, SshOptions } from "./transport/ssh";
 export {

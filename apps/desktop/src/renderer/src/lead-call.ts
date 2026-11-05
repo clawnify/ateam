@@ -171,8 +171,10 @@ export function contextFrom(
  *  person: the voice is the Lead (main/lead/call.ts CALL_INSTRUCTIONS). */
 export function announcement(item: LeadItem): string | null {
 	switch (item.kind) {
+		// A task's reply is said as one short line, written by the text model
+		// (LeadCall.nudge): this is only what to say if that never comes.
 		case "agent":
-			return `Update: the task "${item.task.name}" replied: ${speakable(item.text, 900)}`;
+			return `The task "${item.task.name}" replied. It's in the chat.`;
 		case "page":
 			return `Update: the task "${item.task.name}" put a page in the chat, "${item.title}".`;
 		case "permission":
@@ -660,8 +662,21 @@ export class LeadCall {
 		}
 		if (this.seen.has(item.id)) return;
 		this.seen.add(item.id);
+		if (item.kind === "agent") {
+			void this.nudge(item);
+			return;
+		}
 		const say = announcement(item);
 		if (say) this.send("session.commentary.append", null, say);
+	}
+
+	/** A task's reply, told as one short line: usually news, not a request. */
+	private async nudge(item: Extract<LeadItem, { kind: "agent" }>): Promise<void> {
+		const line = await this.lead()
+			.callNudge(item.task.name, item.text)
+			.catch(() => announcement(item));
+		if (this.state === "off" || !line) return;
+		this.send("session.commentary.append", null, line);
 	}
 
 	// ---- hold and wake -------------------------------------------------------------

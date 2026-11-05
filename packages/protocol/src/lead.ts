@@ -52,6 +52,8 @@ export const LEAD_CH = {
 	 *  or hung up (false). While a call is on, the Lead's messages and answers to
 	 *  tasks wait as permission cards for the user's tap (v32 on a box). */
 	callActive: "lead:callActive",
+	/** A task's reply as one short line for a call to say, by this Mac's text model. */
+	callNudge: "lead:callNudge",
 	evtEvent: "evt:lead:event",
 	evtHome: "evt:lead:home",
 } as const;
@@ -348,4 +350,7 @@ export interface AteamLead {
 	 *  while it lasts) or hung up (false). Throws when that chat lives on a box
 	 *  too old to hold its Lead's messages for a tap. */
 	callActive(on: boolean): Promise<void>;
+	/** One short spoken line for a task's reply (`task` its name): what it did or
+	 *  found, and "It needs you." only when it asks the user something. */
+	callNudge(task: string, reply: string): Promise<string>;
 }
