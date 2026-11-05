@@ -2,13 +2,16 @@ import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AgentDTO } from "@ateam/protocol";
 import type { ProviderOptions } from "../../../shared/host";
-import { BoxReadinessChecklist } from "./BoxReadinessChecklist";
+import { stripAnsi } from "../lib/ansi";
 import { HetznerLogo } from "./HetznerLogo";
 
-// "Create a box" — Ateam stands up a fresh VPS at a provider, generates the SSH key,
-// joins Tailscale, and installs the engine, so the user never opens a provider console
-// or manages a key. Regions + sizes are fetched with the token, so they reflect the
-// account's REAL availability instead of a hardcoded guess that can fail at create time.
+// "Create a box": Ateam stands up a fresh VPS at a provider, generates the SSH key,
+// joins Tailscale, and installs the engine. Regions + sizes are fetched with the token,
+// so they reflect the account's REAL availability instead of a hardcoded guess that can
+// fail at create time. The two credentials say where they come from: neither console
+// can be pre-filled from a link (Hetzner's token page sits under a project id), so each
+// gets the exact path and a button to the console. Once the box is up, the dialog hands
+// it on (`onDone`): what's left to set up is the box's own page.
 export function CreateBoxDialog({
 	onDone,
 	onClose,
@@ -33,10 +36,6 @@ export function CreateBoxDialog({
 	const [error, setError] = useState<string | null>(null);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [preinstall, setPreinstall] = useState<string[]>([]);
-	// After a box is created + connected: the alias to probe + the agents it came with,
-	// which the readiness checklist below renders.
-	const [readyAlias, setReadyAlias] = useState<string | null>(null);
-	const [readyAgents, setReadyAgents] = useState<string[]>([]);
 	const logRef = useRef<HTMLPreElement>(null);
 
 	const loadOptions = async () => {
@@ -70,10 +69,11 @@ export function CreateBoxDialog({
 	const availableSizes = options
 		? options.serverTypes.filter((st) => st.locations.length === 0 || st.locations.includes(region))
 		: [];
-	// Keep the chosen size valid as the region changes.
+	// Keep the chosen size valid as the region changes, starting from the smallest with
+	// 4 GB: agents need about a gigabyte each, and the smallest Hetzner sells has one.
 	useEffect(() => {
 		if (availableSizes.length > 0 && !availableSizes.some((s) => s.slug === size)) {
-			setSize(availableSizes[0]?.slug ?? "");
+			setSize((availableSizes.find((s) => s.memory >= 4) ?? availableSizes[0])?.slug ?? "");
 		}
 		// biome-ignore lint/correctness/useExhaustiveDependencies: react to region/options only
 	}, [region, options]);
@@ -103,12 +103,9 @@ export function CreateBoxDialog({
 				tailscaleAuthKey: tsKey.trim() || undefined,
 				agents: preinstall.length ? preinstall : undefined,
 			});
-			// Created + connected (always a remote engine). Show what's left to make it
-			// task-ready (GitHub sign-in, agent logins) instead of closing blind.
-			if (status.alias) {
-				setReadyAlias(status.alias);
-				setReadyAgents(status.info.agents);
-			}
+			// Created + connected (always a remote engine): what's left to make it
+			// task-ready (GitHub, phone, agent sign-in) is on its own page.
+			if (status.alias) onDone(status.alias);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -119,7 +116,9 @@ export function CreateBoxDialog({
 	};
 
 	return (
-		<div className="overlay" onMouseDown={onClose}>
+		// A click beside the dialog while it works would only hide the progress: the box
+		// is still being made, and lands on its page when it's done.
+		<div className="overlay" onMouseDown={() => !busy && onClose()}>
 			<div className="dialog createbox" onMouseDown={(e) => e.stopPropagation()}>
 				<div className="cb-head">
 					<HetznerLogo size={17} />
@@ -144,19 +143,11 @@ export function CreateBoxDialog({
 						</ul>
 						{log && (
 							<pre ref={logRef} className="cb-log">
-								{log}
+								{stripAnsi(log)}
 							</pre>
 						)}
 						{error && <div className="cb-error">{error}</div>}
-						{!busy && readyAlias ? (
-							<BoxReadinessChecklist
-								alias={readyAlias}
-								agents={readyAgents}
-								label={name.trim() || readyAlias}
-								title="Box created. A few things left:"
-								onDone={() => onDone(readyAlias)}
-							/>
-						) : !busy ? (
+						{!busy ? (
 							<div className="cb-actions">
 								<button
 									type="button"
@@ -194,27 +185,65 @@ export function CreateBoxDialog({
 								type="password"
 								value={token}
 								placeholder={
-									saved.hetznerToken ? "saved ✓ — leave blank to reuse" : "paste your token"
+									saved.hetznerToken ? "saved, leave blank to reuse it" : "paste your token"
 								}
-								// A new token means a possibly different account — reload availability.
+								// A new token means a possibly different account: reload availability.
 								onChange={(e) => {
 									setToken(e.target.value);
 									setOptions(null);
 								}}
 							/>
 						</label>
+						{!saved.hetznerToken && (
+							<div className="cb-help">
+								<span>
+									In the Hetzner Console, open a project, then <b>Security</b> → <b>API tokens</b> →{" "}
+									<b>Generate API token</b>, with <b>Read &amp; Write</b>. Hetzner shows it once.
+								</span>
+								<button
+									type="button"
+									className="cb-link"
+									onClick={() =>
+										void window.ateamHost.openConsole("https://console.hetzner.com/projects")
+									}
+								>
+									Open the Hetzner Console
+								</button>
+							</div>
+						)}
 						<label className="cb-row">
-							<span>Tailscale auth key</span>
+							<span>Tailscale auth key (optional)</span>
 							<input
 								className="cb-input"
 								type="password"
 								value={tsKey}
 								placeholder={
-									saved.tailscaleAuthKey ? "saved ✓ — leave blank to reuse" : "tskey-auth-…"
+									saved.tailscaleAuthKey ? "saved, leave blank to reuse it" : "tskey-auth-…"
 								}
 								onChange={(e) => setTsKey(e.target.value)}
 							/>
 						</label>
+						{!saved.tailscaleAuthKey && (
+							<div className="cb-help">
+								<span>
+									Leave it empty to approve the box on Tailscale's page when it's created. Or make
+									one under <b>Settings</b> → <b>Keys</b> → <b>Generate auth key</b>: turn on{" "}
+									<b>Tags</b> so the box stays on your tailnet for good, and <b>Reusable</b> if
+									Ateam should use it for your next boxes too.
+								</span>
+								<button
+									type="button"
+									className="cb-link"
+									onClick={() =>
+										void window.ateamHost.openConsole(
+											"https://console.tailscale.com/admin/settings/keys",
+										)
+									}
+								>
+									Open Tailscale's keys
+								</button>
+							</div>
+						)}
 
 						{options ? (
 							<>

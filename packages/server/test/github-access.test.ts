@@ -28,6 +28,7 @@ function machine(opts: {
 	systemHelper?: boolean;
 	gitName?: string;
 	ghLoginFails?: string;
+	gitEmail?: string;
 	env?: NodeJS.ProcessEnv;
 	users?: Record<string, { status: number; login?: string; expiry?: string }>;
 	discovery?: Record<string, number>;
@@ -68,7 +69,10 @@ function machine(opts: {
 			if (!opts.gitName) throw new Error("");
 			return { stdout: `${opts.gitName}\n`, stderr: "" };
 		}
-		if (line === "git config --global --get user.email") throw new Error("");
+		if (line === "git config --global --get user.email") {
+			if (!opts.gitEmail) throw new Error("");
+			return { stdout: `${opts.gitEmail}\n`, stderr: "" };
+		}
 		if (line.startsWith("git config --global user.")) return { stdout: "", stderr: "" };
 		throw new Error(`unexpected command: ${line}`);
 	};
@@ -211,6 +215,18 @@ describe("connectGithubToken", () => {
 		});
 		await connectGithubToken(PAT, deps);
 		expect(calls.map((c) => c.args.join(" "))).not.toContain("config --global user.name octo");
+	});
+
+	it("replaces a box image's stand-in identity, which credits commits to no one", async () => {
+		const { deps, calls } = machine({
+			gitName: "Sprite",
+			gitEmail: "noreply@sprites.dev",
+			users: { [PAT]: { status: 200, login: "octo" } },
+		});
+		await connectGithubToken(PAT, deps);
+		const set = calls.map((c) => c.args.join(" "));
+		expect(set).toContain("config --global user.name octo");
+		expect(set).toContain("config --global user.email 42+octo@users.noreply.github.com");
 	});
 
 	it("leaves a provider's system-wide git helper in charge of git", async () => {

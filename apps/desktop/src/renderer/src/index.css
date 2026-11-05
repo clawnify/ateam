@@ -3057,6 +3057,9 @@ input {
 .dialog.createbox {
 	width: 420px;
 	max-width: calc(100vw - 80px);
+	/* A long install log or an error must not push the buttons off the window. */
+	max-height: calc(100vh - 80px);
+	overflow-y: auto;
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
@@ -3204,17 +3207,40 @@ input {
 	color: var(--text);
 	cursor: pointer;
 }
-
-/* Shared box-readiness checklist (after Create-a-box or Set-up-over-SSH). */
-.box-ready {
+/* The global `input` rule (full width, padded) is for text fields, not checkboxes. */
+.cb-agent input[type="checkbox"] {
+	width: auto;
+	margin: 0;
+	padding: 0;
+}
+/* Where a credential comes from, under its field: the console path and a button there. */
+.cb-help {
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	align-items: flex-start;
+	gap: 6px;
+	margin-top: -4px;
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--text-dim);
 }
-.box-ready-title {
-	font-size: 13px;
+.cb-help b {
+	font-weight: 500;
 	color: var(--text);
 }
+.cb-link {
+	padding: 0;
+	border: none;
+	background: none;
+	font: inherit;
+	font-size: 12px;
+	color: var(--text);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	cursor: pointer;
+}
+
+/* A box page's "Finish setting it up" list (BoxPage.tsx): done, or what's left. */
 .box-ready-list {
 	list-style: none;
 	margin: 0;
@@ -3251,11 +3277,6 @@ input {
 	background: var(--bg-elev-2);
 	padding: 1px 5px;
 	border-radius: 4px;
-}
-.box-ready-actions {
-	display: flex;
-	gap: 8px;
-	justify-content: flex-end;
 }
 
 /* ---- A box's GitHub access (GithubAccess.tsx): who it signs in as, per-repo push ---- */
@@ -3410,6 +3431,67 @@ input {
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
+}
+/* Settings → Boxes: one row per box, opening its page. */
+.box-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.box-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	width: 100%;
+	padding: 12px 14px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-elev);
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.box-row:hover {
+	border-color: var(--text-dim);
+}
+.box-row:focus-visible {
+	outline: 1px solid var(--text);
+	outline-offset: 1px;
+}
+.box-row-chevron {
+	flex-shrink: 0;
+	color: var(--text-dim);
+}
+/* A box's own page (BoxPage.tsx), in Settings or in a dialog over New task. */
+.box-page {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	min-width: 0;
+}
+.box-page-dialog {
+	max-height: calc(100vh - 80px);
+	overflow-y: auto;
+}
+/* The dialog's close button sits where the header's actions end: leave it room. */
+.box-page-dialog .box-card-head {
+	padding-right: 28px;
+}
+/* An icon, not one of the app's bordered buttons. */
+.box-page-close,
+.box-page-close:hover {
+	padding: 2px;
+	border: none;
+	border-radius: 4px;
+	background: none;
+}
+.box-page-close:focus-visible {
+	outline: 1px solid var(--text);
 }
 .box-card {
 	display: flex;
@@ -3599,6 +3681,39 @@ input {
 	font-size: 13px;
 	font-weight: 500;
 	color: var(--text-dim);
+}
+/* A section's own page (a box's, under Boxes): crumbs back in its heading's place. */
+.settings-crumbs {
+	margin: 0 0 12px;
+}
+.settings-crumbs ol {
+	/* No reset covers lists here: without these the crumbs are numbered and indented. */
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	gap: 6px;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--text-dim);
+}
+.settings-crumbs [data-slot="breadcrumb-separator"] {
+	display: inline-flex;
+}
+.settings-crumbs [aria-current="page"] {
+	color: var(--text);
+	font-weight: 500;
+}
+/* The crumb back is a button (app state, not a URL), not one of the app's bordered ones. */
+.settings-crumb-link,
+.settings-crumb-link:hover {
+	padding: 0;
+	border: none;
+	background: none;
+	font: inherit;
+	color: var(--text-dim);
+}
+.settings-crumb-link:hover {
+	color: var(--text);
 }
 .settings-group {
 	border: 1px solid var(--border);

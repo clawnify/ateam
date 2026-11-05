@@ -12,6 +12,9 @@ export interface SshClient {
 	child: ChildProcess;
 	/** Kill the ssh child (ends the relay; the remote daemon and its sessions live on). */
 	close(): void;
+	/** The last few KB ssh wrote to stderr, once it has exited (waiting at most `ms`
+	 *  for that): where its reason for refusing a connection is, for describeSshFailure. */
+	stderr(ms?: number): Promise<string>;
 }
 
 export interface SshOptions {
@@ -39,13 +42,29 @@ export function sshClientTransport(
 	opts: SshOptions = {},
 ): SshClient {
 	const child = spawn("ssh", [...KEEPALIVE, ...(opts.sshFlags ?? []), host, ...remoteArgs], {
-		stdio: ["pipe", "pipe", "inherit"],
+		stdio: ["pipe", "pipe", "pipe"],
 	});
 	if (!child.stdout || !child.stdin) {
 		throw new Error("ssh child is missing stdio pipes");
 	}
+	// Passed on to this process's stderr as before, and its tail kept: a reconnect ssh
+	// refuses (a rebuilt box's new host key, say) has no other way to say why.
+	let said = "";
+	child.stderr?.on("data", (chunk: Buffer) => {
+		process.stderr.write(chunk);
+		said = (said + chunk.toString("utf8")).slice(-4096);
+	});
+	const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
 	const transport = streamClientTransport(child.stdout, child.stdin);
-	return { transport, child, close: () => child.kill() };
+	return {
+		transport,
+		child,
+		close: () => child.kill(),
+		stderr: async (ms = 1_000) => {
+			await Promise.race([exited, new Promise((r) => setTimeout(r, ms))]);
+			return said;
+		},
+	};
 }
 
 export interface SshExecResult {
@@ -126,7 +145,12 @@ export async function firstContactFlags(
 export function describeSshFailure(output: string): string | null {
 	// Checked before the unknown-key case: ssh ends this one with the same last line.
 	if (output.includes("REMOTE HOST IDENTIFICATION HAS CHANGED")) {
-		return "The box's host key has changed since this Mac last connected, so ssh refused it. If the box was rebuilt, remove its old key from ~/.ssh/known_hosts (the log names the line), then try again.";
+		// ssh names the known_hosts line holding the old key; a reconnect has no log to show.
+		const old = output.match(/Offending \S+ key in (\S+):(\d+)/);
+		const where = old
+			? `line ${old[2]} of ${old[1]}`
+			: "~/.ssh/known_hosts (the log names the line)";
+		return `The box's host key has changed since this Mac last connected, so ssh refused it. If the box was rebuilt, remove its old key from ${where}, then try again.`;
 	}
 	// StrictHostKeyChecking yes in the user's ssh config: ssh never adds a new key,
 	// so a terminal would refuse this box too, and the key has to be added by hand.
@@ -139,6 +163,11 @@ export function describeSshFailure(output: string): string | null {
 	if (/Permission denied \([\w,-]+\)/.test(output)) {
 		return "The box didn't accept a key ssh could use without asking. A key with a passphrase only works here once it's loaded into ssh-agent, and a provider may need a key of its own, named by an IdentityFile in ~/.ssh/config.";
 	}
+	// A destination with a space or other character no host name has, such as a pasted
+	// `ssh mybox` ("hostname contains invalid characters").
+	if (output.includes("hostname contains invalid characters")) {
+		return "That isn't a box ssh can reach: give just its name in your ssh config, or user@host, with no spaces.";
+	}
 	if (output.includes("ssh: Could not resolve hostname")) {
 		return "ssh couldn't find a box by that name. Check the spelling, or that it matches a Host in ~/.ssh/config.";
 	}
@@ -150,4 +179,19 @@ export function describeSshFailure(output: string): string | null {
 		return "Nothing answered on the box's SSH port. Check that the box is running and the address is right.";
 	}
 	return null;
+}
+
+/**
+ * Why install.sh stopped, in its own words: the last line it died with (`!! …`, its
+ * die()), read from what sshExec streamed. Null when it said nothing that way, such
+ * as when ssh itself failed.
+ */
+export function installerFailure(output: string): string | null {
+	const lines = output.split(/\r?\n/).filter((l) => l.startsWith("!! "));
+	if (lines.length > 0) return (lines[lines.length - 1] ?? "").slice(3).trim() || null;
+	// The installer never ran: the box couldn't download it.
+	const curl = output.match(/^curl: \(\d+\) (.+)$/m)?.[1]?.trim();
+	return curl
+		? `The box couldn't download Ateam's installer (${curl}). Check that it can reach github.com, then try again.`
+		: null;
 }

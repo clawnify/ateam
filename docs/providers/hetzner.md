@@ -8,16 +8,32 @@ on a public IPv4 you close off with Tailscale. It's the one provider Ateam can
 which provisions the server, generates the SSH key, joins your tailnet and installs
 the engine, with no provider console or terminal to touch.
 
-**Verified against** — *not re-verified for this page.* The steps are carried from
-[`../online-ateam.md`](../online-ateam.md), which is the canonical VPS walkthrough.
-Re-stamp this line the next time you create a box end to end.
+**Verified against** Ateam v0.1.87 · Hetzner Cloud · 2026-11-04. Run end to end in the
+released app: Create a box with an API token and a tagged Tailscale auth key made an Arm
+server (Ubuntu 24.04, 4 vCPU, 8 GB) with the engine running as its service, on the tailnet
+with its tag, reached over the tailnet by a client speaking Ateam Go's protocol. The run
+found the bugs that Ateam 0.1.88 fixes, listed under [Gotchas](#gotchas). **Not run:** the
+0.1.88 form itself (a box without an auth key), and the by-hand path below.
 
 ## Create a box
 
-**In the app:** New Task → **Run on** → **Create a box**. Pick a region
-(Falkenstein, Nuremberg, Helsinki, …) and a size, and paste a Hetzner Cloud API
-token — your account, your bill. The picker reads the live per-account catalog, so
-it only offers regions and sizes actually in stock.
+**In the app:** New Task → **Run on** → **Create a box**, or Settings → Boxes → **Add a
+box** → **Create a new box**. Name it and paste a Hetzner Cloud API token (your account,
+your bill), then pick a region and a size from the account's live catalog.
+
+- **The API token:** in the [Hetzner Console](https://console.hetzner.com/projects), open
+  a project (or make one), then **Security** in the sidebar → **API tokens** → **Generate
+  API token**, with **Read & Write**. Hetzner shows it once. The form links there.
+- **The Tailscale auth key** is optional from Ateam 0.1.88. Leave it empty, and once the
+  server is up your browser opens Tailscale's page to approve the box, as Set up phone
+  access does ([recipe](README.md), step 4). Or make one in Tailscale's admin, **Settings
+  → Keys → Generate auth key**: turn on **Tags** so the box never drops off your tailnet,
+  and **Reusable** if Ateam should use it for your next boxes too (it keeps the key
+  encrypted on this Mac; a one-off key works once).
+- **Sizes:** the smallest with 4 GB is picked to start with. Agents need about a gigabyte
+  each; the smallest Hetzner sells has one.
+
+When the box is up, its page opens with what's left: GitHub, and signing in to an agent.
 
 **By hand:** create a **CX23** (x86) or **CAX11** (Arm64) — 2 vCPU / 4 GB / 40 GB —
 on Ubuntu with your SSH key attached, then follow
@@ -33,15 +49,14 @@ the walkthrough.
 
 ## GitHub credentials
 
-Plain `gh auth login` on the box (device code — works over SSH), plus a git identity:
+Connect GitHub from Ateam, under GitHub on the box's page in **Settings → Boxes**, which opens after
+Create a box, with a fine-grained token for the repositories the box works on (Ateam opens
+GitHub's form with the rest filled in; see [Sprites](sprites.md#github-credentials) for
+the permissions). The git identity then sets itself from the account.
 
-```bash
-git config --global user.name "you" && git config --global user.email "you@example.com"
-gh auth login
-```
-
-There is no provider-supplied credential helper to conflict with, so unlike some
-providers, running `gh auth setup-git` here is harmless.
+There is no provider-supplied credential helper to conflict with, so `gh auth login` on
+the box works too, but it hands the box's agents a token that reaches every repo your
+account can.
 
 ## Install the engine
 
@@ -56,15 +71,25 @@ an out-of-memory kill; see [Keeping the daemon alive](../online-ateam.md#keeping
 
 ## Connect
 
-Add a `Host` entry to your Mac's `~/.ssh/config` pointing at the box's **tailnet**
-address (`100.x.y.z`), then pick that alias in the connection switcher. The in-app
-Create-a-box flow writes this entry for you.
+Create a box writes a `Host` entry for the box to your Mac's `~/.ssh/config` (its public
+address and the key Ateam generated) and connects it. For a box made by hand, add an
+entry yourself, ideally pointing at the box's **tailnet** address (`100.x.y.z`) once
+the public port is closed, and pick the alias in Ateam (New task → **Run on**, or
+**Settings → Boxes → Add a box → Set up a box over SSH**), which installs the engine
+and connects.
 
 ## iOS
 
-**Yes — this is the reference setup.** The box joins your tailnet directly
-(`tailscale up`), the daemon binds the box's own tailnet IP, and the phone connects
-over the tailnet:
+**Yes, this is the reference setup.** The box joins your tailnet directly, the daemon
+binds the box's own tailnet IP, and the phone connects over the tailnet. Given an auth
+key, Create a box joins with it. Make that key with a tag: a device it adds takes the tag,
+and tagged devices don't expire, while an untagged one drops off the tailnet after 180 days
+by default and the phone loses the box without saying why. The tag has to exist in your
+tailnet's policy (`tagOwners`). Without a key, you approve the box from Tailscale's page,
+and its key expires unless you turn that off; the box's page says when.
+
+By hand, the installer's `--tailscale` joins the tailnet and opens the phone's port on
+it (with `TS_AUTHKEY=<key>` it needs no browser), or set the address yourself:
 
 ```bash
 export ATEAM_WS_ADDR=100.x.y.z:8787    # the box's OWN Tailscale IP
@@ -72,6 +97,14 @@ curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server
 ```
 
 ## Gotchas
+
+- **Fixed in Ateam 0.1.88, seen on 0.1.87:** the size list offered types the chosen region
+  doesn't sell, so Create failed with `unsupported location for server type`. Hetzner
+  retires a type per location (the old shared AMD types left FSN, NBG, HEL and SIN on
+  2026-01-01), and dropped the type-wide `deprecated` flag on 2026-11-02; the list now
+  reads each location's own entry. The same run's dialog grew past the window with no way
+  to scroll to Done, said "no coding agent yet" right after installing two, printed raw
+  colour codes in its log, and preinstalled OpenCode where a login shell can't find it.
 
 - **Allow the whole `tailscale0` interface, not just port 22.** `ufw enable` sets the
   default incoming policy to deny, so a port-22-only rule silently blocks the

@@ -3,13 +3,19 @@
 // the shipped judgeGrammar, printed with each issue's probability so the
 // question and KEEP_PROBABILITY can be judged against real answers.
 //
-// Makes live OpenRouter calls (a fraction of a cent in all). Run by hand:
-//   cd apps/desktop && bun scripts/grammar-jev-calibrate.ts
-// Key: OPENROUTER_API_KEY, else ~/.ateam/credentials.json.
+// Makes live calls (a fraction of a cent in all). Run by hand:
+//   cd apps/desktop && bun scripts/grammar-jev-calibrate.ts                    (Jev, OpenRouter)
+//   cd apps/desktop && bun scripts/grammar-jev-calibrate.ts --provider openai  (Luna, OpenAI)
+// Key: OPENROUTER_API_KEY, else ~/.ateam/credentials.json; OpenAI's from the file only.
 import { LocalLinter } from "harper.js";
 import { binary } from "harper.js/binary";
-import { openRouterApiKey } from "../../../packages/server/src/credentials-file";
-import { judgeGrammar } from "../../../packages/server/src/grammar-jev";
+import { openAiApiKey, openRouterApiKey } from "../../../packages/server/src/credentials-file";
+import type { DecisionProvider } from "../../../packages/server/src/decision-model";
+import {
+	GRAMMAR_MODEL,
+	judgeGrammar,
+	KEEP_PROBABILITY,
+} from "../../../packages/server/src/grammar-jev";
 import { issuesToShow } from "../src/renderer/src/grammar/filter";
 
 /** Per flagged word: true = a real mistake to show, false = noise to hide. */
@@ -44,8 +50,12 @@ const CASES: { draft: string; expect: Record<string, boolean> }[] = [
 	{ draft: "the agent keeps loosing the draft when i paste", expect: { loosing: true } },
 ];
 
-const key = openRouterApiKey();
-if (!key) throw new Error("no OpenRouter key");
+const provider: DecisionProvider = process.argv.includes("openai") ? "openai" : "openrouter";
+const key = provider === "openai" ? openAiApiKey() : openRouterApiKey();
+if (!key) throw new Error(`no ${provider} key`);
+console.log(
+	`${GRAMMAR_MODEL[provider]} on ${provider}, show at p >= ${KEEP_PROBABILITY[provider]}\n`,
+);
 const linter = new LocalLinter({ binary });
 
 let agree = 0;
@@ -69,7 +79,7 @@ for (const c of CASES) {
 	}
 	const t0 = Date.now();
 	const verdicts = await judgeGrammar({
-		apiKey: key,
+		model: { provider, apiKey: key },
 		draft: c.draft,
 		issues: issues.map((i) => ({ ...i, suggestions: i.suggestions.map((s) => s.label) })),
 	});

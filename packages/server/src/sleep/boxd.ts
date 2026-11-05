@@ -92,6 +92,7 @@ export async function boxdSleepDriver(opts: {
 	const suspendOff = () => run("boxd", ["machine", "config", "set", "auto-suspend.timeout", "0"]);
 	return {
 		where: `boxd machine ${name}`,
+		provider: { id: "boxd", box: { machine: name } },
 		canWakeForLoops: canWake,
 		hold: async () => {
 			await suspendOff();

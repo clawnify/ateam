@@ -19,11 +19,13 @@ import {
 	Server,
 	X,
 } from "lucide-react";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import type { HostStatus, WakeStatus } from "../../../shared/host";
-import { BoxReadinessChecklist } from "./BoxReadinessChecklist";
+import { startSetup, useSetups } from "../lib/setups";
+import { sshDestination } from "../lib/ssh-destination";
+import { BoxPageDialog } from "./BoxPage";
 import { ConnectSteps } from "./ConnectSteps";
 import { CreateBoxDialog } from "./CreateBoxDialog";
 import { PickerHeading, PickerRow, pickerTrigger } from "./picker";
@@ -89,24 +91,33 @@ export function EnvironmentPicker({
 	onAdd,
 	onInstall,
 	onForget,
+	addOnly = false,
+	onSetUp,
 }: {
 	environments: EnvOption[];
 	value: string | null;
 	onChange: (alias: string | null) => void;
 	/** Connect a Tailscale endpoint (`host:port`), waking it through `wake` first and
-	 *  saving that provider with it (null: none); rejects with a message to show. */
-	/** Connect a Tailscale box by address, with a pairing code for one locked to its devices. */
+	 *  saving that provider with it (null: none), with a pairing code for a box locked
+	 *  to its devices; rejects with a message to show. */
 	onAdd?: (endpoint: string, wake: BoxWake | null, code?: string) => Promise<void>;
 	/** Install the engine on a fresh SSH box (`alias` or `user@host`), streaming the
 	 *  installer's output; resolves once the box is set up and connected. */
 	onInstall?: (dest: string, onLog: (chunk: string) => void) => Promise<HostStatus>;
 	/** Remove a box from this list (disconnecting it first if connected). */
 	onForget?: (alias: string) => Promise<void>;
+	/** Settings → Boxes: no list to pick from, just the ways to add a box, behind an
+	 *  "Add a box" button. */
+	addOnly?: boolean;
+	/** A box was added (set up, created, or connected by its Tailscale address): open its
+	 *  page. Without it, a box set up or created here is picked and its page opens in a
+	 *  dialog over what's open, so a task being written keeps its draft. */
+	onSetUp?: (alias: string) => void;
 }) {
 	// The add-a-connection section: "" collapsed → "menu" (the methods) → a chosen
-	// method's inline form → "ready" (the readiness checklist after an SSH set-up).
-	// "Create a new box" opens a modal instead (too big for here).
-	const [addMode, setAddMode] = useState<"" | "menu" | "ssh" | "tailscale" | "ready">("");
+	// method's inline form. "Create a new box" opens a modal instead (too big for here).
+	// What's left once a box is up is on its page (BoxPage.tsx), not in here.
+	const [addMode, setAddMode] = useState<"" | "menu" | "ssh" | "tailscale">("");
 	// Where the back arrow returns to: the list for a form opened from a box's row (its
 	// moon or update button), the methods for one picked from the menu.
 	const [backTo, setBackTo] = useState<"" | "menu">("");
@@ -127,21 +138,25 @@ export function EnvironmentPicker({
 	const [code, setCode] = useState("");
 	const [open, setOpen] = useState(false);
 	const [dest, setDest] = useState("");
-	const [installing, setInstalling] = useState(false);
-	const [log, setLog] = useState("");
 	const [installError, setInstallError] = useState<string | null>(null);
-	// The box a Set-up-over-SSH just produced — probed by the readiness checklist.
-	const [installedAlias, setInstalledAlias] = useState<string | null>(null);
-	const [installedAgents, setInstalledAgents] = useState<string[]>([]);
+	// The box just set up or created here, whose page is open over what's open.
+	const [finishing, setFinishing] = useState<string | null>(null);
 	const [creating, setCreating] = useState(false);
-	const logRef = useRef<HTMLPreElement>(null);
+	// Set-ups started here that aren't boxes yet: a row each, back to the box's page,
+	// since closing that page (or this popover) leaves the set-up running.
+	const setups = useSetups();
+	const pendingSetups = setups.filter(
+		(s) => s.state !== "done" && !environments.some((e) => e.alias === s.dest),
+	);
 
 	const isRemote = value !== null;
 	const label = environments.find((e) => e.alias === value)?.label ?? "Local";
 
 	const close = () => {
 		setOpen(false);
-		setAddMode("");
+		// Settings' button opens on the ways to add a box every time, and its list must
+		// not flash up while the popover fades out.
+		if (!addOnly) setAddMode("");
 	};
 
 	const pick = (env: EnvOption) => {
@@ -175,7 +190,12 @@ export function EnvironmentPicker({
 	}, [addMode, endpoint]);
 
 	const back = () => {
-		setAddMode(addMode === "menu" || addMode === "ready" ? "" : backTo);
+		// With no list behind the ways to add a box, backing out of them closes it.
+		if (addOnly && addMode === "menu") {
+			close();
+			return;
+		}
+		setAddMode(addMode === "menu" ? "" : backTo);
 		setError(null);
 		setInstallError(null);
 	};
@@ -184,9 +204,7 @@ export function EnvironmentPicker({
 			? "Add a remote connection"
 			: addMode === "tailscale"
 				? "Tailscale box"
-				: addMode === "ssh"
-					? "Set up over SSH"
-					: "Box set up";
+				: "Set up over SSH";
 
 	/** Open the Tailscale form, empty or for a listed box whose provider to change. */
 	const openTailscale = (env?: EnvOption) => {
@@ -255,6 +273,7 @@ export function EnvironmentPicker({
 			setNeedsCode(false);
 			setCode("");
 			close();
+			onSetUp?.(ep);
 		} catch (err) {
 			const said = errorText(err);
 			if (said === NEEDS_PAIRING) {
@@ -266,31 +285,32 @@ export function EnvironmentPicker({
 		}
 	};
 
-	// Keep the streaming installer log pinned to its newest line.
-	useEffect(() => {
-		if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-	}, [log]);
+	/** A box is up: its page shows what's left (in Settings, in place of the list). */
+	const finished = (alias: string) => {
+		if (onSetUp) onSetUp(alias);
+		else setFinishing(alias);
+	};
 
-	const submitInstall = async () => {
-		const d = dest.trim();
-		if (!d || !onInstall || installing) return;
-		setInstalling(true);
-		setInstallError(null);
-		setLog("");
-		try {
-			const status = await onInstall(d, (chunk) => setLog((prev) => prev + chunk));
-			// install() sets the box up AND connects it — select it right away (so clicking
-			// away can't strand the pick), then show its readiness checklist.
-			onChange(d);
-			setDest("");
-			setInstalledAlias(d);
-			setInstalledAgents(status.info.agents);
-			setAddMode("ready");
-		} catch (err) {
-			setInstallError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setInstalling(false);
+	// Set up hands the box straight to its page, which shows the install as it goes
+	// (lib/setups.ts): a popover that closes on any click elsewhere is no place to watch
+	// a minute-long install, and closing it never stopped the install, only the view.
+	const submitInstall = () => {
+		if (!onInstall) return;
+		const typed = sshDestination(dest);
+		if ("problem" in typed) {
+			setInstallError(typed.problem);
+			return;
 		}
+		const d = typed.dest;
+		setInstallError(null);
+		setDest("");
+		close();
+		finished(d);
+		// Picked once it's up and connected, so a failed set-up never stays the pick.
+		startSetup(d, (onLog) => onInstall(d, onLog)).then(
+			() => onChange(d),
+			() => {},
+		);
 	};
 
 	return (
@@ -298,43 +318,54 @@ export function EnvironmentPicker({
 			<Popover
 				open={open}
 				onOpenChange={(next) => {
-					if (next) setOpen(true);
-					else close();
+					if (!next) close();
+					else {
+						setOpen(true);
+						if (addOnly) setAddMode("menu");
+					}
 				}}
 			>
 				<PopoverTrigger asChild>
-					<Button
-						variant="ghost"
-						size="sm"
-						className={pickerTrigger}
-						title="Run on — which machine runs this task"
-					>
-						{isRemote ? (
-							<Server className="size-3.5" strokeWidth={1.75} />
-						) : (
-							<Laptop className="size-3.5" strokeWidth={1.75} />
-						)}
-						<span>{label}</span>
-						<span
-							className={cn(
-								"size-1.5 flex-none rounded-full bg-muted-foreground",
-								isRemote && "bg-success shadow-[0_0_6px_rgba(74,222,128,0.7)]",
+					{addOnly ? (
+						<Button variant="outline" size="xs">
+							<Plus className="size-3.5" strokeWidth={1.75} />
+							Add a box
+						</Button>
+					) : (
+						<Button
+							variant="ghost"
+							size="sm"
+							className={pickerTrigger}
+							title="Run on — which machine runs this task"
+						>
+							{isRemote ? (
+								<Server className="size-3.5" strokeWidth={1.75} />
+							) : (
+								<Laptop className="size-3.5" strokeWidth={1.75} />
 							)}
-						/>
-					</Button>
+							<span>{label}</span>
+							<span
+								className={cn(
+									"size-1.5 flex-none rounded-full bg-muted-foreground",
+									isRemote && "bg-success shadow-[0_0_6px_rgba(74,222,128,0.7)]",
+								)}
+							/>
+						</Button>
+					)}
 				</PopoverTrigger>
 				{/* Opens upward from the composer and grows up as the list grows, so its
-				    edge stays next to the toggle however many environments there are. */}
+				    edge stays next to the toggle however many environments there are.
+				    Settings' button sits at the top of its page, so it opens downward. */}
 				<PopoverContent
-					side="top"
-					align="start"
+					side={addOnly ? "bottom" : "top"}
+					align={addOnly ? "end" : "start"}
 					collisionPadding={8}
 					className="max-h-[min(70vh,420px)] w-[260px] overflow-y-auto p-1.5"
 					// Escape backs out one add step at a time, and closes from the list.
 					onEscapeKeyDown={(e) => {
 						if (addMode === "") return;
 						e.preventDefault();
-						if (!busy && !installing) back();
+						if (!busy) back();
 					}}
 				>
 					<PickerHeading>
@@ -345,7 +376,7 @@ export function EnvironmentPicker({
 								variant="ghost"
 								className="h-auto gap-1 p-0 text-[11px] tracking-[0.4px] uppercase hover:bg-transparent"
 								onClick={back}
-								disabled={busy || installing}
+								disabled={busy}
 								aria-label={`Back from ${stepTitle}`}
 							>
 								<ChevronLeft className="size-[13px]" strokeWidth={2} />
@@ -487,6 +518,20 @@ export function EnvironmentPicker({
 								</div>
 							);
 						})}
+					{addMode === "" &&
+						pendingSetups.map((s) => (
+							<PickerRow
+								key={`setup:${s.dest}`}
+								icon={<Server />}
+								title={s.dest}
+								tone={s.state === "failed" ? "error" : undefined}
+								sub={s.state === "failed" ? "couldn't set it up, open to see why" : "setting up…"}
+								onClick={() => {
+									close();
+									finished(s.dest);
+								}}
+							/>
+						))}
 					{(onAdd || onInstall) &&
 						(addMode === "" ? (
 							<PickerRow
@@ -632,52 +677,30 @@ export function EnvironmentPicker({
 										(busy && steps.length === 0 ? "Connecting…" : busy ? "" : "Enter to connect")}
 								</span>
 							</div>
-						) : addMode === "ready" ? (
-							installedAlias && (
-								<BoxReadinessChecklist
-									alias={installedAlias}
-									agents={installedAgents}
-									title="Box set up. A few things left:"
-									onDone={close}
-								/>
-							)
 						) : (
 							<div className={addForm}>
 								<Input
 									autoFocus
 									className={formInput}
-									placeholder="ssh alias or user@host"
+									placeholder="mybox.exe.xyz or user@host"
 									aria-label="SSH destination to set up"
 									value={dest}
-									disabled={installing}
 									onChange={(e) => setDest(e.target.value)}
 									onKeyDown={(e) => {
-										if (e.key === "Enter") void submitInstall();
+										if (e.key === "Enter") submitInstall();
 									}}
 								/>
-								{log && (
-									<pre
-										ref={logRef}
-										className="m-0 max-h-40 overflow-auto rounded-md bg-background p-2 font-mono text-[10px] whitespace-pre-wrap text-muted-foreground"
-									>
-										{log}
-									</pre>
-								)}
 								<span className={cn(formNote, installError && "text-destructive")}>
-									{installing
-										? "Setting up the box…"
-										: (installError ?? "Installs the engine over SSH, then connects")}
+									{installError ?? "Installs the engine over SSH, then connects"}
 								</span>
-								{!installing && (
-									<Button
-										variant="secondary"
-										size="sm"
-										className="self-start border text-foreground"
-										onClick={() => void submitInstall()}
-									>
-										Set up
-									</Button>
-								)}
+								<Button
+									variant="secondary"
+									size="sm"
+									className="self-start border text-foreground"
+									onClick={submitInstall}
+								>
+									Set up
+								</Button>
 							</div>
 						))}
 				</PopoverContent>
@@ -690,10 +713,12 @@ export function EnvironmentPicker({
 							setCreating(false);
 							onChange(alias);
 							close();
+							finished(alias);
 						}}
 					/>,
 					document.body,
 				)}
+			{finishing && <BoxPageDialog alias={finishing} onClose={() => setFinishing(null)} />}
 		</>
 	);
 }

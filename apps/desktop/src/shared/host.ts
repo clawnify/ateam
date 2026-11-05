@@ -63,12 +63,16 @@ export const HOST_CH = {
 	boxReadiness: "host:boxReadiness",
 	/** Update a box's engine (SSH install, or the engine's own update over Tailscale). */
 	updateBox: "host:updateBox",
+	/** Join a box reached over SSH to the tailnet and open its network port there. */
+	phoneAccess: "host:phoneAccess",
 	/** A connected box's GitHub access, handing it a token, and its per-repo access. */
 	githubAccess: "host:githubAccess",
 	connectGithub: "host:connectGithub",
 	checkGithub: "host:checkGithub",
 	/** Open a github.com page in the user's own browser. */
 	openGithub: "host:openGithub",
+	/** Open Hetzner's or Tailscale's console, where Create a box's token and key come from. */
+	openConsole: "host:openConsole",
 	/** Read/write the encrypted provider credentials (token + Tailscale auth key). */
 	secretsStatus: "host:secretsStatus",
 	saveSecrets: "host:saveSecrets",
@@ -90,6 +94,11 @@ export const HOST_CH = {
 	/** The steps of waking and reaching a box (see ConnectProgressEvent). */
 	evtConnectProgress: "evt:host:connect-progress",
 } as const;
+
+/** The page Tailscale prints for approving a device that joins without an auth key
+ *  (`tailscale up`), as it appears in installer output: followed by whitespace once
+ *  the whole link has arrived. */
+export const TAILSCALE_LOGIN_URL = /https:\/\/login\.tailscale\.com\/a\/[A-Za-z0-9]+(?=\s)/;
 
 /** How a box update went: installed over SSH, or started by the box's own engine. */
 export type BoxUpdateResult = { via: "ssh" } | { via: "self"; started: boolean; logPath: string };
@@ -124,6 +133,9 @@ export interface BoxReadiness {
 	/** The git commit identity (derived from the GitHub login once signed in). */
 	gitName?: string;
 	gitEmail?: string;
+	/** When the box's Tailscale key expires (ISO), for a box approved from a link; a
+	 *  tagged box, or one whose expiry is turned off, has none. */
+	tailscaleKeyExpiry?: string;
 }
 
 /** Result of installing an agent's CLI on a box — the login the user runs next. */
@@ -171,8 +183,8 @@ export interface SecretsStatus {
 /** The provider's live catalog, fetched with the token so it reflects real availability. */
 export interface ProviderOptions {
 	locations: { slug: string; label: string }[];
-	/** `locations` = the slugs a size is available in (empty = unknown → offer anywhere). */
-	serverTypes: { slug: string; label: string; locations: string[] }[];
+	/** `locations` = the slugs a size can be ordered in (empty = unknown → offer anywhere). */
+	serverTypes: { slug: string; label: string; locations: string[]; memory: number }[];
 }
 
 /** Which engine is driving the app right now. */
@@ -271,6 +283,12 @@ export interface AteamHost {
 	/** Bring a box's engine up to date. Over SSH it finishes when the box is back on
 	 *  this app's release; a Tailscale box updates itself and reconnects shortly. */
 	updateBox(alias: string): Promise<BoxUpdateResult>;
+	/** Make a box reached over SSH reachable from Ateam Go: the installer again, with
+	 *  --tailscale, so it joins the tailnet and opens the box's network port there.
+	 *  Tailscale's page to approve the box opens in the browser, and its link is in
+	 *  the installer output (onInstallLog, TAILSCALE_LOGIN_URL). Resolves once the
+	 *  box is connected again. */
+	phoneAccess(alias: string): Promise<HostStatus>;
 	/** A connected box's GitHub access: what its gh and git sign in with (v25 engines). */
 	githubAccess(alias: string): Promise<GithubAccessDTO>;
 	/** Hand a connected box a GitHub token; answers its new access. Rejects with a
@@ -281,6 +299,8 @@ export interface AteamHost {
 	checkGithub(alias: string, repos?: string[]): Promise<RepoAccessDTO[]>;
 	/** Open a github.com page in the user's own browser, where they're signed in. */
 	openGithub(url: string): Promise<void>;
+	/** Open a page of Hetzner's or Tailscale's console in the user's own browser. */
+	openConsole(url: string): Promise<void>;
 	/** Which provisioning secrets are already saved (booleans, never the values). */
 	secretsStatus(): Promise<SecretsStatus>;
 	/** Persist provider credentials (encrypted at rest). Empty string clears one. */
@@ -293,9 +313,10 @@ export interface AteamHost {
 	 *  with null. Rejects with the provider's answer when the key doesn't work. */
 	saveWakeAccount(providerId: string, values: Record<string, string> | null): Promise<WakeStatus>;
 	/**
-	 * Per issue, whether to show it, decided by Jev with this Mac's OpenRouter
-	 * key (never sent to the renderer). Null when it won't or couldn't decide:
-	 * no key, `client.filterGrammarWithJev` off, or no answer in time. The
+	 * Per issue, whether to show it, decided by this Mac's decision model (Jev
+	 * on OpenRouter or Luna on OpenAI) with its key (never sent to the
+	 * renderer). Null when it won't or couldn't decide: no key, the decision
+	 * model off, `client.filterGrammarWithJev` off, or no answer in time. The
 	 * renderer then shows every issue.
 	 */
 	judgeGrammar(draft: string, issues: GrammarJudgeIssue[]): Promise<boolean[] | null>;

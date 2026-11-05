@@ -44,6 +44,7 @@ export type { SshClient, SshExecOptions, SshExecResult, SshOptions } from "./tra
 export {
 	describeSshFailure,
 	firstContactFlags,
+	installerFailure,
 	sshClientTransport,
 	sshExec,
 } from "./transport/ssh";
@@ -56,4 +57,6 @@ export {
 	settingsPath,
 	updateSettings,
 } from "./settings-file";
-export { credentialsPath, openRouterApiKey } from "./credentials-file";
+export { credentialsPath, openAiApiKey, openRouterApiKey } from "./credentials-file";
+export type { DecisionModel } from "./decision-model";
+export { currentDecisionModel } from "./decision-model";

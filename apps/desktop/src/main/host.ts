@@ -44,6 +44,7 @@ import {
 	type RpcClient,
 	reconnectDelay,
 	relabelActive,
+	reportedWake,
 	type SettingsResult,
 	type SystemInfo,
 	takeSnapshot,
@@ -62,6 +63,7 @@ import {
 	boxWakeOf,
 	buildCloudInit,
 	type ConnectionDTO,
+	currentDecisionModel,
 	describeSshFailure,
 	type Engine,
 	endpointUrl,
@@ -69,7 +71,9 @@ import {
 	forgetConnection,
 	type HostTransport,
 	hetznerProvider,
+	installerFailure,
 	listConnections,
+	openAiApiKey,
 	openRouterApiKey,
 	readSettings,
 	recordConnection,
@@ -95,6 +99,7 @@ import {
 	type InstallLogEvent,
 	type ProviderOptions,
 	type SecretsStatus,
+	TAILSCALE_LOGIN_URL,
 	type WakeStatus,
 } from "../shared/host";
 import {
@@ -136,7 +141,8 @@ SIGNED=0; LOGIN=""
 if [ -n "$GH" ] && "$GH" auth status >/dev/null 2>&1; then
 	SIGNED=1
 	LOGIN=$("$GH" api user -q .login 2>/dev/null || true)
-	if [ -z "$(git config --global user.name || true)" ] || [ -z "$(git config --global user.email || true)" ]; then
+	if [ -z "$(git config --global user.name || true)" ] || [ -z "$(git config --global user.email || true)" ] ||
+		[ "$(git config --global user.email || true)" = noreply@sprites.dev ]; then
 		N=$("$GH" api user -q '.name // .login' 2>/dev/null || true)
 		E=$("$GH" api user -q '"\\(.id)+\\(.login)@users.noreply.github.com"' 2>/dev/null || true)
 		[ -n "$N" ] && git config --global user.name "$N"
@@ -147,7 +153,8 @@ echo "gh_installed=$([ -n "$GH" ] && echo 1 || echo 0)"
 echo "gh_signed_in=$SIGNED"
 echo "gh_login=$LOGIN"
 echo "git_name=$(git config --global user.name || true)"
-echo "git_email=$(git config --global user.email || true)"`;
+echo "git_email=$(git config --global user.email || true)"
+echo "ts_key_expiry=$(tailscale status --json --peers=false 2>/dev/null | sed -n 's/.*"KeyExpiry": *"\\([^"]*\\)".*/\\1/p' | head -1)"`;
 // Cap a connect: ssh can hang on an auth prompt or an unreachable host with no
 // error, and the UI must not wait forever. A live daemon replies in well under this.
 const CONNECT_TIMEOUT_MS = 20_000;
@@ -202,7 +209,10 @@ export interface Host {
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;
 	/** Install the ateam engine on a reachable SSH box (idempotent), streaming the
 	 *  installer's output, then connect. `dest` is an ssh_config alias or user@host. */
-	install(dest: string, opts?: { wsAddr?: string }): Promise<HostStatus>;
+	install(dest: string, opts?: { wsAddr?: string; tailscale?: boolean }): Promise<HostStatus>;
+	/** Join a box reached over SSH to the tailnet and open its network port there
+	 *  (the installer with --tailscale), then connect it again. */
+	phoneAccess(alias: string): Promise<HostStatus>;
 	/** Create a box from scratch at a provider, provision it, and connect. */
 	createBox(spec: CreateBoxSpec): Promise<HostStatus>;
 	/** Install an agent's CLI on a connected box, streaming the log; returns the login step. */
@@ -231,7 +241,7 @@ export interface Host {
 	wakeStatus(): WakeStatus;
 	/** Check a wake provider's key and save it (encrypted), or clear it with null. */
 	saveWakeAccount(providerId: string, values: Record<string, string> | null): Promise<WakeStatus>;
-	/** Which grammar issues to show, by Jev with this Mac's key; null = show them all. */
+	/** Which grammar issues to show, by this Mac's decision model; null = show them all. */
 	judgeGrammar(draft: string, issues: GrammarJudgeIssue[]): Promise<boolean[] | null>;
 	/** A held box's own connection and protocol version, for calls that address
 	 *  the box itself rather than a board entity (its Lead), or null when it isn't
@@ -466,13 +476,20 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		const r = (await local.handle(method, args)) as CredentialsResult;
 		if (method === CH.credentialsUpdate) {
 			const patch = args[0] as CredentialsPatch;
-			// What is in force here, so a key this Mac takes from its environment
-			// reaches the boxes too; a removal is pushed as the removal it was.
-			await pushCredentials(
-				patch.openRouterApiKey === null
-					? { openRouterApiKey: null }
-					: { openRouterApiKey: openRouterApiKey() ?? null },
-			);
+			// Only the keys this save touched, so saving one never clears another a
+			// box holds. Each is what is in force here, so a key this Mac takes from
+			// its environment reaches the boxes too; a removal is pushed as the
+			// removal it was.
+			const push: CredentialsPatch = {};
+			if (patch.openRouterApiKey !== undefined) {
+				push.openRouterApiKey = patch.openRouterApiKey?.trim()
+					? (openRouterApiKey() ?? null)
+					: null;
+			}
+			if (patch.openAiApiKey !== undefined) {
+				push.openAiApiKey = patch.openAiApiKey?.trim() ? (openAiApiKey() ?? null) : null;
+			}
+			await pushCredentials(push);
 		}
 		const syncedTo: string[] = [];
 		const syncFailed: { alias: string; reason: string }[] = [];
@@ -497,7 +514,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	function openTransport(
 		alias: string,
 		wire: HostTransport | null,
-	): { transport: ClientTransport; close(): void } {
+	): { transport: ClientTransport; close(): void; stderr?: (ms?: number) => Promise<string> } {
 		if (wire === "ws") {
 			const url = endpointUrl(alias);
 			if (!url) throw new Error(`"${alias}" is not a host:port endpoint`);
@@ -609,13 +626,19 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		parked.delete(alias);
 		cancelReconnect(alias);
 		attempts.delete(alias);
+		// A Tailscale box added by its address alone takes the provider it says it runs
+		// on, so a connect the user asks for can wake it rather than time out.
+		const reported =
+			opts.binding === undefined && wire === "ws" && !boxWakeOf(db, alias)
+				? reportedWake(info.provider)
+				: null;
 		recordConnection(db, {
 			hostAlias: alias,
 			transport: wire ?? "ssh",
 			serverVersion: String(info.protocolVersion),
 			engineRelease: info.release ?? null,
 			agentsAvailable: info.agents,
-			...(opts.binding !== undefined ? { wake: opts.binding } : {}),
+			...(opts.binding !== undefined ? { wake: opts.binding } : reported ? { wake: reported } : {}),
 		});
 		// The remote's method set matches the local dispatcher's (same contract). An
 		// engine BEHIND this app is read through tolerantRpc, which fills in what its
@@ -652,8 +675,13 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// hold the board back.
 		if (readSettings().settings.client.syncEngineSettingsToBoxes) {
 			void pushEngineSettings(readSettings().settings.engine);
-			const key = openRouterApiKey();
-			if (key) void pushCredentials({ openRouterApiKey: key });
+			// Only the keys set here: a Mac without one never clears a box's.
+			const keys: CredentialsPatch = {};
+			const openRouter = openRouterApiKey();
+			const openAi = openAiApiKey();
+			if (openRouter) keys.openRouterApiKey = openRouter;
+			if (openAi) keys.openAiApiKey = openAi;
+			if (openRouter || openAi) void pushCredentials(keys);
 		}
 		// Its GitHub access, for the "needs you" dots (a token close to expiring or
 		// refused). Not awaited either: one gh and GitHub call on the box.
@@ -690,6 +718,15 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		rpc: RpcClient;
 		info: SystemInfo;
 	}> {
+		// ssh's own reason for refusing (a rebuilt box's new host key, say), in words, in
+		// place of the RPC's "closed" or timeout: the relay only has its stderr to say it.
+		const sshReason = async (
+			client: { stderr?: (ms?: number) => Promise<string> },
+			err: unknown,
+		): Promise<unknown> => {
+			const why = client.stderr ? describeSshFailure(await client.stderr()) : null;
+			return why ? new Error(why) : err;
+		};
 		const binding = opts.binding !== undefined ? opts.binding : boxWakeOf(db, alias);
 		const narrate = wire === "ws" && opts.wake === true && binding != null;
 		let steps: ConnectStep[] = [];
@@ -741,7 +778,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 					return { client, rpc, info };
 				} catch (err) {
 					client.close();
-					if (Date.now() >= deadline) throw err;
+					if (Date.now() >= deadline) throw await sshReason(client, err);
 				}
 				if (!tick && narrate) {
 					const relabel = () => step((s) => relabelActive(s, waitingLabel(Date.now() - started)));
@@ -971,13 +1008,21 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return out;
 	}
 
-	async function install(dest: string, opts?: { wsAddr?: string }): Promise<HostStatus> {
-		// `dest` reaches ssh as an argument, where a leading "-" would make it an option.
-		if (dest.startsWith("-")) throw new Error(`"${dest}" is not an ssh destination`);
+	async function install(
+		dest: string,
+		opts?: { wsAddr?: string; tailscale?: boolean; rerun?: boolean },
+	): Promise<HostStatus> {
+		// `dest` reaches ssh as an argument, where a leading "-" would make it an option,
+		// and one with a space in it (a pasted `ssh mybox`) names no host ssh can reach.
+		if (dest.startsWith("-") || /\s/.test(dest)) {
+			throw new Error(
+				`"${dest}" isn't one box: give its name in your ssh config, or user@host, on its own.`,
+			);
+		}
 		// Already set up and held — installing again would just re-run the (idempotent)
 		// script for no reason; hand back its status.
 		const existing = backends.get(dest);
-		if (existing) return statusOf(existing, dest);
+		if (existing && !opts?.rerun) return statusOf(existing, dest);
 
 		const wsAddr = opts?.wsAddr?.trim();
 		// A caller-supplied address is interpolated into a remote shell command, so it
@@ -999,28 +1044,44 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// box; what dev must not do is heal on connect, because that release can be behind
 		// main's protocol and the upgrade is then guaranteed futile (see connect()).
 		const pin = app.isPackaged ? `ATEAM_VERSION=v${app.getVersion()} ` : "";
+		// --tailscale joins the box to the tailnet and opens its network port there.
+		const flags = opts?.tailscale ? "--service --tailscale" : "--service";
+		// pipefail for the download: a curl that fails hands bash nothing, bash exits 0 on
+		// an empty script, and the set-up went on to connect to an engine never installed
+		// ("RPC connection closed", seen on a boxd machine whose DNS came and went). Only
+		// for that pipe: the `ip | grep -q` ahead of it ends early on a match, on purpose.
 		const pipeline = wsAddr
-			? `curl -fsSL ${INSTALL_URL} | ${pin}ATEAM_WS_ADDR=${wsAddr} bash -s -- --service`
+			? `set -o pipefail; curl -fsSL ${INSTALL_URL} | ${pin}ATEAM_WS_ADDR=${wsAddr} bash -s -- ${flags}`
 			: // Single-quoted JS so the shell's ${tsip:+…} parameter expansion stays literal.
 				"tsip=$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | head -1 || true); " +
 				'[ -n "$tsip" ] && ip -4 -o addr show 2>/dev/null | grep -qF " $tsip/" || tsip=; ' +
-				`curl -fsSL ${INSTALL_URL} | ${pin}` +
+				`set -o pipefail; curl -fsSL ${INSTALL_URL} | ${pin}` +
 				'ATEAM_WS_ADDR_DEFAULT="${tsip:+$tsip:' +
 				WS_DEFAULT_PORT +
-				'}" bash -s -- --service';
+				`}" bash -s -- ${flags}`;
 
 		// The output's tail, to read ssh's own reason from if the setup fails.
 		let output = "";
+		// Tailscale's page for approving the box, opened once in the user's browser: it
+		// is the one step of joining the tailnet that's theirs, and `tailscale up` waits
+		// on it. The link is in the log too, for when the browser isn't signed in there.
+		let approvalOpened = false;
 		const result = await sshExec(dest, `bash -lc '${pipeline}'`, {
 			// Setting a box up is often the first contact with it: see firstContactFlags.
 			sshFlags: await firstContactFlags(dest),
 			onData: (chunk) => {
 				output = (output + chunk).slice(-8192);
 				broadcast(HOST_CH.evtInstallLog, { dest, chunk } satisfies InstallLogEvent);
+				const approval = opts?.tailscale && !approvalOpened && output.match(TAILSCALE_LOGIN_URL);
+				if (approval) {
+					approvalOpened = true;
+					void shell.openExternal(approval[0]).catch(() => {});
+				}
 			},
 		});
 		if (result.code !== 0) {
-			const why = result.code === 255 ? describeSshFailure(output) : null;
+			// ssh's own reason when ssh failed (255), the installer's when it stopped.
+			const why = result.code === 255 ? describeSshFailure(output) : installerFailure(output);
 			throw new Error(
 				why
 					? `Setup of "${dest}" failed: ${why}`
@@ -1031,6 +1092,10 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// We just reached the box over SSH, so its transport is ssh — seed that row so
 		// connect() resolves it even when `dest` is a user@host with no ssh_config entry.
 		recordConnection(db, { hostAlias: dest, transport: "ssh" });
+		// A box held through a rerun had its engine restarted under it, and the reconnect
+		// that set off may hold the engine the service has since replaced: take a fresh
+		// handshake, so what it reports (its network port) is the new engine's.
+		if (opts?.rerun && backends.has(dest)) release(dest);
 		return connect(dest, true);
 	}
 
@@ -1139,16 +1204,16 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return hetznerProvider.fetchOptions(t);
 	}
 
-	// This Mac's key and setting, whichever engine the terminal belongs to: the
+	// This Mac's keys and settings, whichever engine the terminal belongs to: the
 	// grammar check runs in this window, not on the box.
 	async function judgeGrammar(
 		draft: string,
 		issues: GrammarJudgeIssue[],
 	): Promise<boolean[] | null> {
 		if (!readSettings().settings.client.filterGrammarWithJev) return null;
-		const apiKey = openRouterApiKey();
-		if (!apiKey) return null;
-		const verdicts = await askJevAboutGrammar({ apiKey, draft, issues });
+		const model = currentDecisionModel();
+		if (!model) return null;
+		const verdicts = await askJevAboutGrammar({ model, draft, issues });
 		return verdicts?.map((v) => v.keep) ?? null;
 	}
 
@@ -1170,9 +1235,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		const token = (spec.hetznerToken || saved.hetznerToken || "").trim();
 		const tsKey = (spec.tailscaleAuthKey || saved.tailscaleAuthKey || "").trim();
 		if (!token) throw new Error("A Hetzner API token is required.");
-		if (!tsKey) throw new Error("A Tailscale auth key is required.");
-		// Remember whatever we used, so the next box needs no re-entry.
-		secrets().save({ hetznerToken: token, tailscaleAuthKey: tsKey });
+		// Remember whatever we used, so the next box needs no re-entry. With no key, the
+		// box joins the tailnet when the user approves it (the installer's --tailscale).
+		secrets().save({ hetznerToken: token, ...(tsKey ? { tailscaleAuthKey: tsKey } : {}) });
 
 		const progress = (stage: string) =>
 			broadcast(HOST_CH.evtCreateProgress, { alias, stage } satisfies CreateProgressEvent);
@@ -1182,7 +1247,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		const cloudInit = buildCloudInit({
 			hostname: alias,
 			sshPublicKey: publicKey,
-			tailscaleAuthKey: tsKey,
+			...(tsKey ? { tailscaleAuthKey: tsKey } : {}),
 		});
 
 		const server = await hetznerProvider.createServer({
@@ -1203,18 +1268,33 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		progress("Waiting for the box to boot");
 		await waitForSsh(boxAlias);
 
-		progress("Joining Tailscale");
-		const onTailnet = await waitForTailscale(boxAlias);
-		if (!onTailnet) {
+		let status: HostStatus;
+		if (tsKey) {
+			progress("Joining Tailscale");
+			const onTailnet = await waitForTailscale(boxAlias);
+			if (!onTailnet) {
+				progress(
+					"Tailscale didn't come up, so the phone can't reach the box yet: installing anyway",
+				);
+			}
+			// Reuse the streamed installer (Gap A): it derives the box's tailnet IP into
+			// ATEAM_WS_ADDR (so the phone can connect) and connects on success.
+			progress("Installing the engine");
+			status = await install(boxAlias);
+		} else {
+			// SSH answers once cloud-init has made the user, while its apt run and its
+			// Tailscale install go on for most of a minute (measured on a Hetzner box,
+			// 2026-11-04): the installer installing Tailscale beside them would fight
+			// over apt's lock. With a key, waiting for Tailscale covers the same ground.
+			progress("Waiting for the box to finish setting itself up");
+			await sshExec(boxAlias, "cloud-init status --wait >/dev/null 2>&1 || true");
+			// No key: the installer joins the tailnet itself, and `tailscale up` waits for
+			// the user to approve the box on the page install() opens in their browser.
 			progress(
-				"Tailscale didn't come up — installing anyway; the phone won't connect until it's fixed",
+				"Installing the engine and joining your tailnet: approve the box on the Tailscale page that opens in your browser, and press Connect there",
 			);
+			status = await install(boxAlias, { tailscale: true });
 		}
-
-		// Reuse the streamed installer (Gap A): it derives the box's tailnet IP into
-		// ATEAM_WS_ADDR (so the phone can connect) and connects on success.
-		progress("Installing the engine");
-		const status = await install(boxAlias);
 
 		// Preinstall any requested agent CLIs (best-effort — the box is usable without
 		// them, and the OAuth login is a separate step the user does after).
@@ -1277,6 +1357,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			},
 			gitName: val("git_name") || undefined,
 			gitEmail: val("git_email") || undefined,
+			tailscaleKeyExpiry: val("ts_key_expiry") || undefined,
 		};
 	}
 
@@ -1297,11 +1378,35 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			if (!canUpdateBoxes()) {
 				throw new Error("Only a released build of Ateam updates boxes over SSH.");
 			}
-			await install(alias);
+			// install() hands back a box it already holds without running anything, and
+			// Update is only offered on a held box, so it was a no-op. Let the box go
+			// first: the installer runs, restarting the engine under it anyway, and
+			// install() connects it again on the new release. A failed install holds it
+			// again as it was.
+			release(alias);
+			try {
+				await install(alias);
+			} catch (err) {
+				void reconnect(alias);
+				throw err;
+			}
 			return { via: "ssh" };
 		}
 		const started = (await heldBox(alias).handle(CH.systemUpdate, [])) as BoxUpdateStarted;
 		return { via: "self", ...started };
+	}
+
+	async function phoneAccess(alias: string): Promise<HostStatus> {
+		// Over SSH only: a box reached over Tailscale is on the tailnet already, and
+		// the installer needs a shell on it.
+		if (resolveTransport(db, alias) === "ws") {
+			throw new Error(`${alias} is reached over Tailscale, so it has its network port already.`);
+		}
+		// The box stays held, so its board stays on screen while `tailscale up` waits for
+		// the user, which can be minutes. The installer's engine restart drops the relay by
+		// itself (`ateam attach` exits with the daemon) and the desktop reconnects; a run
+		// that fails before that leaves the box as it was.
+		return install(alias, { tailscale: true, rerun: true });
 	}
 	// The GitHub access each box last reported. Read once when it connects, and again
 	// whenever its panel reads it or a token is connected there, so a token close to
@@ -1481,6 +1586,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		installAgent,
 		boxReadiness,
 		updateBox,
+		phoneAccess,
 		githubAccess,
 		connectGithub,
 		checkGithub,
@@ -1539,6 +1645,7 @@ export function registerHostIpc(host: Host): void {
 	);
 	ipcMain.handle(HOST_CH.boxReadiness, (_e, alias: string) => host.boxReadiness(alias));
 	ipcMain.handle(HOST_CH.updateBox, (_e, alias: string) => host.updateBox(alias));
+	ipcMain.handle(HOST_CH.phoneAccess, (_e, alias: string) => host.phoneAccess(alias));
 	ipcMain.handle(HOST_CH.githubAccess, (_e, alias: string) => host.githubAccess(alias));
 	ipcMain.handle(HOST_CH.connectGithub, (_e, alias: string, token: string) =>
 		host.connectGithub(alias, token),
@@ -1552,6 +1659,16 @@ export function registerHostIpc(host: Host): void {
 		const parsed = new URL(url);
 		if (parsed.protocol !== "https:" || parsed.hostname !== "github.com") {
 			throw new Error("Only github.com pages open from here.");
+		}
+		await shell.openExternal(parsed.toString());
+	});
+	// Where Create a box's Hetzner token and Tailscale key are made, in the user's own
+	// browser, signed in there. These two consoles only.
+	ipcMain.handle(HOST_CH.openConsole, async (_e, url: string) => {
+		const parsed = new URL(url);
+		const consoles = ["console.hetzner.com", "console.tailscale.com"];
+		if (parsed.protocol !== "https:" || !consoles.includes(parsed.hostname)) {
+			throw new Error("Only Hetzner's and Tailscale's consoles open from here.");
 		}
 		await shell.openExternal(parsed.toString());
 	});

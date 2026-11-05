@@ -64,6 +64,7 @@ import {
 	type BoxLink,
 	boxKey,
 	boxTitle,
+	cantWakeReason,
 	leadBoxOf,
 	leadFirst,
 	NEW_LINK,
@@ -71,6 +72,7 @@ import {
 	removeBox,
 	type SavedBox,
 	touchBox,
+	withReportedProvider,
 } from "./src/boxes";
 import { Composer, type ComposerSubmit, type RunOn } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
@@ -89,6 +91,7 @@ import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminal
 import { ProjectBrowser } from "./src/ProjectBrowser";
 import { type ProposalItem, ProposalSheet } from "./src/ProposalSheet";
 import { ProviderIcon } from "./src/ProviderIcon";
+import { ScanQrIcon } from "./src/ScanQrIcon";
 import { useScrollFade } from "./src/scroll-fade";
 import {
 	loadBoards,
@@ -343,6 +346,7 @@ function ConnectionScreen({
 	onSaveAccount,
 	onRemoveAccount,
 	waking,
+	notice,
 	onScan,
 	scanner,
 }: {
@@ -367,6 +371,8 @@ function ConnectionScreen({
 	onRemoveAccount: (def: ProviderDefinition) => void;
 	/** The provider a box is being woken through right now, or null. */
 	waking: string | null;
+	/** Why the form opened from a tap on a box: what it needs to be woken. */
+	notice: string | null;
 	onConnect: () => void;
 	onBack: () => void;
 	/** Back to the Boxes list, when there is one (src/BoxesScreen.tsx). */
@@ -434,7 +440,7 @@ function ConnectionScreen({
 							onPress={onScan}
 							accessibilityRole="button"
 						>
-							<Feather name="camera" size={18} color={C.ink} />
+							<ScanQrIcon size={19} color={C.ink} />
 							<Text style={styles.scanText}>
 								Box locked to your devices? Scan the code from Pair a phone on your Mac.
 							</Text>
@@ -513,6 +519,7 @@ function ConnectionScreen({
 							))}
 						</View>
 					) : null}
+					{!picking && notice ? <Text style={styles.formNotice}>{notice}</Text> : null}
 					{!picking && def && accountInputs.length > 0 ? (
 						unsaved.length === 0 ? (
 							<Pressable
@@ -665,7 +672,7 @@ interface SkewNotice {
 function skewText(n: SkewNotice): string {
 	const box = n.label ?? "This box";
 	if (n.version >= PROTOCOL_VERSION) {
-		return `${box} runs a newer Ateam (v${n.version}). Update this app from TestFlight.`;
+		return `${box} runs a newer Ateam (v${n.version}). Update Ateam Go from the App Store.`;
 	}
 	return n.atLatest
 		? `${box} is on the latest Ateam release (v${n.version}). This app is ahead of it; the next release clears this.`
@@ -1113,6 +1120,8 @@ export default function App() {
 	const [formBusy, setFormBusy] = useState(false);
 	// The connection screen's own error: the form's connect, a key that didn't save.
 	const [error, setError] = useState<string | null>(null);
+	// Why the form opened from a tap on a box (a key or name it needs to be woken).
+	const [formNotice, setFormNotice] = useState<string | null>(null);
 	const accounts = useRef<Record<string, InputValues>>({});
 	// One adapter per provider and key, so its session (boxd's lasts an hour) is reused across connects.
 	const wakers = useRef(new Map<string, WakeAdapter>());
@@ -1397,6 +1406,10 @@ export default function App() {
 			if (dismissed !== null) setSkewDismissed((cur) => ({ ...cur, [key]: dismissed }));
 		},
 		onConnected: async (key, c) => {
+			// A box saved by its address alone takes the provider it says it runs on, so
+			// next time it sleeps the phone can wake it rather than time out.
+			const withProvider = withReportedProvider(boxesRef.current, key, c.info.provider);
+			if (withProvider) commitBoxes(withProvider);
 			const nextSkew = c.skewed ? c.info.protocolVersion : null;
 			// Only the reconnect that ends an update can say the box is already on the
 			// latest release. Any other connect drops the claim: a release may be out since.
@@ -1491,6 +1504,7 @@ export default function App() {
 		setHost(box?.host ?? "");
 		setPort(box?.port ?? "8787");
 		setError(null);
+		setFormNotice(null);
 		const def = providerById(box?.provider?.id);
 		if (!def || !box?.provider) {
 			setProviderId(null);
@@ -1523,6 +1537,17 @@ export default function App() {
 		link.resume();
 	}, [fleet, link, refresh]);
 
+	const editBox = useCallback(
+		async (box: SavedBox, notice: string | null = null) => {
+			landOnBoard.current = false;
+			await fillForm(box);
+			setFormNotice(notice);
+			setEditingKey(boxKey(box));
+			setConnectScreen("form");
+		},
+		[fillForm],
+	);
+
 	// A card's tap: back to the board when its box is up; else wake it, then go.
 	const openBox = useCallback(
 		async (box: SavedBox) => {
@@ -1531,6 +1556,14 @@ export default function App() {
 			endDemo();
 			if (link.conn(key)) {
 				leaveConnect();
+				return;
+			}
+			// A box its provider puts to sleep that this phone can't wake (no key, or no
+			// name there): a tap would only dial it asleep and time out, so it opens the
+			// box's form at what's missing. Its Connect still reaches a box that's up.
+			const why = cantWakeReason(box);
+			if (why && !(await wakerFor(box))) {
+				await editBox(box, `${why} Add it below.`);
 				return;
 			}
 			if (!(await link.connect(box, { wake: true }))) {
@@ -1542,17 +1575,7 @@ export default function App() {
 			// opens Add a project on it.
 			if (!lastRead.current.projects.some((p) => fleet.ownerOf(p.id) === key)) setBrowserKey(key);
 		},
-		[link, endDemo, fleet, leaveConnect],
-	);
-
-	const editBox = useCallback(
-		async (box: SavedBox) => {
-			landOnBoard.current = false;
-			await fillForm(box);
-			setEditingKey(boxKey(box));
-			setConnectScreen("form");
-		},
-		[fillForm],
+		[link, endDemo, fleet, leaveConnect, wakerFor, editBox],
 	);
 
 	const addBox = useCallback(() => {
@@ -1593,6 +1616,7 @@ export default function App() {
 				wakers.current.clear();
 				setAccountSaved(savedFlags(def, account));
 				setError(null);
+				setFormNotice(null);
 				return true;
 			} catch (err) {
 				setError(
@@ -2202,6 +2226,9 @@ export default function App() {
 					onSwipeOpen={setSwipeOpenKey}
 					onConnect={(box) => void openBox(box)}
 					onEdit={(box) => void editBox(box)}
+					onSetProvider={(box) =>
+						void editBox(box, "Pick the provider this box runs on and enter its name there.")
+					}
 					onRemove={onRemoveBox}
 					onLeadBox={onLeadBox}
 					onAdd={addBox}
@@ -2262,6 +2289,7 @@ export default function App() {
 				onSaveAccount={onSaveAccount}
 				onRemoveAccount={(def) => void onRemoveAccount(def)}
 				waking={waking}
+				notice={formNotice}
 				onScan={editingKey === null ? openScanner : null}
 				scanner={scanner}
 			/>
@@ -2716,6 +2744,7 @@ const styles = StyleSheet.create({
 	},
 	demoText: { color: C.ink, fontSize: 14, fontWeight: "700" },
 	formNote: { color: C.faint, fontSize: 12, lineHeight: 18, marginTop: 18, paddingHorizontal: 2 },
+	formNotice: { color: C.ink, fontSize: 13, lineHeight: 19, marginTop: 12, paddingHorizontal: 2 },
 	pickerValue: { color: C.ink, fontSize: 14, paddingVertical: 8 },
 	pickerCard: { marginTop: 8 },
 	pickerOption: {

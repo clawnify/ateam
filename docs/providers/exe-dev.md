@@ -7,12 +7,12 @@ region as it changes. You pay a flat monthly price for a pool of CPU and memory
 that up to 50 VMs share. Nothing pauses a VM for being idle, so there's no sleep
 to manage and no sleep code in Ateam: an agent left working alone keeps working.
 
-**Verified against** Ateam v0.1.70 · exe.dev on a 7-day trial account, region `fra` ·
-2026-10-30. Run end to end: creating the box, the install, the desktop's handshake
-and `-L` forwards, a box left alone, and [iOS](#ios): the VM joined a tailnet with
-`tailscale up` and Ateam Go connected over it. **Not run:** exe.dev's Tailscale
-integration, which is written from its docs, and signing up with a key of its own
-(added 2026-11-02), which is written from exe.dev's FAQ.
+**Verified against** Ateam v0.1.87 · exe.dev on a trial account, region `fra` ·
+2026-11-04. Run end to end on a new VM: adding a key to an existing account, the two
+`~/.ssh/config` entries below, setting the VM up from Settings → Boxes with nothing
+typed on it, and [iOS](#ios). **Not run:** Ateam Go itself, and exe.dev's Tailscale
+integration, which is written from its docs. Measured 2026-10-30 on v0.1.70 and not
+re-run: the VM [left alone](#left-alone).
 
 ## Create a box
 
@@ -25,19 +25,19 @@ ssh exe.dev new --name=mybox
 ```
 
 Ateam connects with `BatchMode=yes`, so it can't prompt for a passphrase. If your
-default key has one, give exe.dev a key of its own and sign up with that: `ssh`
-offers your default keys in turn, so a plain `ssh exe.dev` can stop at a passphrase
-prompt for `~/.ssh/id_rsa`.
+default key has one, give exe.dev a key of its own: `ssh` offers your default keys in
+turn, so a plain `ssh exe.dev` can stop at a passphrase prompt for `~/.ssh/id_rsa`.
+Sign up with the new key, or, if you have an account already, run the same command and
+enter the account's email: exe.dev then adds the key to that account ("Your new ssh key
+has been added to your existing account", 2026-11-04).
 
 ```bash
 ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519_exe
-ssh -i ~/.ssh/id_ed25519_exe -o IdentitiesOnly=yes exe.dev     # sign up with this key
+ssh -i ~/.ssh/id_ed25519_exe -o IdentitiesOnly=yes exe.dev     # sign up, or add it
 ```
 
 `IdentitiesOnly` matters here: without it, `ssh` offers any keys in your agent before
 the one named with `-i`, and exe.dev can end up signing up one of those instead.
-
-Then add the second block below, so every `ssh` to exe.dev uses it.
 
 Pick at least the 4 vCPU / 8 GB capacity ($35/mo) for more than one or two agents
 at a time: every VM shares the pool, and so does every agent on it. Change it with
@@ -45,7 +45,7 @@ at a time: every VM shares the pool, and so does every agent on it. Change it wi
 
 exe.dev writes **nothing** to `~/.ssh/config`. `ssh mybox.exe.xyz` works anyway, but
 Ateam only offers aliases it finds there, and it skips any `Host` line holding a
-pattern. So name the box on its own line:
+pattern. So name the box on its own line, and point every `ssh` to exe.dev at its key:
 
 ```sshconfig
 Host mybox.exe.xyz
@@ -70,10 +70,10 @@ Host mybox.exe.xyz
 
 ## What's preinstalled
 
-The default `exeuntu` image (Ubuntu 24.04, kernel 6.12): `git`, `gh`, `go`,
-`docker`, `tailscale`, `systemd` as init, and all three agent CLIs, `claude`,
-`codex` and `opencode`. You log in as `exedev` with passwordless `sudo`. A new VM
-on the trial had 2 vCPUs, 7 GB of memory and a 25 GB disk.
+The default `exeuntu` image (Ubuntu 24.04): `git`, `gh`, `go`, `python3`, `docker`,
+`tailscale` (installed, its daemon off), `systemd` as init, and three agent CLIs,
+`claude`, `codex` and `opencode`. You log in as `exedev` with passwordless `sudo`. A
+new VM on the trial had 2 vCPUs, 7 GB of memory and a 25 GB disk.
 
 **Not** present: `node` (the installer adds it) and `bun`. `sshd` is installed but
 not running, and nothing listens on port 22: exe.dev ends SSH at its own proxy, as
@@ -84,13 +84,10 @@ them with `sudo exeuntu update claude` and `sudo exeuntu update codex`.
 
 ## GitHub credentials
 
-Give the box a [fine-grained token](sprites.md#github-credentials) limited to the
-repos it works on:
-
-```bash
-pbpaste | ssh mybox.exe.xyz 'gh auth login --with-token'
-ssh mybox.exe.xyz 'gh auth setup-git'
-```
+Connect GitHub from Ateam, under GitHub on the box's page in **Settings → Boxes**, which opens after
+Set up, with a [fine-grained token](sprites.md#github-credentials) limited to the
+repos the box works on: Ateam opens GitHub's form with the rest filled in and hands the
+token to `gh` on the VM. The git identity then sets itself from the account.
 
 exe.dev's own [GitHub integration](https://exe.dev/docs/integrations-github.md)
 keeps the token off the VM, but it doesn't fit Ateam: it serves each repo from its
@@ -100,10 +97,19 @@ that variable, so it would see neither.
 
 ## Install the engine
 
-```bash
-ssh mybox.exe.xyz 'git config --global user.name "you" && git config --global user.email "you@example.com"'
-ssh -t mybox.exe.xyz claude          # preinstalled; log in once, then exit
+Pick **`mybox.exe.xyz`** in Ateam: New task → **Run on** lists it as not set up yet, or
+use **Settings → Boxes → Add a box → Set up a box over SSH**. Ateam accepts the VM's host
+key on first contact, installs the engine over SSH as a systemd unit, and connects. On a
+new VM that took about 70 seconds (2026-11-04), with nothing to type on it. Then log
+into an agent once:
 
+```bash
+ssh -t mybox.exe.xyz claude          # preinstalled; log in, then exit
+```
+
+By hand instead, the same install Ateam runs:
+
+```bash
 ssh mybox.exe.xyz 'curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash -s -- --service'
 ```
 
@@ -112,41 +118,44 @@ comes back after a reboot.
 
 ## Connect
 
-Pick **`mybox.exe.xyz`** in the connection switcher.
+Pick **`mybox.exe.xyz`**. A box set up from Ateam is connected already, and stays
+listed in Settings → Boxes.
 
 ## iOS
 
-The image ships `tailscale`, and `/dev/net/tun` is there, so it runs in its normal
-kernel mode. Its daemon is installed but off; turn it on first, or `tailscale up`
-fails with `failed to connect to local tailscaled`:
+The image ships `tailscale` with its daemon off, and `/dev/net/tun` is there, so it runs
+in its normal kernel mode. **Set up phone access**, under Access on the box's page in
+Settings → Boxes (Ateam 0.1.88 or later), does the rest: Ateam runs the installer again
+with `--tailscale`, which starts `tailscaled`, joins the VM to your tailnet and opens the
+engine's network port on its tailnet address. Your browser opens Tailscale's page to
+approve the VM: press **Connect** at the end of it, or nothing happens. Then add the VM in
+Ateam Go at the address the page shows, on an iPhone signed in to the same Tailscale
+account. The [recipe](README.md) has the rest: no Tailscale account yet, and key expiry.
+From a terminal, the same thing:
 
 ```bash
-ssh mybox.exe.xyz 'sudo systemctl enable --now tailscaled'
+ssh mybox.exe.xyz 'curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash -s -- --tailscale'
 ```
 
-Then join your tailnet. The plain way prints a login URL to approve, once:
-
-```bash
-ssh -t mybox.exe.xyz 'sudo tailscale up --hostname=mybox'
-```
+It waits up to 15 minutes for the approval. An approval that comes later still puts the VM
+on your tailnet, but leaves the engine without its port: run the setup again, and it
+finishes without a new link (about a minute, 2026-11-04). The installer ends with the
+address for Ateam Go (`Ateam Go reaches it at 100.x.y.z:8787`), and the VM's page shows it
+too. With `TS_AUTHKEY=<key>` before `bash` it joins without a link; a key made with a tag
+keeps the VM on the tailnet for good, while a device approved from a link drops off after
+180 days unless you turn key expiry off for it.
 
 Or let exe.dev's [Tailscale
 integration](https://exe.dev/docs/integrations-tailscale-wif.md) join it, which puts
 no auth key on the VM. Follow that page, with one change: join with
 `ephemeral=false`, not the `ephemeral=true` it shows. An ephemeral node is removed
 from the tailnet after it has been offline a while, and comes back with a new
-address, which strands the phone's port the engine was given.
+address, which strands the phone's port the engine was given. Then run the installer
+with `--tailscale` as above: it finds the VM on the tailnet and only opens the port.
 
-Then give the engine its phone port on the VM's tailnet IP (`tailscale ip -4`):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | ATEAM_WS_ADDR=<tailnet-ip>:8787 bash -s -- --service
-```
-
-The installer's readiness report then shows `[ok] tailscale up (<tailnet-ip>)` and
-`phone listener up on <tailnet-ip>:8787`. In Ateam Go, connect to
-`ws://<tailnet-ip>:8787`. A VM never sleeps, so the phone needs no provider or wake
-settings.
+A VM never sleeps, so the phone needs no provider or wake settings. Until the VM is
+locked to your devices, anyone on your tailnet can use its network port: lock it under
+Access on the VM's page.
 
 ## Left alone
 

@@ -154,7 +154,12 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // links:set (an older box answers "Unknown method", FEATURE_MIN_VERSION.crossBox).
 // system:hello takes `{ link: true }` from a link, and its reply gained `wsAddr`,
 // optional. Settings gained `client.crossBox`, read by the desktop alone.
-export const PROTOCOL_VERSION = 30;
+// v31: OpenAI keys. Credentials gained `openAiApiKey` (credentials:update) and
+// `openAi` (the status, optional, so an older engine reads as "no key"), and
+// settings gained `engine.decisionModel` and `engine.openAiTextModel` and the
+// `openai` text model. An older engine stores the key and the settings and
+// never reads them, so a box needs this version to use an OpenAI key.
+export const PROTOCOL_VERSION = 31;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -449,7 +454,14 @@ export interface RegisterProjectOptions {
 export interface GitStatusSnapshot {
 	ahead: number;
 	behind: number;
+	/** Files in the task's diff against its base that haven't landed there:
+	 *  committed work included, so NOT an uncommitted count. */
 	dirty: number;
+	/** What `git status` lists: work that only exists in the worktree. Untracked
+	 *  leftovers (agent-tool folders, screenshots, scratch) don't count. Absent
+	 *  from a snapshot written before it existed, which reads as "not known"
+	 *  (never as clean or dirty). A read-only addition, so no protocol bump. */
+	uncommitted?: number;
 	/** Lines added and removed across the `dirty` files: the size of the work,
 	 *  the task's `+N -M`. Absent from a snapshot written before these fields
 	 *  existed (stored rows, older engines), which reads as "not known yet": a
@@ -692,17 +704,32 @@ export interface EngineSettings {
 	/**
 	 * What writes the title of a task started without a name, its tags, and the
 	 * summary of where each task stands once its agent goes quiet. `auto`: an
-	 * OpenRouter model when a key is set, otherwise Claude Code (Haiku, headless,
-	 * on the user's own subscription). `openrouter` needs the key; `off` writes
-	 * none of them. See server/text-model.ts.
+	 * OpenRouter model when that key is set, else an OpenAI model when that key
+	 * is, otherwise Claude Code (Haiku, headless, on the user's own
+	 * subscription). `openrouter` and `openai` need their key; `off` writes none
+	 * of them. See server/text-model.ts.
 	 */
 	textModel: TextModelChoice;
 	/** The OpenRouter model id used whenever OpenRouter writes that text. */
 	openRouterTextModel: string;
+	/** The OpenAI model id used whenever OpenAI writes that text. */
+	openAiTextModel: string;
+	/**
+	 * Which decision model answers the board's and the grammar filter's yes/no
+	 * questions. `auto`: Jev on OpenRouter when that key is set, else Luna on
+	 * OpenAI when that key is. `openrouter` and `openai` need their key; `off`
+	 * asks neither, and a finished turn always goes to Review. See
+	 * server/decision-model.ts.
+	 */
+	decisionModel: DecisionModelChoice;
 }
-export type TextModelChoice = "auto" | "openrouter" | "claude" | "off";
+export type TextModelChoice = "auto" | "openrouter" | "openai" | "claude" | "off";
+export type DecisionModelChoice = "auto" | "openrouter" | "openai" | "off";
 /** `engine.openRouterTextModel` out of the box, and whenever it is left empty. */
 export const DEFAULT_OPENROUTER_TEXT_MODEL = "anthropic/claude-haiku-5.5";
+/** `engine.openAiTextModel` out of the box, and whenever it is left empty:
+ *  OpenAI's small model, priced as Haiku 5.5 is. */
+export const DEFAULT_OPENAI_TEXT_MODEL = "gpt-6-luna";
 export interface ClientSettings {
 	/** Fetch an update in the background instead of asking first. */
 	autoDownloadUpdates: boolean;
@@ -714,9 +741,11 @@ export interface ClientSettings {
 	 */
 	syncEngineSettingsToBoxes: boolean;
 	/**
-	 * With an OpenRouter key, Jev decides which of the grammar check's issues
-	 * are real mistakes and hides the rest. Sends the draft prompt to
-	 * OpenRouter while you type. No key: every issue shows, as with it off.
+	 * With a decision model (`engine.decisionModel`: Jev on OpenRouter or Luna
+	 * on OpenAI), it decides which of the grammar check's issues are real
+	 * mistakes and hides the rest. Sends the draft prompt to that provider while
+	 * you type. No key: every issue shows, as with it off. The name predates
+	 * OpenAI and stays, so a saved choice keeps applying.
 	 */
 	filterGrammarWithJev: boolean;
 	/**
@@ -837,6 +866,8 @@ export interface CredentialStatus {
 }
 export interface CredentialsResult {
 	openRouter: CredentialStatus;
+	/** Absent from an engine older than v31, which can't use an OpenAI key. */
+	openAi?: CredentialStatus;
 	path: string;
 	/** As SettingsResult: filled in by the desktop while sync is on. */
 	syncedTo?: string[];
@@ -845,6 +876,7 @@ export interface CredentialsResult {
 /** A key to store, or null to remove it. */
 export interface CredentialsPatch {
 	openRouterApiKey?: string | null;
+	openAiApiKey?: string | null;
 }
 
 /**
@@ -1030,6 +1062,13 @@ export interface SystemInfo {
 	/** The address the box's network port listens on (`<host>:<port>`), or null
 	 *  when it has none (v30; absent before). What other boxes link to. */
 	wsAddr?: string | null;
+	/** The provider that puts this box to sleep and the box's name there, null on a
+	 *  box no provider sleeps. Absent from engines before it was reported (no protocol
+	 *  bump: like `release`, nothing gates on it), and while the engine is still
+	 *  finding out. A client that saved the box by its address alone (a pairing QR,
+	 *  the IP typed in) fills in what to wake it through (wake.ts reportedWake),
+	 *  instead of dialling a sleeping box until it times out. */
+	provider?: BoxWake | null;
 }
 
 /** A connection's standing with a box's lock (pairing:*, v29).
@@ -1742,6 +1781,7 @@ export {
 	filled,
 	type InputValues,
 	inputsAt,
+	reportedWake,
 	WAKE_PROVIDERS,
 	type WakeAdapter,
 	wakeAdapter,

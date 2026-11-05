@@ -10,8 +10,13 @@ doesn't count as use, so the engine holds the Sprite awake while it is in use (a
 agent working, typing in a terminal, the Lead chat) and lets it pause once nobody
 has used it for a while. See [Sleeping](#sleeping).
 
-**Verified against** Ateam v0.1.66 (setup), and the sleep and wake engine from the
-release after it · sprite CLI 2026-10-20-hotfix.1 · 2026-10-24
+**Verified against** Ateam v0.1.87 · sprite CLI 2026-10-20-hotfix.1 (2026-11-03 is
+out, not run) · 2026-11-04. Run on a new Sprite: the SSH server, key and alias below,
+Ateam's own install command over that alias (44 seconds), and the installer's
+`--tailscale`, which ran Tailscale as a Sprite service in kernel mode, reached over the
+tailnet by a client speaking Ateam Go's protocol. **Not run** this time: Ateam Go
+itself, and sleeping and waking, measured 2026-10-24 with the engine from the release
+after v0.1.66 ([Sleeping](#sleeping)).
 
 > **Sleep and wake** needs an engine newer than v0.1.66 on the box, and Ateam Go newer
 > than 1.2.0 for the phone to wake a paused Sprite. An older engine doesn't hold the
@@ -26,13 +31,21 @@ sprite org auth                                     # if `sprite org list` shows
 sprite create mybox
 ```
 
-The CLI writes **nothing** to `~/.ssh/config`, and a Sprite has no SSH server, so
-Ateam can't see it until you set both up ([Install the engine](#install-the-engine)).
+`sprite create` opens a console on the new Sprite and leaves it running; leave it with
+`exit` (see [Gotchas](#gotchas)). The CLI writes **nothing** to `~/.ssh/config`, and a
+Sprite has no SSH server, so Ateam can't see it until you give it both
+([Install the engine](#install-the-engine)).
 
 ## What's preinstalled
 
-`git`, `gh`, `node` (24), `npm`, `bun`, `python`, `go`, `rust`, `claude`, `codex`.
-You run as the `sprite` user with passwordless `sudo`.
+In `sprite exec` and `sprite console`: `git`, `gh`, `node` (24), `npm`, `bun`, `python`,
+`go`, `rust` and more in `/.sprite/bin`, and a dozen agent CLIs in `~/.local/bin`,
+`claude`, `codex`, `gemini`, `copilot` and `cursor-agent` among them. You run as the
+`sprite` user with passwordless `sudo`.
+
+Over SSH, which is how Ateam reaches the box, a login shell has no `/.sprite/bin` on its
+PATH. So the installer adds a Node 22 of its own (in `~/.nvm`) and a `gh` (in
+`~/.local/bin`), and Ateam finds `claude` and `codex`.
 
 **Not** present: `sshd`, `systemd`, `tailscale`, `docker`, `opencode`. Long-running
 processes are Sprite *services* (`sprite-env services`), not systemd units.
@@ -44,40 +57,37 @@ auto mode when you turn Auto on. A `claude` you start yourself, in a shell pane 
 over SSH, still reads that default: delete the `defaultMode` line if you want it to
 ask there too.
 
+**The image sets a git identity of its own,** `Sprite <noreply@sprites.dev>`, which
+credits commits to no one. Engines from Ateam 0.1.88 treat it as unset: connecting
+GitHub replaces it with your account's, and until then the installer's readiness report
+flags it. On an older engine, set your own:
+`git config --global user.name "you"; git config --global user.email "you@example.com"`.
+
 ## GitHub credentials
 
-Nothing is wired up: no credential helper, and `gh` isn't logged in. Give the box a
-**fine-grained token** limited to what it works on, rather than `gh auth login`.
-Agents run here, and `gh auth login` hands them a token that never expires and
-reaches every repo your account can, in plain text in `~/.config/gh/hosts.yml` (a
-Sprite has no keyring) and in every checkpoint taken after it.
+Nothing is wired up: no credential helper, and `gh` isn't logged in. **Connect GitHub
+from Ateam**, under GitHub on the box's page in **Settings → Boxes**, which opens after
+Set up, with a
+**fine-grained token** limited to what the box works on, rather than `gh auth login`.
+Agents run here, and `gh auth login` hands them a token that never expires and reaches
+every repo your account can, in plain text in `~/.config/gh/hosts.yml` (a Sprite has no
+keyring) and in every checkpoint taken after it.
 
-1. Create the token. This link pre-fills a 90-day expiry and the permissions
-   Ateam uses; put your org in `target_name` (or drop it for personal repos), then
-   pick the repositories:
+Ateam opens GitHub's form for the token with a 90-day expiry and these permissions
+filled in; you pick the repositories and paste the token into Ateam, which hands it to
+`gh` on the box:
 
-   ```
-   https://github.com/settings/personal-access-tokens/new?name=ateam%20box&target_name=<your-org>&expires_in=90&contents=write&pull_requests=write&issues=write&statuses=read&metadata=read
-   ```
+| Permission | What Ateam does with it |
+| --- | --- |
+| Contents: read and write | clone, push, merge a PR |
+| Pull requests: read and write | `gh pr view`, `gh pr create`, `gh pr merge` |
+| Issues: read and write | list a project's issues, file one |
+| Commit statuses: read | see CI that reports statuses, so the merge queue waits for it |
 
-   | Permission | What Ateam does with it |
-   | --- | --- |
-   | Contents: read and write | clone, push, merge a PR |
-   | Pull requests: read and write | `gh pr view`, `gh pr create`, `gh pr merge` |
-   | Issues: read and write | list a project's issues, file one |
-   | Commit statuses: read | see CI that reports statuses, so the merge queue waits for it |
-
-   Leave Workflows off: an agent that can edit `.github/workflows` can reach the
-   repo's Actions secrets. Fine-grained tokens can't call the Checks API, which Ateam
-   doesn't use. An org owner's own token is approved at once; anyone else's waits for
-   an owner to approve it.
-
-2. Copy it, hand it to `gh` on the box straight from the clipboard, and let git use it:
-
-   ```bash
-   pbpaste | sprite exec -s mybox --stdin -- bash -lc 'gh auth login --with-token'
-   sprite exec -s mybox -- bash -lc 'gh auth setup-git'
-   ```
+Workflows stays off: an agent that can edit `.github/workflows` can reach the repo's
+Actions secrets. Fine-grained tokens can't call the Checks API, which Ateam doesn't use.
+An org owner's own token is approved at once; anyone else's waits for an owner to
+approve it.
 
 Measured on a Sprite (2026-10-25): the engine's repo query listed only the org's
 repos, plus public ones (every fine-grained token reads those); a private org repo
@@ -102,42 +112,26 @@ and Gemini, which calls the gateway "the only supported way to access external A
 from a Sprite". With a connector set up, an agent on the box may use it for GitHub
 API calls instead of `gh`.
 
-**Set your own git identity.** Every Sprite ships a global one, `Sprite
-<noreply@sprites.dev>`, and the installer's readiness check reports it as `[ok]`.
-Commits made there are credited to "Sprite" unless you replace it.
-
 ## Install the engine
 
-Every command here runs on the box with `sprite exec -s mybox -- bash -lc '…'`, or
-in a `sprite console -s mybox`.
+A Sprite needs an SSH server and a key before Ateam can reach it. Run these once:
 
-1. The engine, from the usual installer. `--service` also creates the Sprite service
-   that keeps the engine running and starts it when the box boots:
-
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash -s -- --service
-   ```
-
-   The readiness report ends with `[--] tailscale`; that's expected here.
-
-2. An SSH server, as a service too. `/run` is emptied on every boot, so the command
+1. An SSH server, as a Sprite service. `/run` is emptied on every boot, so the command
    recreates sshd's directory each time:
 
    ```bash
-   sudo apt-get install -y openssh-server
-   sprite-env services create sshd --cmd sudo \
-     --args "bash,-c,mkdir -p /run/sshd && exec /usr/sbin/sshd -D -e"
+   sprite exec -s mybox -- bash -lc 'sudo apt-get install -y openssh-server && sprite-env services create sshd --no-stream --cmd sudo --args "bash,-c,mkdir -p /run/sshd && exec /usr/sbin/sshd -D -e"'
    ```
 
-3. A key without a passphrase (Ateam connects with `BatchMode=yes`, so it can't
-   prompt for one). On your Mac:
+2. A key without a passphrase (Ateam connects with `BatchMode=yes`, so it can't
+   prompt for one), authorized on the Sprite. On your Mac:
 
    ```bash
    ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519_sprites
    sprite exec -s mybox -- bash -c "mkdir -p ~/.ssh && echo '$(cat ~/.ssh/id_ed25519_sprites.pub)' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
    ```
 
-4. An alias in `~/.ssh/config`, going through the Sprites proxy:
+3. An alias in `~/.ssh/config`, going through the Sprites proxy:
 
    ```sshconfig
    Host mybox.sprite
@@ -150,7 +144,16 @@ in a `sprite console -s mybox`.
 
    `ssh mybox.sprite` should now land you in the box.
 
-Then log into an agent once (`ssh -t mybox.sprite claude`) as on any other box.
+Then pick **`mybox.sprite`** in Ateam: New task → **Run on** lists it as not set up yet,
+or use **Settings → Boxes → Add a box → Set up a box over SSH**. Ateam installs the
+engine over SSH, as the Sprite service described below, and connects. Log into an agent
+once (`ssh -t mybox.sprite claude`) as on any other box.
+
+By hand instead, the same install Ateam runs:
+
+```bash
+ssh mybox.sprite 'curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash -s -- --service'
+```
 
 ### The engine's service
 
@@ -174,11 +177,39 @@ was paused: about 2s from cold.
 
 ## iOS
 
-The phone reaches a Sprite over Tailscale. A paused Sprite doesn't answer there, so
-on the phone's connection screen set **Provider** to **Sprites** and enter the
-Sprite's name and a Sprites API token: create one at
-[sprites.dev/account](https://sprites.dev/account) and paste the whole `my-org/…`
-string. Before connecting, the phone asks Sprites to wake the Sprite and hold it
+The phone reaches a Sprite over Tailscale. **Set up phone access**, under Access on the
+box's page in Settings → Boxes (Ateam 0.1.88 or later), does it: Ateam runs the installer
+again with `--tailscale`, which installs Tailscale, runs it as a Sprite service (so it
+starts when the Sprite boots), joins the Sprite to your tailnet and opens the engine's
+network port on its tailnet address. Your browser opens Tailscale's page to approve the
+Sprite: press **Connect** at the end of it. Then add the Sprite in Ateam Go at the address
+the page shows, on an iPhone signed in to the same Tailscale account. The
+[recipe](README.md) has the rest: no Tailscale account yet, and key expiry. From a
+terminal, the same thing:
+
+```bash
+ssh mybox.sprite 'curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash -s -- --tailscale'
+```
+
+It prints the link to approve the Sprite with, waits up to 15 minutes for you, and ends
+with the address for Ateam Go (`Ateam Go reaches it at 100.x.y.z:8787`). With
+`TS_AUTHKEY=<key>` before `bash` it joins without a link; a key made with a tag keeps
+the Sprite on the tailnet for good, while a device approved from a link drops off after
+180 days unless you turn key expiry off for it. The address is kept in
+`~/.ateam/ws-addr`, which the engine reads however it was started, and later upgrades
+keep it. The engine keeps retrying its port until Tailscale has the address, so it
+doesn't need to wait for `tailscaled`.
+
+A paused Sprite doesn't answer on the tailnet, so on the phone's connection screen set
+**Provider** to **Sprites** and enter the Sprite's name and a Sprites API token: create
+one at [sprites.dev/account](https://sprites.dev/account) and paste the whole `my-org/…`
+string. A Sprite added by its address alone (a pairing code, or the IP typed in) fills
+in the provider and its name itself the first time the phone reaches it awake: the
+engine says it runs on a Sprite, and which one (its hostname is its name). The token
+is still yours to add; tapping a Sprite the phone has no token for opens its form at
+the token, rather than dialling it asleep until it times out. A box with no provider
+that doesn't answer (one on an engine from before this, say) says so under its card,
+with a **Set provider** button. Before connecting, the phone asks Sprites to wake the Sprite and hold it
 for five minutes, then keeps trying the Sprite for up to three: a Sprite reported
 awake can take a while longer to answer. Once the phone attaches, the engine holds
 it for a fresh idle window, as for any client connecting to a box it had let go.
@@ -189,30 +220,11 @@ use it. While a dropped connection retries with one of its tasks or its terminal
 open, it wakes again whenever the last wake is over a minute old, so a Sprite that
 paused again before the phone got through is not left asleep. A
 Sprites token works on every Sprite in its organization, so give the phone one for
-an organization that holds only your Ateam boxes.
+an organization that holds only your Ateam boxes. Until the Sprite is locked to your
+devices, anyone on your tailnet can use its network port: lock it under Access on
+the Sprite's page.
 
-Tailscale runs in its normal kernel mode (`/dev/net/tun` is there), as a service:
-
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sprite-env services create tailscaled --cmd sudo \
-  --args "/usr/sbin/tailscaled,--state=/var/lib/tailscale/tailscaled.state,--socket=/run/tailscale/tailscaled.sock"
-sudo tailscale up --hostname=mybox    # approve the printed URL
-```
-
-Then give the engine its phone port on the Sprite's tailnet IP (`tailscale ip -4`)
-by re-running the installer with it. The address is kept in `~/.ateam/ws-addr`,
-which the engine reads however it was started, and later upgrades keep it:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | ATEAM_WS_ADDR=<tailnet-ip>:8787 bash -s -- --service
-```
-
-The engine keeps retrying its phone port until Tailscale has the address, so it
-doesn't need to wait for `tailscaled` (and the desktop's SSH path doesn't depend on
-Tailscale starting).
-
-What we measured:
+What we measured (2026-10-24):
 
 | | |
 | --- | --- |

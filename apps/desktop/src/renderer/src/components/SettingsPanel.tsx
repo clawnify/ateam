@@ -1,8 +1,11 @@
 import {
 	type AgentDTO,
 	type AteamSettings,
+	type CredentialsPatch,
 	type CredentialsResult,
+	DEFAULT_OPENAI_TEXT_MODEL,
 	DEFAULT_OPENROUTER_TEXT_MODEL,
+	type DecisionModelChoice,
 	type MergeStrategy,
 	type SettingsPatch,
 	type SettingsResult,
@@ -54,7 +57,7 @@ interface RowContext {
 	patch: (p: SettingsPatch) => void;
 	/** Which keys are set; null until loaded (or on an engine too old to say). */
 	credentials: CredentialsResult | null;
-	saveKey: (key: string | null) => Promise<void>;
+	saveKey: (patch: CredentialsPatch) => Promise<void>;
 }
 
 const MERGE_STRATEGIES: { value: MergeStrategy; label: string }[] = [
@@ -70,7 +73,15 @@ const UPDATE_STRATEGIES: { value: UpdateStrategy; label: string }[] = [
 const TEXT_MODEL_OPTIONS: { value: TextModelChoice; label: string }[] = [
 	{ value: "auto", label: "Automatic" },
 	{ value: "openrouter", label: "OpenRouter" },
+	{ value: "openai", label: "OpenAI" },
 	{ value: "claude", label: "Claude Code (Haiku)" },
+	{ value: "off", label: "Off" },
+];
+
+const DECISION_MODEL_OPTIONS: { value: DecisionModelChoice; label: string }[] = [
+	{ value: "auto", label: "Automatic" },
+	{ value: "openrouter", label: "Jev (OpenRouter)" },
+	{ value: "openai", label: "Luna (OpenAI)" },
 	{ value: "off", label: "Off" },
 ];
 
@@ -282,7 +293,7 @@ const ROWS: Row[] = [
 		section: "boxes",
 		title: "Boxes",
 		description:
-			"Every box you've used: whether it's connected, its engine version, and the GitHub account and token it uses. Connect, update or forget a box here, paste a new GitHub token instead of using the box's terminal, choose a box for the Lead chat to run on, and let your boxes reach each other.",
+			"Every box you've used: whether it's connected, its engine version, and the GitHub account and token it uses. Add, connect, update or forget a box here, paste a new GitHub token instead of using the box's terminal, choose a box for the Lead chat to run on, and let your boxes reach each other.",
 		control: () => null,
 	},
 	{
@@ -290,15 +301,49 @@ const ROWS: Row[] = [
 		section: "ai",
 		title: "OpenRouter API key",
 		description:
-			"When an agent finishes a turn, Jev, a small decision model on OpenRouter, reads its last message and moves the card to Needs you if the agent is waiting on you. Without a key, a finished turn always goes to Review. The agent's last message and your last reply are sent to OpenRouter.",
-		control: (_s, { credentials, saveKey }) => <KeyField status={credentials} onSave={saveKey} />,
+			"Lets Jev, a small decision model on OpenRouter, sort finished turns and filter grammar suggestions, and lets an OpenRouter model write titles and summaries. What each one sends is described below.",
+		control: (_s, { credentials, saveKey }) => (
+			<KeyField provider="openRouter" status={credentials} onSave={saveKey} />
+		),
+	},
+	{
+		id: "credentials.openAi",
+		section: "ai",
+		title: "OpenAI API key",
+		description:
+			"Lets Luna, OpenAI's decision model, do the same work as Jev, and lets an OpenAI model write titles and summaries, so you need no OpenRouter account. Only a key saved here is used, never OPENAI_API_KEY from your shell.",
+		control: (_s, { credentials, saveKey }) => (
+			<KeyField provider="openAi" status={credentials} onSave={saveKey} />
+		),
+	},
+	{
+		id: "engine.decisionModel",
+		section: "ai",
+		title: "Decision model",
+		description:
+			"When an agent finishes a turn, the decision model reads its last message and moves the card to Needs you if the agent is waiting on you. Automatic uses Jev when an OpenRouter key is set, otherwise Luna when an OpenAI key is. With neither, or Off, a finished turn always goes to Review. The agent's last message and your last reply are sent to that provider.",
+		control: (s, { patch }) => (
+			<select
+				className="settings-select"
+				value={s.engine.decisionModel ?? "auto"}
+				onChange={(e) =>
+					patch({ engine: { decisionModel: e.target.value as DecisionModelChoice } })
+				}
+			>
+				{DECISION_MODEL_OPTIONS.map((o) => (
+					<option key={o.value} value={o.value}>
+						{o.label}
+					</option>
+				))}
+			</select>
+		),
 	},
 	{
 		id: "client.filterGrammarWithJev",
 		section: "ai",
 		title: "Filter grammar suggestions",
 		description:
-			"With an OpenRouter key, Jev keeps only the grammar suggestions that fix real mistakes and hides slang, names and jargon. Your draft prompt is sent to OpenRouter as you type. Without a key, every suggestion shows.",
+			"With a decision model, keeps only the grammar suggestions that fix real mistakes and hides slang, names and jargon. Your draft prompt is sent to that provider as you type. Without one, every suggestion shows.",
 		control: (s, { patch }) => (
 			<Switch
 				checked={s.client.filterGrammarWithJev}
@@ -312,7 +357,7 @@ const ROWS: Row[] = [
 		section: "ai",
 		title: "Model for titles and summaries",
 		description:
-			"Writes a short title for a task you start without a name, and a sentence or two on where each task stands once its agent has been quiet for a few minutes. Automatic uses OpenRouter when a key is set, otherwise Claude Code (Haiku, on your subscription). With OpenRouter, a task's prompts and its agent's last reply are sent to OpenRouter, with anything that looks like a key or a token removed first.",
+			"Writes a short title for a task you start without a name, and a sentence or two on where each task stands once its agent has been quiet for a few minutes. Automatic uses OpenRouter when that key is set, then OpenAI, otherwise Claude Code (Haiku, on your subscription). With OpenRouter or OpenAI, a task's prompts and its agent's last reply are sent to that provider, with anything that looks like a key or a token removed first.",
 		control: (s, { patch }) => (
 			<select
 				className="settings-select"
@@ -338,6 +383,20 @@ const ROWS: Row[] = [
 				value={s.engine.openRouterTextModel ?? ""}
 				placeholder={DEFAULT_OPENROUTER_TEXT_MODEL}
 				onCommit={(v) => patch({ engine: { openRouterTextModel: v } })}
+			/>
+		),
+	},
+	{
+		id: "engine.openAiTextModel",
+		section: "ai",
+		title: "OpenAI model for titles and summaries",
+		description: "The model that writes them when OpenAI does, by its OpenAI model id.",
+		control: (s, { patch }) => (
+			<TextSetting
+				label="OpenAI model for titles and summaries"
+				value={s.engine.openAiTextModel ?? ""}
+				placeholder={DEFAULT_OPENAI_TEXT_MODEL}
+				onCommit={(v) => patch({ engine: { openAiTextModel: v } })}
 			/>
 		),
 	},
@@ -388,30 +447,50 @@ function TextSetting({
  * four characters and a way to remove it. The key is never read back; the
  * engine answers whether one is set, not what it is.
  */
+const KEY_FIELDS = {
+	openRouter: {
+		field: "openRouterApiKey",
+		label: "OpenRouter API key",
+		placeholder: "sk-or-…",
+		envName: "OPENROUTER_API_KEY",
+	},
+	openAi: {
+		field: "openAiApiKey",
+		label: "OpenAI API key",
+		placeholder: "sk-…",
+		envName: "OPENAI_API_KEY",
+	},
+} as const;
+
 function KeyField({
+	provider,
 	status,
 	onSave,
 }: {
+	provider: keyof typeof KEY_FIELDS;
 	status: CredentialsResult | null;
-	onSave: (key: string | null) => Promise<void>;
+	onSave: (patch: CredentialsPatch) => Promise<void>;
 }) {
 	const [draft, setDraft] = useState("");
 	const [busy, setBusy] = useState(false);
+	const { field, label, placeholder, envName } = KEY_FIELDS[provider];
 	const run = async (key: string | null) => {
 		setBusy(true);
 		try {
-			await onSave(key);
+			await onSave({ [field]: key });
 			setDraft("");
 		} finally {
 			setBusy(false);
 		}
 	};
 	if (!status) return <span className="settings-key-note">Unavailable</span>;
-	const key = status.openRouter;
+	const key = status[provider];
+	// An engine older than OpenAI keys reports none; saving one there would do nothing.
+	if (!key) return <span className="settings-key-note">Update Ateam here to use it</span>;
 	if (key.set && key.source === "env") {
 		return (
 			<span className="settings-key-note" title="Set in the engine's environment">
-				OPENROUTER_API_KEY ····{key.hint}
+				{envName} ····{key.hint}
 			</span>
 		);
 	}
@@ -441,8 +520,8 @@ function KeyField({
 			<input
 				className="settings-input"
 				type="password"
-				placeholder="sk-or-…"
-				aria-label="OpenRouter API key"
+				placeholder={placeholder}
+				aria-label={label}
 				autoComplete="off"
 				spellCheck={false}
 				value={draft}
@@ -522,9 +601,9 @@ export function SettingsPanel({
 		};
 	}, []);
 
-	const saveKey = useCallback(async (key: string | null) => {
+	const saveKey = useCallback(async (patch: CredentialsPatch) => {
 		try {
-			setCredentials(await window.ateam.credentials.update({ openRouterApiKey: key }));
+			setCredentials(await window.ateam.credentials.update(patch));
 		} catch (e) {
 			setError(String(e));
 		}
@@ -638,9 +717,7 @@ export function SettingsPanel({
 						if (section.id === "boxes") {
 							return (
 								<section key={section.id} className="settings-section">
-									<h3>{section.label}</h3>
-									<p className="settings-section-intro">{rows[0]?.description}</p>
-									<BoxesSettings />
+									<BoxesSettings title={section.label} intro={rows[0]?.description} />
 								</section>
 							);
 						}

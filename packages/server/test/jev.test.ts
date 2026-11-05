@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { classifyTurn, decideStep, JEV_MODEL, type JevLegs } from "../src/jev";
+import { BOARD_MODEL, classifyTurn, decideStep, type JevLegs } from "../src/jev";
+
+const jev = { provider: "openrouter", apiKey: "k" } as const;
 
 const legs = (over: Partial<JevLegs>): JevLegs => ({
 	asks_user: 0.02,
@@ -66,14 +68,14 @@ describe("classifyTurn", () => {
 		const seen: { url?: string; init?: RequestInit } = {};
 		stub(200, answers(legs({ asks_user: 0.99, claims_done: 0.1 })), seen);
 		const v = await classifyTurn({
-			apiKey: "sk-or-test",
+			model: { provider: "openrouter", apiKey: "sk-or-test" },
 			finalMessage: "Postgres or SQLite?",
 			userMessage: "add a database",
 		});
 		expect(v?.step).toBe("needs_attention");
 		expect(seen.url).toBe("https://openrouter.ai/api/alpha/decisions");
 		const sent = JSON.parse(String(seen.init?.body));
-		expect(sent.model).toBe(JEV_MODEL);
+		expect(sent.model).toBe(BOARD_MODEL.openrouter);
 		expect(sent.state).toEqual({
 			users_most_recent_message: "add a database",
 			agents_final_message: "Postgres or SQLite?",
@@ -86,12 +88,12 @@ describe("classifyTurn", () => {
 
 	it("is null on a failed call, so the rule's column stands", async () => {
 		stub(401, { error: "bad key" });
-		expect(await classifyTurn({ apiKey: "k", finalMessage: "done" })).toBeNull();
+		expect(await classifyTurn({ model: jev, finalMessage: "done" })).toBeNull();
 	});
 
 	it("is null on an incomplete verdict rather than reading a missing answer as 0", async () => {
 		stub(200, { answers: { asks_user: { noul: 0.99 } } });
-		expect(await classifyTurn({ apiKey: "k", finalMessage: "done" })).toBeNull();
+		expect(await classifyTurn({ model: jev, finalMessage: "done" })).toBeNull();
 	});
 
 	it("never calls out without a key or a message", async () => {
@@ -100,8 +102,10 @@ describe("classifyTurn", () => {
 			called = true;
 			return new Response("{}");
 		}) as unknown as typeof fetch;
-		expect(await classifyTurn({ apiKey: "", finalMessage: "done" })).toBeNull();
-		expect(await classifyTurn({ apiKey: "k", finalMessage: "  " })).toBeNull();
+		expect(
+			await classifyTurn({ model: { provider: "openrouter", apiKey: "" }, finalMessage: "done" }),
+		).toBeNull();
+		expect(await classifyTurn({ model: jev, finalMessage: "  " })).toBeNull();
 		expect(called).toBe(false);
 	});
 });

@@ -34,7 +34,14 @@ export type {
 	UpdateFromBaseInput,
 	UpdateResult,
 } from "./sync";
-export { commit, push, trackingStatus, updateFromBase } from "./sync";
+export {
+	commit,
+	push,
+	trackingStatus,
+	uncommittedCount,
+	uncommittedWorkCount,
+	updateFromBase,
+} from "./sync";
 export type {
 	CreateTaskInput,
 	RemoveTaskInput,
