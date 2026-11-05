@@ -38,7 +38,7 @@ import {
 	type RpcExtension,
 	serveRpc,
 } from "./rpc";
-import { readSettings } from "./settings-file";
+import { hasBoxChoice, idleSleepMinutesOf, readSettings, updateSettings } from "./settings-file";
 import { detectSleepDriver, providerReport, type SleepControl, startSleepControl } from "./sleep";
 import { reachableWsAddr } from "./tailnet";
 import { socketServerTransport } from "./transport/socket";
@@ -103,6 +103,10 @@ async function runDaemon(): Promise<void> {
 	const LOCK_NEW_BOXES = false;
 	const fresh =
 		!existsSync(join(DATA_DIR, "ateam.sqlite")) && !existsSync(join(DATA_DIR, "grove.sqlite"));
+	// A new box starts always on, unless its file already says otherwise: billed while
+	// up, but nothing needs a key to wake it. A box that ran before keeps sleeping as
+	// it did until someone chooses (the phone's box form, the desktop's box page).
+	if (fresh && !hasBoxChoice()) updateSettings({ box: { alwaysOn: true } });
 	// The boxes this one links to (links.ts): its agents and its Lead reach them.
 	const links = new BoxLinks({ dataDir: DATA_DIR, log: (line) => console.log(line) });
 	const engine = await createEngine({
@@ -240,7 +244,7 @@ function serveClient(
 		trusted,
 		pairing,
 		wsAddr,
-		provider: providerReport(boxProvider, readSettings().settings.engine.idleSleepMinutes),
+		provider: providerReport(boxProvider, idleSleepMinutesOf(readSettings().settings)),
 	});
 }
 
@@ -255,7 +259,14 @@ async function maybeStartIdleSleep(
 	lead: ReturnType<typeof engineLead>,
 ): Promise<void> {
 	const log = (line: string) => console.log(line);
-	const driver = await detectSleepDriver(log);
+	const driver = await detectSleepDriver({
+		log,
+		// Set at the provider by the user (boxd: hibernation off, after Ateam had let
+		// it sleep): kept as this box's own choice, so Ateam stops putting it to sleep.
+		onAlwaysOn: () => {
+			updateSettings({ box: { alwaysOn: true } });
+		},
+	});
 	boxProvider = driver?.provider ?? null;
 	if (!driver) return;
 	log(`[ateam] on ${driver.where}: letting it sleep when idle`);
@@ -280,7 +291,7 @@ async function maybeStartIdleSleep(
 			const due = [nextLoop(), nextWait].filter((t): t is number => t != null);
 			return due.length > 0 ? Math.min(...due) : null;
 		},
-		idleMinutes: () => readSettings().settings.engine.idleSleepMinutes,
+		idleMinutes: () => idleSleepMinutesOf(readSettings().settings),
 		log,
 	});
 }

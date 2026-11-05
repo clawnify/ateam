@@ -14,15 +14,21 @@ export {
 	startSleepControl,
 } from "./control";
 
-const DRIVERS: ((opts: { log: (line: string) => void }) => Promise<SleepDriver | null>)[] = [
+export interface DetectOptions {
+	log: (line: string) => void;
+	/** The user set the box always on at its provider (boxd: hibernation off). */
+	onAlwaysOn?: () => void;
+}
+
+const DRIVERS: ((opts: DetectOptions) => Promise<SleepDriver | null>)[] = [
 	boxdSleepDriver,
 	spritesSleepDriver,
 ];
 
 /** The sleep driver for the box this engine runs on, or null when its provider has none. */
-export async function detectSleepDriver(log: (line: string) => void): Promise<SleepDriver | null> {
+export async function detectSleepDriver(opts: DetectOptions): Promise<SleepDriver | null> {
 	for (const detect of DRIVERS) {
-		const driver = await detect({ log });
+		const driver = await detect(opts);
 		if (driver) return driver;
 	}
 	return null;

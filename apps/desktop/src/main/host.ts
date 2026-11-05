@@ -59,6 +59,7 @@ import {
 } from "@ateam/protocol";
 import {
 	judgeGrammar as askJevAboutGrammar,
+	boxSleepsOf,
 	boxSnapshotOf,
 	boxWakeOf,
 	buildCloudInit,
@@ -222,6 +223,8 @@ export interface Host {
 	/** Bring a box's engine up to date: over SSH to this app's release, or, for a
 	 *  Tailscale box, by asking its engine to update itself (what the phone does). */
 	updateBox(alias: string): Promise<BoxUpdateResult>;
+	/** Keep a connected box always on, or let it sleep when idle (box.alwaysOn there). */
+	setBoxAlwaysOn(alias: string, on: boolean): Promise<{ sleeps: boolean | null }>;
 	/** A connected box's GitHub access (githubAccess:status): what gh and git sign in with. */
 	githubAccess(alias: string): Promise<GithubAccessDTO>;
 	/** Hand a connected box a GitHub token; answers its new access. The token never comes back. */
@@ -627,13 +630,11 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		cancelReconnect(alias);
 		attempts.delete(alias);
 		// A Tailscale box added by its address alone takes the provider it says it runs
-		// on, so a connect the user asks for can wake it rather than time out. Not one
-		// that says it's always on (idle sleep off): there is nothing to wake.
+		// on, so a connect the user asks for can wake it rather than time out, and its
+		// row is named for its machine there. Whether it sleeps is kept beside it
+		// (`sleeps`), so an always-on box that doesn't answer isn't shown asleep.
 		const reported =
-			opts.binding === undefined &&
-			wire === "ws" &&
-			!boxWakeOf(db, alias) &&
-			info.provider?.sleeps !== false
+			opts.binding === undefined && wire === "ws" && !boxWakeOf(db, alias)
 				? reportedWake(info.provider)
 				: null;
 		recordConnection(db, {
@@ -643,6 +644,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			engineRelease: info.release ?? null,
 			agentsAvailable: info.agents,
 			...(opts.binding !== undefined ? { wake: opts.binding } : reported ? { wake: reported } : {}),
+			// What the box says about sleeping, when it says (an older engine doesn't).
+			...(info.provider !== undefined ? { sleeps: info.provider?.sleeps ?? null } : {}),
 		});
 		// The remote's method set matches the local dispatcher's (same contract). An
 		// engine BEHIND this app is read through tolerantRpc, which fills in what its
@@ -1433,6 +1436,26 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			// No dot from a box that couldn't say: its panel shows why when opened.
 		}
 	}
+	// On the box itself (box.alwaysOn), which a Mac's settings sync never pushes, and
+	// which the box then reports in hello. Its answer is kept on the held box's info,
+	// so its page shows it without waiting for the next connect.
+	async function setBoxAlwaysOn(alias: string, on: boolean): Promise<{ sleeps: boolean | null }> {
+		const backend = heldBox(alias);
+		// No provider puts it to sleep (null), or an engine too old to say (undefined):
+		// nothing it would act on.
+		if (!infos.get(alias)?.provider) return { sleeps: null };
+		const r = (await withTimeout(
+			backend.handle(CH.settingsUpdate, [{ box: { alwaysOn: on } }]) as Promise<SettingsResult>,
+			CONNECT_TIMEOUT_MS,
+		)) as SettingsResult;
+		const sleeps = r.settings.box?.alwaysOn !== true && r.settings.engine.idleSleepMinutes > 0;
+		const info = infos.get(alias);
+		if (info?.provider) info.provider = { ...info.provider, sleeps };
+		recordConnection(db, { hostAlias: alias, sleeps });
+		broadcastConnections();
+		return { sleeps };
+	}
+
 	async function githubAccess(alias: string): Promise<GithubAccessDTO> {
 		const access = (await heldBox(alias).handle(CH.githubAccessStatus, [])) as GithubAccessDTO;
 		return rememberGithub(alias, access);
@@ -1511,8 +1534,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	function noteFailure(alias: string, err: unknown): void {
 		// A host:port box a provider puts to sleep can't be asked whether it sleeps
 		// without waking it, so it was tried instead. Not answering is what a
-		// sleeping one does: show it asleep (it wakes when used), not as broken.
-		if (boxWakeOf(db, alias)) {
+		// sleeping one does: show it asleep (it wakes when used), not as broken. Not a
+		// box that last said it's always on: not answering is then a real failure.
+		if (boxWakeOf(db, alias) && boxSleepsOf(db, alias) !== false) {
 			asleep.add(alias);
 			broadcastConnections();
 			return;
@@ -1591,6 +1615,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		boxReadiness,
 		updateBox,
 		phoneAccess,
+		setBoxAlwaysOn,
 		githubAccess,
 		connectGithub,
 		checkGithub,
@@ -1650,6 +1675,9 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.boxReadiness, (_e, alias: string) => host.boxReadiness(alias));
 	ipcMain.handle(HOST_CH.updateBox, (_e, alias: string) => host.updateBox(alias));
 	ipcMain.handle(HOST_CH.phoneAccess, (_e, alias: string) => host.phoneAccess(alias));
+	ipcMain.handle(HOST_CH.boxAlwaysOn, (_e, alias: string, on: boolean) =>
+		host.setBoxAlwaysOn(alias, on === true),
+	);
 	ipcMain.handle(HOST_CH.githubAccess, (_e, alias: string) => host.githubAccess(alias));
 	ipcMain.handle(HOST_CH.connectGithub, (_e, alias: string, token: string) =>
 		host.connectGithub(alias, token),

@@ -78,6 +78,13 @@ export function wakesThrough(box: SavedConnection): ProviderDefinition | undefin
 	return box.sleeps === false ? undefined : providerById(box.provider?.id);
 }
 
+/** The box form's Always on / Sleeps when idle to begin with: a box being added shows
+ *  always on, as a new box starts (cli.ts); a saved one is as it last said (one that
+ *  never said sleeps, as it did before boxes reported it). Only a pick is sent. */
+export function alwaysOnInForm(box: SavedConnection | null): boolean {
+	return box === null ? true : box.sleeps === false;
+}
+
 /** Why this phone can't wake a box its provider puts to sleep, when it can't (no
  *  waker for it): its name there is missing, else the provider's key. Null for a
  *  box with no provider, which nothing wakes. */

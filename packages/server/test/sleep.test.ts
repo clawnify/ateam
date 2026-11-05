@@ -148,9 +148,14 @@ describe("sleep control on boxd", () => {
 				if (opts.run === false) throw new Error("run: not found");
 				return "";
 			}
+			// A read of boxd's own timeout, not a change: answers what Ateam set last.
+			if (cmd === "boxd" && args.join(" ") === "machine config list --json") {
+				return JSON.stringify({ "auto-hibernate.timeout": RELEASE_S });
+			}
 			calls.push(`${cmd} ${args.join(" ")}`);
 			return "";
 		};
+		const timeoutStatePath = join(dir, "auto-hibernate-set");
 		const deps = {
 			working: () => working,
 			nextLoopAt: () => opts.nextLoopAt ?? null,
@@ -163,7 +168,12 @@ describe("sleep control on boxd", () => {
 			calls,
 			wakeScriptPath,
 			start: async () => {
-				const driver = await boxdSleepDriver({ log: () => {}, exec, wakeScriptPath });
+				const driver = await boxdSleepDriver({
+					log: () => {},
+					exec,
+					wakeScriptPath,
+					timeoutStatePath,
+				});
 				if (!driver) throw new Error("expected the boxd driver");
 				return startSleepControl(driver, deps);
 			},
@@ -277,8 +287,77 @@ describe("boxdSleepDriver", () => {
 		const driver = await boxdSleepDriver({
 			log: () => {},
 			exec: async (cmd, args) => (cmd === "boxd" && args[0] === "info" ? '{"name":"mybox"}' : ""),
+			timeoutStatePath: join(
+				mkdtempSync(join(tmpdir(), "ateam-boxd-state-")),
+				"auto-hibernate-set",
+			),
 		});
 		expect(driver?.provider).toEqual({ id: "boxd", box: { machine: "mybox" } });
+	});
+});
+
+describe("boxd's own always on", () => {
+	/** A boxd VM whose auto-hibernate timeout is `timeout()`, recording what Ateam sets. */
+	function vm(timeout: () => number) {
+		const sets: string[] = [];
+		const exec = async (cmd: string, args: string[]) => {
+			if (cmd === "boxd" && args[0] === "info") return JSON.stringify({ name: "mybox" });
+			if (cmd === "boxd" && args.join(" ") === "machine config list --json") {
+				return JSON.stringify({ "auto-hibernate.timeout": timeout(), "auto-suspend.timeout": 0 });
+			}
+			if (cmd === "boxd" && args[0] === "machine" && args[1] === "config" && args[2] === "set") {
+				sets.push(`${args[3]}=${args[4]}`);
+			}
+			return "";
+		};
+		const statePath = join(mkdtempSync(join(tmpdir(), "ateam-boxd-state-")), "auto-hibernate-set");
+		return { exec, sets, statePath };
+	}
+
+	it("an upgraded box reads nothing into a 0: it may be Ateam's own hold", async () => {
+		const v = vm(() => 0);
+		let alwaysOn = 0;
+		const d = await boxdSleepDriver({
+			log: () => {},
+			exec: v.exec,
+			timeoutStatePath: v.statePath,
+			onAlwaysOn: () => alwaysOn++,
+		});
+		await d?.hold();
+		expect(alwaysOn).toBe(0);
+	});
+
+	it("hibernation turned off in boxd after Ateam let the box sleep is kept, not undone", async () => {
+		let t = 0;
+		const v = vm(() => t);
+		let alwaysOn = 0;
+		const d = await boxdSleepDriver({
+			log: () => {},
+			exec: v.exec,
+			timeoutStatePath: v.statePath,
+			onAlwaysOn: () => alwaysOn++,
+		});
+		if (!d) throw new Error("expected the boxd driver");
+		await d.release();
+		t = RELEASE_S;
+		await d.hold();
+		expect(alwaysOn).toBe(0);
+		await d.release();
+		// The user turns hibernation off in boxd while Ateam has it released.
+		t = 0;
+		await d.hold();
+		expect(alwaysOn).toBe(1);
+		// The record survives a restart: a new engine tells the same change apart.
+		await d.release();
+		t = 0;
+		const again = await boxdSleepDriver({
+			log: () => {},
+			exec: v.exec,
+			timeoutStatePath: v.statePath,
+			onAlwaysOn: () => alwaysOn++,
+		});
+		await again?.hold();
+		expect(alwaysOn).toBe(2);
 	});
 });
 

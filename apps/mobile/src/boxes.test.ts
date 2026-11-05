@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { NEEDS_PAIRING } from "@ateam/protocol";
 import {
+	alwaysOnInForm,
 	awayOf,
 	type BoxLink,
 	boxKey,
@@ -115,6 +116,14 @@ describe("boxes", () => {
 		// Idle sleep turned back on: the next connect says so.
 		const again = always && withReportedProvider(always, boxKey(sprite), report(true));
 		expect(again).toEqual([{ ...sprite, sleeps: true }]);
+	});
+
+	test("the form starts a new box always on, and a saved one as it last said", () => {
+		expect(alwaysOnInForm(null)).toBe(true);
+		expect(alwaysOnInForm({ ...sprite, sleeps: false })).toBe(true);
+		expect(alwaysOnInForm({ ...sprite, sleeps: true })).toBe(false);
+		// Never said (an older engine): as it was, sleeping.
+		expect(alwaysOnInForm(sprite)).toBe(false);
 	});
 
 	test("a box that says it's always on is never shown asleep or asked about", () => {

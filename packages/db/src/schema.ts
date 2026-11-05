@@ -495,6 +495,10 @@ export const hosts = sqliteTable(
 		 *  machine's own inputs (its name there). The provider's key is not here: it is
 		 *  a secret, kept in the app's encrypted store. Null for every other box. */
 		wake: text("wake", { mode: "json" }).$type<{ id: string; box: Record<string, string> }>(),
+		/** Whether the box last said it sleeps when idle (SystemInfo.provider.sleeps):
+		 *  0 while it's always on, so it isn't shown asleep when it doesn't answer.
+		 *  Null until it says, or on a box no provider sleeps. */
+		sleeps: integer("sleeps", { mode: "boolean" }),
 		/** The box's board as last seen (projects, their tasks, loops), so its cards
 		 *  stay on the board while it sleeps or can't be reached. Opaque here: the
 		 *  desktop writes and reads it (main/offline.ts). Null until first held. */

@@ -254,10 +254,13 @@ name and a boxd API key. A box added by its address alone fills in the provider 
 the machine's name itself the first time the phone reaches it awake (the engine
 says which machine it runs on); the key is still yours to add, and tapping a box the
 phone has no key for opens its form at the key. A box with no provider that doesn't
-answer says so under its card, with a **Set provider** button. A box whose idle sleep is
-off (Settings → idle sleep: never) says it's always on, and the phone then never shows it
-asleep or asks for a key. Set always-on there, not in boxd: whenever Ateam lets the box
-sleep it sets boxd's own `auto-hibernate.timeout`. Saving the key checks it with boxd at once. Using the
+answer says so under its card, with a **Set provider** button. A new box starts **always
+on**: it never sleeps, needs no key, and is billed while up. Choose **Sleeps when idle**
+in the box form on the phone or the desktop (right after the provider), or on its page in
+Settings → Boxes; the key is then asked for. The choice is set on the box itself, never
+synced from a Mac, and a box that ran Ateam before this keeps sleeping as it did until you
+choose. boxd's own setting counts too: hibernation turned off in boxd after Ateam had let
+the box sleep is kept, rather than undone at the next release. Saving the key checks it with boxd at once. Using the
 box (tapping its card, opening one of its tasks, starting a task there, its
 terminal or the Lead on it) checks the machine's state and wakes it first;
 opening the app doesn't, so a hibernated box stays asleep, its tasks shown as the
