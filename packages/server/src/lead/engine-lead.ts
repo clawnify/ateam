@@ -183,6 +183,9 @@ export function engineLead(
 				}
 				case LEAD_CH.setAuto:
 					return l.setAuto(args[0] === true);
+				// v32: the desktop is on a voice call with this Lead.
+				case LEAD_CH.callActive:
+					return l.setCall(args[0] === true);
 				case LEAD_CH.attachBytes: {
 					const name = str(args[0], "The file name");
 					const base64 = str(args[1], "The file");

@@ -43,7 +43,7 @@ import { PtyClient } from "./pty/pty-client";
 import { reapableSessions } from "./pty/reap";
 import { makeStrandReconciler } from "./pty/reconcile";
 import { liveAgentIds, type Services, toTaskDTO } from "./services";
-import { createTaskInProject, spawnAgentInTask } from "./sessions";
+import { createTaskInProject, ResumeInFlightError, spawnAgentInTask } from "./sessions";
 import { PermissionBridge } from "./permissions";
 import { applyShowPage } from "./pages";
 import { applyPropose, clearProposal } from "./proposals";
@@ -484,16 +484,21 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			const last = repo.listSessionsByTask(db, task.id).find((s) => s.agentId !== "shell");
 			const agentId =
 				last?.agentId ?? task.agentId ?? readSettings().settings.engine.defaultAgentId;
-			await spawnAgentInTask(services, sendTaskUpdated, {
-				taskId: task.id,
-				agentId,
-				prompt,
-				...(last
-					? last.agentSessionId
-						? { resumeSessionId: last.agentSessionId }
-						: { resume: true }
-					: {}),
-			});
+			try {
+				return await spawnAgentInTask(services, sendTaskUpdated, {
+					taskId: task.id,
+					agentId,
+					prompt,
+					...(last
+						? last.agentSessionId
+							? { resumeSessionId: last.agentSessionId }
+							: { resume: true }
+						: {}),
+				});
+			} catch (e) {
+				if (e instanceof ResumeInFlightError) return null;
+				throw e;
+			}
 		},
 		log: opts.log ?? ((line) => console.log(line)),
 	});
@@ -547,7 +552,11 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	};
 
 	// PTY output/exit → emitted for the transport to forward.
-	pty.on("data", (e) => emitter.emit("ptyData", e));
+	pty.on("data", (e) => {
+		emitter.emit("ptyData", e);
+		// An agent started to take a message: what it prints, should it quit unread.
+		peers.agentOutput(e.terminalId, e.data);
+	});
 	pty.on("exit", (e) => {
 		emitter.emit("ptyExit", e);
 		permissions.settle(e.terminalId);
@@ -557,6 +566,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		// (pty.has), not this status.
 		// The pane is gone, so a follow-up armed for it can never be delivered.
 		followUps.discard(e.terminalId);
+		// An agent started to take a message whose pane died before it showed up.
+		peers.agentQuit(e.terminalId);
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
 		// A message still waiting for this task now goes in by launch.
@@ -634,6 +645,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		// PermissionRequest notification is not moving on.
 		if (e.eventType !== "PermissionRequest" && e.eventType !== "BrowserUse")
 			permissions.settle(e.terminalId, e.eventType);
+		// Any sign of life from an agent started to take a message: it is up.
+		if (e.eventType !== "AgentExit") peers.agentEvent(e.terminalId);
 		// The agent called a browser tool. Its Working fires alongside and drives
 		// the status, so this only stamps the task.
 		if (e.eventType === "BrowserUse") {
@@ -641,6 +654,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			return;
 		}
 		if (e.eventType === "AgentExit") {
+			// Before any other event: an agent started to take a message never read it.
+			peers.agentQuit(e.terminalId);
 			repo.recordEvent(db, {
 				sessionId: session.id,
 				terminalId: e.terminalId,

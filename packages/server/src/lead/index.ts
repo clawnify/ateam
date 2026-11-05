@@ -72,9 +72,16 @@ export interface Lead {
 	interrupt(): void;
 	/** A new conversation; the old one is archived, not deleted. */
 	reset(): void;
-	permission(id: string, answer: LeadPermissionAnswer): void;
+	/** Claude's own prompt, or a message or answer held during a call (below). */
+	permission(id: string, answer: LeadPermissionAnswer): void | Promise<void>;
 	/** Auto mode on or off: Claude's own auto mode, applied to the running agent. */
 	setAuto(on: boolean): void;
+	/** The user is on a voice call with this chat (true, repeated while it
+	 *  lasts; it lapses after CALL_GUARD_MS without one) or hung up. While a
+	 *  call is on, the Lead's messages and answers to tasks wait as permission
+	 *  cards for the user's tap: a call's words are transcribed, and may have
+	 *  been misheard or said to someone else in the room. */
+	setCall(on: boolean): void;
 	/** The user created (`taskId` when it was a task) or dismissed a proposal. */
 	proposal(id: string, outcome: "created" | "dismissed", taskId?: string): Promise<void>;
 	/** The user talks to a task's agent straight from the chat. */
@@ -99,6 +106,14 @@ const fail = (reason: string): never => {
 	throw new Error(reason);
 };
 
+/** A call's "on" lapses this long after the window last said so: a window that
+ *  crashed mid-call stops holding the Lead's messages soon after. */
+export const CALL_GUARD_MS = 90_000;
+
+/** What the Lead hears when a message or answer is held for the user's tap. */
+const HELD_FOR_TAP =
+	"Held for the user's OK: they are on a voice call with you, so Ateam shows this as a card in the chat and nothing goes to the task until they tap Allow. Tell them in a few words that it is waiting for their OK. Do not send it again; you hear what they decided with their next message.";
+
 export async function startLead(deps: LeadDeps): Promise<Lead> {
 	const { handle } = deps;
 	// The session is created below; the follower records into it through this.
@@ -106,11 +121,31 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	const follower = new Follower({ dir: deps.dir, handle, record: (item) => session?.record(item) });
 	const attachments = new LeadAttachments(deps.dir);
 	attachments.prune();
+	// A voice call: until when it is on, and the messages and answers held for
+	// the user's tap, by the id of the permission card that shows each. Held in
+	// memory: a restart cancels the cards (session.ts marks unanswered ones).
+	let callUntil = 0;
+	type HeldAction = { text: string; run: () => Promise<{ text: string; isError?: boolean }> };
+	const held = new Map<string, HeldAction>();
 	const tools = createLeadTools({
 		place: deps.place,
 		handle,
 		machineOf: deps.machineOf,
 		onTouch: (task) => follower.follow(task),
+		hold: (r) => {
+			if (!session || Date.now() >= callUntil) return null;
+			const id = randomUUID();
+			held.set(id, r);
+			session.record({
+				kind: "permission",
+				id,
+				text: r.text,
+				canAlways: false,
+				always: null,
+				at: Date.now(),
+			});
+			return HELD_FOR_TAP;
+		},
 		propose: (p) => {
 			if (!session) return;
 			// The same name again is the Lead revising its proposal: the earlier
@@ -184,8 +219,30 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 		attachBytes: (name, data) => attachments.addBytes(String(name), data),
 		interrupt: () => lead.interrupt(),
 		reset: () => lead.reset(),
-		permission: (id, answer) => lead.answerPermission(String(id), answer),
+		async permission(id, answer) {
+			const action = held.get(String(id));
+			if (!action) return lead.answerPermission(String(id), answer);
+			held.delete(String(id));
+			const card = lead.item(String(id));
+			const what = action.text.split("\n")[0]?.replace(/\*\*/g, "") ?? "your held message";
+			if (answer === "deny") {
+				if (card?.kind === "permission") lead.record({ ...card, answer: "deny" });
+				lead.note(`the user said no to ${JSON.stringify(what)}: it was not sent`);
+				return;
+			}
+			const res = await action.run();
+			if (card?.kind === "permission") lead.record({ ...card, answer: "allow" });
+			lead.note(
+				res.isError
+					? `the user allowed ${JSON.stringify(what)}, but it failed: ${res.text}`
+					: `the user allowed ${JSON.stringify(what)}: ${res.text}`,
+			);
+			if (res.isError) throw new Error(res.text);
+		},
 		setAuto: (on) => lead.setAuto(on),
+		setCall(on) {
+			callUntil = on ? Date.now() + CALL_GUARD_MS : 0;
+		},
 		// A task made from a proposal is followed, as one the Lead messaged is:
 		// its replies come here.
 		async proposal(id, outcome, taskId) {

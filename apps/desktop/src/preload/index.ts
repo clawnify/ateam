@@ -277,6 +277,11 @@ const lead: AteamLead = {
 		ipcRenderer.on(LEAD_CH.evtHome, handler);
 		return () => ipcRenderer.off(LEAD_CH.evtHome, handler);
 	},
+	callStart: (sdp, input) => ipcRenderer.invoke(LEAD_CH.callStart, sdp, input),
+	callJudge: (pieces, context, topic) =>
+		ipcRenderer.invoke(LEAD_CH.callJudge, pieces, context, topic),
+	callActive: (on) => ipcRenderer.invoke(LEAD_CH.callActive, on),
+	callNudge: (task, reply) => ipcRenderer.invoke(LEAD_CH.callNudge, task, reply),
 };
 contextBridge.exposeInMainWorld("ateamLead", lead);
 

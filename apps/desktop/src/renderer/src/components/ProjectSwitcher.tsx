@@ -1,5 +1,5 @@
 import { aliasLabel, type EngineMember, type UnifiedProject } from "@ateam/protocol";
-import { ChevronDown, Layers, Monitor, Server } from "lucide-react";
+import { ChevronDown, FolderPlus, Layers, Monitor, Server } from "lucide-react";
 import { type DragEvent, useState } from "react";
 import { cn } from "@/lib/utils";
 import { pickerTrigger } from "./picker";
@@ -71,7 +71,8 @@ function Machines({ members }: { members: EngineMember[] }) {
 /**
  * The sidebar's project switcher: each repo card (in the order it is given, most
  * recent first: project-order.ts), All projects, then Add project and the
- * selected project's own actions. Files from Finder dropped on
+ * selected project's own actions; with no project at all, an Add project
+ * button in its place. Files from Finder dropped on
  * it start a task in the project it names (`drop`), as the rows used to.
  */
 export function ProjectSwitcher({
@@ -103,6 +104,20 @@ export function ProjectSwitcher({
 	};
 	dropping: boolean;
 }) {
+	// No project at all: nothing to switch to, so the row is the way to add one
+	// (under All too, which with nothing in it would name nothing).
+	if (cards.length === 0)
+		return (
+			<Button
+				variant="outline"
+				size="sm"
+				className="h-8 w-full justify-start px-2 text-[13px] text-foreground has-[>svg]:px-2"
+				onClick={onAdd}
+			>
+				<FolderPlus className="size-3.5" strokeWidth={1.75} />
+				Add project
+			</Button>
+		);
 	const active = cards.find((c) => c.key === activeKey) ?? null;
 	const label = all ? "All projects" : (active?.name ?? "No project");
 	return (
