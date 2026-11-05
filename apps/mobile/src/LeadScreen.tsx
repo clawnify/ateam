@@ -10,6 +10,7 @@
 import {
 	applyLeadEvent,
 	findLeadTask,
+	findLinkedTask,
 	type LeadAgentItem,
 	type LeadBlock,
 	type LeadClient,
@@ -81,6 +82,9 @@ interface Ctx {
 	tasks: TaskDTO[];
 	openTask: (ref: string) => void;
 	knowsTask: (ref: string) => boolean;
+	/** A link in the Lead's prose: its target and text (findLinkedTask). */
+	openLink: (ref: string, label: string) => void;
+	knowsLink: (ref: string, label: string) => boolean;
 	/** Open a proposal's New task sheet or New loop form, filled in. */
 	startProposal?: (item: Extract<LeadItem, { kind: "proposal" }>) => void;
 }
@@ -104,7 +108,7 @@ function TaskChip({ task, ctx }: { task: LeadTaskRef; ctx: Ctx }) {
 }
 
 function Md({ text, ctx }: { text: string; ctx: Ctx }) {
-	return <LeadMarkdown text={text} onTaskLink={ctx.openTask} knowsTask={ctx.knowsTask} />;
+	return <LeadMarkdown text={text} onTaskLink={ctx.openLink} knowsTask={ctx.knowsLink} />;
 }
 
 function Tools({ tools, ctx }: { tools: LeadToolItem[]; ctx: Ctx }) {
@@ -588,9 +592,14 @@ export function LeadScreen({
 			tasks,
 			openTask,
 			knowsTask: (ref) => findLeadTask(tasks, ref) != null,
+			openLink: (ref, label) => {
+				const t = findLinkedTask(tasks, ref, label);
+				if (t) onOpenTask(t);
+			},
+			knowsLink: (ref, label) => findLinkedTask(tasks, ref, label) != null,
 			startProposal: onStartProposal,
 		}),
-		[tasks, openTask, onStartProposal],
+		[tasks, openTask, onOpenTask, onStartProposal],
 	);
 	const blocks = useMemo(() => (snap ? toLeadBlocks(snap.items) : []), [snap]);
 	// Scrolled back to the oldest item held: the page before it, if the box has one.
