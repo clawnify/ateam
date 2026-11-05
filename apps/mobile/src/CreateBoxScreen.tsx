@@ -341,6 +341,7 @@ export function CreateBoxScreen({
 		savedToken.current = null;
 		setTokenSaved(false);
 		setOptions(null);
+		setProblem(null);
 	};
 
 	const boxName = boxNameOf(name);
