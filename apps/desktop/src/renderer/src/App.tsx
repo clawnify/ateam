@@ -1361,15 +1361,9 @@ export function App() {
 		setMcHighlightId(t.id);
 		setMcJump((j) => ({ id: t.id, seq: (j?.seq ?? 0) + 1 }));
 	};
-	// Clicking the task you're already focused on closes it, revealing the view
-	// underneath — the lit tab already tells you which one you'll land on. Only
-	// the sidebar toggles: a search hit or a board card means "take me there",
-	// never "take me away".
-	const toggleTask = (t: TaskDTO) => {
-		if (t.id === selectedTaskId && panelMode === "full") {
-			setSelectedTaskId(null);
-			return;
-		}
+	// A sidebar row only ever opens its task: clicking the one already open
+	// keeps it open (closing is the panel's ✕ or a view tab).
+	const openFromSidebar = (t: TaskDTO) => {
 		if (mcGridShown) return pointAtTile(t);
 		openTask(t);
 	};
@@ -1413,7 +1407,7 @@ export function App() {
 	// engine sends a removal for every write to an archived task (a git-status
 	// refresh is enough), and a removal closes the open panel.
 	const openRow = (t: TaskDTO) => {
-		if (t.archivedAt == null) return toggleTask(t);
+		if (t.archivedAt == null) return openFromSidebar(t);
 		void window.ateam.tasks
 			.setArchived(t.id, false)
 			.then(openTask, (e) =>
@@ -1957,7 +1951,7 @@ export function App() {
 									hint={l.enabled ? undefined : "Paused"}
 									active={task != null && task.id === sidebarSelectedId}
 									className={l.enabled ? undefined : "loop-paused"}
-									onClick={() => (task ? toggleTask(task) : goToView("loops"))}
+									onClick={() => (task ? openFromSidebar(task) : goToView("loops"))}
 								>
 									<Repeat size={16} strokeWidth={1.75} />
 									{task?.column === "needs_attention" && (
@@ -2142,7 +2136,7 @@ export function App() {
 													loop={l}
 													task={task}
 													selected={task != null && task.id === sidebarSelectedId}
-													onClick={() => (task ? toggleTask(task) : goToView("loops"))}
+													onClick={() => (task ? openFromSidebar(task) : goToView("loops"))}
 													onRunNow={() =>
 														window.ateam.loops.runNow(l.id).then(
 															(list) => {
