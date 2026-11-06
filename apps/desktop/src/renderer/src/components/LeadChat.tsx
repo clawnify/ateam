@@ -1183,6 +1183,7 @@ export function LeadChat({
 	home,
 	onLeadBox,
 	onOpenLeadSettings,
+	onCallNeedsKey,
 }: {
 	/** A project window's chat: the name of the project it is about. */
 	scope?: string;
@@ -1192,6 +1193,8 @@ export function LeadChat({
 	onLeadBox: (t: TaskDTO) => boolean;
 	/** Settings → Boxes, where the chat's home is chosen. */
 	onOpenLeadSettings?: () => void;
+	/** Settings → AI at the OpenAI key, for a call this Mac has no key to open. */
+	onCallNeedsKey?: () => void;
 	/** Every loaded task, across projects and machines, to name and open the ones the Lead touches. */
 	tasks: TaskDTO[];
 	/** To say which project each task is in when the user picks one with "@". */
@@ -1206,6 +1209,20 @@ export function LeadChat({
 }) {
 	const [snap, setSnap] = useState<LeadSnapshot>(EMPTY);
 	const call = useLeadCall();
+	// A call's voice session is opened with this Mac's OpenAI key (main/lead/call.ts),
+	// whichever machine the chat lives on. Without one, go where it is added
+	// instead of asking for the mic for a call that can't start. An answer that
+	// doesn't come leaves it to the call, which says what is missing.
+	const startCall = useCallback(async () => {
+		if (onCallNeedsKey) {
+			const keys = await window.ateam.credentials.get().catch(() => null);
+			if (keys?.openAi && !keys.openAi.set) {
+				onCallNeedsKey();
+				return;
+			}
+		}
+		await leadCall.start();
+	}, [onCallNeedsKey]);
 	// The call tells a task's new question once, as a decision to think about.
 	useEffect(() => leadCall.setTasks(tasks), [tasks]);
 	// A question answered by a tap on its card or by voice on the call: a box's
@@ -1736,7 +1753,7 @@ export function LeadChat({
 						aria-label={call.state === "off" ? "Call the Lead" : "Hang up"}
 						aria-pressed={call.state !== "off"}
 						disabled={call.state === "off" && !home.canCall}
-						onClick={() => (call.state === "off" ? void leadCall.start() : leadCall.hangUp())}
+						onClick={() => (call.state === "off" ? void startCall() : leadCall.hangUp())}
 					>
 						{call.state === "off" ? (
 							<Phone size={15} strokeWidth={1.75} />

@@ -104,7 +104,7 @@ import { PromptComposer } from "./components/PromptComposer";
 import { ProposalNote, ProposalStrip, proposalLabel } from "./components/Proposals";
 import { QuestionCard } from "./components/QuestionCard";
 import { RailTile } from "./components/RailTile";
-import { SettingsPanel } from "./components/SettingsPanel";
+import { type SectionId, type SettingsJump, SettingsPanel } from "./components/SettingsPanel";
 import { SidebarViewMenu } from "./components/SidebarViewMenu";
 import { TaskPeek, TaskPeekProvider } from "./components/TaskPeek";
 import { TaskSearch } from "./components/TaskSearch";
@@ -1481,12 +1481,15 @@ export function App() {
 	};
 	// Tabs mean "show me this view". The focused task covers the view it belongs
 	// to, so switching tabs — including clicking the lit one — closes it.
-	// Settings opened at a page from elsewhere (the Lead's header → Boxes).
-	const [settingsJump, setSettingsJump] = useState<{ section: "boxes"; n: number } | null>(null);
-	const openLeadSettings = () => {
-		setSettingsJump((j) => ({ section: "boxes", n: (j?.n ?? 0) + 1 }));
+	// Settings opened at a page from elsewhere: the Lead's header → Boxes, its
+	// call button without an OpenAI key → that key's field, Get started → AI.
+	const [settingsJump, setSettingsJump] = useState<SettingsJump | null>(null);
+	const openSettingsAt = (section: SectionId, row?: string) => {
+		setSettingsJump((j) => ({ section, row, n: (j?.n ?? 0) + 1 }));
 		goToView("settings");
 	};
+	const openLeadSettings = () => openSettingsAt("boxes");
+	const openCallKey = () => openSettingsAt("ai", "credentials.openAi");
 	const goToView = (v: View) => {
 		if (panelMode === "full") setSelectedTaskId(null);
 		setView(v);
@@ -2438,6 +2441,7 @@ export function App() {
 							onAdd={addProject}
 							onRecheckAgents={recheckAgents}
 							onOpenBoxes={openLeadSettings}
+							onOpenAi={() => openSettingsAt("ai")}
 						/>
 					) : view === "board" ? (
 						<>
@@ -2602,6 +2606,7 @@ export function App() {
 							home={leadHome}
 							onLeadBox={onLeadBox}
 							onOpenLeadSettings={openLeadSettings}
+							onCallNeedsKey={openCallKey}
 						/>
 					) : (
 						<LoopsPanel
@@ -2638,6 +2643,7 @@ export function App() {
 							home={leadHome}
 							onLeadBox={onLeadBox}
 							onOpenLeadSettings={openLeadSettings}
+							onCallNeedsKey={openCallKey}
 						/>
 					</aside>
 				</>
