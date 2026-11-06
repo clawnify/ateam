@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { ensureNotifyScript } from "../src/agent-setup";
-import { type HookEvent, HookServer, hookText } from "../src/hooks/hook-server";
+import { type HookEvent, HookServer, hookSessionId, hookText } from "../src/hooks/hook-server";
 
 /**
  * The turn's text reaches the engine: the REAL shipped notify.sh, fired the way
@@ -70,6 +70,61 @@ describe("notify.sh → hook server", () => {
 		const { stdout } = await fire("Stop", { last_assistant_message: "done" });
 		followUp = undefined;
 		expect(JSON.parse(stdout)).toEqual({ decision: "block", reason: "keep going" });
+	});
+});
+
+// Codex names its own conversations, and its turn-end `notify` (argv, not
+// stdin) is all it reports in a worktree whose hooks it was never asked to
+// trust. The field names are the ones in the Codex 0.165 binary.
+describe("the conversation id reaches the engine", () => {
+	async function fireCodex(payload: unknown): Promise<HookEvent[]> {
+		events = [];
+		const notify = join(dirname(scriptPath), "codex-notify.sh");
+		const proc = Bun.spawn(["sh", notify, JSON.stringify(payload)], {
+			env: { ...process.env, ATEAM_HOOK_PORT: String(server.port), ATEAM_TERMINAL_ID: "term-1" },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		await proc.exited;
+		return events;
+	}
+
+	it("from Codex's notify payload", async () => {
+		const got = await fireCodex({
+			type: "agent-turn-complete",
+			"thread-id": "01a1b0f8-7cc0-7542-abb1-24a79ea21a78",
+			"turn-id": "t-1",
+			cwd: "/w",
+			"input-messages": ["go"],
+			"last-assistant-message": "done",
+		});
+		expect(got).toHaveLength(1);
+		expect(got[0]).toMatchObject({
+			eventType: "Stop",
+			sessionId: "01a1b0f8-7cc0-7542-abb1-24a79ea21a78",
+			lastAssistantMessage: "done",
+		});
+	});
+
+	it("from a hook's session_id, which notify.sh's empty query param no longer hides", async () => {
+		const { events } = await fire("Stop", { session_id: "sess-7", last_assistant_message: "ok" });
+		expect(events[0]).toMatchObject({ eventType: "Stop", sessionId: "sess-7" });
+	});
+
+	it("is absent from a bodiless event", async () => {
+		const { events } = await fire("Working", { session_id: "sess-7" });
+		expect(events[0].sessionId).toBeUndefined();
+	});
+});
+
+describe("hookSessionId", () => {
+	it("reads either schema and nothing else", () => {
+		expect(hookSessionId(JSON.stringify({ "thread-id": "th-1" }))).toBe("th-1");
+		expect(hookSessionId(JSON.stringify({ session_id: "s-1" }))).toBe("s-1");
+		expect(hookSessionId(JSON.stringify({ "thread-id": "  " }))).toBeUndefined();
+		expect(hookSessionId(JSON.stringify({ "thread-id": 7 }))).toBeUndefined();
+		expect(hookSessionId("not json")).toBeUndefined();
+		expect(hookSessionId("")).toBeUndefined();
 	});
 });
 

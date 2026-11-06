@@ -14,10 +14,15 @@
  *     an idle session by exiting 2 with the message on stderr. OpenCode's is a
  *     plugin that prompts the session through its own server
  *     (`client.session.promptAsync`). Both long-poll `/inbox/wait`.
- *   - A live agent with no listener (Codex, whose background hooks never start
- *     a turn; or a session launched before this existed) is restarted on the
- *     same conversation with the message as its prompt, but only once its turn
- *     is over and nobody has typed into it for a while. That is the reaper's
+ *   - A live Codex whose conversation Ateam knows takes it through Codex's own
+ *     queue (`codex queue`, codex-queue.ts): a user turn it starts as soon as
+ *     it can, in place, with no restart. Its background hooks never start a
+ *     turn, so this is its only live door.
+ *   - A live agent with no listener (a Codex without `codex queue`, or whose
+ *     conversation Ateam has not heard named; or a session launched before
+ *     this existed) is restarted on the same conversation with the message as
+ *     its prompt, but only once its turn is over and nobody has typed into it
+ *     for a while. That is the reaper's
  *     kill plus the restore path the app already runs (pty/reap.ts,
  *     `restoreAgentSession`), so it costs the conversation nothing.
  *   - A task with no live agent is woken the same way: its last conversation is
@@ -73,6 +78,9 @@ import type { AgentSession, AteamDb, PeerMessage, Project, Task } from "@ateam/d
 import { repo } from "@ateam/db";
 import { isBranchForName } from "@ateam/git-core";
 import { projectRepo, type RemoteSenderDTO } from "@ateam/protocol";
+import { holdsWork, INPUT_QUIET_MS } from "./pty/reap";
+
+export { INPUT_QUIET_MS };
 
 /** Turns two tasks may trade inside HOP_WINDOW_MS before a human has to step in. */
 export const MAX_HOPS = 12;
@@ -83,8 +91,6 @@ const SENDER_WINDOW_MS = 10 * 60 * 1000;
 export const MAX_BODY = 8000;
 /** Restarts and launches in flight at once. */
 const MAX_WAKES = 2;
-/** A human typed this recently: never restart under their hands. */
-export const INPUT_QUIET_MS = 60 * 1000;
 /** How long a live Claude/OpenCode agent gets to take a message through its own
  *  listener before it is treated like one that has none (an older launch),
  *  counted from the message or the end of its last turn, whichever is later. */
@@ -143,7 +149,13 @@ const LISTENS = new Set(["claude", "opencode"]);
 
 export interface DeliveryFacts {
 	/** The recipient's live agent session, if any. */
-	live: { agentId: string; status: string; hasListener: boolean } | null;
+	live: {
+		agentId: string;
+		status: string;
+		hasListener: boolean;
+		/** A Codex whose conversation can take it through `codex queue`. */
+		canQueue?: boolean;
+	} | null;
 	/** When a human last typed into that session's terminal. */
 	lastInputAt: number | null;
 	/** The session's last hook event (a Stop, for an idle one). */
@@ -155,35 +167,21 @@ export interface DeliveryFacts {
 
 /**
  * - `listener`: hand the batch to the live agent's listener now.
+ * - `queue`: put the batch in the live Codex's own queue (codex-queue.ts),
+ *   which takes it at once if idle and after its turn otherwise, leaving a
+ *   draft alone: nothing here has to wait for it to go quiet.
  * - `wait`: leave it pending; a later event (a turn ending, a listener
  *   arriving, the sweep) looks again.
  * - `restart`: kill the idle live agent and resume its conversation with the
  *   batch as the prompt.
  * - `launch`: no live agent; resume (or start) one with the batch as the prompt.
  */
-export type DeliveryPlan = "listener" | "wait" | "restart" | "launch";
-
-/** A restart would throw work away: the agent is busy, or someone typed into it. */
-function holdsWork(
-	status: string,
-	lastInputAt: number | null,
-	lastEventAt: number | null,
-	now: number,
-): boolean {
-	// Mid-turn or holding a question: it is busy, and a restart would throw the
-	// turn away. Its Stop brings us back here.
-	if (status !== "idle") return true;
-	if (lastInputAt == null) return false;
-	if (now - lastInputAt < INPUT_QUIET_MS) return true;
-	// Typed into since its turn ended: a prompt it is now working on (Codex
-	// reports no turn start without its trusted hooks) or a draft. Either way
-	// the status is stale; its next Stop brings us back.
-	return lastEventAt == null || lastInputAt > lastEventAt;
-}
+export type DeliveryPlan = "listener" | "queue" | "wait" | "restart" | "launch";
 
 export function planDelivery(f: DeliveryFacts): DeliveryPlan {
 	if (!f.live) return "launch";
 	if (f.live.hasListener) return "listener";
+	if (f.live.canQueue) return "queue";
 	if (holdsWork(f.live.status, f.lastInputAt, f.lastEventAt, f.now)) return "wait";
 	// A harness that listens is expected to register; give it a moment so a
 	// message is not delivered by a restart instead. The moment runs from the
@@ -359,6 +357,9 @@ export interface PeerMessengerDeps {
 	 *  runs in. Null when another launch is already bringing that conversation
 	 *  back: the batch then stays pending for that one. */
 	launch: (task: Task, prompt: string) => Promise<{ terminalId: string } | null>;
+	/** Queue `text` for a live Codex's conversation (`agentSessionId`); true once
+	 *  Codex took it. Absent: every Codex message goes by restart. */
+	queue?: (session: AgentSession, text: string) => Promise<boolean>;
 	log: (line: string) => void;
 	now?: () => number;
 }
@@ -400,6 +401,10 @@ export class PeerMessenger {
 	 *  turn ends there (kick). */
 	private paused = new Map<string, string>();
 	private waking = new Set<string>();
+	/** Tasks with a `codex queue` call under way. */
+	private queuing = new Set<string>();
+	/** Codex terminals whose `codex queue` failed once: restarts from then on. */
+	private noQueue = new Set<string>();
 	/** Agents started for a batch that have not shown up yet, by terminal. */
 	private starting = new Map<string, Starting>();
 	private sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -876,9 +881,19 @@ export class PeerMessenger {
 		batch: PeerMessage[],
 	): DeliveryPlan {
 		const listenerTerminal = live ? this.listenerFor(task.id, live.terminalId) : null;
+		const canQueue =
+			live?.agentId === "codex" &&
+			live.agentSessionId != null &&
+			this.deps.queue != null &&
+			!this.noQueue.has(live.terminalId);
 		const plan = planDelivery({
 			live: live
-				? { agentId: live.agentId, status: live.status, hasListener: listenerTerminal != null }
+				? {
+						agentId: live.agentId,
+						status: live.status,
+						hasListener: listenerTerminal != null,
+						canQueue,
+					}
 				: null,
 			lastInputAt: live ? this.deps.lastInputAt(live.terminalId) : null,
 			lastEventAt: live?.lastEventAt ?? null,
@@ -899,12 +914,51 @@ export class PeerMessenger {
 				w.resolve({ kind: "message", text: this.render(batch) });
 				return plan;
 			}
+			case "queue":
+				return live ? this.enqueue(task, live, batch) : "wait";
 			case "restart":
 			case "launch":
 				return this.wake(task, live, plan);
 			default:
 				return plan;
 		}
+	}
+
+	/**
+	 * Hand the batch to the live Codex's own queue. Marked delivered once Codex
+	 * says it has it: from there it is Codex's to run, and it keeps it even if
+	 * the agent quits first (the next one to open the thread runs it). A Codex
+	 * that refuses (no `queue` subcommand, the thread unknown to it) gets this
+	 * batch and every later one by restart instead.
+	 */
+	private enqueue(task: Task, live: AgentSession, batch: PeerMessage[]): DeliveryPlan {
+		const queue = this.deps.queue;
+		if (!queue || this.queuing.has(task.id)) return "wait";
+		this.queuing.add(task.id);
+		void (async () => {
+			let queued = false;
+			try {
+				queued = await queue(live, this.render(batch));
+			} catch {
+				queued = false;
+			} finally {
+				this.queuing.delete(task.id);
+			}
+			if (queued) {
+				repo.markPeerMessagesDelivered(
+					this.deps.db,
+					batch.map((m) => m.id),
+					"queue",
+					this.now(),
+				);
+			} else {
+				this.noQueue.add(live.terminalId);
+				this.deps.log(`[ateam] codex queue refused a message for ${task.id}; restarting instead`);
+			}
+			// Whatever arrived meanwhile, or this batch again by the old door.
+			this.kick(task.id);
+		})();
+		return "queue";
 	}
 
 	/**
@@ -1182,6 +1236,8 @@ function describePlan(plan: DeliveryPlan | "none"): string {
 	switch (plan) {
 		case "listener":
 			return "delivered to its agent now.";
+		case "queue":
+			return "handed to its agent, which takes it as its next prompt: at once if it is idle, else when its current turn ends.";
 		case "launch":
 			return "its agent was not running, so Ateam is starting it with your message.";
 		case "restart":

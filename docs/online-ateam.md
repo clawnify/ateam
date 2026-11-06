@@ -110,6 +110,10 @@ knows, greys out the ones this box hasn't got, and offers **Install** beside the
 which runs that agent's official installer on the box. The one-time OAuth login is
 still yours to do, in a terminal there, on first use.
 
+The first Codex task on a box also stops at Codex's **Hooks need review** prompt in
+its terminal. Pick **Trust all and continue** once: Ateam's status hooks then run in
+every Codex task on that box, so its card follows the agent's turns.
+
 ## 1. Install the `ateam` server on the box
 
 One command, run **on the box as your non-root user**:
