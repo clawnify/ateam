@@ -69,7 +69,9 @@ export function boxRows(
 			const seen = Number(c.serverVersion);
 			const version = info?.protocolVersion ?? (Number.isFinite(seen) && seen > 0 ? seen : null);
 			const release = (info ? info.release : c.engineRelease) ?? null;
-			const provider = c.wake ? providerById(c.wake.id)?.label : undefined;
+			// The provider the Mac wakes it through, else the one a connected box says it
+			// runs on (an always-on one like exe.dev, which nothing wakes).
+			const provider = providerById(c.wake?.id ?? info?.provider?.id)?.label;
 			const reach = c.transport === "ws" ? `Tailscale ${c.alias}` : `SSH ${c.hostName ?? c.alias}`;
 			return {
 				alias: c.alias,

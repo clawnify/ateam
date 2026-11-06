@@ -60,6 +60,16 @@ describe("boxRows", () => {
 		});
 	});
 
+	it("names the provider a connected box says it runs on, when nothing wakes it", () => {
+		const exe: HostStatus = {
+			mode: "remote",
+			alias: "mybox.exe.xyz",
+			info: { protocolVersion: 32, agents: [], provider: { id: "exe", box: {}, sleeps: false } },
+		};
+		const [r] = boxRows([conn({ alias: "mybox.exe.xyz" })], [exe], {}, app);
+		expect(r).toMatchObject({ title: "mybox.exe.xyz", detail: "exe.dev · SSH mybox.exe.xyz" });
+	});
+
 	it("keeps why the last connect failed", () => {
 		expect(rows[2]).toMatchObject({
 			failure: "ssh: connect timed out",
