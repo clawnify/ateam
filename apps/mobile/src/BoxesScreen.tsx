@@ -7,8 +7,10 @@
 // (EnvironmentPicker.tsx): a box, Add a Tailscale box, Remove from this list.
 //
 // The phone dials every box over the tailnet, which leaves a sleeping one asleep;
-// only a tap (or opening something on it) wakes one through its provider. While a
-// box is being reached, a tray under its card lists the steps (@ateam/protocol
+// only a tap (or opening something on it) wakes one through its provider. So a box
+// that sleeps shows asleep through those tries rather than a spinner that never gets
+// anywhere (boxes.ts shownAsleep). While a box is being reached for a tap, a tray
+// under its card lists the steps (@ateam/protocol
 // connect-steps): a woken box can take minutes to answer, and a bare spinner for
 // that long reads as stuck.
 
@@ -37,6 +39,7 @@ import {
 	NO_PROVIDER_HINT,
 	needsProvider,
 	type SavedBox,
+	shownAsleep,
 } from "./boxes";
 import { ProviderIcon } from "./ProviderIcon";
 import { ScanQrIcon } from "./ScanQrIcon";
@@ -158,15 +161,17 @@ export function BoxesScreen({
 						const live = link.state === "live";
 						const isLead = choosingLead && key === leadKey;
 						const making = settingUp?.key === key && !live ? settingUp : null;
+						// A box that sleeps rests asleep through the tries in the background.
+						const asleep = shownAsleep(box, link);
 						return (
 							<BoxCard
 								key={key}
 								box={box}
 								live={live}
-								reaching={link.state === "connecting"}
+								reaching={link.state === "connecting" && !asleep}
 								asked={link.asked}
-								asleep={link.state === "down" && link.asleep}
-								failure={link.state === "down" && !link.asleep && !making ? link.error : null}
+								asleep={asleep}
+								failure={link.state === "down" && !asleep && !making ? link.error : null}
 								note={making ? "Setting itself up on Hetzner, about 4 minutes" : null}
 								// A try in the background shows only as the spinner; the steps are for one asked for.
 								steps={link.asked ? link.steps : []}
