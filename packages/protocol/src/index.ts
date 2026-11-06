@@ -165,7 +165,12 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // since a call's words are transcribed and may not have been meant for it. A new
 // method only: a v31 box answers "Unknown method", and the desktop offers no call
 // when its Lead lives there (FEATURE_MIN_VERSION.leadCall).
-export const PROTOCOL_VERSION = 32;
+// v33: a box opens and runs a call to its own Lead: lead:callStart (OpenAI's
+// voice session, from the box's key), lead:callJudge (the gate) and
+// lead:callNudge (a task's reply in one line), which Ateam Go needs to call.
+// New methods only: a v32 box answers "Unknown method", and Ateam Go offers no
+// call there (FEATURE_MIN_VERSION.leadCallSession).
+export const PROTOCOL_VERSION = 33;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -364,6 +369,9 @@ export const FEATURE_MIN_VERSION = {
 	 *  the user's tap during a call. An older box would act on them unasked, so
 	 *  the desktop offers no call when its Lead lives there. */
 	leadCall: 32,
+	/** v33 added lead:callStart, lead:callJudge and lead:callNudge on a box, so a
+	 *  client without its own keys (Ateam Go) can call the box's Lead. */
+	leadCallSession: 33,
 	/** v29 added pairing:* and the lock on a box's network port. An older box is
 	 *  always open: clients say so instead of offering to lock it. */
 	pairing: 29,
@@ -1782,6 +1790,22 @@ export * from "./github-access";
 // The Lead chat: its items and events, the desktop's IPC channels and the
 // engine's RPC for a box's own Lead (v24).
 export * from "./lead";
+// A voice call with the Lead: the engine both apps run, each with its own media.
+export {
+	type CallChannel,
+	type CallLead,
+	type CallMedia,
+	type CallMeter,
+	type CallPeer,
+	type CallState,
+	type CallStream,
+	type CallTask,
+	type CallTrack,
+	type CallView,
+	heldReason,
+	LeadCall,
+	UNDO_MS,
+} from "./lead-call";
 export * from "./lead-view";
 // Box providers as data: what a client asks the user for to wake a sleeping box.
 export {

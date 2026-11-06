@@ -174,6 +174,12 @@ function demoLead(push: (e: LeadEvent) => void) {
 		handles: (method: string) => method.startsWith("lead:"),
 		handle(method: string, args: unknown[]): unknown {
 			if (method === LEAD_CH.snapshot) return { items, draft: "", busy: false, auto };
+			// A call's first ask: refused before the phone starts a system call or
+			// opens its mic.
+			if (method === LEAD_CH.callActive && args[0] === true)
+				return new Error(
+					"This is the demo board, so it takes no calls. On your own box, the Lead answers calls with your box's OpenAI key.",
+				);
 			if (method === LEAD_CH.setAuto) {
 				auto = args[0] === true;
 				push({ type: "auto", auto });
@@ -257,8 +263,17 @@ export function demoConnection(): Connection {
 			const result = lead.handles(frame.method)
 				? lead.handle(frame.method, frame.args)
 				: handle(frame.method, frame.args);
-			// Resolve on a later tick so it behaves like a real async round-trip.
-			setTimeout(() => onFrame?.({ t: "res", id: frame.id, ok: true, result }), 0);
+			// Resolve on a later tick so it behaves like a real async round-trip. An
+			// Error is a refusal, as the box sends one.
+			setTimeout(
+				() =>
+					onFrame?.(
+						result instanceof Error
+							? { t: "res", id: frame.id, ok: false, error: result.message }
+							: { t: "res", id: frame.id, ok: true, result },
+					),
+				0,
+			);
 		},
 		onFrame: (h) => {
 			onFrame = h;

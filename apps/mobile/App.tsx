@@ -94,6 +94,7 @@ import { HomeScreen, type ProjectRow, placeText, type TaskPlace } from "./src/Ho
 import { LeadScreen } from "./src/LeadScreen";
 import { type LoopDraft, LoopForm, LoopsScreen } from "./src/LoopsScreen";
 import type { LeadBadge } from "./src/lead-badge";
+import { leadCall, setCallTarget, useLeadCall } from "./src/lead-call";
 import { createLinks, type LinkDeps, type Waker } from "./src/links";
 import { MissionScreen } from "./src/MissionScreen";
 import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminalScreen";
@@ -893,6 +894,8 @@ function Shell({
 	const covered = openTask !== null || boxTerminal !== null;
 	const showLead = leadOpen && !covered;
 	const showTab = !covered && !leadOpen;
+	// On a call with the Lead, its button says so from every screen.
+	const onCall = useLeadCall().state !== "off";
 	// The composer's Task | Lead switch floats over these lists: it fades while
 	// one scrolls and returns when it stops.
 	const { faded, scrollProps } = useScrollFade();
@@ -941,16 +944,22 @@ function Shell({
 						hitSlop={10}
 						accessibilityRole="button"
 						accessibilityLabel={
-							leadBadge === "waiting"
-								? "Lead chat, waiting on you"
-								: leadBadge === "new"
-									? "Lead chat, new messages"
-									: "Lead chat"
+							onCall
+								? "Lead chat, on a call"
+								: leadBadge === "waiting"
+									? "Lead chat, waiting on you"
+									: leadBadge === "new"
+										? "Lead chat, new messages"
+										: "Lead chat"
 						}
 						accessibilityState={{ selected: showLead }}
 					>
 						<View>
-							<Feather name="message-circle" size={19} color={showLead ? C.ink : C.muted} />
+							{onCall ? (
+								<Feather name="phone" size={18} color={C.green} />
+							) : (
+								<Feather name="message-circle" size={19} color={showLead ? C.ink : C.muted} />
+							)}
 							{leadBadge && (
 								<View
 									style={[styles.leadDot, leadBadge === "waiting" && { backgroundColor: C.amber }]}
@@ -2317,6 +2326,11 @@ export default function App() {
 			!githubKey &&
 			!aiKeysKey,
 	);
+	// A call with the Lead follows its box and connection (src/lead-call.ts), and
+	// tells a task's new question once, as the desktop's does.
+	const callName = multi && leadKey ? `Lead on ${labelOf(leadKey)}` : "Lead";
+	useEffect(() => setCallTarget(leadKey, leadClient, callName), [leadKey, leadClient, callName]);
+	useEffect(() => leadCall.setTasks(tasks), [tasks]);
 	const anyLive = Object.values(links).some((l) => l.state === "live");
 	const linkOf = (key: string | null): BoxLink => (key ? links[key] : undefined) ?? NEW_LINK;
 

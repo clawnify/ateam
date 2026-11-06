@@ -20,6 +20,7 @@
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-svg": "15.12.1",
+    "react-native-webrtc": "155.0.1",
     "react-native-webview": "13.15.0"
   },
   "devDependencies": {
