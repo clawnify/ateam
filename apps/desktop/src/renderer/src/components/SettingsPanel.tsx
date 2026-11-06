@@ -34,7 +34,15 @@ import { BoxesSettings } from "./BoxesSettings";
  * offered: a setting nothing acts on is a lie, however tidy the row.
  */
 
-type SectionId = "general" | "boxes" | "agents" | "git" | "ai";
+export type SectionId = "general" | "boxes" | "agents" | "git" | "ai";
+
+/** Settings opened from elsewhere: at a section, and at one row of it when `row` names one.
+ *  A new `n` opens it again. */
+export interface SettingsJump {
+	section: SectionId;
+	row?: string;
+	n: number;
+}
 
 const SECTIONS: { id: SectionId; label: string }[] = [
 	{ id: "general", label: "General" },
@@ -311,7 +319,7 @@ const ROWS: Row[] = [
 		section: "ai",
 		title: "OpenAI API key",
 		description:
-			"Lets Luna, OpenAI's decision model, do the same work as Jev, and lets an OpenAI model write titles and summaries, so you need no OpenRouter account. Only a key saved here is used, never OPENAI_API_KEY from your shell.",
+			"Lets you call the Lead by voice. It also lets Luna, OpenAI's decision model, do the same work as Jev, and lets an OpenAI model write titles and summaries, so you need no OpenRouter account. Only a key saved here is used, never OPENAI_API_KEY from your shell.",
 		control: (_s, { credentials, saveKey }) => (
 			<KeyField provider="openAi" status={credentials} onSave={saveKey} />
 		),
@@ -443,6 +451,40 @@ function TextSetting({
 }
 
 /**
+ * This Mac's keys: whether each is set, never the key itself, and a save. Its
+ * own call on purpose, and allowed to fail alone: an engine from before
+ * credentials existed still shows every other setting.
+ */
+export function useCredentials(onError: (message: string) => void): {
+	credentials: CredentialsResult | null;
+	saveKey: (patch: CredentialsPatch) => Promise<void>;
+} {
+	const [credentials, setCredentials] = useState<CredentialsResult | null>(null);
+	const report = useRef(onError);
+	report.current = onError;
+	useEffect(() => {
+		let cancelled = false;
+		window.ateam.credentials
+			.get()
+			.then((r) => {
+				if (!cancelled) setCredentials(r);
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+	const saveKey = useCallback(async (patch: CredentialsPatch) => {
+		try {
+			setCredentials(await window.ateam.credentials.update(patch));
+		} catch (e) {
+			report.current(String(e));
+		}
+	}, []);
+	return { credentials, saveKey };
+}
+
+/**
  * A secret's row: an empty field to paste into, or, once saved, only its last
  * four characters and a way to remove it. The key is never read back; the
  * engine answers whether one is set, not what it is.
@@ -462,7 +504,7 @@ const KEY_FIELDS = {
 	},
 } as const;
 
-function KeyField({
+export function KeyField({
 	provider,
 	status,
 	onSave,
@@ -565,19 +607,33 @@ export function SettingsPanel({
 	agents: AgentDTO[];
 	/** A connected box needs the user (useBoxesNeedingYou): Boxes gets a dot. */
 	boxesNeedYou?: boolean;
-	/** Open at this page; a new `n` opens it again. */
-	jumpTo?: { section: SectionId; n: number } | null;
+	/** Open at this page (and row); a new `n` opens it again. */
+	jumpTo?: SettingsJump | null;
 }) {
 	const [result, setResult] = useState<SettingsResult | null>(null);
-	const [credentials, setCredentials] = useState<CredentialsResult | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const { credentials, saveKey } = useCredentials(setError);
 	const [query, setQuery] = useState("");
 	// One section at a time, like every settings page a Mac user has met: the
 	// nav is the page's tabs, not an index into one long scroll.
 	const [active, setActive] = useState<SectionId>(jumpTo?.section ?? "general");
 	useEffect(() => {
-		if (jumpTo) setActive(jumpTo.section);
+		if (!jumpTo) return;
+		setActive(jumpTo.section);
+		setQuery("");
 	}, [jumpTo]);
+	// A jump to one row (the Lead's call button without an OpenAI key): once the
+	// row is on screen, bring it into view with the cursor in its field. Once per
+	// jump, so a later change on the page doesn't scroll back to it.
+	const jumped = useRef(0);
+	useEffect(() => {
+		if (!jumpTo?.row || jumped.current === jumpTo.n || !result || !credentials) return;
+		const row = document.querySelector<HTMLElement>(`[data-setting="${jumpTo.row}"]`);
+		if (!row) return;
+		jumped.current = jumpTo.n;
+		row.scrollIntoView({ block: "center" });
+		row.querySelector<HTMLInputElement>("input")?.focus();
+	}, [jumpTo, result, credentials, active]);
 	const searchRef = useRef<HTMLInputElement>(null);
 
 	useEffect(() => {
@@ -588,25 +644,9 @@ export function SettingsPanel({
 				if (!cancelled) setResult(r);
 			})
 			.catch((e) => setError(String(e)));
-		// Separate from settings on purpose, and allowed to fail alone: an engine
-		// from before credentials existed still shows every other row.
-		window.ateam.credentials
-			.get()
-			.then((r) => {
-				if (!cancelled) setCredentials(r);
-			})
-			.catch(() => {});
 		return () => {
 			cancelled = true;
 		};
-	}, []);
-
-	const saveKey = useCallback(async (patch: CredentialsPatch) => {
-		try {
-			setCredentials(await window.ateam.credentials.update(patch));
-		} catch (e) {
-			setError(String(e));
-		}
 	}, []);
 
 	// Optimistic: the row reflects the change at once, the file catches up, and
@@ -726,7 +766,7 @@ export function SettingsPanel({
 								<h3>{section.label}</h3>
 								<div className="settings-group">
 									{rows.map((row) => (
-										<div key={row.id} className="settings-row">
+										<div key={row.id} className="settings-row" data-setting={row.id}>
 											<div className="settings-row-text">
 												<div className="settings-row-title">{row.title}</div>
 												<div className="settings-row-desc">{row.description}</div>

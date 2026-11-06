@@ -5526,6 +5526,34 @@ input {
 	padding: 6px 14px;
 	font-size: 13px;
 }
+.get-started-optional {
+	margin-left: 6px;
+	color: var(--text-dim);
+	font-size: 12px;
+	font-weight: 400;
+}
+.get-started-keys {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	align-items: center;
+	gap: 8px 12px;
+	margin-top: 12px;
+	font-size: 13px;
+}
+.get-started-keys .settings-input {
+	flex: 1;
+	width: auto;
+	min-width: 0;
+}
+.get-started-step .get-started-note {
+	margin-top: 10px;
+	font-size: 12px;
+}
+.get-started-step .get-started-error {
+	margin-top: 8px;
+	color: var(--red);
+	font-size: 12px;
+}
 .get-started-glyphs {
 	display: inline-flex;
 	gap: 4px;
