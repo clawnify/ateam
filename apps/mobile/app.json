@@ -21,7 +21,7 @@
 				"expo-camera",
 				{
 					"cameraPermission": "Ateam Go uses the camera to scan the pairing code your Mac shows, so this phone can use a box locked to your devices.",
-					"microphonePermission": false,
+					"microphonePermission": "Ateam Go uses the microphone when you call your Lead, so it can hear what you say. It listens only during a call you start.",
 					"recordAudioAndroid": false
 				}
 			]
@@ -32,6 +32,7 @@
 			"buildNumber": "30",
 			"infoPlist": {
 				"ITSAppUsesNonExemptEncryption": false,
+				"UIBackgroundModes": ["audio", "voip"],
 				"NSLocalNetworkUsageDescription": "Ateam connects to a coding-agent server you run on your own machine or local network.",
 				"NSAppTransportSecurity": {
 					"NSAllowsArbitraryLoads": false,

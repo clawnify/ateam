@@ -55,6 +55,7 @@ import { CH } from "./index";
 import {
 	LEAD_CH,
 	LEAD_EVENT,
+	type LeadCallVerdict,
 	type LeadClient,
 	type LeadEvent,
 	type LeadFile,
@@ -140,6 +141,11 @@ export function leadClient(rpc: RpcClient): LeadClient {
 		permission: async (id, answer) => void (await call(LEAD_CH.permission, id, answer)),
 		setAuto: async (on) => void (await call(LEAD_CH.setAuto, on)),
 		callActive: async (on) => void (await call(LEAD_CH.callActive, on)),
+		callStart: (sdp, input) =>
+			call(LEAD_CH.callStart, sdp, input) as Promise<{ sdp: string; sessionId: string }>,
+		callJudge: (pieces, context, opts) =>
+			call(LEAD_CH.callJudge, pieces, context, opts) as Promise<LeadCallVerdict[] | null>,
+		callNudge: (task, reply) => call(LEAD_CH.callNudge, task, reply) as Promise<string>,
 		dismissProposal: async (id) => void (await call(LEAD_CH.proposal, id, "dismissed")),
 		proposalCreated: async (id, taskId) =>
 			void (await call(LEAD_CH.proposal, id, "created", ...(taskId ? [taskId] : []))),

@@ -1,8 +1,11 @@
 // A voice call with the Lead: the voice is OpenAI's GPT-Live, and everything
-// it hears goes to the Lead as the user's message in the chat. The window runs
-// the call (WebRTC: the mic, the speaker, the event channel) and the Lead
-// conversation; this only opens the session with OpenAI, from the key in
-// Settings → AI, so the key never reaches the window.
+// it hears goes to the Lead as the user's message in the chat. The client runs
+// the call (WebRTC: the mic, the speaker, the event channel; the shared engine
+// in @ateam/protocol lead-call) and the Lead conversation; this opens the
+// session with OpenAI, judges what the call heard and words a task's reply, on
+// the machine whose Lead it is: the Mac for its own Lead (desktop main), a box
+// for its Lead (engine-lead.ts, which Ateam Go calls). The OpenAI key, from
+// Settings → AI (pushed to boxes), never reaches a client.
 //
 // The session is in client delegation mode: the voice decides when the user
 // said something for the Lead (`session.delegation.created`), the window sends
@@ -11,28 +14,26 @@
 // the hand-off fired under a second after the user stopped talking, and a
 // reply was spoken under a second after it was sent.
 import type { LeadCallTopic, LeadCallTurn, LeadCallVerdict } from "@ateam/protocol";
-import {
-	askConfiguredTextModel,
-	classifyTurn,
-	currentDecisionModel,
-	judgeSpeech,
-	openAiApiKey,
-} from "@ateam/server";
+import { judgeSpeech } from "../call-gate";
+import { openAiApiKey } from "../credentials-file";
+import { currentDecisionModel } from "../decision-model";
+import { classifyTurn } from "../jev";
+import { askConfiguredTextModel } from "../text-model";
 
 const LIVE_SESSIONS_URL = "https://api.openai.com/v1/live/sessions";
 export const CALL_MODEL = "gpt-live-1";
+
+/** When GPT-Live requests its own acknowledgement of a hand-off, which the
+ *  client always cancels first (lead-call's LeadCall): it acknowledges itself
+ *  once the gate has sent the words. 800 is the most OpenAI accepts
+ *  ("Expected a value <= 800": 1000 failed every call, 2026-11-05; the guide
+ *  gives no limit). */
+const ACK_DELAY_MS = 800;
 
 /** The voice speaks as the Lead, in the first person: to the user there is one
  *  of it. Its knowledge and work come from delegating (the Lead's own Claude);
  *  it never says so. The user corrected a voice that narrated ("I'll pass that
  *  on to the Lead", "the Lead is waiting on your approval"), 2026-11-05. */
-/** When GPT-Live requests its own acknowledgement of a hand-off, which the
- *  window always cancels first (renderer lead-call.ts): it acknowledges
- *  itself once the gate has sent the words. 800 is the most OpenAI accepts
- *  ("Expected a value <= 800": 1000 failed every call, 2026-11-05; the guide
- *  gives no limit). */
-const ACK_DELAY_MS = 800;
-
 export const CALL_INSTRUCTIONS = `You are the Lead: the user's Lead in Ateam, who runs their coding tasks, the board and the product's direction. The user is on a call with you. Always speak as yourself, in the first person ("I", "me", "my"). Never mention "the Lead" as someone else, and never talk about delegating, passing things on, a backend, or checking with anyone: to the user, the work is yours.
 
 You think and work by delegating: what you know about their tasks, board, code and product, and everything you do, comes back from delegating. So you never answer from memory, not even about this conversation, however sure you are. Delegate every single thing the user says: questions, follow-ups, ideas, instructions, answers to your questions, comments. Only a bare "hello" or "hold on" is not delegated. Delegate whenever in doubt.
@@ -45,7 +46,7 @@ The microphone is in the user's room, often a home: you may hear the user talkin
 
 Long silences are normal on this call: the user may be thinking or working. Never ask whether they are still there.`;
 
-/** What a call heard, judged by this Mac's decision model (server call-gate.ts):
+/** What a call heard, judged by this machine's decision model (call-gate.ts):
  *  null with no model (no key, the setting off) or no answer in time. */
 export async function judgeCall(
 	pieces: unknown,
@@ -114,12 +115,15 @@ export function seedInput(turns: LeadCallTurn[]): unknown[] {
 	}));
 }
 
+/** `noKey`: what to tell the user when this machine has no OpenAI key, in
+ *  words for where they are (a box sends them to their Mac). */
 export async function startCall(
 	sdp: string,
 	input: LeadCallTurn[],
+	noKey = "A call needs an OpenAI key: add one in Settings → AI.",
 ): Promise<{ sdp: string; sessionId: string }> {
 	const key = openAiApiKey();
-	if (!key) throw new Error("A call needs an OpenAI key: add one in Settings → AI.");
+	if (!key) throw new Error(noKey);
 	if (typeof sdp !== "string" || !sdp.startsWith("v="))
 		throw new Error("The call's connection offer was empty.");
 	const seed = seedInput(Array.isArray(input) ? input : []);
@@ -131,7 +135,7 @@ export async function startCall(
 				model: CALL_MODEL,
 				instructions: CALL_INSTRUCTIONS,
 				// The voice's automatic acknowledgement of a hand-off is requested
-				// after this delay, so the window's cancel (an empty thinking
+				// after this delay, so the client's cancel (an empty thinking
 				// append, sent the moment the hand-off arrives) always lands first:
 				// left unset, it spoke 0.2 s after the hand-off, before any cancel,
 				// and before the gate ruled ("Sure. Checking that." for words then

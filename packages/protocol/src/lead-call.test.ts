@@ -1,8 +1,9 @@
 import { expect, jest, test } from "bun:test";
-import type { AteamLead, LeadCallVerdict, LeadItem } from "@ateam/protocol";
+import type { AteamLead, LeadCallVerdict, LeadItem } from "./lead";
 import {
 	activeTopic,
 	announcement,
+	type CallMedia,
 	contextFrom,
 	decisionLine,
 	gist,
@@ -337,7 +338,24 @@ const lead = (p = 0.9): LeadCallVerdict => ({ p, send: true, kind: "lead" });
 const nobodys: LeadCallVerdict = { p: 0.3, send: false, kind: "unclear" };
 function fakeCall(
 	gate: (pieces: string[], opts?: { continuing?: string }) => LeadCallVerdict[] | null,
+	level = () => 0,
 ) {
+	// The app's media: what the call asked of it, in order. No network here,
+	// so a session never opens.
+	const did: string[] = [];
+	const media: CallMedia = {
+		openMic: async () => ({ getAudioTracks: () => [], getTracks: () => [] }),
+		newPeer: () => {
+			did.push("peer");
+			throw new Error("no network in tests");
+		},
+		meter: () => {
+			did.push("meter");
+			return { level, stop: () => did.push("meter stopped") };
+		},
+		chime: () => did.push("chime"),
+		close: () => did.push("closed"),
+	};
 	const judged: { pieces: string[]; opts: Parameters<AteamLead["callJudge"]>[2] }[] = [];
 	const sent: string[] = [];
 	const leadAnswered: unknown[] = [];
@@ -355,7 +373,7 @@ function fakeCall(
 		},
 		callActive: async () => {},
 	} as unknown as AteamLead;
-	const call = new LeadCall(() => fake);
+	const call = new LeadCall(() => fake, media);
 	// biome-ignore lint/suspicious/noExplicitAny: these tests drive the call's private state.
 	const c = call as any;
 	const hear = (text: string, start: number) =>
@@ -368,8 +386,128 @@ function fakeCall(
 	const stop = () => {
 		for (const t of [c.judgeTimer, c.heldTimer, c.approval?.timer]) if (t) clearTimeout(t);
 	};
-	return { call, c, judged, sent, leadAnswered, hear, stop };
+	return { call, c, judged, sent, leadAnswered, hear, stop, did };
 }
+
+test("on hold the meter has the mic, from when the session closed until the next one opens", async () => {
+	let loud = 0;
+	const { call, c, did } = fakeCall(
+		() => null,
+		() => loud,
+	);
+	c.mic = { getAudioTracks: () => [], getTracks: () => [] };
+	c.view.state = "live";
+	c.listen();
+	await c.toHold();
+	expect(did).toEqual(["meter"]);
+	// Someone starts talking: the chime, and the meter lets go before the
+	// session takes the mic (on a phone, two can't hold it).
+	loud = 0.2;
+	await new Promise((r) => setTimeout(r, 450));
+	loud = 0;
+	expect(did.slice(0, 4)).toEqual(["meter", "chime", "meter stopped", "peer"]);
+	// It didn't connect: on hold again, listening, and it says why.
+	await new Promise((r) => setTimeout(r, 20));
+	expect(call.view).toMatchObject({ state: "hold", error: "no network in tests" });
+	expect(did.at(-1)).toBe("meter");
+	call.hangUp();
+	expect(did.slice(-2)).toEqual(["meter stopped", "closed"]);
+});
+
+test("a phone call holds the call: no session, no listening, and its news waits", async () => {
+	const { call, c, did } = fakeCall(() => null);
+	c.mic = { getAudioTracks: () => [], getTracks: () => [] };
+	c.view.state = "hold";
+	c.hearOnHold();
+	call.setPaused(true);
+	expect(call.view.paused).toBe(true);
+	expect(did).toEqual(["meter", "meter stopped"]);
+	// A task's news and the Talk button while the other call is on: nothing opens.
+	c.say("The disk task says it is done.");
+	call.talk();
+	expect(did).toEqual(["meter", "meter stopped"]);
+	// The phone call is over: the news that waited opens a session (none here:
+	// back on hold, listening).
+	call.setPaused(false);
+	expect(did.slice(2)).toEqual(["chime", "peer"]);
+	await new Promise((r) => setTimeout(r, 0));
+	expect(did.at(-1)).toBe("meter");
+	call.hangUp();
+	expect(call.view.paused).toBe(false);
+});
+
+test("relink listens on the new connection and tells what came meanwhile", async () => {
+	const { call, c } = fakeCall(() => null);
+	const subs: string[] = [];
+	const conn = (name: string, items: LeadItem[]) => ({
+		onEvent: () => {
+			subs.push(`on ${name}`);
+			return () => subs.push(`off ${name}`);
+		},
+		snapshot: async () => ({ items, draft: "", busy: false, auto: false }),
+		callActive: async () => {},
+		callNudge: async () => "The disk task says it is done.",
+	});
+	const reply: LeadItem = {
+		kind: "agent",
+		id: "a9",
+		task: { taskId: "t2", name: "Disk usage", agentId: null },
+		text: "Done.",
+		at: 1,
+	};
+	c.lead = () => conn("old", []);
+	c.view.state = "hold";
+	c.unsub = c.lead().onEvent();
+	// The box reconnected; a task replied in between.
+	c.lead = () => conn("new", [reply]);
+	call.relink();
+	await new Promise((r) => setTimeout(r, 0));
+	expect(subs).toEqual(["on old", "off old", "on new"]);
+	expect(c.said.at(-1)?.text).toBe("The disk task says it is done.");
+	call.hangUp();
+});
+
+test("hanging up while the call starts stops it there, with no error", async () => {
+	const { call, did } = fakeCall(() => null);
+	let micAsked: () => void = () => {};
+	const stopped: string[] = [];
+	// The phone's start: the system call, then the mic, which takes a while.
+	(call as unknown as { media: CallMedia }).media.openMic = () =>
+		new Promise((resolve) => {
+			micAsked = () =>
+				resolve({
+					getAudioTracks: () => [],
+					getTracks: () => [{ enabled: true, stop: () => stopped.push("mic") }],
+				});
+		});
+	const lead = (call as unknown as { lead: () => Record<string, unknown> }).lead();
+	lead.snapshot = async () => ({ items: [], draft: "", busy: false, auto: false });
+	lead.onEvent = () => () => {};
+	const starting = call.start();
+	await new Promise((r) => setTimeout(r, 0));
+	call.hangUp();
+	micAsked();
+	await starting;
+	expect(call.view).toMatchObject({ state: "off", error: "" });
+	// The mic it got after all is let go, and no session was asked for.
+	expect(stopped).toEqual(["mic"]);
+	expect(did).not.toContain("peer");
+});
+
+test("a session OpenAI ended goes on hold and listens at once, asking it nothing", async () => {
+	const { call, c, did } = fakeCall(() => null);
+	const asked: string[] = [];
+	c.mic = { getAudioTracks: () => [], getTracks: () => [] };
+	c.pc = { close: () => did.push("session closed") };
+	c.dc = { readyState: "open", send: (d: string) => asked.push(d) };
+	c.view.state = "live";
+	c.onVoice({ type: "session.closed" });
+	await new Promise((r) => setTimeout(r, 0));
+	expect(call.view.state).toBe("hold");
+	expect(asked).toEqual([]);
+	expect(did).toEqual(["session closed", "meter"]);
+	call.hangUp();
+});
 
 test("a hold judges what was heard before closing the session, never drops it", async () => {
 	const { c, judged, sent, hear, stop } = fakeCall((p) => p.map(() => lead()));
