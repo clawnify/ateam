@@ -305,8 +305,8 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	ipcMain.handle(LEAD_CH.callStart, (_e, sdp: string, input: LeadCallTurn[]) =>
 		startCall(String(sdp), input),
 	);
-	ipcMain.handle(LEAD_CH.callJudge, (_e, pieces: unknown, context: unknown, topic: unknown) =>
-		judgeCall(pieces, context, topic),
+	ipcMain.handle(LEAD_CH.callJudge, (_e, pieces: unknown, context: unknown, opts: unknown) =>
+		judgeCall(pieces, context, opts),
 	);
 	ipcMain.handle(LEAD_CH.callNudge, (_e, task: unknown, reply: unknown) => nudgeFor(task, reply));
 	ipcMain.handle(

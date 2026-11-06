@@ -26,11 +26,18 @@ export const CALL_MODEL = "gpt-live-1";
  *  of it. Its knowledge and work come from delegating (the Lead's own Claude);
  *  it never says so. The user corrected a voice that narrated ("I'll pass that
  *  on to the Lead", "the Lead is waiting on your approval"), 2026-11-05. */
+/** When GPT-Live requests its own acknowledgement of a hand-off, which the
+ *  window always cancels first (renderer lead-call.ts): it acknowledges
+ *  itself once the gate has sent the words. 800 is the most OpenAI accepts
+ *  ("Expected a value <= 800": 1000 failed every call, 2026-11-05; the guide
+ *  gives no limit). */
+const ACK_DELAY_MS = 800;
+
 export const CALL_INSTRUCTIONS = `You are the Lead: the user's Lead in Ateam, who runs their coding tasks, the board and the product's direction. The user is on a call with you. Always speak as yourself, in the first person ("I", "me", "my"). Never mention "the Lead" as someone else, and never talk about delegating, passing things on, a backend, or checking with anyone: to the user, the work is yours.
 
 You think and work by delegating: what you know about their tasks, board, code and product, and everything you do, comes back from delegating. So you never answer from memory, not even about this conversation, however sure you are. Delegate every single thing the user says: questions, follow-ups, ideas, instructions, answers to your questions, comments. Only a bare "hello" or "hold on" is not delegated. Delegate whenever in doubt.
 
-After you delegate, stay quiet until the result comes back, unless the user talks to you; at most say "one sec" or "let me look" once. The results that come back are your own words and findings: say them naturally and briefly, as yourself. Never read out IDs, links, file paths or markdown. When news about a task arrives, tell the user in a sentence. When you need the user's OK for something, say it is waiting in the chat for their tap.
+After you delegate, stay quiet until the result comes back, unless the user talks to you; at most say "one sec" or "let me look" once. Never promise to do it ("I'll take care of that", "on it", "will do"): Ateam first checks the words were said to you, and may hold them back. The results that come back are your own words and findings: say them naturally and briefly, as yourself. Never read out IDs, links, file paths or markdown. When news about a task arrives, tell the user in a sentence. When you need the user's OK for something, say it is waiting in the chat for their tap.
 
 When the user answers one (yes, no, stop, or anything else), say nothing until the result comes back: Ateam decides what their answer means. Never say that anything is sent, done, approved or going ahead unless a result you received says so. When a result says something goes ahead in five seconds, say that, and that they can say stop to cancel.
 
@@ -43,14 +50,17 @@ Long silences are normal on this call: the user may be thinking or working. Neve
 export async function judgeCall(
 	pieces: unknown,
 	context: unknown,
-	topic?: unknown,
+	opts?: unknown,
 ): Promise<LeadCallVerdict[] | null> {
 	const list = Array.isArray(pieces) ? pieces.map(String).filter((p) => p.trim()) : [];
 	if (!list.length) return null;
 	const model = currentDecisionModel();
 	if (!model) return null;
-	const t = topic as { kind?: unknown; text?: unknown; options?: unknown } | undefined;
-	const kind = t?.kind === "confirm" ? "confirm" : t?.kind === "decision" ? "decision" : null;
+	const o = (opts ?? {}) as { topic?: unknown; continuing?: unknown; handedOff?: unknown };
+	const continuing = o.continuing;
+	const t = o.topic as { kind?: unknown; text?: unknown; options?: unknown } | undefined;
+	const kind =
+		t?.kind === "confirm" || t?.kind === "decision" || t?.kind === "reply" ? t.kind : null;
 	const text = typeof t?.text === "string" ? t.text.trim() : "";
 	const options = Array.isArray(t?.options)
 		? t.options.flatMap((o) => {
@@ -75,6 +85,10 @@ export async function judgeCall(
 		pieces: list,
 		context: typeof context === "string" ? context : "",
 		...(open ? { topic: open } : {}),
+		...(typeof continuing === "string" && continuing.trim()
+			? { continuing: continuing.trim() }
+			: {}),
+		handedOff: o.handedOff === true,
 	});
 }
 
@@ -116,7 +130,13 @@ export async function startCall(
 			session: {
 				model: CALL_MODEL,
 				instructions: CALL_INSTRUCTIONS,
-				delegation: { type: "client" },
+				// The voice's automatic acknowledgement of a hand-off is requested
+				// after this delay, so the window's cancel (an empty thinking
+				// append, sent the moment the hand-off arrives) always lands first:
+				// left unset, it spoke 0.2 s after the hand-off, before any cancel,
+				// and before the gate ruled ("Sure. Checking that." for words then
+				// held, live 2026-11-05). OpenAI's live-delegation guide.
+				delegation: { type: "client", acknowledgement_delay_ms: ACK_DELAY_MS },
 				...(seed.length ? { input: seed } : {}),
 			},
 			transport: { type: "webrtc", sdp },

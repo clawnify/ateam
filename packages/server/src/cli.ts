@@ -39,7 +39,13 @@ import {
 	serveRpc,
 } from "./rpc";
 import { hasBoxChoice, idleSleepMinutesOf, readSettings, updateSettings } from "./settings-file";
-import { detectSleepDriver, providerReport, type SleepControl, startSleepControl } from "./sleep";
+import {
+	alwaysOnProvider,
+	detectSleepDriver,
+	providerReport,
+	type SleepControl,
+	startSleepControl,
+} from "./sleep";
 import { reachableWsAddr } from "./tailnet";
 import { socketServerTransport } from "./transport/socket";
 import { wsServerTransport } from "./transport/ws";
@@ -65,10 +71,13 @@ let extensions: RpcExtension[] = [];
 // Where the network port listens (`<host>:<port>`), reported in hello for other
 // boxes to link to (cross-box), or null with no listener.
 let wsAddr: string | null = null;
-// The provider that puts this box to sleep and its name there, reported in hello so
-// a client that added the box by its address can wake it. Undefined until the
-// sleep driver's detection has answered, then null on a box no provider sleeps.
+// The provider this box runs on and its name there, reported in hello so a client
+// that added the box by its address can wake it, or at least name where it runs.
+// Undefined until detection has answered, then null on a box no known provider runs.
 let boxProvider: BoxWake | null | undefined;
+// Whether that provider can put the box to sleep (it has a sleep driver). One that
+// can't (exe.dev) is always on, whatever idleSleepMinutes says.
+let boxCanSleep = false;
 // The lock on the network port (pairing.ts): which devices may use the box over
 // the WebSocket. The unix socket (what `attach` relays over SSH) is never gated.
 const pairing: PairingGuard = {
@@ -248,7 +257,10 @@ function serveClient(
 		trusted,
 		pairing,
 		wsAddr,
-		provider: providerReport(boxProvider, idleSleepMinutesOf(readSettings().settings)),
+		provider: providerReport(
+			boxProvider,
+			boxCanSleep ? idleSleepMinutesOf(readSettings().settings) : 0,
+		),
 	});
 }
 
@@ -271,7 +283,8 @@ async function maybeStartIdleSleep(
 			updateSettings({ box: { alwaysOn: true } });
 		},
 	});
-	boxProvider = driver?.provider ?? null;
+	boxProvider = driver?.provider ?? alwaysOnProvider();
+	boxCanSleep = driver !== null;
 	if (!driver) return;
 	log(`[ateam] on ${driver.where}: letting it sleep when idle`);
 	sleepControl = await startSleepControl(driver, {

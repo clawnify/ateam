@@ -1836,6 +1836,7 @@ export {
 	filled,
 	type InputValues,
 	inputsAt,
+	reportedProvider,
 	reportedWake,
 	WAKE_PROVIDERS,
 	type WakeAdapter,

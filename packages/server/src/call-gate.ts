@@ -9,6 +9,7 @@
 // It reads words only; the voice (GPT-Live) hears the sound. With no model, or
 // no answer in time, the caller falls back on the voice's own hand-off.
 
+import { CALL_MAX_PIECES } from "@ateam/protocol";
 import {
 	askDecisions,
 	type DecisionModel,
@@ -41,12 +42,24 @@ export const CALL_GATE_MODEL: PerProvider<string> = {
  */
 export const SEND_PROBABILITY: PerProvider<number> = { openrouter: 0.7, openai: 0.5 };
 
+/**
+ * The bar when the voice handed the words off as said to it. Neither alone is
+ * enough: the voice alone forwarded side talk (why this gate exists), and words
+ * alone can't tell who the user turned to: after "Mom, hold on a second.",
+ * Jev put "Delete the old test box" at 0.36-0.64, as said to Mom, while the
+ * voice, hearing the room, handed it off (2026-11-05). Side talk scored
+ * 0.03-0.45 on Jev and 0.00-0.31 on Luna, under this bar either way. Known:
+ * with no sentence end between them in the transcript, the two are one piece
+ * and held together, with Send.
+ */
+export const HANDED_OFF_PROBABILITY = 0.5;
+
 /** The user is waiting on the Lead, which takes seconds; this only has to stay
  *  well under that. Luna's first call of a session took 1.7-2.0 s (cold), so
  *  the call warms it up when it opens (lead-call.ts). */
 const TIMEOUT_MS = 3_000;
-/** At most this many pieces per call: the newest. */
-export const MAX_PIECES = 4;
+/** At most this many pieces per call (the call joins its oldest past it). */
+export const MAX_PIECES = CALL_MAX_PIECES;
 const MAX_PIECE = 600;
 const MAX_CONTEXT = 3_000;
 
@@ -74,10 +87,12 @@ export interface SpeechVerdict {
  * confirmation (a card: send this message? run this?) may be answered by a
  * spoken yes or no; a decision (a task's question with options) is only ever
  * talked about here, never answered by what was said near it (the user,
- * 2026-11-05: "these require some thought as they are proper decisions").
+ * 2026-11-05: "these require some thought as they are proper decisions"),
+ * unless a button is clearly picked; a task's reply, said in one line, is only
+ * talked about.
  */
 export interface SpeechTopic {
-	kind: "confirm" | "decision";
+	kind: "confirm" | "decision" | "reply";
 	/** The card or the question, in plain words. */
 	text: string;
 	/** A decision's buttons, in order: the user's words may pick one. */
@@ -120,19 +135,39 @@ export function choiceOf(about: number, chose: number[], bar: number): number | 
 export const ANSWER_PROBABILITY: PerProvider<number> = { openrouter: 0.6, openai: 0.5 };
 
 /**
- * A piece is about the open topic at this probability. A decision's bar is
- * higher, since being about it tags the words to the Lead with its task: lines
- * about a raised decision scored 0.80-0.98, "What's in flight on the board?"
- * 0.29 (Jev) and 0.66 (Luna) (live run 2026-11-05).
+ * A piece is about the open topic at this probability. A decision's or a
+ * reply's bar is higher, since being about it tags the words to the Lead with
+ * its task: lines about a raised decision scored 0.80-0.98, "What's in flight
+ * on the board?" 0.29 (Jev) and 0.66 (Luna) (live run 2026-11-05).
  */
-export const ABOUT_PROBABILITY = { confirm: 0.5, decision: 0.75 } as const;
+export const ABOUT_PROBABILITY = { confirm: 0.5, decision: 0.75, reply: 0.75 } as const;
+
+/**
+ * A piece carries on from what the user was just saying to the Lead (the same
+ * utterance, a pause between) at this probability.
+ */
+export const CONTINUE_PROBABILITY = 0.5;
+
+const TOPIC_LABEL: Record<SpeechTopic["kind"], string> = {
+	confirm: "a confirmation",
+	decision: "a decision",
+	reply: "a task's reply, just told to the user in one line",
+};
 
 const CALL = `The user is on a voice call with "the Lead", an AI that runs their software work: coding tasks, the board of tasks, the product's direction. The microphone in their room hears everything, not only the user talking to the Lead.`;
 
-function questions(n: number, topic?: SpeechTopic): Record<string, YesNoQuestion> {
+function questions(
+	n: number,
+	topic?: SpeechTopic,
+	continuing = false,
+): Record<string, YesNoQuestion> {
 	const out: Record<string, YesNoQuestion> = {};
 	for (let i = 0; i < n; i++) {
 		const p = `piece_${i + 1}`;
+		if (continuing)
+			out[`${p}_continues`] = {
+				instructions: `${CALL} The user was saying utterance_so_far to the Lead and paused. Is ${p} the user carrying on with it: the rest of the same sentence or thought, still said to the Lead, rather than turning to someone else or a sound from a TV?`,
+			};
 		if (topic) {
 			out[`${p}_about`] = {
 				instructions: `${CALL} The Lead just raised open_topic with the user. Is ${p} the user talking about open_topic: answering it, asking about it, or discussing it?`,
@@ -197,8 +232,20 @@ export function verdictOf(
 }
 
 /**
- * A verdict per piece of speech, in the order given (only the newest
- * MAX_PIECES are judged; older ones come back unsent). Null when there is
+ * At most MAX_PIECES pieces, every word kept: the oldest are joined into one.
+ * Returns the pieces to judge and, per input piece, which one judges it.
+ */
+export function capPieces(pieces: string[]): { judged: string[]; of: number[] } {
+	const extra = Math.max(0, pieces.length - MAX_PIECES);
+	if (!extra) return { judged: pieces, of: pieces.map((_, i) => i) };
+	return {
+		judged: [pieces.slice(0, extra + 1).join(" "), ...pieces.slice(extra + 1)],
+		of: pieces.map((_, i) => Math.max(0, i - extra)),
+	};
+}
+
+/**
+ * A verdict per piece of speech, in the order given. Null when there is
  * nothing to ask or the model did not answer in time: the caller decides.
  */
 export async function judgeSpeech(input: {
@@ -209,11 +256,17 @@ export async function judgeSpeech(input: {
 	context: string;
 	/** What the call just raised, if anything is open. */
 	topic?: SpeechTopic;
+	/** The user's words to the Lead just before, in the same utterance: a
+	 *  piece that carries on from them is for the Lead too. */
+	continuing?: string;
+	/** The voice handed these words off as said to it: it hears the room (who
+	 *  the user turns to, a TV's sound), which words alone don't carry. */
+	handedOff?: boolean;
 	signal?: AbortSignal;
 }): Promise<SpeechVerdict[] | null> {
 	if (!input.model.apiKey || input.pieces.length === 0) return null;
-	const skipped = Math.max(0, input.pieces.length - MAX_PIECES);
-	const judged = input.pieces.slice(skipped).map((p) => p.slice(0, MAX_PIECE));
+	const capped = capPieces(input.pieces);
+	const judged = capped.judged.map((p) => p.slice(0, MAX_PIECE));
 	const state: Record<string, string> = {
 		call_so_far: input.context.slice(-MAX_CONTEXT) || "(nothing yet)",
 	};
@@ -221,8 +274,8 @@ export async function judgeSpeech(input: {
 		state[`piece_${i + 1}`] = p;
 	});
 	const topic = input.topic?.text.trim() ? input.topic : undefined;
-	if (topic)
-		state.open_topic = `${topic.kind === "confirm" ? "a confirmation" : "a decision"}: ${topic.text.slice(0, MAX_PIECE)}`;
+	if (topic) state.open_topic = `${TOPIC_LABEL[topic.kind]}: ${topic.text.slice(0, MAX_PIECE)}`;
+	if (input.continuing) state.utterance_so_far = input.continuing.slice(-MAX_PIECE);
 	const options = (topic?.options ?? []).slice(0, MAX_OPTIONS);
 	options.forEach((o, k) => {
 		state[`option_${k + 1}`] =
@@ -232,41 +285,46 @@ export async function judgeSpeech(input: {
 		target: input.model,
 		model: CALL_GATE_MODEL[input.model.provider],
 		state,
-		questions: questions(judged.length, topic),
+		questions: questions(judged.length, topic, !!input.continuing),
 		timeoutMs: TIMEOUT_MS,
 		signal: input.signal,
 	});
 	if (!answers) return null;
-	const bar = SEND_PROBABILITY[input.model.provider];
+	const bar = input.handedOff
+		? Math.min(SEND_PROBABILITY[input.model.provider], HANDED_OFF_PROBABILITY)
+		: SEND_PROBABILITY[input.model.provider];
 	const answerBar = ANSWER_PROBABILITY[input.model.provider];
 	const chooseBar = CHOOSE_PROBABILITY[input.model.provider];
-	const unsent: SpeechVerdict = { p: 0, send: false, kind: "unclear" };
-	return [
-		...Array.from({ length: skipped }, () => unsent),
-		...judged.map((_, i) => {
-			const a = (q: string) => answers[`piece_${i + 1}_${q}`] ?? 0;
-			const v = verdictOf(
-				{ lead: a("lead"), someone: a("someone"), background: a("background") },
-				bar,
-			);
-			if (!topic) return v;
-			const about = a("about");
-			return {
-				...v,
-				about,
-				onTopic: about >= ABOUT_PROBABILITY[topic.kind],
-				answer:
-					topic.kind === "confirm"
-						? answerOf({ about, approve: a("approve"), refuse: a("refuse") }, answerBar)
-						: null,
-				choice: options.length
-					? choiceOf(
-							about,
-							options.map((_, k) => a(`opt_${k + 1}`)),
-							chooseBar,
-						)
+	const verdicts = judged.map((_, i): SpeechVerdict => {
+		const a = (q: string) => answers[`piece_${i + 1}_${q}`] ?? 0;
+		const said = verdictOf(
+			{ lead: a("lead"), someone: a("someone"), background: a("background") },
+			bar,
+		);
+		// The rest of what the user was saying to the Lead: for the Lead, even
+		// when it reads as nothing alone (", legally we have to...").
+		const v: SpeechVerdict =
+			input.continuing && !said.send && a("continues") >= CONTINUE_PROBABILITY
+				? { ...said, send: true, kind: "lead" }
+				: said;
+		if (!topic) return v;
+		const about = a("about");
+		return {
+			...v,
+			about,
+			onTopic: about >= ABOUT_PROBABILITY[topic.kind],
+			answer:
+				topic.kind === "confirm"
+					? answerOf({ about, approve: a("approve"), refuse: a("refuse") }, answerBar)
 					: null,
-			};
-		}),
-	];
+			choice: options.length
+				? choiceOf(
+						about,
+						options.map((_, k) => a(`opt_${k + 1}`)),
+						chooseBar,
+					)
+				: null,
+		};
+	});
+	return capped.of.map((k) => verdicts[k] as SpeechVerdict);
 }
