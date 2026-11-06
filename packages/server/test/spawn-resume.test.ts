@@ -11,7 +11,11 @@ import { peerToken } from "../src/agent-setup";
 import { FollowUps } from "../src/follow-ups";
 import { BOARD_INSTRUCTIONS } from "../src/hooks/board-mcp";
 import type { Services } from "../src/services";
-import { spawnAgentInTask } from "../src/sessions";
+import {
+	adoptReportedConversation,
+	isCodexSideThreadEvent,
+	spawnAgentInTask,
+} from "../src/sessions";
 import { WorktreeGuard } from "../src/worktree-guard";
 
 // Opening a stopped task auto-resumes its conversation, so a resume must be
@@ -337,5 +341,72 @@ describe("peer messaging on the launch line", () => {
 		);
 		// The task's description stays what the user started it with.
 		expect(repo.getTask(db, taskId)?.description ?? null).toBeNull();
+	});
+});
+
+// Codex names its own conversations, so a fresh Codex tab has no id until its
+// first turn ends and notify reports one (hook-server.ts, hookSessionId).
+describe("adoptReportedConversation", () => {
+	const tab = (agentId: string, agentSessionId: string | null) =>
+		repo.createSession(db, {
+			taskId,
+			agentId,
+			terminalId: `term-${agentId}`,
+			agentSessionId,
+			cwd: "/w",
+		});
+	const idOf = (id: string) =>
+		repo.listSessionsByTask(db, taskId).find((s) => s.id === id)?.agentSessionId ?? null;
+
+	it("names a Codex tab after the thread it reported", () => {
+		const s = tab("codex", null);
+		adoptReportedConversation(db, s, "thread-1");
+		expect(idOf(s.id)).toBe("thread-1");
+	});
+
+	it("keeps an id already there, whoever reports another", () => {
+		const s = tab("codex", "thread-1");
+		adoptReportedConversation(db, s, "thread-2");
+		expect(idOf(s.id)).toBe("thread-1");
+	});
+
+	// Ateam names Claude's conversations itself (--session-id); a Claude tab
+	// without one is agent mode or a --continue, which it leaves alone.
+	it("leaves a harness Ateam names itself to Ateam", () => {
+		const s = tab("claude", null);
+		adoptReportedConversation(db, s, "sess-1");
+		expect(idOf(s.id)).toBeNull();
+	});
+
+	it("does nothing without a reported id", () => {
+		const s = tab("codex", null);
+		adoptReportedConversation(db, s, undefined);
+		expect(idOf(s.id)).toBeNull();
+	});
+});
+
+// Seen live on Codex 0.165: notify fired for the terminal-title thread
+// (`{"title":"Reply ready"}`) from the same terminal as the conversation.
+describe("isCodexSideThreadEvent", () => {
+	const codex = (agentSessionId: string | null) => ({ agentId: "codex", agentSessionId });
+	const index = (id: string) => (id === "conv" ? true : id === "unreadable" ? null : false);
+
+	it("drops a side thread's report, before and after the tab is named", () => {
+		expect(isCodexSideThreadEvent(codex(null), "title-thread", index)).toBe(true);
+		expect(isCodexSideThreadEvent(codex("conv"), "title-thread", index)).toBe(true);
+	});
+
+	it("keeps the conversation's own reports", () => {
+		expect(isCodexSideThreadEvent(codex(null), "conv", index)).toBe(false);
+		// Its own id is never looked up.
+		expect(isCodexSideThreadEvent(codex("own"), "own", () => false)).toBe(false);
+	});
+
+	it("keeps what it cannot tell, and what is not Codex's", () => {
+		expect(isCodexSideThreadEvent(codex(null), "unreadable", index)).toBe(false);
+		expect(isCodexSideThreadEvent(codex(null), undefined, index)).toBe(false);
+		expect(
+			isCodexSideThreadEvent({ agentId: "claude", agentSessionId: null }, "x", () => false),
+		).toBe(false);
 	});
 });

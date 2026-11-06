@@ -85,3 +85,38 @@ export function latestCodexThreadInDir(
 		db.close();
 	}
 }
+
+const SOURCE_OF = "select source from threads where id = ?";
+
+/**
+ * Whether a thread Codex reported is a conversation a person has: `true` for
+ * one indexed as `cli` or `vscode`, `false` for anything else. Codex runs side
+ * threads beside a conversation, and its `notify` reports their turns like the
+ * conversation's own, with the same cwd and client: its Guardian reviewer and
+ * spawned subagents (indexed under JSON sources), and the one that writes the
+ * terminal title, which is never indexed at all (seen on Codex 0.165: a
+ * `{"title":"…"}` turn starting 0.7 s into the first turn). A conversation is
+ * indexed when it starts, before any turn of it can end. `null` when the
+ * index cannot be read, so the caller keeps its old behaviour.
+ */
+export function codexThreadIsConversation(
+	id: string,
+	opts: { home?: string; open?: OpenSqlite } = {},
+): boolean | null {
+	const path = stateDbPath(opts.home ?? codexHome());
+	if (!path) return null;
+	let db: SqliteHandle;
+	try {
+		db = (opts.open ?? openWithDriver)(path);
+	} catch {
+		return null;
+	}
+	try {
+		const row = db.prepare(SOURCE_OF).get(id) as { source?: unknown } | undefined;
+		return row?.source === "cli" || row?.source === "vscode";
+	} catch {
+		return null;
+	} finally {
+		db.close();
+	}
+}
