@@ -88,6 +88,7 @@ import { connect, mobileNative, redeemPairing } from "./src/connection";
 import { pairTarget, parsePairLinks } from "./src/pair-link";
 import { demoConnection } from "./src/demo";
 import { type Board, createFleet, type Fleet, pickProject } from "./src/fleet";
+import { AiKeysScreen } from "./src/AiKeysScreen";
 import { GithubAccessScreen } from "./src/GithubAccessScreen";
 import { HomeScreen, type ProjectRow, placeText, type TaskPlace } from "./src/HomeScreen";
 import { LeadScreen } from "./src/LeadScreen";
@@ -1281,6 +1282,10 @@ export default function App() {
 	// A box this phone created, until its Finish setting up page is done with.
 	const [finishKey, setFinishKey] = useState<string | null>(null);
 	const [githubKey, setGithubKey] = useState<string | null>(null);
+	// The box whose AI keys page is open (AiKeysScreen): from its card in Boxes,
+	// Finish setting up, and a call with a Lead whose box has no OpenAI key.
+	const [aiKeysKey, setAiKeysKey] = useState<string | null>(null);
+	const openAiKeys = useCallback((key: string) => setAiKeysKey(key), []);
 	const [browserKey, setBrowserKey] = useState<string | null>(null);
 	const [leadOpen, setLeadOpen] = useState(false);
 	// The box whose Lead the phone talks to, as picked in Boxes; and the box a new
@@ -1511,6 +1516,7 @@ export default function App() {
 			openOwner,
 			boxTerminalKey,
 			githubKey,
+			aiKeysKey,
 			browserKey,
 			updatingKey,
 			leadOpen ? leadKey : null,
@@ -1733,6 +1739,7 @@ export default function App() {
 			setAgentsByBox(({ [key]: _gone, ...rest }) => rest);
 			setBoxTerminalKey((k) => (k === key ? null : k));
 			setGithubKey((k) => (k === key ? null : k));
+			setAiKeysKey((k) => (k === key ? null : k));
 			setBrowserKey((k) => (k === key ? null : k));
 			void refresh();
 		},
@@ -1863,6 +1870,7 @@ export default function App() {
 		setOpenTask(null);
 		setBoxTerminalKey(null);
 		setGithubKey(null);
+		setAiKeysKey(null);
 		setBrowserKey(null);
 		setLeadOpen(false);
 		const d = demoConnection();
@@ -2301,7 +2309,13 @@ export default function App() {
 	const leadBadge = useLeadBadge(
 		leadClient,
 		leadConn ? leadKey : null,
-		view === "board" && leadOpen && !openTask && !boxTerminalKey && !browserKey && !githubKey,
+		view === "board" &&
+			leadOpen &&
+			!openTask &&
+			!boxTerminalKey &&
+			!browserKey &&
+			!githubKey &&
+			!aiKeysKey,
 	);
 	const anyLive = Object.values(links).some((l) => l.state === "live");
 	const linkOf = (key: string | null): BoxLink => (key ? links[key] : undefined) ?? NEW_LINK;
@@ -2316,6 +2330,19 @@ export default function App() {
 				onClose={() => setGithubKey(null)}
 				onUpdateBox={() => void updateBox(githubKey)}
 				updating={updatingKey === githubKey}
+			/>
+		);
+	}
+
+	const aiKeysConn = aiKeysKey ? link.conn(aiKeysKey) : undefined;
+	if (aiKeysKey && aiKeysConn) {
+		return (
+			<AiKeysScreen
+				api={aiKeysConn.api}
+				boxLabel={labelOf(aiKeysKey)}
+				onClose={() => setAiKeysKey(null)}
+				onUpdateBox={() => void updateBox(aiKeysKey)}
+				updating={updatingKey === aiKeysKey}
 			/>
 		);
 	}
@@ -2366,6 +2393,7 @@ export default function App() {
 					setBoxTerminalKey(finishKey);
 				}}
 				onGithub={() => setGithubKey(finishKey)}
+				onAiKeys={() => openAiKeys(finishKey)}
 				onAddProject={() => setBrowserKey(finishKey)}
 				onDone={() => {
 					setFinishKey(null);
@@ -2445,6 +2473,7 @@ export default function App() {
 						setBoxTerminalKey(boxKey(box));
 					}}
 					onGithub={(box) => setGithubKey(boxKey(box))}
+					onAiKeys={(box) => openAiKeys(boxKey(box))}
 					openKeys={
 						new Set(
 							boxes
