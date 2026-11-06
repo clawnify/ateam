@@ -1,0 +1,7 @@
+{
+  "name": "expo-lead-call",
+  "version": "1.0.0",
+  "description": "A call with the Lead as a system call: CallKit, the mic's level on hold, the chime (Ateam mobile)",
+  "main": "src/index.ts",
+  "private": true
+}

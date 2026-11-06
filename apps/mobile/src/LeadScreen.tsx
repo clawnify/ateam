@@ -48,6 +48,7 @@ import {
 	type PickedFile,
 	previews,
 } from "./attach";
+import { CallBar, CallButton } from "./CallBar";
 import { LeadMarkdown } from "./LeadMarkdown";
 import { type QuestionAnswer, QuestionCard } from "./QuestionCard";
 import { C, CONTENT_MAX } from "./theme";
@@ -696,15 +697,18 @@ export function LeadScreen({
 				<Text style={styles.eyebrow} numberOfLines={1}>
 					Lead · {boxLabel ?? "this box"}
 				</Text>
-				<Pressable
-					onPress={newConversation}
-					disabled={!snap?.items.length}
-					hitSlop={10}
-					accessibilityRole="button"
-					accessibilityLabel="New conversation"
-				>
-					<Feather name="edit" size={16} color={snap?.items.length ? C.ink : C.faint} />
-				</Pressable>
+				<View style={styles.headActions}>
+					<CallButton boxLabel={boxLabel} boxVersion={boxVersion} onUpdateBox={onUpdateBox} />
+					<Pressable
+						onPress={newConversation}
+						disabled={!snap?.items.length}
+						hitSlop={10}
+						accessibilityRole="button"
+						accessibilityLabel="New conversation"
+					>
+						<Feather name="edit" size={16} color={snap?.items.length ? C.ink : C.faint} />
+					</Pressable>
+				</View>
 			</View>
 
 			{loadError ? (
@@ -776,6 +780,7 @@ export function LeadScreen({
 			{asking.length > 0 && <Waiting tasks={asking} ctx={ctx} onAnswer={lead.answer} />}
 
 			<View style={styles.composer}>
+				<CallBar />
 				{note && <Text style={[styles.errorText, styles.note]}>{note}</Text>}
 				<AttachmentStrip
 					files={files}
@@ -858,6 +863,7 @@ const styles = StyleSheet.create({
 		maxWidth: CONTENT_MAX,
 		alignSelf: "center",
 	},
+	headActions: { flexDirection: "row", alignItems: "center", gap: 20 },
 	eyebrow: {
 		color: C.muted,
 		fontSize: 11,
