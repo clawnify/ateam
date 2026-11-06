@@ -50,10 +50,17 @@ export function CallButton({
 	boxLabel,
 	boxVersion,
 	onUpdateBox,
+	keyMissing,
+	onAddKey,
 }: {
 	boxLabel?: string | null;
 	boxVersion: number;
 	onUpdateBox: () => void;
+	/** Whether the Lead's box has no OpenAI key: a call's voice session is opened with
+	 *  the box's key (lead:callStart), so without one it can't start. */
+	keyMissing?: () => Promise<boolean>;
+	/** That box's AI keys page (AiKeysScreen). */
+	onAddKey?: () => void;
 }) {
 	const call = useLeadCall();
 	const available = useCallsAvailable();
@@ -70,6 +77,13 @@ export function CallButton({
 					{ text: "Update box", onPress: onUpdateBox },
 				],
 			);
+			return;
+		}
+		// No OpenAI key on the box: go where it's added, as the desktop's call button
+		// does, rather than start a call that can only fail. An answer that doesn't come
+		// leaves it to the call, which says what's missing.
+		if (keyMissing && onAddKey && (await keyMissing().catch(() => false))) {
+			onAddKey();
 			return;
 		}
 		// Once, before the first call: where the voice goes (App Review 5.1.2).

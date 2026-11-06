@@ -809,6 +809,8 @@ function Shell({
 	onLead,
 	leadBadge,
 	onUpdateLeadBox,
+	callKeyMissing,
+	onAddCallKey,
 	updatingLeadBox,
 	onStartProposal,
 }: {
@@ -878,6 +880,9 @@ function Shell({
 	/** The dot on the Lead button (src/lead-badge.ts). */
 	leadBadge: LeadBadge;
 	onUpdateLeadBox: () => void;
+	/** Whether the Lead's box has no OpenAI key for calls, and its AI keys page. */
+	callKeyMissing?: () => Promise<boolean>;
+	onAddCallKey?: () => void;
 	updatingLeadBox: boolean;
 	/** "Start it" on one of the Lead's proposals. */
 	onStartProposal: (item: ProposalItem) => void;
@@ -1125,6 +1130,8 @@ function Shell({
 					onUpdateBox={onUpdateLeadBox}
 					updating={updatingLeadBox}
 					onStartProposal={onStartProposal}
+					callKeyMissing={callKeyMissing}
+					onAddCallKey={onAddCallKey}
 				/>
 			)}
 			{showTab && tab === "loops" && (
@@ -2688,6 +2695,17 @@ export default function App() {
 					if (leadKey) void updateBox(leadKey);
 				}}
 				updatingLeadBox={leadKey !== null && updatingKey === leadKey}
+				// The call's session is opened with the Lead box's own key (lead:callStart).
+				// A box too old to say (no `openAi` status) is left to the call to explain.
+				callKeyMissing={
+					leadConn && !demo.current
+						? async () => {
+								const keys = await leadConn.api.credentials.get();
+								return keys.openAi !== undefined && !keys.openAi.set;
+							}
+						: undefined
+				}
+				onAddCallKey={leadKey && !demo.current ? () => openAiKeys(leadKey) : undefined}
 				onStartProposal={(item) => {
 					if (item.proposal.kind === "task") return setProposalSheet(item);
 					const p = item.proposal;

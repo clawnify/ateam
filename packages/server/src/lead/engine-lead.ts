@@ -195,7 +195,7 @@ export function engineLead(
 						str(args[0], "The connection offer"),
 						Array.isArray(args[1]) ? (args[1] as LeadCallTurn[]) : [],
 						// Keys reach a box from the Mac that holds it (host.ts pushCredentials).
-						"This box has no OpenAI key for calls. Add yours in Ateam on your Mac, Settings → AI, and it reaches your boxes.",
+						"This box has no OpenAI key for calls. Add yours from the box's card in Ateam Go (the key button), or in Ateam on your Mac, Settings → AI.",
 					);
 				case LEAD_CH.callJudge:
 					return judgeCall(args[0], args[1], args[2]);

@@ -26,7 +26,10 @@ export const AI_KEY_FIELDS: readonly AiKeyField[] = [
 		placeholder: "sk-…",
 		purpose:
 			"Calls with the Lead, and a small model that moves a finished task to Needs you when its agent is waiting on you.",
-		console: { url: "https://platform.openai.com/api-keys", path: "platform.openai.com › API keys" },
+		console: {
+			url: "https://platform.openai.com/api-keys",
+			path: "platform.openai.com › API keys",
+		},
 		optional: false,
 	},
 	{
@@ -35,7 +38,10 @@ export const AI_KEY_FIELDS: readonly AiKeyField[] = [
 		label: "OpenRouter API key",
 		placeholder: "sk-or-…",
 		purpose: "Does that sorting through OpenRouter instead. Not needed with an OpenAI key.",
-		console: { url: "https://openrouter.ai/settings/keys", path: "openrouter.ai › Settings › API Keys" },
+		console: {
+			url: "https://openrouter.ai/settings/keys",
+			path: "openrouter.ai › Settings › API Keys",
+		},
 		optional: true,
 	},
 ];
