@@ -2587,7 +2587,9 @@ export function App() {
 							onHighlight={setMcHighlightId}
 							jump={mcJump}
 							onJumpMissing={(id) => {
-								const t = activeTasks.find((x) => x.id === id);
+								// allTasks, not activeTasks: a Lead chip can name another
+								// project's task, which has no tile here.
+								const t = allTasks.find((x) => x.id === id);
 								if (t) openTask(t);
 							}}
 							onReorder={reorderMission}
