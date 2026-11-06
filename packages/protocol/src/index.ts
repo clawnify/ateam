@@ -1790,6 +1790,22 @@ export * from "./github-access";
 // The Lead chat: its items and events, the desktop's IPC channels and the
 // engine's RPC for a box's own Lead (v24).
 export * from "./lead";
+// A voice call with the Lead: the engine both apps run, each with its own media.
+export {
+	type CallChannel,
+	type CallLead,
+	type CallMedia,
+	type CallMeter,
+	type CallPeer,
+	type CallState,
+	type CallStream,
+	type CallTask,
+	type CallTrack,
+	type CallView,
+	heldReason,
+	LeadCall,
+	UNDO_MS,
+} from "./lead-call";
 export * from "./lead-view";
 // Box providers as data: what a client asks the user for to wake a sleeping box.
 export {
