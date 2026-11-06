@@ -10,7 +10,7 @@ import {
 	type ProviderDefinition,
 	type ProviderReport,
 	providerById,
-	reportedWake,
+	reportedProvider,
 	wakeMachineName,
 } from "@ateam/protocol";
 import type { SavedConnection } from "./storage";
@@ -52,7 +52,7 @@ export function withReportedProvider(
 	key: string,
 	reported: ProviderReport | null | undefined,
 ): SavedBox[] | null {
-	const wake = reportedWake(reported);
+	const wake = reportedProvider(reported);
 	const at = list.findIndex((b) => boxKey(b) === key);
 	const box = list[at];
 	if (!wake || !reported || !box) return null;
@@ -75,7 +75,9 @@ export function withReportedProvider(
  *  still wakes through the provider when a key is saved (links.ts), since a box can
  *  be put back to sleeping after it last said so. */
 export function wakesThrough(box: SavedConnection): ProviderDefinition | undefined {
-	return box.sleeps === false ? undefined : providerById(box.provider?.id);
+	const def = providerById(box.provider?.id);
+	// A provider with nothing to wake (exe.dev) is only a name.
+	return box.sleeps === false || !def?.wake ? undefined : def;
 }
 
 /** The box form's Always on / Sleeps when idle to begin with: a box being added shows

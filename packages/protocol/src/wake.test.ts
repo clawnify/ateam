@@ -4,6 +4,7 @@ import { PROVIDERS, providerById } from "./providers";
 import {
 	filled,
 	inputsAt,
+	reportedProvider,
 	reportedWake,
 	WAKE_PROVIDERS,
 	wakeAdapter,
@@ -86,5 +87,29 @@ describe("reportedWake", () => {
 			id: "sprites",
 			box: { machine: "b" },
 		});
+	});
+});
+
+describe("reportedProvider", () => {
+	test("a provider the client can wake is taken as reportedWake takes it", () => {
+		expect(reportedProvider({ id: "sprites", box: { machine: " ateam-box " } })).toEqual({
+			id: "sprites",
+			box: { machine: "ateam-box" },
+		});
+		expect(reportedProvider({ id: "sprites", box: {} })).toBeNull();
+	});
+	test("an always-on provider is named by its id alone, and nothing a box sent rides along", () => {
+		expect(reportedProvider({ id: "exe", box: { machine: "ateam-exe", token: "x" } })).toEqual({
+			id: "exe",
+			box: {},
+		});
+		// Named, but never woken: no client offers it, and none asks for a key for it.
+		expect(reportedWake({ id: "exe", box: {} })).toBeNull();
+		expect(WAKE_PROVIDERS.some((p) => p.id === "exe")).toBe(false);
+	});
+	test("nothing said, or a provider this client doesn't know, is ignored", () => {
+		expect(reportedProvider(undefined)).toBeNull();
+		expect(reportedProvider(null)).toBeNull();
+		expect(reportedProvider({ id: "fly-machines", box: {} })).toBeNull();
 	});
 });

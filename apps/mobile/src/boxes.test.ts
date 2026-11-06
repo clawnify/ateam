@@ -97,6 +97,22 @@ describe("boxes", () => {
 		expect(next && boxTitle(next[1] as SavedBox)).toBe("ateam-box");
 	});
 
+	test("a box on exe.dev says so, and is named for it without anything to wake", () => {
+		const reported = { id: "exe", box: {}, sleeps: false };
+		const next = withReportedProvider([plain], boxKey(plain), reported);
+		const exe = next?.[0] as SavedBox;
+		expect(exe).toEqual({ ...plain, provider: { id: "exe", box: {} }, sleeps: false });
+		expect(boxSubtitle(exe)).toBe("port 8787 · exe.dev");
+		expect(boxTitle(exe)).toBe(plain.host);
+		// Nothing to wake, even before it had said it's always on.
+		const failed: BoxLink = { ...NEW_LINK, state: "down", error: "Timed out reaching the box" };
+		for (const box of [exe, { ...exe, sleeps: undefined }]) {
+			expect(wakesThrough(box)).toBeUndefined();
+			expect(cantWakeReason(box)).toBeNull();
+			expect(needsProvider(box, failed)).toBe(false);
+		}
+	});
+
 	test("a provider the user picked stays; only its blank name is filled", () => {
 		const reported = { id: "sprites", box: { machine: "other-name" }, sleeps: true };
 		const known: SavedBox = { ...sprite, sleeps: true };
