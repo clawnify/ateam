@@ -3,6 +3,7 @@
 // anywhere else, so the first one that answers is this box's provider. Adding a
 // provider is a driver beside ./boxd.ts and a line in DRIVERS; when to sleep
 // (./control.ts) stays the same. See docs/providers/README.md.
+import { readFileSync } from "node:fs";
 import type { BoxWake, ProviderReport } from "@ateam/protocol";
 import { boxdSleepDriver } from "./boxd";
 import type { SleepDriver } from "./control";
@@ -32,6 +33,23 @@ export async function detectSleepDriver(opts: DetectOptions): Promise<SleepDrive
 		if (driver) return driver;
 	}
 	return null;
+}
+
+/**
+ * The provider of a box nothing puts to sleep, so it has no driver: hello only names
+ * it, and a client shows the box as being there. exe.dev boots every VM with its own
+ * init, `init=/exe.dev/bin/exe-init` on the kernel command line (read on a VM,
+ * 2026-11-06), which a container or a copied file can't fake the way a path on disk
+ * could be.
+ */
+export function alwaysOnProvider(cmdline = "/proc/cmdline"): BoxWake | null {
+	let line: string;
+	try {
+		line = readFileSync(cmdline, "utf8");
+	} catch {
+		return null; // not Linux, or not readable: nothing to name
+	}
+	return /(^|\s)init=\/exe\.dev\//.test(line) ? { id: "exe", box: {} } : null;
 }
 
 /**

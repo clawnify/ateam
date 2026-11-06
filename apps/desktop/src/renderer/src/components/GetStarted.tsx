@@ -1,12 +1,16 @@
 // The board's place while there is no project at all: a new install (after the
-// theme choice in Welcome.tsx), or the last project removed. It covers only what
-// stands between the user and a first task (a project, a coding agent) and what
-// happens next. Later setup stays in Settings, behind one link to Boxes: a
-// checklist of every feature here would drift from Settings as features change.
+// theme choice in Welcome.tsx), or the last project removed. It covers what
+// stands between the user and a first task (a project, a coding agent), one
+// optional step, and what happens next. The optional step is the AI keys: what
+// they turn on (Needs you sorting, calling the Lead) is otherwise found only by
+// going looking, and their fields are Settings' own (KeyField), so the two can't
+// drift. Other setup stays in Settings, behind one link to Boxes: a checklist of
+// every feature here would drift from Settings as features change.
 import type { AgentDTO } from "@ateam/protocol";
-import { FolderPlus } from "lucide-react";
-import { useEffect } from "react";
+import { Check, ChevronRight, FolderPlus } from "lucide-react";
+import { useEffect, useState } from "react";
 import { SessionIcon } from "./AgentIcon";
+import { KeyField, useCredentials } from "./SettingsPanel";
 
 const and = new Intl.ListFormat("en", { type: "conjunction" });
 const or = new Intl.ListFormat("en", { type: "disjunction" });
@@ -16,6 +20,7 @@ export function GetStarted({
 	onAdd,
 	onRecheckAgents,
 	onOpenBoxes,
+	onOpenAi,
 }: {
 	/** This Mac's agents; empty until the first list arrives (the registry always has some). */
 	agents: AgentDTO[];
@@ -23,7 +28,18 @@ export function GetStarted({
 	/** Re-read this Mac's agents, so one installed in a terminal meanwhile shows up. */
 	onRecheckAgents: () => void;
 	onOpenBoxes: () => void;
+	/** Settings → AI: everything a key is used for, and the models. */
+	onOpenAi: () => void;
 }) {
+	const [keyError, setKeyError] = useState<string | null>(null);
+	const { credentials, saveKey } = useCredentials(setKeyError);
+	// Optional, so folded until someone opens it. Once both keys are in, it folds
+	// itself again with a check: nothing left to do there. Still opens to change one.
+	const bothKeys = Boolean(credentials?.openRouter?.set && credentials?.openAi?.set);
+	const [aiOpen, setAiOpen] = useState(false);
+	useEffect(() => {
+		if (bothKeys) setAiOpen(false);
+	}, [bothKeys]);
 	// Back from the terminal is when an install would have happened.
 	useEffect(() => {
 		window.addEventListener("focus", onRecheckAgents);
@@ -80,8 +96,57 @@ export function GetStarted({
 					</div>
 				</li>
 				<li>
+					<span className={`get-started-num${bothKeys ? " done" : ""}`} aria-hidden="true">
+						{bothKeys ? <Check size={13} strokeWidth={2.25} /> : 3}
+					</span>
+					<div className="get-started-step">
+						<h2>
+							<button
+								type="button"
+								className="get-started-toggle"
+								aria-expanded={aiOpen}
+								aria-controls="get-started-ai"
+								onClick={() => setAiOpen((o) => !o)}
+							>
+								AI features
+								<span className="get-started-optional">{bothKeys ? "Keys added" : "Optional"}</span>
+								<ChevronRight
+									className="get-started-chevron"
+									size={14}
+									strokeWidth={1.75}
+									aria-hidden="true"
+								/>
+							</button>
+						</h2>
+						{aiOpen && (
+							<div id="get-started-ai">
+								<p>
+									With an OpenRouter or OpenAI key, a small model reads each finished turn and moves
+									the task to Needs you when its agent is waiting on you. An OpenAI key also lets
+									you call the Lead by voice.
+								</p>
+								<div className="get-started-keys">
+									<span>OpenRouter</span>
+									<KeyField provider="openRouter" status={credentials} onSave={saveKey} />
+									<span>OpenAI</span>
+									<KeyField provider="openAi" status={credentials} onSave={saveKey} />
+								</div>
+								{keyError && <p className="get-started-error">{keyError}</p>}
+								<p className="get-started-note">
+									Your agent's last message and your reply go to that provider. Everything else a
+									key does is in{" "}
+									<button type="button" className="get-started-link" onClick={onOpenAi}>
+										Settings › AI
+									</button>
+									.
+								</p>
+							</div>
+						)}
+					</div>
+				</li>
+				<li>
 					<span className="get-started-num" aria-hidden="true">
-						3
+						4
 					</span>
 					<div className="get-started-step">
 						<h2>Then start a task</h2>

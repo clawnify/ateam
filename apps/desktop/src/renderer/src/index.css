@@ -5526,6 +5526,66 @@ input {
 	padding: 6px 14px;
 	font-size: 13px;
 }
+.get-started-optional {
+	margin-left: 6px;
+	color: var(--text-dim);
+	font-size: 12px;
+	font-weight: 400;
+}
+/* An optional step's title opens and folds it. */
+.get-started-toggle {
+	display: inline-flex;
+	align-items: center;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+.get-started-chevron {
+	margin-left: 4px;
+	color: var(--text-dim);
+	transition: transform 0.15s ease;
+}
+.get-started-toggle[aria-expanded="true"] .get-started-chevron {
+	transform: rotate(90deg);
+}
+.get-started-toggle:hover .get-started-chevron {
+	color: var(--text);
+}
+@media (prefers-reduced-motion: reduce) {
+	.get-started-chevron {
+		transition: none;
+	}
+}
+/* A step with nothing left to do: a check in place of its number. */
+.get-started-num.done {
+	border-color: var(--text-dim);
+	color: var(--text);
+}
+.get-started-keys {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	align-items: center;
+	gap: 8px 12px;
+	margin-top: 12px;
+	font-size: 13px;
+}
+.get-started-keys .settings-input {
+	flex: 1;
+	width: auto;
+	min-width: 0;
+}
+.get-started-step .get-started-note {
+	margin-top: 10px;
+	font-size: 12px;
+}
+.get-started-step .get-started-error {
+	margin-top: 8px;
+	color: var(--red);
+	font-size: 12px;
+}
 .get-started-glyphs {
 	display: inline-flex;
 	gap: 4px;

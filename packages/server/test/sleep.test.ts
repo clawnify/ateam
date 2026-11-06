@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { boxdMachineName, boxdSleepDriver, loopWakeScript, RELEASE_S } from "../src/sleep/boxd";
@@ -14,7 +14,7 @@ import {
 	sleepMode,
 	startSleepControl,
 } from "../src/sleep/control";
-import { providerReport } from "../src/sleep/index";
+import { alwaysOnProvider, providerReport } from "../src/sleep/index";
 import {
 	HOLD_EXPIRE,
 	HOLD_RENEW_MS,
@@ -371,6 +371,28 @@ describe("providerReport", () => {
 	it("passes on not knowing yet, and no provider", () => {
 		expect(providerReport(undefined, 60)).toBeUndefined();
 		expect(providerReport(null, 60)).toBeNull();
+	});
+});
+
+describe("alwaysOnProvider", () => {
+	const cmdline = (line: string) => {
+		const path = join(mkdtempSync(join(tmpdir(), "ateam-cmdline-")), "cmdline");
+		writeFileSync(path, `${line}\n`);
+		return path;
+	};
+	it("names exe.dev from the init it boots every VM with", () => {
+		// An exe.dev VM's kernel command line, address and name made neutral.
+		const exe = cmdline(
+			"console=hvc0 root=/dev/vda init=/exe.dev/bin/exe-init rw domain=exe.xyz ip=10.0.0.2:10.0.0.1:10.0.0.1:255.255.0.0:mybox:eth0:none",
+		);
+		expect(alwaysOnProvider(exe)).toEqual({ id: "exe", box: {} });
+		// Reported as always on: nothing to wake, whatever idle sleep says.
+		expect(providerReport(alwaysOnProvider(exe), 0)).toEqual({ id: "exe", box: {}, sleeps: false });
+	});
+	it("names nothing anywhere else, or where there is no command line to read", () => {
+		expect(alwaysOnProvider(cmdline("BOOT_IMAGE=/vmlinuz root=/dev/sda1 ro quiet"))).toBeNull();
+		expect(alwaysOnProvider(cmdline("root=/dev/vda rw note=init=/exe.dev/"))).toBeNull();
+		expect(alwaysOnProvider(join(tmpdir(), "ateam-no-such-cmdline"))).toBeNull();
 	});
 });
 
