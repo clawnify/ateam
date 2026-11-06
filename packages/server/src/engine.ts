@@ -42,8 +42,15 @@ import { applyAgentQuit, columnAfterExit } from "./pty/agent-quit";
 import { PtyClient } from "./pty/pty-client";
 import { reapableSessions } from "./pty/reap";
 import { makeStrandReconciler } from "./pty/reconcile";
+import { queueCodexMessage } from "./codex-queue";
 import { liveAgentIds, type Services, toTaskDTO } from "./services";
-import { createTaskInProject, ResumeInFlightError, spawnAgentInTask } from "./sessions";
+import {
+	adoptReportedConversation,
+	createTaskInProject,
+	isCodexSideThreadEvent,
+	ResumeInFlightError,
+	spawnAgentInTask,
+} from "./sessions";
 import { PermissionBridge } from "./permissions";
 import { applyShowPage } from "./pages";
 import { applyPropose, clearProposal } from "./proposals";
@@ -500,6 +507,11 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 				throw e;
 			}
 		},
+		// A live Codex takes a message through its own queue (codex-queue.ts).
+		queue: (session, text) =>
+			session.agentSessionId
+				? queueCodexMessage(session.agentSessionId, text, session.cwd)
+				: Promise.resolve(false),
 		log: opts.log ?? ((line) => console.log(line)),
 	});
 	hooks.setPeerInbox({
@@ -640,6 +652,11 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	hooks.on("hook", (e: HookEvent) => {
 		const session = repo.getSessionByTerminal(db, e.terminalId);
 		if (!session) return;
+		// Codex's side threads report their turns from this terminal too.
+		if (isCodexSideThreadEvent(session, e.sessionId)) return;
+		// Before anything below can act on this event: the peer messenger
+		// restarts an agent at its Stop, and that restart must resume by id.
+		adoptReportedConversation(db, session, e.sessionId);
 		// The agent moving on means a prompt held for an Ateam client was answered
 		// in its terminal (or abandoned): take that card down. Its own
 		// PermissionRequest notification is not moving on.
@@ -795,7 +812,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		}
 	};
 	const reapIdleSessions = (): void => {
-		const due = reapableSessions(repo.listOpenSessions(db), Date.now(), REAP_IDLE_MS);
+		const open = repo
+			.listOpenSessions(db)
+			.map((s) => ({ ...s, lastInputAt: pty.lastInputAt(s.terminalId) }));
+		const due = reapableSessions(open, Date.now(), REAP_IDLE_MS);
 		let count = 0;
 		for (const s of due) {
 			// Already gone: its exit is the live path's to record, not ours.
