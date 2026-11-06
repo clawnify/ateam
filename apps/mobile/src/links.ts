@@ -3,7 +3,8 @@
 // with everything it touches passed in, so these rules run under bun test:
 //
 //   - A box is reached in the background and never woken: dialling a sleeping box
-//     over the tailnet leaves it asleep, and its board as last seen stands in.
+//     over the tailnet leaves it asleep, and its board as last seen stands in. Its
+//     card shows it asleep meanwhile, not reached (boxes.ts shownAsleep).
 //   - Only someone asking for a box wakes it: a card, opening one of its tasks,
 //     starting a task there, its terminal, the Lead on it. A box someone waits on
 //     is retried sooner, and woken again once the last wake is stale (REWAKE_MS).

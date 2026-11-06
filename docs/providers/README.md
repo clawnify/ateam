@@ -80,6 +80,14 @@ desktop's box forms and its page in Settings → Boxes switch it. The engine rep
 `system:hello` (`provider.sleeps`), so neither client shows an always-on box asleep or
 asks for its key.
 
+Ateam Go tries every box in the background and wakes none of them: only a tap, or
+opening something on a box, wakes it. A box that sleeps therefore shows **Asleep · tap to
+wake** on its card through those tries, and before the first one ends, rather than a
+spinner that can't get anywhere; if it is up, the try lands and the card turns
+connected. A box no provider puts to sleep reports `provider: null`, and the phone saves
+one that has no provider of its own as always on, so a try that fails doesn't offer
+**Set provider** for it.
+
 A provider that never puts a box to sleep has no driver, but its boxes can still say
 where they run, so Ateam Go and Settings → Boxes name them by provider instead of by
 address. That is two lines: a definition without `wake` in `providers.ts`, and a check in
