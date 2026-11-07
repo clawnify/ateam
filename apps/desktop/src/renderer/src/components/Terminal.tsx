@@ -45,6 +45,7 @@ const writeDelivery = (terminalId: string, d: AttachDelivery) => {
  */
 export function TerminalView({
 	terminalId,
+	autoFocus = true,
 	grammar = false,
 	skills = false,
 	skillButtons,
@@ -54,6 +55,8 @@ export function TerminalView({
 	aboveToolbar,
 }: {
 	terminalId: string;
+	/** Grids opt out so a newly visible terminal cannot take keyboard input. */
+	autoFocus?: boolean;
 	/** Grammar-check the prompt as it's typed. For agent sessions, not a shell. */
 	grammar?: boolean;
 	/** Offer the agent's skills on the toolbar. For an agent session, not a shell. */
@@ -123,9 +126,9 @@ export function TerminalView({
 		// opens) and when the window comes back (it opened while you were away).
 		const mayTakeFocus = () => !document.querySelector(".overlay");
 
-		// Focus so keystrokes (incl. Enter) reach this PTY. In Mission Control
-		// many terminals are mounted; clicking a tile focuses the one you want.
-		if (mayTakeFocus()) term.focus();
+		// A single terminal focuses on mount; a grid focuses only on a click or
+		// an explicit jump, since background reordering can mount another tile.
+		if (autoFocus && mayTakeFocus()) term.focus();
 		const focusTerm = () => term.focus();
 		el.addEventListener("mousedown", focusTerm);
 
@@ -472,7 +475,7 @@ export function TerminalView({
 			termRef.current = null;
 			term.dispose();
 		};
-	}, [terminalId]);
+	}, [terminalId, autoFocus]);
 
 	// "+ → Files…": native picker, then type the escaped paths into the PTY —
 	// same effect as dragging the files onto the terminal.
