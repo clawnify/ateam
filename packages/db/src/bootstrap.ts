@@ -167,6 +167,15 @@ export function bootstrap(db: SqliteExecutor): void {
 			html TEXT NOT NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS saved_task_pages (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+			page TEXT NOT NULL,
+			html TEXT NOT NULL,
+			at INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS saved_task_pages_task_idx ON saved_task_pages (task_id, at);
+
 		CREATE TABLE IF NOT EXISTS task_change_steps (
 			task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
 			diff_key TEXT NOT NULL,
@@ -183,6 +192,7 @@ export function bootstrap(db: SqliteExecutor): void {
 				last_seen INTEGER,
 				hidden INTEGER NOT NULL DEFAULT 0,
 				wake TEXT,
+				sleeps INTEGER,
 				snapshot TEXT,
 				created_at INTEGER
 			);
@@ -231,6 +241,8 @@ export function bootstrap(db: SqliteExecutor): void {
 		// Null for every box that predates it: no board seen yet to keep.
 		"ALTER TABLE hosts ADD COLUMN snapshot TEXT",
 		"ALTER TABLE hosts ADD COLUMN engine_release TEXT",
+		// Null for every box that predates it: none had said whether it sleeps.
+		"ALTER TABLE hosts ADD COLUMN sleeps INTEGER",
 		// Both null for every session that predates them, which reads correctly:
 		// no known conversation to resume, and no claim about how it ended — so
 		// history is never mistaken for tabs that were open at shutdown.

@@ -18,6 +18,7 @@ import {
 	type ProjectDTO,
 	projectRepo,
 	relativeAge,
+	TASK_LINK_SCHEME,
 	type TaskDTO,
 	type TaskLastReplyDTO,
 	type TaskProposalDTO,
@@ -36,6 +37,11 @@ export interface LeadToolDeps {
 	machineOf(id: string): string | null;
 	/** A task the Lead messaged or answered: its replies come back to the chat. */
 	onTouch?(task: TaskDTO): void;
+	/** Asked before a message or an answer goes to a task. While the user is on
+	 *  a voice call (index.ts), it keeps `run` for the user's tap and answers
+	 *  what to tell the Lead instead; otherwise null, and the tool goes ahead.
+	 *  `text` is the card the user decides on, in markdown. */
+	hold?(r: { text: string; run: () => Promise<McpToolResult> }): string | null;
 	/** Put a proposal in the chat, where the user creates it from its dialog. */
 	propose?(p: {
 		projectId: string;
@@ -162,7 +168,7 @@ const messageSchema = (w: Words) =>
 const toolsFor = (w: Words, scoped = false) => [
 	{
 		name: "get_board",
-		description: `List the tasks ${w.board}, grouped under each project's name, the repo it is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its machine and its id; one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus where it stands now (a summary written a few minutes after its agent goes quiet) and what it waits for or asks the user. Filter to what you need: all (the default) is every task still in play, merged ones left out; needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project, merged ones included (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.${scoped ? " This chat is one project's: without project, every filter lists that project's tasks only." : ""}`,
+		description: `List the tasks ${w.board}, grouped under each project's name, the repo it is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its machine and its id; one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus where it stands now (a summary written a few minutes after its agent goes quiet) and what it waits for or asks the user. Filter to what you need: all (the default) is every task on the board, Done ones included (archived ones are not listed); needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.${scoped ? " This chat is one project's: without project, every filter lists that project's tasks only." : ""}`,
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -308,6 +314,14 @@ const firstLine = (text: string) =>
 
 /** A summary's room in get_board's one line per task. The board stays in the
  *  Lead's context, so a long one is cut there; read_task carries it whole. */
+/** Text as a markdown quote, for a card the user decides on. */
+const quote = (text: string) =>
+	text
+		.slice(0, 1500)
+		.split("\n")
+		.map((l) => `> ${l}`)
+		.join("\n");
+
 const SUMMARY_IN_BOARD = 200;
 const clipLine = (text: string, max: number) => {
 	if (text.length <= max) return text;
@@ -427,9 +441,8 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 		// A home chat sees its own project unless it names another, or "all".
 		const only = home && asked === "all" ? "" : asked;
 		const keep = (t: TaskDTO) => {
-			// Merged work is out of play, but it is news: a briefing on the latest
-			// tasks includes what just merged.
-			if (t.column === "merged") return filter === "recent";
+			// Done (merged) tasks stay listed: only archived ones are left out, and
+			// tasks:list never returns those. The Lead must find a task the user names.
 			const state = agentState(t);
 			if (filter === "needs_you")
 				return t.column === "needs_attention" || state === "needs_you" || !!t.question;
@@ -550,7 +563,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 		});
 		const what = kind === "task" ? "New task" : "New loop";
 		return {
-			text: `Proposed "${proposal.name}" in ${project.name}. ${w.decide(what)} Nothing starts until they do, and you hear what they decided with their next message: say in a line what you proposed and why, do not say it started, and do not wait for it.`,
+			text: `Proposed "${proposal.name}" in ${project.name}. ${w.decide(what)} Nothing starts until they do, and you hear what they decided with their next message: say in a line what you proposed and why, do not say it started, and do not wait for it. It has no id until they create it, so name it in plain words, not as a ${TASK_LINK_SCHEME} link.`,
 		};
 	}
 
@@ -562,6 +575,11 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 			`Message it with ${OTHER_PROJECT_TOOL}, which the user approves first.`,
 		);
 		if (no) return { text: no, isError: true };
+		const held = deps.hold?.({
+			text: `**Send this to "${task.name}"?**\n\n${quote(String(args.message ?? ""))}`,
+			run: () => deliver(task, args),
+		});
+		if (held) return { text: held };
 		return deliver(task, args);
 	}
 
@@ -647,20 +665,25 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 		);
 		if (no) return { text: no, isError: true };
 		if (!task.question) return { text: `"${task.name}" has no question waiting.`, isError: true };
-		try {
-			await call(CH.tasksAnswerQuestion, [
-				{
-					taskId: task.id,
-					questionId: task.question.id,
-					via: "lead",
-					answer: Array.isArray(args.answer) ? args.answer.map(String) : String(args.answer ?? ""),
-				},
-			]);
-			deps.onTouch?.(task);
-			return { text: `Passed the answer to "${task.name}"; its agent continues with it.` };
-		} catch (e) {
-			return { text: explain(e, "Answering that question"), isError: true };
-		}
+		const question = task.question;
+		const given = Array.isArray(args.answer) ? args.answer.map(String) : String(args.answer ?? "");
+		const run = async (): Promise<McpToolResult> => {
+			try {
+				await call(CH.tasksAnswerQuestion, [
+					{ taskId: task.id, questionId: question.id, via: "lead", answer: given },
+				]);
+				deps.onTouch?.(task);
+				return { text: `Passed the answer to "${task.name}"; its agent continues with it.` };
+			} catch (e) {
+				return { text: explain(e, "Answering that question"), isError: true };
+			}
+		};
+		const held = deps.hold?.({
+			text: `**Answer "${task.name}"?**\n\n${quote(question.text)}\n\nAnswer: **${Array.isArray(given) ? given.join(", ") || "nothing ticked" : given}**`,
+			run,
+		});
+		if (held) return { text: held };
+		return run();
 	}
 
 	return {
@@ -674,12 +697,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 				seen.get(ref) ??
 				[...seen.values()].find((t) => t.name.toLowerCase() === ref.trim().toLowerCase());
 			const to = known ? `"${known.name}" in ${known.project}` : `"${ref}"`;
-			const body = String(input.message ?? "").slice(0, 1500);
-			const quoted = body
-				.split("\n")
-				.map((l) => `> ${l}`)
-				.join("\n");
-			return `**Message ${to}, outside this chat's project?**\n\n${quoted}`;
+			return `**Message ${to}, outside this chat's project?**\n\n${quote(String(input.message ?? ""))}`;
 		},
 		async call(name, args) {
 			switch (name) {

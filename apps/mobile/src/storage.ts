@@ -14,6 +14,24 @@ const PROJECT_KEY = "ateam.selectedProject";
 const COMPOSER_TARGET_KEY = "ateam.composerTarget";
 const PREVIEW_PORT_KEY = "ateam.previewPort";
 const GITHUB_SEEN_KEY = "ateam.githubSeen";
+const CALL_NOTICE_KEY = "ateam.callNotice";
+
+/** Whether the user has read what a call sends to OpenAI, told once before the first call. */
+export async function loadCallNotice(): Promise<boolean> {
+	try {
+		return (await AsyncStorage.getItem(CALL_NOTICE_KEY)) === "1";
+	} catch {
+		return false;
+	}
+}
+
+export async function saveCallNotice(): Promise<void> {
+	try {
+		await AsyncStorage.setItem(CALL_NOTICE_KEY, "1");
+	} catch {
+		/* best-effort: the notice shows again before the next call */
+	}
+}
 
 export interface SavedConnection {
 	host: string;
@@ -21,6 +39,10 @@ export interface SavedConnection {
 	/** The provider the phone wakes this box through before connecting, with this
 	 *  box's own inputs (its machine name). The account inputs live in the Keychain. */
 	provider?: { id: string; box: Record<string, string> };
+	/** Whether the box last said it sleeps when idle (SystemInfo.provider.sleeps);
+	 *  false while it's always on. The box's own fact, so every report replaces it.
+	 *  Absent until a box says, and the phone then goes by its provider. */
+	sleeps?: boolean;
 }
 
 /** Every box the phone has connected to, newest first (src/boxes.ts). Before the

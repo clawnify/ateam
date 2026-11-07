@@ -10,7 +10,7 @@
 // So cloning is a first-class door, and "new" offers to create the GitHub repo too.
 
 import type { DirListingDTO, ProjectDTO, RemoteRepoDTO, RepoAccess } from "@ateam/protocol";
-import { boxSupports, githubRepoFromUrl } from "@ateam/protocol";
+import { boxSupports, githubRepoFromUrl, NO_GIT_IDENTITY } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -212,7 +212,16 @@ export function ProjectBrowser({
 					}
 					onRegistered(project);
 				} catch (e) {
-					setError(e instanceof Error ? e.message : String(e));
+					const why = e instanceof Error ? e.message : String(e);
+					// A fresh box: the first commit has no one to be from until GitHub is
+					// connected, which sets a name and email from the account.
+					if (why === NO_GIT_IDENTITY) {
+						Alert.alert("Who are commits from?", why, [
+							...(onOpenGithub ? [{ text: "Connect GitHub", onPress: onOpenGithub }] : []),
+							...(onOpenTerminal ? [{ text: "Open terminal", onPress: onOpenTerminal }] : []),
+							{ text: "Cancel", style: "cancel" as const },
+						]);
+					} else setError(why);
 				} finally {
 					setBusyPath(null);
 				}
@@ -231,7 +240,7 @@ export function ProjectBrowser({
 				],
 			);
 		});
-	}, [api, listing?.path, canGithub, onRegistered]);
+	}, [api, listing?.path, canGithub, onRegistered, onOpenGithub, onOpenTerminal]);
 
 	const shown = (repos ?? []).filter((r) =>
 		filter ? r.fullName.toLowerCase().includes(filter.toLowerCase()) : true,

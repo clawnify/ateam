@@ -3,7 +3,11 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { latestCodexThreadInDir, type OpenSqlite } from "../src/codex-threads";
+import {
+	codexThreadIsConversation,
+	latestCodexThreadInDir,
+	type OpenSqlite,
+} from "../src/codex-threads";
 
 // Codex's thread index, as found on a machine running two tasks of one repo:
 // `codex resume --last` in `ours` reopened `theirs` because it was newer. The
@@ -68,5 +72,32 @@ describe("latestCodexThreadInDir", () => {
 		const moved = mkdtempSync(join(tmpdir(), "ateam-codex-"));
 		new Database(join(moved, "state_6.sqlite")).exec("create table sessions (id text)");
 		expect(latestCodexThreadInDir(OURS, { home: moved, open })).toEqual({ ok: false, id: null });
+	});
+});
+
+// Codex's notify reports its side threads' turns like the conversation's own.
+describe("codexThreadIsConversation", () => {
+	const home = codexHome([
+		["conv", OURS, "cli", 100],
+		["ide", OURS, "vscode", 100],
+		["review", OURS, GUARDIAN, 200],
+	]);
+
+	it("knows a conversation a person has", () => {
+		expect(codexThreadIsConversation("conv", { home, open })).toBe(true);
+		expect(codexThreadIsConversation("ide", { home, open })).toBe(true);
+	});
+
+	it("knows Codex's own side threads, indexed or not", () => {
+		expect(codexThreadIsConversation("review", { home, open })).toBe(false);
+		// The terminal-title thread never reaches the index.
+		expect(codexThreadIsConversation("title-thread", { home, open })).toBe(false);
+	});
+
+	it("cannot tell without an index", () => {
+		const empty = mkdtempSync(join(tmpdir(), "ateam-codex-none-"));
+		expect(codexThreadIsConversation("conv", { home: empty, open })).toBeNull();
+		writeFileSync(join(empty, "state_5.sqlite"), "not a database");
+		expect(codexThreadIsConversation("conv", { home: empty, open })).toBeNull();
 	});
 });

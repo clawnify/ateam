@@ -22,6 +22,7 @@ import {
 	type InstallLogEvent,
 } from "../shared/host";
 import { type AteamTheme, THEME_CH, themeOrDefault } from "../shared/theme";
+import { type AteamWindow, WINDOW_CH } from "../shared/window";
 
 const api: AteamApi = {
 	projects: {
@@ -35,6 +36,7 @@ const api: AteamApi = {
 		remove: (id) => ipcRenderer.invoke(CH.projectsRemove, id),
 	},
 	tasks: {
+		pages: (taskId) => ipcRenderer.invoke(CH.tasksPages, taskId),
 		createFromIssue: (input) => ipcRenderer.invoke(CH.tasksCreateFromIssue, input),
 		list: (projectId) => ipcRenderer.invoke(CH.tasksList, projectId),
 		create: (input) => ipcRenderer.invoke(CH.tasksCreate, input),
@@ -198,6 +200,7 @@ const host: AteamHost = {
 	pairingInvite: (alias) => ipcRenderer.invoke(HOST_CH.pairingInvite, alias),
 	pairingRevoke: (alias, id) => ipcRenderer.invoke(HOST_CH.pairingRevoke, alias, id),
 	pairingLock: (alias) => ipcRenderer.invoke(HOST_CH.pairingLock, alias),
+	phonePairing: () => ipcRenderer.invoke(HOST_CH.phonePairing),
 	crossBoxStatus: () => ipcRenderer.invoke(HOST_CH.crossBoxStatus),
 	crossBoxSet: (on) => ipcRenderer.invoke(HOST_CH.crossBoxSet, on),
 	provision: (alias, input) => ipcRenderer.invoke(HOST_CH.provision, alias, input),
@@ -207,6 +210,7 @@ const host: AteamHost = {
 	boxReadiness: (alias) => ipcRenderer.invoke(HOST_CH.boxReadiness, alias),
 	updateBox: (alias) => ipcRenderer.invoke(HOST_CH.updateBox, alias),
 	phoneAccess: (alias) => ipcRenderer.invoke(HOST_CH.phoneAccess, alias),
+	setBoxAlwaysOn: (alias, on) => ipcRenderer.invoke(HOST_CH.boxAlwaysOn, alias, on),
 	githubAccess: (alias) => ipcRenderer.invoke(HOST_CH.githubAccess, alias),
 	connectGithub: (alias, token) => ipcRenderer.invoke(HOST_CH.connectGithub, alias, token),
 	checkGithub: (alias, repos) => ipcRenderer.invoke(HOST_CH.checkGithub, alias, repos),
@@ -275,6 +279,11 @@ const lead: AteamLead = {
 		ipcRenderer.on(LEAD_CH.evtHome, handler);
 		return () => ipcRenderer.off(LEAD_CH.evtHome, handler);
 	},
+	callStart: (sdp, input) => ipcRenderer.invoke(LEAD_CH.callStart, sdp, input),
+	callJudge: (pieces, context, opts) =>
+		ipcRenderer.invoke(LEAD_CH.callJudge, pieces, context, opts),
+	callActive: (on) => ipcRenderer.invoke(LEAD_CH.callActive, on),
+	callNudge: (task, reply) => ipcRenderer.invoke(LEAD_CH.callNudge, task, reply),
 };
 contextBridge.exposeInMainWorld("ateamLead", lead);
 
@@ -291,3 +300,13 @@ const theme: AteamTheme = {
 	},
 };
 contextBridge.exposeInMainWorld("ateamTheme", theme);
+
+const nativeWindow: AteamWindow = {
+	isFullScreen: () => ipcRenderer.sendSync(WINDOW_CH.fullScreen),
+	onFullScreen: (cb) => {
+		const handler = (_: unknown, fullScreen: boolean) => cb(fullScreen);
+		ipcRenderer.on(WINDOW_CH.evtFullScreen, handler);
+		return () => ipcRenderer.off(WINDOW_CH.evtFullScreen, handler);
+	},
+};
+contextBridge.exposeInMainWorld("ateamWindow", nativeWindow);

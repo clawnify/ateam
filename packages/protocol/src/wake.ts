@@ -77,6 +77,18 @@ export function reportedWake(
 	return { id: def.id, box };
 }
 
+/** The provider a box says it runs on in hello, when it is one Ateam knows: a provider
+ *  a client can wake as reportedWake has it (its box inputs, all present), and any
+ *  other known one by its id alone, so a client can name it. Null for one it doesn't
+ *  know, which an older client ignores the same way. */
+export function reportedProvider(
+	reported: { id: string; box: Record<string, string> } | null | undefined,
+): { id: string; box: Record<string, string> } | null {
+	const def = PROVIDERS.find((p) => p.id === reported?.id);
+	if (!def) return null;
+	return def.wake ? reportedWake(reported) : { id: def.id, box: {} };
+}
+
 /** What people call a box a provider wakes: its machine name there (the first of the
  *  provider's box inputs), or null when it has none and the address has to do. */
 export function wakeMachineName(

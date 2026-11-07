@@ -40,11 +40,41 @@ export function pairLinkOf(
 	box: Pick<CrossBoxBox, "alias" | "wsAddr">,
 	code: string,
 ): string | null {
-	const at = linkUrlOf(box);
-	const m = "url" in at ? /^ws:\/\/(.+):(\d+)$/.exec(at.url) : null;
-	return m
-		? `ateamgo://pair?host=${encodeURIComponent(m[1] ?? "")}&port=${m[2]}&code=${encodeURIComponent(code)}`
-		: null;
+	return phonePairLinkOf([{ ...box, code }]).link;
+}
+
+/** A box in the phone's QR, and the code it pairs with when it's locked. */
+export interface PhoneBox extends Pick<CrossBoxBox, "alias" | "wsAddr"> {
+	code: string | null;
+}
+
+/**
+ * The `ateamgo://pair` link that puts every box on a phone in one scan (Settings →
+ * Boxes → Pair your iPhone): `b=host,port,code` per box, with no code for an open box,
+ * which the phone adds by its address alone. One locked box keeps the older form
+ * (`host`, `port`, `code`), which every Ateam Go that pairs can read. Also the boxes
+ * the phone can't reach (no network port, or one only the box itself can use).
+ */
+export function phonePairLinkOf(boxes: PhoneBox[]): { link: string | null; unreachable: string[] } {
+	const at: { host: string; port: string; code: string | null }[] = [];
+	const unreachable: string[] = [];
+	for (const box of boxes) {
+		const url = linkUrlOf(box);
+		const m = "url" in url ? /^ws:\/\/(.+):(\d+)$/.exec(url.url) : null;
+		if (m?.[1] && m[2]) at.push({ host: m[1], port: m[2], code: box.code });
+		else unreachable.push(box.alias);
+	}
+	const enc = encodeURIComponent;
+	const [only, ...rest] = at;
+	if (!only) return { link: null, unreachable };
+	if (rest.length === 0 && only.code) {
+		return {
+			link: `ateamgo://pair?host=${enc(only.host)}&port=${only.port}&code=${enc(only.code)}`,
+			unreachable,
+		};
+	}
+	const params = at.map((a) => `b=${enc(`${a.host},${a.port},${a.code ?? ""}`)}`);
+	return { link: `ateamgo://pair?${params.join("&")}`, unreachable };
 }
 
 /**

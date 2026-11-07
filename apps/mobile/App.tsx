@@ -17,14 +17,18 @@ import type {
 	LoopDTO,
 	ProjectDTO,
 	ProviderDefinition,
+	SettingsResult,
 	TaskDTO,
 } from "@ateam/protocol";
 import {
+	AGENT_INSTALLS,
 	activeLabel,
 	boxSupports,
 	buildAteamApi,
+	CH,
 	filled,
 	type InputValues,
+	type InstallableAgent,
 	inputsAt,
 	NEEDS_PAIRING,
 	PROTOCOL_VERSION,
@@ -64,6 +68,7 @@ import {
 	type BoxLink,
 	boxKey,
 	boxTitle,
+	alwaysOnInForm,
 	cantWakeReason,
 	leadBoxOf,
 	leadFirst,
@@ -76,15 +81,20 @@ import {
 } from "./src/boxes";
 import { Composer, type ComposerSubmit, type RunOn } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
+import { CreateBoxScreen } from "./src/CreateBoxScreen";
+import { FinishSetupScreen } from "./src/FinishSetupScreen";
+import { GetStartedScreen } from "./src/GetStartedScreen";
 import { connect, mobileNative, redeemPairing } from "./src/connection";
-import { pairTarget, parsePairLink } from "./src/pair-link";
+import { pairTarget, parsePairLinks } from "./src/pair-link";
 import { demoConnection } from "./src/demo";
 import { type Board, createFleet, type Fleet, pickProject } from "./src/fleet";
+import { AiKeysScreen } from "./src/AiKeysScreen";
 import { GithubAccessScreen } from "./src/GithubAccessScreen";
 import { HomeScreen, type ProjectRow, placeText, type TaskPlace } from "./src/HomeScreen";
 import { LeadScreen } from "./src/LeadScreen";
 import { type LoopDraft, LoopForm, LoopsScreen } from "./src/LoopsScreen";
 import type { LeadBadge } from "./src/lead-badge";
+import { leadCall, setCallTarget, useLeadCall } from "./src/lead-call";
 import { createLinks, type LinkDeps, type Waker } from "./src/links";
 import { MissionScreen } from "./src/MissionScreen";
 import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminalScreen";
@@ -121,6 +131,7 @@ import { type Tab, TabStrip } from "./src/TabStrip";
 import { TerminalScreen } from "./src/TerminalScreen";
 import { STATUS_BAR, TopFade } from "./src/TopFade";
 import { sortTasks } from "./src/task-order";
+import { useBoxCreation } from "./src/useBoxCreation";
 import { useLeadBadge } from "./src/useLeadBadge";
 import { onReminderTap, syncReminders } from "./src/wait-notifications";
 import type { ReminderData } from "./src/wait-reminders";
@@ -330,8 +341,10 @@ function ConnectionScreen({
 	setHost,
 	setPort,
 	onConnect,
-	onBack,
 	onBackToList,
+	backLabel,
+	canDisconnect,
+	onCreate,
 	editing,
 	onDisconnect,
 	onDemo,
@@ -347,6 +360,8 @@ function ConnectionScreen({
 	onRemoveAccount,
 	waking,
 	notice,
+	alwaysOn,
+	onAlwaysOn,
 	onScan,
 	scanner,
 }: {
@@ -373,10 +388,17 @@ function ConnectionScreen({
 	waking: string | null;
 	/** Why the form opened from a tap on a box: what it needs to be woken. */
 	notice: string | null;
+	/** The box is to stay up, so it needs no key to be woken (box.alwaysOn on the box). */
+	alwaysOn: boolean;
+	onAlwaysOn: (on: boolean) => void;
 	onConnect: () => void;
-	onBack: () => void;
-	/** Back to the Boxes list, when there is one (src/BoxesScreen.tsx). */
-	onBackToList: (() => void) | null;
+	/** Back to the Boxes list (src/BoxesScreen.tsx), or Get started with no box yet. */
+	onBackToList: () => void;
+	backLabel: string;
+	/** No box is saved and the demo is connected: Disconnect leaves it. */
+	canDisconnect: boolean;
+	/** Create a box on Hetzner instead (not while editing one). */
+	onCreate: (() => void) | null;
 	/** Editing a saved box rather than adding one. */
 	editing: boolean;
 	onDisconnect: () => void;
@@ -395,24 +417,21 @@ function ConnectionScreen({
 	const draftsFilled = unsaved.every((i) => (drafts[i.key] ?? "").trim() !== "");
 	const inputRows = [
 		...boxInputs.map((input) => ({ input, value: boxValues[input.key] ?? "", draft: false })),
-		...unsaved.map((input) => ({ input, value: drafts[input.key] ?? "", draft: true })),
+		// An always-on box is never woken, so the phone asks for no key for it.
+		...(alwaysOn ? [] : unsaved).map((input) => ({
+			input,
+			value: drafts[input.key] ?? "",
+			draft: true,
+		})),
 	];
 	const options: (ProviderDefinition | null)[] = [null, ...WAKE_PROVIDERS];
 	return (
 		<View style={styles.root}>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
 			<View style={styles.navBar}>
-				{onBackToList ? (
-					<Pressable onPress={onBackToList} hitSlop={8}>
-						<Text style={styles.backText}>‹ Boxes</Text>
-					</Pressable>
-				) : connected ? (
-					<Pressable onPress={onBack} hitSlop={8}>
-						<Text style={styles.backText}>‹ Board</Text>
-					</Pressable>
-				) : (
-					<LogoMark />
-				)}
+				<Pressable onPress={onBackToList} hitSlop={8}>
+					<Text style={styles.backText}>{backLabel}</Text>
+				</Pressable>
 				{/* The desktop's words for the same thing (EnvironmentPicker.tsx). */}
 				<Text style={styles.navTitle} numberOfLines={1}>
 					{editing ? "Edit box" : "Add a Tailscale box"}
@@ -446,6 +465,16 @@ function ConnectionScreen({
 							</Text>
 						</Pressable>
 					) : null}
+					{onCreate ? (
+						<Pressable
+							style={[styles.formCard, styles.scanRow]}
+							onPress={onCreate}
+							accessibilityRole="button"
+						>
+							<Feather name="server" size={18} color={C.ink} />
+							<Text style={styles.scanText}>No box yet? Create one on Hetzner from here.</Text>
+						</Pressable>
+					) : null}
 					<View style={styles.eyebrowRow}>
 						<View style={[styles.tick, { backgroundColor: C.ink }]} />
 						<Text style={styles.eyebrow}>Box</Text>
@@ -476,6 +505,36 @@ function ConnectionScreen({
 						</Pressable>
 					</View>
 
+					{!picking && def ? (
+						<View style={[styles.formCard, styles.pickerCard]} accessibilityRole="radiogroup">
+							{[
+								{
+									on: true,
+									title: "Always on",
+									hint: "It never sleeps, so nothing needs a key to wake it. Billed around the clock.",
+								},
+								{
+									on: false,
+									title: "Sleeps when idle",
+									hint: `Sleeps when nobody uses it and wakes when you do, with your ${def.label} ${keyLabel}.`,
+								},
+							].map((o, i) => (
+								<Pressable
+									key={o.title}
+									style={[styles.pickerOption, i === 0 && styles.fieldDivider]}
+									onPress={() => onAlwaysOn(o.on)}
+									accessibilityRole="radio"
+									accessibilityState={{ selected: alwaysOn === o.on }}
+								>
+									<View style={styles.pickerText}>
+										<Text style={styles.pickerTitle}>{o.title}</Text>
+										<Text style={styles.pickerHint}>{o.hint}</Text>
+									</View>
+									{alwaysOn === o.on ? <Feather name="check" size={15} color={C.ink} /> : null}
+								</Pressable>
+							))}
+						</View>
+					) : null}
 					{picking ? (
 						<View style={[styles.formCard, styles.pickerCard]}>
 							{options.map((p, i) => (
@@ -520,7 +579,7 @@ function ConnectionScreen({
 						</View>
 					) : null}
 					{!picking && notice ? <Text style={styles.formNotice}>{notice}</Text> : null}
-					{!picking && def && accountInputs.length > 0 ? (
+					{!picking && def && !alwaysOn && accountInputs.length > 0 ? (
 						unsaved.length === 0 ? (
 							<Pressable
 								style={styles.demoBtn}
@@ -544,7 +603,9 @@ function ConnectionScreen({
 							</Pressable>
 						) : null
 					) : null}
-					{!picking && def?.wake ? <Text style={styles.formNote}>{def.wake.note}</Text> : null}
+					{!picking && !alwaysOn && def?.wake ? (
+						<Text style={styles.formNote}>{def.wake.note}</Text>
+					) : null}
 
 					{waking ? <Text style={styles.formNote}>Waking the box through {waking}…</Text> : null}
 
@@ -568,16 +629,16 @@ function ConnectionScreen({
 					) : null}
 
 					{/* On a phone with no box saved, the demo is all that's connected: this leaves it. */}
-					{connected && !onBackToList ? (
+					{canDisconnect ? (
 						<Pressable style={styles.disconnectBtn} onPress={onDisconnect} hitSlop={6}>
 							<Text style={styles.disconnectText}>Disconnect</Text>
 						</Pressable>
 					) : null}
 
 					<Text style={styles.formNote}>
-						The phone opens a WebSocket to your box's `ateam` listener over Tailscale — WireGuard is
-						the encryption and the auth boundary. Enable it on the box with{" "}
-						<Text style={styles.mono}>ATEAM_WS_ADDR=&lt;tailscale-ip&gt;:&lt;port&gt;</Text>.
+						The phone reaches Ateam on your box over Tailscale, at the address the box has there. To
+						open that port on a box: Set up phone access on its page in Ateam on a Mac, or run
+						Ateam's installer on it with <Text style={styles.mono}>--tailscale</Text>.
 					</Text>
 				</View>
 			</ScrollView>
@@ -699,6 +760,9 @@ interface BoxTerminalView extends BoxView {
 	updating: boolean;
 	updateError: string | null;
 	boxAtLatest: boolean;
+	/** A command to type in once it's open (Finish setting up's sign-in). */
+	run: string | null;
+	onRan: () => void;
 }
 
 function Shell({
@@ -745,6 +809,8 @@ function Shell({
 	onLead,
 	leadBadge,
 	onUpdateLeadBox,
+	callKeyMissing,
+	onAddCallKey,
 	updatingLeadBox,
 	onStartProposal,
 }: {
@@ -814,6 +880,9 @@ function Shell({
 	/** The dot on the Lead button (src/lead-badge.ts). */
 	leadBadge: LeadBadge;
 	onUpdateLeadBox: () => void;
+	/** Whether the Lead's box has no OpenAI key for calls, and its AI keys page. */
+	callKeyMissing?: () => Promise<boolean>;
+	onAddCallKey?: () => void;
 	updatingLeadBox: boolean;
 	/** "Start it" on one of the Lead's proposals. */
 	onStartProposal: (item: ProposalItem) => void;
@@ -830,6 +899,8 @@ function Shell({
 	const covered = openTask !== null || boxTerminal !== null;
 	const showLead = leadOpen && !covered;
 	const showTab = !covered && !leadOpen;
+	// On a call with the Lead, its button says so from every screen.
+	const onCall = useLeadCall().state !== "off";
 	// The composer's Task | Lead switch floats over these lists: it fades while
 	// one scrolls and returns when it stops.
 	const { faded, scrollProps } = useScrollFade();
@@ -878,16 +949,22 @@ function Shell({
 						hitSlop={10}
 						accessibilityRole="button"
 						accessibilityLabel={
-							leadBadge === "waiting"
-								? "Lead chat, waiting on you"
-								: leadBadge === "new"
-									? "Lead chat, new messages"
-									: "Lead chat"
+							onCall
+								? "Lead chat, on a call"
+								: leadBadge === "waiting"
+									? "Lead chat, waiting on you"
+									: leadBadge === "new"
+										? "Lead chat, new messages"
+										: "Lead chat"
 						}
 						accessibilityState={{ selected: showLead }}
 					>
 						<View>
-							<Feather name="message-circle" size={19} color={showLead ? C.ink : C.muted} />
+							{onCall ? (
+								<Feather name="phone" size={18} color={C.green} />
+							) : (
+								<Feather name="message-circle" size={19} color={showLead ? C.ink : C.muted} />
+							)}
 							{leadBadge && (
 								<View
 									style={[styles.leadDot, leadBadge === "waiting" && { backgroundColor: C.amber }]}
@@ -964,6 +1041,8 @@ function Shell({
 					updating={boxTerminal.updating}
 					updateError={boxTerminal.updateError}
 					boxAtLatest={boxTerminal.boxAtLatest}
+					run={boxTerminal.run}
+					onRan={boxTerminal.onRan}
 				/>
 			) : null}
 			{showTab && tab === "board" && (
@@ -1051,6 +1130,8 @@ function Shell({
 					onUpdateBox={onUpdateLeadBox}
 					updating={updatingLeadBox}
 					onStartProposal={onStartProposal}
+					callKeyMissing={callKeyMissing}
+					onAddCallKey={onAddCallKey}
 				/>
 			)}
 			{showTab && tab === "loops" && (
@@ -1087,9 +1168,10 @@ function Shell({
 export default function App() {
 	useColorScheme(); // reserved: theme-aware later
 	const [view, setView] = useState<"connect" | "board">("connect");
-	// The connection screen shows the Boxes list (src/BoxesScreen.tsx), or the form
-	// for adding or editing one. With no saved boxes it is always the form.
-	const [connectScreen, setConnectScreen] = useState<"list" | "form">("list");
+	// The connection screen shows the Boxes list (src/BoxesScreen.tsx), Get started when
+	// there's no box yet (src/GetStartedScreen.tsx), the form for adding or editing one,
+	// or Create a box (src/CreateBoxScreen.tsx).
+	const [connectScreen, setConnectScreen] = useState<"list" | "form" | "create">("list");
 	const [boxes, setBoxes] = useState<SavedBox[]>([]);
 	const boxesRef = useRef<SavedBox[]>([]);
 	// The saved box the form is editing, by its key.
@@ -1122,6 +1204,11 @@ export default function App() {
 	const [error, setError] = useState<string | null>(null);
 	// Why the form opened from a tap on a box (a key or name it needs to be woken).
 	const [formNotice, setFormNotice] = useState<string | null>(null);
+	// The form's Always on / Sleeps when idle, for a box with a provider, and whether
+	// the user picked it: only a pick is sent to the box, so adding a box that exists
+	// already (a second phone, a reinstall) never changes how it sleeps.
+	const [formAlwaysOn, setFormAlwaysOn] = useState(true);
+	const [formAlwaysOnPicked, setFormAlwaysOnPicked] = useState(false);
 	const accounts = useRef<Record<string, InputValues>>({});
 	// One adapter per provider and key, so its session (boxd's lasts an hour) is reused across connects.
 	const wakers = useRef(new Map<string, WakeAdapter>());
@@ -1206,7 +1293,15 @@ export default function App() {
 	// What's open over the board that belongs to one box: its terminal, its GitHub
 	// access, or adding a project to it. Each holds that box's key.
 	const [boxTerminalKey, setBoxTerminalKey] = useState<string | null>(null);
+	// What to type into the box terminal when it next opens (Finish setting up).
+	const [boxTerminalRun, setBoxTerminalRun] = useState<string | null>(null);
+	// A box this phone created, until its Finish setting up page is done with.
+	const [finishKey, setFinishKey] = useState<string | null>(null);
 	const [githubKey, setGithubKey] = useState<string | null>(null);
+	// The box whose AI keys page is open (AiKeysScreen): from its card in Boxes,
+	// Finish setting up, and a call with a Lead whose box has no OpenAI key.
+	const [aiKeysKey, setAiKeysKey] = useState<string | null>(null);
+	const openAiKeys = useCallback((key: string) => setAiKeysKey(key), []);
 	const [browserKey, setBrowserKey] = useState<string | null>(null);
 	const [leadOpen, setLeadOpen] = useState(false);
 	// The box whose Lead the phone talks to, as picked in Boxes; and the box a new
@@ -1437,6 +1532,7 @@ export default function App() {
 			openOwner,
 			boxTerminalKey,
 			githubKey,
+			aiKeysKey,
 			browserKey,
 			updatingKey,
 			leadOpen ? leadKey : null,
@@ -1505,6 +1601,8 @@ export default function App() {
 		setPort(box?.port ?? "8787");
 		setError(null);
 		setFormNotice(null);
+		setFormAlwaysOn(alwaysOnInForm(box));
+		setFormAlwaysOnPicked(false);
 		const def = providerById(box?.provider?.id);
 		if (!def || !box?.provider) {
 			setProviderId(null);
@@ -1657,10 +1755,62 @@ export default function App() {
 			setAgentsByBox(({ [key]: _gone, ...rest }) => rest);
 			setBoxTerminalKey((k) => (k === key ? null : k));
 			setGithubKey((k) => (k === key ? null : k));
+			setAiKeysKey((k) => (k === key ? null : k));
 			setBrowserKey((k) => (k === key ? null : k));
 			void refresh();
 		},
 		[fleet, link, refresh],
+	);
+
+	// A box being created on Hetzner from here (src/useBoxCreation.ts): on the list as
+	// soon as it exists, and once it answers, the board, with Add a project open on it.
+	const boxCreation = useBoxCreation({
+		link,
+		label: PHONE_LABEL,
+		saveBox: (box, replaces) => commitBoxes(touchBox(boxesRef.current, box, Date.now(), replaces)),
+		removeBox: (key) => {
+			commitBoxes(removeBox(boxesRef.current, key));
+			forgetBox(key);
+		},
+		onConnected: (key) => {
+			boxCreation.dismiss();
+			landOnBoard.current = false;
+			setConnectScreen("list");
+			setView("board");
+			setFinishKey(key);
+		},
+	});
+	// Nothing goes to Hetzner before the disclosure has been accepted, as for a box.
+	const startCreation = useCallback(
+		(spec: Parameters<typeof boxCreation.create>[0]) => {
+			if (consented.current) void boxCreation.create(spec);
+			else hooks.current.askConsent(() => void boxCreation.create(spec));
+		},
+		[boxCreation.create],
+	);
+
+	// The form's Always on / Sleeps when idle, sent to the box itself (box.alwaysOn
+	// there), which says which it is in hello from then on. Only to an engine that
+	// reports its provider: null means no provider sleeps it, and an older engine
+	// (undefined) would ignore it. The box's answer is the truth the phone keeps, since
+	// a Mac's idle window of 0 keeps it up whatever this says.
+	const applyAlwaysOn = useCallback(
+		async (key: string, on: boolean): Promise<string | null> => {
+			const c = link.conn(key);
+			if (!c?.info.provider) return null;
+			try {
+				const r = (await c.rpc.call(CH.settingsUpdate, [
+					{ box: { alwaysOn: on } },
+				])) as SettingsResult;
+				const sleeps = r.settings.box?.alwaysOn !== true && r.settings.engine.idleSleepMinutes > 0;
+				commitBoxes(boxesRef.current.map((b) => (boxKey(b) === key ? { ...b, sleeps } : b)));
+				return null;
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				return `Connected, but couldn't ${on ? "keep it always on" : "let it sleep when idle"}: ${msg}`;
+			}
+		},
+		[link, commitBoxes],
 	);
 
 	const onConnect = useCallback(async () => {
@@ -1696,6 +1846,11 @@ export default function App() {
 			}
 			// An edit that moved the box to another address: the old one leaves the board.
 			if (replaces && replaces !== key) forgetBox(replaces);
+			const unset = def && formAlwaysOnPicked ? await applyAlwaysOn(key, formAlwaysOn) : null;
+			if (unset) {
+				setError(unset);
+				return;
+			}
 			setEditingKey(null);
 			setConnectScreen("list");
 			leaveConnect();
@@ -1712,6 +1867,9 @@ export default function App() {
 		link,
 		endDemo,
 		forgetBox,
+		applyAlwaysOn,
+		formAlwaysOn,
+		formAlwaysOnPicked,
 		fleet,
 		leaveConnect,
 		commitBoxes,
@@ -1728,6 +1886,7 @@ export default function App() {
 		setOpenTask(null);
 		setBoxTerminalKey(null);
 		setGithubKey(null);
+		setAiKeysKey(null);
 		setBrowserKey(null);
 		setLeadOpen(false);
 		const d = demoConnection();
@@ -1804,41 +1963,53 @@ export default function App() {
 		},
 		[link],
 	);
-	// `ateamgo://pair?host=…&port=…&code=…`: the QR a paired Mac shows (Settings →
-	// Boxes → Pair a phone), opened by the iPhone's Camera. Any app or web page can
-	// open a link like this, so nothing happens on its own: a malformed one is
-	// dropped, and a good one asks first, naming the box it would pair with (and
-	// save, if it wasn't on the list).
+	// `ateamgo://pair?…`: the QR a Mac shows (src/pair-link.ts), for one box or every
+	// box it holds, opened by the iPhone's Camera. Any app or web page can open a link
+	// like this, so nothing happens on its own: a malformed one is dropped, and a good
+	// one asks first, naming the boxes it would add (or pair, when they're locked).
 	const offerPairLink = useCallback(
 		(url: string | null): void => {
-			const link = url ? parsePairLink(url) : null;
-			if (!link) return;
-			const { box, code } = link;
+			const entries = url ? parsePairLinks(url) : null;
+			if (!entries?.length) return;
+			const where = entries.map((e) => `${e.box.host}:${e.box.port}`).join(", ");
 			Alert.alert(
-				"Pair with this box?",
-				`Ateam Go pairs with the box at ${box.host}:${box.port}, adding it to your boxes if it isn't there yet. Only go on if you just showed this code on your Mac.`,
+				entries.length === 1 ? "Pair with this box?" : `Add these ${entries.length} boxes?`,
+				`Ateam Go adds ${entries.length === 1 ? "the box at" : "the boxes at"} ${where}, pairing with the locked ones. Only go on if you just showed this code on your Mac.`,
 				[
 					{ text: "Cancel", style: "cancel" },
 					{
-						text: "Pair",
+						text: entries.length === 1 ? "Pair" : "Add them",
 						onPress: () =>
 							void (async () => {
 								await booted.current;
 								endDemo();
-								try {
+								const failed: string[] = [];
+								for (const entry of entries) {
 									// A box already on the list keeps what it was saved with.
-									await pairBox(pairTarget(boxesRef.current, link), code, true);
-									setView("board");
-								} catch (e) {
-									setError(e instanceof Error ? e.message : String(e));
-									setView("connect");
+									const box = pairTarget(boxesRef.current, entry);
+									try {
+										if (entry.code) await pairBox(box, entry.code, true);
+										else if (!(await link.connect(box, { wake: true, save: true }))) {
+											throw new Error(
+												link.get(boxKey(box)).error ?? "Couldn't connect to the box.",
+											);
+										}
+									} catch (e) {
+										const why = e instanceof Error ? e.message : String(e);
+										failed.push(entries.length === 1 ? why : `${entry.box.host}: ${why}`);
+									}
 								}
+								if (failed.length) {
+									setError(failed.join("\n"));
+									setConnectScreen("list");
+									setView("connect");
+								} else setView("board");
 							})(),
 					},
 				],
 			);
 		},
-		[pairBox, endDemo],
+		[pairBox, endDemo, link],
 	);
 	useEffect(() => {
 		void Linking.getInitialURL().then(offerPairLink);
@@ -2154,8 +2325,19 @@ export default function App() {
 	const leadBadge = useLeadBadge(
 		leadClient,
 		leadConn ? leadKey : null,
-		view === "board" && leadOpen && !openTask && !boxTerminalKey && !browserKey && !githubKey,
+		view === "board" &&
+			leadOpen &&
+			!openTask &&
+			!boxTerminalKey &&
+			!browserKey &&
+			!githubKey &&
+			!aiKeysKey,
 	);
+	// A call with the Lead follows its box and connection (src/lead-call.ts), and
+	// tells a task's new question once, as the desktop's does.
+	const callName = multi && leadKey ? `Lead on ${labelOf(leadKey)}` : "Lead";
+	useEffect(() => setCallTarget(leadKey, leadClient, callName), [leadKey, leadClient, callName]);
+	useEffect(() => leadCall.setTasks(tasks), [tasks]);
 	const anyLive = Object.values(links).some((l) => l.state === "live");
 	const linkOf = (key: string | null): BoxLink => (key ? links[key] : undefined) ?? NEW_LINK;
 
@@ -2169,6 +2351,19 @@ export default function App() {
 				onClose={() => setGithubKey(null)}
 				onUpdateBox={() => void updateBox(githubKey)}
 				updating={updatingKey === githubKey}
+			/>
+		);
+	}
+
+	const aiKeysConn = aiKeysKey ? link.conn(aiKeysKey) : undefined;
+	if (aiKeysKey && aiKeysConn) {
+		return (
+			<AiKeysScreen
+				api={aiKeysConn.api}
+				boxLabel={labelOf(aiKeysKey)}
+				onClose={() => setAiKeysKey(null)}
+				onUpdateBox={() => void updateBox(aiKeysKey)}
+				updating={updatingKey === aiKeysKey}
 			/>
 		);
 	}
@@ -2201,20 +2396,80 @@ export default function App() {
 		return <ConsentScreen onAgree={onAgreeConsent} onDemo={onDeclineConsent} />;
 	}
 
+	// Comes back after each step it opens: their screens draw over it, and the box
+	// terminal is the board's, so it steps aside while that is open.
+	if (finishKey && !boxTerminalKey) {
+		const reported = link.conn(finishKey)?.info.agents ?? [];
+		return (
+			<FinishSetupScreen
+				name={labelOf(finishKey)}
+				agents={reported.filter((a): a is InstallableAgent => Object.hasOwn(AGENT_INSTALLS, a))}
+				onSignIn={(command) => {
+					setBoxTerminalRun(command);
+					setView("board");
+					setBoxTerminalKey(finishKey);
+				}}
+				onTerminal={() => {
+					setView("board");
+					setBoxTerminalKey(finishKey);
+				}}
+				onGithub={() => setGithubKey(finishKey)}
+				onAiKeys={() => openAiKeys(finishKey)}
+				onAddProject={() => setBrowserKey(finishKey)}
+				onDone={() => {
+					setFinishKey(null);
+					setView("board");
+				}}
+			/>
+		);
+	}
+
 	// A board to go back to: the saved boxes' (live, or as last seen), or the demo's.
 	const onBoard = demo.current || boxes.length > 0;
 	if (view === "connect") {
-		if (connectScreen === "list" && boxes.length > 0) {
+		const leading =
+			onBoard && !landOnBoard.current ? (
+				<Pressable onPress={leaveConnect} hitSlop={8}>
+					<Text style={styles.backText}>‹ Board</Text>
+				</Pressable>
+			) : (
+				<LogoMark />
+			);
+		const making = boxCreation.creation;
+		if (connectScreen === "create") {
+			return (
+				<CreateBoxScreen
+					creation={making}
+					onCreate={startCreation}
+					onReachAt={(host) => void boxCreation.reachAt(host)}
+					onDelete={() => void boxCreation.deleteServer()}
+					onStartOver={boxCreation.dismiss}
+					onBack={() => setConnectScreen("list")}
+				/>
+			);
+		}
+		if (connectScreen === "list" && boxes.length === 0) {
+			return (
+				<GetStartedScreen
+					leading={leading}
+					onScan={openScanner}
+					onCreate={() => setConnectScreen("create")}
+					creating={making && making.step !== "done" ? making.name : null}
+					onHaveBox={addBox}
+					onDemo={() => void startDemo()}
+					error={error}
+					scanner={scanner}
+				/>
+			);
+		}
+		if (connectScreen === "list") {
 			return (
 				<BoxesScreen
-					leading={
-						onBoard && !landOnBoard.current ? (
-							<Pressable onPress={leaveConnect} hitSlop={8}>
-								<Text style={styles.backText}>‹ Board</Text>
-							</Pressable>
-						) : (
-							<LogoMark />
-						)
+					leading={leading}
+					settingUp={
+						making?.serverId && making.step !== "done"
+							? { key: boxKey(making.box), onOpen: () => setConnectScreen("create") }
+							: null
 					}
 					boxes={boxes}
 					links={links}
@@ -2239,6 +2494,7 @@ export default function App() {
 						setBoxTerminalKey(boxKey(box));
 					}}
 					onGithub={(box) => setGithubKey(boxKey(box))}
+					onAiKeys={(box) => openAiKeys(boxKey(box))}
 					openKeys={
 						new Set(
 							boxes
@@ -2265,16 +2521,14 @@ export default function App() {
 				setHost={setHost}
 				setPort={setPort}
 				onConnect={() => void onConnect()}
-				onBack={leaveConnect}
-				onBackToList={
-					boxes.length > 0
-						? () => {
-								setEditingKey(null);
-								setError(null);
-								setConnectScreen("list");
-							}
-						: null
-				}
+				onBackToList={() => {
+					setEditingKey(null);
+					setError(null);
+					setConnectScreen("list");
+				}}
+				backLabel={boxes.length > 0 ? "‹ Boxes" : "‹ Back"}
+				canDisconnect={anyLive && boxes.length === 0}
+				onCreate={editingKey === null ? () => setConnectScreen("create") : null}
 				editing={editingKey !== null}
 				onDisconnect={onLeaveDemo}
 				onDemo={() => void startDemo()}
@@ -2290,6 +2544,11 @@ export default function App() {
 				onRemoveAccount={(def) => void onRemoveAccount(def)}
 				waking={waking}
 				notice={formNotice}
+				alwaysOn={formAlwaysOn}
+				onAlwaysOn={(on) => {
+					setFormAlwaysOn(on);
+					setFormAlwaysOnPicked(true);
+				}}
 				onScan={editingKey === null ? openScanner : null}
 				scanner={scanner}
 			/>
@@ -2409,6 +2668,8 @@ export default function App() {
 								updating: updatingKey === boxTerminalKey,
 								updateError: updateError?.key === boxTerminalKey ? updateError.message : null,
 								boxAtLatest: atLatest[boxTerminalKey] ?? false,
+								run: boxTerminalRun,
+								onRan: () => setBoxTerminalRun(null),
 							}
 						: null
 				}
@@ -2434,6 +2695,17 @@ export default function App() {
 					if (leadKey) void updateBox(leadKey);
 				}}
 				updatingLeadBox={leadKey !== null && updatingKey === leadKey}
+				// The call's session is opened with the Lead box's own key (lead:callStart).
+				// A box too old to say (no `openAi` status) is left to the call to explain.
+				callKeyMissing={
+					leadConn && !demo.current
+						? async () => {
+								const keys = await leadConn.api.credentials.get();
+								return keys.openAi !== undefined && !keys.openAi.set;
+							}
+						: undefined
+				}
+				onAddCallKey={leadKey && !demo.current ? () => openAiKeys(leadKey) : undefined}
 				onStartProposal={(item) => {
 					if (item.proposal.kind === "task") return setProposalSheet(item);
 					const p = item.proposal;

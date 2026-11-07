@@ -18,6 +18,7 @@ import {
 	peerMessages,
 	projects,
 	type Settings,
+	savedTaskPages,
 	settings,
 	type TaskChangeSteps,
 	type TaskPage,
@@ -234,9 +235,31 @@ export const repo = {
 		db.delete(tasks).where(eq(tasks.id, id)).run();
 	},
 
-	/** Replace the task's page: its HTML and the summary on the task, together. */
+	/** Save an artifact, retaining the latest-page binding for older clients. */
 	setTaskPage(db: AteamDb, taskId: string, page: TaskPage, html: string) {
 		db.transaction((tx) => {
+			// Keep the pre-upgrade artifact before replacing the legacy row.
+			const previous = tx
+				.select({ page: tasks.page, html: taskPages.html })
+				.from(tasks)
+				.innerJoin(taskPages, eq(tasks.id, taskPages.taskId))
+				.where(eq(tasks.id, taskId))
+				.get();
+			if (previous?.page)
+				tx.insert(savedTaskPages)
+					.values({
+						id: previous.page.id,
+						taskId,
+						page: previous.page,
+						html: previous.html,
+						at: previous.page.at,
+					})
+					.onConflictDoNothing()
+					.run();
+			tx.insert(savedTaskPages)
+				.values({ id: page.id, taskId, page, html, at: page.at })
+				.onConflictDoUpdate({ target: savedTaskPages.id, set: { page, html } })
+				.run();
 			tx.insert(taskPages)
 				.values({ taskId, html })
 				.onConflictDoUpdate({ target: taskPages.taskId, set: { html } })
@@ -248,6 +271,35 @@ export const repo = {
 
 	getTaskPageHtml(db: AteamDb, taskId: string): string | undefined {
 		return db.select().from(taskPages).where(eq(taskPages.taskId, taskId)).get()?.html;
+	},
+
+	/** Metadata only; artifact HTML is loaded by id. */
+	listTaskPages(db: AteamDb, taskId: string): TaskPage[] {
+		const pages = db
+			.select({ page: savedTaskPages.page })
+			.from(savedTaskPages)
+			.where(eq(savedTaskPages.taskId, taskId))
+			.orderBy(asc(savedTaskPages.at), asc(savedTaskPages.id))
+			.all()
+			.map((row) => row.page);
+		const legacy = repo.getTask(db, taskId)?.page;
+		if (legacy && !pages.some((page) => page.id === legacy.id)) pages.push(legacy);
+		return pages;
+	},
+
+	getTaskPage(db: AteamDb, taskId: string, pageId?: string): (TaskPage & { html: string }) | null {
+		if (pageId) {
+			const saved = db
+				.select()
+				.from(savedTaskPages)
+				.where(and(eq(savedTaskPages.taskId, taskId), eq(savedTaskPages.id, pageId)))
+				.get();
+			if (saved) return { ...saved.page, html: saved.html };
+		}
+		const legacy = repo.getTask(db, taskId)?.page;
+		if (!legacy || (pageId && legacy.id !== pageId)) return null;
+		const html = repo.getTaskPageHtml(db, taskId);
+		return html === undefined ? null : { ...legacy, html };
 	},
 
 	/** The task's change steps, the last ones written; undefined before the first. */
@@ -512,6 +564,16 @@ export const repo = {
 		if (ids.length === 0) return;
 		db.update(peerMessages)
 			.set({ deliveredAt: at, deliveredVia: via })
+			.where(inArray(peerMessages.id, ids))
+			.run();
+	},
+
+	/** Messages that never reached their agent: no longer pending (a launch
+	 *  already stamped them; one that could not start is stamped now), with why. */
+	markPeerMessagesFailed(db: AteamDb, ids: string[], error: string, at = Date.now()): void {
+		if (ids.length === 0) return;
+		db.update(peerMessages)
+			.set({ deliveredAt: sql`coalesce(${peerMessages.deliveredAt}, ${at})`, error })
 			.where(inArray(peerMessages.id, ids))
 			.run();
 	},

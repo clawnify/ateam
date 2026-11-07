@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
+import { AGENT_INSTALLS } from "@ateam/protocol";
 
 const pexec = promisify(execFile);
 
@@ -151,8 +152,8 @@ export const AGENTS = [
 		sessionIdFlag: "--session-id",
 		resumeIdCommand: "claude --resume",
 		agentsCommand: "claude agents",
-		install: "curl -fsSL https://claude.ai/install.sh | bash",
-		loginCommand: "claude login",
+		install: AGENT_INSTALLS.claude.install,
+		loginCommand: AGENT_INSTALLS.claude.login,
 		// --safe-mode drops hooks/CLAUDE.md/skills/MCP, --restricted drops the
 		// command-running tools: this asks a question, it does not do work in a
 		// repo. Both together take the call from ~50s to ~3s. Haiku because the
@@ -182,8 +183,8 @@ export const AGENTS = [
 		// there is no flag to hand it one, so its tabs stay unrestorable until
 		// the id is read back out of its transcript store.
 		resumeIdCommand: "codex resume",
-		install: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
-		loginCommand: "codex login",
+		install: AGENT_INSTALLS.codex.install,
+		loginCommand: AGENT_INSTALLS.codex.login,
 		// `codex exec` streams its progress to stdout, so the answer is taken
 		// from --output-last-message instead. read-only sandbox + no git-repo
 		// requirement: the prompt is self-contained, there is nothing to touch.

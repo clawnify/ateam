@@ -12,7 +12,7 @@
     },
     "apps/desktop": {
       "name": "@ateam/desktop",
-      "version": "0.1.88",
+      "version": "0.1.91",
       "dependencies": {
         "better-sqlite3": "^11.8.1",
         "electron-updater": "^6.8.3",
@@ -68,6 +68,9 @@
     "packages/agents": {
       "name": "@ateam/agents",
       "version": "0.0.0",
+      "dependencies": {
+        "@ateam/protocol": "workspace:*",
+      },
     },
     "packages/db": {
       "name": "@ateam/db",

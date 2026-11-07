@@ -159,7 +159,20 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // settings gained `engine.decisionModel` and `engine.openAiTextModel` and the
 // `openai` text model. An older engine stores the key and the settings and
 // never reads them, so a box needs this version to use an OpenAI key.
-export const PROTOCOL_VERSION = 31;
+// v32: voice calls with the Lead. lead:callActive tells a box's Lead that the
+// user is on a call with it: while one is, its messages and answers to tasks
+// (send_message, answer_question) wait as permission cards for the user's tap,
+// since a call's words are transcribed and may not have been meant for it. A new
+// method only: a v31 box answers "Unknown method", and the desktop offers no call
+// when its Lead lives there (FEATURE_MIN_VERSION.leadCall).
+// v33: a box opens and runs a call to its own Lead: lead:callStart (OpenAI's
+// voice session, from the box's key), lead:callJudge (the gate) and
+// lead:callNudge (a task's reply in one line), which Ateam Go needs to call.
+// New methods only: a v32 box answers "Unknown method", and Ateam Go offers no
+// call there (FEATURE_MIN_VERSION.leadCallSession).
+// v34: tasks:pages lists saved artifacts; tasks:page accepts an optional page id.
+// Older engines still serve their latest page; clients fall back to that binding.
+export const PROTOCOL_VERSION = 34;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -191,7 +204,7 @@ export interface TaskQuestionDTO {
 	kind?: "permission" | "askUserQuestion";
 	/** The task's page (TaskDTO.page) drawn with this question: the agent laid
 	 *  the decision out in HTML, and the page's own buttons can answer. Only
-	 *  while TaskDTO.page still has this id; a newer page replaces it. */
+	 *  independently of TaskDTO.page, which names only the latest artifact. */
 	pageId?: string;
 }
 
@@ -228,20 +241,20 @@ export interface TaskProposalDTO {
 
 /**
  * An HTML page an agent made for the user (show_page, or ask_user's `page`):
- * a dashboard, a comparison, a report. One per task; a new one replaces it.
+ * a dashboard, a comparison, a report. Tasks retain multiple independent pages.
  * The HTML itself is read with tasks:page, so the board's task list stays small.
  */
 export interface TaskPageDTO {
 	id: string;
 	title: string;
 	at: number;
-	/** Came with an ask_user question (its `page`), not from show_page: the
-	 *  question's card draws it, and once the question ends it is history, so
-	 *  the task panel never opens it by itself. Absent from engines before it. */
+	/** Came with an ask_user question (its `page`). While pending, the question
+	 *  card draws it; afterwards it remains available as a saved doc tab.
+	 *  Absent from older engines. */
 	fromQuestion?: boolean;
 }
 
-/** tasks:page: the task's page with its HTML, as the agent wrote it. */
+/** tasks:page: a saved page by id, or the latest page when the id is omitted. */
 export interface TaskPageContentDTO extends TaskPageDTO {
 	html: string;
 }
@@ -354,6 +367,13 @@ export const FEATURE_MIN_VERSION = {
 	/** v28 added lead:react to a box's Lead. An older box answers "Unknown
 	 *  method", so the desktop hides the emoji answer when its Lead lives there. */
 	leadReact: 28,
+	/** v32 added lead:callActive, which holds a box Lead's messages to tasks for
+	 *  the user's tap during a call. An older box would act on them unasked, so
+	 *  the desktop offers no call when its Lead lives there. */
+	leadCall: 32,
+	/** v33 added lead:callStart, lead:callJudge and lead:callNudge on a box, so a
+	 *  client without its own keys (Ateam Go) can call the box's Lead. */
+	leadCallSession: 33,
 	/** v29 added pairing:* and the lock on a box's network port. An older box is
 	 *  always open: clients say so instead of offering to lock it. */
 	pairing: 29,
@@ -533,6 +553,15 @@ export interface TaskDTO {
 	 * the same as empty — a read-only addition, so no protocol bump.
 	 */
 	agentIds?: string[];
+	/**
+	 * Why an agent live in this task can't use the board tools (ask_user,
+	 * send_message, show_page, proposals): a sentence for the user, set once the
+	 * agent has been up for a minute without connecting to the board (an
+	 * organization policy, an old CLI, or an agent started by hand). Null when
+	 * every agent has them or the engine can't tell. Runtime-only, never stored;
+	 * absent from an older engine, which reads the same as null.
+	 */
+	boardToolsMissing?: string | null;
 	/** Merge-queue position; null when the task is not queued to merge. */
 	mergeStatus: MergeStatus | null;
 	prNumber: number | null;
@@ -577,7 +606,7 @@ export interface TaskDTO {
 	/** When the agent last finished a turn with a reply (read it with
 	 *  tasks:lastReply); null until one has. Absent on an engine older than v19. */
 	lastReplyAt?: number | null;
-	/** The page the task's agent made for the user (show_page); null when none.
+	/** Latest page the task's agent made (show_page); null when none.
 	 *  Absent on an engine older than v20. */
 	page?: TaskPageDTO | null;
 	/** Tasks and loops the task's agent proposed and the user has not yet
@@ -671,7 +700,8 @@ export type UpdateStrategy = "merge" | "rebase";
  * User settings: `~/.ateam/settings.json`, hand-editable (server/settings-file.ts).
  * One schema, two readers. `client` is read by the desktop on the machine
  * running it; `engine` by whichever engine runs the work, so a box reads its
- * own file. Only keys with a reader exist — a setting nothing reads is a lie.
+ * own file; `box` by that one box's engine, never synced from a Mac. Only keys
+ * with a reader exist — a setting nothing reads is a lie.
  */
 export interface EngineSettings {
 	/** Agent a new task launches with when the composer doesn't say. */
@@ -816,14 +846,26 @@ export interface SkillLinkResult {
 		status: "create" | "exists";
 	}[];
 }
+/** What one box is, set on that box (from the phone's box form or the desktop's box
+ *  page) and never pushed by a Mac's settings sync, which carries `engine` only. */
+export interface BoxSettings {
+	/**
+	 * Never let this box sleep: it stays up and billed around the clock, and nothing
+	 * needs a provider key to wake it. Off, it sleeps after `engine.idleSleepMinutes`
+	 * like any other. Only an engine on a provider that sleeps boxes reads it.
+	 */
+	alwaysOn: boolean;
+}
 export interface AteamSettings {
 	version: number;
 	client: ClientSettings;
 	engine: EngineSettings;
+	box: BoxSettings;
 }
 export interface SettingsPatch {
 	client?: Partial<ClientSettings>;
 	engine?: Partial<EngineSettings>;
+	box?: Partial<BoxSettings>;
 }
 /**
  * `settings:get`'s answer: what is in force, where it came from, and a warning
@@ -1062,13 +1104,13 @@ export interface SystemInfo {
 	/** The address the box's network port listens on (`<host>:<port>`), or null
 	 *  when it has none (v30; absent before). What other boxes link to. */
 	wsAddr?: string | null;
-	/** The provider that puts this box to sleep and the box's name there, null on a
-	 *  box no provider sleeps. Absent from engines before it was reported (no protocol
-	 *  bump: like `release`, nothing gates on it), and while the engine is still
-	 *  finding out. A client that saved the box by its address alone (a pairing QR,
-	 *  the IP typed in) fills in what to wake it through (wake.ts reportedWake),
-	 *  instead of dialling a sleeping box until it times out. */
-	provider?: BoxWake | null;
+	/** The provider that puts this box to sleep, the box's name there, and whether it
+	 *  lets the box sleep now; null on a box no provider sleeps. Absent from engines
+	 *  before it was reported, and while the engine is still finding out. A client that
+	 *  saved the box by its address alone (a pairing QR, the IP typed in) fills in what
+	 *  to wake it through (wake.ts reportedWake), instead of dialling a sleeping box
+	 *  until it times out. */
+	provider?: ProviderReport | null;
 }
 
 /** A connection's standing with a box's lock (pairing:*, v29).
@@ -1086,6 +1128,11 @@ export interface PairingState {
 /** The refusal a locked box gives an unpaired connection. Clients match it to
  *  offer pairing instead of showing it as an error. */
 export const NEEDS_PAIRING = "This box needs pairing.";
+
+/** A new project's first commit has no one to be from: the box has no git name and
+ *  email yet. Clients match it to offer the two ways to give it one. */
+export const NO_GIT_IDENTITY =
+	"This box has no name and email for commits yet. Connect GitHub on it, which sets them from your account, or set them in its terminal: git config --global user.name and user.email.";
 
 /** One device paired with a box. */
 export interface PairedDeviceDTO {
@@ -1223,6 +1270,9 @@ export interface ConnectionDTO {
 	 * wakes it. Set only by the desktop, and only until that connect.
 	 */
 	asleep?: boolean;
+	/** Whether the box last said it sleeps when idle (SystemInfo.provider.sleeps);
+	 *  false while it's always on, null until it says. */
+	sleeps?: boolean | null;
 	/** A `ws` box a provider puts to sleep: the provider that wakes it before a
 	 *  connect, and the machine's inputs there (see providers.ts). */
 	wake?: BoxWake | null;
@@ -1232,6 +1282,14 @@ export interface ConnectionDTO {
 export interface BoxWake {
 	id: string;
 	box: Record<string, string>;
+}
+
+/** What a box says about its provider in system:hello (SystemInfo.provider). */
+export interface ProviderReport extends BoxWake {
+	/** Whether the engine lets the box sleep when it's idle, right now: false while its
+	 *  idle sleep is off (`engine.idleSleepMinutes` 0), when it's always on and a client
+	 *  has nothing to wake. Read when the client connects, so it follows the setting. */
+	sleeps: boolean;
 }
 
 /**
@@ -1448,6 +1506,8 @@ export interface AteamApi {
 		/** The task's diff told as steps. Asking starts writing new ones when the
 		 *  diff moved on; the answer says so (`working`) and the caller asks again. */
 		changeSteps(taskId: string): Promise<ChangeStepsDTO>;
+		/** Saved artifact metadata, without HTML. Older engines have only task.page. */
+		pages(taskId: string): Promise<TaskPageDTO[]>;
 	};
 	git: {
 		commit(taskId: string, message: string): Promise<{ sha: string }>;
@@ -1743,6 +1803,22 @@ export * from "./github-access";
 // The Lead chat: its items and events, the desktop's IPC channels and the
 // engine's RPC for a box's own Lead (v24).
 export * from "./lead";
+// A voice call with the Lead: the engine both apps run, each with its own media.
+export {
+	type CallChannel,
+	type CallLead,
+	type CallMedia,
+	type CallMeter,
+	type CallPeer,
+	type CallState,
+	type CallStream,
+	type CallTask,
+	type CallTrack,
+	type CallView,
+	heldReason,
+	LeadCall,
+	UNDO_MS,
+} from "./lead-call";
 export * from "./lead-view";
 // Box providers as data: what a client asks the user for to wake a sleeping box.
 export {
@@ -1766,6 +1842,22 @@ export {
 	taskTags,
 } from "./task-tags";
 // A cap for a promise that can't be left to wait forever (an RPC has none of its own).
+export {
+	AGENT_INSTALLS,
+	type BoxProvider,
+	buildCloudInit,
+	type CreatedServer,
+	type CreateServerInput,
+	HETZNER_LOCATIONS,
+	HETZNER_SIZES,
+	HetznerError,
+	hetznerProvider,
+	INSTALL_SH_URL,
+	type InstallableAgent,
+	LeftoverAddressesError,
+	orderableServerTypes,
+	type ProviderOptions,
+} from "./provision";
 export { withTimeout } from "./timeout";
 // Reading an engine older than this client (the version gate is advisory now).
 export { NO_TRIAGE, tolerantRpc } from "./tolerate";
@@ -1781,6 +1873,7 @@ export {
 	filled,
 	type InputValues,
 	inputsAt,
+	reportedProvider,
 	reportedWake,
 	WAKE_PROVIDERS,
 	type WakeAdapter,

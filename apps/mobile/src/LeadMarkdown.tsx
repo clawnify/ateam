@@ -13,10 +13,11 @@ import { C } from "./theme";
 
 export interface LeadMarkdownProps {
 	text: string;
-	/** A `task:` link was tapped: what follows the scheme (the task's id). */
-	onTaskLink?: (ref: string) => void;
+	/** A `task:` link was tapped: what follows the scheme (the task's id), and
+	 *  the link's text. */
+	onTaskLink?: (ref: string, label: string) => void;
 	/** Whether a `task:` link names a task this phone can open. */
-	knowsTask?: (ref: string) => boolean;
+	knowsTask?: (ref: string, label: string) => boolean;
 }
 
 type Ctx = Pick<LeadMarkdownProps, "onTaskLink" | "knowsTask">;
@@ -74,7 +75,7 @@ function link(t: Tokens.Link, ctx: Ctx, key: string, label?: string): ReactNode 
 		const ref = t.href.slice(TASK_LINK_SCHEME.length);
 		const text = label ?? t.text;
 		// A task this phone can't open (another box's, or gone) reads as plain words.
-		if (!ctx.onTaskLink || (ctx.knowsTask && !ctx.knowsTask(ref)))
+		if (!ctx.onTaskLink || (ctx.knowsTask && !ctx.knowsTask(ref, text)))
 			return (
 				<Text key={key} style={styles.strong}>
 					{text}
@@ -84,7 +85,7 @@ function link(t: Tokens.Link, ctx: Ctx, key: string, label?: string): ReactNode 
 			<Text
 				key={key}
 				style={styles.chip}
-				onPress={() => ctx.onTaskLink?.(ref)}
+				onPress={() => ctx.onTaskLink?.(ref, text)}
 				accessibilityRole="link"
 				accessibilityHint="Opens the task"
 			>

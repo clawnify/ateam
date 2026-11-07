@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { boxdMachineName, boxdSleepDriver, loopWakeScript, RELEASE_S } from "../src/sleep/boxd";
@@ -14,6 +14,7 @@ import {
 	sleepMode,
 	startSleepControl,
 } from "../src/sleep/control";
+import { alwaysOnProvider, providerReport } from "../src/sleep/index";
 import {
 	HOLD_EXPIRE,
 	HOLD_RENEW_MS,
@@ -147,9 +148,14 @@ describe("sleep control on boxd", () => {
 				if (opts.run === false) throw new Error("run: not found");
 				return "";
 			}
+			// A read of boxd's own timeout, not a change: answers what Ateam set last.
+			if (cmd === "boxd" && args.join(" ") === "machine config list --json") {
+				return JSON.stringify({ "auto-hibernate.timeout": RELEASE_S });
+			}
 			calls.push(`${cmd} ${args.join(" ")}`);
 			return "";
 		};
+		const timeoutStatePath = join(dir, "auto-hibernate-set");
 		const deps = {
 			working: () => working,
 			nextLoopAt: () => opts.nextLoopAt ?? null,
@@ -162,7 +168,12 @@ describe("sleep control on boxd", () => {
 			calls,
 			wakeScriptPath,
 			start: async () => {
-				const driver = await boxdSleepDriver({ log: () => {}, exec, wakeScriptPath });
+				const driver = await boxdSleepDriver({
+					log: () => {},
+					exec,
+					wakeScriptPath,
+					timeoutStatePath,
+				});
 				if (!driver) throw new Error("expected the boxd driver");
 				return startSleepControl(driver, deps);
 			},
@@ -276,8 +287,112 @@ describe("boxdSleepDriver", () => {
 		const driver = await boxdSleepDriver({
 			log: () => {},
 			exec: async (cmd, args) => (cmd === "boxd" && args[0] === "info" ? '{"name":"mybox"}' : ""),
+			timeoutStatePath: join(
+				mkdtempSync(join(tmpdir(), "ateam-boxd-state-")),
+				"auto-hibernate-set",
+			),
 		});
 		expect(driver?.provider).toEqual({ id: "boxd", box: { machine: "mybox" } });
+	});
+});
+
+describe("boxd's own always on", () => {
+	/** A boxd VM whose auto-hibernate timeout is `timeout()`, recording what Ateam sets. */
+	function vm(timeout: () => number) {
+		const sets: string[] = [];
+		const exec = async (cmd: string, args: string[]) => {
+			if (cmd === "boxd" && args[0] === "info") return JSON.stringify({ name: "mybox" });
+			if (cmd === "boxd" && args.join(" ") === "machine config list --json") {
+				return JSON.stringify({ "auto-hibernate.timeout": timeout(), "auto-suspend.timeout": 0 });
+			}
+			if (cmd === "boxd" && args[0] === "machine" && args[1] === "config" && args[2] === "set") {
+				sets.push(`${args[3]}=${args[4]}`);
+			}
+			return "";
+		};
+		const statePath = join(mkdtempSync(join(tmpdir(), "ateam-boxd-state-")), "auto-hibernate-set");
+		return { exec, sets, statePath };
+	}
+
+	it("an upgraded box reads nothing into a 0: it may be Ateam's own hold", async () => {
+		const v = vm(() => 0);
+		let alwaysOn = 0;
+		const d = await boxdSleepDriver({
+			log: () => {},
+			exec: v.exec,
+			timeoutStatePath: v.statePath,
+			onAlwaysOn: () => alwaysOn++,
+		});
+		await d?.hold();
+		expect(alwaysOn).toBe(0);
+	});
+
+	it("hibernation turned off in boxd after Ateam let the box sleep is kept, not undone", async () => {
+		let t = 0;
+		const v = vm(() => t);
+		let alwaysOn = 0;
+		const d = await boxdSleepDriver({
+			log: () => {},
+			exec: v.exec,
+			timeoutStatePath: v.statePath,
+			onAlwaysOn: () => alwaysOn++,
+		});
+		if (!d) throw new Error("expected the boxd driver");
+		await d.release();
+		t = RELEASE_S;
+		await d.hold();
+		expect(alwaysOn).toBe(0);
+		await d.release();
+		// The user turns hibernation off in boxd while Ateam has it released.
+		t = 0;
+		await d.hold();
+		expect(alwaysOn).toBe(1);
+		// The record survives a restart: a new engine tells the same change apart.
+		await d.release();
+		t = 0;
+		const again = await boxdSleepDriver({
+			log: () => {},
+			exec: v.exec,
+			timeoutStatePath: v.statePath,
+			onAlwaysOn: () => alwaysOn++,
+		});
+		await again?.hold();
+		expect(alwaysOn).toBe(2);
+	});
+});
+
+describe("providerReport", () => {
+	const sprite = { id: "sprites", box: { machine: "ateam-box" } };
+	it("says the box sleeps while idle sleep is on, and not while it's off (always on)", () => {
+		expect(providerReport(sprite, 60)).toEqual({ ...sprite, sleeps: true });
+		expect(providerReport(sprite, 0)).toEqual({ ...sprite, sleeps: false });
+		expect(providerReport(sprite, Number.NaN)).toEqual({ ...sprite, sleeps: false });
+	});
+	it("passes on not knowing yet, and no provider", () => {
+		expect(providerReport(undefined, 60)).toBeUndefined();
+		expect(providerReport(null, 60)).toBeNull();
+	});
+});
+
+describe("alwaysOnProvider", () => {
+	const cmdline = (line: string) => {
+		const path = join(mkdtempSync(join(tmpdir(), "ateam-cmdline-")), "cmdline");
+		writeFileSync(path, `${line}\n`);
+		return path;
+	};
+	it("names exe.dev from the init it boots every VM with", () => {
+		// An exe.dev VM's kernel command line, address and name made neutral.
+		const exe = cmdline(
+			"console=hvc0 root=/dev/vda init=/exe.dev/bin/exe-init rw domain=exe.xyz ip=10.0.0.2:10.0.0.1:10.0.0.1:255.255.0.0:mybox:eth0:none",
+		);
+		expect(alwaysOnProvider(exe)).toEqual({ id: "exe", box: {} });
+		// Reported as always on: nothing to wake, whatever idle sleep says.
+		expect(providerReport(alwaysOnProvider(exe), 0)).toEqual({ id: "exe", box: {}, sleeps: false });
+	});
+	it("names nothing anywhere else, or where there is no command line to read", () => {
+		expect(alwaysOnProvider(cmdline("BOOT_IMAGE=/vmlinuz root=/dev/sda1 ro quiet"))).toBeNull();
+		expect(alwaysOnProvider(cmdline("root=/dev/vda rw note=init=/exe.dev/"))).toBeNull();
+		expect(alwaysOnProvider(join(tmpdir(), "ateam-no-such-cmdline"))).toBeNull();
 	});
 });
 
