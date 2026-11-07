@@ -126,6 +126,16 @@ import {
 	mcShapeGrid,
 	placeArrivals,
 } from "./mc-layout";
+import {
+	byMcPriority,
+	type McPins,
+	orderMcTiles,
+	pinMcArrival,
+	pinMcSwap,
+	readMcPins,
+	stabilizeMcPages,
+	undoMcPins,
+} from "./mc-order";
 import { bumpProject, orderProjects, readProjectOrder, saveProjectOrder } from "./project-order";
 import { panelOnScreen, proposalToOpen, shownWhileOpen } from "./proposal-open";
 import {
@@ -190,6 +200,8 @@ const MC_TILE_MIME = "application/x-ateam-tile";
 const FLIP_HOLD_MS = 500;
 // How long the grid's size must hold still before Auto refits to it.
 const MC_RESIZE_SETTLE_MS = 200;
+// Batch automatic priority changes after five seconds without a new order.
+const MC_REORDER_DELAY_MS = 5_000;
 
 // Whether a drag carries files from Finder (not a tile, not dragged text).
 const draggingFiles = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
@@ -355,8 +367,7 @@ export function App() {
 		localStorage.setItem(`ateam.mcLayout.${scopeKey}`, l);
 		setMcLayoutSet((m) => ({ ...m, [scopeKey]: l }));
 	};
-	// Bumped by the Sync button: Mission Control re-sorts its tiles to the
-	// sidebar's order once, then holds still again (see mcOrder).
+	// Bumped by Refresh: discard manual placement and reapply the grid's order.
 	const [mcSyncSeq, setMcSyncSeq] = useState(0);
 	// Which work Mission Control tiles: the tasks (the sidebar's TASKS list) or
 	// the loops' own tasks (its LOOPS list), never both on one grid.
@@ -1081,6 +1092,17 @@ export function App() {
 	// Which grid Mission Control shows: the project's (or repo card's) tasks
 	// or loops. A new key is a new set of tiles.
 	const mcGridKey = `${allProjects ? "all" : (activeCard?.key ?? activeProjectId)}:${mcMode}`;
+	const [mcPinsSet, setMcPinsSet] = useState<Record<string, McPins>>({});
+	const mcPins = useMemo(
+		() => mcPinsSet[mcGridKey] ?? readMcPins(`ateam.mcPins.${mcGridKey}`),
+		[mcGridKey, mcPinsSet],
+	);
+	const saveMcPins = (update: SetStateAction<McPins>) => {
+		const pins =
+			typeof update === "function" ? update(readMcPins(`ateam.mcPins.${mcGridKey}`)) : update;
+		setMcPinsSet((m) => ({ ...m, [mcGridKey]: pins }));
+		localStorage.setItem(`ateam.mcPins.${mcGridKey}`, JSON.stringify(pins));
+	};
 	// The Auto button. The grid fits itself (see MissionControl).
 	const chooseAutoLayout = () => {
 		setMcLayout("auto");
@@ -1194,9 +1216,9 @@ export function App() {
 			.map((t) => t.id);
 	}, [sidebarGroups, orderedSidebarTasks]);
 	// Mission Control's own tile order, per project, independent of the
-	// sidebar's: status changes reorder the list, never the tiles. It records
-	// the tiles as Mission Control last laid them out; the first visit seeds it
-	// from the sidebar, new tiles join the end, a tile drag swaps two, and only
+	// sidebar's. Fixed layouts hold still; Auto derives its live order below.
+	// It records the tiles as Mission Control last laid them out; the first
+	// visit seeds it from the sidebar, new tiles join the end, a tile drag swaps two, and only
 	// Sync re-applies the sidebar's order. Read during render (like mcLayout) so
 	// a project switch mounts Mission Control with that project's order, not a
 	// frame of the last one's.
@@ -1247,6 +1269,7 @@ export function App() {
 	// Sync: the sidebar's current order replaces Mission Control's. Deleted
 	// tasks are dropped here so the saved order doesn't grow forever.
 	const syncMission = () => {
+		saveMcPins({});
 		const inBase = new Set(missionBaseIds);
 		const live = new Set(activeTasks.map((t) => t.id));
 		saveMcOrder([...missionBaseIds, ...mcOrder.filter((id) => !inBase.has(id) && live.has(id))]);
@@ -2334,7 +2357,7 @@ export function App() {
 							<button
 								type="button"
 								className={`navbtn icon ${view === "mission" && mcChoice === "auto" ? "active" : ""}`}
-								title="Mission Control: Auto layout (fits the live terminals to the space, with no empty slot)"
+								title="Mission Control: Auto layout (brings Needs You and recent activity into view after a 5-second pause; drag a tile to pin its position)"
 								aria-label="Mission Control: Auto layout"
 								aria-pressed={view === "mission" && mcChoice === "auto"}
 								onClick={chooseAutoLayout}
@@ -2360,8 +2383,12 @@ export function App() {
 							<button
 								type="button"
 								className="navbtn icon"
-								title="Sync with sidebar: put the tiles in the sidebar's current order (they never reorder on their own)"
-								aria-label="Sync Mission Control order with sidebar"
+								title={
+									mcChoice === "auto"
+										? "Refresh Mission Control: clear pinned positions and sort by Needs You, then recent activity"
+										: "Refresh Mission Control: clear pinned positions and sync with the sidebar"
+								}
+								aria-label="Refresh Mission Control order"
 								disabled={!scopeKey}
 								onClick={syncMission}
 							>
@@ -2590,6 +2617,8 @@ export function App() {
 							tasks={missionTasks}
 							agents={agents}
 							order={missionOrderIds}
+							pins={mcPins}
+							onPinsChange={saveMcPins}
 							layout={mcChoice}
 							syncSeq={mcSyncSeq}
 							onExpand={openFromMission}
@@ -4452,13 +4481,15 @@ function TaskPanel({
  */
 type TileTab = { terminalId: string; pinned: boolean };
 
-function MissionControl({
+export function MissionControl({
 	mode,
 	shownByTask,
 	setShownByTask,
 	tasks,
 	agents,
 	order,
+	pins,
+	onPinsChange,
 	layout,
 	syncSeq,
 	onExpand,
@@ -4482,6 +4513,9 @@ function MissionControl({
 	agents: AgentDTO[];
 	/** The rank tiles take on mount and on Sync; read at no other time. */
 	order: string[];
+	/** Manually placed slots, retained across visits until Refresh. */
+	pins: McPins;
+	onPinsChange: Dispatch<SetStateAction<McPins>>;
 	/** A fixed layout, or "auto": each page shaped to the grid's own size. */
 	layout: McChoice;
 	/** Bumped by the Sync button: re-sort the tiles to `order` once. */
@@ -4506,7 +4540,79 @@ function MissionControl({
 	// told you nothing. The tile shows one session at a time and its tabs switch
 	// between them. Creating and closing sessions stays in the task panel, where
 	// the + and the ✕ live; a tile is a viewport onto work that already exists.
-	const [tiles, setTiles] = useState<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
+	const [placedTiles, setTiles] = useState<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
+	const [dragOrder, setDragOrder] = useState<string[] | null>(null);
+	const dragging = dragOrder !== null;
+	// Session discovery owns membership, while current task props own status
+	// and recency. A slow session fetch cannot restore stale task metadata.
+	const freshTiles = useMemo(() => {
+		const current = new Map(tasks.map((t) => [t.id, t]));
+		return placedTiles.flatMap((tile) => {
+			const task = current.get(tile.task.id);
+			return task ? [task === tile.task ? tile : { ...tile, task }] : [];
+		});
+	}, [placedTiles, tasks]);
+	// Debounce changes in priority ranking. Background metadata
+	// and session refreshes must not keep restarting the quiet period.
+	const priorityOrder = useMemo(
+		() =>
+			[...freshTiles]
+				.sort((a, b) => byMcPriority(a.task, b.task))
+				.map((t) => t.task.id)
+				.join(" "),
+		[freshTiles],
+	);
+	// The requested priority can differ from the displayed order: ordering
+	// terminals already on the same page gives no extra visibility.
+	const [settled, setSettled] = useState({ requested: priorityOrder, order: priorityOrder });
+	const priorityOrderRef = useRef(priorityOrder);
+	priorityOrderRef.current = priorityOrder;
+	const pinsRef = useRef(pins);
+	pinsRef.current = pins;
+	// Explicit Refresh and layout selection always use the latest priority.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: explicit refresh/layout requests flush the pending order, independently of activity changes.
+	useLayoutEffect(() => {
+		const order = priorityOrderRef.current;
+		setSettled({ requested: order, order });
+	}, [syncSeq, layout]);
+	useEffect(() => {
+		if (layout !== "auto" || settled.requested === priorityOrder) return;
+		if (!settled.order || !priorityOrder) {
+			setSettled({ requested: priorityOrder, order: priorityOrder });
+			return;
+		}
+		const timer = window.setTimeout(() => {
+			const current = tilesRef.current;
+			const priority = new Map(priorityOrder.split(" ").map((id, i) => [id, i]));
+			const next = orderMcTiles(current, pinsRef.current, priority).map((t) => t.task.id);
+			const stable = stabilizeMcPages(
+				next,
+				current.map((t) => t.task.id),
+				pageSizeRef.current,
+			);
+			setSettled({ requested: priorityOrder, order: stable.join(" ") });
+		}, MC_REORDER_DELAY_MS);
+		return () => window.clearTimeout(timer);
+	}, [priorityOrder, settled, layout]);
+	const priorityRank = useMemo(
+		() => new Map((settled.order || priorityOrder).split(" ").map((id, i) => [id, i])),
+		[settled.order, priorityOrder],
+	);
+	const tiles = useMemo(() => {
+		if (layout !== "auto") return freshTiles;
+		if (dragOrder) {
+			// Keep drop targets steady while the pointer is holding a tile.
+			const rank = new Map(dragOrder.map((id, i) => [id, i]));
+			return [...freshTiles].sort(
+				(a, b) => (rank.get(a.task.id) ?? Infinity) - (rank.get(b.task.id) ?? Infinity),
+			);
+		}
+		return orderMcTiles(freshTiles, pins, priorityRank);
+	}, [freshTiles, layout, pins, dragOrder, priorityRank]);
+	const onPinsChangeRef = useRef(onPinsChange);
+	onPinsChangeRef.current = onPinsChange;
+	const pendingFocusRef = useRef<string | null>(null);
+	const pinUndosRef = useRef(new Map<string, { before: McPins; after: McPins }[]>());
 	// Only a tab the viewer clicked outlives this grid. The ones it resolved by
 	// itself are re-read when the next grid's tiles arrive, and left in place
 	// they would paint the old tab for a frame before that.
@@ -4598,7 +4704,8 @@ function MissionControl({
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [flip]);
 
-	// Tiles never reorder on their own. `order` is read only when we land here
+	// The base order for fixed layouts. Auto derives priority from live tasks
+	// above instead. `order` is read only when we land here
 	// and when Sync is pressed; between those, tiles hold their slots however
 	// the sidebar shuffles (agents finishing, statuses changing), so the tile
 	// you are reaching for is the one you get. Tasks not in the rank sort last.
@@ -4662,6 +4769,9 @@ function MissionControl({
 	// synced here (not at render time) so the effect legitimately depends on it.
 	useEffect(() => {
 		rankRef.current = rank;
+		placeRef.current.clear();
+		pinUndosRef.current.clear();
+		pendingFocusRef.current = null;
 		resort(true);
 	}, [rank, resort]);
 
@@ -4680,6 +4790,8 @@ function MissionControl({
 	// first. It could only cost: listForTask is routed per task, so for box-owned
 	// tasks every pass was one SSH round-trip PER TASK, and the old 2.5s tick issued
 	// them in a serial await chain that could outlast its own interval.
+	const taskIds = tasks.map((t) => t.id).join(" ");
+	// biome-ignore lint/correctness/useExhaustiveDependencies: membership changes must refetch sessions, independently of the event subscription's stable refs.
 	useEffect(() => {
 		let cancelled = false;
 		let inFlight = false;
@@ -4715,7 +4827,7 @@ function MissionControl({
 			offUpdated();
 			offExit();
 		};
-	}, [resort]);
+	}, [resort, taskIds]);
 
 	// The tiles this page actually shows. Computed before the empty-state return
 	// so the arrival effect below runs on every render, as hooks must.
@@ -4810,7 +4922,6 @@ function MissionControl({
 	const handledJumpRef = useRef(jump?.seq ?? 0);
 	const onJumpMissingRef = useRef(onJumpMissing);
 	onJumpMissingRef.current = onJumpMissing;
-	const pendingFocusRef = useRef<string | null>(null);
 	const tileEls = useRef(new Map<string, HTMLDivElement>());
 	useEffect(() => {
 		if (!jump || jump.seq === handledJumpRef.current) return;
@@ -4845,6 +4956,15 @@ function MissionControl({
 		const ta = tiles.find((t) => t.task.id === a);
 		const tb = tiles.find((t) => t.task.id === b);
 		if (!ta || !tb || ta === tb) return;
+		if (layout === "auto")
+			onPinsChange(
+				pinMcSwap(
+					pins,
+					tiles.map((t) => t.task.id),
+					a,
+					b,
+				),
+			);
 		setTiles(tiles.map((t) => (t === ta ? tb : t === tb ? ta : t)));
 	};
 	// Dragging across pages: while a tile is dragged, strips along the grid's
@@ -4854,7 +4974,6 @@ function MissionControl({
 	// flip unmounts the dragged tile's page, so its own dragend may never
 	// reach us: the drag is over at the first drop, dragend or mouse move
 	// anywhere (no mouse events fire mid-drag).
-	const [dragging, setDragging] = useState(false);
 	const flipTimerRef = useRef<number | null>(null);
 	const stopFlipTimer = useCallback(() => {
 		if (flipTimerRef.current !== null) window.clearTimeout(flipTimerRef.current);
@@ -4866,7 +4985,7 @@ function MissionControl({
 			dragIdRef.current = null;
 			stopFlipTimer();
 			setDropTarget(null);
-			setDragging(false);
+			setDragOrder(null);
 		};
 		window.addEventListener("drop", end, true);
 		window.addEventListener("dragend", end, true);
@@ -4911,6 +5030,18 @@ function MissionControl({
 			return;
 		}
 		placeRef.current.set(id, onto);
+		if (layout === "auto") {
+			const after = pinMcArrival(
+				pins,
+				tiles.map((t) => t.task.id),
+				id,
+				onto,
+			);
+			const undos = pinUndosRef.current.get(id) ?? [];
+			undos.push({ before: pins, after });
+			pinUndosRef.current.set(id, undos);
+			onPinsChange(after);
+		}
 		// Its agent is already waking from an earlier drop: this one only moves
 		// the spot. A second wake could start a second agent on the same
 		// conversation, since the engine only joins a resume by id (sessions.ts).
@@ -4919,7 +5050,17 @@ function MissionControl({
 		wakingTasksRef.current.add(id);
 		void onWake(task).then((woke) => {
 			wakingTasksRef.current.delete(id);
+			const undos = pinUndosRef.current.get(id) ?? [];
+			pinUndosRef.current.delete(id);
 			if (woke) return;
+			if (placeRef.current.has(id)) {
+				onPinsChangeRef.current((current) => {
+					let next = current;
+					for (const { before, after } of [...undos].reverse())
+						next = undoMcPins(next, before, after);
+					return next;
+				});
+			}
 			placeRef.current.delete(id);
 			if (pendingFocusRef.current === id) pendingFocusRef.current = null;
 		});
@@ -4930,7 +5071,7 @@ function MissionControl({
 			const id = pillTask(e);
 			if (!id) return;
 			// The page-flip strips, as for a dragged tile.
-			if (!dragging) setDragging(true);
+			if (!dragging) setDragOrder(tilesRef.current.map((t) => t.task.id));
 			if (!offTile(e)) return; // the tile under it answers
 			const takes = !hasTile(id);
 			if (takes) {
@@ -5087,12 +5228,16 @@ function MissionControl({
 							<div
 								className="bar movable"
 								draggable
-								title="Drag onto another tile to swap them"
+								title={
+									layout === "auto"
+										? "Drag onto another tile to pin this position until Refresh"
+										: "Drag onto another tile to swap them"
+								}
 								onDragStart={(e) => {
 									dragIdRef.current = task.id;
 									// Next tick: changing the DOM inside dragstart can make
 									// Chromium cancel the drag it is starting.
-									window.setTimeout(() => setDragging(true), 0);
+									window.setTimeout(() => setDragOrder(tilesRef.current.map((t) => t.task.id)), 0);
 									e.dataTransfer.setData(MC_TILE_MIME, task.id);
 									e.dataTransfer.effectAllowed = "move";
 								}}
@@ -5140,6 +5285,7 @@ function MissionControl({
 													[task.id]: { terminalId: session.terminalId, pinned: true },
 												}));
 												// A tab means "show me that terminal", as in the task panel.
+												pendingFocusRef.current = task.id;
 												if (changesOpen) toggleChanges(task.id);
 											}}
 										>
@@ -5156,6 +5302,7 @@ function MissionControl({
 								    would crowd a tile. Adding a skill stays in the panel. */}
 								<TerminalView
 									terminalId={shown}
+									autoFocus={false}
 									grammar={agentShown}
 									skills={agentShown}
 									skillButtons="sent"
