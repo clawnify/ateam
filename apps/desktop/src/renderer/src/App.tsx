@@ -11,6 +11,7 @@ import type {
 	SessionDTO,
 	SessionHitDTO,
 	TaskDTO,
+	TaskPageDTO,
 	TaskTriage,
 	UnifiedProject,
 } from "@ateam/protocol";
@@ -41,6 +42,7 @@ import {
 	Copy,
 	EllipsisVertical,
 	ExternalLink,
+	FileText,
 	FolderPlus,
 	GitBranch,
 	GitCommitVertical,
@@ -58,6 +60,7 @@ import {
 	Minimize2,
 	PanelLeft,
 	PanelRight,
+	Pause,
 	Play,
 	Plus,
 	RefreshCw,
@@ -114,6 +117,13 @@ import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
+import {
+	type GetStartedState,
+	nextGetStarted,
+	readGetStarted,
+	saveGetStarted,
+	showsGetStarted,
+} from "./get-started";
 import { addTailscaleBox, installBox } from "./lib/box-actions";
 import {
 	bestMcShape,
@@ -126,12 +136,15 @@ import {
 	placeArrivals,
 } from "./mc-layout";
 import {
-	type GetStartedState,
-	nextGetStarted,
-	readGetStarted,
-	saveGetStarted,
-	showsGetStarted,
-} from "./get-started";
+	byMcPriority,
+	type McPins,
+	orderMcTiles,
+	pinMcArrival,
+	pinMcSwap,
+	readMcPins,
+	stabilizeMcPages,
+	undoMcPins,
+} from "./mc-order";
 import { bumpProject, orderProjects, readProjectOrder, saveProjectOrder } from "./project-order";
 import { panelOnScreen, proposalToOpen, shownWhileOpen } from "./proposal-open";
 import {
@@ -196,6 +209,8 @@ const MC_TILE_MIME = "application/x-ateam-tile";
 const FLIP_HOLD_MS = 500;
 // How long the grid's size must hold still before Auto refits to it.
 const MC_RESIZE_SETTLE_MS = 200;
+// Batch automatic priority changes after five seconds without a new order.
+const MC_REORDER_DELAY_MS = 5_000;
 
 // Whether a drag carries files from Finder (not a tile, not dragged text).
 const draggingFiles = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
@@ -278,6 +293,13 @@ interface ComposeInput {
 }
 
 export function App() {
+	const [fullScreen, setFullScreen] = useState(() => window.ateamWindow.isFullScreen());
+	useEffect(() => {
+		const off = window.ateamWindow.onFullScreen(setFullScreen);
+		// A transition may have finished between the first render and subscribing.
+		setFullScreen(window.ateamWindow.isFullScreen());
+		return off;
+	}, []);
 	// Non-null in a detached window: this window is pinned to one project and
 	// hides the project switcher; null in the main multi-project dashboard.
 	const boundProjectId = useMemo(() => window.ateam.window.boundProjectId(), []);
@@ -361,8 +383,7 @@ export function App() {
 		localStorage.setItem(`ateam.mcLayout.${scopeKey}`, l);
 		setMcLayoutSet((m) => ({ ...m, [scopeKey]: l }));
 	};
-	// Bumped by the Sync button: Mission Control re-sorts its tiles to the
-	// sidebar's order once, then holds still again (see mcOrder).
+	// Bumped by Refresh: discard manual placement and reapply the grid's order.
 	const [mcSyncSeq, setMcSyncSeq] = useState(0);
 	// Which work Mission Control tiles: the tasks (the sidebar's TASKS list) or
 	// the loops' own tasks (its LOOPS list), never both on one grid.
@@ -1102,6 +1123,17 @@ export function App() {
 	// Which grid Mission Control shows: the project's (or repo card's) tasks
 	// or loops. A new key is a new set of tiles.
 	const mcGridKey = `${allProjects ? "all" : (activeCard?.key ?? activeProjectId)}:${mcMode}`;
+	const [mcPinsSet, setMcPinsSet] = useState<Record<string, McPins>>({});
+	const mcPins = useMemo(
+		() => mcPinsSet[mcGridKey] ?? readMcPins(`ateam.mcPins.${mcGridKey}`),
+		[mcGridKey, mcPinsSet],
+	);
+	const saveMcPins = (update: SetStateAction<McPins>) => {
+		const pins =
+			typeof update === "function" ? update(readMcPins(`ateam.mcPins.${mcGridKey}`)) : update;
+		setMcPinsSet((m) => ({ ...m, [mcGridKey]: pins }));
+		localStorage.setItem(`ateam.mcPins.${mcGridKey}`, JSON.stringify(pins));
+	};
 	// The Auto button. The grid fits itself (see MissionControl).
 	const chooseAutoLayout = () => {
 		setMcLayout("auto");
@@ -1215,9 +1247,9 @@ export function App() {
 			.map((t) => t.id);
 	}, [sidebarGroups, orderedSidebarTasks]);
 	// Mission Control's own tile order, per project, independent of the
-	// sidebar's: status changes reorder the list, never the tiles. It records
-	// the tiles as Mission Control last laid them out; the first visit seeds it
-	// from the sidebar, new tiles join the end, a tile drag swaps two, and only
+	// sidebar's. Fixed layouts hold still; Auto derives its live order below.
+	// It records the tiles as Mission Control last laid them out; the first
+	// visit seeds it from the sidebar, new tiles join the end, a tile drag swaps two, and only
 	// Sync re-applies the sidebar's order. Read during render (like mcLayout) so
 	// a project switch mounts Mission Control with that project's order, not a
 	// frame of the last one's.
@@ -1268,6 +1300,7 @@ export function App() {
 	// Sync: the sidebar's current order replaces Mission Control's. Deleted
 	// tasks are dropped here so the saved order doesn't grow forever.
 	const syncMission = () => {
+		saveMcPins({});
 		const inBase = new Set(missionBaseIds);
 		const live = new Set(activeTasks.map((t) => t.id));
 		saveMcOrder([...missionBaseIds, ...mcOrder.filter((id) => !inBase.has(id) && live.has(id))]);
@@ -1878,59 +1911,61 @@ export function App() {
 			style={{ "--sidebar-w": `${sidebarWidth}px`, "--lead-w": `${leadWidth}px` } as CSSProperties}
 		>
 			<aside className={`sidebar ${rail ? "rail" : ""}`}>
-				{/* In rail mode the traffic lights own this strip; the toggle moves
-				    below them as the first tile. */}
-				<div className="side-top">
-					{!rail && (
-						<IconButton
-							icon={Settings}
-							label="Settings"
-							shortcut="⌘,"
-							active={view === "settings"}
-							attention={boxesNeedYou ? "a box needs you" : undefined}
-							onClick={() => goToView("settings")}
-						/>
-					)}
-					{!rail && <IconButton icon={PanelLeft} label="Collapse sidebar" onClick={toggleRail} />}
-				</div>
-				{/* The project switcher, its own full-width row under the traffic-light
-				    strip (as Codex and Open Session do), so a name has room. A
-				    detached window IS one project, so it names it instead. */}
-				{!rail && (
-					<div className="side-project">
-						{boundProjectId ? (
-							<ProjectTitle
-								name={boundProject?.name ?? "…"}
-								owner={boundProject?.githubOwner ?? null}
-								color={boundProject?.color ?? null}
-								path={boundProject?.repoPath}
-							/>
-						) : !projectsLoaded ? (
-							// The row's height, held until the list says whether it is a
-							// switcher or an Add project button.
-							<div className="h-8" />
-						) : (
-							<ProjectSwitcher
-								cards={switcherCards}
-								activeKey={activeCard?.key ?? null}
-								all={allProjects}
-								onSelect={(card) => {
-									const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
-									if (primary) selectProject(primary.projectId);
-								}}
-								onSelectAll={selectAll}
-								onAdd={addProject}
-								onOpenWindow={(card) => {
-									const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
-									if (primary) window.ateam.window.openProject(primary.projectId);
-								}}
-								onRemove={removeProject}
-								drop={activeProjectId ? projectDropProps("switcher", activeProjectId) : undefined}
-								dropping={dropCardKey === "switcher"}
+				<div className={`side-header${fullScreen && !rail ? " fullscreen" : ""}`}>
+					{/* In rail mode the traffic lights own this strip; the toggle moves
+					    below them as the first tile. */}
+					<div className="side-top">
+						{!rail && (
+							<IconButton
+								icon={Settings}
+								label="Settings"
+								shortcut="⌘,"
+								active={view === "settings"}
+								attention={boxesNeedYou ? "a box needs you" : undefined}
+								onClick={() => goToView("settings")}
 							/>
 						)}
+						{!rail && <IconButton icon={PanelLeft} label="Collapse sidebar" onClick={toggleRail} />}
 					</div>
-				)}
+					{/* The selector shares Settings' row in native full screen, and
+					    gets the full width below the traffic lights otherwise. A
+					    detached window names its pinned project instead. */}
+					{!rail && (
+						<div className="side-project">
+							{boundProjectId ? (
+								<ProjectTitle
+									name={boundProject?.name ?? "…"}
+									owner={boundProject?.githubOwner ?? null}
+									color={boundProject?.color ?? null}
+									path={boundProject?.repoPath}
+								/>
+							) : !projectsLoaded ? (
+								// The row's height, held until the list says whether it is a
+								// switcher or an Add project button.
+								<div className="h-8" />
+							) : (
+								<ProjectSwitcher
+									cards={switcherCards}
+									activeKey={activeCard?.key ?? null}
+									all={allProjects}
+									onSelect={(card) => {
+										const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+										if (primary) selectProject(primary.projectId);
+									}}
+									onSelectAll={selectAll}
+									onAdd={addProject}
+									onOpenWindow={(card) => {
+										const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+										if (primary) window.ateam.window.openProject(primary.projectId);
+									}}
+									onRemove={removeProject}
+									drop={activeProjectId ? projectDropProps("switcher", activeProjectId) : undefined}
+									dropping={dropCardKey === "switcher"}
+								/>
+							)}
+						</div>
+					)}
+				</div>
 
 				{rail ? (
 					// The expanded sidebar's three sections as tile groups, each led
@@ -2222,6 +2257,15 @@ export function App() {
 													task={task}
 													selected={task != null && task.id === sidebarSelectedId}
 													onClick={() => (task ? openFromSidebar(task) : goToView("loops"))}
+													onToggle={() =>
+														window.ateam.loops.setEnabled(l.id, !l.enabled).then(
+															() => refreshLoops(),
+															(e) =>
+																setError(
+																	`Couldn't ${l.enabled ? "pause" : "resume"} ${l.title}: ${e instanceof Error ? e.message : String(e)}`,
+																),
+														)
+													}
 													onRunNow={() =>
 														window.ateam.loops.runNow(l.id).then(
 															(list) => {
@@ -2346,7 +2390,7 @@ export function App() {
 							<button
 								type="button"
 								className={`navbtn icon ${view === "mission" && mcChoice === "auto" ? "active" : ""}`}
-								title="Mission Control: Auto layout (fits the live terminals to the space, with no empty slot)"
+								title="Mission Control: Auto layout (brings Needs You and recent activity into view after a 5-second pause; drag a tile to pin its position)"
 								aria-label="Mission Control: Auto layout"
 								aria-pressed={view === "mission" && mcChoice === "auto"}
 								onClick={chooseAutoLayout}
@@ -2372,8 +2416,12 @@ export function App() {
 							<button
 								type="button"
 								className="navbtn icon"
-								title="Sync with sidebar: put the tiles in the sidebar's current order (they never reorder on their own)"
-								aria-label="Sync Mission Control order with sidebar"
+								title={
+									mcChoice === "auto"
+										? "Refresh Mission Control: clear pinned positions and sort by Needs You, then recent activity"
+										: "Refresh Mission Control: clear pinned positions and sync with the sidebar"
+								}
+								aria-label="Refresh Mission Control order"
 								disabled={!scopeKey}
 								onClick={syncMission}
 							>
@@ -2604,6 +2652,8 @@ export function App() {
 							tasks={missionTasks}
 							agents={agents}
 							order={missionOrderIds}
+							pins={mcPins}
+							onPinsChange={saveMcPins}
 							layout={mcChoice}
 							syncSeq={mcSyncSeq}
 							onExpand={openFromMission}
@@ -3201,18 +3251,26 @@ function LoopRow({
 	task,
 	selected,
 	onClick,
+	onToggle,
 	onRunNow,
 }: {
 	loop: LoopDTO;
 	task: TaskDTO | null;
 	selected: boolean;
 	onClick: () => void;
+	/** Pause or resume scheduled runs, like the Loops tab's toggle. */
+	onToggle: () => Promise<void>;
 	/** Run it now, off schedule, like the Loops tab's Run now. */
 	onRunNow: () => Promise<void>;
 }) {
 	// Starting a run can take seconds (the first one creates the task's
 	// worktree), so the row's icon spins until the engine answers.
 	const [starting, setStarting] = useState(false);
+	const [toggling, setToggling] = useState(false);
+	const toggle = () => {
+		setToggling(true);
+		void onToggle().finally(() => setToggling(false));
+	};
 	const runNow = () => {
 		setStarting(true);
 		void onRunNow().finally(() => setStarting(false));
@@ -3240,7 +3298,15 @@ function LoopRow({
 					label={`Actions for ${loop.title}`}
 					icon={EllipsisVertical}
 					className="size-5 [&_svg:not([class*='size-'])]:size-3.5"
-					items={[{ label: "Run now", icon: Play, disabled: starting, onClick: runNow }]}
+					items={[
+						{ label: "Run now", icon: Play, disabled: starting, onClick: runNow },
+						{
+							label: loop.enabled ? "Pause" : "Resume",
+							icon: loop.enabled ? Pause : Play,
+							disabled: toggling,
+							onClick: toggle,
+						},
+					]}
 				/>
 			</span>
 		</div>
@@ -3520,16 +3586,24 @@ function TaskSummary({ task }: { task: TaskDTO }) {
 	);
 }
 
-// Whether the user opened (true) or closed (false) each page in the task panel,
-// by page id. A page nobody chose for opens by itself if show_page made it, and
-// not if it came with a question (TaskPageDTO.fromQuestion). Not the panel's
-// state: the panel remounts on every side/full switch. Kept across restarts
-// because a task keeps its page forever; past the cap the oldest choices fall
-// off, and those pages go back to their default.
-// shortcut: this Mac's localStorage; move it onto the task row once another
-// client (the phone) shows pages and should agree on what was closed.
+/**
+ * An agent live in the open task that never reached the board tools
+ * (TaskDTO.boardToolsMissing, server/board-connections.ts): it looks fine,
+ * but its questions, messages and pages will never come. The engine writes the
+ * sentence, with what to do about it.
+ */
+function BoardToolsNote({ task }: { task: TaskDTO }) {
+	if (!task.boardToolsMissing) return null;
+	return (
+		<p className="board-tools-note" title={task.boardToolsMissing}>
+			{task.boardToolsMissing}
+		</p>
+	);
+}
+
+// Whether an artifact tab was opened or hidden. Hiding keeps the saved artifact;
+// the + menu can reopen it. Choices survive panel remounts and app restarts.
 const PAGE_CHOICES_KEY = "ateam.pageChoices";
-const PAGE_CHOICES_MAX = 200;
 const pageChoices = new Map<string, boolean>(
 	(() => {
 		try {
@@ -3537,7 +3611,7 @@ const pageChoices = new Map<string, boolean>(
 			return Array.isArray(v)
 				? v.filter(
 						(e): e is [string, boolean] =>
-							Array.isArray(e) && typeof e[0] === "string" && typeof e[1] === "boolean",
+							Array.isArray(e) && typeof e[0] === "string" && e[1] === false,
 					)
 				: [];
 		} catch {
@@ -3546,12 +3620,10 @@ const pageChoices = new Map<string, boolean>(
 	})(),
 );
 const choosePage = (pageId: string, open: boolean) => {
-	pageChoices.delete(pageId); // re-inserted last: the newest choice is the last to go
-	pageChoices.set(pageId, open);
-	for (const old of pageChoices.keys()) {
-		if (pageChoices.size <= PAGE_CHOICES_MAX) break;
-		pageChoices.delete(old);
-	}
+	// Only hidden tabs need a stored choice. Never evict another hidden tab
+	// just because the user has accumulated more task artifacts.
+	if (open) pageChoices.delete(pageId);
+	else pageChoices.set(pageId, false);
 	try {
 		localStorage.setItem(PAGE_CHOICES_KEY, JSON.stringify([...pageChoices]));
 	} catch {
@@ -3562,7 +3634,10 @@ const choosePage = (pageId: string, open: boolean) => {
 // terminal, and the page fills it instead (the 480px side panel always does).
 const PAGE_SPLIT_MIN = 880;
 
-function TaskPanel({
+type TaskCompanion = { taskId: string; kind: "page" | "terminal"; id: string };
+const taskCompanions = new Map<string, TaskCompanion>();
+
+export function TaskPanel({
 	task,
 	agents,
 	envAgents,
@@ -3665,9 +3740,53 @@ function TaskPanel({
 			return !s;
 		});
 	const [viewFile, setViewFile] = useState<string | null>(null);
-	// This task's live PTY sessions — agents and shells alike. They ARE the tabs:
-	// the daemon already owns as many per task as you like, so there is nothing
-	// extra to persist. Tagged with the task they were read for, because the render
+	const [savedPages, setSavedPages] = useState<{ taskId: string; pages: TaskPageDTO[] } | null>(
+		null,
+	);
+
+	const [companion, setCompanionState] = useState<TaskCompanion | null>(
+		() => taskCompanions.get(task.id) ?? null,
+	);
+	const setCompanion = (next: TaskCompanion | null) => {
+		if (next) taskCompanions.set(task.id, next);
+		else taskCompanions.delete(task.id);
+		setCompanionState(next);
+	};
+	const [, rerender] = useReducer((n: number) => n + 1, 0);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only artifact identity/revision changes require a reload; hook events recreate task.page too.
+	useEffect(() => {
+		let cancelled = false;
+		const latest = task.page;
+		void (window.ateam.tasks.pages?.(task.id) ?? Promise.resolve(latest ? [latest] : []))
+			.then((pages) => {
+				if (!cancelled) setSavedPages({ taskId: task.id, pages });
+			})
+			.catch((error) => {
+				// Older engines know only the latest page. Other failures reach the toast.
+				if (cancelled) return;
+				setSavedPages({ taskId: task.id, pages: latest ? [latest] : [] });
+				if (!String(error).includes("Unknown method"))
+					void run(async () => {
+						throw error;
+					});
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [task.id, task.page?.id, task.page?.at, run]);
+	const pages = savedPages?.taskId === task.id ? [...savedPages.pages] : [];
+	if (task.page) {
+		const at = pages.findIndex((page) => page.id === task.page?.id);
+		if (at < 0) pages.push(task.page);
+		else pages[at] = task.page;
+	}
+	const pageTabs = pages.filter(
+		(page) => page.id !== task.question?.pageId && pageChoices.get(page.id) !== false,
+	);
+	const side = companion?.taskId === task.id ? companion : null;
+
+	// This task's live PTY sessions — agents and shells alike — supply its
+	// terminal tabs. The daemon already owns as many per task as you like. Tagged with the task they were read for, because the render
 	// right after you switch tasks still holds the previous task's list — reading
 	// that as this task's would put a foreign terminal in the panel. `null` means
 	// "not read yet", which the tab-fallback effect below must not mistake for
@@ -3690,6 +3809,7 @@ function TaskPanel({
 	useEffect(() => {
 		setChangesOpen(false);
 		setViewFile(null);
+		setCompanionState(taskCompanions.get(task.id) ?? null);
 		setEditorOpen(false);
 		setEditorSrc(null);
 		setEditorBusy(null);
@@ -3878,7 +3998,7 @@ function TaskPanel({
 				taskId: task.id,
 			});
 			await refreshSessions();
-			showTerminal(tid);
+			showCompanionTerminal(tid);
 		});
 
 	const commit = () =>
@@ -3895,10 +4015,34 @@ function TaskPanel({
 	 * the editor still covered it) left no obvious way back out.
 	 */
 	const showTerminal = (tid: string | null) => {
+		setCompanion(null);
 		setTerminal(tid);
 		setEditorOpen(false);
 		setBrowserOpen(false);
 		setChangesOpen(false);
+	};
+
+	const showCompanionTerminal = (tid: string) => {
+		if (!terminalId || tid === terminalId) {
+			showTerminal(tid);
+			return;
+		}
+		setCompanion({ taskId: task.id, kind: "terminal", id: tid });
+		setEditorOpen(false);
+		setBrowserOpen(false);
+		setChangesOpen(false);
+	};
+	const openPage = (page: TaskPageDTO) => {
+		choosePage(page.id, true);
+		setCompanion({ taskId: task.id, kind: "page", id: page.id });
+		setEditorOpen(false);
+		setBrowserOpen(false);
+		setChangesOpen(false);
+	};
+	const hidePage = (id: string) => {
+		choosePage(id, false);
+		if (side?.kind === "page" && side.id === id) setCompanion(null);
+		rerender();
 	};
 
 	// The question card folded to one line, to read the terminal behind it. Held
@@ -3931,45 +4075,34 @@ function TaskPanel({
 	const mainViewOpen = editorOpen || browserOpen || changesOpen;
 	const termDocked = termSide && mainViewOpen;
 
-	// The agent's page, unless the open question's card draws it. A show_page
-	// page is open unless closed: beside the terminal when the body is wide
-	// enough, over it when not. The editor, browser and changes views cover it.
-	// Not open, it is a bar above the terminal's toolbar. A question's page,
-	// once the question has ended, only ever opens from the bar.
-	const page = task.page && task.question?.pageId !== task.page.id ? task.page : null;
-	const [, rerender] = useReducer((n: number) => n + 1, 0);
-	const pageShown = !!page && (pageChoices.get(page.id) ?? !page.fromQuestion) && !mainViewOpen;
+	const page = side?.kind === "page" ? pageTabs.find((page) => page.id === side.id) : undefined;
+	const companionSession =
+		side?.kind === "terminal" && side.id !== terminalId
+			? tabs.find(({ session, live }) => live && session.terminalId === side.id)
+			: undefined;
+	const companionShown = !!(page || companionSession) && !mainViewOpen;
 	const bodyRef = useRef<HTMLDivElement>(null);
 	const [bodyWide, setBodyWide] = useState(false);
 	useLayoutEffect(() => {
 		const el = bodyRef.current;
 		if (!el) return;
-		// Measured now as well: the observer's first report lands after the paint.
 		const check = () => setBodyWide(el.clientWidth >= PAGE_SPLIT_MIN);
 		check();
 		const ro = new ResizeObserver(check);
 		ro.observe(el);
 		return () => ro.disconnect();
 	}, []);
-	const pageFills = pageShown && !bodyWide;
-	const openPage = () => {
-		if (!page) return;
-		choosePage(page.id, true);
-		setEditorOpen(false);
-		setBrowserOpen(false);
-		setChangesOpen(false);
-		rerender();
-	};
-	const closePage = () => {
-		if (!page) return;
-		choosePage(page.id, false);
-		rerender();
-	};
-	const pageBar = page && !pageShown && (
-		<div className="panel-page">
-			<PageFrame taskId={task.id} pageId={page.id} title={page.title} onOpen={openPage} />
-		</div>
-	);
+	const companionFills = companionShown && (!bodyWide || !terminalId);
+	useLayoutEffect(() => {
+		// A narrow pane covers the session. Typing must not reach a hidden agent.
+		const active = document.activeElement;
+		if (
+			companionFills &&
+			active instanceof HTMLElement &&
+			bodyRef.current?.querySelector(".term-wrap")?.contains(active)
+		)
+			active.blur();
+	}, [companionFills]);
 
 	// Closing a tab kills its PTY — tabs are exactly the live sessions, so there
 	// is no "closed but still running" state to explain. Confirm first when the
@@ -3992,7 +4125,9 @@ function TaskPanel({
 	// the agent — not back into the toggle button.
 	const setModeAndFocusTerm = (m: "side" | "full") => {
 		onSetMode(m);
-		requestAnimationFrame(() => window.dispatchEvent(new Event("ateam:focus-terminal")));
+		requestAnimationFrame(() =>
+			window.dispatchEvent(new CustomEvent("ateam:focus-terminal", { detail: terminalId })),
+		);
 	};
 
 	return (
@@ -4018,35 +4153,53 @@ function TaskPanel({
 					</span>
 				</div>
 				<TaskSummary task={task} />
+				<BoardToolsNote task={task} />
 				<BranchLine task={task} />
 			</div>
 
 			<div className="actions">
-				{/* Left: this task's terminals, and the `+` that opens another. What kind
+				{/* Left: this task's sessions and saved docs, and the `+` for another tab. What kind
 				    of agent session you get is the composer's question, not a row of
 				    buttons — so the row stays legible however many tabs are open. */}
-				<div className="sess-tabs" role="tablist" aria-label="Sessions">
+				<div
+					className="sess-tabs"
+					role="tablist"
+					aria-label="Task workspace"
+					aria-multiselectable="true"
+				>
 					{tabs.map(({ session, label, live }) => (
 						<div
 							key={session.terminalId}
-							className={`sess-tab ${session.terminalId === terminalId ? "active" : ""} ${
+							className={`sess-tab ${!mainViewOpen && (session.terminalId === terminalId || companionSession?.session.terminalId === session.terminalId) ? "active" : ""} ${
 								live ? "" : "restorable"
 							}`}
 						>
 							<button
 								type="button"
 								role="tab"
-								aria-selected={live && session.terminalId === terminalId}
+								aria-selected={
+									live &&
+									!mainViewOpen &&
+									(session.terminalId === terminalId ||
+										companionSession?.session.terminalId === session.terminalId)
+								}
 								className="sess-tab-name"
 								title={live ? label : `${label} — closed by a restart. Click to resume it.`}
 								onClick={() => {
 									// The tab already on screen folds the question card over it.
-									if (live && task.question && session.terminalId === terminalId && !mainViewOpen) {
+									if (
+										live &&
+										task.question &&
+										session.terminalId === terminalId &&
+										!mainViewOpen &&
+										!companionShown
+									) {
 										toggleQuestion();
 										return;
 									}
 									if (live) {
-										showTerminal(session.terminalId);
+										if (session.agentId === "shell") showCompanionTerminal(session.terminalId);
+										else showTerminal(session.terminalId);
 										return;
 									}
 									setEditorOpen(false);
@@ -4060,6 +4213,17 @@ function TaskPanel({
 								</span>
 								<span>{label}</span>
 							</button>
+							{live && terminalId && session.terminalId !== terminalId && (
+								<button
+									type="button"
+									className="sess-tab-close"
+									title={`Open ${label} beside the last session`}
+									aria-label={`Open ${label} beside the last session`}
+									onClick={() => showCompanionTerminal(session.terminalId)}
+								>
+									<Columns2 size={13} />
+								</button>
+							)}
 							{/* A stranded tab has no process to kill, and it retires itself
 							    after one run of the app — so it carries no close button. */}
 							{live && (
@@ -4075,6 +4239,33 @@ function TaskPanel({
 							)}
 						</div>
 					))}
+					{pageTabs.map((page) => (
+						<div
+							key={page.id}
+							className={`sess-tab ${companionShown && side?.kind === "page" && side.id === page.id ? "active" : ""}`}
+						>
+							<button
+								type="button"
+								role="tab"
+								className="sess-tab-name"
+								aria-selected={companionShown && side?.kind === "page" && side.id === page.id}
+								title={`Open ${page.title} beside the last session`}
+								onClick={() => openPage(page)}
+							>
+								<FileText size={14} />
+								<span>{page.title}</span>
+							</button>
+							<button
+								type="button"
+								className="sess-tab-close"
+								title={`Hide ${page.title} tab (keeps the saved doc)`}
+								aria-label={`Hide ${page.title} tab`}
+								onClick={() => hidePage(page.id)}
+							>
+								<X size={14} />
+							</button>
+						</div>
+					))}
 					<Menu
 						icon={Plus}
 						label="New tab"
@@ -4086,6 +4277,15 @@ function TaskPanel({
 							},
 							{ label: "Terminal", icon: SquareTerminal, onClick: shell },
 							{ label: "Resume last conversation", icon: History, onClick: resumeLast },
+							...pages
+								.filter(
+									(page) => pageChoices.get(page.id) === false && page.id !== task.question?.pageId,
+								)
+								.map((page) => ({
+									label: `Reopen ${page.title}`,
+									icon: FileText,
+									onClick: () => openPage(page),
+								})),
 						]}
 					/>
 				</div>
@@ -4336,11 +4536,12 @@ function TaskPanel({
 				    view when the sidebar toggle is on. */}
 				<div
 					className="term-wrap"
-					style={{ display: (termDocked || !mainViewOpen) && !pageFills ? "flex" : "none" }}
+					style={{ display: (termDocked || !mainViewOpen) && !companionFills ? "flex" : "none" }}
 				>
 					{terminalId ? (
 						<TerminalView
 							terminalId={terminalId}
+							autoFocus={!companionShown && !mainViewOpen}
 							grammar={agentTerminal}
 							skills={agentTerminal}
 							onAddSkill={alias === null ? addSkill : undefined}
@@ -4350,7 +4551,6 @@ function TaskPanel({
 									await window.ateam.tasks.setColumn(task.id, "merged");
 								})
 							}
-							aboveToolbar={pageBar}
 						/>
 					) : (
 						<>
@@ -4361,7 +4561,6 @@ function TaskPanel({
 								</button>
 								<span className="muted">or open a tab with + to start a terminal</span>
 							</div>
-							{pageBar}
 						</>
 					)}
 				</div>
@@ -4431,9 +4630,35 @@ function TaskPanel({
 					</div>
 				)}
 
-				{page && pageShown && (
-					<div className={`page-pane${pageFills ? " fills" : ""}`}>
-						<PageFrame taskId={task.id} pageId={page.id} title={page.title} onClose={closePage} />
+				{page && companionShown && (
+					<div className={`page-pane${companionFills ? " fills" : ""}`}>
+						<PageFrame
+							key={`${page.id}:${page.at}`}
+							taskId={task.id}
+							pageId={page.id}
+							title={page.title}
+							onClose={() => setCompanion(null)}
+						/>
+					</div>
+				)}
+				{companionSession && companionShown && (
+					<div className={`page-pane terminal-companion${companionFills ? " fills" : ""}`}>
+						<div className="page-head">
+							<SessionIcon agentId={companionSession.session.agentId} size={14} />
+							<span className="page-title">{companionSession.label}</span>
+							<IconButton
+								icon={Maximize2}
+								label="Focus this session"
+								onClick={() => showTerminal(companionSession.session.terminalId)}
+							/>
+							<IconButton icon={X} label="Close split view" onClick={() => setCompanion(null)} />
+						</div>
+						<TerminalView
+							terminalId={companionSession.session.terminalId}
+							grammar={companionSession.session.agentId !== "shell"}
+							skills={companionSession.session.agentId !== "shell"}
+							onAddSkill={alias === null ? addSkill : undefined}
+						/>
 					</div>
 				)}
 			</div>
@@ -4450,13 +4675,15 @@ function TaskPanel({
  */
 type TileTab = { terminalId: string; pinned: boolean };
 
-function MissionControl({
+export function MissionControl({
 	mode,
 	shownByTask,
 	setShownByTask,
 	tasks,
 	agents,
 	order,
+	pins,
+	onPinsChange,
 	layout,
 	syncSeq,
 	onExpand,
@@ -4480,6 +4707,9 @@ function MissionControl({
 	agents: AgentDTO[];
 	/** The rank tiles take on mount and on Sync; read at no other time. */
 	order: string[];
+	/** Manually placed slots, retained across visits until Refresh. */
+	pins: McPins;
+	onPinsChange: Dispatch<SetStateAction<McPins>>;
 	/** A fixed layout, or "auto": each page shaped to the grid's own size. */
 	layout: McChoice;
 	/** Bumped by the Sync button: re-sort the tiles to `order` once. */
@@ -4504,7 +4734,79 @@ function MissionControl({
 	// told you nothing. The tile shows one session at a time and its tabs switch
 	// between them. Creating and closing sessions stays in the task panel, where
 	// the + and the ✕ live; a tile is a viewport onto work that already exists.
-	const [tiles, setTiles] = useState<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
+	const [placedTiles, setTiles] = useState<{ task: TaskDTO; sessions: SessionDTO[] }[]>([]);
+	const [dragOrder, setDragOrder] = useState<string[] | null>(null);
+	const dragging = dragOrder !== null;
+	// Session discovery owns membership, while current task props own status
+	// and recency. A slow session fetch cannot restore stale task metadata.
+	const freshTiles = useMemo(() => {
+		const current = new Map(tasks.map((t) => [t.id, t]));
+		return placedTiles.flatMap((tile) => {
+			const task = current.get(tile.task.id);
+			return task ? [task === tile.task ? tile : { ...tile, task }] : [];
+		});
+	}, [placedTiles, tasks]);
+	// Debounce changes in priority ranking. Background metadata
+	// and session refreshes must not keep restarting the quiet period.
+	const priorityOrder = useMemo(
+		() =>
+			[...freshTiles]
+				.sort((a, b) => byMcPriority(a.task, b.task))
+				.map((t) => t.task.id)
+				.join(" "),
+		[freshTiles],
+	);
+	// The requested priority can differ from the displayed order: ordering
+	// terminals already on the same page gives no extra visibility.
+	const [settled, setSettled] = useState({ requested: priorityOrder, order: priorityOrder });
+	const priorityOrderRef = useRef(priorityOrder);
+	priorityOrderRef.current = priorityOrder;
+	const pinsRef = useRef(pins);
+	pinsRef.current = pins;
+	// Explicit Refresh and layout selection always use the latest priority.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: explicit refresh/layout requests flush the pending order, independently of activity changes.
+	useLayoutEffect(() => {
+		const order = priorityOrderRef.current;
+		setSettled({ requested: order, order });
+	}, [syncSeq, layout]);
+	useEffect(() => {
+		if (layout !== "auto" || settled.requested === priorityOrder) return;
+		if (!settled.order || !priorityOrder) {
+			setSettled({ requested: priorityOrder, order: priorityOrder });
+			return;
+		}
+		const timer = window.setTimeout(() => {
+			const current = tilesRef.current;
+			const priority = new Map(priorityOrder.split(" ").map((id, i) => [id, i]));
+			const next = orderMcTiles(current, pinsRef.current, priority).map((t) => t.task.id);
+			const stable = stabilizeMcPages(
+				next,
+				current.map((t) => t.task.id),
+				pageSizeRef.current,
+			);
+			setSettled({ requested: priorityOrder, order: stable.join(" ") });
+		}, MC_REORDER_DELAY_MS);
+		return () => window.clearTimeout(timer);
+	}, [priorityOrder, settled, layout]);
+	const priorityRank = useMemo(
+		() => new Map((settled.order || priorityOrder).split(" ").map((id, i) => [id, i])),
+		[settled.order, priorityOrder],
+	);
+	const tiles = useMemo(() => {
+		if (layout !== "auto") return freshTiles;
+		if (dragOrder) {
+			// Keep drop targets steady while the pointer is holding a tile.
+			const rank = new Map(dragOrder.map((id, i) => [id, i]));
+			return [...freshTiles].sort(
+				(a, b) => (rank.get(a.task.id) ?? Infinity) - (rank.get(b.task.id) ?? Infinity),
+			);
+		}
+		return orderMcTiles(freshTiles, pins, priorityRank);
+	}, [freshTiles, layout, pins, dragOrder, priorityRank]);
+	const onPinsChangeRef = useRef(onPinsChange);
+	onPinsChangeRef.current = onPinsChange;
+	const pendingFocusRef = useRef<string | null>(null);
+	const pinUndosRef = useRef(new Map<string, { before: McPins; after: McPins }[]>());
 	// Only a tab the viewer clicked outlives this grid. The ones it resolved by
 	// itself are re-read when the next grid's tiles arrive, and left in place
 	// they would paint the old tab for a frame before that.
@@ -4596,7 +4898,8 @@ function MissionControl({
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [flip]);
 
-	// Tiles never reorder on their own. `order` is read only when we land here
+	// The base order for fixed layouts. Auto derives priority from live tasks
+	// above instead. `order` is read only when we land here
 	// and when Sync is pressed; between those, tiles hold their slots however
 	// the sidebar shuffles (agents finishing, statuses changing), so the tile
 	// you are reaching for is the one you get. Tasks not in the rank sort last.
@@ -4660,6 +4963,9 @@ function MissionControl({
 	// synced here (not at render time) so the effect legitimately depends on it.
 	useEffect(() => {
 		rankRef.current = rank;
+		placeRef.current.clear();
+		pinUndosRef.current.clear();
+		pendingFocusRef.current = null;
 		resort(true);
 	}, [rank, resort]);
 
@@ -4678,6 +4984,8 @@ function MissionControl({
 	// first. It could only cost: listForTask is routed per task, so for box-owned
 	// tasks every pass was one SSH round-trip PER TASK, and the old 2.5s tick issued
 	// them in a serial await chain that could outlast its own interval.
+	const taskIds = tasks.map((t) => t.id).join(" ");
+	// biome-ignore lint/correctness/useExhaustiveDependencies: membership changes must refetch sessions, independently of the event subscription's stable refs.
 	useEffect(() => {
 		let cancelled = false;
 		let inFlight = false;
@@ -4713,7 +5021,7 @@ function MissionControl({
 			offUpdated();
 			offExit();
 		};
-	}, [resort]);
+	}, [resort, taskIds]);
 
 	// The tiles this page actually shows. Computed before the empty-state return
 	// so the arrival effect below runs on every render, as hooks must.
@@ -4808,7 +5116,6 @@ function MissionControl({
 	const handledJumpRef = useRef(jump?.seq ?? 0);
 	const onJumpMissingRef = useRef(onJumpMissing);
 	onJumpMissingRef.current = onJumpMissing;
-	const pendingFocusRef = useRef<string | null>(null);
 	const tileEls = useRef(new Map<string, HTMLDivElement>());
 	useEffect(() => {
 		if (!jump || jump.seq === handledJumpRef.current) return;
@@ -4843,6 +5150,15 @@ function MissionControl({
 		const ta = tiles.find((t) => t.task.id === a);
 		const tb = tiles.find((t) => t.task.id === b);
 		if (!ta || !tb || ta === tb) return;
+		if (layout === "auto")
+			onPinsChange(
+				pinMcSwap(
+					pins,
+					tiles.map((t) => t.task.id),
+					a,
+					b,
+				),
+			);
 		setTiles(tiles.map((t) => (t === ta ? tb : t === tb ? ta : t)));
 	};
 	// Dragging across pages: while a tile is dragged, strips along the grid's
@@ -4852,7 +5168,6 @@ function MissionControl({
 	// flip unmounts the dragged tile's page, so its own dragend may never
 	// reach us: the drag is over at the first drop, dragend or mouse move
 	// anywhere (no mouse events fire mid-drag).
-	const [dragging, setDragging] = useState(false);
 	const flipTimerRef = useRef<number | null>(null);
 	const stopFlipTimer = useCallback(() => {
 		if (flipTimerRef.current !== null) window.clearTimeout(flipTimerRef.current);
@@ -4864,7 +5179,7 @@ function MissionControl({
 			dragIdRef.current = null;
 			stopFlipTimer();
 			setDropTarget(null);
-			setDragging(false);
+			setDragOrder(null);
 		};
 		window.addEventListener("drop", end, true);
 		window.addEventListener("dragend", end, true);
@@ -4909,6 +5224,18 @@ function MissionControl({
 			return;
 		}
 		placeRef.current.set(id, onto);
+		if (layout === "auto") {
+			const after = pinMcArrival(
+				pins,
+				tiles.map((t) => t.task.id),
+				id,
+				onto,
+			);
+			const undos = pinUndosRef.current.get(id) ?? [];
+			undos.push({ before: pins, after });
+			pinUndosRef.current.set(id, undos);
+			onPinsChange(after);
+		}
 		// Its agent is already waking from an earlier drop: this one only moves
 		// the spot. A second wake could start a second agent on the same
 		// conversation, since the engine only joins a resume by id (sessions.ts).
@@ -4917,7 +5244,17 @@ function MissionControl({
 		wakingTasksRef.current.add(id);
 		void onWake(task).then((woke) => {
 			wakingTasksRef.current.delete(id);
+			const undos = pinUndosRef.current.get(id) ?? [];
+			pinUndosRef.current.delete(id);
 			if (woke) return;
+			if (placeRef.current.has(id)) {
+				onPinsChangeRef.current((current) => {
+					let next = current;
+					for (const { before, after } of [...undos].reverse())
+						next = undoMcPins(next, before, after);
+					return next;
+				});
+			}
 			placeRef.current.delete(id);
 			if (pendingFocusRef.current === id) pendingFocusRef.current = null;
 		});
@@ -4928,7 +5265,7 @@ function MissionControl({
 			const id = pillTask(e);
 			if (!id) return;
 			// The page-flip strips, as for a dragged tile.
-			if (!dragging) setDragging(true);
+			if (!dragging) setDragOrder(tilesRef.current.map((t) => t.task.id));
 			if (!offTile(e)) return; // the tile under it answers
 			const takes = !hasTile(id);
 			if (takes) {
@@ -5085,12 +5422,16 @@ function MissionControl({
 							<div
 								className="bar movable"
 								draggable
-								title="Drag onto another tile to swap them"
+								title={
+									layout === "auto"
+										? "Drag onto another tile to pin this position until Refresh"
+										: "Drag onto another tile to swap them"
+								}
 								onDragStart={(e) => {
 									dragIdRef.current = task.id;
 									// Next tick: changing the DOM inside dragstart can make
 									// Chromium cancel the drag it is starting.
-									window.setTimeout(() => setDragging(true), 0);
+									window.setTimeout(() => setDragOrder(tilesRef.current.map((t) => t.task.id)), 0);
 									e.dataTransfer.setData(MC_TILE_MIME, task.id);
 									e.dataTransfer.effectAllowed = "move";
 								}}
@@ -5138,6 +5479,7 @@ function MissionControl({
 													[task.id]: { terminalId: session.terminalId, pinned: true },
 												}));
 												// A tab means "show me that terminal", as in the task panel.
+												pendingFocusRef.current = task.id;
 												if (changesOpen) toggleChanges(task.id);
 											}}
 										>
@@ -5154,6 +5496,7 @@ function MissionControl({
 								    would crowd a tile. Adding a skill stays in the panel. */}
 								<TerminalView
 									terminalId={shown}
+									autoFocus={false}
 									grammar={agentShown}
 									skills={agentShown}
 									skillButtons="sent"
