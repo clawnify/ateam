@@ -1196,6 +1196,13 @@ input {
 	-webkit-box-orient: vertical;
 	overflow: hidden;
 }
+/* An agent in the open task without the board tools (TaskDTO.boardToolsMissing). */
+.board-tools-note {
+	margin: 4px 0 6px;
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--amber);
+}
 /* The open task's branch: the one place it shows, and a click copies it. */
 .branch-line {
 	display: flex;

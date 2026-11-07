@@ -292,6 +292,12 @@ shows under the open task's title, beside its full title when the pointer
 rests on its sidebar row or board card for two seconds, and in the Lead's and
 the agents' board tools; written by an OpenRouter or OpenAI model when you add that key in Settings, otherwise
 by Claude Code, or turned off there),
+board tools with nothing to install (every launch hands them to the agent, so
+the Claude Code, Codex or OpenCode you already use gets them and its own config
+is never touched; an agent that never loaded them, because an organization's
+MCP policy dropped them, its CLI is too old, or it was started by hand in the
+task's terminal, gets a note under the task's title saying why, and the Lead
+says the same about itself in its chat),
 and signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
 Electron main process is boot-verified with native modules.

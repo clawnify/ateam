@@ -3562,6 +3562,21 @@ function TaskSummary({ task }: { task: TaskDTO }) {
 	);
 }
 
+/**
+ * An agent live in the open task that never reached the board tools
+ * (TaskDTO.boardToolsMissing, server/board-connections.ts): it looks fine,
+ * but its questions, messages and pages will never come. The engine writes the
+ * sentence, with what to do about it.
+ */
+function BoardToolsNote({ task }: { task: TaskDTO }) {
+	if (!task.boardToolsMissing) return null;
+	return (
+		<p className="board-tools-note" title={task.boardToolsMissing}>
+			{task.boardToolsMissing}
+		</p>
+	);
+}
+
 // Whether an artifact tab was opened or hidden. Hiding keeps the saved artifact;
 // the + menu can reopen it. Choices survive panel remounts and app restarts.
 const PAGE_CHOICES_KEY = "ateam.pageChoices";
@@ -4114,6 +4129,7 @@ export function TaskPanel({
 					</span>
 				</div>
 				<TaskSummary task={task} />
+				<BoardToolsNote task={task} />
 				<BranchLine task={task} />
 			</div>
 
