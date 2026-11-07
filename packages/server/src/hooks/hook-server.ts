@@ -9,6 +9,8 @@ export interface HookEvent {
 	terminalId: string;
 	eventType: string;
 	sessionId?: string;
+	/** The harness reporting from this pane, including a manual shell resume. */
+	agentId?: string;
 	/** Stop: the agent's final message of the turn, when its hook sent one. */
 	lastAssistantMessage?: string;
 	/** UserReply: what the user typed. */
@@ -425,6 +427,7 @@ export class HookServer extends EventEmitter {
 								terminalId,
 								eventType,
 								sessionId,
+								agentId: url.searchParams.get("agentId") || undefined,
 								...hookText(body),
 							} satisfies HookEvent);
 						}

@@ -42,13 +42,13 @@ esac
 # The reply is empty (204) unless this terminal has a follow-up armed, in which
 # case it is the agent's own continuation JSON and stdout is where it belongs.
 # A timeout or an unreachable app also yields empty, i.e. the old behaviour.
-URL="http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}&sessionId=\${CLAUDE_SESSION_ID:-}"
-# A turn's end and a user's reply carry the text the board classifier reads
-# (Stop: last_assistant_message, UserPromptSubmit: prompt), so those two POST
-# the hook's input. Everything else, PreToolUse above all (every tool call,
+URL="http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}&sessionId=\${CLAUDE_SESSION_ID:-}&agentId=\${ATEAM_AGENT_ID:-}"
+# Start carries the resumed conversation's id. A turn's end and a user's reply
+# carry the text the board classifier reads, so these POST the hook's input.
+# Everything else, PreToolUse above all (every tool call,
 # with its arguments), stays a bodiless GET.
 case "$EVENT" in
-	Stop|UserReply)
+	Start|Stop|UserReply)
 		if [ -n "$PAYLOAD" ]; then
 			BODY=$(printf '%s' "$PAYLOAD" | curl -s -m 2 --data-binary @- "$URL" 2>/dev/null || true)
 		else
@@ -81,7 +81,7 @@ esac
 # follow-up only reaches the agent through the Stop hook Ateam passes on the
 # launch line, which shares Claude's hook schema.
 # The payload rides along for the board classifier (see notify.sh).
-BODY=$(printf '%s' "$1" | curl -s -m 2 --data-binary @- "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}" 2>/dev/null || true)
+BODY=$(printf '%s' "$1" | curl -s -m 2 --data-binary @- "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}&agentId=codex" 2>/dev/null || true)
 [ -n "$BODY" ] && printf '%s' "$BODY"
 exit 0
 `;
@@ -616,6 +616,45 @@ export function codexHookArgs(notifyScriptPath: string): string {
 			return `-c ${sq(`hooks.${codexEvent}=[{hooks=[{type="command",command=${command}}]}]`)}`;
 		})
 		.join(" ");
+}
+
+/**
+ * A manual `codex resume <id>` in a task's shell needs the same per-launch
+ * hooks and board connection as the Resume button. Other commands pass through;
+ * Ateam's own launch starts with `-c` and already carries this configuration.
+ * Child Codex processes bypass the shim so they cannot claim their parent's tab.
+ */
+export async function ensureCodexResumeShim(userDataDir: string, hookPort: number): Promise<void> {
+	const hooksDir = join(userDataDir, "hooks");
+	const notify = join(hooksDir, "notify.sh");
+	const sq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+	const script = `#!/bin/sh
+REALPATH=$(printf '%s' "$PATH" | awk -v RS=: -v d="$ATEAM_HOOKS_DIR" 'NF && $0!=d' | paste -sd: -)
+REAL_CODEX=$(PATH="$REALPATH" command -v codex 2>/dev/null)
+[ -n "$REAL_CODEX" ] || { echo "codex: command not found" >&2; exit 127; }
+if [ "$1" != resume ] || [ -n "$ATEAM_CODEX_ACTIVE" ] || [ -z "$ATEAM_TERMINAL_ID" ]; then
+	export ATEAM_CODEX_ACTIVE=1
+	exec "$REAL_CODEX" "$@"
+fi
+for ARG in "$@"; do
+	case "$ARG" in -h|--help) exec "$REAL_CODEX" "$@" ;; esac
+done
+export ATEAM_AGENT_ID=codex ATEAM_CODEX_ACTIVE=1
+# Announce the launch even while Codex is asking the user to trust its hooks.
+# Only a literal UUID is safe to put in JSON and pin before Codex resolves it.
+RESUME_ID=""
+case "$2" in
+	????????-????-????-????-????????????)
+		case "$2" in *[!0-9a-fA-F-]*) ;; *) RESUME_ID=$(printf '%s' "$2" | tr A-F a-f) ;; esac ;;
+esac
+printf '{"session_id":"%s"}' "$RESUME_ID" | sh ${sq(notify)} Start
+"$REAL_CODEX" -c ${sq(`notify=["sh",${JSON.stringify(join(hooksDir, "codex-notify.sh"))}]`)} ${codexHookArgs(notify)} ${codexBoardMcpArgs(hookPort)} "$@"
+RESULT=$?
+sh ${sq(notify)} AgentExit </dev/null
+exit "$RESULT"
+`;
+	await writeIfChanged(join(hooksDir, "codex"), script);
+	await chmod(join(hooksDir, "codex"), 0o755);
 }
 
 /**

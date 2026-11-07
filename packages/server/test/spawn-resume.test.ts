@@ -10,8 +10,11 @@ import * as schema from "../../db/src/schema";
 import { peerToken } from "../src/agent-setup";
 import { FollowUps } from "../src/follow-ups";
 import { BOARD_INSTRUCTIONS } from "../src/hooks/board-mcp";
+import { applyAgentQuit } from "../src/pty/agent-quit";
 import type { Services } from "../src/services";
+import { liveAgentIds } from "../src/services";
 import {
+	adoptManuallyResumedCodex,
 	adoptReportedConversation,
 	isCodexSideThreadEvent,
 	spawnAgentInTask,
@@ -344,8 +347,71 @@ describe("peer messaging on the launch line", () => {
 	});
 });
 
-// Codex names its own conversations, so a fresh Codex tab has no id until its
-// first turn ends and notify reports one (hook-server.ts, hookSessionId).
+describe("a manual Codex resume", () => {
+	const event = {
+		terminalId: "manual",
+		eventType: "Start",
+		agentId: "codex",
+		sessionId: "resumed",
+	};
+	const tab = (agentId: string, status: "idle" | "stopped", terminalId = "manual") =>
+		repo.createSession(db, {
+			taskId,
+			agentId,
+			status,
+			terminalId,
+			agentSessionId: "previous",
+			cwd: "/w",
+		});
+
+	it("revives a quit agent in its shell, replaces the conversation id, and quits back to a shell", () => {
+		const prior = tab("codex", "stopped");
+		const resumed = adoptManuallyResumedCodex(db, prior, event);
+		expect(resumed).toMatchObject({ agentId: "codex", status: "idle", agentSessionId: "resumed" });
+		expect(repo.getSessionByTerminal(db, "manual")).toMatchObject(resumed);
+		expect(liveAgentIds(db, { has: () => true }, taskId)).toEqual(["codex"]);
+		// Opening the conversation is looking, not work.
+		expect(repo.getTask(db, taskId)).toMatchObject({ column: "needs_attention", lastEventAt: T0 });
+		applyAgentQuit(db, { has: () => true }, resumed);
+		expect(liveAgentIds(db, { has: () => true }, taskId)).toEqual(["shell"]);
+	});
+
+	it("recognizes Codex in a newly opened task shell, including a different previous harness", () => {
+		for (const agentId of ["shell", "claude"]) {
+			const prior = tab(agentId, agentId === "shell" ? "idle" : "stopped", `manual-${agentId}`);
+			const resumed = adoptManuallyResumedCodex(db, prior, {
+				...event,
+				terminalId: prior.terminalId,
+			});
+			expect(resumed.agentId).toBe("codex");
+			expect(repo.getTask(db, taskId)?.agentId).toBe("codex");
+		}
+	});
+
+	it("can recover at notify's Stop when Codex hooks have not been trusted", () => {
+		const prior = tab("codex", "stopped");
+		expect(adoptManuallyResumedCodex(db, prior, { ...event, eventType: "Stop" })).toMatchObject({
+			agentSessionId: "resumed",
+			status: "idle",
+		});
+	});
+
+	it("leaves live agents and closed panes alone, and does not revive on exit or unattributed hooks", () => {
+		const live = tab("codex", "idle");
+		expect(adoptManuallyResumedCodex(db, live, event)).toBe(live);
+		const stopped = { ...live, status: "stopped" as const };
+		for (const e of [
+			{ ...event, agentId: undefined },
+			{ ...event, eventType: "AgentExit" },
+		]) {
+			expect(adoptManuallyResumedCodex(db, stopped, e)).toBe(stopped);
+		}
+		const closed = { ...stopped, exitedAt: Date.now() };
+		expect(adoptManuallyResumedCodex(db, closed, event)).toBe(closed);
+	});
+});
+
+// Codex names its own conversations; hooks or turn-end notify report the id.
 describe("adoptReportedConversation", () => {
 	const tab = (agentId: string, agentSessionId: string | null) =>
 		repo.createSession(db, {

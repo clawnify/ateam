@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { agentCommand, getAgent, latestSessionInDir, probeAgentBinary } from "@ateam/agents";
-import { repo, type Task } from "@ateam/db";
+import { type AgentSession, repo, type Task } from "@ateam/db";
 import { createTask as gitCreateTask, seedWorktree } from "@ateam/git-core";
 import {
 	BOARD_MCP_TOOLS,
@@ -20,6 +20,7 @@ import {
 } from "./agent-setup";
 import { codexThreadIsConversation, latestCodexThreadInDir } from "./codex-threads";
 import { shell } from "./headless";
+import type { HookEvent } from "./hooks/hook-server";
 import { refreshLoginPath } from "./login-env";
 import type { Services } from "./services";
 import { labelTask } from "./task-labels";
@@ -212,8 +213,8 @@ export function isCodexSideThreadEvent(
 /**
  * Record the conversation an agent says its tab holds, when Ateam could not
  * name it at launch: a harness that names its own (Codex), launched fresh, has
- * no id until its hooks report one, and Codex's first report is its first
- * turn's end. With the id on the row, a restart or a restored tab resumes it by
+ * no id until its hooks report one (or its turn-end notify, without trusted
+ * hooks). With the id on the row, a restart or a restored tab resumes it by
  * id, and two of them at once meet in spawnAgentInTask instead of putting two
  * agents on it. Never over an id already there: Ateam minted it, or a resume
  * picked it.
@@ -226,6 +227,35 @@ export function adoptReportedConversation(
 	if (!reportedId || session.agentSessionId) return;
 	if (getAgent(session.agentId)?.sessionIdFlag) return;
 	repo.updateSession(db, session.id, { agentSessionId: reportedId });
+}
+
+/** A Codex resumed by hand is an agent again, in the same still-live pane. */
+export function adoptManuallyResumedCodex(
+	db: Services["db"],
+	session: AgentSession,
+	event: HookEvent,
+): AgentSession {
+	if (
+		event.agentId !== "codex" ||
+		(event.eventType !== "Start" && event.eventType !== "Stop") ||
+		(session.agentId !== "shell" && session.status !== "stopped") ||
+		session.exitedAt != null ||
+		session.exitReason != null
+	)
+		return session;
+	const resumed = {
+		...session,
+		agentId: "codex",
+		agentSessionId: event.sessionId ?? null,
+		status: "idle" as const,
+	};
+	repo.updateSession(db, session.id, {
+		agentId: resumed.agentId,
+		agentSessionId: resumed.agentSessionId,
+		status: resumed.status,
+	});
+	repo.updateTask(db, session.taskId, { agentId: "codex" });
+	return resumed;
 }
 
 /**
