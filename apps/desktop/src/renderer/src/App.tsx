@@ -2686,6 +2686,8 @@ export function App() {
 								: undefined
 					}
 					initialFiles={composerSeed?.files ?? composerFiles}
+					defaultAgentId={composerSeed?.agentId}
+					initialYolo={composerSeed?.yolo}
 					initialAlias={composerSeed?.alias}
 					project={projectPill}
 					environments={composerEnvs}
@@ -2801,6 +2803,7 @@ export function App() {
 							initialName={p.name}
 							initialPrompt={p.prompt}
 							defaultAgentId={p.agentId}
+							initialYolo={false}
 							// Where the proposing agent runs: what it knows holds there.
 							initialAlias={originOf(task.projectId)}
 							header={note}
@@ -2867,6 +2870,7 @@ export function App() {
 							initialPrompt={p.prompt}
 							initialFiles={item.files}
 							defaultAgentId={p.agentId}
+							initialYolo={false}
 							initialAlias={originOf(item.projectId)}
 							header={note}
 							environments={composerEnvs}
