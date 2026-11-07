@@ -54,6 +54,7 @@ const ENTITY = new Set<string>([
 	CH.peersSendFromLead, // {taskId} — delivered by the engine that owns the task
 	CH.tasksAnswerQuestion, // {taskId} — the question lives on the task's engine
 	CH.tasksClearProposal, // {taskId} — so do the proposals
+	CH.tasksPages, // taskId — saved artifact metadata
 	CH.tasksPage, // taskId — main serves the page from the engine that owns the task
 	CH.tasksChangeSteps, // taskId — written where the task's worktree and transcripts are
 	CH.projectsRemove,

@@ -31,6 +31,7 @@ export const CH = {
 	tasksAnswerQuestion: "tasks:answerQuestion",
 	tasksClearProposal: "tasks:clearProposal",
 	tasksPage: "tasks:page",
+	tasksPages: "tasks:pages",
 	tasksChangeSteps: "tasks:changeSteps",
 	peersSendFromLead: "peers:sendFromLead",
 	// Cross-box (v30): an agent on a linked box lists this box's tasks and messages
