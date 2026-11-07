@@ -498,6 +498,11 @@ async function launchAgent(
 	// AgentExit). Quoted: on macOS the script lives under "Application Support".
 	const notify = `'${services.notifyScriptPath.replace(/'/g, `'\\''`)}'`;
 	const command = `${agentCmd}; sh ${notify} AgentExit; exec ${shell} -l`;
+	// Watch for the board tools reaching it (board-connections.ts), from before
+	// the agent can possibly connect. Agent mode carries none by design.
+	if (!(agent.id === "claude" && input.agentMode)) {
+		services.boardConnections?.launched(terminalId, task.id, agent.id);
+	}
 	services.pty.spawn({
 		terminalId,
 		shell,

@@ -3551,6 +3551,21 @@ function TaskSummary({ task }: { task: TaskDTO }) {
 	);
 }
 
+/**
+ * An agent live in the open task that never reached the board tools
+ * (TaskDTO.boardToolsMissing, server/board-connections.ts): it looks fine,
+ * but its questions, messages and pages will never come. The engine writes the
+ * sentence, with what to do about it.
+ */
+function BoardToolsNote({ task }: { task: TaskDTO }) {
+	if (!task.boardToolsMissing) return null;
+	return (
+		<p className="board-tools-note" title={task.boardToolsMissing}>
+			{task.boardToolsMissing}
+		</p>
+	);
+}
+
 // Whether the user opened (true) or closed (false) each page in the task panel,
 // by page id. A page nobody chose for opens by itself if show_page made it, and
 // not if it came with a question (TaskPageDTO.fromQuestion). Not the panel's
@@ -4049,6 +4064,7 @@ function TaskPanel({
 					</span>
 				</div>
 				<TaskSummary task={task} />
+				<BoardToolsNote task={task} />
 				<BranchLine task={task} />
 			</div>
 

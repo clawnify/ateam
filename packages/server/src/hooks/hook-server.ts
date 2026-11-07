@@ -224,6 +224,9 @@ export class HookServer extends EventEmitter {
 					const callerVerified = Boolean(
 						callerTerminalId && token && this.inbox?.verify(callerTerminalId, token),
 					);
+					// The terminal's agent has the board tools: any request with its own
+					// token proves it (board-connections.ts).
+					if (callerVerified) this.emit("boardRequest", callerTerminalId);
 					let body = "";
 					req.on("data", (c) => {
 						body += c;
