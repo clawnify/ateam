@@ -65,14 +65,14 @@ function fakeRouter(overrides: Record<string, (args: unknown[]) => unknown> = {}
 }
 
 describe("lead tools", () => {
-	it("get_board leaves merged tasks out and names the repo and the machine", async () => {
+	it("get_board lists Done tasks and names the repo and the machine", async () => {
 		const r = fakeRouter();
 		const tools = createLeadTools({ handle: r.handle, machineOf: () => "hetzner" });
 		const res = await tools.call("get_board", {});
 		const text = res?.text ?? "";
 		expect(text).toContain("ateam (repo clawnify/ateam, hetzner, project p1)");
 		expect(text).toContain("t1 | fix login | review | idle | claude");
-		expect(text).not.toContain("old work");
+		expect(text).toContain("old work");
 	});
 
 	it("propose_task starts nothing: the proposal goes to the chat for the user to create", async () => {
@@ -366,9 +366,9 @@ describe("lead tools", () => {
 		expect(text).toContain("a-merged | a merged | merged | not_running | codex | 2m ago");
 		expect(text).toContain("b-mid | b mid");
 		expect(text).not.toContain("a old");
-		// Without recent, merged work stays out.
+		// The default lists Done work too: only archived tasks are left out.
 		const all = (await tools.call("get_board", {}))?.text ?? "";
-		expect(all).not.toContain("a merged");
+		expect(all).toContain("a merged");
 	});
 
 	it("looks a task up by id on its own engine, without listing the board", async () => {

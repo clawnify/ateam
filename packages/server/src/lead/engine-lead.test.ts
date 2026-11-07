@@ -327,7 +327,7 @@ describe("a call with the box's Lead (v33, Ateam Go)", () => {
 			const phone = connect(ext);
 			// No key on this box: the phone hears what is missing, OpenAI isn't asked.
 			await expect(phone.call(LEAD_CH.callStart, "v=0 offer", [])).rejects.toThrow(
-				"This box has no OpenAI key for calls. Add yours in Ateam on your Mac",
+				"This box has no OpenAI key for calls. Add yours from the box's card in Ateam Go",
 			);
 			expect(asked).toHaveLength(0);
 

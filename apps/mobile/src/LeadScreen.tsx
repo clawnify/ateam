@@ -528,6 +528,8 @@ export function LeadScreen({
 	onUpdateBox,
 	updating,
 	onStartProposal,
+	callKeyMissing,
+	onAddCallKey,
 }: {
 	lead: LeadClient | null;
 	/** The box it runs on, named when the phone holds more than one; else null. */
@@ -542,6 +544,9 @@ export function LeadScreen({
 	updating: boolean;
 	/** "Start it" on a proposal card: the app opens its sheet or form. */
 	onStartProposal?: (item: Extract<LeadItem, { kind: "proposal" }>) => void;
+	/** Whether the box has no OpenAI key for calls, and its AI keys page (CallButton). */
+	callKeyMissing?: () => Promise<boolean>;
+	onAddCallKey?: () => void;
 }) {
 	const [snap, setSnap] = useState<LeadSnapshot | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
@@ -698,7 +703,13 @@ export function LeadScreen({
 					Lead · {boxLabel ?? "this box"}
 				</Text>
 				<View style={styles.headActions}>
-					<CallButton boxLabel={boxLabel} boxVersion={boxVersion} onUpdateBox={onUpdateBox} />
+					<CallButton
+						boxLabel={boxLabel}
+						boxVersion={boxVersion}
+						onUpdateBox={onUpdateBox}
+						keyMissing={callKeyMissing}
+						onAddKey={onAddCallKey}
+					/>
 					<Pressable
 						onPress={newConversation}
 						disabled={!snap?.items.length}
