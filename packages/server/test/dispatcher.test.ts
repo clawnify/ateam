@@ -81,6 +81,37 @@ describe("createDispatcher", () => {
 		expect(d.methods).not.toContain(CH.utilAttachClipboardImage);
 	});
 
+	it("lists artifact metadata and reads the requested page, with legacy latest fallback", async () => {
+		const db = createTestDb();
+		const { engine } = makeEngine(db);
+		const dispatcher = createDispatcher(engine);
+		const project = repo.upsertProject(db, { repoPath: "/tmp/pages", name: "pages" });
+		if (!project) throw new Error("seed");
+		const task = repo.createTask(db, {
+			projectId: project.id,
+			name: "pages",
+			slug: "pages",
+			branch: "pages",
+			baseBranch: "main",
+			worktreePath: "/tmp/pages/task",
+		});
+		repo.setTaskPage(db, task.id, { id: "one", title: "One", at: 1 }, "first");
+		repo.setTaskPage(db, task.id, { id: "two", title: "Two", at: 2 }, "second");
+		expect(await dispatcher.handle(CH.tasksPages, [task.id])).toEqual([
+			{ id: "one", title: "One", at: 1 },
+			{ id: "two", title: "Two", at: 2 },
+		]);
+		expect(await dispatcher.handle(CH.tasksPage, [task.id, "one"])).toMatchObject({
+			id: "one",
+			html: "first",
+		});
+		expect(await dispatcher.handle(CH.tasksPage, [task.id])).toMatchObject({
+			id: "two",
+			html: "second",
+		});
+		expect(await dispatcher.handle(CH.tasksPage, [task.id, "missing"])).toBeNull();
+	});
+
 	// Mission Control listens for taskUpdated rather than polling every task's
 	// sessions, so a session that doesn't announce itself is invisible to other
 	// windows and to the phone. The agent spawn always broadcast; the shell spawn

@@ -5,8 +5,8 @@
  * scripts run but cannot reach Ateam, the network beyond loading libraries, or
  * the window around it.
  *
- * One page per task: a new one replaces it. The HTML is stored apart from the
- * task (task_pages) and read with tasks:page, so the board's task list, sent
+ * Multiple pages per task. The HTML is stored apart from the
+ * task (saved_task_pages) and read with tasks:page, so the board's task list, sent
  * to every client on every change, carries only its title.
  */
 import { randomUUID } from "node:crypto";
@@ -35,7 +35,7 @@ export function validatePage(
 	return { ok: true, title, html };
 }
 
-/** File the page on its task (replacing the last one) and return its summary. */
+/** File the page on its task and return its summary. */
 export function savePage(
 	db: AteamDb,
 	taskId: string,
@@ -43,9 +43,10 @@ export function savePage(
 	html: string,
 	now = Date.now(),
 	fromQuestion = false,
+	pageId?: string,
 ): TaskPage {
 	const page: TaskPage = {
-		id: randomUUID(),
+		id: pageId ?? randomUUID(),
 		title,
 		at: now,
 		...(fromQuestion ? { fromQuestion } : {}),
@@ -57,21 +58,39 @@ export function savePage(
 /** show_page: the page appears on the task's panel and in the Lead chat. */
 export function applyShowPage(
 	db: AteamDb,
-	req: { taskId: string; title?: unknown; html?: unknown },
+	req: { taskId: string; title?: unknown; html?: unknown; pageId?: unknown },
 	notify: (taskId: string) => void,
 	now = Date.now(),
 ): { ok: boolean; reason: string } {
 	const task = repo.getTask(db, req.taskId);
 	if (!task) return { ok: false, reason: `no task ${req.taskId}` };
-	const verdict = validatePage(req, "Page");
+	let previous: ReturnType<typeof repo.getTaskPage> = null;
+	if (req.pageId !== undefined) {
+		if (typeof req.pageId !== "string" || !req.pageId)
+			return { ok: false, reason: "pageId must name an existing artifact on this task" };
+		previous = repo.getTaskPage(db, task.id, req.pageId);
+		if (!previous || previous.fromQuestion)
+			return {
+				ok: false,
+				reason: "pageId must name an existing artifact on this task, not a question page",
+			};
+	}
+	const verdict = validatePage(req, previous?.title ?? "Page");
 	if (!verdict.ok) return verdict;
-	savePage(db, task.id, verdict.title, verdict.html, now);
+	const page = savePage(
+		db,
+		task.id,
+		verdict.title,
+		verdict.html,
+		previous ? Math.max(now, previous.at + 1) : now,
+		false,
+		previous?.id,
+	);
 	repo.updateTask(db, task.id, { isUnread: true });
 	notify(task.id);
 	return {
 		ok: true,
-		reason:
-			"Shown. The user sees it on this task's panel in Ateam and in the Lead chat if they follow this task (not on the phone yet). It replaces this task's previous page. Do not paste the HTML into your reply; say in a line what it shows.",
+		reason: `Shown. Artifact id: ${page.id}. The user sees it on this task's panel in Ateam and in the Lead chat if they follow this task (not on the phone yet). Other artifacts stay saved. To revise this artifact, pass its pageId to show_page. Do not paste the HTML into your reply; say in a line what it shows.`,
 	};
 }
 

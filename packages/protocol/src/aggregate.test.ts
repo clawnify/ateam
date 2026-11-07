@@ -176,3 +176,15 @@ test("learn routes ids that arrived outside a call", async () => {
 	await agg.handle(CH.ptyListForTask, ["pushed-task"]);
 	expect(remote.calls).toContain(CH.ptyListForTask);
 });
+
+test("artifact metadata and page reads route to the task's engine", async () => {
+	const { local, remote, agg } = fixtures();
+	await agg.handle(CH.projectsList, []);
+	await agg.handle(CH.tasksList, ["pB"]);
+	await agg.handle(CH.tasksPages, ["tB"]);
+	await agg.handle(CH.tasksPage, ["tB", "artifact"]);
+	expect(remote.calls).toContain(CH.tasksPages);
+	expect(remote.calls).toContain(CH.tasksPage);
+	expect(local.calls).not.toContain(CH.tasksPages);
+	expect(local.calls).not.toContain(CH.tasksPage);
+});
