@@ -11,6 +11,7 @@ import type {
 	SessionDTO,
 	SessionHitDTO,
 	TaskDTO,
+	TaskPageDTO,
 	TaskTriage,
 	UnifiedProject,
 } from "@ateam/protocol";
@@ -41,6 +42,7 @@ import {
 	Copy,
 	EllipsisVertical,
 	ExternalLink,
+	FileText,
 	FolderPlus,
 	GitBranch,
 	GitCommitVertical,
@@ -3566,16 +3568,9 @@ function BoardToolsNote({ task }: { task: TaskDTO }) {
 	);
 }
 
-// Whether the user opened (true) or closed (false) each page in the task panel,
-// by page id. A page nobody chose for opens by itself if show_page made it, and
-// not if it came with a question (TaskPageDTO.fromQuestion). Not the panel's
-// state: the panel remounts on every side/full switch. Kept across restarts
-// because a task keeps its page forever; past the cap the oldest choices fall
-// off, and those pages go back to their default.
-// shortcut: this Mac's localStorage; move it onto the task row once another
-// client (the phone) shows pages and should agree on what was closed.
+// Whether an artifact tab was opened or hidden. Hiding keeps the saved artifact;
+// the + menu can reopen it. Choices survive panel remounts and app restarts.
 const PAGE_CHOICES_KEY = "ateam.pageChoices";
-const PAGE_CHOICES_MAX = 200;
 const pageChoices = new Map<string, boolean>(
 	(() => {
 		try {
@@ -3583,7 +3578,7 @@ const pageChoices = new Map<string, boolean>(
 			return Array.isArray(v)
 				? v.filter(
 						(e): e is [string, boolean] =>
-							Array.isArray(e) && typeof e[0] === "string" && typeof e[1] === "boolean",
+							Array.isArray(e) && typeof e[0] === "string" && e[1] === false,
 					)
 				: [];
 		} catch {
@@ -3592,12 +3587,10 @@ const pageChoices = new Map<string, boolean>(
 	})(),
 );
 const choosePage = (pageId: string, open: boolean) => {
-	pageChoices.delete(pageId); // re-inserted last: the newest choice is the last to go
-	pageChoices.set(pageId, open);
-	for (const old of pageChoices.keys()) {
-		if (pageChoices.size <= PAGE_CHOICES_MAX) break;
-		pageChoices.delete(old);
-	}
+	// Only hidden tabs need a stored choice. Never evict another hidden tab
+	// just because the user has accumulated more task artifacts.
+	if (open) pageChoices.delete(pageId);
+	else pageChoices.set(pageId, false);
 	try {
 		localStorage.setItem(PAGE_CHOICES_KEY, JSON.stringify([...pageChoices]));
 	} catch {
@@ -3608,7 +3601,10 @@ const choosePage = (pageId: string, open: boolean) => {
 // terminal, and the page fills it instead (the 480px side panel always does).
 const PAGE_SPLIT_MIN = 880;
 
-function TaskPanel({
+type TaskCompanion = { taskId: string; kind: "page" | "terminal"; id: string };
+const taskCompanions = new Map<string, TaskCompanion>();
+
+export function TaskPanel({
 	task,
 	agents,
 	envAgents,
@@ -3711,9 +3707,53 @@ function TaskPanel({
 			return !s;
 		});
 	const [viewFile, setViewFile] = useState<string | null>(null);
-	// This task's live PTY sessions — agents and shells alike. They ARE the tabs:
-	// the daemon already owns as many per task as you like, so there is nothing
-	// extra to persist. Tagged with the task they were read for, because the render
+	const [savedPages, setSavedPages] = useState<{ taskId: string; pages: TaskPageDTO[] } | null>(
+		null,
+	);
+
+	const [companion, setCompanionState] = useState<TaskCompanion | null>(
+		() => taskCompanions.get(task.id) ?? null,
+	);
+	const setCompanion = (next: TaskCompanion | null) => {
+		if (next) taskCompanions.set(task.id, next);
+		else taskCompanions.delete(task.id);
+		setCompanionState(next);
+	};
+	const [, rerender] = useReducer((n: number) => n + 1, 0);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only artifact identity/revision changes require a reload; hook events recreate task.page too.
+	useEffect(() => {
+		let cancelled = false;
+		const latest = task.page;
+		void (window.ateam.tasks.pages?.(task.id) ?? Promise.resolve(latest ? [latest] : []))
+			.then((pages) => {
+				if (!cancelled) setSavedPages({ taskId: task.id, pages });
+			})
+			.catch((error) => {
+				// Older engines know only the latest page. Other failures reach the toast.
+				if (cancelled) return;
+				setSavedPages({ taskId: task.id, pages: latest ? [latest] : [] });
+				if (!String(error).includes("Unknown method"))
+					void run(async () => {
+						throw error;
+					});
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [task.id, task.page?.id, task.page?.at, run]);
+	const pages = savedPages?.taskId === task.id ? [...savedPages.pages] : [];
+	if (task.page) {
+		const at = pages.findIndex((page) => page.id === task.page?.id);
+		if (at < 0) pages.push(task.page);
+		else pages[at] = task.page;
+	}
+	const pageTabs = pages.filter(
+		(page) => page.id !== task.question?.pageId && pageChoices.get(page.id) !== false,
+	);
+	const side = companion?.taskId === task.id ? companion : null;
+
+	// This task's live PTY sessions — agents and shells alike — supply its
+	// terminal tabs. The daemon already owns as many per task as you like. Tagged with the task they were read for, because the render
 	// right after you switch tasks still holds the previous task's list — reading
 	// that as this task's would put a foreign terminal in the panel. `null` means
 	// "not read yet", which the tab-fallback effect below must not mistake for
@@ -3736,6 +3776,7 @@ function TaskPanel({
 	useEffect(() => {
 		setChangesOpen(false);
 		setViewFile(null);
+		setCompanionState(taskCompanions.get(task.id) ?? null);
 		setEditorOpen(false);
 		setEditorSrc(null);
 		setEditorBusy(null);
@@ -3924,7 +3965,7 @@ function TaskPanel({
 				taskId: task.id,
 			});
 			await refreshSessions();
-			showTerminal(tid);
+			showCompanionTerminal(tid);
 		});
 
 	const commit = () =>
@@ -3941,10 +3982,34 @@ function TaskPanel({
 	 * the editor still covered it) left no obvious way back out.
 	 */
 	const showTerminal = (tid: string | null) => {
+		setCompanion(null);
 		setTerminal(tid);
 		setEditorOpen(false);
 		setBrowserOpen(false);
 		setChangesOpen(false);
+	};
+
+	const showCompanionTerminal = (tid: string) => {
+		if (!terminalId || tid === terminalId) {
+			showTerminal(tid);
+			return;
+		}
+		setCompanion({ taskId: task.id, kind: "terminal", id: tid });
+		setEditorOpen(false);
+		setBrowserOpen(false);
+		setChangesOpen(false);
+	};
+	const openPage = (page: TaskPageDTO) => {
+		choosePage(page.id, true);
+		setCompanion({ taskId: task.id, kind: "page", id: page.id });
+		setEditorOpen(false);
+		setBrowserOpen(false);
+		setChangesOpen(false);
+	};
+	const hidePage = (id: string) => {
+		choosePage(id, false);
+		if (side?.kind === "page" && side.id === id) setCompanion(null);
+		rerender();
 	};
 
 	// The question card folded to one line, to read the terminal behind it. Held
@@ -3977,45 +4042,34 @@ function TaskPanel({
 	const mainViewOpen = editorOpen || browserOpen || changesOpen;
 	const termDocked = termSide && mainViewOpen;
 
-	// The agent's page, unless the open question's card draws it. A show_page
-	// page is open unless closed: beside the terminal when the body is wide
-	// enough, over it when not. The editor, browser and changes views cover it.
-	// Not open, it is a bar above the terminal's toolbar. A question's page,
-	// once the question has ended, only ever opens from the bar.
-	const page = task.page && task.question?.pageId !== task.page.id ? task.page : null;
-	const [, rerender] = useReducer((n: number) => n + 1, 0);
-	const pageShown = !!page && (pageChoices.get(page.id) ?? !page.fromQuestion) && !mainViewOpen;
+	const page = side?.kind === "page" ? pageTabs.find((page) => page.id === side.id) : undefined;
+	const companionSession =
+		side?.kind === "terminal" && side.id !== terminalId
+			? tabs.find(({ session, live }) => live && session.terminalId === side.id)
+			: undefined;
+	const companionShown = !!(page || companionSession) && !mainViewOpen;
 	const bodyRef = useRef<HTMLDivElement>(null);
 	const [bodyWide, setBodyWide] = useState(false);
 	useLayoutEffect(() => {
 		const el = bodyRef.current;
 		if (!el) return;
-		// Measured now as well: the observer's first report lands after the paint.
 		const check = () => setBodyWide(el.clientWidth >= PAGE_SPLIT_MIN);
 		check();
 		const ro = new ResizeObserver(check);
 		ro.observe(el);
 		return () => ro.disconnect();
 	}, []);
-	const pageFills = pageShown && !bodyWide;
-	const openPage = () => {
-		if (!page) return;
-		choosePage(page.id, true);
-		setEditorOpen(false);
-		setBrowserOpen(false);
-		setChangesOpen(false);
-		rerender();
-	};
-	const closePage = () => {
-		if (!page) return;
-		choosePage(page.id, false);
-		rerender();
-	};
-	const pageBar = page && !pageShown && (
-		<div className="panel-page">
-			<PageFrame taskId={task.id} pageId={page.id} title={page.title} onOpen={openPage} />
-		</div>
-	);
+	const companionFills = companionShown && (!bodyWide || !terminalId);
+	useLayoutEffect(() => {
+		// A narrow pane covers the session. Typing must not reach a hidden agent.
+		const active = document.activeElement;
+		if (
+			companionFills &&
+			active instanceof HTMLElement &&
+			bodyRef.current?.querySelector(".term-wrap")?.contains(active)
+		)
+			active.blur();
+	}, [companionFills]);
 
 	// Closing a tab kills its PTY — tabs are exactly the live sessions, so there
 	// is no "closed but still running" state to explain. Confirm first when the
@@ -4038,7 +4092,9 @@ function TaskPanel({
 	// the agent — not back into the toggle button.
 	const setModeAndFocusTerm = (m: "side" | "full") => {
 		onSetMode(m);
-		requestAnimationFrame(() => window.dispatchEvent(new Event("ateam:focus-terminal")));
+		requestAnimationFrame(() =>
+			window.dispatchEvent(new CustomEvent("ateam:focus-terminal", { detail: terminalId })),
+		);
 	};
 
 	return (
@@ -4069,31 +4125,48 @@ function TaskPanel({
 			</div>
 
 			<div className="actions">
-				{/* Left: this task's terminals, and the `+` that opens another. What kind
+				{/* Left: this task's sessions and saved docs, and the `+` for another tab. What kind
 				    of agent session you get is the composer's question, not a row of
 				    buttons — so the row stays legible however many tabs are open. */}
-				<div className="sess-tabs" role="tablist" aria-label="Sessions">
+				<div
+					className="sess-tabs"
+					role="tablist"
+					aria-label="Task workspace"
+					aria-multiselectable="true"
+				>
 					{tabs.map(({ session, label, live }) => (
 						<div
 							key={session.terminalId}
-							className={`sess-tab ${session.terminalId === terminalId ? "active" : ""} ${
+							className={`sess-tab ${!mainViewOpen && (session.terminalId === terminalId || companionSession?.session.terminalId === session.terminalId) ? "active" : ""} ${
 								live ? "" : "restorable"
 							}`}
 						>
 							<button
 								type="button"
 								role="tab"
-								aria-selected={live && session.terminalId === terminalId}
+								aria-selected={
+									live &&
+									!mainViewOpen &&
+									(session.terminalId === terminalId ||
+										companionSession?.session.terminalId === session.terminalId)
+								}
 								className="sess-tab-name"
 								title={live ? label : `${label} — closed by a restart. Click to resume it.`}
 								onClick={() => {
 									// The tab already on screen folds the question card over it.
-									if (live && task.question && session.terminalId === terminalId && !mainViewOpen) {
+									if (
+										live &&
+										task.question &&
+										session.terminalId === terminalId &&
+										!mainViewOpen &&
+										!companionShown
+									) {
 										toggleQuestion();
 										return;
 									}
 									if (live) {
-										showTerminal(session.terminalId);
+										if (session.agentId === "shell") showCompanionTerminal(session.terminalId);
+										else showTerminal(session.terminalId);
 										return;
 									}
 									setEditorOpen(false);
@@ -4107,6 +4180,17 @@ function TaskPanel({
 								</span>
 								<span>{label}</span>
 							</button>
+							{live && terminalId && session.terminalId !== terminalId && (
+								<button
+									type="button"
+									className="sess-tab-close"
+									title={`Open ${label} beside the last session`}
+									aria-label={`Open ${label} beside the last session`}
+									onClick={() => showCompanionTerminal(session.terminalId)}
+								>
+									<Columns2 size={13} />
+								</button>
+							)}
 							{/* A stranded tab has no process to kill, and it retires itself
 							    after one run of the app — so it carries no close button. */}
 							{live && (
@@ -4122,6 +4206,33 @@ function TaskPanel({
 							)}
 						</div>
 					))}
+					{pageTabs.map((page) => (
+						<div
+							key={page.id}
+							className={`sess-tab ${companionShown && side?.kind === "page" && side.id === page.id ? "active" : ""}`}
+						>
+							<button
+								type="button"
+								role="tab"
+								className="sess-tab-name"
+								aria-selected={companionShown && side?.kind === "page" && side.id === page.id}
+								title={`Open ${page.title} beside the last session`}
+								onClick={() => openPage(page)}
+							>
+								<FileText size={14} />
+								<span>{page.title}</span>
+							</button>
+							<button
+								type="button"
+								className="sess-tab-close"
+								title={`Hide ${page.title} tab (keeps the saved doc)`}
+								aria-label={`Hide ${page.title} tab`}
+								onClick={() => hidePage(page.id)}
+							>
+								<X size={14} />
+							</button>
+						</div>
+					))}
 					<Menu
 						icon={Plus}
 						label="New tab"
@@ -4133,6 +4244,15 @@ function TaskPanel({
 							},
 							{ label: "Terminal", icon: SquareTerminal, onClick: shell },
 							{ label: "Resume last conversation", icon: History, onClick: resumeLast },
+							...pages
+								.filter(
+									(page) => pageChoices.get(page.id) === false && page.id !== task.question?.pageId,
+								)
+								.map((page) => ({
+									label: `Reopen ${page.title}`,
+									icon: FileText,
+									onClick: () => openPage(page),
+								})),
 						]}
 					/>
 				</div>
@@ -4383,11 +4503,12 @@ function TaskPanel({
 				    view when the sidebar toggle is on. */}
 				<div
 					className="term-wrap"
-					style={{ display: (termDocked || !mainViewOpen) && !pageFills ? "flex" : "none" }}
+					style={{ display: (termDocked || !mainViewOpen) && !companionFills ? "flex" : "none" }}
 				>
 					{terminalId ? (
 						<TerminalView
 							terminalId={terminalId}
+							autoFocus={!companionShown && !mainViewOpen}
 							grammar={agentTerminal}
 							skills={agentTerminal}
 							onAddSkill={alias === null ? addSkill : undefined}
@@ -4397,7 +4518,6 @@ function TaskPanel({
 									await window.ateam.tasks.setColumn(task.id, "merged");
 								})
 							}
-							aboveToolbar={pageBar}
 						/>
 					) : (
 						<>
@@ -4408,7 +4528,6 @@ function TaskPanel({
 								</button>
 								<span className="muted">or open a tab with + to start a terminal</span>
 							</div>
-							{pageBar}
 						</>
 					)}
 				</div>
@@ -4478,9 +4597,35 @@ function TaskPanel({
 					</div>
 				)}
 
-				{page && pageShown && (
-					<div className={`page-pane${pageFills ? " fills" : ""}`}>
-						<PageFrame taskId={task.id} pageId={page.id} title={page.title} onClose={closePage} />
+				{page && companionShown && (
+					<div className={`page-pane${companionFills ? " fills" : ""}`}>
+						<PageFrame
+							key={`${page.id}:${page.at}`}
+							taskId={task.id}
+							pageId={page.id}
+							title={page.title}
+							onClose={() => setCompanion(null)}
+						/>
+					</div>
+				)}
+				{companionSession && companionShown && (
+					<div className={`page-pane terminal-companion${companionFills ? " fills" : ""}`}>
+						<div className="page-head">
+							<SessionIcon agentId={companionSession.session.agentId} size={14} />
+							<span className="page-title">{companionSession.label}</span>
+							<IconButton
+								icon={Maximize2}
+								label="Focus this session"
+								onClick={() => showTerminal(companionSession.session.terminalId)}
+							/>
+							<IconButton icon={X} label="Close split view" onClick={() => setCompanion(null)} />
+						</div>
+						<TerminalView
+							terminalId={companionSession.session.terminalId}
+							grammar={companionSession.session.agentId !== "shell"}
+							skills={companionSession.session.agentId !== "shell"}
+							onAddSkill={alias === null ? addSkill : undefined}
+						/>
 					</div>
 				)}
 			</div>

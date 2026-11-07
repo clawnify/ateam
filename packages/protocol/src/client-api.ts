@@ -48,6 +48,7 @@ import type {
 	SkillLinkResult,
 	SystemInfo,
 	TaskDTO,
+	TaskPageDTO,
 	UpdateLoopInput,
 	UpdateResultDTO,
 } from "./index";
@@ -216,6 +217,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			listArchived: (projectId) => call<TaskDTO[]>(CH.tasksListArchived, [projectId]),
 			setArchived: (id, archived) => call<TaskDTO>(CH.tasksSetArchived, [id, archived]),
 			changeSteps: (taskId) => call<ChangeStepsDTO>(CH.tasksChangeSteps, [taskId]),
+			pages: (taskId) => call<TaskPageDTO[]>(CH.tasksPages, [taskId]),
 		},
 		git: {
 			commit: (taskId, message) => call<{ sha: string }>(CH.gitCommit, [taskId, message]),

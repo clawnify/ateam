@@ -77,6 +77,20 @@ describe("Follower", () => {
 		expect(items).toHaveLength(1);
 	});
 
+	it("shows an explicit artifact revision once, including after a restart", async () => {
+		const first = make();
+		const page = { id: "artifact", title: "Research", at: 150 };
+		first.follower.follow(task({ page }));
+		await first.follower.onTaskUpdated(task({ page: { ...page, at: 151 } }));
+		await first.follower.onTaskUpdated(task({ page: { ...page, at: 151 } }));
+		expect(first.items).toMatchObject([{ kind: "page", pageId: "artifact", at: 151 }]);
+		const again = make(first.dir);
+		await again.follower.onTaskUpdated(task({ page: { ...page, at: 151 } }));
+		expect(again.items).toHaveLength(0);
+		await again.follower.onTaskUpdated(task({ page: { ...page, at: 152 } }));
+		expect(again.items).toMatchObject([{ kind: "page", pageId: "artifact", at: 152 }]);
+	});
+
 	it("ignores tasks nobody touched from the chat", async () => {
 		const { follower, items, reads } = make();
 		await follower.onTaskUpdated(task({ id: "other", lastReplyAt: 999 }));
