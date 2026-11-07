@@ -286,6 +286,13 @@ interface ComposeInput {
 }
 
 export function App() {
+	const [fullScreen, setFullScreen] = useState(() => window.ateamWindow.isFullScreen());
+	useEffect(() => {
+		const off = window.ateamWindow.onFullScreen(setFullScreen);
+		// A transition may have finished between the first render and subscribing.
+		setFullScreen(window.ateamWindow.isFullScreen());
+		return off;
+	}, []);
 	// Non-null in a detached window: this window is pinned to one project and
 	// hides the project switcher; null in the main multi-project dashboard.
 	const boundProjectId = useMemo(() => window.ateam.window.boundProjectId(), []);
@@ -1882,59 +1889,61 @@ export function App() {
 			style={{ "--sidebar-w": `${sidebarWidth}px`, "--lead-w": `${leadWidth}px` } as CSSProperties}
 		>
 			<aside className={`sidebar ${rail ? "rail" : ""}`}>
-				{/* In rail mode the traffic lights own this strip; the toggle moves
-				    below them as the first tile. */}
-				<div className="side-top">
-					{!rail && (
-						<IconButton
-							icon={Settings}
-							label="Settings"
-							shortcut="⌘,"
-							active={view === "settings"}
-							attention={boxesNeedYou ? "a box needs you" : undefined}
-							onClick={() => goToView("settings")}
-						/>
-					)}
-					{!rail && <IconButton icon={PanelLeft} label="Collapse sidebar" onClick={toggleRail} />}
-				</div>
-				{/* The project switcher, its own full-width row under the traffic-light
-				    strip (as Codex and Open Session do), so a name has room. A
-				    detached window IS one project, so it names it instead. */}
-				{!rail && (
-					<div className="side-project">
-						{boundProjectId ? (
-							<ProjectTitle
-								name={boundProject?.name ?? "…"}
-								owner={boundProject?.githubOwner ?? null}
-								color={boundProject?.color ?? null}
-								path={boundProject?.repoPath}
-							/>
-						) : !projectsLoaded ? (
-							// The row's height, held until the list says whether it is a
-							// switcher or an Add project button.
-							<div className="h-8" />
-						) : (
-							<ProjectSwitcher
-								cards={switcherCards}
-								activeKey={activeCard?.key ?? null}
-								all={allProjects}
-								onSelect={(card) => {
-									const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
-									if (primary) selectProject(primary.projectId);
-								}}
-								onSelectAll={selectAll}
-								onAdd={addProject}
-								onOpenWindow={(card) => {
-									const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
-									if (primary) window.ateam.window.openProject(primary.projectId);
-								}}
-								onRemove={removeProject}
-								drop={activeProjectId ? projectDropProps("switcher", activeProjectId) : undefined}
-								dropping={dropCardKey === "switcher"}
+				<div className={`side-header${fullScreen && !rail ? " fullscreen" : ""}`}>
+					{/* In rail mode the traffic lights own this strip; the toggle moves
+					    below them as the first tile. */}
+					<div className="side-top">
+						{!rail && (
+							<IconButton
+								icon={Settings}
+								label="Settings"
+								shortcut="⌘,"
+								active={view === "settings"}
+								attention={boxesNeedYou ? "a box needs you" : undefined}
+								onClick={() => goToView("settings")}
 							/>
 						)}
+						{!rail && <IconButton icon={PanelLeft} label="Collapse sidebar" onClick={toggleRail} />}
 					</div>
-				)}
+					{/* The selector shares Settings' row in native full screen, and
+					    gets the full width below the traffic lights otherwise. A
+					    detached window names its pinned project instead. */}
+					{!rail && (
+						<div className="side-project">
+							{boundProjectId ? (
+								<ProjectTitle
+									name={boundProject?.name ?? "…"}
+									owner={boundProject?.githubOwner ?? null}
+									color={boundProject?.color ?? null}
+									path={boundProject?.repoPath}
+								/>
+							) : !projectsLoaded ? (
+								// The row's height, held until the list says whether it is a
+								// switcher or an Add project button.
+								<div className="h-8" />
+							) : (
+								<ProjectSwitcher
+									cards={switcherCards}
+									activeKey={activeCard?.key ?? null}
+									all={allProjects}
+									onSelect={(card) => {
+										const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+										if (primary) selectProject(primary.projectId);
+									}}
+									onSelectAll={selectAll}
+									onAdd={addProject}
+									onOpenWindow={(card) => {
+										const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+										if (primary) window.ateam.window.openProject(primary.projectId);
+									}}
+									onRemove={removeProject}
+									drop={activeProjectId ? projectDropProps("switcher", activeProjectId) : undefined}
+									dropping={dropCardKey === "switcher"}
+								/>
+							)}
+						</div>
+					)}
+				</div>
 
 				{rail ? (
 					// The expanded sidebar's three sections as tile groups, each led
@@ -3553,6 +3562,21 @@ function TaskSummary({ task }: { task: TaskDTO }) {
 	);
 }
 
+/**
+ * An agent live in the open task that never reached the board tools
+ * (TaskDTO.boardToolsMissing, server/board-connections.ts): it looks fine,
+ * but its questions, messages and pages will never come. The engine writes the
+ * sentence, with what to do about it.
+ */
+function BoardToolsNote({ task }: { task: TaskDTO }) {
+	if (!task.boardToolsMissing) return null;
+	return (
+		<p className="board-tools-note" title={task.boardToolsMissing}>
+			{task.boardToolsMissing}
+		</p>
+	);
+}
+
 // Whether an artifact tab was opened or hidden. Hiding keeps the saved artifact;
 // the + menu can reopen it. Choices survive panel remounts and app restarts.
 const PAGE_CHOICES_KEY = "ateam.pageChoices";
@@ -4105,6 +4129,7 @@ export function TaskPanel({
 					</span>
 				</div>
 				<TaskSummary task={task} />
+				<BoardToolsNote task={task} />
 				<BranchLine task={task} />
 			</div>
 

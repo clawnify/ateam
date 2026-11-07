@@ -2,9 +2,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CH, type TaskDTO } from "@ateam/protocol";
 import { createEngine, type Engine, readSettings } from "@ateam/server";
-import { app, BrowserWindow, dialog, Menu } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { autoUpdater } from "electron-updater";
 import { windowBackground } from "../shared/theme";
+import { WINDOW_CH } from "../shared/window";
 import { APP_NAME } from "./app-name";
 import { startCrossBox } from "./cross-box";
 import { createHost, registerHostIpc } from "./host";
@@ -211,6 +212,9 @@ function createWindow(projectId?: string): BrowserWindow {
 	});
 	windowProject.set(win, projectId ?? null);
 	guardPageFrames(win.webContents);
+	// Native full screen hides the traffic lights; maximized windows keep them.
+	win.on("enter-full-screen", () => win.webContents.send(WINDOW_CH.evtFullScreen, true));
+	win.on("leave-full-screen", () => win.webContents.send(WINDOW_CH.evtFullScreen, false));
 
 	// Pin the project by stamping the renderer URL; the preload reads it back via
 	// window.boundProjectId(). A hash keeps loadFile working (no querystring file).
@@ -265,6 +269,9 @@ app
 	.whenReady()
 	.then(async () => {
 		app.setName(APP_NAME);
+		ipcMain.on(WINDOW_CH.fullScreen, (event) => {
+			event.returnValue = BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false;
+		});
 
 		// Show the app icon in the macOS dock during dev (packaged builds use the
 		// .icns in build/). Best-effort: the icon lives at build/icon.png.

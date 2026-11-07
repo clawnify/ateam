@@ -553,6 +553,15 @@ export interface TaskDTO {
 	 * the same as empty — a read-only addition, so no protocol bump.
 	 */
 	agentIds?: string[];
+	/**
+	 * Why an agent live in this task can't use the board tools (ask_user,
+	 * send_message, show_page, proposals): a sentence for the user, set once the
+	 * agent has been up for a minute without connecting to the board (an
+	 * organization policy, an old CLI, or an agent started by hand). Null when
+	 * every agent has them or the engine can't tell. Runtime-only, never stored;
+	 * absent from an older engine, which reads the same as null.
+	 */
+	boardToolsMissing?: string | null;
 	/** Merge-queue position; null when the task is not queued to merge. */
 	mergeStatus: MergeStatus | null;
 	prNumber: number | null;
