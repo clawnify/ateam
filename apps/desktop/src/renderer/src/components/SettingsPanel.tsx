@@ -309,7 +309,7 @@ const ROWS: Row[] = [
 		section: "ai",
 		title: "OpenRouter API key",
 		description:
-			"Lets Jev, a small decision model on OpenRouter, sort finished turns and filter grammar suggestions, and lets an OpenRouter model write titles and summaries. What each one sends is described below.",
+			"Lets Jev, a small decision model on OpenRouter, sort finished turns and filter grammar suggestions, and lets an OpenRouter model write titles and summaries. What each one sends is described below. Ateam copies this key to your boxes when sync is on, so use one with a credit limit (set on the key at openrouter.ai › Settings › API Keys).",
 		control: (_s, { credentials, saveKey }) => (
 			<KeyField provider="openRouter" status={credentials} onSave={saveKey} />
 		),
@@ -319,7 +319,7 @@ const ROWS: Row[] = [
 		section: "ai",
 		title: "OpenAI API key",
 		description:
-			"Lets you call the Lead by voice. It also lets Luna, OpenAI's decision model, do the same work as Jev, and lets an OpenAI model write titles and summaries, so you need no OpenRouter account. Only a key saved here is used, never OPENAI_API_KEY from your shell.",
+			"Lets you call the Lead by voice. It also lets Luna, OpenAI's decision model, do the same work as Jev, and lets an OpenAI model write titles and summaries, so you need no OpenRouter account. Only a key saved here is used, never OPENAI_API_KEY from your shell. Ateam copies this key to your boxes when sync is on, and OpenAI sets spend limits per project, so make the key in a project with a monthly limit (Project settings).",
 		control: (_s, { credentials, saveKey }) => (
 			<KeyField provider="openAi" status={credentials} onSave={saveKey} />
 		),
