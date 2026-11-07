@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/cover.png" alt="Ateam — coding agents from anywhere: the Ateam app icon over a beach with an empty deck chair by the sea" width="900" />
+  <img src="./assets/cover.png" alt="Ateam — coding agents from anywhere: Claude Code, Codex and OpenCode, one git worktree per task, local and remote environments, Mac, iPhone and iPad access, Lead chat and voice calls, and scheduled agent loops." width="900" />
 </p>
 
 <p align="center">
