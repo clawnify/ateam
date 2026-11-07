@@ -22,7 +22,7 @@ import { WorktreeGuard } from "../src/worktree-guard";
 // assert the extraction still emits it.
 function makeEngine(db: AteamDb, agentPresence: BinaryPresence = "present") {
 	const taskUpdated: string[] = [];
-	const spawned: { terminalId: string; args?: string[] }[] = [];
+	const spawned: { terminalId: string; args?: string[]; env?: NodeJS.ProcessEnv }[] = [];
 	const engine = {
 		services: {
 			db,
@@ -105,6 +105,32 @@ describe("createDispatcher", () => {
 		};
 		expect(spawned.terminalId).toBeTruthy();
 		expect(taskUpdated).toContain(task.id);
+	});
+
+	it("gives task shells the identity and hooks needed by a manual Codex resume", async () => {
+		const db = createTestDb();
+		const { engine, spawned } = makeEngine(db);
+		const d = createDispatcher(engine);
+		const project = repo.upsertProject(db, { repoPath: "/r", name: "r" });
+		if (!project) throw new Error("failed to seed project");
+		const task = repo.createTask(db, {
+			projectId: project.id,
+			name: "shell",
+			slug: "shell",
+			branch: "shell",
+			baseBranch: "main",
+			worktreePath: "/r/w",
+		});
+		const { terminalId } = (await d.handle(CH.ptySpawnShell, [{ taskId: task.id }])) as {
+			terminalId: string;
+		};
+		expect(spawned[0]?.env).toMatchObject({
+			ATEAM_TERMINAL_ID: terminalId,
+			ATEAM_AGENT_ID: "shell",
+			ATEAM_HOOKS_DIR: "/tmp/hooks",
+		});
+		expect(spawned[0]?.env?.ATEAM_TERMINAL_TOKEN).toBeTruthy();
+		expect(spawned[0]?.env?.PATH).toStartWith("/tmp/hooks:");
 	});
 
 	// The card is created before its worktree finishes seeding, and it renders

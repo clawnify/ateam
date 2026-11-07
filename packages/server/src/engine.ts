@@ -20,7 +20,13 @@ import type {
 	PtyExitEvent,
 	TaskDTO,
 } from "@ateam/protocol";
-import { ensureGhShim, ensureNotifyScript, ensurePeerSecret, verifyPeerToken } from "./agent-setup";
+import {
+	ensureCodexResumeShim,
+	ensureGhShim,
+	ensureNotifyScript,
+	ensurePeerSecret,
+	verifyPeerToken,
+} from "./agent-setup";
 import { ARCHIVE_SWEEP_MS, archiveIdleTasks } from "./archive";
 import { stampBrowserUse } from "./browser";
 import {
@@ -45,6 +51,7 @@ import { makeStrandReconciler } from "./pty/reconcile";
 import { queueCodexMessage } from "./codex-queue";
 import { liveAgentIds, type Services, toTaskDTO } from "./services";
 import {
+	adoptManuallyResumedCodex,
 	adoptReportedConversation,
 	createTaskInProject,
 	isCodexSideThreadEvent,
@@ -331,6 +338,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		log: opts.log,
 	});
 	const notifyScriptPath = await ensureNotifyScript(dataDir);
+	await ensureCodexResumeShim(dataDir, hookPort);
 	await ensureGhShim(dataDir);
 	const peerSecret = await ensurePeerSecret(dataDir);
 	const hooksDir = join(dataDir, "hooks");
@@ -650,10 +658,19 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 
 	// Agent status hooks → update session/task, drive the kanban column.
 	hooks.on("hook", (e: HookEvent) => {
-		const session = repo.getSessionByTerminal(db, e.terminalId);
-		if (!session) return;
+		const prior = repo.getSessionByTerminal(db, e.terminalId);
+		if (!prior) return;
 		// Codex's side threads report their turns from this terminal too.
-		if (isCodexSideThreadEvent(session, e.sessionId)) return;
+		if (
+			isCodexSideThreadEvent(
+				{ ...prior, agentId: e.agentId === "codex" ? "codex" : prior.agentId },
+				e.sessionId,
+			)
+		)
+			return;
+		// A rejected resume never started an agent in this shell.
+		if (e.eventType === "AgentExit" && e.agentId === "codex" && prior.agentId !== "codex") return;
+		const session = adoptManuallyResumedCodex(db, prior, e);
 		// Before anything below can act on this event: the peer messenger
 		// restarts an agent at its Stop, and that restart must resume by id.
 		adoptReportedConversation(db, session, e.sessionId);
@@ -707,7 +724,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		// A fresh launch already filed the card as running when it spawned, and
 		// its first Working follows within seconds; a resume sits idle at the
 		// prompt and must not move the card or refresh its "last activity".
-		if (e.eventType === "Start") return;
+		if (e.eventType === "Start") {
+			if (session !== prior) sendTaskUpdated(session.taskId);
+			return;
+		}
 		const task = repo.getTask(db, session.taskId);
 		if (task) {
 			// Activity brings an archived task back, whatever the event: the early

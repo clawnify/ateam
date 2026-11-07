@@ -60,6 +60,7 @@ import {
 	type TaskWait,
 	type UpdateLoopInput,
 } from "@ateam/protocol";
+import { buildAgentEnv, peerToken } from "./agent-setup";
 import { installBrowser, openBrowserView } from "./browser";
 import { credentialStatuses, credentialsPath, updateCredentials } from "./credentials-file";
 import { createEditorHost, installCodeServer } from "./editor";
@@ -249,7 +250,13 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			shell,
 			args: ["-l"],
 			cwd: task.worktreePath,
-			env: { ...process.env },
+			env: buildAgentEnv({
+				terminalId,
+				agentId: "shell",
+				hookPort: services.hookPort,
+				hooksDir: services.hooksDir,
+				token: peerToken(services.peerSecret, terminalId),
+			}),
 		});
 		// A new session IS a change to the task — say so, exactly as the agent
 		// spawn does. Without this, a shell opened in one window is invisible to

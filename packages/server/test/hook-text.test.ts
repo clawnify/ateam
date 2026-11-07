@@ -111,6 +111,11 @@ describe("the conversation id reaches the engine", () => {
 		expect(events[0]).toMatchObject({ eventType: "Stop", sessionId: "sess-7" });
 	});
 
+	it("from SessionStart, before the resumed agent has done any work", async () => {
+		const { events } = await fire("Start", { session_id: "resumed-7" });
+		expect(events[0]).toMatchObject({ eventType: "Start", sessionId: "resumed-7" });
+	});
+
 	it("is absent from a bodiless event", async () => {
 		const { events } = await fire("Working", { session_id: "sess-7" });
 		expect(events[0].sessionId).toBeUndefined();
