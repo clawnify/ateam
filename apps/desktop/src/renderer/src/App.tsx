@@ -58,6 +58,7 @@ import {
 	Minimize2,
 	PanelLeft,
 	PanelRight,
+	Pause,
 	Play,
 	Plus,
 	RefreshCw,
@@ -2200,6 +2201,15 @@ export function App() {
 													task={task}
 													selected={task != null && task.id === sidebarSelectedId}
 													onClick={() => (task ? openFromSidebar(task) : goToView("loops"))}
+													onToggle={() =>
+														window.ateam.loops.setEnabled(l.id, !l.enabled).then(
+															() => refreshLoops(),
+															(e) =>
+																setError(
+																	`Couldn't ${l.enabled ? "pause" : "resume"} ${l.title}: ${e instanceof Error ? e.message : String(e)}`,
+																),
+														)
+													}
 													onRunNow={() =>
 														window.ateam.loops.runNow(l.id).then(
 															(list) => {
@@ -3177,18 +3187,26 @@ function LoopRow({
 	task,
 	selected,
 	onClick,
+	onToggle,
 	onRunNow,
 }: {
 	loop: LoopDTO;
 	task: TaskDTO | null;
 	selected: boolean;
 	onClick: () => void;
+	/** Pause or resume scheduled runs, like the Loops tab's toggle. */
+	onToggle: () => Promise<void>;
 	/** Run it now, off schedule, like the Loops tab's Run now. */
 	onRunNow: () => Promise<void>;
 }) {
 	// Starting a run can take seconds (the first one creates the task's
 	// worktree), so the row's icon spins until the engine answers.
 	const [starting, setStarting] = useState(false);
+	const [toggling, setToggling] = useState(false);
+	const toggle = () => {
+		setToggling(true);
+		void onToggle().finally(() => setToggling(false));
+	};
 	const runNow = () => {
 		setStarting(true);
 		void onRunNow().finally(() => setStarting(false));
@@ -3216,7 +3234,15 @@ function LoopRow({
 					label={`Actions for ${loop.title}`}
 					icon={EllipsisVertical}
 					className="size-5 [&_svg:not([class*='size-'])]:size-3.5"
-					items={[{ label: "Run now", icon: Play, disabled: starting, onClick: runNow }]}
+					items={[
+						{ label: "Run now", icon: Play, disabled: starting, onClick: runNow },
+						{
+							label: loop.enabled ? "Pause" : "Resume",
+							icon: loop.enabled ? Pause : Play,
+							disabled: toggling,
+							onClick: toggle,
+						},
+					]}
 				/>
 			</span>
 		</div>
