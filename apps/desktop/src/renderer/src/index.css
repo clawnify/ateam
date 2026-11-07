@@ -319,6 +319,25 @@ input {
 }
 /* Slim header row sharing the traffic-light strip: the collapse toggle lives
    here (like Arc/Linear), and the accordions start right below — no dead gap. */
+.side-header {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	flex: none;
+	width: 100%;
+}
+/* Full screen frees the traffic-light strip for the project and settings.
+   Keep one mounted selector so its menu and focus survive the transition. */
+.side-header.fullscreen {
+	grid-template-columns: minmax(0, 1fr) auto;
+}
+.side-header.fullscreen .side-top {
+	grid-area: 1 / 2;
+}
+.side-header.fullscreen .side-project {
+	grid-area: 1 / 1;
+	align-self: center;
+	padding: 0 0 0 6px;
+}
 .side-top {
 	height: 38px;
 	flex: none;
@@ -443,6 +462,7 @@ input {
    project name sits in the same row. */
 .side-project {
 	flex: none;
+	min-width: 0;
 	padding: 0 6px 4px;
 }
 .project-title {
