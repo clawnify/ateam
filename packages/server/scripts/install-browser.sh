@@ -30,7 +30,18 @@
 #                     nothing with no tailnet. The VNC password is the second lock,
 #                     not the first: never set this to a public address.
 #   TASKWINDOW_VERSION       the TaskWindow release to pin (default below)
-set -euo pipefail
+set -Eeuo pipefail
+# Where `set -e` ends the script, say which command did, on stderr (the app shows
+# its last lines), instead of ending it with no word. -E hands the trap to
+# functions too. It speaks only in the script's own shell, so a failure inside
+# $(…) is told once, by the line that used it, and only while -e is on.
+on_err() {
+	local status=$? cmd="${BASH_COMMAND%%$'\n'*}"
+	if [ "${BASHPID:-$$}" = "$$" ] && [[ $- == *e* ]]; then
+		printf '\n!! install-browser.sh stopped at line %s (exit %s): %s\n' "$1" "$status" "$cmd" >&2
+	fi
+}
+trap 'on_err $LINENO' ERR
 
 TASKWINDOW_VERSION="${TASKWINDOW_VERSION:-0.2.13}"
 # The Chrome Web Store id of TaskWindow; the store build pairs with the daemon by
@@ -78,7 +89,9 @@ command -v curl >/dev/null || die "curl is required"
 # The node the engine runs on, which install.sh pinned in its launcher and whose
 # npm it already used; TaskWindow only needs >= 18. The login PATH's node can be
 # a distro build without npm (a Sprite's /usr/bin/node), so it is only the fallback.
-NODE="$(sed -n 's/^exec \([^ ]*\) .*/\1/p' "$BIN_DIR/ateam" 2>/dev/null | head -1)"
+# A box install.sh never ran on has no launcher: sed then fails, and without the
+# `|| true` pipefail would end the script here, silently, before the die below.
+NODE="$(sed -n 's/^exec \([^ ]*\) .*/\1/p' "$BIN_DIR/ateam" 2>/dev/null | head -1 || true)"
 [ -x "$NODE" ] || NODE="$(bash -lc 'command -v node' 2>/dev/null || true)"
 [ -n "$NODE" ] || die "no node on the login PATH: run install.sh first"
 NODE="$(readlink -f "$NODE")"
@@ -208,8 +221,10 @@ if [ -z "$VIEW_ADDR" ]; then
 	if [ -s "$DATA_DIR/ws-addr" ]; then HOST="$(head -1 "$DATA_DIR/ws-addr" | sed 's/:[0-9]*$//')"; fi
 	if [ -z "$HOST" ]; then HOST="$(tailscale ip -4 2>/dev/null | head -1 || true)"; fi
 	# Tailscale in userspace mode (boxd) owns no interface, and a bind to its IP
-	# would fail on every restart.
-	if [ -n "$HOST" ] && ! ip -4 -o addr show 2>/dev/null | grep -qF " $HOST/"; then HOST=""; fi
+	# would fail on every restart. Not `grep -q`: ip writes each address line on
+	# its own, and once grep -q quits at the match, a later line kills ip with
+	# SIGPIPE, which pipefail reads as no match.
+	if [ -n "$HOST" ] && ! ip -4 -o addr show 2>/dev/null | grep -F " $HOST/" >/dev/null; then HOST=""; fi
 	if [ -n "$HOST" ] && [ "$HOST" != 127.0.0.1 ]; then VIEW_ADDR="$HOST:6080"; fi
 fi
 if [ -n "$VIEW_ADDR" ]; then SERVICES="$SERVICES ateam-novnc-tailnet"; fi
@@ -259,7 +274,7 @@ if [ "$SVC_MGR" = systemd ]; then
 	# re-run never closes the browser under an agent. A new TaskWindow is worth a
 	# restart, and so is noVNC: it holds no state (a viewer reconnects), and a
 	# running one would keep listening where an older run put it.
-	# shellcheck disable=SC2086
+	# shellcheck disable=SC2046,SC2086
 	sudo systemctl enable --now $(printf '%s.service ' $SERVICES) >/dev/null 2>&1
 	sudo systemctl restart ateam-novnc.service
 	if [ -n "$VIEW_ADDR" ]; then sudo systemctl restart ateam-novnc-tailnet.service; fi
