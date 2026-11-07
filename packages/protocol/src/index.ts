@@ -204,7 +204,7 @@ export interface TaskQuestionDTO {
 	kind?: "permission" | "askUserQuestion";
 	/** The task's page (TaskDTO.page) drawn with this question: the agent laid
 	 *  the decision out in HTML, and the page's own buttons can answer. Only
-	 *  while TaskDTO.page still has this id; a newer page replaces it. */
+	 *  independently of TaskDTO.page, which names only the latest artifact. */
 	pageId?: string;
 }
 

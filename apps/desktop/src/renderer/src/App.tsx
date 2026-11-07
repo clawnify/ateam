@@ -3556,7 +3556,6 @@ function TaskSummary({ task }: { task: TaskDTO }) {
 // Whether an artifact tab was opened or hidden. Hiding keeps the saved artifact;
 // the + menu can reopen it. Choices survive panel remounts and app restarts.
 const PAGE_CHOICES_KEY = "ateam.pageChoices";
-const PAGE_CHOICES_MAX = 200;
 const pageChoices = new Map<string, boolean>(
 	(() => {
 		try {
@@ -3564,7 +3563,7 @@ const pageChoices = new Map<string, boolean>(
 			return Array.isArray(v)
 				? v.filter(
 						(e): e is [string, boolean] =>
-							Array.isArray(e) && typeof e[0] === "string" && typeof e[1] === "boolean",
+							Array.isArray(e) && typeof e[0] === "string" && e[1] === false,
 					)
 				: [];
 		} catch {
@@ -3573,12 +3572,10 @@ const pageChoices = new Map<string, boolean>(
 	})(),
 );
 const choosePage = (pageId: string, open: boolean) => {
-	pageChoices.delete(pageId); // re-inserted last: the newest choice is the last to go
-	pageChoices.set(pageId, open);
-	for (const old of pageChoices.keys()) {
-		if (pageChoices.size <= PAGE_CHOICES_MAX) break;
-		pageChoices.delete(old);
-	}
+	// Only hidden tabs need a stored choice. Never evict another hidden tab
+	// just because the user has accumulated more task artifacts.
+	if (open) pageChoices.delete(pageId);
+	else pageChoices.set(pageId, false);
 	try {
 		localStorage.setItem(PAGE_CHOICES_KEY, JSON.stringify([...pageChoices]));
 	} catch {
@@ -3592,7 +3589,7 @@ const PAGE_SPLIT_MIN = 880;
 type TaskCompanion = { taskId: string; kind: "page" | "terminal"; id: string };
 const taskCompanions = new Map<string, TaskCompanion>();
 
-function TaskPanel({
+export function TaskPanel({
 	task,
 	agents,
 	envAgents,
@@ -4080,7 +4077,9 @@ function TaskPanel({
 	// the agent — not back into the toggle button.
 	const setModeAndFocusTerm = (m: "side" | "full") => {
 		onSetMode(m);
-		requestAnimationFrame(() => window.dispatchEvent(new Event("ateam:focus-terminal")));
+		requestAnimationFrame(() =>
+			window.dispatchEvent(new CustomEvent("ateam:focus-terminal", { detail: terminalId })),
+		);
 	};
 
 	return (
@@ -4493,6 +4492,7 @@ function TaskPanel({
 					{terminalId ? (
 						<TerminalView
 							terminalId={terminalId}
+							autoFocus={!companionShown && !mainViewOpen}
 							grammar={agentTerminal}
 							skills={agentTerminal}
 							onAddSkill={alias === null ? addSkill : undefined}

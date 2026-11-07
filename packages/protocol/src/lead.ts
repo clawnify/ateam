@@ -209,7 +209,7 @@ export type LeadItem =
 			reaction?: string;
 	  }
 	/** A followed task's agent showed the user a page (show_page): drawn in the
-	 *  thread from the task, so a page replaced since says so. */
+	 *  thread from the task. The page id reads that saved artifact. */
 	| { kind: "page"; id: string; task: LeadTaskRef; pageId: string; title: string; at: number }
 	| { kind: "assistant"; id: string; text: string; at: number }
 	| {

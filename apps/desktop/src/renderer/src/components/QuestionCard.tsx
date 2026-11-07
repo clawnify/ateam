@@ -252,11 +252,11 @@ export function QuestionCard({
 				<div className="md question-text">
 					<Markdown text={q.text} />
 				</div>
-				{q.pageId && task.page?.id === q.pageId && (
+				{q.pageId && (
 					<PageFrame
 						taskId={task.id}
 						pageId={q.pageId}
-						title={task.page.title}
+						title={task.page?.id === q.pageId ? task.page.title : headline(q.text)}
 						onAnswer={(v) => !sending && void answer(v)}
 					/>
 				)}
