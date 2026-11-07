@@ -27,7 +27,8 @@ function makeEngine(db: AteamDb, agentPresence: BinaryPresence = "present") {
 		services: {
 			db,
 			pty: {
-				has: () => false,
+				// Like the real client (pty-client.ts): live from the moment it spawns.
+				has: (id: string) => spawned.some((s) => s.terminalId === id),
 				kill() {},
 				write() {},
 				resize() {},
@@ -554,13 +555,134 @@ describe("createDispatcher", () => {
 				const restored = r.restore();
 				// Let the restore get past its checks and into its launch.
 				await Bun.sleep(0);
-				// Refused rather than joined: the restore carries no prompt, so
-				// joining would drop the message. It stays pending for the new tab.
-				await expect(r.message()).rejects.toBeInstanceOf(ResumeInFlightError);
+				// Waits for the restore, then is refused rather than handed its tab:
+				// the restore carries no prompt, so taking its tab would drop the
+				// message. It stays pending for the new tab.
+				const message = r.message();
 				r.release();
+				await expect(message).rejects.toBeInstanceOf(ResumeInFlightError);
 				const back = await restored;
 				expect(r.spawned).toHaveLength(1);
 				expect(r.openSessions()).toEqual([back.terminalId]);
+			} finally {
+				await r.cleanup();
+			}
+		});
+	});
+
+	// The 2026-11-06 incident. A Codex task's first agent names its own
+	// conversation and had not been heard naming it, so the messenger's restart
+	// and the panel's restore of the tab it left both asked for "the newest
+	// conversation here" (resume: true), which no id-keyed guard can see coming.
+	// Two Codex processes came up on one thread 196ms apart.
+	describe("one Codex conversation comes back once, named or not", () => {
+		async function racingCodex() {
+			const dir = await mkdtemp(join(tmpdir(), "ateam-race-codex-"));
+			const db = createTestDb();
+			const { engine, spawned } = makeEngine(db);
+			let release!: () => void;
+			const gate = new Promise<void>((r) => {
+				release = r;
+			});
+			const services = engine.services as unknown as {
+				probeAgent: () => Promise<BinaryPresence>;
+				latestSession: () => Promise<{ ok: true; id: string }>;
+			};
+			services.probeAgent = async () => {
+				await gate;
+				return "present";
+			};
+			// What Codex's own index says is the newest thread in this worktree.
+			services.latestSession = async () => ({ ok: true, id: "thread-1" });
+			const d = createDispatcher(engine);
+			const project = repo.upsertProject(db, { repoPath: dir, name: "R", defaultBranch: "main" });
+			const task = repo.createTask(db, {
+				projectId: project!.id,
+				name: "race",
+				slug: "race",
+				branch: "race",
+				baseBranch: "main",
+				worktreePath: dir,
+			});
+			const reapedTab = (terminalId: string, agentSessionId: string | null) => {
+				const s = repo.createSession(db, {
+					taskId: task.id,
+					agentId: "codex",
+					terminalId,
+					agentSessionId,
+					cwd: dir,
+				});
+				repo.updateSession(db, s.id, { exitedAt: 1, exitReason: "reaped" });
+			};
+			reapedTab("term-reaped", null);
+			const openSessions = () =>
+				repo
+					.listSessionsByTask(db, task.id)
+					.filter((s) => s.exitedAt == null)
+					.map((s) => s.terminalId);
+			// engine.ts's messenger launch, for a task whose last session has no id.
+			const message = () =>
+				spawnAgentInTask(engine.services, () => {}, {
+					taskId: task.id,
+					agentId: "codex",
+					resume: true,
+					prompt: "[Ateam] Message from another agent.",
+				});
+			const restore = (terminalId = "term-reaped") =>
+				d.handle(CH.ptyRestoreSession, [{ taskId: task.id, terminalId }]) as Promise<{
+					terminalId: string;
+				}>;
+			const cleanup = () => {
+				release();
+				return rm(dir, { recursive: true, force: true });
+			};
+			return { reapedTab, spawned, release, openSessions, message, restore, cleanup };
+		}
+
+		it("a restore gets the tab the message launch just opened", async () => {
+			const r = await racingCodex();
+			try {
+				const launched = r.message();
+				const restored = r.restore();
+				r.release();
+				const [a, b] = await Promise.all([launched, restored]);
+				expect(b).toEqual(a);
+				expect(r.spawned).toHaveLength(1);
+				expect(r.spawned[0]?.args?.join(" ")).toContain("resume 'thread-1'");
+				expect(r.openSessions()).toEqual([a.terminalId]);
+			} finally {
+				await r.cleanup();
+			}
+		});
+
+		it("a message launch behind a restore keeps its work for that tab", async () => {
+			const r = await racingCodex();
+			try {
+				const restored = r.restore();
+				await Bun.sleep(0);
+				const message = r.message();
+				r.release();
+				await expect(message).rejects.toBeInstanceOf(ResumeInFlightError);
+				const back = await restored;
+				expect(r.spawned).toHaveLength(1);
+				expect(r.openSessions()).toEqual([back.terminalId]);
+			} finally {
+				await r.cleanup();
+			}
+		});
+
+		// One caller knows the id (a tab whose Stop named it), the other only asks
+		// for the newest conversation: they still meet once the scan answers.
+		it("a resume by id and a resume of the newest meet on the same thread", async () => {
+			const r = await racingCodex();
+			try {
+				r.reapedTab("term-named", "thread-1");
+				const launched = r.message();
+				const restored = r.restore("term-named");
+				r.release();
+				const [a, b] = await Promise.all([launched, restored]);
+				expect(b).toEqual(a);
+				expect(r.spawned).toHaveLength(1);
 			} finally {
 				await r.cleanup();
 			}

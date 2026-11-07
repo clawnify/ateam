@@ -14,6 +14,24 @@ const PROJECT_KEY = "ateam.selectedProject";
 const COMPOSER_TARGET_KEY = "ateam.composerTarget";
 const PREVIEW_PORT_KEY = "ateam.previewPort";
 const GITHUB_SEEN_KEY = "ateam.githubSeen";
+const CALL_NOTICE_KEY = "ateam.callNotice";
+
+/** Whether the user has read what a call sends to OpenAI, told once before the first call. */
+export async function loadCallNotice(): Promise<boolean> {
+	try {
+		return (await AsyncStorage.getItem(CALL_NOTICE_KEY)) === "1";
+	} catch {
+		return false;
+	}
+}
+
+export async function saveCallNotice(): Promise<void> {
+	try {
+		await AsyncStorage.setItem(CALL_NOTICE_KEY, "1");
+	} catch {
+		/* best-effort: the notice shows again before the next call */
+	}
+}
 
 export interface SavedConnection {
 	host: string;

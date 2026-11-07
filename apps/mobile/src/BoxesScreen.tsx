@@ -7,8 +7,10 @@
 // (EnvironmentPicker.tsx): a box, Add a Tailscale box, Remove from this list.
 //
 // The phone dials every box over the tailnet, which leaves a sleeping one asleep;
-// only a tap (or opening something on it) wakes one through its provider. While a
-// box is being reached, a tray under its card lists the steps (@ateam/protocol
+// only a tap (or opening something on it) wakes one through its provider. So a box
+// that sleeps shows asleep through those tries rather than a spinner that never gets
+// anywhere (boxes.ts shownAsleep). While a box is being reached for a tap, a tray
+// under its card lists the steps (@ateam/protocol
 // connect-steps): a woken box can take minutes to answer, and a bare spinner for
 // that long reads as stuck.
 
@@ -37,6 +39,7 @@ import {
 	NO_PROVIDER_HINT,
 	needsProvider,
 	type SavedBox,
+	shownAsleep,
 } from "./boxes";
 import { ProviderIcon } from "./ProviderIcon";
 import { ScanQrIcon } from "./ScanQrIcon";
@@ -64,6 +67,7 @@ export function BoxesScreen({
 	onDemo,
 	onBoxTerminal,
 	onGithub,
+	onAiKeys,
 	openKeys,
 	onPair,
 	onLock,
@@ -105,6 +109,8 @@ export function BoxesScreen({
 	onBoxTerminal: (box: SavedBox) => void;
 	/** Open a connected box's GitHub access (sign-in, token, which repos it can push to). */
 	onGithub: (box: SavedBox) => void;
+	/** The box's AI keys page (AiKeysScreen). */
+	onAiKeys: (box: SavedBox) => void;
 	/** Connected boxes that can be locked and aren't: anyone on the network may use them. */
 	openKeys: Set<string>;
 	/** Pair this phone with a locked box using a one-time code. */
@@ -158,15 +164,17 @@ export function BoxesScreen({
 						const live = link.state === "live";
 						const isLead = choosingLead && key === leadKey;
 						const making = settingUp?.key === key && !live ? settingUp : null;
+						// A box that sleeps rests asleep through the tries in the background.
+						const asleep = shownAsleep(box, link);
 						return (
 							<BoxCard
 								key={key}
 								box={box}
 								live={live}
-								reaching={link.state === "connecting"}
+								reaching={link.state === "connecting" && !asleep}
 								asked={link.asked}
-								asleep={link.state === "down" && link.asleep}
-								failure={link.state === "down" && !link.asleep && !making ? link.error : null}
+								asleep={asleep}
+								failure={link.state === "down" && !asleep && !making ? link.error : null}
 								note={making ? "Setting itself up on Hetzner, about 4 minutes" : null}
 								// A try in the background shows only as the spinner; the steps are for one asked for.
 								steps={link.asked ? link.steps : []}
@@ -181,6 +189,7 @@ export function BoxesScreen({
 								onLead={choosingLead && !isLead ? () => onLeadBox(box) : undefined}
 								onTerminal={live ? () => onBoxTerminal(box) : undefined}
 								onGithub={live ? () => onGithub(box) : undefined}
+								onAiKeys={live ? () => onAiKeys(box) : undefined}
 								onPair={(code) => onPair(box, code)}
 								onScan={onScan}
 								onLock={live && openKeys.has(key) ? () => onLock(box) : undefined}
@@ -240,6 +249,7 @@ function BoxCard({
 	onLead,
 	onTerminal,
 	onGithub,
+	onAiKeys,
 	onPair,
 	onScan,
 	onLock,
@@ -274,6 +284,7 @@ function BoxCard({
 	onTerminal?: () => void;
 	/** Only on a connected box's card, like the terminal. */
 	onGithub?: () => void;
+	onAiKeys?: () => void;
 	/** Pair this phone with the box using a code (shown when it's locked to others). */
 	onPair: (code: string) => Promise<void>;
 	/** Scan the code with the camera instead. */
@@ -411,6 +422,7 @@ function BoxCard({
 						accessibilityActions={[
 							{ name: "activate" },
 							...(onGithub ? [{ name: "github", label: "GitHub on this box" }] : []),
+							...(onAiKeys ? [{ name: "aiKeys", label: "AI keys on this box" }] : []),
 							...(onTerminal ? [{ name: "terminal", label: "Box terminal" }] : []),
 							...(onLead ? [{ name: "lead", label: "Talk to this box's Lead" }] : []),
 							{ name: "edit", label: "Edit" },
@@ -421,6 +433,7 @@ function BoxCard({
 							if (action === "edit") onEdit();
 							else if (action === "remove") onRemove();
 							else if (action === "github") onGithub?.();
+							else if (action === "aiKeys") onAiKeys?.();
 							else if (action === "terminal") onTerminal?.();
 							else if (action === "lead") onLead?.();
 							else if (!(reaching && asked)) onPress();
@@ -456,6 +469,17 @@ function BoxCard({
 								accessibilityLabel="GitHub on this box"
 							>
 								<Feather name="github" size={16} color={C.ink} />
+							</Pressable>
+						) : null}
+						{onAiKeys ? (
+							<Pressable
+								style={styles.terminalBtn}
+								onPress={onAiKeys}
+								hitSlop={8}
+								accessibilityRole="button"
+								accessibilityLabel="AI keys on this box"
+							>
+								<Feather name="key" size={16} color={C.ink} />
 							</Pressable>
 						) : null}
 						{onTerminal ? (

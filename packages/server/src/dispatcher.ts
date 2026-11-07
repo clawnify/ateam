@@ -76,7 +76,8 @@ import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } fr
 import { searchSessions } from "./session-search";
 import {
 	createTaskInProject,
-	resumeInFlight,
+	liveTabOn,
+	resumesSettled,
 	type SpawnAgentInput,
 	shell,
 	spawnAgentInTask,
@@ -1011,13 +1012,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				// Including a launch still on its way up (the peer messenger handing
 				// this agent a message): it has no live terminal yet, and it may
 				// already have stamped this tab `restored`, which the check below
-				// would refuse. Join it (sessions.ts, resumeInFlight).
-				const coming = resumeInFlight(services, dead.agentSessionId);
-				if (coming) return coming;
-				const open = repo
-					.listSessionsByTask(db, task.id)
-					.find((s) => s.agentSessionId === dead.agentSessionId && services.pty.has(s.terminalId));
-				if (open) return { terminalId: open.terminalId };
+				// would refuse. Wait for it (sessions.ts, resumesSettled).
+				await resumesSettled(services, task.id, dead.agentId);
+				const open = liveTabOn(services, task.id, dead.agentSessionId);
+				if (open) return open;
 			}
 			// Both endings mean "this tab is coming back if you ask": the app went
 			// down under it, or the app reclaimed its idle process.

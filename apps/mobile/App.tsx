@@ -88,11 +88,13 @@ import { connect, mobileNative, redeemPairing } from "./src/connection";
 import { pairTarget, parsePairLinks } from "./src/pair-link";
 import { demoConnection } from "./src/demo";
 import { type Board, createFleet, type Fleet, pickProject } from "./src/fleet";
+import { AiKeysScreen } from "./src/AiKeysScreen";
 import { GithubAccessScreen } from "./src/GithubAccessScreen";
 import { HomeScreen, type ProjectRow, placeText, type TaskPlace } from "./src/HomeScreen";
 import { LeadScreen } from "./src/LeadScreen";
 import { type LoopDraft, LoopForm, LoopsScreen } from "./src/LoopsScreen";
 import type { LeadBadge } from "./src/lead-badge";
+import { leadCall, setCallTarget, useLeadCall } from "./src/lead-call";
 import { createLinks, type LinkDeps, type Waker } from "./src/links";
 import { MissionScreen } from "./src/MissionScreen";
 import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminalScreen";
@@ -807,6 +809,8 @@ function Shell({
 	onLead,
 	leadBadge,
 	onUpdateLeadBox,
+	callKeyMissing,
+	onAddCallKey,
 	updatingLeadBox,
 	onStartProposal,
 }: {
@@ -876,6 +880,9 @@ function Shell({
 	/** The dot on the Lead button (src/lead-badge.ts). */
 	leadBadge: LeadBadge;
 	onUpdateLeadBox: () => void;
+	/** Whether the Lead's box has no OpenAI key for calls, and its AI keys page. */
+	callKeyMissing?: () => Promise<boolean>;
+	onAddCallKey?: () => void;
 	updatingLeadBox: boolean;
 	/** "Start it" on one of the Lead's proposals. */
 	onStartProposal: (item: ProposalItem) => void;
@@ -892,6 +899,8 @@ function Shell({
 	const covered = openTask !== null || boxTerminal !== null;
 	const showLead = leadOpen && !covered;
 	const showTab = !covered && !leadOpen;
+	// On a call with the Lead, its button says so from every screen.
+	const onCall = useLeadCall().state !== "off";
 	// The composer's Task | Lead switch floats over these lists: it fades while
 	// one scrolls and returns when it stops.
 	const { faded, scrollProps } = useScrollFade();
@@ -940,16 +949,22 @@ function Shell({
 						hitSlop={10}
 						accessibilityRole="button"
 						accessibilityLabel={
-							leadBadge === "waiting"
-								? "Lead chat, waiting on you"
-								: leadBadge === "new"
-									? "Lead chat, new messages"
-									: "Lead chat"
+							onCall
+								? "Lead chat, on a call"
+								: leadBadge === "waiting"
+									? "Lead chat, waiting on you"
+									: leadBadge === "new"
+										? "Lead chat, new messages"
+										: "Lead chat"
 						}
 						accessibilityState={{ selected: showLead }}
 					>
 						<View>
-							<Feather name="message-circle" size={19} color={showLead ? C.ink : C.muted} />
+							{onCall ? (
+								<Feather name="phone" size={18} color={C.green} />
+							) : (
+								<Feather name="message-circle" size={19} color={showLead ? C.ink : C.muted} />
+							)}
 							{leadBadge && (
 								<View
 									style={[styles.leadDot, leadBadge === "waiting" && { backgroundColor: C.amber }]}
@@ -1115,6 +1130,8 @@ function Shell({
 					onUpdateBox={onUpdateLeadBox}
 					updating={updatingLeadBox}
 					onStartProposal={onStartProposal}
+					callKeyMissing={callKeyMissing}
+					onAddCallKey={onAddCallKey}
 				/>
 			)}
 			{showTab && tab === "loops" && (
@@ -1281,6 +1298,10 @@ export default function App() {
 	// A box this phone created, until its Finish setting up page is done with.
 	const [finishKey, setFinishKey] = useState<string | null>(null);
 	const [githubKey, setGithubKey] = useState<string | null>(null);
+	// The box whose AI keys page is open (AiKeysScreen): from its card in Boxes,
+	// Finish setting up, and a call with a Lead whose box has no OpenAI key.
+	const [aiKeysKey, setAiKeysKey] = useState<string | null>(null);
+	const openAiKeys = useCallback((key: string) => setAiKeysKey(key), []);
 	const [browserKey, setBrowserKey] = useState<string | null>(null);
 	const [leadOpen, setLeadOpen] = useState(false);
 	// The box whose Lead the phone talks to, as picked in Boxes; and the box a new
@@ -1511,6 +1532,7 @@ export default function App() {
 			openOwner,
 			boxTerminalKey,
 			githubKey,
+			aiKeysKey,
 			browserKey,
 			updatingKey,
 			leadOpen ? leadKey : null,
@@ -1733,6 +1755,7 @@ export default function App() {
 			setAgentsByBox(({ [key]: _gone, ...rest }) => rest);
 			setBoxTerminalKey((k) => (k === key ? null : k));
 			setGithubKey((k) => (k === key ? null : k));
+			setAiKeysKey((k) => (k === key ? null : k));
 			setBrowserKey((k) => (k === key ? null : k));
 			void refresh();
 		},
@@ -1863,6 +1886,7 @@ export default function App() {
 		setOpenTask(null);
 		setBoxTerminalKey(null);
 		setGithubKey(null);
+		setAiKeysKey(null);
 		setBrowserKey(null);
 		setLeadOpen(false);
 		const d = demoConnection();
@@ -2301,8 +2325,19 @@ export default function App() {
 	const leadBadge = useLeadBadge(
 		leadClient,
 		leadConn ? leadKey : null,
-		view === "board" && leadOpen && !openTask && !boxTerminalKey && !browserKey && !githubKey,
+		view === "board" &&
+			leadOpen &&
+			!openTask &&
+			!boxTerminalKey &&
+			!browserKey &&
+			!githubKey &&
+			!aiKeysKey,
 	);
+	// A call with the Lead follows its box and connection (src/lead-call.ts), and
+	// tells a task's new question once, as the desktop's does.
+	const callName = multi && leadKey ? `Lead on ${labelOf(leadKey)}` : "Lead";
+	useEffect(() => setCallTarget(leadKey, leadClient, callName), [leadKey, leadClient, callName]);
+	useEffect(() => leadCall.setTasks(tasks), [tasks]);
 	const anyLive = Object.values(links).some((l) => l.state === "live");
 	const linkOf = (key: string | null): BoxLink => (key ? links[key] : undefined) ?? NEW_LINK;
 
@@ -2316,6 +2351,19 @@ export default function App() {
 				onClose={() => setGithubKey(null)}
 				onUpdateBox={() => void updateBox(githubKey)}
 				updating={updatingKey === githubKey}
+			/>
+		);
+	}
+
+	const aiKeysConn = aiKeysKey ? link.conn(aiKeysKey) : undefined;
+	if (aiKeysKey && aiKeysConn) {
+		return (
+			<AiKeysScreen
+				api={aiKeysConn.api}
+				boxLabel={labelOf(aiKeysKey)}
+				onClose={() => setAiKeysKey(null)}
+				onUpdateBox={() => void updateBox(aiKeysKey)}
+				updating={updatingKey === aiKeysKey}
 			/>
 		);
 	}
@@ -2366,6 +2414,7 @@ export default function App() {
 					setBoxTerminalKey(finishKey);
 				}}
 				onGithub={() => setGithubKey(finishKey)}
+				onAiKeys={() => openAiKeys(finishKey)}
 				onAddProject={() => setBrowserKey(finishKey)}
 				onDone={() => {
 					setFinishKey(null);
@@ -2445,6 +2494,7 @@ export default function App() {
 						setBoxTerminalKey(boxKey(box));
 					}}
 					onGithub={(box) => setGithubKey(boxKey(box))}
+					onAiKeys={(box) => openAiKeys(boxKey(box))}
 					openKeys={
 						new Set(
 							boxes
@@ -2645,6 +2695,17 @@ export default function App() {
 					if (leadKey) void updateBox(leadKey);
 				}}
 				updatingLeadBox={leadKey !== null && updatingKey === leadKey}
+				// The call's session is opened with the Lead box's own key (lead:callStart).
+				// A box too old to say (no `openAi` status) is left to the call to explain.
+				callKeyMissing={
+					leadConn && !demo.current
+						? async () => {
+								const keys = await leadConn.api.credentials.get();
+								return keys.openAi !== undefined && !keys.openAi.set;
+							}
+						: undefined
+				}
+				onAddCallKey={leadKey && !demo.current ? () => openAiKeys(leadKey) : undefined}
 				onStartProposal={(item) => {
 					if (item.proposal.kind === "task") return setProposalSheet(item);
 					const p = item.proposal;

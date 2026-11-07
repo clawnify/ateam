@@ -48,6 +48,7 @@ import {
 	type PickedFile,
 	previews,
 } from "./attach";
+import { CallBar, CallButton } from "./CallBar";
 import { LeadMarkdown } from "./LeadMarkdown";
 import { type QuestionAnswer, QuestionCard } from "./QuestionCard";
 import { C, CONTENT_MAX } from "./theme";
@@ -527,6 +528,8 @@ export function LeadScreen({
 	onUpdateBox,
 	updating,
 	onStartProposal,
+	callKeyMissing,
+	onAddCallKey,
 }: {
 	lead: LeadClient | null;
 	/** The box it runs on, named when the phone holds more than one; else null. */
@@ -541,6 +544,9 @@ export function LeadScreen({
 	updating: boolean;
 	/** "Start it" on a proposal card: the app opens its sheet or form. */
 	onStartProposal?: (item: Extract<LeadItem, { kind: "proposal" }>) => void;
+	/** Whether the box has no OpenAI key for calls, and its AI keys page (CallButton). */
+	callKeyMissing?: () => Promise<boolean>;
+	onAddCallKey?: () => void;
 }) {
 	const [snap, setSnap] = useState<LeadSnapshot | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
@@ -696,15 +702,24 @@ export function LeadScreen({
 				<Text style={styles.eyebrow} numberOfLines={1}>
 					Lead · {boxLabel ?? "this box"}
 				</Text>
-				<Pressable
-					onPress={newConversation}
-					disabled={!snap?.items.length}
-					hitSlop={10}
-					accessibilityRole="button"
-					accessibilityLabel="New conversation"
-				>
-					<Feather name="edit" size={16} color={snap?.items.length ? C.ink : C.faint} />
-				</Pressable>
+				<View style={styles.headActions}>
+					<CallButton
+						boxLabel={boxLabel}
+						boxVersion={boxVersion}
+						onUpdateBox={onUpdateBox}
+						keyMissing={callKeyMissing}
+						onAddKey={onAddCallKey}
+					/>
+					<Pressable
+						onPress={newConversation}
+						disabled={!snap?.items.length}
+						hitSlop={10}
+						accessibilityRole="button"
+						accessibilityLabel="New conversation"
+					>
+						<Feather name="edit" size={16} color={snap?.items.length ? C.ink : C.faint} />
+					</Pressable>
+				</View>
 			</View>
 
 			{loadError ? (
@@ -776,6 +791,7 @@ export function LeadScreen({
 			{asking.length > 0 && <Waiting tasks={asking} ctx={ctx} onAnswer={lead.answer} />}
 
 			<View style={styles.composer}>
+				<CallBar />
 				{note && <Text style={[styles.errorText, styles.note]}>{note}</Text>}
 				<AttachmentStrip
 					files={files}
@@ -858,6 +874,7 @@ const styles = StyleSheet.create({
 		maxWidth: CONTENT_MAX,
 		alignSelf: "center",
 	},
+	headActions: { flexDirection: "row", alignItems: "center", gap: 20 },
 	eyebrow: {
 		color: C.muted,
 		fontSize: 11,

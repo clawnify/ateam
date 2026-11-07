@@ -18,6 +18,7 @@ import {
 	pickRunOn,
 	removeBox,
 	type SavedBox,
+	shownAsleep,
 	touchBox,
 	wakesThrough,
 	withReportedProvider,
@@ -153,10 +154,21 @@ describe("boxes", () => {
 		expect(needsProvider(plain, failed)).toBe(true);
 	});
 
+	test("a box that no provider puts to sleep is always on, and never asked for one", () => {
+		const next = withReportedProvider([sprite, plain], boxKey(plain), null);
+		expect(next).toEqual([sprite, { ...plain, sleeps: false }]);
+		const failed: BoxLink = { ...NEW_LINK, state: "down", error: "Timed out reaching the box" };
+		expect(needsProvider(next?.[1] as SavedBox, failed)).toBe(false);
+		// Said already: nothing to change.
+		expect(withReportedProvider([{ ...plain, sleeps: false }], boxKey(plain), null)).toBeNull();
+		// One given a provider keeps it and whether it sleeps: a tap still wakes it through it.
+		expect(withReportedProvider([sprite], boxKey(sprite), null)).toBeNull();
+		expect(withReportedProvider([plain], "100.1.1.1:8787", null)).toBeNull();
+	});
+
 	test("nothing reported, nothing wakeable, or a box off the list changes nothing", () => {
 		const x = { id: "sprites", box: { machine: "x" }, sleeps: true };
 		expect(withReportedProvider([plain], boxKey(plain), undefined)).toBeNull();
-		expect(withReportedProvider([plain], boxKey(plain), null)).toBeNull();
 		expect(withReportedProvider([plain], boxKey(plain), { ...x, id: "nope" })).toBeNull();
 		expect(withReportedProvider([plain], boxKey(plain), { ...x, box: {} })).toBeNull();
 		expect(withReportedProvider([plain], "100.1.1.1:8787", x)).toBeNull();
@@ -174,6 +186,29 @@ describe("boxes", () => {
 		expect(needsProvider(plain, { ...failed, error: CONNECTION_LOST })).toBe(false);
 		// A box with a provider is woken through it, or asks for its key.
 		expect(needsProvider(sprite, failed)).toBe(false);
+	});
+
+	test("a box that sleeps rests asleep on its card through the tries in the background", () => {
+		const timedOut = "connection timed out after 15000ms";
+		// Untried, and its first try: most likely asleep, so no spinner.
+		expect(shownAsleep(sprite, NEW_LINK)).toBe(true);
+		expect(shownAsleep(sprite, { ...NEW_LINK, state: "connecting" })).toBe(true);
+		// Found asleep, then tried again in the background: still asleep.
+		const asleep: BoxLink = { ...NEW_LINK, state: "down", error: timedOut, asleep: true };
+		expect(shownAsleep(sprite, asleep)).toBe(true);
+		expect(shownAsleep(sprite, { ...asleep, state: "connecting" })).toBe(true);
+		// A tap's try shows its steps, and one that lands shows it up.
+		expect(shownAsleep(sprite, { ...asleep, state: "connecting", asked: true })).toBe(false);
+		const up: BoxLink = { ...asleep, state: "live", asleep: false, error: null };
+		expect(shownAsleep(sprite, up)).toBe(false);
+		// After a drop or another failure it's being reached, not asleep.
+		const dropped: BoxLink = { ...NEW_LINK, state: "connecting", error: CONNECTION_LOST };
+		expect(shownAsleep(sprite, dropped)).toBe(false);
+		expect(shownAsleep(sprite, { ...NEW_LINK, state: "down", error: NEEDS_PAIRING })).toBe(false);
+		// A box that doesn't sleep is never shown asleep: its tries spin.
+		for (const box of [plain, { ...sprite, sleeps: false }]) {
+			expect(shownAsleep(box, { ...NEW_LINK, state: "connecting" })).toBe(false);
+		}
 	});
 
 	test("the stored list loads, and a single remembered connection becomes the first box", () => {
