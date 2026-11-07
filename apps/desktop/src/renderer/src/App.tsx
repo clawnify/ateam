@@ -724,8 +724,9 @@ export function App() {
 	// Group the merged projects into one card per repo (same GitHub owner/name across
 	// engines), remembering each engine's projectId — the routing key for its tasks.
 	const unifiedProjects = useMemo(() => unifyProjects(projects, origins), [projects, origins]);
-	// Nothing on the board at all, so Get started takes the board's place. A
-	// detached window is one project, so never there.
+	// Nothing on the board at all, so Get started takes the board's place, and
+	// the Lead's: the app opens on the Lead, and a first launch must land on
+	// Get started. A detached window is one project, so never there.
 	const noProjects = projectsLoaded && !boundProjectId && unifiedProjects.length === 0;
 	const recheckAgents = useCallback(() => void window.ateam.agents.list().then(setAgents), []);
 	// The switcher lists them most recently switched to first (project-order.ts).
@@ -2493,7 +2494,7 @@ export function App() {
 							onDelete={() => deleteTask(selectedTask)}
 							onClose={() => setSelectedTaskId(null)}
 						/>
-					) : view === "board" && noProjects ? (
+					) : (view === "board" || view === "lead") && noProjects ? (
 						<GetStarted
 							agents={agents}
 							onAdd={addProject}
