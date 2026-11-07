@@ -8,6 +8,7 @@ import type {
 	BoxWake,
 	ConnectionDTO,
 	ConnectStep,
+	CredentialsResult,
 	GithubAccessDTO,
 	PairingInviteDTO,
 	PairingStatusDTO,
@@ -44,6 +45,8 @@ export const HOST_CH = {
 	appRelease: "host:appRelease",
 	/** The GitHub access each box last reported (Host.githubStatuses). */
 	boxGithub: "host:boxGithub",
+	/** Which AI keys one held box holds (set or not, last four), asked of that box. */
+	boxCredentials: "host:boxCredentials",
 	/** A held box's lock and paired devices (pairing:*, v29). */
 	pairingStatus: "host:pairingStatus",
 	pairingInvite: "host:pairingInvite",
@@ -272,6 +275,9 @@ export interface AteamHost {
 	appRelease(): Promise<string>;
 	/** The GitHub access each box last reported, by alias, without reaching a box. */
 	boxGithub(): Promise<Record<string, GithubAccessDTO>>;
+	/** Which AI keys a held box holds, from the box itself: never the keys, only
+	 *  whether each is set and its last four characters. */
+	boxCredentials(alias: string): Promise<CredentialsResult>;
 	/** Whether a held box (v29) is locked to its paired devices, and which they are. */
 	pairingStatus(alias: string): Promise<PairingStatusDTO>;
 	/** A one-time code for another device, with the `ateamgo://` link a phone's

@@ -1,5 +1,6 @@
 import {
 	type ConnectionDTO,
+	type CredentialsResult,
 	type GithubAccessDTO,
 	githubAccessProblem,
 	NEEDS_PAIRING,
@@ -603,8 +604,53 @@ export function BoxPage({
 					<GithubAccess alias={row.alias} label={row.title} />
 				)}
 			</div>
+			<div className="box-card-section">
+				<div className="box-card-label">AI keys</div>
+				<BoxAiKeys alias={row.alias} connected={row.state === "connected"} />
+			</div>
 		</section>
 	);
+}
+
+/**
+ * Which AI keys the box itself holds, asked of that box (each box keeps its own).
+ * With neither, nothing on it moves a finished task to Needs you, and nothing else
+ * on the board says why. Titles and summaries still come from Claude Code there.
+ */
+function BoxAiKeys({ alias, connected }: { alias: string; connected: boolean }) {
+	const [keys, setKeys] = useState<CredentialsResult | "failed" | null>(null);
+	useEffect(() => {
+		setKeys(null);
+		if (!connected) return;
+		let live = true;
+		window.ateamHost.boxCredentials(alias).then(
+			(r) => live && setKeys(r),
+			() => live && setKeys("failed"),
+		);
+		return () => {
+			live = false;
+		};
+	}, [alias, connected]);
+	if (!connected) {
+		return <div className="gh-access-muted">Connect to see which AI keys it has.</div>;
+	}
+	if (keys === null) return <div className="gh-access-muted">Checking…</div>;
+	if (keys === "failed") return <div className="gh-access-muted">Couldn't read its AI keys.</div>;
+	const held = [
+		keys.openAi?.set ? `OpenAI key …${keys.openAi.hint ?? ""}` : null,
+		keys.openRouter.set
+			? `OpenRouter key …${keys.openRouter.hint ?? ""}${keys.openRouter.source === "env" ? " (from OPENROUTER_API_KEY)" : ""}`
+			: null,
+	].filter((k): k is string => k !== null);
+	if (held.length === 0) {
+		return (
+			<div className="gh-access-warn">
+				No AI key on this box: finished tasks won't move to Needs you when they wait on you. Add one
+				in Settings → AI on this Mac: it's copied to your boxes when sync is on.
+			</div>
+		);
+	}
+	return <div className="gh-access-muted">{held.join(" · ")}</div>;
 }
 
 /**

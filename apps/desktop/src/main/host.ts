@@ -236,6 +236,9 @@ export interface Host {
 	/** The GitHub access each box last reported, by alias: on connect, from its panel, or
 	 *  after a token was connected there. What the "needs you" dots read. */
 	githubStatuses(): Record<string, GithubAccessDTO>;
+	/** Which AI keys one held box holds, asked of that box (credentialsCall answers for
+	 *  this Mac, or the machine selected when sync is off). */
+	boxCredentials(alias: string): Promise<CredentialsResult>;
 	/** Which provisioning secrets are saved (booleans, never the values). */
 	secretsStatus(): SecretsStatus;
 	/** Persist provider credentials (encrypted). Returns the new saved-status. */
@@ -1510,6 +1513,12 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	function githubStatuses(): Record<string, GithubAccessDTO> {
 		return Object.fromEntries(githubStatus);
 	}
+	async function boxCredentials(alias: string): Promise<CredentialsResult> {
+		return (await withTimeout(
+			heldBox(alias).handle(CH.credentialsGet, []) as Promise<CredentialsResult>,
+			CONNECT_TIMEOUT_MS,
+		)) as CredentialsResult;
+	}
 	async function checkGithub(alias: string, repos?: string[]): Promise<RepoAccessDTO[]> {
 		return (await heldBox(alias).handle(CH.githubAccessCheck, [repos ?? null])) as RepoAccessDTO[];
 	}
@@ -1647,6 +1656,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		failures,
 		canUpdateBoxes,
 		githubStatuses,
+		boxCredentials,
 		editorUrl,
 		browserUrl,
 		provision,
@@ -1698,6 +1708,7 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.canUpdateBoxes, () => host.canUpdateBoxes());
 	ipcMain.handle(HOST_CH.appRelease, () => app.getVersion());
 	ipcMain.handle(HOST_CH.boxGithub, () => host.githubStatuses());
+	ipcMain.handle(HOST_CH.boxCredentials, (_e, alias: string) => host.boxCredentials(String(alias)));
 	ipcMain.handle(HOST_CH.pairingStatus, (_e, alias: string) => host.pairingStatus(String(alias)));
 	ipcMain.handle(HOST_CH.pairingInvite, (_e, alias: string) => host.pairingInvite(String(alias)));
 	ipcMain.handle(HOST_CH.pairingRevoke, (_e, alias: string, id: string) =>

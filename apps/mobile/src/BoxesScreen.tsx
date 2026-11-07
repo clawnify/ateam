@@ -69,6 +69,7 @@ export function BoxesScreen({
 	onGithub,
 	onAiKeys,
 	openKeys,
+	keylessKeys,
 	onPair,
 	onLock,
 	onScan,
@@ -113,6 +114,8 @@ export function BoxesScreen({
 	onAiKeys: (box: SavedBox) => void;
 	/** Connected boxes that can be locked and aren't: anyone on the network may use them. */
 	openKeys: Set<string>;
+	/** Connected boxes that hold no AI key: their finished tasks never move to Needs you. */
+	keylessKeys: Set<string>;
 	/** Pair this phone with a locked box using a one-time code. */
 	onPair: (box: SavedBox, code: string) => Promise<void>;
 	/** Lock an open box to the devices paired with it, starting with this phone. */
@@ -190,6 +193,7 @@ export function BoxesScreen({
 								onTerminal={live ? () => onBoxTerminal(box) : undefined}
 								onGithub={live ? () => onGithub(box) : undefined}
 								onAiKeys={live ? () => onAiKeys(box) : undefined}
+								noAiKey={live && keylessKeys.has(key)}
 								onPair={(code) => onPair(box, code)}
 								onScan={onScan}
 								onLock={live && openKeys.has(key) ? () => onLock(box) : undefined}
@@ -250,6 +254,7 @@ function BoxCard({
 	onTerminal,
 	onGithub,
 	onAiKeys,
+	noAiKey,
 	onPair,
 	onScan,
 	onLock,
@@ -285,6 +290,8 @@ function BoxCard({
 	/** Only on a connected box's card, like the terminal. */
 	onGithub?: () => void;
 	onAiKeys?: () => void;
+	/** Connected, and it answered it holds no AI key. */
+	noAiKey: boolean;
 	/** Pair this phone with the box using a code (shown when it's locked to others). */
 	onPair: (code: string) => Promise<void>;
 	/** Scan the code with the camera instead. */
@@ -517,6 +524,8 @@ function BoxCard({
 				<ProviderTray onSetProvider={onSetProvider} />
 			) : onLock ? (
 				<LockTray onLock={onLock} />
+			) : noAiKey && onAiKeys ? (
+				<AiKeyTray onAiKeys={onAiKeys} />
 			) : null}
 		</View>
 	);
@@ -535,6 +544,28 @@ function ProviderTray({ onSetProvider }: { onSetProvider: () => void }) {
 					accessibilityRole="button"
 				>
 					<Text style={styles.trayBtnText}>Set provider</Text>
+				</Pressable>
+			</View>
+		</View>
+	);
+}
+
+/** Under a connected box with no AI key: nothing on it moves a finished task to
+ *  Needs you, and nothing else would say why. (Titles and summaries still come from
+ *  Claude Code on the box, when it has it.) */
+function AiKeyTray({ onAiKeys }: { onAiKeys: () => void }) {
+	return (
+		<View style={styles.tray}>
+			<Text style={styles.trayNote}>
+				No AI key on this box: finished tasks won't move to Needs you when they wait on you.
+			</Text>
+			<View style={styles.pairRow}>
+				<Pressable
+					style={[styles.pairBtn, styles.scanBtn]}
+					onPress={onAiKeys}
+					accessibilityRole="button"
+				>
+					<Text style={styles.trayBtnText}>Add AI keys</Text>
 				</Pressable>
 			</View>
 		</View>
