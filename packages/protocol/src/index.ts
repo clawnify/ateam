@@ -170,7 +170,9 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // lead:callNudge (a task's reply in one line), which Ateam Go needs to call.
 // New methods only: a v32 box answers "Unknown method", and Ateam Go offers no
 // call there (FEATURE_MIN_VERSION.leadCallSession).
-export const PROTOCOL_VERSION = 33;
+// v34: tasks:pages lists saved artifacts; tasks:page accepts an optional page id.
+// Older engines still serve their latest page; clients fall back to that binding.
+export const PROTOCOL_VERSION = 34;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -202,7 +204,7 @@ export interface TaskQuestionDTO {
 	kind?: "permission" | "askUserQuestion";
 	/** The task's page (TaskDTO.page) drawn with this question: the agent laid
 	 *  the decision out in HTML, and the page's own buttons can answer. Only
-	 *  while TaskDTO.page still has this id; a newer page replaces it. */
+	 *  independently of TaskDTO.page, which names only the latest artifact. */
 	pageId?: string;
 }
 
@@ -239,20 +241,20 @@ export interface TaskProposalDTO {
 
 /**
  * An HTML page an agent made for the user (show_page, or ask_user's `page`):
- * a dashboard, a comparison, a report. One per task; a new one replaces it.
+ * a dashboard, a comparison, a report. Tasks retain multiple independent pages.
  * The HTML itself is read with tasks:page, so the board's task list stays small.
  */
 export interface TaskPageDTO {
 	id: string;
 	title: string;
 	at: number;
-	/** Came with an ask_user question (its `page`), not from show_page: the
-	 *  question's card draws it, and once the question ends it is history, so
-	 *  the task panel never opens it by itself. Absent from engines before it. */
+	/** Came with an ask_user question (its `page`). While pending, the question
+	 *  card draws it; afterwards it remains available as a saved doc tab.
+	 *  Absent from older engines. */
 	fromQuestion?: boolean;
 }
 
-/** tasks:page: the task's page with its HTML, as the agent wrote it. */
+/** tasks:page: a saved page by id, or the latest page when the id is omitted. */
 export interface TaskPageContentDTO extends TaskPageDTO {
 	html: string;
 }
@@ -595,7 +597,7 @@ export interface TaskDTO {
 	/** When the agent last finished a turn with a reply (read it with
 	 *  tasks:lastReply); null until one has. Absent on an engine older than v19. */
 	lastReplyAt?: number | null;
-	/** The page the task's agent made for the user (show_page); null when none.
+	/** Latest page the task's agent made (show_page); null when none.
 	 *  Absent on an engine older than v20. */
 	page?: TaskPageDTO | null;
 	/** Tasks and loops the task's agent proposed and the user has not yet
@@ -1495,6 +1497,8 @@ export interface AteamApi {
 		/** The task's diff told as steps. Asking starts writing new ones when the
 		 *  diff moved on; the answer says so (`working`) and the caller asks again. */
 		changeSteps(taskId: string): Promise<ChangeStepsDTO>;
+		/** Saved artifact metadata, without HTML. Older engines have only task.page. */
+		pages(taskId: string): Promise<TaskPageDTO[]>;
 	};
 	git: {
 		commit(taskId: string, message: string): Promise<{ sha: string }>;

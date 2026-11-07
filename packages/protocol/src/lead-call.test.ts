@@ -8,6 +8,7 @@ import {
 	decisionLine,
 	gist,
 	heldReason,
+	IN_PROGRESS,
 	LeadCall,
 	optionsOf,
 	piecesOf,
@@ -619,14 +620,19 @@ test("a hand-off cancels the voice's own acknowledgement; the call acknowledges 
 	};
 	c.onVoice({ type: "session.delegation.created", delegation: { id: "d1" } });
 	expect(out).toEqual([["session.thinking.append", "d1", ""]]);
-	// Sent: "One sec." for that hand-off, nothing more.
+	// Sent: the hand-off is noted as in progress, and "One sec." is a line of
+	// its own, never the hand-off's commentary (GPT-Live takes that as a
+	// result and went on to invent one).
 	hear("Start a task for disk usage", 0);
 	await c.judge("d1");
-	expect(out.slice(1)).toEqual([["session.commentary.append", "d1", "One sec."]]);
+	expect(out.slice(1)).toEqual([
+		["session.thinking.append", "d1", IN_PROGRESS],
+		["session.commentary.append", null, "One sec."],
+	]);
 	// Held: no acknowledgement, the voice is told to say nothing.
 	hear("Mom, hold on", 9000);
 	c.batchFrom = c.utter.until + UTTERANCE_GAP_MS + 1;
 	await c.judge("d2");
-	expect(out.slice(2).map((e) => e[0])).toEqual(["session.thinking.append"]);
+	expect(out.slice(3).map((e) => e[0])).toEqual(["session.thinking.append"]);
 	stop();
 });

@@ -4943,12 +4943,8 @@ input {
 	font-size: 12px;
 	color: var(--text-dim);
 }
-/* The task's page, closed: a bar between the terminal and its toolbar. */
-.panel-page {
-	padding: 6px 8px;
-}
-/* The task's page, open: beside the terminal, or over it where the panel body
-   is too narrow for both (TaskPanel's PAGE_SPLIT_MIN). */
+/* A selected doc or terminal beside the last session, filling the panel when
+   it is too narrow for both (TaskPanel's PAGE_SPLIT_MIN). */
 .page-pane {
 	flex: 0 0 50%;
 	min-width: 0;

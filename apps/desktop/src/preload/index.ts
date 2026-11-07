@@ -36,6 +36,7 @@ const api: AteamApi = {
 		remove: (id) => ipcRenderer.invoke(CH.projectsRemove, id),
 	},
 	tasks: {
+		pages: (taskId) => ipcRenderer.invoke(CH.tasksPages, taskId),
 		createFromIssue: (input) => ipcRenderer.invoke(CH.tasksCreateFromIssue, input),
 		list: (projectId) => ipcRenderer.invoke(CH.tasksList, projectId),
 		create: (input) => ipcRenderer.invoke(CH.tasksCreate, input),

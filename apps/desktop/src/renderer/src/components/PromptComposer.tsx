@@ -6,6 +6,10 @@ import { titleFromPrompt } from "../titleFromPrompt";
 import { AgentPicker } from "./AgentPicker";
 import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
 
+/** localStorage keys of the coding agent and Auto mode last picked for a new task. */
+const AGENT_KEY = "ateam.agent";
+const AUTO_KEY = "ateam.auto";
+
 /** Last path segment, for a compact chip label. */
 function baseName(p: string): string {
 	return p.split(/[/\\]/).pop() || p;
@@ -43,6 +47,7 @@ export function PromptComposer({
 	variant = "task",
 	sessionAlias,
 	defaultAgentId,
+	initialYolo,
 	initialName = "",
 	initialPrompt = "",
 	initialFiles = [],
@@ -65,6 +70,9 @@ export function PromptComposer({
 	sessionAlias?: string | null;
 	/** Preselect this agent (a task's existing agent) instead of the first available. */
 	defaultAgentId?: string;
+	/** Start Auto mode on or off instead of as last picked, e.g. off for an
+	 *  agent's proposal, which may only suggest it. */
+	initialYolo?: boolean;
 	initialName?: string;
 	initialPrompt?: string;
 	/** Paths to start attached, e.g. files dropped on a project in the sidebar. */
@@ -112,10 +120,26 @@ export function PromptComposer({
 	const [name, setName] = useState(initialName);
 	const [prompt, setPrompt] = useState(initialPrompt);
 	const session = variant === "session";
-	const [agentId, setAgentId] = useState(
-		defaultAgentId ?? agents.find((a) => a.available)?.id ?? "claude",
+	// The agent last picked for a new task is remembered across tasks (and app
+	// restarts), like Run on below. A session starts on its task's own agent.
+	const [pickedAgent, setPickedAgent] = useState(() => {
+		if (defaultAgentId) return defaultAgentId;
+		const saved = session ? null : localStorage.getItem(AGENT_KEY);
+		if (saved && agents.some((a) => a.id === saved)) return saved;
+		return agents.find((a) => a.available)?.id ?? "claude";
+	});
+	const pickAgent = (id: string) => {
+		setPickedAgent(id);
+		if (!session) localStorage.setItem(AGENT_KEY, id);
+	};
+	// Auto mode is remembered for new tasks the same way.
+	const [yolo, setYoloState] = useState(
+		() => initialYolo ?? (!session && localStorage.getItem(AUTO_KEY) === "1"),
 	);
-	const [yolo, setYolo] = useState(false);
+	const setYolo = (on: boolean) => {
+		setYoloState(on);
+		if (!session) localStorage.setItem(AUTO_KEY, on ? "1" : "0");
+	};
 	const [files, setFiles] = useState<string[]>(initialFiles);
 	const [dragging, setDragging] = useState(false);
 	// Files still being saved from their bytes, and a line about a drop that can't attach.
@@ -192,13 +216,12 @@ export function PromptComposer({
 		return availOnEnv ? availOnEnv.includes(id) : (a?.available ?? false);
 	};
 
-	// Switching environment can strand the picked agent (not installed there) — drop
-	// to the first agent the new environment can actually run.
-	useEffect(() => {
-		if (!availOnEnv || availOnEnv.includes(agentId)) return;
-		const first = agents.find((a) => availOnEnv.includes(a.id));
-		if (first) setAgentId(first.id);
-	}, [availOnEnv, agentId, agents]);
+	// An environment without the picked agent runs the first one it has instead,
+	// without forgetting the pick: an environment that has it gets it back.
+	const agentId =
+		availOnEnv && !availOnEnv.includes(pickedAgent)
+			? (agents.find((a) => availOnEnv.includes(a.id))?.id ?? pickedAgent)
+			: pickedAgent;
 
 	// A session has no name to fall back on — it needs something to say.
 	// A file still being saved isn't in `files` yet: a quick ⌘⏎ would start the agent without it.
@@ -362,7 +385,7 @@ export function PromptComposer({
 					<AgentPicker
 						agents={agents}
 						value={agentId}
-						onChange={setAgentId}
+						onChange={pickAgent}
 						isAvailable={isAvail}
 						alias={alias}
 						onInstallAgent={onInstallAgent}
@@ -382,7 +405,7 @@ export function PromptComposer({
 						className={`iconbtn comp-yolo ${yolo ? "active" : ""}`}
 						title="Auto mode"
 						aria-label="Auto mode"
-						onClick={() => setYolo((v) => !v)}
+						onClick={() => setYolo(!yolo)}
 					>
 						<Zap size={16} strokeWidth={1.75} />
 					</button>

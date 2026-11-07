@@ -167,6 +167,15 @@ export function bootstrap(db: SqliteExecutor): void {
 			html TEXT NOT NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS saved_task_pages (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+			page TEXT NOT NULL,
+			html TEXT NOT NULL,
+			at INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS saved_task_pages_task_idx ON saved_task_pages (task_id, at);
+
 		CREATE TABLE IF NOT EXISTS task_change_steps (
 			task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
 			diff_key TEXT NOT NULL,

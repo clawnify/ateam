@@ -430,6 +430,21 @@ export const taskPages = sqliteTable("task_pages", {
 	html: text("html").notNull(),
 });
 
+/** Independent artifacts, with HTML kept off the task row. */
+export const savedTaskPages = sqliteTable(
+	"saved_task_pages",
+	{
+		id: text("id").primaryKey(),
+		taskId: text("task_id")
+			.notNull()
+			.references(() => tasks.id, { onDelete: "cascade" }),
+		page: text("page", { mode: "json" }).$type<TaskPage>().notNull(),
+		html: text("html").notNull(),
+		at: integer("at").notNull(),
+	},
+	(t) => [index("saved_task_pages_task_idx").on(t.taskId, t.at)],
+);
+
 /** One step of a task's change, as the change steps write it (change-steps.ts). */
 export interface ChangeStep {
 	title: string;

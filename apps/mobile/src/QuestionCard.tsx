@@ -176,7 +176,7 @@ export function QuestionCard({
 				</Pressable>
 			</View>
 			<LeadMarkdown text={q.text} />
-			{q.pageId && task.page?.id === q.pageId ? (
+			{q.pageId ? (
 				<Text style={styles.note}>It drew a page for this: open it on your Mac to see it.</Text>
 			) : null}
 			{q.select === "many" && q.choices ? (
