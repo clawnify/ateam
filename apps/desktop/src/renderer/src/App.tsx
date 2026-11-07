@@ -117,6 +117,13 @@ import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
+import {
+	type GetStartedState,
+	nextGetStarted,
+	readGetStarted,
+	saveGetStarted,
+	showsGetStarted,
+} from "./get-started";
 import { addTailscaleBox, installBox } from "./lib/box-actions";
 import {
 	bestMcShape,
@@ -721,9 +728,6 @@ export function App() {
 	// Group the merged projects into one card per repo (same GitHub owner/name across
 	// engines), remembering each engine's projectId — the routing key for its tasks.
 	const unifiedProjects = useMemo(() => unifyProjects(projects, origins), [projects, origins]);
-	// Nothing on the board at all, so Get started takes the board's place. A
-	// detached window is one project, so never there.
-	const noProjects = projectsLoaded && !boundProjectId && unifiedProjects.length === 0;
 	const recheckAgents = useCallback(() => void window.ateam.agents.list().then(setAgents), []);
 	// The switcher lists them most recently switched to first (project-order.ts).
 	// `switchedTo` holds a switch until its card is on the board: a project just
@@ -945,6 +949,24 @@ export function App() {
 				.filter((t) => !deletingIds.has(t.id)),
 		[tasksByProject, deletingIds],
 	);
+
+	// Get started takes the board's place with no project at all, and on a new
+	// install until its first task (get-started.ts). A detached window is one
+	// project, so never there.
+	const [getStarted, setGetStarted] = useState<GetStartedState>(readGetStarted);
+	const startBoard = {
+		projectsLoaded,
+		bound: boundProjectId !== null,
+		projectCount: unifiedProjects.length,
+		taskCount: allTasks.length,
+	};
+	const getStartedNow = nextGetStarted(getStarted, startBoard);
+	const showGetStarted = showsGetStarted(getStartedNow, startBoard);
+	useEffect(() => {
+		if (getStartedNow === getStarted) return;
+		setGetStarted(getStartedNow);
+		saveGetStarted(getStartedNow);
+	}, [getStartedNow, getStarted]);
 
 	// The active card's board unions tasks from every engine that has the repo;
 	// under All, every card's.
@@ -2483,9 +2505,11 @@ export function App() {
 							onDelete={() => deleteTask(selectedTask)}
 							onClose={() => setSelectedTaskId(null)}
 						/>
-					) : view === "board" && noProjects ? (
+					) : view === "board" && showGetStarted ? (
 						<GetStarted
 							agents={agents}
+							projects={unifiedProjects.map((p) => p.name)}
+							onNewTask={activeProjectId ? newTask : undefined}
 							onAdd={addProject}
 							onRecheckAgents={recheckAgents}
 							onOpenBoxes={openLeadSettings}
