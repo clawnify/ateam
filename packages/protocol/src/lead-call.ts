@@ -157,6 +157,9 @@ const SPEECH_RMS = 0.03;
 const SPEECH_MS = 250;
 /** About 500 tokens, OpenAI's cap on one commentary append. */
 const SPEAK_MAX = 1800;
+/** What the voice is told about a request the gate sent, until its result. */
+export const IN_PROGRESS =
+	"In progress: this request is still being worked on and nothing is done yet. Say nothing about its outcome until its result comes.";
 
 /** Markdown from the chat, as words to say aloud. */
 export function speakable(md: string, max = SPEAK_MAX): string {
@@ -1164,8 +1167,17 @@ export class LeadCall {
 		if (plan.lead.length) {
 			this.toLead(answered ? null : handOff, plan.lead.join(" "));
 			// The acknowledgement the voice's own was cancelled for: only now
-			// that the words went, and never a promise.
-			if (handOff && !answered) this.send("session.commentary.append", handOff, "One sec.");
+			// that the words went, and never a promise. The hand-off gets a
+			// note that its request is in progress (OpenAI's way for progress),
+			// and "One sec." is a line of its own: sent as the hand-off's
+			// commentary, which GPT-Live takes as a result, the voice went on to
+			// invent one ("I've fixed the typo", "it'll go ahead in five seconds")
+			// in 5 of 5 sessions; with the note, in 0 of 13, and the real result
+			// was still spoken (probe, 2026-11-07).
+			if (handOff && !answered) {
+				this.send("session.thinking.append", handOff, IN_PROGRESS);
+				this.send("session.commentary.append", null, "One sec.");
+			}
 		} else if (handOff && !answered) this.quiet(handOff);
 	}
 
