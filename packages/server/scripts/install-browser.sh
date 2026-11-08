@@ -100,7 +100,7 @@ case "$(dpkg --print-architecture)" in
 amd64) CHROME_DEB=google-chrome-stable_current_amd64.deb ;;
 *) die "Google Chrome ships for amd64 only, and this box is $(dpkg --print-architecture)" ;;
 esac
-PKGS="xvfb openbox x11vnc novnc xdotool scrot fonts-noto-color-emoji"
+PKGS="xvfb openbox x11vnc novnc xdotool scrot feh fonts-noto-color-emoji"
 if ! command -v google-chrome >/dev/null; then
 	TMP="$(mktemp -d)"
 	trap 'rm -rf "$TMP"' EXIT
@@ -139,6 +139,9 @@ fi
 
 mkdir -p "$BROWSER_DIR" "$PROFILE_DIR" "$BIN_DIR"
 chmod 700 "$BROWSER_DIR"
+if [ -f "$ENGINE_DIR/desktop-wallpaper.png" ]; then
+	cp "$ENGINE_DIR/desktop-wallpaper.png" "$BROWSER_DIR/wallpaper.png"
+fi
 if [ ! -s "$VNC_PASS_FILE" ]; then
 	# VNC passwords stop at 8 characters, so more would only look stronger.
 	(umask 077 && head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 8 >"$VNC_PASS_FILE")
@@ -185,7 +188,18 @@ pid="\$(tr -d ' ' 2>/dev/null <"\$L")"
 if [ -n "\$pid" ] && [ "\$(cat /proc/\$pid/comm 2>/dev/null)" != Xvfb ]; then
 	rm -f "\$L" /tmp/.X11-unix/X$D
 fi
-exec /usr/bin/Xvfb $DISPLAY_NUM -screen 0 1280x720x24 -nolisten tcp
+# Apply once the new X server is ready. Setting the root pixmap needs no window
+# or focus, and the short-lived helper does not become another managed service.
+if [ -f "$BROWSER_DIR/wallpaper.png" ]; then
+	(
+		for _ in {1..30}; do
+			DISPLAY=$DISPLAY_NUM /usr/bin/feh --no-fehbg --bg-fill "$BROWSER_DIR/wallpaper.png" 2>/dev/null && exit 0
+			sleep 1
+		done
+	) &
+fi
+# Keep the root pixmap when the wallpaper helper exits before Openbox connects.
+exec /usr/bin/Xvfb $DISPLAY_NUM -screen 0 1280x720x24 -nolisten tcp -noreset
 EOF
 chmod +x "$XVFB_LAUNCHER"
 
@@ -348,6 +362,10 @@ for _ in $(seq 1 20); do
 done
 [ -n "$DESKTOP_READY" ] || die "desktop-control did not start: check the ateam-novnc service"
 printf '%s\n' "$DESKTOP_SIGNATURE" >"$BROWSER_DIR/desktop-installed-build"
+# Also update an already-running desktop without restarting Xvfb or Chrome.
+if [ -f "$BROWSER_DIR/wallpaper.png" ]; then
+	DISPLAY="$DISPLAY_NUM" feh --no-fehbg --bg-fill "$BROWSER_DIR/wallpaper.png"
+fi
 
 # -------------------------------------------------------------- verify -----
 

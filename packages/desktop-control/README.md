@@ -54,6 +54,10 @@ normalized to Return. It is typing, so the focused application's shortcuts,
 autoindent, and text transformations still apply. Scroll amounts are wheel
 steps (1–20) at the current pointer position.
 
+The viewer fills its frame, with controls collapsed behind the corner button.
+Open it to take/release control or use the phone text field. The Ateam installer
+sets a dark wallpaper on the actual X desktop and restores it at display startup.
+
 The viewer starts in watch mode. **Take control** revokes the agent lease,
 cancels its running input, waits for key cleanup, and permits only that viewer's
 input. **Release control** or disconnect makes the desktop available again.

@@ -1,8 +1,8 @@
 export const viewerHtml = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Desktop</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#17191d;color:#e8e9ec;font:13px system-ui;display:flex;flex-direction:column;height:100dvh}header{display:flex;align-items:center;gap:12px;padding:9px 12px;border-bottom:1px solid #34373d;min-height:48px}#status{flex:1}button{font:inherit;color:inherit;background:#353942;border:1px solid #555b66;border-radius:5px;padding:6px 10px;cursor:pointer}button:disabled{opacity:.5;cursor:default}#textbar{display:flex;gap:8px;padding:8px 12px;border-top:1px solid #34373d}#textbar[hidden]{display:none}#text{flex:1;min-width:0;font:16px system-ui;padding:6px;border:1px solid #555b66;border-radius:5px;background:#22252b;color:inherit}#screen{flex:1;min-height:0;overflow:hidden}#error{color:#ffb2a9;padding:0 12px;margin:0}button:focus-visible{outline:2px solid #87bfff;outline-offset:2px}
-</style></head><body><header><span id="status" role="status">Connecting…</span><button id="take" disabled>Take control</button><button id="release" hidden>Release control</button></header><p id="error" role="alert"></p><main id="screen" aria-label="Remote desktop"></main><form id="textbar" hidden><input id="text" aria-label="Text to type on the desktop" placeholder="Type text…" autocomplete="off"><button id="send" type="submit">Send text</button><button id="enter" type="button">Enter</button></form><script type="module" src="/viewer.js"></script></body></html>`;
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:#080e18;color:#e8e9ec;font:13px system-ui;height:100dvh;overflow:hidden}#screen{width:100%;height:100%;overflow:hidden}button,input{font:inherit}button{color:inherit;background:#353942;border:1px solid #555b66;border-radius:7px;padding:9px 12px;cursor:pointer;min-height:40px}button:disabled{opacity:.5;cursor:default}button:focus-visible,summary:focus-visible,input:focus-visible{outline:2px solid #87bfff;outline-offset:2px}#controls{position:fixed;bottom:max(12px,env(safe-area-inset-bottom));left:max(12px,env(safe-area-inset-left));z-index:2}summary{display:flex;align-items:center;justify-content:center;width:44px;height:44px;list-style:none;cursor:pointer;border:1px solid #ffffff20;border-radius:12px;background:#141a24d9;color:#b9c4d3;opacity:.35;transition:opacity .15s}summary::-webkit-details-marker{display:none}summary:hover,summary:focus-visible,#controls[open]>summary{opacity:1}#controls[data-controlling="true"]>summary{color:#a5d3ff;border-color:#87bfff80;opacity:.8}#panel{position:absolute;bottom:52px;left:0;width:340px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 80px);overflow:auto;background:#141a24f5;border:1px solid #ffffff24;border-radius:12px;padding:14px;box-shadow:0 12px 40px #0006}#status{display:block;line-height:1.5;color:#bac5d4;margin-bottom:12px}#textbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}#text{flex:1 1 100%;min-width:0;width:100%;font:16px system-ui;padding:10px;border:1px solid #555b66;border-radius:7px;background:#222b39;color:inherit}#error{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:3;max-width:calc(100vw - 24px);padding:10px 14px;margin:0;background:#301d20ed;color:#ffb2a9;border-radius:8px;line-height:1.5}#error:empty{display:none}@media(prefers-reduced-motion:reduce){summary{transition:none}}
+</style></head><body><main id="screen" aria-label="Remote desktop"></main><details id="controls"><summary aria-label="Desktop controls" title="Desktop controls"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="#141a24"/><circle cx="15" cy="17" r="3" fill="#141a24"/></svg></summary><section id="panel" aria-label="Desktop controls"><span id="status" role="status">Connecting…</span><button id="take" disabled>Take control</button><button id="release" hidden>Release control</button><form id="textbar" hidden><input id="text" aria-label="Text to type on the desktop" placeholder="Type text…" autocomplete="off"><button id="send" type="submit">Send text</button><button id="enter" type="button">Enter</button></form></section></details><p id="error" role="alert"></p><script type="module" src="/viewer.js"></script></body></html>`;
 
 export const viewerScript = `
 import RFB from '/core/rfb.js';
@@ -16,6 +16,9 @@ const release = document.getElementById('release');
 const textbar=document.getElementById('textbar');
 const text=document.getElementById('text');
 const send=document.getElementById('send');
+const controls=document.getElementById('controls');
+const toggle=controls.querySelector('summary');
+controls.addEventListener('keydown', e=>{ if(e.key==='Escape'){ e.stopPropagation(); controls.open=false; toggle.focus(); } });
 let rfb, clientId, connected = false, taking = false, closing = false, polling = false;
 let retry;
 async function request(action) {
@@ -35,6 +38,8 @@ async function refresh() {
     if (current!==rfb || taking || !connected) return;
     error.textContent='';
     rfb.viewOnly = !state.controlling;
+    controls.dataset.controlling=String(state.controlling);
+    toggle.title=state.controlling?'Desktop controls · You have control':'Desktop controls';
     take.disabled = state.controlling;
     release.hidden = !state.controlling; textbar.hidden=!state.controlling;
     status.textContent = state.controlling ? 'You have control · desktop agent input is blocked' :
@@ -46,7 +51,7 @@ async function refresh() {
 take.onclick = async () => {
   taking=true; take.disabled=true; error.textContent=''; status.textContent='Taking control…';
   try { await request('take'); } catch(e) { error.textContent=e.message; }
-  finally { taking=false; await refresh(); if (!rfb.viewOnly) rfb.focus(); }
+  finally { taking=false; await refresh(); if (!rfb.viewOnly) { controls.open=false; rfb.focus(); } }
 };
 release.onclick = async () => {
   rfb.viewOnly=true;
@@ -80,7 +85,7 @@ function connect() {
   rfb.addEventListener('connect', () => { if(current!==rfb) return; connected=true; error.textContent=''; take.disabled=false; refresh(); });
   rfb.addEventListener('disconnect', () => {
     if(current!==rfb) return;
-    connected=false; take.disabled=true; release.hidden=true; textbar.hidden=true; status.textContent='Disconnected · reconnecting…';
+    connected=false; controls.dataset.controlling='false'; error.textContent='Disconnected · reconnecting…'; take.disabled=true; release.hidden=true; textbar.hidden=true; status.textContent='Disconnected · reconnecting…';
     clearTimeout(retry); retry=setTimeout(connect,2000);
   });
   rfb.addEventListener('securityfailure', () => { if(current!==rfb) return; error.textContent='Desktop authentication failed. Reopen the viewer from Ateam.'; });

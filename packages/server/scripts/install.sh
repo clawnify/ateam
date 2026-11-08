@@ -192,6 +192,7 @@ mkdir -p "$APP_DIR" "$BIN_DIR"
 cp "$TMP/cli.js" "$TMP/daemon.js" "$TMP/package.json" "$APP_DIR/"
 # Older pinned releases predate desktop control; keep their engine install valid.
 if [ -f "$TMP/desktop.js" ]; then cp "$TMP/desktop.js" "$APP_DIR/"; fi
+if [ -f "$TMP/desktop-wallpaper.png" ]; then cp "$TMP/desktop-wallpaper.png" "$APP_DIR/"; fi
 
 # ------------------------------------------------------------- natives -------
 
