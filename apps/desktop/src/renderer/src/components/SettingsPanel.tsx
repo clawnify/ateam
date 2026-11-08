@@ -309,7 +309,7 @@ const ROWS: Row[] = [
 		section: "ai",
 		title: "OpenRouter API key",
 		description:
-			"Lets Jev, a small decision model on OpenRouter, sort finished turns and filter grammar suggestions, and lets an OpenRouter model write titles and summaries. What each one sends is described below. Ateam copies this key to your boxes when sync is on, so use one with a credit limit (set on the key at openrouter.ai › Settings › API Keys).",
+			"Lets Jev, a small decision model on OpenRouter, sort finished turns and filter grammar suggestions, and lets an OpenRouter model write titles and summaries. What each one sends is described below. Ateam copies this key to your boxes when sync is on, so use one with a credit limit (set on the key at openrouter.ai › Settings › API Keys). Your OpenRouter account must also allow Jev (or OpenAI models): when its privacy or guardrail settings block them, finished tasks quietly stop moving to Needs you.",
 		control: (_s, { credentials, saveKey }) => (
 			<KeyField provider="openRouter" status={credentials} onSave={saveKey} />
 		),

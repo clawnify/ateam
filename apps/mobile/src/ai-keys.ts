@@ -38,7 +38,7 @@ export const AI_KEY_FIELDS: readonly AiKeyField[] = [
 		label: "OpenRouter API key",
 		placeholder: "sk-or-…",
 		purpose:
-			"Does that sorting through OpenRouter instead. Not needed with an OpenAI key. Set a credit limit on the key.",
+			"Does that sorting through OpenRouter instead. Not needed with an OpenAI key. Set a credit limit on the key, and let your OpenRouter account use Jev or OpenAI models: its privacy or guardrail settings can block them.",
 		console: {
 			url: "https://openrouter.ai/settings/keys",
 			path: "openrouter.ai › Settings › API Keys",
