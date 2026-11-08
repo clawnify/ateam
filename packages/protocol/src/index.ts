@@ -204,32 +204,6 @@ export function clientBelowFloor(
 }
 
 /**
- * The oldest client protocol an engine of this version still serves correctly, sent
- * in system:hello (SystemInfo.minClient). A client older than the engine but at or
- * above this floor works on, without the newer features (each is gated by
- * FEATURE_MIN_VERSION), so it says nothing: an additive bump never asks anyone to
- * update. Below it, the client tells the user to update itself. Raise it ONLY for a
- * change an older client would misread or can't follow, in the same PR, and never
- * above the protocol of the Ateam Go live on the App Store: until that phone is out,
- * there is nothing to update to. That one case is the only one that still needs the
- * phone released before the desktop and engine.
- *
- * 29: a box can be private to its paired devices (pairing, v29), and a new one is;
- * a client below v29 can't pair.
- */
-export const MIN_CLIENT_PROTOCOL = 29;
-
-/** Whether a box running a newer protocol than this client needs a newer client:
- *  only below the box's floor. One that doesn't say (an engine from before the
- *  floor) is taken as serving this client, as every engine since v7 does. */
-export function clientBelowFloor(
-	clientProtocol: number,
-	box: { protocolVersion: number; minClient?: number },
-): boolean {
-	return box.protocolVersion > clientProtocol && (box.minClient ?? 0) > clientProtocol;
-}
-
-/**
  * A decision an agent is waiting on (ask_user). Answered from any client with
  * tasks:answerQuestion; the answer reaches the agent as a message from the user.
  */
