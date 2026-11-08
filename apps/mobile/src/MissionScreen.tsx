@@ -34,6 +34,7 @@ import {
 } from "../modules/expo-swiftterm/src/ExpoSwifttermView";
 import { KeyBar } from "./KeyBar";
 import { MC_NATIVE_FONT_SIZE, MC_NATIVE_METRICS } from "./mission-metrics";
+import { MissionLayoutIcon } from "./MissionLayoutIcon";
 import { TerminalStrip } from "./TerminalStrip";
 import { C } from "./theme";
 import { usePty } from "./useTaskPty";
@@ -420,10 +421,7 @@ export function MissionScreen({
 					accessibilityLabel={`Mission Control layout: ${MC_CHOICES.find((c) => c.value === layout)?.label}`}
 					accessibilityHint="Tap to switch to the next layout"
 				>
-					<Feather name="layout" size={16} color={C.ink} />
-					<Text style={styles.controlText}>
-						{MC_CHOICES.find((c) => c.value === layout)?.label}
-					</Text>
+					<MissionLayoutIcon layout={layout} color={C.ink} />
 				</Pressable>
 				<Pressable
 					style={styles.control}
