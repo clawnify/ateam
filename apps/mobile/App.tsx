@@ -910,6 +910,7 @@ function Shell({
 		onCloseBoxTerminal();
 		onLead(false);
 	};
+	const [sidebarOrder, setSidebarOrder] = useState<string[]>([]);
 	const [missionSession, setMissionSession] = useState<SessionDTO | undefined>();
 	useEffect(() => {
 		if (!openTask) setMissionSession(undefined);
@@ -929,6 +930,10 @@ function Shell({
 			(t) => t.column !== "merged" && loopTaskIds.has(t.id) === (missionMode === "loops"),
 		),
 		"status",
+	);
+	const sidebarRank = new Map(sidebarOrder.map((id, i) => [id, i]));
+	missionTasks.sort(
+		(a, b) => (sidebarRank.get(a.id) ?? Infinity) - (sidebarRank.get(b.id) ?? Infinity),
 	);
 	// A full terminal (a task's, or a box's) covers the tab's content. The Lead
 	// covers it too, under a task opened from one of its chips: closing the task
@@ -971,6 +976,9 @@ function Shell({
 							</Pressable>
 						</View>
 						<HomeScreen
+							key={selectedKey ?? "none"}
+							api={api}
+							onOrder={setSidebarOrder}
 							sidebar
 							rail={sidebarCollapsed}
 							projects={projects}
@@ -1188,6 +1196,9 @@ function Shell({
 					)}
 					{showTab && contentTab === "home" && (
 						<HomeScreen
+							key={selectedKey ?? "none"}
+							api={api}
+							onOrder={setSidebarOrder}
 							projects={projects}
 							selectedKey={selectedKey}
 							onSelectProject={onSelectProject}
@@ -2181,6 +2192,11 @@ export default function App() {
 			cards.map((c) => ({
 				key: c.key,
 				name: c.name,
+				members: c.members.map((m) => ({
+					id: m.projectId,
+					machine: m.alias,
+					label: m.alias ? labelOf(m.alias) : "Local",
+				})),
 				on: multi
 					? leadFirst(
 							c.members.map((m) => m.alias ?? ""),

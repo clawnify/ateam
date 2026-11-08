@@ -42,6 +42,8 @@ const ENTITY = new Set<string>([
 	CH.tasksCreateFromIssue,
 	CH.tasksCreate, // {projectId}
 	CH.tasksRemove,
+	CH.tasksMarkRead, // task id — marking a box task read must reach that box
+
 	CH.tasksSetColumn,
 	CH.tasksCleanup,
 	CH.tasksCleanupPreview,

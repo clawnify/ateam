@@ -1887,3 +1887,6 @@ export { wsClientTransport } from "./ws";
 export * from "./mc-order";
 
 export * from "./session-tabs";
+
+export * from "./sidebar-view";
+export { byWhatsNext, nextRank, taskWaitingLabel, waitState } from "./triage-order";

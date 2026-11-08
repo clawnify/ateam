@@ -93,6 +93,7 @@ function task(
 const TASKS: TaskDTO[] = [
 	task("onboarding-copy", "Rewrite the onboarding copy", "needs_attention", "awaiting_input", {
 		lastEventAt: T0 - 30_000,
+		isUnread: true,
 	}),
 	task("dark-mode", "Add a dark-mode toggle to settings", "running", "running", {
 		lastEventAt: T0 - 5_000,
@@ -103,15 +104,23 @@ const TASKS: TaskDTO[] = [
 	}),
 	task("flaky-test", "Fix the flaky checkout test", "review", "idle", {
 		prNumber: 128,
+		prState: "open",
 		prUrl: "https://github.com/clawnify/ateam/pull/128",
 		gitStatus: { ahead: 3, behind: 0, dirty: 0, updatedAt: T0 },
 	}),
 	task("empty-states", "Design the empty states", "todo", null),
 	task("bump-deps", "Bump dependencies to latest", "merged", "stopped", {
 		prNumber: 121,
+		prState: "merged",
 		mergeStatus: null,
 	}),
 ];
+
+const ARCHIVED = task("old-release", "Archive the previous release notes", "merged", "stopped", {
+	archivedAt: T0 - 86_400_000,
+	prState: "merged",
+	isUnread: true,
+});
 
 // A believable Claude Code session, as an ANSI transcript. Static (not streamed) so
 // it's deterministic — good for App Store screenshots and a stable review.
@@ -233,6 +242,14 @@ function handle(method: string, args: unknown[]): unknown {
 			return [PROJECT];
 		case CH.tasksList:
 			return TASKS;
+		case CH.tasksListArchived:
+			return [ARCHIVED];
+		case CH.tasksMarkRead: {
+			const t = [...TASKS, ARCHIVED].find((t) => t.id === args[0]);
+			if (!t) throw new Error("Task not found");
+			t.isUnread = false;
+			return { ...t };
+		}
 		case CH.tasksCreate: {
 			const input = args[0] as { projectId: string; name: string };
 			return task(`new-${T0}`, input.name || "New task", "running", "running");
