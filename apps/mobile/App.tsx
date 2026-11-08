@@ -17,8 +17,8 @@ import type {
 	LoopDTO,
 	ProjectDTO,
 	ProviderDefinition,
-	SettingsResult,
 	SessionDTO,
+	SettingsResult,
 	TaskDTO,
 } from "@ateam/protocol";
 import {
