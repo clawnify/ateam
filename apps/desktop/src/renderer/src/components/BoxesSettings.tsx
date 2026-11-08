@@ -4,6 +4,7 @@ import { boxesNeedingYou, engineLabel } from "../boxes-settings";
 import { addTailscaleBox, installBox } from "../lib/box-actions";
 import { useSetups } from "../lib/setups";
 import { BoxPage, BoxSetupPage, statusLine, useBoxActions, useBoxes } from "./BoxPage";
+import { DotfilesDefault } from "./Dotfiles";
 import { CrossBox } from "./CrossBox";
 import { EnvironmentPicker } from "./EnvironmentPicker";
 import { PhonePairingPage } from "./PhonePairing";
@@ -195,6 +196,7 @@ export function BoxesSettings({ title, intro }: { title: string; intro?: string 
 						))}
 					</ul>
 				) : null}
+				<DotfilesDefault />
 			</div>
 		</>
 	);

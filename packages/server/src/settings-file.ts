@@ -47,6 +47,7 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 		crossBox: false,
 	},
 	engine: {
+		dotfiles: null,
 		defaultAgentId: "claude",
 		defaultMergeStrategy: "squash",
 		defaultUpdateStrategy: "merge",

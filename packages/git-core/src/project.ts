@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, type ExecFileOptions } from "node:child_process";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -310,7 +310,11 @@ export async function createGithubRepo(
  * uses plain `git clone`. Used to provision a project onto a remote box. Throws
  * GH_FAILED if the clone fails; `dest` must not already exist.
  */
-export async function cloneRepo(cloneUrl: string, dest: string): Promise<void> {
+export async function cloneRepo(
+	cloneUrl: string,
+	dest: string,
+	options: Pick<ExecFileOptions, "env" | "timeout"> = {},
+): Promise<void> {
 	if (!/^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/.test(cloneUrl)) {
 		throw new GitCoreError("INVALID_NAME", `Unsupported clone URL "${cloneUrl}"`);
 	}
@@ -319,17 +323,17 @@ export async function cloneRepo(cloneUrl: string, dest: string): Promise<void> {
 	try {
 		if (gh) {
 			try {
-				await pexec("gh", ["repo", "clone", `${gh.owner}/${gh.name}`, dest]);
+				await pexec("gh", ["repo", "clone", `${gh.owner}/${gh.name}`, dest], options);
 			} catch {
 				// `gh` may be unauthenticated in this process even when git can
 				// clone: hosts like boxd inject GH_TOKEN into login shells only,
 				// while wiring a system-scope git credential helper that works
 				// from any process. Fall back to plain `git clone`.
 				await rm(dest, { recursive: true, force: true });
-				await pexec("git", ["clone", cloneUrl, dest]);
+				await pexec("git", ["clone", cloneUrl, dest], options);
 			}
 		} else {
-			await pexec("git", ["clone", cloneUrl, dest]);
+			await pexec("git", ["clone", cloneUrl, dest], options);
 		}
 	} catch (err) {
 		throw new GitCoreError(

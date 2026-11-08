@@ -70,9 +70,22 @@ function task(
 		mergeStatus: null,
 		prNumber: null,
 		prUrl: null,
+		prState: null,
 		gitStatus: null,
 		lastEventAt: T0,
 		isUnread: false,
+		preparing: false,
+		tags: null,
+		waitingReason: null,
+		waitingUntil: null,
+		waitingFiredAt: null,
+		browserUsedAt: null,
+		archivedAt: null,
+		triage: {
+			bucket: agentStatus === "running" ? "active" : "not_started",
+			done: false,
+			reason: "Demo task",
+		},
 		...extra,
 	};
 }
@@ -127,6 +140,7 @@ function sessionFor(taskId: string): SessionDTO {
 		taskId,
 		agentId: t?.agentId ?? "claude",
 		terminalId: `demo-term-${taskId}`,
+		agentSessionId: null,
 		status: "running",
 		cwd: "/home/demo/ateam",
 	};
