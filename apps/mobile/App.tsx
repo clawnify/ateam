@@ -181,6 +181,7 @@ const COLUMNS: { key: TaskDTO["column"]; label: string; tint: string }[] = [
 const CONTENT_MAX = 720;
 // A 280-point navigator leaves at least 520 points for the board/terminal.
 const SIDEBAR_WIDTH = 280;
+const SIDEBAR_RAIL_WIDTH = 56;
 const SIDEBAR_MIN_WINDOW = 800;
 
 /** How this phone names itself to a box it pairs with. */
@@ -938,10 +939,25 @@ function Shell({
 		>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
 			<View style={styles.shellColumns}>
-				{sidebar && (
-					<View style={styles.sidebar} testID="project-task-sidebar">
+				{wide && (
+					<View
+						style={[styles.sidebar, sidebarCollapsed && styles.sidebarRail]}
+						testID="project-task-sidebar"
+					>
+						<View style={[styles.sidebarHeader, sidebarCollapsed && styles.sidebarHeaderRail]}>
+							<Pressable
+								style={styles.sidebarToggle}
+								onPress={onToggleSidebar}
+								accessibilityRole="button"
+								accessibilityLabel={sidebar ? "Collapse sidebar" : "Expand sidebar"}
+								accessibilityState={{ expanded: sidebar }}
+							>
+								<Feather name="sidebar" size={20} color={sidebar ? C.ink : C.muted} />
+							</Pressable>
+						</View>
 						<HomeScreen
 							sidebar
+							rail={sidebarCollapsed}
 							projects={projects}
 							selectedKey={selectedKey}
 							onSelectProject={(key) => {
@@ -972,17 +988,6 @@ function Shell({
 						{/* Only behind a list: elsewhere the bar has nothing under it to fade. */}
 						{listUnder && <TopFade height={topInset} />}
 						<View style={styles.boardHeader}>
-							{wide && (
-								<Pressable
-									style={styles.sidebarToggle}
-									onPress={onToggleSidebar}
-									accessibilityRole="button"
-									accessibilityLabel={sidebar ? "Collapse sidebar" : "Expand sidebar"}
-									accessibilityState={{ expanded: sidebar }}
-								>
-									<Feather name="sidebar" size={20} color={sidebar ? C.ink : C.muted} />
-								</Pressable>
-							)}
 							<Pressable style={styles.statusHit} onPress={onOpenConnection} hitSlop={10}>
 								<View style={[styles.statusDot, { backgroundColor: connColor }]} />
 							</Pressable>
@@ -1003,7 +1008,7 @@ function Shell({
 				    from the project's tabs. As wide as the status dot's slot, so the tabs
 				    stay centered. A box's terminal is on its card in Boxes. */}
 							<Pressable
-								style={[styles.cornerHit, wide && styles.wideCornerHit]}
+								style={styles.cornerHit}
 								onPress={() => {
 									// From a task opened out of the chat, back to the chat.
 									const back = covered;
@@ -2921,8 +2926,10 @@ const styles = StyleSheet.create({
 		paddingHorizontal: 14,
 		paddingBottom: 12,
 	},
-	sidebarToggle: { width: 44, height: 44, alignItems: "flex-start", justifyContent: "center" },
-	wideCornerHit: { width: 88 },
+	sidebarToggle: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+	sidebarRail: { width: SIDEBAR_RAIL_WIDTH },
+	sidebarHeader: { height: 44, paddingHorizontal: 6, alignItems: "flex-end" },
+	sidebarHeaderRail: { alignItems: "center" },
 	statusHit: { width: 44, alignItems: "flex-start", justifyContent: "center" },
 	statusDot: { width: 12, height: 12, borderRadius: 6 },
 	headerCenter: { flex: 1, alignItems: "center" },

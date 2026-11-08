@@ -66,12 +66,15 @@ function TaskRow({
 	place,
 	onPress,
 	sidebar = false,
+	rail = false,
 	selected = false,
 }: {
 	task: TaskDTO;
 	place: TaskPlace;
 	onPress: () => void;
 	sidebar?: boolean;
+	/** Desktop-style icon-only navigation; only used in the sidebar. */
+	rail?: boolean;
 	selected?: boolean;
 }) {
 	const tags = tagsFor(task);
@@ -81,11 +84,13 @@ function TaskRow({
 			style={[
 				styles.row,
 				sidebar && styles.sidebarRow,
+				rail && styles.railRow,
 				place.away && styles.rowAway,
 				selected && styles.taskActive,
 			]}
 			onPress={onPress}
 			accessibilityRole="button"
+			accessibilityLabel={rail ? [task.name, where].filter(Boolean).join(", ") : undefined}
 			accessibilityState={{ selected }}
 		>
 			<View style={styles.icon}>
@@ -95,7 +100,7 @@ function TaskRow({
 					<Feather name={taskIconName(task.name)} size={15} color={C.muted} />
 				)}
 			</View>
-			{sidebar ? (
+			{rail ? null : sidebar ? (
 				<View style={styles.taskText}>
 					<Text style={[styles.sidebarName, task.isUnread && styles.nameUnread]} numberOfLines={2}>
 						{task.name}
@@ -111,7 +116,7 @@ function TaskRow({
 					{task.name}
 				</Text>
 			)}
-			{!sidebar && tags.length > 0 && (
+			{!rail && !sidebar && tags.length > 0 && (
 				<View style={styles.tags}>
 					{tags.map((tag) => (
 						<Text key={tag} style={styles.tag}>
@@ -120,12 +125,12 @@ function TaskRow({
 					))}
 				</View>
 			)}
-			{!sidebar && where ? (
+			{!rail && !sidebar && where ? (
 				<Text style={styles.box} numberOfLines={1}>
 					{where}
 				</Text>
 			) : null}
-			<View style={[styles.dot, { backgroundColor: statusColor(task) }]} />
+			<View style={[styles.dot, rail && styles.railDot, { backgroundColor: statusColor(task) }]} />
 		</Pressable>
 	);
 }
@@ -135,6 +140,7 @@ function LoopRow({
 	task,
 	onPress,
 	sidebar = false,
+	rail = false,
 	selected = false,
 }: {
 	loop: LoopDTO;
@@ -142,28 +148,35 @@ function LoopRow({
 	onPress: () => void;
 	selected?: boolean;
 	sidebar?: boolean;
+	/** Desktop-style icon-only navigation; only used in the sidebar. */
+	rail?: boolean;
 }) {
 	return (
 		<Pressable
 			style={[
 				styles.row,
 				sidebar && styles.sidebarRow,
+				rail && styles.railRow,
 				!loop.enabled && styles.rowPaused,
 				selected && styles.taskActive,
 			]}
 			onPress={onPress}
 			accessibilityRole="button"
+			accessibilityLabel={rail ? loop.title : undefined}
 			accessibilityState={{ selected }}
 		>
 			<View style={styles.icon}>
 				<Feather name="repeat" size={15} color={C.muted} />
 			</View>
-			<Text style={styles.name} numberOfLines={1}>
-				{loop.title}
-			</Text>
+			{!rail && (
+				<Text style={styles.name} numberOfLines={1}>
+					{loop.title}
+				</Text>
+			)}
 			<View
 				style={[
 					styles.dot,
+					rail && styles.railDot,
 					{ backgroundColor: task ? statusColor(task) : loop.enabled ? C.blue : C.faint },
 				]}
 			/>
@@ -186,6 +199,7 @@ export function HomeScreen({
 	scrollProps,
 	topInset = 0,
 	sidebar = false,
+	rail = false,
 	selectedTaskId,
 }: {
 	projects: ProjectRow[];
@@ -207,6 +221,8 @@ export function HomeScreen({
 	topInset?: number;
 	/** Reuse Home as persistent navigation in a wide window. */
 	sidebar?: boolean;
+	/** Desktop-style icon-only navigation; only used in the sidebar. */
+	rail?: boolean;
 	selectedTaskId?: string;
 }) {
 	const [sort, setSort] = useState<TaskSort>("updated");
@@ -233,21 +249,23 @@ export function HomeScreen({
 			{...scrollProps}
 		>
 			<View style={styles.column}>
-				<View style={styles.sectionHead}>
-					<Pressable
-						style={[styles.sectionToggle, sidebar && styles.sidebarHit]}
-						onPress={() => setProjectsOpen((o) => !o)}
-						accessibilityRole="button"
-						accessibilityLabel="Projects"
-						accessibilityState={{ expanded: projectsOpen }}
-					>
-						<Feather
-							name={projectsOpen ? "chevron-down" : "chevron-right"}
-							size={14}
-							color={C.muted}
-						/>
-						<Text style={styles.sectionTitle}>Projects</Text>
-					</Pressable>
+				<View style={[styles.sectionHead, rail && styles.railSectionHead]}>
+					{!rail && (
+						<Pressable
+							style={[styles.sectionToggle, sidebar && styles.sidebarHit]}
+							onPress={() => setProjectsOpen((o) => !o)}
+							accessibilityRole="button"
+							accessibilityLabel="Projects"
+							accessibilityState={{ expanded: projectsOpen }}
+						>
+							<Feather
+								name={projectsOpen ? "chevron-down" : "chevron-right"}
+								size={14}
+								color={C.muted}
+							/>
+							<Text style={styles.sectionTitle}>Projects</Text>
+						</Pressable>
+					)}
 					<Pressable
 						style={[styles.sortBtn, sidebar && styles.sidebarHit]}
 						onPress={onAddProject}
@@ -258,51 +276,65 @@ export function HomeScreen({
 						<Feather name="folder-plus" size={16} color={C.muted} />
 					</Pressable>
 				</View>
-				{projectsOpen &&
-					(projects.length === 0 ? (
-						<Text style={styles.emptyText}>No projects yet</Text>
-					) : (
-						projects.map((p) => {
-							const active = p.key === selectedKey;
-							return (
-								<Pressable
-									key={p.key}
-									style={[styles.row, sidebar && styles.sidebarRow, active && styles.rowActive]}
-									onPress={() => onSelectProject(p.key)}
-									accessibilityRole="button"
-									accessibilityState={{ selected: active }}
-								>
-									<View style={styles.icon}>
-										<View style={[styles.projDot, active && styles.projDotActive]} />
-									</View>
-									<Text style={[styles.name, active && styles.nameActive]} numberOfLines={1}>
-										{p.name}
-									</Text>
-									{p.on ? (
-										<Text style={styles.box} numberOfLines={1}>
-											{p.on}
-										</Text>
-									) : null}
-								</Pressable>
-							);
-						})
-					))}
+				{(rail || projectsOpen) &&
+					(projects.length === 0
+						? !rail && <Text style={styles.emptyText}>No projects yet</Text>
+						: projects.map((p) => {
+								const active = p.key === selectedKey;
+								return (
+									<Pressable
+										key={p.key}
+										style={[
+											styles.row,
+											sidebar && styles.sidebarRow,
+											rail && styles.railRow,
+											active && styles.rowActive,
+										]}
+										onPress={() => onSelectProject(p.key)}
+										accessibilityLabel={
+											rail ? [p.name, p.on].filter(Boolean).join(", ") : undefined
+										}
+										accessibilityRole="button"
+										accessibilityState={{ selected: active }}
+									>
+										<View style={styles.icon}>
+											{rail ? (
+												<Text style={styles.railInitial}>{p.name.charAt(0).toUpperCase()}</Text>
+											) : (
+												<View style={[styles.projDot, active && styles.projDotActive]} />
+											)}
+										</View>
+										{!rail && (
+											<Text style={[styles.name, active && styles.nameActive]} numberOfLines={1}>
+												{p.name}
+											</Text>
+										)}
+										{!rail && p.on ? (
+											<Text style={styles.box} numberOfLines={1}>
+												{p.on}
+											</Text>
+										) : null}
+									</Pressable>
+								);
+							}))}
 
-				<View style={[styles.sectionHead, styles.sectionHeadLower]}>
-					<Pressable
-						style={[styles.sectionToggle, sidebar && styles.sidebarHit]}
-						onPress={() => setTasksOpen((o) => !o)}
-						accessibilityRole="button"
-						accessibilityLabel="Tasks"
-						accessibilityState={{ expanded: tasksOpen }}
-					>
-						<Feather
-							name={tasksOpen ? "chevron-down" : "chevron-right"}
-							size={14}
-							color={C.muted}
-						/>
-						<Text style={styles.sectionTitle}>Tasks</Text>
-					</Pressable>
+				<View style={[styles.sectionHead, styles.sectionHeadLower, rail && styles.railSectionHead]}>
+					{!rail && (
+						<Pressable
+							style={[styles.sectionToggle, sidebar && styles.sidebarHit]}
+							onPress={() => setTasksOpen((o) => !o)}
+							accessibilityRole="button"
+							accessibilityLabel="Tasks"
+							accessibilityState={{ expanded: tasksOpen }}
+						>
+							<Feather
+								name={tasksOpen ? "chevron-down" : "chevron-right"}
+								size={14}
+								color={C.muted}
+							/>
+							<Text style={styles.sectionTitle}>Tasks</Text>
+						</Pressable>
+					)}
 					<Pressable
 						style={[styles.sortBtn, sidebar && styles.sidebarHit]}
 						onPress={() => setSort((s) => (s === "status" ? "updated" : "status"))}
@@ -310,16 +342,20 @@ export function HomeScreen({
 						accessibilityLabel={`Sort tasks by ${sort === "status" ? "recent activity" : "status"}`}
 						hitSlop={6}
 					>
-						<Text style={styles.sortText}>{sort === "status" ? "by status" : "recent"}</Text>
+						{rail ? (
+							<Feather name="bar-chart-2" size={16} color={C.muted} />
+						) : (
+							<Text style={styles.sortText}>{sort === "status" ? "by status" : "recent"}</Text>
+						)}
 					</Pressable>
 				</View>
-				{tasksOpen &&
+				{(rail || tasksOpen) &&
 					(loading && ordered.length === 0 ? (
 						<View style={styles.empty}>
 							<ActivityIndicator color={C.muted} />
 						</View>
 					) : ordered.length === 0 ? (
-						<Text style={styles.emptyText}>No active tasks</Text>
+						!rail && <Text style={styles.emptyText}>No active tasks</Text>
 					) : (
 						ordered.map((t) => (
 							<TaskRow
@@ -328,26 +364,29 @@ export function HomeScreen({
 								place={placeOf(t)}
 								onPress={() => onOpenTask(t)}
 								sidebar={sidebar}
+								rail={rail}
 								selected={t.id === selectedTaskId}
 							/>
 						))
 					))}
 
-				<View style={[styles.sectionHead, styles.sectionHeadLower]}>
-					<Pressable
-						style={[styles.sectionToggle, sidebar && styles.sidebarHit]}
-						onPress={() => setLoopsOpen((o) => !o)}
-						accessibilityRole="button"
-						accessibilityLabel="Loops"
-						accessibilityState={{ expanded: loopsOpen }}
-					>
-						<Feather
-							name={loopsOpen ? "chevron-down" : "chevron-right"}
-							size={14}
-							color={C.muted}
-						/>
-						<Text style={styles.sectionTitle}>Loops</Text>
-					</Pressable>
+				<View style={[styles.sectionHead, styles.sectionHeadLower, rail && styles.railSectionHead]}>
+					{!rail && (
+						<Pressable
+							style={[styles.sectionToggle, sidebar && styles.sidebarHit]}
+							onPress={() => setLoopsOpen((o) => !o)}
+							accessibilityRole="button"
+							accessibilityLabel="Loops"
+							accessibilityState={{ expanded: loopsOpen }}
+						>
+							<Feather
+								name={loopsOpen ? "chevron-down" : "chevron-right"}
+								size={14}
+								color={C.muted}
+							/>
+							<Text style={styles.sectionTitle}>Loops</Text>
+						</Pressable>
+					)}
 					<Pressable
 						style={[styles.sortBtn, sidebar && styles.sidebarHit]}
 						onPress={onNewLoop}
@@ -358,24 +397,23 @@ export function HomeScreen({
 						<Feather name="plus" size={16} color={C.muted} />
 					</Pressable>
 				</View>
-				{loopsOpen &&
-					(loops.length === 0 ? (
-						<Text style={styles.emptyText}>No loops</Text>
-					) : (
-						loops.map((l) => {
-							const task = l.taskId ? (taskById.get(l.taskId) ?? null) : null;
-							return (
-								<LoopRow
-									key={l.id}
-									loop={l}
-									sidebar={sidebar}
-									task={task}
-									selected={!!task && task.id === selectedTaskId}
-									onPress={() => (task ? onOpenTask(task) : onOpenLoops())}
-								/>
-							);
-						})
-					))}
+				{(rail || loopsOpen) &&
+					(loops.length === 0
+						? !rail && <Text style={styles.emptyText}>No loops</Text>
+						: loops.map((l) => {
+								const task = l.taskId ? (taskById.get(l.taskId) ?? null) : null;
+								return (
+									<LoopRow
+										key={l.id}
+										loop={l}
+										sidebar={sidebar}
+										rail={rail}
+										task={task}
+										selected={!!task && task.id === selectedTaskId}
+										onPress={() => (task ? onOpenTask(task) : onOpenLoops())}
+									/>
+								);
+							}))}
 			</View>
 		</ScrollView>
 	);
@@ -425,6 +463,16 @@ const styles = StyleSheet.create({
 	sidebarPlace: { color: C.faint, fontSize: 12 },
 	sidebarHit: { minHeight: 44, minWidth: 44 },
 	sidebarRow: { minHeight: 44 },
+	railRow: { paddingHorizontal: 0, justifyContent: "center", gap: 0 },
+	railDot: { position: "absolute", top: 8, right: 8, width: 6, height: 6 },
+	railInitial: { color: C.ink, fontSize: 15, fontWeight: "700", textAlign: "center" },
+	railSectionHead: {
+		paddingHorizontal: 0,
+		paddingVertical: 4,
+		justifyContent: "center",
+		borderTopWidth: StyleSheet.hairlineWidth,
+		borderTopColor: C.line,
+	},
 	projDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.line },
 	projDotActive: { backgroundColor: C.ink },
 	nameActive: { fontWeight: "700" },
