@@ -926,9 +926,8 @@ function Shell({
 	const [missionJump, setMissionJump] = useState<{ id: string; seq: number } | null>(null);
 	const loopTaskIds = new Set(loops.flatMap((loop) => (loop.taskId ? [loop.taskId] : [])));
 	const missionTasks = sortTasks(
-		shown.filter(
-			(t) => t.column !== "merged" && loopTaskIds.has(t.id) === (missionMode === "loops"),
-		),
+		// Like desktop, membership comes from live sessions, even for a merged task.
+		shown.filter((t) => loopTaskIds.has(t.id) === (missionMode === "loops")),
 		"status",
 	);
 	const sidebarRank = new Map(sidebarOrder.map((id, i) => [id, i]));
