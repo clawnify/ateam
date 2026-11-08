@@ -49,6 +49,7 @@ import {
 	type DirEntryDTO,
 	type KanbanColumn,
 	type MergeStrategy,
+	MIN_CLIENT_PROTOCOL,
 	NO_GIT_IDENTITY,
 	PROTOCOL_VERSION,
 	type RegisterProjectOptions,
@@ -795,6 +796,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			const agents = await listAgents();
 			return {
 				protocolVersion: PROTOCOL_VERSION,
+				minClient: MIN_CLIENT_PROTOCOL,
 				agents: agents.filter((a) => a.available).map((a) => a.id),
 				release: ENGINE_RELEASE,
 			};
