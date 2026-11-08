@@ -57,6 +57,7 @@ import {
 	Text,
 	TextInput,
 	useColorScheme,
+	useWindowDimensions,
 	View,
 } from "react-native";
 import { AgentIcon } from "./src/AgentIcon";
@@ -176,6 +177,9 @@ const COLUMNS: { key: TaskDTO["column"]; label: string; tint: string }[] = [
 // on iPhone (wider than any screen), it stops the board/composer/form from stretching
 // edge-to-edge on iPad. The terminal is intentionally exempt — more columns is better.
 const CONTENT_MAX = 720;
+// A 280-point navigator leaves at least 520 points for the board/terminal.
+const SIDEBAR_WIDTH = 280;
+const SIDEBAR_MIN_WINDOW = 800;
 
 /** How this phone names itself to a box it pairs with. */
 const PHONE_LABEL = Platform.OS === "ios" ? "iPhone" : "Phone";
@@ -887,6 +891,16 @@ function Shell({
 	/** "Start it" on one of the Lead's proposals. */
 	onStartProposal: (item: ProposalItem) => void;
 }) {
+	const { width } = useWindowDimensions();
+	const sidebar = width >= SIDEBAR_MIN_WINDOW;
+	// Home becomes the navigator on wide windows; its main view is the board.
+	// Derive this instead of changing tab state during rotation/Split View.
+	const contentTab = sidebar && tab === "home" ? "board" : tab;
+	const leaveDetail = () => {
+		onCloseTask();
+		onCloseBoxTerminal();
+		onLead(false);
+	};
 	// Mission Control tiles: this project's tasks that have (or had) an agent, in
 	// Home's order, merged work excluded.
 	const missionTasks = sortTasks(
@@ -908,259 +922,297 @@ function Shell({
 	// it (TopFade), padded by its height so they start below it. Terminals, the
 	// Lead and Mission's pages start below it instead.
 	const [topInset, setTopInset] = useState(TOP_INSET_GUESS);
-	const listUnder = showTab && (tab === "board" || tab === "home" || tab === "loops");
+	const listUnder =
+		showTab && (contentTab === "board" || contentTab === "home" || contentTab === "loops");
 	return (
 		<KeyboardAvoidingView
 			style={styles.shellRoot}
 			behavior={Platform.OS === "ios" ? "padding" : undefined}
 		>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
-			<View style={styles.topBar} onLayout={(e) => setTopInset(e.nativeEvent.layout.height)}>
-				{/* Only behind a list: elsewhere the bar has nothing under it to fade. */}
-				{listUnder && <TopFade height={topInset} />}
-				<View style={styles.boardHeader}>
-					<Pressable style={styles.statusHit} onPress={onOpenConnection} hitSlop={10}>
-						<View style={[styles.statusDot, { backgroundColor: connColor }]} />
-					</Pressable>
-					<View style={styles.headerCenter}>
-						<TabStrip
-							tab={leadOpen ? null : tab}
-							onChange={(t) => {
-								// A tab tap from the full terminal (or the Lead) leaves it, like the desktop.
-								onCloseTask();
-								onCloseBoxTerminal();
-								onLead(false);
-								onTab(t);
+			<View style={styles.shellColumns}>
+				{sidebar && (
+					<View style={styles.sidebar} testID="project-task-sidebar">
+						<HomeScreen
+							sidebar
+							projects={projects}
+							selectedKey={selectedKey}
+							onSelectProject={(key) => {
+								leaveDetail();
+								onSelectProject(key);
 							}}
+							placeOf={placeOf}
+							onAddProject={onAddProject}
+							tasks={shown}
+							loops={loops}
+							loading={loading}
+							selectedTaskId={openTask?.id}
+							onOpenTask={(task) => {
+								leaveDetail();
+								onOpenTask(task);
+							}}
+							onOpenLoops={() => {
+								leaveDetail();
+								onTab("loops");
+							}}
+							onNewLoop={onNewLoop}
 						/>
 					</View>
-					{/* The Lead, box-wide like the desktop's right sidebar, so it sits apart
+				)}
+				{/* Keep the main pane mounted when the sidebar appears/disappears. */}
+				<View key="main" style={styles.shellMain} testID="main-pane">
+					<View style={styles.topBar} onLayout={(e) => setTopInset(e.nativeEvent.layout.height)}>
+						{/* Only behind a list: elsewhere the bar has nothing under it to fade. */}
+						{listUnder && <TopFade height={topInset} />}
+						<View style={styles.boardHeader}>
+							<Pressable style={styles.statusHit} onPress={onOpenConnection} hitSlop={10}>
+								<View style={[styles.statusDot, { backgroundColor: connColor }]} />
+							</Pressable>
+							<View style={styles.headerCenter}>
+								<TabStrip
+									tab={leadOpen ? null : contentTab}
+									hideHome={sidebar}
+									onChange={(t) => {
+										// A tab tap from the full terminal (or the Lead) leaves it, like the desktop.
+										onCloseTask();
+										onCloseBoxTerminal();
+										onLead(false);
+										onTab(t);
+									}}
+								/>
+							</View>
+							{/* The Lead, box-wide like the desktop's right sidebar, so it sits apart
 				    from the project's tabs. As wide as the status dot's slot, so the tabs
 				    stay centered. A box's terminal is on its card in Boxes. */}
-					<Pressable
-						style={styles.cornerHit}
-						onPress={() => {
-							// From a task opened out of the chat, back to the chat.
-							const back = covered;
-							onCloseTask();
-							onCloseBoxTerminal();
-							onLead(back || !leadOpen);
-						}}
-						hitSlop={10}
-						accessibilityRole="button"
-						accessibilityLabel={
-							onCall
-								? "Lead chat, on a call"
-								: leadBadge === "waiting"
-									? "Lead chat, waiting on you"
-									: leadBadge === "new"
-										? "Lead chat, new messages"
-										: "Lead chat"
-						}
-						accessibilityState={{ selected: showLead }}
-					>
-						<View>
-							{onCall ? (
-								<Feather name="phone" size={18} color={C.green} />
-							) : (
-								<Feather name="message-circle" size={19} color={showLead ? C.ink : C.muted} />
-							)}
-							{leadBadge && (
-								<View
-									style={[styles.leadDot, leadBadge === "waiting" && { backgroundColor: C.amber }]}
-								/>
-							)}
+							<Pressable
+								style={styles.cornerHit}
+								onPress={() => {
+									// From a task opened out of the chat, back to the chat.
+									const back = covered;
+									onCloseTask();
+									onCloseBoxTerminal();
+									onLead(back || !leadOpen);
+								}}
+								hitSlop={10}
+								accessibilityRole="button"
+								accessibilityLabel={
+									onCall
+										? "Lead chat, on a call"
+										: leadBadge === "waiting"
+											? "Lead chat, waiting on you"
+											: leadBadge === "new"
+												? "Lead chat, new messages"
+												: "Lead chat"
+								}
+								accessibilityState={{ selected: showLead }}
+							>
+								<View>
+									{onCall ? (
+										<Feather name="phone" size={18} color={C.green} />
+									) : (
+										<Feather name="message-circle" size={19} color={showLead ? C.ink : C.muted} />
+									)}
+									{leadBadge && (
+										<View
+											style={[
+												styles.leadDot,
+												leadBadge === "waiting" && { backgroundColor: C.amber },
+											]}
+										/>
+									)}
+								</View>
+							</Pressable>
 						</View>
-					</Pressable>
-				</View>
 
-				{/* The board still works on a skewed box, so this states the risk and offers
+						{/* The board still works on a skewed box, so this states the risk and offers
 			    the one fix, rather than blocking the way the handshake used to. A box
 			    AHEAD of the app can't be fixed from here: updating it would only take it
 			    further away, so that case just explains itself. */}
-				{notice && (
-					<View style={styles.skewBar}>
-						<Text style={styles.skewText}>{skewText(notice)}</Text>
-						{notice.version < PROTOCOL_VERSION && !notice.atLatest && (
-							<Pressable
-								style={[styles.skewBtn, notice.updating && styles.skewBtnBusy]}
-								onPress={notice.onUpdate}
-								disabled={notice.updating}
-							>
-								<Text style={styles.skewBtnText}>
-									{notice.updating ? "Updating…" : "Update box"}
-								</Text>
-							</Pressable>
+						{notice && (
+							<View style={styles.skewBar}>
+								<Text style={styles.skewText}>{skewText(notice)}</Text>
+								{notice.version < PROTOCOL_VERSION && !notice.atLatest && (
+									<Pressable
+										style={[styles.skewBtn, notice.updating && styles.skewBtnBusy]}
+										onPress={notice.onUpdate}
+										disabled={notice.updating}
+									>
+										<Text style={styles.skewBtnText}>
+											{notice.updating ? "Updating…" : "Update box"}
+										</Text>
+									</Pressable>
+								)}
+								<Pressable onPress={notice.onDismiss} hitSlop={10} accessibilityLabel="Dismiss">
+									<Feather name="x" size={16} color={C.amber} />
+								</Pressable>
+							</View>
 						)}
-						<Pressable onPress={notice.onDismiss} hitSlop={10} accessibilityLabel="Dismiss">
-							<Feather name="x" size={16} color={C.amber} />
-						</Pressable>
+						{notice?.error && (
+							<View style={styles.skewErrorBar}>
+								<Text style={styles.skewErrorText}>{notice.error}</Text>
+							</View>
+						)}
 					</View>
-				)}
-				{notice?.error && (
-					<View style={styles.skewErrorBar}>
-						<Text style={styles.skewErrorText}>{notice.error}</Text>
-					</View>
-				)}
-			</View>
-			{!listUnder && <View style={{ height: topInset }} />}
+					{!listUnder && <View style={{ height: topInset }} />}
 
-			{/* While its box is being reached (asleep, or dropped) an open terminal keeps
+					{/* While its box is being reached (asleep, or dropped) an open terminal keeps
 			    its place, and attaches (a new gen remounts it) once the box answers. It
 			    talks to its box directly: a pasted image must land where its agent is. */}
-			{openTask && !openTaskView.api ? (
-				<ReconnectingTerminal
-					lead={<AgentIcon agentId={openTask.agentId} size={12} />}
-					title={(tasks.find((t) => t.id === openTask.id) ?? openTask).name}
-					onBack={onCloseTask}
-					status={openTaskView.status}
-					wakeError={openTaskView.wakeError}
-				/>
-			) : openTask && openTaskView.api ? (
-				<Term
-					key={`${openTaskView.gen}:${openTask.id}`}
-					api={openTaskView.api}
-					task={tasks.find((t) => t.id === openTask.id) ?? openTask}
-					onClose={onCloseTask}
-					autoFocus={openTaskFocus}
-				/>
-			) : boxTerminal && !boxTerminal.api ? (
-				<ReconnectingTerminal
-					lead={<Feather name="terminal" size={12} color={C.ink} />}
-					title={boxTerminal.title}
-					onBack={onCloseBoxTerminal}
-					status={boxTerminal.status}
-					wakeError={boxTerminal.wakeError}
-				/>
-			) : boxTerminal?.api ? (
-				<BoxTerminalScreen
-					key={`${boxTerminal.gen}:box`}
-					api={boxTerminal.api}
-					onClose={onCloseBoxTerminal}
-					onUpdateBox={boxTerminal.onUpdateBox}
-					updating={boxTerminal.updating}
-					updateError={boxTerminal.updateError}
-					boxAtLatest={boxTerminal.boxAtLatest}
-					run={boxTerminal.run}
-					onRan={boxTerminal.onRan}
-				/>
-			) : null}
-			{showTab && tab === "board" && (
-				<ScrollView
-					style={styles.board}
-					contentContainerStyle={[styles.boardContent, { paddingTop: topInset + 16 }]}
-					showsVerticalScrollIndicator={false}
-					keyboardShouldPersistTaps="handled"
-					{...scrollProps}
-				>
-					<View style={styles.contentColumn}>
-						{loading && shown.length === 0 ? (
-							<View style={styles.centerPad}>
-								<ActivityIndicator color={C.ink} />
-								<Text style={styles.footnote}>loading board…</Text>
-							</View>
-						) : shown.length === 0 ? (
-							<View style={styles.centerPad}>
-								<Text style={styles.footnote}>no tasks yet — start one below</Text>
-							</View>
-						) : (
-							COLUMNS.map((col) => {
-								const inCol = shown.filter((t) => t.column === col.key);
-								if (inCol.length === 0) return null;
-								return (
-									<View key={col.key} style={styles.zone}>
-										<View style={styles.eyebrowRow}>
-											<View style={[styles.tick, { backgroundColor: col.tint }]} />
-											<Text style={styles.eyebrow}>{col.label}</Text>
-											<Text style={styles.eyebrowCount}>{inCol.length}</Text>
-										</View>
-										{inCol.map((t) => (
-											<TaskCard
-												key={t.id}
-												task={t}
-												tint={col.tint}
-												place={placeOf(t)}
-												onOpen={() => onOpenTask(t)}
-											/>
-										))}
+					{openTask && !openTaskView.api ? (
+						<ReconnectingTerminal
+							lead={<AgentIcon agentId={openTask.agentId} size={12} />}
+							title={(tasks.find((t) => t.id === openTask.id) ?? openTask).name}
+							onBack={onCloseTask}
+							status={openTaskView.status}
+							wakeError={openTaskView.wakeError}
+						/>
+					) : openTask && openTaskView.api ? (
+						<Term
+							key={`${openTaskView.gen}:${openTask.id}`}
+							api={openTaskView.api}
+							task={tasks.find((t) => t.id === openTask.id) ?? openTask}
+							onClose={onCloseTask}
+							autoFocus={openTaskFocus}
+						/>
+					) : boxTerminal && !boxTerminal.api ? (
+						<ReconnectingTerminal
+							lead={<Feather name="terminal" size={12} color={C.ink} />}
+							title={boxTerminal.title}
+							onBack={onCloseBoxTerminal}
+							status={boxTerminal.status}
+							wakeError={boxTerminal.wakeError}
+						/>
+					) : boxTerminal?.api ? (
+						<BoxTerminalScreen
+							key={`${boxTerminal.gen}:box`}
+							api={boxTerminal.api}
+							onClose={onCloseBoxTerminal}
+							onUpdateBox={boxTerminal.onUpdateBox}
+							updating={boxTerminal.updating}
+							updateError={boxTerminal.updateError}
+							boxAtLatest={boxTerminal.boxAtLatest}
+							run={boxTerminal.run}
+							onRan={boxTerminal.onRan}
+						/>
+					) : null}
+					{showTab && contentTab === "board" && (
+						<ScrollView
+							style={styles.board}
+							contentContainerStyle={[styles.boardContent, { paddingTop: topInset + 16 }]}
+							showsVerticalScrollIndicator={false}
+							keyboardShouldPersistTaps="handled"
+							{...scrollProps}
+						>
+							<View style={styles.contentColumn}>
+								{loading && shown.length === 0 ? (
+									<View style={styles.centerPad}>
+										<ActivityIndicator color={C.ink} />
+										<Text style={styles.footnote}>loading board…</Text>
 									</View>
-								);
-							})
-						)}
-					</View>
-				</ScrollView>
-			)}
-			{showTab && tab === "home" && (
-				<HomeScreen
-					projects={projects}
-					selectedKey={selectedKey}
-					onSelectProject={onSelectProject}
-					placeOf={placeOf}
-					onAddProject={onAddProject}
-					tasks={shown}
-					loops={loops}
-					loading={loading}
-					onOpenTask={onOpenTask}
-					onOpenLoops={() => onTab("loops")}
-					onNewLoop={onNewLoop}
-					scrollProps={scrollProps}
-					topInset={topInset}
-				/>
-			)}
-			{showTab && tab === "mission" && (
-				<MissionScreen api={api} tasks={missionTasks} onExpand={onExpandTask} />
-			)}
-			{showLead && leadView && (
-				<ReconnectingTerminal
-					lead={<Feather name="message-circle" size={12} color={C.ink} />}
-					title={leadView.title}
-					onBack={() => onLead(false)}
-					status={leadView.status}
-					wakeError={leadView.wakeError}
-				/>
-			)}
-			{showLead && !leadView && (
-				<LeadScreen
-					lead={lead}
-					boxLabel={leadLabel}
-					supported={boxSupports("lead", boxVersion)}
-					boxVersion={boxVersion}
-					tasks={tasks}
-					onOpenTask={onOpenTask}
-					onUpdateBox={onUpdateLeadBox}
-					updating={updatingLeadBox}
-					onStartProposal={onStartProposal}
-					callKeyMissing={callKeyMissing}
-					onAddCallKey={onAddCallKey}
-				/>
-			)}
-			{showTab && tab === "loops" && (
-				<LoopsScreen
-					api={api}
-					loops={loops}
-					tasks={shown}
-					onOpenTask={onOpenTask}
-					onCreate={onNewLoop}
-					onEdit={onEditLoop}
-					onChanged={onLoopsChanged}
-					topInset={topInset}
-				/>
-			)}
+								) : shown.length === 0 ? (
+									<View style={styles.centerPad}>
+										<Text style={styles.footnote}>no tasks yet — start one below</Text>
+									</View>
+								) : (
+									COLUMNS.map((col) => {
+										const inCol = shown.filter((t) => t.column === col.key);
+										if (inCol.length === 0) return null;
+										return (
+											<View key={col.key} style={styles.zone}>
+												<View style={styles.eyebrowRow}>
+													<View style={[styles.tick, { backgroundColor: col.tint }]} />
+													<Text style={styles.eyebrow}>{col.label}</Text>
+													<Text style={styles.eyebrowCount}>{inCol.length}</Text>
+												</View>
+												{inCol.map((t) => (
+													<TaskCard
+														key={t.id}
+														task={t}
+														tint={col.tint}
+														place={placeOf(t)}
+														onOpen={() => onOpenTask(t)}
+													/>
+												))}
+											</View>
+										);
+									})
+								)}
+							</View>
+						</ScrollView>
+					)}
+					{showTab && contentTab === "home" && (
+						<HomeScreen
+							projects={projects}
+							selectedKey={selectedKey}
+							onSelectProject={onSelectProject}
+							placeOf={placeOf}
+							onAddProject={onAddProject}
+							tasks={shown}
+							loops={loops}
+							loading={loading}
+							onOpenTask={onOpenTask}
+							onOpenLoops={() => onTab("loops")}
+							onNewLoop={onNewLoop}
+							scrollProps={scrollProps}
+							topInset={topInset}
+						/>
+					)}
+					{showTab && contentTab === "mission" && (
+						<MissionScreen api={api} tasks={missionTasks} onExpand={onExpandTask} />
+					)}
+					{showLead && leadView && (
+						<ReconnectingTerminal
+							lead={<Feather name="message-circle" size={12} color={C.ink} />}
+							title={leadView.title}
+							onBack={() => onLead(false)}
+							status={leadView.status}
+							wakeError={leadView.wakeError}
+						/>
+					)}
+					{showLead && !leadView && (
+						<LeadScreen
+							lead={lead}
+							boxLabel={leadLabel}
+							supported={boxSupports("lead", boxVersion)}
+							boxVersion={boxVersion}
+							tasks={tasks}
+							onOpenTask={onOpenTask}
+							onUpdateBox={onUpdateLeadBox}
+							updating={updatingLeadBox}
+							onStartProposal={onStartProposal}
+							callKeyMissing={callKeyMissing}
+							onAddCallKey={onAddCallKey}
+						/>
+					)}
+					{showTab && contentTab === "loops" && (
+						<LoopsScreen
+							api={api}
+							loops={loops}
+							tasks={shown}
+							onOpenTask={onOpenTask}
+							onCreate={onNewLoop}
+							onEdit={onEditLoop}
+							onChanged={onLoopsChanged}
+							topInset={topInset}
+						/>
+					)}
 
-			{showTab && (tab === "board" || tab === "home") && (
-				<Composer
-					agents={agents}
-					busy={creating}
-					onSubmit={onCreate}
-					lead={composerLead}
-					onLeadSent={onLeadSent}
-					switchFaded={faded}
-					snack={snack}
-					onOpenSnack={onOpenSnack}
-					onDismissSnack={onDismissSnack}
-					runOn={runOn}
-				/>
-			)}
+					{showTab && (contentTab === "board" || contentTab === "home") && (
+						<Composer
+							agents={agents}
+							busy={creating}
+							onSubmit={onCreate}
+							lead={composerLead}
+							onLeadSent={onLeadSent}
+							switchFaded={faded}
+							snack={snack}
+							onOpenSnack={onOpenSnack}
+							onDismissSnack={onDismissSnack}
+							runOn={runOn}
+						/>
+					)}
+				</View>
+			</View>
 		</KeyboardAvoidingView>
 	);
 }
@@ -2806,6 +2858,15 @@ const styles = StyleSheet.create({
 	root: { flex: 1, backgroundColor: C.bg, paddingTop: 60 },
 	// The board's shell: no top padding, the floating top bar holds the status bar's.
 	shellRoot: { flex: 1, backgroundColor: C.bg },
+	shellColumns: { flex: 1, flexDirection: "row" },
+	shellMain: { flex: 1, minWidth: 0 },
+	sidebar: {
+		width: SIDEBAR_WIDTH,
+		paddingTop: STATUS_BAR,
+		paddingBottom: 20,
+		borderRightWidth: StyleSheet.hairlineWidth,
+		borderRightColor: C.line,
+	},
 	topBar: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, paddingTop: STATUS_BAR },
 
 	// logo mark (icon.svg redrawn) — connection screen only

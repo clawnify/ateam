@@ -65,15 +65,29 @@ function TaskRow({
 	task,
 	place,
 	onPress,
+	sidebar = false,
+	selected = false,
 }: {
 	task: TaskDTO;
 	place: TaskPlace;
 	onPress: () => void;
+	sidebar?: boolean;
+	selected?: boolean;
 }) {
 	const tags = tagsFor(task);
 	const where = placeText(place);
 	return (
-		<Pressable style={[styles.row, place.away && styles.rowAway]} onPress={onPress}>
+		<Pressable
+			style={[
+				styles.row,
+				sidebar && styles.sidebarRow,
+				place.away && styles.rowAway,
+				selected && styles.taskActive,
+			]}
+			onPress={onPress}
+			accessibilityRole="button"
+			accessibilityState={{ selected }}
+		>
 			<View style={styles.icon}>
 				{task.agentId ? (
 					<AgentIcon agentId={task.agentId} size={16} />
@@ -81,10 +95,23 @@ function TaskRow({
 					<Feather name={taskIconName(task.name)} size={15} color={C.muted} />
 				)}
 			</View>
-			<Text style={[styles.name, task.isUnread && styles.nameUnread]} numberOfLines={1}>
-				{task.name}
-			</Text>
-			{tags.length > 0 && (
+			{sidebar ? (
+				<View style={styles.taskText}>
+					<Text style={[styles.sidebarName, task.isUnread && styles.nameUnread]} numberOfLines={2}>
+						{task.name}
+					</Text>
+					{where && (
+						<Text style={styles.sidebarPlace} numberOfLines={1}>
+							{where}
+						</Text>
+					)}
+				</View>
+			) : (
+				<Text style={[styles.name, task.isUnread && styles.nameUnread]} numberOfLines={1}>
+					{task.name}
+				</Text>
+			)}
+			{!sidebar && tags.length > 0 && (
 				<View style={styles.tags}>
 					{tags.map((tag) => (
 						<Text key={tag} style={styles.tag}>
@@ -93,7 +120,7 @@ function TaskRow({
 					))}
 				</View>
 			)}
-			{where ? (
+			{!sidebar && where ? (
 				<Text style={styles.box} numberOfLines={1}>
 					{where}
 				</Text>
@@ -107,13 +134,27 @@ function LoopRow({
 	loop,
 	task,
 	onPress,
+	sidebar = false,
+	selected = false,
 }: {
 	loop: LoopDTO;
 	task: TaskDTO | null;
 	onPress: () => void;
+	selected?: boolean;
+	sidebar?: boolean;
 }) {
 	return (
-		<Pressable style={[styles.row, !loop.enabled && styles.rowPaused]} onPress={onPress}>
+		<Pressable
+			style={[
+				styles.row,
+				sidebar && styles.sidebarRow,
+				!loop.enabled && styles.rowPaused,
+				selected && styles.taskActive,
+			]}
+			onPress={onPress}
+			accessibilityRole="button"
+			accessibilityState={{ selected }}
+		>
 			<View style={styles.icon}>
 				<Feather name="repeat" size={15} color={C.muted} />
 			</View>
@@ -144,6 +185,8 @@ export function HomeScreen({
 	onNewLoop,
 	scrollProps,
 	topInset = 0,
+	sidebar = false,
+	selectedTaskId,
 }: {
 	projects: ProjectRow[];
 	selectedKey: string | null;
@@ -162,6 +205,9 @@ export function HomeScreen({
 	scrollProps?: ScrollFadeProps;
 	/** The floating top bar's height: the list scrolls under it and starts below it. */
 	topInset?: number;
+	/** Reuse Home as persistent navigation in a wide window. */
+	sidebar?: boolean;
+	selectedTaskId?: string;
 }) {
 	const [sort, setSort] = useState<TaskSort>("updated");
 	const [projectsOpen, setProjectsOpen] = useState(true);
@@ -181,13 +227,20 @@ export function HomeScreen({
 	return (
 		<ScrollView
 			style={styles.root}
+			keyboardShouldPersistTaps="handled"
 			contentContainerStyle={[styles.content, { paddingTop: topInset + 6 }]}
 			scrollIndicatorInsets={{ top: topInset }}
 			{...scrollProps}
 		>
 			<View style={styles.column}>
 				<View style={styles.sectionHead}>
-					<Pressable style={styles.sectionToggle} onPress={() => setProjectsOpen((o) => !o)}>
+					<Pressable
+						style={[styles.sectionToggle, sidebar && styles.sidebarHit]}
+						onPress={() => setProjectsOpen((o) => !o)}
+						accessibilityRole="button"
+						accessibilityLabel="Projects"
+						accessibilityState={{ expanded: projectsOpen }}
+					>
 						<Feather
 							name={projectsOpen ? "chevron-down" : "chevron-right"}
 							size={14}
@@ -195,7 +248,13 @@ export function HomeScreen({
 						/>
 						<Text style={styles.sectionTitle}>Projects</Text>
 					</Pressable>
-					<Pressable style={styles.sortBtn} onPress={onAddProject} hitSlop={6}>
+					<Pressable
+						style={[styles.sortBtn, sidebar && styles.sidebarHit]}
+						onPress={onAddProject}
+						hitSlop={6}
+						accessibilityLabel="Add project"
+						accessibilityRole="button"
+					>
 						<Feather name="folder-plus" size={16} color={C.muted} />
 					</Pressable>
 				</View>
@@ -208,8 +267,10 @@ export function HomeScreen({
 							return (
 								<Pressable
 									key={p.key}
-									style={[styles.row, active && styles.rowActive]}
+									style={[styles.row, sidebar && styles.sidebarRow, active && styles.rowActive]}
 									onPress={() => onSelectProject(p.key)}
+									accessibilityRole="button"
+									accessibilityState={{ selected: active }}
 								>
 									<View style={styles.icon}>
 										<View style={[styles.projDot, active && styles.projDotActive]} />
@@ -228,7 +289,13 @@ export function HomeScreen({
 					))}
 
 				<View style={[styles.sectionHead, styles.sectionHeadLower]}>
-					<Pressable style={styles.sectionToggle} onPress={() => setTasksOpen((o) => !o)}>
+					<Pressable
+						style={[styles.sectionToggle, sidebar && styles.sidebarHit]}
+						onPress={() => setTasksOpen((o) => !o)}
+						accessibilityRole="button"
+						accessibilityLabel="Tasks"
+						accessibilityState={{ expanded: tasksOpen }}
+					>
 						<Feather
 							name={tasksOpen ? "chevron-down" : "chevron-right"}
 							size={14}
@@ -237,8 +304,10 @@ export function HomeScreen({
 						<Text style={styles.sectionTitle}>Tasks</Text>
 					</Pressable>
 					<Pressable
-						style={styles.sortBtn}
+						style={[styles.sortBtn, sidebar && styles.sidebarHit]}
 						onPress={() => setSort((s) => (s === "status" ? "updated" : "status"))}
+						accessibilityRole="button"
+						accessibilityLabel={`Sort tasks by ${sort === "status" ? "recent activity" : "status"}`}
 						hitSlop={6}
 					>
 						<Text style={styles.sortText}>{sort === "status" ? "by status" : "recent"}</Text>
@@ -253,12 +322,25 @@ export function HomeScreen({
 						<Text style={styles.emptyText}>No active tasks</Text>
 					) : (
 						ordered.map((t) => (
-							<TaskRow key={t.id} task={t} place={placeOf(t)} onPress={() => onOpenTask(t)} />
+							<TaskRow
+								key={t.id}
+								task={t}
+								place={placeOf(t)}
+								onPress={() => onOpenTask(t)}
+								sidebar={sidebar}
+								selected={t.id === selectedTaskId}
+							/>
 						))
 					))}
 
 				<View style={[styles.sectionHead, styles.sectionHeadLower]}>
-					<Pressable style={styles.sectionToggle} onPress={() => setLoopsOpen((o) => !o)}>
+					<Pressable
+						style={[styles.sectionToggle, sidebar && styles.sidebarHit]}
+						onPress={() => setLoopsOpen((o) => !o)}
+						accessibilityRole="button"
+						accessibilityLabel="Loops"
+						accessibilityState={{ expanded: loopsOpen }}
+					>
 						<Feather
 							name={loopsOpen ? "chevron-down" : "chevron-right"}
 							size={14}
@@ -266,7 +348,13 @@ export function HomeScreen({
 						/>
 						<Text style={styles.sectionTitle}>Loops</Text>
 					</Pressable>
-					<Pressable style={styles.sortBtn} onPress={onNewLoop} hitSlop={6}>
+					<Pressable
+						style={[styles.sortBtn, sidebar && styles.sidebarHit]}
+						onPress={onNewLoop}
+						hitSlop={6}
+						accessibilityLabel="New loop"
+						accessibilityRole="button"
+					>
 						<Feather name="plus" size={16} color={C.muted} />
 					</Pressable>
 				</View>
@@ -280,7 +368,9 @@ export function HomeScreen({
 								<LoopRow
 									key={l.id}
 									loop={l}
+									sidebar={sidebar}
 									task={task}
+									selected={!!task && task.id === selectedTaskId}
 									onPress={() => (task ? onOpenTask(task) : onOpenLoops())}
 								/>
 							);
@@ -329,6 +419,12 @@ const styles = StyleSheet.create({
 	// From a box that's asleep or not answering: its board as last seen.
 	rowAway: { opacity: 0.55 },
 	rowActive: { backgroundColor: C.surface },
+	taskActive: { backgroundColor: C.sunken },
+	taskText: { flex: 1, minWidth: 0, gap: 3 },
+	sidebarName: { color: C.ink, fontSize: 14 },
+	sidebarPlace: { color: C.faint, fontSize: 12 },
+	sidebarHit: { minHeight: 44, minWidth: 44 },
+	sidebarRow: { minHeight: 44 },
 	projDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.line },
 	projDotActive: { backgroundColor: C.ink },
 	nameActive: { fontWeight: "700" },
