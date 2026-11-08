@@ -33,6 +33,7 @@ import {
 	SwiftTermView,
 } from "../modules/expo-swiftterm/src/ExpoSwifttermView";
 import { KeyBar } from "./KeyBar";
+import { MC_NATIVE_FONT_SIZE, MC_NATIVE_METRICS } from "./mission-metrics";
 import { TerminalStrip } from "./TerminalStrip";
 import { C } from "./theme";
 import { usePty } from "./useTaskPty";
@@ -72,7 +73,7 @@ function LiveTerminal({
 				<SwiftTermView
 					ref={termRef}
 					style={styles.term}
-					fontSize={12.5}
+					fontSize={MC_NATIVE_FONT_SIZE}
 					onSizeChange={pty.onSizeChange}
 				/>
 			) : (
@@ -228,7 +229,7 @@ export function MissionScreen({
 			() =>
 				setFit((prev) => ({
 					area: size,
-					capacity: mcCapacity(size, prev?.capacity),
+					capacity: mcCapacity(size, prev?.capacity, MC_NATIVE_METRICS),
 				})),
 			MC_RESIZE_SETTLE_MS,
 		);
@@ -390,7 +391,9 @@ export function MissionScreen({
 		void AsyncStorage.setItem(layoutKey, next).catch(() => {});
 	};
 	const shape =
-		layout === "auto" ? bestMcShape(visible.length, fit?.area ?? size) : fixedMcShape(layout);
+		layout === "auto"
+			? bestMcShape(visible.length, fit?.area ?? size, MC_NATIVE_METRICS)
+			: fixedMcShape(layout);
 	const rects = mcShapeRects(shape, size);
 	return (
 		<View style={styles.root}>

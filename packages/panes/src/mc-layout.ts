@@ -67,7 +67,7 @@ export function mcShapeRects(shape: McShape, area: McArea) {
 // rest go to further pages, every page but the last full, so a tile arriving
 // never moves the ones already on screen to another page.
 
-/** The grid's size, in CSS px. */
+/** The grid's size, in CSS pixels on web or layout points on native. */
 export type McArea = { width: number; height: number };
 
 /**
@@ -79,15 +79,22 @@ export type McArea = { width: number; height: number };
  */
 export type McShape = { flow: "rows" | "cols"; lines: number[] };
 
-// One terminal cell at the tiles' font (12.5px, Menlo in the app), and what a
-// tile spends around its terminal: across, the 1px edges and the terminal's
-// 6px padding; down, those plus the 26px bar and the 33px skills toolbar.
-// Measured in the app; ratios between shapes are what matter, so a pixel off
-// moves nothing.
-const CELL_W = 7.53;
-const CELL_H = 15;
-const CHROME_W = 14;
-const CHROME_H = 73;
+/** Cell size and tile chrome, in the same units as McArea. */
+export type McMetrics = {
+	cellWidth: number;
+	cellHeight: number;
+	chromeWidth: number;
+	chromeHeight: number;
+};
+
+// Desktop Menlo at 12.5px: 1px edges + 6px terminal padding, plus the
+// 26px title bar and 33px skills toolbar. Native supplies its own metrics.
+const DESKTOP_METRICS: McMetrics = {
+	cellWidth: 7.53,
+	cellHeight: 15,
+	chromeWidth: 14,
+	chromeHeight: 73,
+};
 // The terminal a tile is scored against. 30 lines rather than the classic 24:
 // an agent's output scrolls down, so height is what shows more of its work.
 const TARGET_COLS = 80;
@@ -121,10 +128,6 @@ const SQUARE = 1.2;
 // The most tiles a page is ever asked to hold, a bound for the search only.
 const MAX_PAGE = 36;
 
-// A tile's terminal size, in columns and lines.
-const termCols = (width: number) => (width - CHROME_W) / CELL_W;
-const termLines = (height: number) => (height - CHROME_H) / CELL_H;
-
 // How a shape's widest tile sits: 0 every tile stands (no wider than tall),
 // 1 the widest is about square, 2 some tile lies down.
 type Stance = 0 | 1 | 2;
@@ -137,6 +140,7 @@ const stanceOf = (aspect: number): Stance => (aspect <= 1 ? 0 : aspect <= SQUARE
 function rate(
 	shape: McShape,
 	area: McArea,
+	metrics: McMetrics,
 ): { fit: number; score: number; lines: number; stance: Stance } {
 	const k = shape.lines.length;
 	let fit = Number.POSITIVE_INFINITY;
@@ -146,7 +150,8 @@ function rate(
 	for (const n of shape.lines) {
 		const w = shape.flow === "rows" ? area.width / n : area.width / k;
 		const h = shape.flow === "rows" ? area.height / k : area.height / n;
-		const [c, l] = [termCols(w), termLines(h)];
+		const c = (w - metrics.chromeWidth) / metrics.cellWidth;
+		const l = (h - metrics.chromeHeight) / metrics.cellHeight;
 		fit = Math.min(fit, c / MIN_COLS, l / MIN_LINES);
 		score = Math.min(score, c / TARGET_COLS, l / TARGET_LINES);
 		lines += n * l;
@@ -172,11 +177,12 @@ function candidates(n: number): McShape[] {
 	return out;
 }
 
-const rateAll = (n: number, area: McArea) =>
-	candidates(n).map((shape) => ({ shape, ...rate(shape, area) }));
+const rateAll = (n: number, area: McArea, metrics: McMetrics) =>
+	candidates(n).map((shape) => ({ shape, ...rate(shape, area, metrics) }));
 
 // The best fit any shape of n tiles reaches in `area`.
-const topFit = (n: number, area: McArea): number => Math.max(...rateAll(n, area).map((r) => r.fit));
+const topFit = (n: number, area: McArea, metrics: McMetrics): number =>
+	Math.max(...rateAll(n, area, metrics).map((r) => r.fit));
 
 /**
  * How Auto lays out a page of `n` tiles in `area`. Of the shapes that keep
@@ -185,9 +191,13 @@ const topFit = (n: number, area: McArea): number => Math.max(...rateAll(n, area)
  * whose smallest tile is most readable, close calls going to the one with the
  * most lines. Every tile has a cell and every cell a tile.
  */
-export function bestMcShape(n: number, area: McArea): McShape {
+export function bestMcShape(
+	n: number,
+	area: McArea,
+	metrics: McMetrics = DESKTOP_METRICS,
+): McShape {
 	if (n <= 0) return { flow: "rows", lines: [] };
-	const rated = rateAll(n, area);
+	const rated = rateAll(n, area, metrics);
 	// Each step keeps the top of what it filters by, so none comes up empty.
 	const near = <T>(rs: T[], by: (r: T) => number) => {
 		const best = Math.max(...rs.map(by));
@@ -210,9 +220,9 @@ export function bestMcShape(n: number, area: McArea): McShape {
 // fitting at least `floor` of the smallest terminal; never fewer than one. A
 // tile more never fits better (each line only gains tiles), so the first miss
 // ends the search.
-function capacityAt(area: McArea, floor: number): number {
+function capacityAt(area: McArea, floor: number, metrics: McMetrics): number {
 	let n = 1;
-	while (n < MAX_PAGE && topFit(n + 1, area) >= floor) n++;
+	while (n < MAX_PAGE && topFit(n + 1, area, metrics) >= floor) n++;
 	return n;
 }
 
@@ -221,10 +231,14 @@ function capacityAt(area: McArea, floor: number): number {
  * before (`prev`), it keeps it while the space still fits it within MARGIN of
  * the smallest terminal, so only a real change of space re-pages the tiles.
  */
-export function mcCapacity(area: McArea, prev?: number): number {
-	if (prev === undefined) return capacityAt(area, 1);
-	const lo = capacityAt(area, 1 + MARGIN);
-	const hi = capacityAt(area, 1 - MARGIN);
+export function mcCapacity(
+	area: McArea,
+	prev?: number,
+	metrics: McMetrics = DESKTOP_METRICS,
+): number {
+	if (prev === undefined) return capacityAt(area, 1, metrics);
+	const lo = capacityAt(area, 1 + MARGIN, metrics);
+	const hi = capacityAt(area, 1 - MARGIN, metrics);
 	return Math.min(hi, Math.max(lo, prev));
 }
 
