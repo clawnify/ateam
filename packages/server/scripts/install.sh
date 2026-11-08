@@ -867,14 +867,20 @@ case "$WS_ADDR" in
 	;;
 esac
 
-# The phone's WebSocket serves any device that can reach it until the box is locked
-# to the devices paired with it (pairing.ts), so say which it is and where the lock is.
+# The phone's WebSocket serves only devices paired with the box once it's private,
+# which a new box is from its first start (pairing.ts, LOCK_NEW_BOXES in cli.ts). An
+# older box can still be open. Say which it is. A private box nothing is paired with
+# yet gets the code its first device pairs with: this terminal may be the only way in.
+FIRST_CODE=""
 if [ -n "$WS_ADDR" ]; then
 	if grep -qs '"locked": true' "$DATA_DIR/pairings.json"; then
-		mark ok 'locked to paired devices (pair another from Ateam, or with: ateam pair)'
+		mark ok 'private to paired devices (pair another from Ateam, or with: ateam pair)'
+		if grep -qs '"devices": \[\]' "$DATA_DIR/pairings.json"; then
+			FIRST_CODE="$(ATEAM_DATA_DIR="$DATA_DIR" "$BIN_DIR/ateam" pair 2>/dev/null | sed -n 's/^Pairing code: //p' | head -1 || true)"
+		fi
 	else
-		mark no "open to any device that can reach $PHONE_AT: lock it from Ateam"
-		info '     (Settings → Boxes → Access on a Mac, or Lock it on its card in Ateam Go)'
+		mark no "open to any device that can reach $PHONE_AT: make it private from Ateam"
+		info '     (Settings → Boxes → Access on a Mac, or Make private on its card in Ateam Go)'
 	fi
 fi
 
@@ -887,4 +893,7 @@ connection switcher. Clients connect with:
 EOF
 if [ -n "$TS_IP" ] && [ -n "$WS_ADDR" ]; then
 	printf '\nAteam Go reaches it at %s on your tailnet.\n' "$PHONE_AT"
+fi
+if [ -n "$FIRST_CODE" ]; then
+	printf '\nPair your first device with code %s: enter it in Ateam (Ateam Go, or Add a box on\na Mac) within 10 minutes. It works once; `ateam pair` makes another.\n' "$FIRST_CODE"
 fi

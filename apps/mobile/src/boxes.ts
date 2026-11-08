@@ -10,7 +10,7 @@ import {
 	type ProviderDefinition,
 	type ProviderReport,
 	providerById,
-	reportedWake,
+	reportedProvider,
 	wakeMachineName,
 } from "@ateam/protocol";
 import type { SavedConnection } from "./storage";
@@ -46,16 +46,27 @@ export function touchBox(
  *  alone (a pairing QR, an IP typed in) has no provider, so the phone dialled it asleep
  *  until it timed out. The provider only fills what is missing: one the user picked
  *  stays, and only its blank name is filled, from a report at the same provider.
- *  Whether it sleeps is the box's own fact, so the latest report always replaces it. */
+ *  Whether it sleeps is the box's own fact, so the latest report always replaces it.
+ *  A report of null says no provider puts the box to sleep (a plain server): one saved
+ *  with no provider is then always on, so a try that fails doesn't offer Set provider. */
 export function withReportedProvider(
 	list: SavedBox[],
 	key: string,
 	reported: ProviderReport | null | undefined,
 ): SavedBox[] | null {
-	const wake = reportedWake(reported);
 	const at = list.findIndex((b) => boxKey(b) === key);
 	const box = list[at];
-	if (!wake || !reported || !box) return null;
+	if (!box) return null;
+	// Undefined is an engine that doesn't say (older, or still looking), which changes
+	// nothing. A box given a provider keeps what it has: a tap still wakes it through it.
+	if (reported === null) {
+		if (providerById(box.provider?.id) || box.sleeps === false) return null;
+		const list2 = [...list];
+		list2[at] = { ...box, sleeps: false };
+		return list2;
+	}
+	const wake = reportedProvider(reported);
+	if (!wake || !reported) return null;
 	let next: SavedBox = box;
 	const own = providerById(box.provider?.id);
 	const fill =
@@ -75,7 +86,21 @@ export function withReportedProvider(
  *  still wakes through the provider when a key is saved (links.ts), since a box can
  *  be put back to sleeping after it last said so. */
 export function wakesThrough(box: SavedConnection): ProviderDefinition | undefined {
-	return box.sleeps === false ? undefined : providerById(box.provider?.id);
+	const def = providerById(box.provider?.id);
+	// A provider with nothing to wake (exe.dev) is only a name.
+	return box.sleeps === false || !def?.wake ? undefined : def;
+}
+
+/** Whether a box's card shows it asleep (the moon, "tap to wake") rather than being
+ *  reached. Only a tap wakes a box, so a try in the background can't reach one that
+ *  sleeps, and a card that spun for each of those tries said it was on its way when it
+ *  wasn't. So a box that sleeps shows asleep while it was last seen asleep, and before
+ *  its first try has said anything, since asleep is how such a box is mostly found. If
+ *  it's up after all, that try lands and the card turns live. A try someone asked for
+ *  shows its steps, and one after a drop or another failure shows it's being reached. */
+export function shownAsleep(box: SavedConnection, link: BoxLink): boolean {
+	if (link.state === "live" || link.asked) return false;
+	return link.asleep || (link.error === null && wakesThrough(box) !== undefined);
 }
 
 /** The box form's Always on / Sleeps when idle to begin with: a box being added shows
@@ -181,6 +206,9 @@ export interface BoxLink {
 	wakeError: string | null;
 	/** The box's protocol version once it has answered. */
 	version: number | null;
+	/** The oldest app protocol the box serves correctly (SystemInfo.minClient); null
+	 *  before it answers, or from an engine that doesn't say. */
+	minClient: number | null;
 	/** Bumps on every connect: keys its open terminal so it remounts onto the fresh link. */
 	gen: number;
 }
@@ -193,6 +221,7 @@ export const NEW_LINK: BoxLink = {
 	asleep: false,
 	wakeError: null,
 	version: null,
+	minClient: null,
 	gen: 0,
 };
 

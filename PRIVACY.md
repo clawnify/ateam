@@ -1,6 +1,6 @@
 # Privacy Policy — Ateam & Ateam Go
 
-**Effective date: November 4, 2026**
+**Effective date: November 6, 2026**
 
 Ateam (the desktop app) and Ateam Go (the iOS companion app) are local-first
 tools published by Clawnify. This policy describes what data the apps handle,
@@ -31,7 +31,7 @@ Ateam Go stores a small amount of data locally on your phone, and only there:
 - your preview-port preference, and
 - your API key for each provider you have the app wake a machine through, which
   is kept in the iOS Keychain,
-- for each machine you have locked to its paired devices, this phone's key to
+- for each machine kept private to its paired devices, this phone's key to
   it, which that machine gave the phone when you paired them. It is kept in the
   iOS Keychain and is only ever sent to that machine, and
 - reminders for tasks you parked until a date: the task's name, what it waits on and when it comes
@@ -102,12 +102,30 @@ Tailscale auth key you enter (so the machine can join your network) and a
 one-way hash of a token this phone keeps (so the machine recognises the phone);
 the token itself never leaves the phone. Nothing goes to us.
 
+### AI features with your own keys (optional)
+
+With an OpenRouter or OpenAI API key of yours, Ateam can sort finished tasks
+into Needs you, write task titles and summaries, filter grammar suggestions
+(desktop app) and take calls with the Lead. You add a key in the desktop app
+(Settings → AI) or, for one of your machines, in Ateam Go. The key is stored on
+that machine, not on the phone, and the text these features need (an agent's
+last message and your reply, a task's prompts) goes to the key's provider under
+your own account. Without a key, nothing goes to them.
+
+### Calls with the Lead (optional)
+
+During a call, what you say goes to OpenAI's realtime voice service, on the
+OpenAI key of your Mac or of the machine whose Lead it is, and its voice speaks
+the Lead's replies. Your words land in the Lead chat as text. The apps keep no
+audio, and the microphone is used only during a call you start.
+
 ## AI coding agents
 
 The apps orchestrate AI coding agents — such as Claude Code, OpenCode, and
 Codex — that **you install and run on your own computer, under accounts you
 hold directly with those providers** (for example Anthropic or OpenAI). The
-Ateam apps themselves include no AI SDK and send nothing to any AI provider.
+Ateam apps themselves include no AI SDK, and reach an AI provider only through
+the optional features above.
 
 When you instruct an agent to work, the agent software on your machine
 communicates with its provider under your own credentials and that provider's

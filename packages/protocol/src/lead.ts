@@ -126,6 +126,9 @@ export const LEAD_RPC = [
 	LEAD_CH.older,
 	LEAD_CH.react,
 	LEAD_CH.callActive,
+	LEAD_CH.callStart,
+	LEAD_CH.callJudge,
+	LEAD_CH.callNudge,
 ] as const;
 
 /** The engine's push event for its Lead, with a LeadEvent payload. Sent only
@@ -206,7 +209,7 @@ export type LeadItem =
 			reaction?: string;
 	  }
 	/** A followed task's agent showed the user a page (show_page): drawn in the
-	 *  thread from the task, so a page replaced since says so. */
+	 *  thread from the task. The page id reads that saved artifact. */
 	| { kind: "page"; id: string; task: LeadTaskRef; pageId: string; title: string; at: number }
 	| { kind: "assistant"; id: string; text: string; at: number }
 	| {
@@ -320,6 +323,16 @@ export interface LeadClient {
 	/** On a voice call with the box's Lead (true, repeated while it lasts) or
 	 *  not. A box before v32 rejects it: gate on boxSupports("leadCall"). */
 	callActive(on: boolean): Promise<void>;
+	/** The box opens a call's voice session with OpenAI from its own key, the
+	 *  box judges what the call heard, and words a task's reply in one line.
+	 *  A box before v33 rejects them: gate on boxSupports("leadCallSession"). */
+	callStart(sdp: string, input: LeadCallTurn[]): Promise<{ sdp: string; sessionId: string }>;
+	callJudge(
+		pieces: string[],
+		context: string,
+		opts?: LeadCallJudgeOptions,
+	): Promise<LeadCallVerdict[] | null>;
+	callNudge(task: string, reply: string): Promise<string>;
 	dismissProposal(id: string): Promise<void>;
 	/** A proposal was created from its sheet or form on this device: the card
 	 *  says so, and a task (`taskId`) is followed for its replies. */

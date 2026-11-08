@@ -8,6 +8,17 @@
 
 export type { SpeechKind, SpeechVerdict } from "./call-gate";
 export { judgeSpeech } from "./call-gate";
+export {
+	CALL_INSTRUCTIONS,
+	CALL_MODEL,
+	headlineOf,
+	judgeCall,
+	needWords,
+	nudgeFor,
+	nudgePrompt,
+	seedInput,
+	startCall,
+} from "./lead/call";
 export type { ConnectionDTO, ConnectionRecord, HostTransport, SshHost } from "./connections";
 export {
 	boxSleepsOf,

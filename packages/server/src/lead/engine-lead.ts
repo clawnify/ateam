@@ -19,6 +19,7 @@ import {
 	LEAD_CH,
 	LEAD_EVENT,
 	LEAD_RPC,
+	type LeadCallTurn,
 	type LeadEvent,
 	type LeadSnapshot,
 	type TaskDTO,
@@ -26,6 +27,7 @@ import {
 import type { Dispatcher } from "../dispatcher";
 import type { Engine } from "../engine";
 import type { RpcExtension } from "../rpc";
+import { judgeCall, nudgeFor, startCall } from "./call";
 import { type Lead, type LeadDeps, startLead } from "./index";
 
 /** How long a box's Lead sits idle before its claude is stopped. A message
@@ -186,6 +188,19 @@ export function engineLead(
 				// v32: the desktop is on a voice call with this Lead.
 				case LEAD_CH.callActive:
 					return l.setCall(args[0] === true);
+				// v33: a client without its own keys (Ateam Go) calls this Lead:
+				// the box opens the voice session, judges and words replies.
+				case LEAD_CH.callStart:
+					return startCall(
+						str(args[0], "The connection offer"),
+						Array.isArray(args[1]) ? (args[1] as LeadCallTurn[]) : [],
+						// Keys reach a box from the Mac that holds it (host.ts pushCredentials).
+						"This box has no OpenAI key for calls. Add yours from the box's card in Ateam Go (the key button), or in Ateam on your Mac, Settings → AI.",
+					);
+				case LEAD_CH.callJudge:
+					return judgeCall(args[0], args[1], args[2]);
+				case LEAD_CH.callNudge:
+					return nudgeFor(args[0], args[1]);
 				case LEAD_CH.attachBytes: {
 					const name = str(args[0], "The file name");
 					const base64 = str(args[1], "The file");

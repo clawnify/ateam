@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	codexHookArgs,
 	ensureBoardMcpConfig,
 	ensureClaudeHooks,
 	ensureNotifyScript,
 	ensurePeerSecret,
 	opencodeConfigContent,
 	peerToken,
+	removeAteamCodexHooks,
 	verifyPeerToken,
 } from "../src/agent-setup";
 
@@ -276,19 +278,6 @@ test("an existing browser-only hook is upgraded in place", async () => {
 	expect(browser[0].matcher).toBe("mcp__(taskwindow|desktop)__.*");
 });
 
-test("Codex's desktop tools expose the viewer on the phone, once", async () => {
-	const { ensureCodexHooks } = await import("../src/agent-setup");
-	const wt = join(dir, "codex-desktop");
-	await ensureCodexHooks(wt, notifyPath);
-	await ensureCodexHooks(wt, notifyPath);
-	const config = JSON.parse(await readFile(join(wt, ".codex", "hooks.json"), "utf8"));
-	const entries = config.hooks.PreToolUse.filter(
-		(e: { matcher?: string }) => e.matcher === "mcp__desktop__.*",
-	);
-	expect(entries).toHaveLength(1);
-	expect(entries[0].hooks[0].command).toEndWith(" BrowserUse");
-});
-
 test("OpenCode desktop calls send BrowserUse through the shipped plugin", async () => {
 	const file = join(dir, "hooks", "opencode-inbox.js");
 	const source = await readFile(file, "utf8");
@@ -326,4 +315,105 @@ test("OpenCode desktop calls send BrowserUse through the shipped plugin", async 
 	} finally {
 		endpoint.stop(true);
 	}
+});
+
+// Codex 0.165 loads a worktree's `.codex/hooks.json` only in a folder the user
+// trusted, and asks again for every new worktree path; hooks given with `-c`
+// are trusted once per machine (agent-setup, codexHookArgs).
+describe("Codex hooks on the launch line", () => {
+	/** What a real shell hands Codex: the `-c` values, split as `sh` splits them. */
+	async function argv(args: string): Promise<string[]> {
+		const proc = Bun.spawn(["sh", "-c", `printf '%s\\0' ${args}`], { stdout: "pipe" });
+		const out = await new Response(proc.stdout).text();
+		await proc.exited;
+		return out.split("\0").filter(Boolean);
+	}
+
+	test("each event runs notify.sh, as TOML Codex parses, whatever the path holds", async () => {
+		const path = "/Users/o'neil/Library/Application Support/ateam/hooks/notify.sh";
+		const values = (await argv(codexHookArgs(path))).filter((a) => a !== "-c");
+		const parsed = Object.fromEntries(
+			values.map((v) => {
+				const eq = v.indexOf("=");
+				const key = v.slice(0, eq).replace(/^hooks\./, "");
+				return [key, (Bun.TOML.parse(`v = ${v.slice(eq + 1)}`) as { v: unknown }).v];
+			}),
+		);
+		const hook = (event: string) => [
+			{ hooks: [{ type: "command", command: `sh ${JSON.stringify(path)} ${event}` }] },
+		];
+		expect(parsed).toEqual({
+			SessionStart: hook("Start"),
+			Stop: hook("Stop"),
+			PermissionRequest: hook("PermissionRequest"),
+			PreToolUse: [
+				...hook("Working"),
+				{
+					matcher: "mcp__desktop__.*",
+					hooks: [{ type: "command", command: `sh ${JSON.stringify(path)} BrowserUse` }],
+				},
+			],
+			UserPromptSubmit: hook("UserReply"),
+		});
+	});
+
+	// Codex keys a hook's trust on its hash: any change asks every machine again.
+	test("the commands never change between launches", () => {
+		expect(codexHookArgs("/h/notify.sh")).toBe(codexHookArgs("/h/notify.sh"));
+	});
+});
+
+describe("removeAteamCodexHooks", () => {
+	const ours = (event: string) => ({
+		hooks: [
+			{
+				type: "command",
+				command: `sh "/Users/x/Library/Application Support/ateam/hooks/notify.sh" ${event}`,
+			},
+		],
+	});
+
+	test("removes a file and folder that held only Ateam's hooks", async () => {
+		const wt = join(dir, "codex-only-ours");
+		await mkdir(join(wt, ".codex"), { recursive: true });
+		await writeFile(
+			join(wt, ".codex", "hooks.json"),
+			JSON.stringify({ hooks: { SessionStart: [ours("Start")], Stop: [ours("Stop")] } }),
+		);
+		await removeAteamCodexHooks(wt);
+		expect(await stat(join(wt, ".codex")).catch(() => null)).toBeNull();
+	});
+
+	test("keeps the repo's own hooks and settings", async () => {
+		const wt = join(dir, "codex-mixed");
+		await mkdir(join(wt, ".codex"), { recursive: true });
+		const theirs = { hooks: [{ type: "command", command: "sh ./scripts/notify.sh Stop" }] };
+		await writeFile(
+			join(wt, ".codex", "hooks.json"),
+			JSON.stringify({
+				description: "repo hooks",
+				hooks: {
+					Stop: [theirs, ours("Stop")],
+					PreToolUse: [ours("Working"), { ...ours("BrowserUse"), matcher: "mcp__desktop__.*" }],
+				},
+			}),
+		);
+		await removeAteamCodexHooks(wt);
+		const left = JSON.parse(await readFile(join(wt, ".codex", "hooks.json"), "utf8"));
+		expect(left).toEqual({ description: "repo hooks", hooks: { Stop: [theirs] } });
+	});
+
+	test("leaves a folder with other files in it, and no file at all", async () => {
+		const wt = join(dir, "codex-folder-kept");
+		await mkdir(join(wt, ".codex"), { recursive: true });
+		await writeFile(join(wt, ".codex", "config.toml"), "model = 'x'\n");
+		await writeFile(
+			join(wt, ".codex", "hooks.json"),
+			JSON.stringify({ hooks: { Stop: [ours("Stop")] } }),
+		);
+		await removeAteamCodexHooks(wt);
+		expect(await stat(join(wt, ".codex", "hooks.json")).catch(() => null)).toBeNull();
+		expect(await readFile(join(wt, ".codex", "config.toml"), "utf8")).toBe("model = 'x'\n");
+		await removeAteamCodexHooks(join(dir, "no-such-worktree"));
+	});
 });

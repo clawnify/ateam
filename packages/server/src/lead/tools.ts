@@ -168,7 +168,7 @@ const messageSchema = (w: Words) =>
 const toolsFor = (w: Words, scoped = false) => [
 	{
 		name: "get_board",
-		description: `List the tasks ${w.board}, grouped under each project's name, the repo it is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its machine and its id; one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus where it stands now (a summary written a few minutes after its agent goes quiet) and what it waits for or asks the user. Filter to what you need: all (the default) is every task still in play, merged ones left out; needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project, merged ones included (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.${scoped ? " This chat is one project's: without project, every filter lists that project's tasks only." : ""}`,
+		description: `List the tasks ${w.board}, grouped under each project's name, the repo it is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its machine and its id; one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus where it stands now (a summary written a few minutes after its agent goes quiet) and what it waits for or asks the user. Filter to what you need: all (the default) is every task on the board, Done ones included (archived ones are not listed); needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.${scoped ? " This chat is one project's: without project, every filter lists that project's tasks only." : ""}`,
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -441,9 +441,8 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 		// A home chat sees its own project unless it names another, or "all".
 		const only = home && asked === "all" ? "" : asked;
 		const keep = (t: TaskDTO) => {
-			// Merged work is out of play, but it is news: a briefing on the latest
-			// tasks includes what just merged.
-			if (t.column === "merged") return filter === "recent";
+			// Done (merged) tasks stay listed: only archived ones are left out, and
+			// tasks:list never returns those. The Lead must find a task the user names.
 			const state = agentState(t);
 			if (filter === "needs_you")
 				return t.column === "needs_attention" || state === "needs_you" || !!t.question;

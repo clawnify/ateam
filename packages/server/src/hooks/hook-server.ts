@@ -47,6 +47,29 @@ export function hookText(body: string): Pick<HookEvent, "lastAssistantMessage" |
 	return out;
 }
 
+/**
+ * The conversation id a hook's JSON input carries: `session_id` in the hook
+ * schema Claude Code and Codex share, `thread-id` in Codex's `notify` payload
+ * (the field list in the Codex 0.165 binary: agent-turn-complete, thread-id,
+ * turn-id, cwd, client, input-messages, last-assistant-message). Codex names
+ * its own conversations, and in a worktree whose hooks it has not been asked to
+ * trust its turn-end `notify` is the only thing it reports, so this is how
+ * Ateam learns which conversation a Codex tab holds.
+ */
+export function hookSessionId(body: string): string | undefined {
+	if (!body) return undefined;
+	let raw: unknown;
+	try {
+		raw = JSON.parse(body);
+	} catch {
+		return undefined;
+	}
+	if (!raw || typeof raw !== "object") return undefined;
+	const o = raw as Record<string, unknown>;
+	const id = o.session_id ?? o["thread-id"];
+	return typeof id === "string" && id.trim() ? id.trim() : undefined;
+}
+
 /** An agent asked to merge (via the `gh` shim) — routed into the merge queue. */
 export interface MergeRequestEvent {
 	terminalId: string;
@@ -201,6 +224,9 @@ export class HookServer extends EventEmitter {
 					const callerVerified = Boolean(
 						callerTerminalId && token && this.inbox?.verify(callerTerminalId, token),
 					);
+					// The terminal's agent has the board tools: any request with its own
+					// token proves it (board-connections.ts).
+					if (callerVerified) this.emit("boardRequest", callerTerminalId);
 					let body = "";
 					req.on("data", (c) => {
 						body += c;
@@ -394,7 +420,9 @@ export class HookServer extends EventEmitter {
 					const complete = (body: string) => {
 						const terminalId = url.searchParams.get("terminalId") ?? "";
 						const eventType = url.searchParams.get("eventType") ?? "";
-						const sessionId = url.searchParams.get("sessionId") ?? undefined;
+						// notify.sh's query param is empty in every hook environment
+						// (repo.findTerminalByAgentSessionId); the body carries the id.
+						const sessionId = url.searchParams.get("sessionId") || hookSessionId(body);
 						if (terminalId && eventType) {
 							this.emit("hook", {
 								terminalId,

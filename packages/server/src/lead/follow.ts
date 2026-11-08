@@ -29,6 +29,7 @@ interface Followed {
 	agentStatus: string | null;
 	/** The page already shown (or there when followed); absent in older files. */
 	pageId?: string | null;
+	pageAt?: number;
 }
 
 export interface FollowerOptions {
@@ -66,6 +67,7 @@ export class Follower {
 			lastReplyAt: Math.max(prev?.lastReplyAt ?? 0, task.lastReplyAt ?? 0),
 			agentStatus: task.agentStatus,
 			pageId: task.page?.id ?? null,
+			pageAt: task.page?.at,
 		});
 		while (this.followed.size > MAX_FOLLOWED) {
 			const oldest = this.followed.keys().next().value;
@@ -96,10 +98,11 @@ export class Follower {
 				task: f.ref,
 			});
 		f.agentStatus = task.agentStatus;
-		// A new page: drawn in the thread, unless it belongs to a question, whose
+		// A new page or revision: drawn in the thread, unless it belongs to a question, whose
 		// card (below the thread) draws it.
-		if (task.page && task.page.id !== (f.pageId ?? null)) {
+		if (task.page && (task.page.id !== (f.pageId ?? null) || task.page.at !== f.pageAt)) {
 			f.pageId = task.page.id;
+			f.pageAt = task.page.at;
 			this.save();
 			if (task.question?.pageId !== task.page.id)
 				this.o.record({

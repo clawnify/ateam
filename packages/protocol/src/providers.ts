@@ -1,9 +1,11 @@
-// Box providers Ateam can do more with than SSH into, as DATA: what a client asks
-// the user for, and how it labels it. What happens with those values is code, one
-// adapter per provider (wake.ts, shared by the phone and the desktop), because no two
-// providers wake a box the same way: boxd exchanges a key for a token and speaks
-// gRPC-web, Hetzner and Fly take one REST call, AWS signs every request. The same
-// split DevPod and Omnara landed on. See docs/providers/README.md.
+// Box providers Ateam knows by name, as DATA: what a client asks the user for, and
+// how it labels it. One with `wake` is one Ateam can do more with than SSH into; one
+// without is only named, from what a box on it says in hello (SystemInfo.provider).
+// What happens with those values is code, one adapter per provider (wake.ts, shared
+// by the phone and the desktop), because no two providers wake a box the same way:
+// boxd exchanges a key for a token and speaks gRPC-web, Hetzner and Fly take one REST
+// call, AWS signs every request. The same split DevPod and Omnara landed on. See
+// docs/providers/README.md.
 
 /** One value a provider needs, shown as one field. */
 export interface ProviderInput {
@@ -64,6 +66,13 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
 				"Sprites. A Sprites token works on every Sprite in its organization, so use one for " +
 				"an organization that holds only your Ateam boxes.",
 		},
+	},
+	// Always on, billed flat: nothing to wake, so no `wake`. Named so a box that says
+	// it runs here (sleep/index.ts) is shown as exe.dev rather than as an address.
+	// No logo: exe.dev publishes no square vector mark (docs/providers/README.md).
+	{
+		id: "exe",
+		label: "exe.dev",
 	},
 ];
 

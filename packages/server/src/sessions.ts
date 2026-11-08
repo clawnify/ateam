@@ -12,13 +12,14 @@ import {
 	buildAgentEnv,
 	claudeModDir,
 	codexBoardMcpArgs,
+	codexHookArgs,
 	ensureBoardMcpConfig,
 	ensureClaudeHooks,
-	ensureCodexHooks,
 	peerToken,
+	removeAteamCodexHooks,
 } from "./agent-setup";
 import { desktopMcpConfig } from "./browser";
-import { latestCodexThreadInDir } from "./codex-threads";
+import { codexThreadIsConversation, latestCodexThreadInDir } from "./codex-threads";
 import { shell } from "./headless";
 import { refreshLoginPath } from "./login-env";
 import type { Services } from "./services";
@@ -123,49 +124,123 @@ export async function createTaskInProject(
 }
 
 /**
- * Resumes under way, by the conversation they bring back, per engine. Two
- * callers can decide to resume the same conversation in the same instant: the
- * peer messenger relaunching an agent to hand it a message, and a client
- * auto-restoring the tab that agent just left (or two windows, or the desktop
- * and the phone). Each one checks for a live terminal first, but a launch
- * spends its first ~200ms in probes before it spawns one, so both checks pass
- * and two agent processes end up writing one transcript and one worktree.
+ * Resumes under way, per engine, by task and agent. Two callers can decide to
+ * bring the same conversation back in the same instant: the peer messenger
+ * relaunching an agent to hand it a message, and a client auto-restoring the
+ * tab that agent just left (or two windows, or the desktop and the phone).
+ * Each one checks for a live terminal first, but a launch spends its first
+ * ~200ms in probes before it spawns one, so both checks pass and two agent
+ * processes end up on one transcript and one worktree.
+ *
+ * Keyed by task and agent rather than by conversation, because a resume does
+ * not always know its conversation when it is asked for: `resume: true` (an
+ * agent that names its own conversations, Codex or OpenCode, before Ateam has
+ * heard the id) only learns it from a scan, after an await. So the resumes of
+ * one task's agent take turns, and each one, once it knows its conversation,
+ * hands back the tab already holding it (liveTabOn). Two resumes of different
+ * conversations in one task only wait for each other, which costs the second
+ * one the first one's probes. Every probe a launch makes has a timeout
+ * (login-env, the agents registry), so a turn always ends.
+ *
  * Keyed per engine (a WeakMap on its services) rather than on the Services
  * type, the same way the phone keys its own in-flight launches.
  */
-const resuming = new WeakMap<Services, Map<string, Promise<{ terminalId: string }>>>();
+const resuming = new WeakMap<Services, Map<string, Promise<unknown>>>();
 
-/** A resume that carries work found its conversation already coming back. */
+const resumeKey = (taskId: string, agentId: string) => `${taskId}\u0000${agentId}`;
+
+/**
+ * A resume that carries work found its conversation already open, or coming
+ * back in a launch ahead of it.
+ */
 export class ResumeInFlightError extends Error {
 	constructor(conversationId: string) {
 		super(
-			`conversation ${conversationId} is already being resumed; what was meant for it waits for that tab`,
+			`conversation ${conversationId} is already open or being resumed; what was meant for it waits for that tab`,
 		);
 		this.name = "ResumeInFlightError";
 	}
 }
 
-/** The launch already bringing this conversation back, if one is under way. */
-export function resumeInFlight(
+/** Settles once every resume of this task's agent already under way has. */
+export function resumesSettled(services: Services, taskId: string, agentId: string): Promise<void> {
+	const last = resuming.get(services)?.get(resumeKey(taskId, agentId));
+	return last ? last.then(noop, noop) : Promise.resolve();
+}
+
+const noop = () => {};
+
+/**
+ * The tab already holding this conversation: a live terminal whose agent has
+ * not quit (an agent that quits leaves its pane alive as a shell, `stopped`).
+ */
+export function liveTabOn(
 	services: Services,
+	taskId: string,
 	conversationId: string,
-): Promise<{ terminalId: string }> | undefined {
-	return resuming.get(services)?.get(conversationId);
+): { terminalId: string } | undefined {
+	const open = repo
+		.listSessionsByTask(services.db, taskId)
+		.find(
+			(s) =>
+				s.agentSessionId === conversationId &&
+				s.exitedAt == null &&
+				s.status !== "stopped" &&
+				services.pty.has(s.terminalId),
+		);
+	return open ? { terminalId: open.terminalId } : undefined;
+}
+
+/**
+ * An event a Codex tab reported for one of Codex's side threads rather than
+ * its conversation: its turn-end `notify` fires for the terminal-title writer,
+ * the Guardian reviewer and subagents too, with nothing but the thread id to
+ * tell them apart (codexThreadIsConversation). Taken as the tab's own, it would
+ * end the card's turn while the agent is still working, let the peer messenger
+ * restart it mid-turn, and name the tab after the side thread. Only an id that
+ * is not the tab's own conversation is looked up.
+ */
+export function isCodexSideThreadEvent(
+	session: { agentId: string; agentSessionId: string | null },
+	reportedId: string | undefined,
+	isConversation: (id: string) => boolean | null = codexThreadIsConversation,
+): boolean {
+	if (session.agentId !== "codex" || !reportedId) return false;
+	if (reportedId === session.agentSessionId) return false;
+	return isConversation(reportedId) === false;
+}
+
+/**
+ * Record the conversation an agent says its tab holds, when Ateam could not
+ * name it at launch: a harness that names its own (Codex), launched fresh, has
+ * no id until its hooks report one, and Codex's first report is its first
+ * turn's end. With the id on the row, a restart or a restored tab resumes it by
+ * id, and two of them at once meet in spawnAgentInTask instead of putting two
+ * agents on it. Never over an id already there: Ateam minted it, or a resume
+ * picked it.
+ */
+export function adoptReportedConversation(
+	db: Services["db"],
+	session: { id: string; agentId: string; agentSessionId: string | null },
+	reportedId: string | undefined,
+): void {
+	if (!reportedId || session.agentSessionId) return;
+	if (getAgent(session.agentId)?.sessionIdFlag) return;
+	repo.updateSession(db, session.id, { agentSessionId: reportedId });
 }
 
 /**
  * Launch a coding agent in a task's worktree and record the session.
  *
- * A resume of a conversation that is already being resumed does not launch a
- * second agent onto it. Without work of its own (a restored tab) it joins that
- * launch and gets the same tab back. With work (a prompt or files) it is
- * refused with ResumeInFlightError rather than silently dropping the work: the
- * peer messenger leaves its messages pending, and the new tab's listener takes
- * them once it is up. Registered before anything is awaited, which is the
- * whole point.
- *
- * Only a resume by id is covered. `resume: true` learns its conversation from
- * a scan, after an await, so it has no key to register under in time.
+ * A resume never puts a second agent on a conversation that already has one.
+ * Resumes of one task's agent run one after another (see `resuming`), and each
+ * one checks for a tab already holding its conversation once it knows which
+ * conversation that is. Without work of its own (a restored tab) it gets that
+ * tab back. With work (a prompt or files) it is refused with
+ * ResumeInFlightError rather than silently dropping the work: the peer
+ * messenger leaves its messages pending, and that tab's listener takes them,
+ * or the messenger's next sweep restarts it with them. Queued before anything
+ * is awaited, which is the whole point.
  */
 export function spawnAgentInTask(
 	services: Services,
@@ -178,22 +253,19 @@ export function spawnAgentInTask(
 		services.worktreeGuard.launch(input.taskId, () =>
 			launchAgent(services, notifyTaskUpdated, input),
 		);
-	const conversationId = input.resumeSessionId;
-	if (!conversationId) return launch();
-	let inFlight = resuming.get(services);
-	if (!inFlight) {
-		inFlight = new Map();
-		resuming.set(services, inFlight);
+	// A fresh launch starts a conversation of its own: nothing to collide with.
+	if (!input.resume && !input.resumeSessionId) return launch();
+	let queues = resuming.get(services);
+	if (!queues) {
+		queues = new Map();
+		resuming.set(services, queues);
 	}
-	const existing = inFlight.get(conversationId);
-	if (existing) {
-		const carriesWork = Boolean(input.prompt?.trim() || input.files?.length);
-		return carriesWork ? Promise.reject(new ResumeInFlightError(conversationId)) : existing;
-	}
-	const started = launch();
-	inFlight.set(conversationId, started);
+	const key = resumeKey(input.taskId, input.agentId);
+	const ahead = queues.get(key);
+	const started = ahead ? ahead.then(launch, launch) : launch();
+	queues.set(key, started);
 	const settle = () => {
-		if (inFlight.get(conversationId) === started) inFlight.delete(conversationId);
+		if (queues.get(key) === started) queues.delete(key);
 	};
 	started.then(settle, settle);
 	return started;
@@ -282,6 +354,21 @@ async function launchAgent(
 		}
 	}
 
+	// A resume normally carries no prompt; one woken by a peer message does
+	// (peer-messages.ts), and that is work starting like any fresh launch.
+	const hasWork = Boolean(input.prompt?.trim() || input.files?.length);
+
+	// The conversation is known now, however it was asked for, and every resume
+	// of this agent ahead of this one has finished (spawnAgentInTask): one of
+	// them may already have brought it back.
+	if (resumeSessionId) {
+		const open = liveTabOn(services, task.id, resumeSessionId);
+		if (open) {
+			if (hasWork) throw new ResumeInFlightError(resumeSessionId);
+			return open;
+		}
+	}
+
 	// A delete may have begun during the probes above; it is waiting on this
 	// launch, so stop before writing anything rather than start an agent it
 	// would kill a moment later.
@@ -300,9 +387,6 @@ async function launchAgent(
 	const mintsId = Boolean(agent.sessionIdFlag) && !input.resume && !input.agentMode;
 	const agentSessionId = resumeSessionId ?? (mintsId ? terminalId : null);
 	const isResume = Boolean(input.resume || input.resumeSessionId);
-	// A resume normally carries no prompt; one woken by a peer message does
-	// (peer-messages.ts), and that is work starting like any fresh launch.
-	const hasWork = Boolean(input.prompt?.trim() || input.files?.length);
 	repo.createSession(services.db, {
 		taskId: task.id,
 		agentId: agent.id,
@@ -336,7 +420,8 @@ async function launchAgent(
 	if (agent.id === "claude") {
 		await ensureClaudeHooks(task.worktreePath, services.notifyScriptPath);
 	} else if (agent.id === "codex") {
-		await ensureCodexHooks(task.worktreePath, services.notifyScriptPath);
+		// Its hooks ride the launch line now (codexHookArgs below).
+		await removeAteamCodexHooks(task.worktreePath);
 	}
 
 	// A fresh launch on a task whose wait already resurfaced means someone is
@@ -379,14 +464,15 @@ async function launchAgent(
 		resumeSessionId,
 	});
 	if (agent.id === "codex") {
-		// Codex has no hooks, but `notify` invokes a program with a JSON
-		// payload on turn completion — our script maps it to Stop. Injected
+		// `notify` invokes a program with a JSON payload on turn completion; our
+		// script maps it to Stop. It runs whether or not the user has approved
+		// the hooks (codexHookArgs), so a turn's end is never missed. Injected
 		// per-launch via -c so the user's ~/.codex/config.toml is untouched.
 		const codexNotify = join(services.hooksDir, "codex-notify.sh");
-		// The board MCP server rides the same way (codexBoardMcpArgs).
+		// The board MCP server and the hooks ride the same way.
 		agentCmd = agentCmd.replace(
 			/^codex/,
-			`codex -c 'notify=["sh","${codexNotify}"]' ${codexBoardMcpArgs(services.hookPort, desktop)}`,
+			`codex -c 'notify=["sh","${codexNotify}"]' ${codexHookArgs(services.notifyScriptPath)} ${codexBoardMcpArgs(services.hookPort, desktop)}`,
 		);
 	} else if (agent.id === "claude" && !input.agentMode) {
 		// The board tools (get_board / set_status / set_waiting), served by the
@@ -416,6 +502,11 @@ async function launchAgent(
 	// AgentExit). Quoted: on macOS the script lives under "Application Support".
 	const notify = `'${services.notifyScriptPath.replace(/'/g, `'\\''`)}'`;
 	const command = `${agentCmd}; sh ${notify} AgentExit; exec ${shell} -l`;
+	// Watch for the board tools reaching it (board-connections.ts), from before
+	// the agent can possibly connect. Agent mode carries none by design.
+	if (!(agent.id === "claude" && input.agentMode)) {
+		services.boardConnections?.launched(terminalId, task.id, agent.id);
+	}
 	services.pty.spawn({
 		terminalId,
 		shell,

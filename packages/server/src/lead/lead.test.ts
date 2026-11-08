@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { CH, type LeadEvent, type TaskDTO } from "@ateam/protocol";
 import { startLead } from "./index";
-import { LeadSession, NOTES_HEAD } from "./session";
+import { LeadSession, leadToolsMissing, NOTES_HEAD } from "./session";
 import { createLeadTools, LEAD_MCP_NAME } from "./tools";
 
 // ---- tools, against a fake router -------------------------------------------
@@ -65,14 +65,14 @@ function fakeRouter(overrides: Record<string, (args: unknown[]) => unknown> = {}
 }
 
 describe("lead tools", () => {
-	it("get_board leaves merged tasks out and names the repo and the machine", async () => {
+	it("get_board lists Done tasks and names the repo and the machine", async () => {
 		const r = fakeRouter();
 		const tools = createLeadTools({ handle: r.handle, machineOf: () => "hetzner" });
 		const res = await tools.call("get_board", {});
 		const text = res?.text ?? "";
 		expect(text).toContain("ateam (repo clawnify/ateam, hetzner, project p1)");
 		expect(text).toContain("t1 | fix login | review | idle | claude");
-		expect(text).not.toContain("old work");
+		expect(text).toContain("old work");
 	});
 
 	it("propose_task starts nothing: the proposal goes to the chat for the user to create", async () => {
@@ -366,9 +366,9 @@ describe("lead tools", () => {
 		expect(text).toContain("a-merged | a merged | merged | not_running | codex | 2m ago");
 		expect(text).toContain("b-mid | b mid");
 		expect(text).not.toContain("a old");
-		// Without recent, merged work stays out.
+		// The default lists Done work too: only archived tasks are left out.
 		const all = (await tools.call("get_board", {}))?.text ?? "";
-		expect(all).not.toContain("a merged");
+		expect(all).toContain("a merged");
 	});
 
 	it("looks a task up by id on its own engine, without listing the board", async () => {
@@ -452,6 +452,23 @@ function answer(p: FakeClaude, subtype: string, response: unknown, error?: strin
 	});
 }
 
+describe("leadToolsMissing", () => {
+	it("says nothing when Ateam's server connected, is still pending, or Claude listed no servers", () => {
+		expect(leadToolsMissing([{ name: "ateam_lead", status: "connected" }])).toBeNull();
+		expect(leadToolsMissing([{ name: "ateam_lead", status: "pending" }])).toBeNull();
+		expect(leadToolsMissing(undefined)).toBeNull();
+	});
+
+	it("names a policy when the server is missing, and the status when it failed", () => {
+		expect(leadToolsMissing([{ name: "github", status: "connected" }])).toContain(
+			"allowedMcpServers",
+		);
+		expect(leadToolsMissing([{ name: "ateam_lead", status: "failed" }])).toContain(
+			"reports them as failed",
+		);
+	});
+});
+
 describe("LeadSession", () => {
 	it("starts claude on the first message and renders a turn with a tool call", async () => {
 		const { session, procs, dir } = makeSession();
@@ -509,6 +526,15 @@ describe("LeadSession", () => {
 		again.session.send("and now?");
 		const args = (again.procs[0] as FakeClaude).args;
 		expect(args[args.indexOf("--resume") + 1]).toBe("sess-1");
+	});
+
+	it("tells the user in the chat when Claude's init lists no Ateam server", async () => {
+		const { session, procs } = makeSession();
+		session.send("hi");
+		const p = procs[0] as FakeClaude;
+		p.say({ ...init(), mcp_servers: [{ name: "github", status: "connected" }] });
+		await tick();
+		expect(session.snapshot().items.at(-1)).toMatchObject({ kind: "notice", tone: "error" });
 	});
 
 	it("tells the Lead where attached files are, and shows them on the message", async () => {
