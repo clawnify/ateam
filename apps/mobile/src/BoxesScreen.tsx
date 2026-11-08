@@ -567,8 +567,8 @@ function PairTray({
 	return (
 		<View style={styles.tray}>
 			<Text style={styles.trayText}>
-				Locked to its paired devices. On your Mac, Pair a phone (Settings, Boxes) shows a code: type
-				it here or scan it. `ateam pair` on the box prints a code too.
+				Private to its paired devices. Type or scan a code from Pair a phone on your Mac (Settings,
+				Boxes). The box's installer prints one too, and so does `ateam pair` on the box.
 			</Text>
 			<View style={styles.pairRow}>
 				<TextInput
@@ -603,7 +603,7 @@ function PairTray({
 	);
 }
 
-/** Under a box anyone on the network may use: lock it, pairing this phone first. */
+/** Under a box anyone on the network may use: make it private, pairing this phone first. */
 function LockTray({ onLock }: { onLock: () => Promise<void> }) {
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -620,18 +620,18 @@ function LockTray({ onLock }: { onLock: () => Promise<void> }) {
 	};
 	const lock = () =>
 		Alert.alert(
-			"Lock this box?",
+			"Make this box private?",
 			"Only devices paired with it can use it from then on, starting with this phone. Your Mac, if it reaches the box over Tailscale, needs a code too: get one with `ateam pair` in this box's terminal (the terminal button on its card).",
 			[
 				{ text: "Cancel", style: "cancel" },
-				{ text: "Lock it", onPress: () => void run() },
+				{ text: "Make private", onPress: () => void run() },
 			],
 		);
 	return (
 		<View style={styles.tray}>
 			<Text style={styles.trayWarn}>
-				Anyone on your Tailscale network can control this box. Lock it so only the devices you pair
-				can.
+				Open to your Tailscale network: any device on it can use this box. Make it private to the
+				devices you pair.
 			</Text>
 			<View style={styles.pairRow}>
 				<Pressable
@@ -640,7 +640,7 @@ function LockTray({ onLock }: { onLock: () => Promise<void> }) {
 					onPress={lock}
 					accessibilityRole="button"
 				>
-					<Text style={styles.pairBtnText}>{busy ? "Locking…" : "Lock it"}</Text>
+					<Text style={styles.pairBtnText}>{busy ? "Making private…" : "Make private"}</Text>
 				</Pressable>
 			</View>
 			{error ? <Text style={styles.pairError}>{error}</Text> : null}

@@ -462,26 +462,30 @@ should have it — your phone and your Mac, not "anything I ever add to this tai
 The SSH transport doesn't need this — OpenSSH authenticates with your key regardless
 of who can reach port 22. It's specific to the WebSocket.
 
-### Lock the box to your devices (v29)
+### Keep the box private to your devices (v29)
 
 A box on v29 or later can serve its WebSocket only to the devices paired with it.
 A connection from anything else gets no events (no terminal output, no board) and
 every call is refused with "This box needs pairing." until it pairs. SSH is never
-affected. Keep the ACL anyway: the lock and the ACL guard against different things.
+affected. Keep the ACL anyway: pairing and the ACL guard against different things.
 
-- **A box starts open**, a new one too, and stays open until you lock it. Its card
-  says anyone on your tailnet can control it.
-- **Lock one** from **Settings → Boxes → the box → Access → Lock it** on the Mac, or **Lock it**
-  under its card in the phone's **Boxes**. The device you lock it from is paired first.
-  A phone needs Ateam Go 1.4 or later to pair: an older one can't use a locked box.
+- **A new box starts private** (from v0.1.93). One set up from a Mac is reached over
+  SSH, which pairing never gates, and the Mac pairs your phone from there. One created
+  from Ateam Go is paired with that phone before it first starts. One installed by hand
+  prints a pairing code for its first device at the end of the installer.
+- **An older box stays as it was**: one that has run before keeps whatever it had, so
+  an upgrade never shuts a device out. While it's open, its card says it's open to your
+  Tailscale network.
+- **Make one private** from **Settings → Boxes → the box → Access → Make private** on the
+  Mac, or **Make private** under its card in the phone's **Boxes**. The device you do it
+  from is paired first. A phone needs Ateam Go 1.4 or later to pair.
 - **Pair a phone** from the same place on the Mac: a QR code the iPhone's Camera opens
   in Ateam Go (`ateamgo://pair?...`), which asks before it pairs, naming the box, and the
   code itself to type on the box's card in **Boxes** on the phone. A code works once, for
   10 minutes.
-- **No paired device at hand** (the phone locked the box and the Mac reaches it only
-  over Tailscale, or the one paired phone is lost): run `ateam pair` in the box's
-  terminal, which prints a code for a locked box. `ateam pair --unlock` opens a box
-  again when no paired device is left.
+- **No paired device at hand** (the Mac reaches the box only over Tailscale, or the one
+  paired phone is lost): run `ateam pair` in the box's terminal, which prints a code for
+  a private box. `ateam pair --unlock` opens a box again when no paired device is left.
 - **Unpair** a device from **Settings → Boxes → the box → Access**: its token stops working and
   its connection drops at once. Do it for a lost phone.
 
@@ -508,8 +512,8 @@ every box this Mac holds to every other one:
   **Access** there. Unpair it to cut that link; turning this off and on again sets it up
   anew. The Mac sets the pairings up, since it holds every box: it asks the box being
   reached for a one-time code and hands it to the other box, which redeems it itself, so
-  the token never comes through the Mac. A box that isn't locked takes a link as it
-  takes any device, and once you lock it, the Mac pairs the links to it.
+  the token never comes through the Mac. An open box takes a link as it takes any
+  device, and once you make it private, the Mac pairs the links to it.
 - **A box that's asleep or off the tailnet** is listed as unreachable, and a message to
   one of its tasks fails with that reason. Boxes don't wake each other.
 - **What a box needs:** v30, and a network port the other boxes can reach (the one Ateam

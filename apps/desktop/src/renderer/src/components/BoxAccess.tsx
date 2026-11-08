@@ -88,7 +88,7 @@ export function BoxAccess({
 
 	const lock = async () => {
 		const ok = await confirm(
-			`Lock ${title} to your devices?`,
+			`Make ${title} private to your devices?`,
 			"Only devices paired with it can use it over the network from then on, starting with this Mac. Every other device needs a pairing code first, and a phone needs Ateam Go 1.4 or later to use one. Connections over SSH aren't affected.",
 		);
 		if (!ok) return;
@@ -116,15 +116,15 @@ export function BoxAccess({
 		return (
 			<>
 				<div className="box-access-warning">
-					Anyone on your Tailscale network can control this box over its network port: open
-					terminals, read what agents print, use its GitHub token.
+					Open to your Tailscale network: any device on it can use this box over its network port,
+					open terminals, read what agents print, use its GitHub token.
 				</div>
 				<div className="box-lead-row">
 					<span className="gh-access-muted">
-						Lock it so only the devices you pair can. SSH isn't affected.
+						Make it private to the devices you pair. SSH isn't affected.
 					</span>
 					<Button size="xs" variant="outline" disabled={busy} onClick={() => void lock()}>
-						Lock it
+						Make private
 					</Button>
 				</div>
 				{error && <div className="gh-access-problem">{error}</div>}
@@ -134,7 +134,9 @@ export function BoxAccess({
 
 	return (
 		<>
-			<div className="gh-access-muted">Locked: only these devices can use it over the network.</div>
+			<div className="gh-access-muted">
+				Private: only these devices can use it over the network.
+			</div>
 			<ul className="box-devices">
 				{status.devices.map((d) => (
 					<li key={d.id}>

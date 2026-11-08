@@ -461,7 +461,7 @@ function ConnectionScreen({
 						>
 							<ScanQrIcon size={19} color={C.ink} />
 							<Text style={styles.scanText}>
-								Box locked to your devices? Scan the code from Pair a phone on your Mac.
+								Box private to your devices? Scan the code from Pair a phone on your Mac.
 							</Text>
 						</Pressable>
 					) : null}
