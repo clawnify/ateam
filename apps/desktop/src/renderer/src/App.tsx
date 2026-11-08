@@ -2132,7 +2132,9 @@ export function App() {
 							</div>
 							{!tasksCollapsed && (
 								<TaskPeekProvider>
-									<div className="side-list">
+									{/* Status updates move rows. Keep the scroll offset instead of
+									    letting the browser follow an anchor row to its new position. */}
+									<div className="side-list" style={{ overflowAnchor: "none" }}>
 										{!activeProjectId ? (
 											// activeProjectId is only empty while there is no project.
 											projectsLoaded && <div className="tree-empty">Add a project first</div>
