@@ -27,6 +27,7 @@ import {
 	boxSupports,
 	buildAteamApi,
 	CH,
+	clientBelowFloor,
 	filled,
 	type InputValues,
 	type InstallableAgent,
@@ -741,7 +742,7 @@ interface SkewNotice {
 function skewText(n: SkewNotice): string {
 	const box = n.label ?? "This box";
 	if (n.version >= PROTOCOL_VERSION) {
-		return `${box} runs a newer Ateam (v${n.version}). Update Ateam Go from the App Store.`;
+		return `${box} runs a newer Ateam (v${n.version}) that needs a newer Ateam Go. Update it from the App Store.`;
 	}
 	return n.atLatest
 		? `${box} is on the latest Ateam release (v${n.version}). This app is ahead of it; the next release clears this.`
@@ -2695,15 +2696,21 @@ export default function App() {
 	}
 
 	// The first live box on another Ateam than this app, whose banner isn't dismissed.
+	// An older box always says so (Update box fixes it). A newer one only when it can't
+	// serve this app (below its MIN_CLIENT_PROTOCOL floor): above the floor the app
+	// works on without the newer features, so an ordinary engine release never asks for
+	// an Ateam Go that isn't on the App Store yet.
 	const skewKey =
 		[...boxes.map(boxKey), ...(demo.current ? [DEMO] : [])].find((k) => {
 			const l = links[k];
-			return (
-				l?.state === "live" &&
-				l.version !== null &&
-				l.version !== PROTOCOL_VERSION &&
-				skewDismissed[k] !== l.version
-			);
+			if (l?.state !== "live" || l.version === null || skewDismissed[k] === l.version) {
+				return false;
+			}
+			if (l.version < PROTOCOL_VERSION) return true;
+			return clientBelowFloor(PROTOCOL_VERSION, {
+				protocolVersion: l.version,
+				...(l.minClient !== null ? { minClient: l.minClient } : {}),
+			});
 		}) ?? null;
 	const skewVersion = skewKey ? links[skewKey]?.version : null;
 	const notice =

@@ -206,6 +206,9 @@ export interface BoxLink {
 	wakeError: string | null;
 	/** The box's protocol version once it has answered. */
 	version: number | null;
+	/** The oldest app protocol the box serves correctly (SystemInfo.minClient); null
+	 *  before it answers, or from an engine that doesn't say. */
+	minClient: number | null;
 	/** Bumps on every connect: keys its open terminal so it remounts onto the fresh link. */
 	gen: number;
 }
@@ -218,6 +221,7 @@ export const NEW_LINK: BoxLink = {
 	asleep: false,
 	wakeError: null,
 	version: null,
+	minClient: null,
 	gen: 0,
 };
 
