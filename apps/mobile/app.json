@@ -32,6 +32,12 @@
 			"buildNumber": "32",
 			"infoPlist": {
 				"ITSAppUsesNonExemptEncryption": false,
+				"UISupportedInterfaceOrientations~ipad": [
+					"UIInterfaceOrientationPortrait",
+					"UIInterfaceOrientationPortraitUpsideDown",
+					"UIInterfaceOrientationLandscapeLeft",
+					"UIInterfaceOrientationLandscapeRight"
+				],
 				"UIBackgroundModes": ["audio", "voip"],
 				"NSLocalNetworkUsageDescription": "Ateam connects to a coding-agent server you run on your own machine or local network.",
 				"NSAppTransportSecurity": {
