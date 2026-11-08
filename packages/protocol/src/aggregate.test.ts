@@ -188,3 +188,21 @@ test("artifact metadata and page reads route to the task's engine", async () => 
 	expect(local.calls).not.toContain(CH.tasksPages);
 	expect(local.calls).not.toContain(CH.tasksPage);
 });
+
+test("marking a remote task read routes to its owner, including archived tasks", async () => {
+	const local = fake("local", {});
+	const remote = fake("remote", {
+		[CH.projectsList]: () => [{ id: "remote-project" }],
+		[CH.tasksListArchived]: () => [{ id: "archived-task" }],
+		[CH.tasksMarkRead]: () => ({ id: "archived-task", isUnread: false }),
+	});
+	const agg = createAggregate([local, remote], local);
+	await agg.handle(CH.projectsList, []);
+	await agg.handle(CH.tasksListArchived, ["remote-project"]);
+	expect(await agg.handle(CH.tasksMarkRead, ["archived-task"])).toEqual({
+		id: "archived-task",
+		isUnread: false,
+	});
+	expect(remote.calls).toContain(CH.tasksMarkRead);
+	expect(local.calls).not.toContain(CH.tasksMarkRead);
+});

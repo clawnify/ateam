@@ -117,9 +117,19 @@ import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { usePrompt } from "./components/usePrompt";
 import { VscodeLogo } from "./components/VscodeLogo";
+import {
+	type GetStartedState,
+	nextGetStarted,
+	readGetStarted,
+	saveGetStarted,
+	showsGetStarted,
+} from "./get-started";
 import { addTailscaleBox, installBox } from "./lib/box-actions";
 import {
 	bestMcShape,
+	fixedMcShape,
+	MC_RESIZE_SETTLE_MS,
+	MC_REORDER_DELAY_MS,
 	MC_PAGE_SIZE,
 	type McArea,
 	type McChoice,
@@ -200,10 +210,6 @@ const MC_TILE_MIME = "application/x-ateam-tile";
 // How long a dragged tile is held over the grid's top or bottom edge before
 // the page flips.
 const FLIP_HOLD_MS = 500;
-// How long the grid's size must hold still before Auto refits to it.
-const MC_RESIZE_SETTLE_MS = 200;
-// Batch automatic priority changes after five seconds without a new order.
-const MC_REORDER_DELAY_MS = 5_000;
 
 // Whether a drag carries files from Finder (not a tile, not dragged text).
 const draggingFiles = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
@@ -263,6 +269,9 @@ function dragWidth(
 // opened over, so the tooltip has to name that view, not the board.
 type View = "board" | "mission" | "loops" | "settings" | "lead";
 
+// Where the app opens, in the main window and in a project window.
+const DEFAULT_VIEW: View = "lead";
+
 const FOCUS_COLLAPSE_LABEL: Record<View, string> = {
 	board: "Show beside the board",
 	lead: "Back to the Lead",
@@ -286,6 +295,13 @@ interface ComposeInput {
 }
 
 export function App() {
+	const [fullScreen, setFullScreen] = useState(() => window.ateamWindow.isFullScreen());
+	useEffect(() => {
+		const off = window.ateamWindow.onFullScreen(setFullScreen);
+		// A transition may have finished between the first render and subscribing.
+		setFullScreen(window.ateamWindow.isFullScreen());
+		return off;
+	}, []);
 	// Non-null in a detached window: this window is pinned to one project and
 	// hides the project switcher; null in the main multi-project dashboard.
 	const boundProjectId = useMemo(() => window.ateam.window.boundProjectId(), []);
@@ -351,7 +367,7 @@ export function App() {
 	const [dropCardKey, setDropCardKey] = useState<string | null>(null);
 	const [newIssueOpen, setNewIssueOpen] = useState(false);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
-	const [view, setView] = useState<View>("board");
+	const [view, setView] = useState<View>(DEFAULT_VIEW);
 	const needingBoxes = useBoxesNeedingYou();
 	const boxesNeedYou = needingBoxes.size > 0;
 	// Layout is per project: one project may run twice the terminals of another.
@@ -714,9 +730,6 @@ export function App() {
 	// Group the merged projects into one card per repo (same GitHub owner/name across
 	// engines), remembering each engine's projectId — the routing key for its tasks.
 	const unifiedProjects = useMemo(() => unifyProjects(projects, origins), [projects, origins]);
-	// Nothing on the board at all, so Get started takes the board's place. A
-	// detached window is one project, so never there.
-	const noProjects = projectsLoaded && !boundProjectId && unifiedProjects.length === 0;
 	const recheckAgents = useCallback(() => void window.ateam.agents.list().then(setAgents), []);
 	// The switcher lists them most recently switched to first (project-order.ts).
 	// `switchedTo` holds a switch until its card is on the board: a project just
@@ -938,6 +951,26 @@ export function App() {
 				.filter((t) => !deletingIds.has(t.id)),
 		[tasksByProject, deletingIds],
 	);
+
+	// Get started takes the board's place with no project at all, and on a new
+	// install until its first task (get-started.ts). The Lead's place too: the
+	// app opens on the Lead, so a first launch lands on it, and adding a project
+	// from it must not swap the list for the chat halfway through. A detached
+	// window is one project, so never there.
+	const [getStarted, setGetStarted] = useState<GetStartedState>(readGetStarted);
+	const startBoard = {
+		projectsLoaded,
+		bound: boundProjectId !== null,
+		projectCount: unifiedProjects.length,
+		taskCount: allTasks.length,
+	};
+	const getStartedNow = nextGetStarted(getStarted, startBoard);
+	const showGetStarted = showsGetStarted(getStartedNow, startBoard);
+	useEffect(() => {
+		if (getStartedNow === getStarted) return;
+		setGetStarted(getStartedNow);
+		saveGetStarted(getStartedNow);
+	}, [getStartedNow, getStarted]);
 
 	// The active card's board unions tasks from every engine that has the repo;
 	// under All, every card's.
@@ -1338,6 +1371,10 @@ export function App() {
 	const rememberView = () => {
 		if (scopeKey) viewMemRef.current[scopeKey] = { taskId: selectedTaskId, mode: panelMode, view };
 	};
+	// A project not opened yet this session opens in the view you're on, so a
+	// pick never moves you off the Lead, the Board or Mission Control. Settings
+	// belongs to no project, so a pick from there lands on the Lead.
+	const unvisitedView: View = view === "settings" ? DEFAULT_VIEW : view;
 	// One project picked in the switcher (or a rail tile): All ends.
 	const selectProject = (id: string) => {
 		if (id === activeProjectId && !allProjects) return;
@@ -1348,7 +1385,7 @@ export function App() {
 		setSwitchedTo(id);
 		setSelectedTaskId(mem?.taskId ?? null);
 		setPanelMode(mem?.mode ?? "side");
-		setView(mem?.view ?? "board");
+		setView(mem?.view ?? unvisitedView);
 	};
 	const selectAll = () => {
 		if (allProjects) return;
@@ -1357,7 +1394,7 @@ export function App() {
 		setAllProjects(true);
 		setSelectedTaskId(mem?.taskId ?? null);
 		setPanelMode(mem?.mode ?? "side");
-		setView(mem?.view ?? "board");
+		setView(mem?.view ?? unvisitedView);
 		// New work goes to the project of the task in front of you.
 		const back = mem?.taskId ? allTasks.find((t) => t.id === mem.taskId) : undefined;
 		if (back) setActiveProjectId(back.projectId);
@@ -1672,11 +1709,14 @@ export function App() {
 
 	// Land a task in whatever the user is actually looking at: a task open
 	// full-width hands its panel to this one, the board opens it beside itself,
-	// and Mission Control just grows a tile. `panelMode` survives deselection,
-	// so "full" only counts while a task is really on screen, otherwise the
-	// board would jump to a full-width panel the user never opened.
+	// and Mission Control just grows a tile. The Lead has no panel beside it, so
+	// there the task opens full-width and collapsing it goes back to the chat.
+	// `panelMode` survives deselection, so "full" only counts while a task is
+	// really on screen, otherwise the board would jump to a full-width panel
+	// the user never opened.
 	const landTask = (id: string) => {
-		if (!(selectedTaskId && panelMode === "full")) setPanelMode("side");
+		if (view === "lead") setPanelMode("full");
+		else if (!(selectedTaskId && panelMode === "full")) setPanelMode("side");
 		setSelectedTaskId(id);
 		// Loops shows only loop-owned tasks, so a new task would land
 		// somewhere it can't be seen; every other view keeps its place.
@@ -1882,59 +1922,61 @@ export function App() {
 			style={{ "--sidebar-w": `${sidebarWidth}px`, "--lead-w": `${leadWidth}px` } as CSSProperties}
 		>
 			<aside className={`sidebar ${rail ? "rail" : ""}`}>
-				{/* In rail mode the traffic lights own this strip; the toggle moves
-				    below them as the first tile. */}
-				<div className="side-top">
-					{!rail && (
-						<IconButton
-							icon={Settings}
-							label="Settings"
-							shortcut="⌘,"
-							active={view === "settings"}
-							attention={boxesNeedYou ? "a box needs you" : undefined}
-							onClick={() => goToView("settings")}
-						/>
-					)}
-					{!rail && <IconButton icon={PanelLeft} label="Collapse sidebar" onClick={toggleRail} />}
-				</div>
-				{/* The project switcher, its own full-width row under the traffic-light
-				    strip (as Codex and Open Session do), so a name has room. A
-				    detached window IS one project, so it names it instead. */}
-				{!rail && (
-					<div className="side-project">
-						{boundProjectId ? (
-							<ProjectTitle
-								name={boundProject?.name ?? "…"}
-								owner={boundProject?.githubOwner ?? null}
-								color={boundProject?.color ?? null}
-								path={boundProject?.repoPath}
-							/>
-						) : !projectsLoaded ? (
-							// The row's height, held until the list says whether it is a
-							// switcher or an Add project button.
-							<div className="h-8" />
-						) : (
-							<ProjectSwitcher
-								cards={switcherCards}
-								activeKey={activeCard?.key ?? null}
-								all={allProjects}
-								onSelect={(card) => {
-									const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
-									if (primary) selectProject(primary.projectId);
-								}}
-								onSelectAll={selectAll}
-								onAdd={addProject}
-								onOpenWindow={(card) => {
-									const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
-									if (primary) window.ateam.window.openProject(primary.projectId);
-								}}
-								onRemove={removeProject}
-								drop={activeProjectId ? projectDropProps("switcher", activeProjectId) : undefined}
-								dropping={dropCardKey === "switcher"}
+				<div className={`side-header${fullScreen && !rail ? " fullscreen" : ""}`}>
+					{/* In rail mode the traffic lights own this strip; the toggle moves
+					    below them as the first tile. */}
+					<div className="side-top">
+						{!rail && (
+							<IconButton
+								icon={Settings}
+								label="Settings"
+								shortcut="⌘,"
+								active={view === "settings"}
+								attention={boxesNeedYou ? "a box needs you" : undefined}
+								onClick={() => goToView("settings")}
 							/>
 						)}
+						{!rail && <IconButton icon={PanelLeft} label="Collapse sidebar" onClick={toggleRail} />}
 					</div>
-				)}
+					{/* The selector shares Settings' row in native full screen, and
+					    gets the full width below the traffic lights otherwise. A
+					    detached window names its pinned project instead. */}
+					{!rail && (
+						<div className="side-project">
+							{boundProjectId ? (
+								<ProjectTitle
+									name={boundProject?.name ?? "…"}
+									owner={boundProject?.githubOwner ?? null}
+									color={boundProject?.color ?? null}
+									path={boundProject?.repoPath}
+								/>
+							) : !projectsLoaded ? (
+								// The row's height, held until the list says whether it is a
+								// switcher or an Add project button.
+								<div className="h-8" />
+							) : (
+								<ProjectSwitcher
+									cards={switcherCards}
+									activeKey={activeCard?.key ?? null}
+									all={allProjects}
+									onSelect={(card) => {
+										const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+										if (primary) selectProject(primary.projectId);
+									}}
+									onSelectAll={selectAll}
+									onAdd={addProject}
+									onOpenWindow={(card) => {
+										const primary = card.members.find((m) => m.alias === null) ?? card.members[0];
+										if (primary) window.ateam.window.openProject(primary.projectId);
+									}}
+									onRemove={removeProject}
+									drop={activeProjectId ? projectDropProps("switcher", activeProjectId) : undefined}
+									dropping={dropCardKey === "switcher"}
+								/>
+							)}
+						</div>
+					)}
+				</div>
 
 				{rail ? (
 					// The expanded sidebar's three sections as tile groups, each led
@@ -2089,7 +2131,9 @@ export function App() {
 							</div>
 							{!tasksCollapsed && (
 								<TaskPeekProvider>
-									<div className="side-list">
+									{/* Status updates move rows. Keep the scroll offset instead of
+									    letting the browser follow an anchor row to its new position. */}
+									<div className="side-list" style={{ overflowAnchor: "none" }}>
 										{!activeProjectId ? (
 											// activeProjectId is only empty while there is no project.
 											projectsLoaded && <div className="tree-empty">Add a project first</div>
@@ -2283,7 +2327,13 @@ export function App() {
 					<div className="tabs">
 						{/* The tab stays lit while a task is focused over it: the focused
 						    task belongs to a view, and the lit tab is where closing it
-						    lands you. */}
+						    lands you. The Lead comes first: it's where the app opens. */}
+						<div
+							className={`tab ${view === "lead" ? "active" : ""}`}
+							onClick={() => goToView("lead")}
+						>
+							Lead
+						</div>
 						<div
 							className={`tab ${view === "board" ? "active" : ""}`}
 							onClick={() => goToView("board")}
@@ -2295,12 +2345,6 @@ export function App() {
 							onClick={() => goToView("loops")}
 						>
 							Loops
-						</div>
-						<div
-							className={`tab ${view === "lead" ? "active" : ""}`}
-							onClick={() => goToView("lead")}
-						>
-							Lead
 						</div>
 					</div>
 					{/* Centered task search: the topbar is a 1fr | search | 1fr grid, so
@@ -2474,9 +2518,11 @@ export function App() {
 							onDelete={() => deleteTask(selectedTask)}
 							onClose={() => setSelectedTaskId(null)}
 						/>
-					) : view === "board" && noProjects ? (
+					) : (view === "board" || view === "lead") && showGetStarted ? (
 						<GetStarted
 							agents={agents}
+							projects={unifiedProjects.map((p) => p.name)}
+							onNewTask={activeProjectId ? newTask : undefined}
 							onAdd={addProject}
 							onRecheckAgents={recheckAgents}
 							onOpenBoxes={openLeadSettings}
@@ -3553,6 +3599,21 @@ function TaskSummary({ task }: { task: TaskDTO }) {
 	);
 }
 
+/**
+ * An agent live in the open task that never reached the board tools
+ * (TaskDTO.boardToolsMissing, server/board-connections.ts): it looks fine,
+ * but its questions, messages and pages will never come. The engine writes the
+ * sentence, with what to do about it.
+ */
+function BoardToolsNote({ task }: { task: TaskDTO }) {
+	if (!task.boardToolsMissing) return null;
+	return (
+		<p className="board-tools-note" title={task.boardToolsMissing}>
+			{task.boardToolsMissing}
+		</p>
+	);
+}
+
 // Whether an artifact tab was opened or hidden. Hiding keeps the saved artifact;
 // the + menu can reopen it. Choices survive panel remounts and app restarts.
 const PAGE_CHOICES_KEY = "ateam.pageChoices";
@@ -4105,6 +4166,7 @@ export function TaskPanel({
 					</span>
 				</div>
 				<TaskSummary task={task} />
+				<BoardToolsNote task={task} />
 				<BranchLine task={task} />
 			</div>
 
@@ -5294,8 +5356,10 @@ export function MissionControl({
 		);
 	// Auto's page: lines of tiles that fill the grid, every tile a cell and
 	// every cell a tile. The last page is shaped for the tiles it has.
-	const autoGrid =
-		layout === "auto" && fit ? mcShapeGrid(bestMcShape(visible.length, fit.area)) : null;
+	const layoutGrid =
+		layout === "auto"
+			? fit && mcShapeGrid(bestMcShape(visible.length, fit.area))
+			: mcShapeGrid(fixedMcShape(layout));
 
 	return (
 		<div className={wrapClass} ref={wrapRef} {...wrapDropProps}>
@@ -5307,7 +5371,7 @@ export function MissionControl({
 				key={clampedPage}
 				className="mc"
 				data-layout={layout}
-				style={autoGrid?.container}
+				style={layoutGrid?.container}
 				initial={dirRef.current === 0 ? false : { y: dirRef.current * 32, opacity: 0.3 }}
 				animate={{ y: 0, opacity: 1 }}
 				transition={springy}
@@ -5338,7 +5402,7 @@ export function MissionControl({
 							// only: `layout` alone would scale a terminal mid-flight when the
 							// page holds a different number of tiles than it did before.
 							layout="position"
-							style={autoGrid?.tiles[i]}
+							style={layoutGrid?.tiles[i]}
 							initial={{ opacity: 0 }}
 							animate={{ opacity: 1 }}
 							transition={{ layout: springy, opacity: { duration: 0.22 } }}
@@ -5482,7 +5546,7 @@ export function MissionControl({
 				    in its first open slot; the tile that task grows takes the slot,
 				    and the offer moves on to the next one, gliding like the tiles.
 				    Auto leaves no open slot: its tiles fill the page. */}
-				{newTaskButton && !autoGrid && visible.length < pageSize && (
+				{newTaskButton && layout !== "auto" && visible.length < pageSize && (
 					<motion.div
 						key="mc-slot"
 						className="mc-slot"

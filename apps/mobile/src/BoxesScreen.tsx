@@ -534,8 +534,8 @@ function PairTray({
 	return (
 		<View style={styles.tray}>
 			<Text style={styles.trayText}>
-				Locked to its paired devices. On your Mac, Pair a phone (Settings, Boxes) shows a code: type
-				it here or scan it. `ateam pair` on the box prints a code too.
+				Private to its paired devices. Type or scan a code from Pair a phone on your Mac (Settings,
+				Boxes). The box's installer prints one too, and so does `ateam pair` on the box.
 			</Text>
 			<View style={styles.pairRow}>
 				<TextInput

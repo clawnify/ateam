@@ -140,19 +140,19 @@ function LockSection({ onLock }: { onLock: () => Promise<void> }) {
 	};
 	const lock = () =>
 		Alert.alert(
-			"Lock this box?",
+			"Make this box private?",
 			"Only devices paired with it can use it from then on, starting with this phone. Your Mac, if it reaches the box over Tailscale, needs a code too: get one with `ateam pair` in this box's terminal (the terminal button on its card).",
 			[
 				{ text: "Cancel", style: "cancel" },
-				{ text: "Lock it", onPress: () => void run() },
+				{ text: "Make private", onPress: () => void run() },
 			],
 		);
 	return (
 		<View style={styles.lockSection}>
 			<Text style={styles.rowTitle}>Device access</Text>
 			<Text style={styles.warning}>
-				Anyone on your Tailscale network can control this box. Lock it so only the devices you pair
-				can.
+				Open to your Tailscale network: any device on it can use this box. Make it private to the
+				devices you pair.
 			</Text>
 			<Pressable
 				style={[styles.lockButton, busy && styles.disabled]}
@@ -160,7 +160,7 @@ function LockSection({ onLock }: { onLock: () => Promise<void> }) {
 				onPress={lock}
 				accessibilityRole="button"
 			>
-				<Text style={styles.lockText}>{busy ? "Locking…" : "Lock it"}</Text>
+				<Text style={styles.lockText}>{busy ? "Making private…" : "Make private"}</Text>
 			</Pressable>
 			{error ? <Text style={styles.error}>{error}</Text> : null}
 		</View>

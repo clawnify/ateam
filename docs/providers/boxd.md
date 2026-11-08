@@ -129,9 +129,9 @@ forward the port, which the engine reports as its address.
 
 The tailnet path goes straight to the VM, never through boxd's proxy, so the phone's
 traffic doesn't wake a hibernated box: Ateam Go wakes it through boxd's API (see
-[Sleep and wake](#sleep-and-wake)). Until a box is locked to your devices, anyone on your tailnet can use its
-network port: lock it under Access on
-the box's page.
+[Sleep and wake](#sleep-and-wake)). A box set up with Ateam from v0.1.93 starts private
+to your paired devices; an older one stays open to your tailnet until you make it
+private under Access on the box's page.
 
 ### boxd's Tailscale integration (org-level)
 

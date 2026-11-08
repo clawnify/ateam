@@ -22,6 +22,7 @@ import {
 	type InstallLogEvent,
 } from "../shared/host";
 import { type AteamTheme, THEME_CH, themeOrDefault } from "../shared/theme";
+import { type AteamWindow, WINDOW_CH } from "../shared/window";
 
 const api: AteamApi = {
 	projects: {
@@ -302,3 +303,13 @@ const theme: AteamTheme = {
 	},
 };
 contextBridge.exposeInMainWorld("ateamTheme", theme);
+
+const nativeWindow: AteamWindow = {
+	isFullScreen: () => ipcRenderer.sendSync(WINDOW_CH.fullScreen),
+	onFullScreen: (cb) => {
+		const handler = (_: unknown, fullScreen: boolean) => cb(fullScreen);
+		ipcRenderer.on(WINDOW_CH.evtFullScreen, handler);
+		return () => ipcRenderer.off(WINDOW_CH.evtFullScreen, handler);
+	},
+};
+contextBridge.exposeInMainWorld("ateamWindow", nativeWindow);

@@ -176,6 +176,32 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 export const PROTOCOL_VERSION = 35;
 
 /**
+ * The oldest client protocol an engine of this version still serves correctly, sent
+ * in system:hello (SystemInfo.minClient). A client older than the engine but at or
+ * above this floor works on, without the newer features (each is gated by
+ * FEATURE_MIN_VERSION), so it says nothing: an additive bump never asks anyone to
+ * update. Below it, the client tells the user to update itself. Raise it ONLY for a
+ * change an older client would misread or can't follow, in the same PR, and never
+ * above the protocol of the Ateam Go live on the App Store: until that phone is out,
+ * there is nothing to update to. That one case is the only one that still needs the
+ * phone released before the desktop and engine.
+ *
+ * 29: a box can be private to its paired devices (pairing, v29), and a new one is;
+ * a client below v29 can't pair.
+ */
+export const MIN_CLIENT_PROTOCOL = 29;
+
+/** Whether a box running a newer protocol than this client needs a newer client:
+ *  only below the box's floor. One that doesn't say (an engine from before the
+ *  floor) is taken as serving this client, as every engine since v7 does. */
+export function clientBelowFloor(
+	clientProtocol: number,
+	box: { protocolVersion: number; minClient?: number },
+): boolean {
+	return box.protocolVersion > clientProtocol && (box.minClient ?? 0) > clientProtocol;
+}
+
+/**
  * A decision an agent is waiting on (ask_user). Answered from any client with
  * tasks:answerQuestion; the answer reaches the agent as a message from the user.
  */
@@ -555,6 +581,15 @@ export interface TaskDTO {
 	 * the same as empty — a read-only addition, so no protocol bump.
 	 */
 	agentIds?: string[];
+	/**
+	 * Why an agent live in this task can't use the board tools (ask_user,
+	 * send_message, show_page, proposals): a sentence for the user, set once the
+	 * agent has been up for a minute without connecting to the board (an
+	 * organization policy, an old CLI, or an agent started by hand). Null when
+	 * every agent has them or the engine can't tell. Runtime-only, never stored;
+	 * absent from an older engine, which reads the same as null.
+	 */
+	boardToolsMissing?: string | null;
 	/** Merge-queue position; null when the task is not queued to merge. */
 	mergeStatus: MergeStatus | null;
 	prNumber: number | null;
@@ -1089,6 +1124,9 @@ export interface SystemInfo {
 	protocolVersion: number;
 	/** Ids of agents installed + available on the engine's machine. */
 	agents: string[];
+	/** The oldest client protocol this engine serves correctly (MIN_CLIENT_PROTOCOL).
+	 *  Absent from engines before it was reported. */
+	minClient?: number;
 	/** The Ateam release the engine was built from ("0.1.80"). Absent from engines
 	 *  before it was reported, null from one run from source. A release can change
 	 *  the engine without a protocol bump, so clients compare this to offer updates. */
@@ -1878,3 +1916,11 @@ export {
 } from "./wake";
 export type { WsClient } from "./ws";
 export { wsClientTransport } from "./ws";
+
+// Mission Control task ordering, shared by desktop and native clients.
+export * from "./mc-order";
+
+export * from "./session-tabs";
+
+export * from "./sidebar-view";
+export { byWhatsNext, nextRank, taskWaitingLabel, waitState } from "./triage-order";
