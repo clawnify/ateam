@@ -1882,3 +1882,8 @@ export {
 } from "./wake";
 export type { WsClient } from "./ws";
 export { wsClientTransport } from "./ws";
+
+// Mission Control task ordering, shared by desktop and native clients.
+export * from "./mc-order";
+
+export * from "./session-tabs";
