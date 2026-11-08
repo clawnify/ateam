@@ -1911,3 +1911,11 @@ export {
 } from "./wake";
 export type { WsClient } from "./ws";
 export { wsClientTransport } from "./ws";
+
+// Mission Control task ordering, shared by desktop and native clients.
+export * from "./mc-order";
+
+export * from "./session-tabs";
+
+export * from "./sidebar-view";
+export { byWhatsNext, nextRank, taskWaitingLabel, waitState } from "./triage-order";
