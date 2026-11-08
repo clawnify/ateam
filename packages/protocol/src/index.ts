@@ -173,7 +173,9 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // v34: tasks:pages lists saved artifacts; tasks:page accepts an optional page id.
 // Older engines still serve their latest page; clients fall back to that binding.
 // v35: explicit box-scoped dotfiles preview/apply; settings sync never runs scripts.
-export const PROTOCOL_VERSION = 35;
+// v36: browser:view carries desktop viewer credentials, including a bundled
+// password value that already-released clients forward unchanged.
+export const PROTOCOL_VERSION = 36;
 
 /**
  * The oldest client protocol an engine of this version still serves correctly, sent
@@ -1463,10 +1465,15 @@ export interface EditorEndpointDTO {
  */
 export type EditorOpenResult = EditorEndpointDTO | { needsInstall: true };
 
-/** Where a box's browser view answers, on ITS machine, and the VNC password. */
+/** Where a box's browser view answers, on ITS machine, and its credentials. */
 export interface BrowserViewDTO {
 	port: number;
+	/** Opaque viewer credential; pass unchanged to browserViewUrl. Legacy noVNC
+	 * uses a raw password; desktop control may bundle its viewer token here so
+	 * already released apps can authenticate without a coordinated update. */
 	password: string;
+	/** Present on boxes with desktop control; grants human viewer takeover. */
+	controlToken?: string;
 }
 
 // ---- the API surface exposed on window.ateam ----

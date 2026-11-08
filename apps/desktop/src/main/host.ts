@@ -1648,7 +1648,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		const base = ws
 			? `http://${new URL(ws).hostname}:${view.port}`
 			: `http://127.0.0.1:${browserLocalPort(alias)}`;
-		return { url: browserViewUrl(base, view.password) };
+		return { url: browserViewUrl(base, view.password, view.controlToken) };
 	}
 
 	return {
