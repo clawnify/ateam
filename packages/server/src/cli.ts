@@ -25,6 +25,7 @@ import { dirname, join } from "node:path";
 import { type AggregateBackend, type BoxWake, CH, createAggregate } from "@ateam/protocol";
 import type { Dispatcher } from "./dispatcher";
 import { createDispatcher } from "./dispatcher";
+import { dotfilesFor } from "./dotfiles";
 import type { Engine } from "./engine";
 import { createEngine } from "./engine";
 import { engineLead } from "./lead/engine-lead";
@@ -289,6 +290,7 @@ async function maybeStartIdleSleep(
 	log(`[ateam] on ${driver.where}: letting it sleep when idle`);
 	sleepControl = await startSleepControl(driver, {
 		working: () => engine.isWorking(),
+		setupActive: () => dotfilesFor(engine.services.userDataDir).active(),
 		lastInputAt: () => engine.lastInputAt(),
 		lead: () => lead.activity(),
 		nextLoopAt: () => {

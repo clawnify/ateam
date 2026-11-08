@@ -1,0 +1,11 @@
+# Never copy agent runtime directories wholesale into this repository.
+.env
+.env.*
+!.env.example
+**/auth.json
+**/credentials.json
+**/.credentials.json
+**/sessions/
+**/history.jsonl
+**/*.key
+**/*.pem

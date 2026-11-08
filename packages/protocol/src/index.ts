@@ -172,7 +172,8 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // call there (FEATURE_MIN_VERSION.leadCallSession).
 // v34: tasks:pages lists saved artifacts; tasks:page accepts an optional page id.
 // Older engines still serve their latest page; clients fall back to that binding.
-export const PROTOCOL_VERSION = 34;
+// v35: explicit box-scoped dotfiles preview/apply; settings sync never runs scripts.
+export const PROTOCOL_VERSION = 35;
 
 /**
  * The oldest client protocol an engine of this version still serves correctly, sent
@@ -362,6 +363,7 @@ export interface TaskLastReplyDTO {
  * so nothing forced a bump to answer "what stops working under this?". Now it does.
  */
 export const FEATURE_MIN_VERSION = {
+	dotfiles: 35,
 	/** v6 turned CleanupCandidate from a flat row into `{ task: TaskDTO, recommended }`.
 	 *  The dialog dereferences `.task` on every row, so a v5 engine's reply is not a
 	 *  degraded dialog, it is a thrown TypeError. */
@@ -730,6 +732,8 @@ export type UpdateStrategy = "merge" | "rebase";
  * with a reader exist — a setting nothing reads is a lie.
  */
 export interface EngineSettings {
+	/** Default for explicit dotfiles previews. Syncing this never applies it. */
+	dotfiles: import("./dotfiles").DotfilesConfig | null;
 	/** Agent a new task launches with when the composer doesn't say. */
 	defaultAgentId: string;
 	/** How "Merge via PR" lands the branch. */
@@ -1363,6 +1367,7 @@ export interface SessionHitDTO {
 
 // ---- IPC channel names (their own module: see channels.ts) ----
 export { CH } from "./channels";
+export * from "./dotfiles";
 
 // ---- event payloads ----
 export interface PtyDataEvent {

@@ -136,7 +136,9 @@ describe("loopWakeScript", () => {
 });
 
 describe("sleep control on boxd", () => {
-	function harness(opts: { run?: boolean; nextLoopAt?: number | null } = {}) {
+	function harness(
+		opts: { run?: boolean; nextLoopAt?: number | null; setupActive?: () => boolean } = {},
+	) {
 		let t = 0;
 		let working = false;
 		const calls: string[] = [];
@@ -158,6 +160,7 @@ describe("sleep control on boxd", () => {
 		const timeoutStatePath = join(dir, "auto-hibernate-set");
 		const deps = {
 			working: () => working,
+			setupActive: opts.setupActive,
 			nextLoopAt: () => opts.nextLoopAt ?? null,
 			idleMinutes: () => 60,
 			log: () => {},
@@ -213,6 +216,21 @@ describe("sleep control on boxd", () => {
 		await minutes(h, tick, 3);
 		expect(h.calls.slice(5)).toEqual([SUSPEND_OFF, "boxd machine config set auto-hibernate.timeout 0"]);
 		stop();
+	});
+
+	it("a dotfiles install holds an otherwise idle box after its client leaves", async () => {
+		let installing = true;
+		const h = harness({ setupActive: () => installing });
+		const { stop, tick } = await h.start();
+		try {
+			await minutes(h, tick, 120);
+			expect(h.calls).toEqual([SUSPEND_OFF, "boxd machine config set auto-hibernate.timeout 0"]);
+			installing = false;
+			await minutes(h, tick, 60);
+			expect(h.calls).toContain(`boxd machine config set auto-hibernate.timeout ${RELEASE_S}`);
+		} finally {
+			stop();
+		}
 	});
 
 	it("a client attaching to a released box holds it and restarts the window", async () => {

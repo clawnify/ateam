@@ -5603,3 +5603,36 @@ input {
 .get-started-link:hover {
 	text-decoration-color: currentColor;
 }
+
+/* Dotfiles preview and logs fit both Settings and the setup dialog. */
+.dotfiles {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	min-width: 0;
+}
+.dotfiles-field {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-size: 12px;
+}
+.dotfiles-preview,
+.dotfiles-result {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	overflow-wrap: anywhere;
+	min-width: 0;
+}
+.dotfiles-log {
+	margin: 0;
+	padding: 12px;
+	max-height: 280px;
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 11px;
+	background: var(--background);
+	border-radius: 6px;
+}
