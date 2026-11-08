@@ -209,7 +209,11 @@ engine says it runs on a Sprite, and which one (its hostname is its name). The t
 is still yours to add; tapping a Sprite the phone has no token for opens its form at
 the token, rather than dialling it asleep until it times out. A box with no provider
 that doesn't answer (one on an engine from before this, say) says so under its card,
-with a **Set provider** button. Before connecting, the phone asks Sprites to wake the Sprite and hold it
+with a **Set provider** button. A new Sprite starts **always on**: it never pauses and is
+billed while up, and nothing asks for a token. Choose **Sleeps when idle** to save money,
+in the box form on the phone or the desktop (right after the provider) or on its page in
+Settings → Boxes; the token is then asked for. A Sprite that ran Ateam before this keeps
+sleeping as it did until you choose. Before connecting, the phone asks Sprites to wake the Sprite and hold it
 for five minutes, then keeps trying the Sprite for up to three: a Sprite reported
 awake can take a while longer to answer. Once the phone attaches, the engine holds
 it for a fresh idle window, as for any client connecting to a box it had let go.
@@ -220,9 +224,9 @@ use it. While a dropped connection retries with one of its tasks or its terminal
 open, it wakes again whenever the last wake is over a minute old, so a Sprite that
 paused again before the phone got through is not left asleep. A
 Sprites token works on every Sprite in its organization, so give the phone one for
-an organization that holds only your Ateam boxes. Until the Sprite is locked to your
-devices, anyone on your tailnet can use its network port: lock it under Access on
-the Sprite's page.
+an organization that holds only your Ateam boxes. A Sprite set up with Ateam from
+v0.1.93 starts private to your paired devices; an older one stays open to your tailnet
+until you make it private under Access on the Sprite's page.
 
 What we measured (2026-10-24):
 

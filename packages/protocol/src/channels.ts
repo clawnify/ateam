@@ -31,6 +31,7 @@ export const CH = {
 	tasksAnswerQuestion: "tasks:answerQuestion",
 	tasksClearProposal: "tasks:clearProposal",
 	tasksPage: "tasks:page",
+	tasksPages: "tasks:pages",
 	tasksChangeSteps: "tasks:changeSteps",
 	peersSendFromLead: "peers:sendFromLead",
 	// Cross-box (v30): an agent on a linked box lists this box's tasks and messages
@@ -79,6 +80,9 @@ export const CH = {
 	utilOpenBrowser: "util:openBrowser",
 	settingsGet: "settings:get",
 	settingsUpdate: "settings:update",
+	dotfilesStatus: "dotfiles:status",
+	dotfilesPrepare: "dotfiles:prepare",
+	dotfilesApply: "dotfiles:apply",
 	credentialsGet: "credentials:get",
 	credentialsUpdate: "credentials:update",
 	githubAccessStatus: "githubAccess:status",

@@ -12,7 +12,9 @@
 // the Mac running it (presentation, updates); `engine` keys are read by whichever
 // engine runs the work, so on a box they come from the box's own file. That is
 // Herdr's client/server split, and it is what makes a font a property of your
-// Mac rather than of the box you happen to run a task on.
+// Mac rather than of the box you happen to run a task on. `box` keys say what one
+// box is (always on or not): its own engine reads them, and a Mac's settings sync
+// never pushes them, since it carries `engine` alone.
 //
 // Only keys with a reader exist here. A setting nothing reads is a lie in the
 // file, and the schema's own `terminal_font_*` / `notifications_muted` columns
@@ -22,6 +24,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
 	type AteamSettings,
+	type BoxSettings,
 	type ClientSettings,
 	DEFAULT_OPENAI_TEXT_MODEL,
 	DEFAULT_OPENROUTER_TEXT_MODEL,
@@ -44,6 +47,7 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 		crossBox: false,
 	},
 	engine: {
+		dotfiles: null,
 		defaultAgentId: "claude",
 		defaultMergeStrategy: "squash",
 		defaultUpdateStrategy: "merge",
@@ -55,6 +59,9 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 		openRouterTextModel: DEFAULT_OPENROUTER_TEXT_MODEL,
 		openAiTextModel: DEFAULT_OPENAI_TEXT_MODEL,
 		decisionModel: "auto",
+	},
+	box: {
+		alwaysOn: false,
 	},
 };
 
@@ -124,6 +131,7 @@ export function updateSettings(patch: SettingsPatch, path: string = settingsPath
 		version: SETTINGS_VERSION,
 		client: { ...current.client, ...patch.client },
 		engine: { ...current.engine, ...patch.engine },
+		box: { ...current.box, ...patch.box },
 	};
 	mkdirSync(dirname(path), { recursive: true });
 	const tmp = `${path}.tmp`;
@@ -141,11 +149,30 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 function merge(raw: Record<string, unknown>): AteamSettings {
 	const client = isRecord(raw.client) ? raw.client : {};
 	const engine = isRecord(raw.engine) ? raw.engine : {};
+	const box = isRecord(raw.box) ? raw.box : {};
 	return {
 		...DEFAULT_SETTINGS,
 		...raw,
 		version: SETTINGS_VERSION,
 		client: { ...DEFAULT_SETTINGS.client, ...client } as ClientSettings,
 		engine: { ...DEFAULT_SETTINGS.engine, ...engine } as EngineSettings,
+		box: { ...DEFAULT_SETTINGS.box, ...box } as BoxSettings,
 	};
+}
+
+/** Whether the file itself says if this box is always on: a choice made on it, as
+ *  opposed to the default filling it in. */
+export function hasBoxChoice(path: string = settingsPath()): boolean {
+	try {
+		const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+		return isRecord(raw) && isRecord(raw.box) && typeof raw.box.alwaysOn === "boolean";
+	} catch {
+		return false;
+	}
+}
+
+/** How long this box may sit idle before it sleeps, in minutes; 0 never. Always on
+ *  (`box.alwaysOn`) wins over the idle window a Mac may have pushed in `engine`. */
+export function idleSleepMinutesOf(settings: AteamSettings): number {
+	return settings.box.alwaysOn ? 0 : settings.engine.idleSleepMinutes;
 }

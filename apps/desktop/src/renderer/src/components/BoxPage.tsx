@@ -16,6 +16,7 @@ import { setUpPhoneAccess } from "../lib/box-actions";
 import { type BoxSetup, dismissSetup, useSetup } from "../lib/setups";
 import { useLeadHome } from "../useLeadHome";
 import { BoxAccess } from "./BoxAccess";
+import { BoxDotfiles } from "./Dotfiles";
 import { GithubAccess } from "./GithubAccess";
 import { Button } from "./ui/button";
 import { Dialog, DialogOverlay, DialogPortal, DialogTitle } from "./ui/dialog";
@@ -35,7 +36,7 @@ export const errorText = (e: unknown) =>
 export function statusLine(row: BoxRow, now: number): string {
 	if (row.state === "connected") return "Connected";
 	if (row.state === "asleep") return "Asleep";
-	if (row.failure === NEEDS_PAIRING) return "Locked: this Mac needs pairing";
+	if (row.failure === NEEDS_PAIRING) return "Private: this Mac needs pairing";
 	if (row.failure) return `Couldn't connect: ${row.failure}`;
 	const age = relativeAge(row.lastSeen, now);
 	return age
@@ -126,6 +127,15 @@ export function useBoxActions(load: () => Promise<void>, confirm: Confirm) {
 			act(row.alias, row.state === "asleep" ? "Waking…" : "Connecting…", async () => {
 				await window.ateamHost.connect(row.alias, { wake: true });
 				return null;
+			}),
+
+		setAlwaysOn: (row: BoxRow, on: boolean) =>
+			act(row.alias, on ? "Keeping it on…" : "Letting it sleep…", async () => {
+				const { sleeps } = await window.ateamHost.setBoxAlwaysOn(row.alias, on);
+				// Asked to sleep but still up: this Mac's idle sleep of "never" is pushed to it.
+				return !on && sleeps === false
+					? "It stays up: idle sleep is set to never in Settings, and that applies to this box too."
+					: null;
 			}),
 
 		pairWithCode: (row: BoxRow) =>
@@ -496,6 +506,34 @@ export function BoxPage({
 					</div>
 				)}
 			</div>
+			{row.sleeps === null ? null : (
+				<div className="box-card-section">
+					<div className="box-card-label">Sleep</div>
+					{row.state !== "connected" ? (
+						<div className="gh-access-muted">Connect to choose whether it sleeps.</div>
+					) : row.sleeps === undefined ? (
+						<div className="gh-access-muted">
+							Update the box to choose whether it sleeps from here.
+						</div>
+					) : (
+						<div className="box-lead-row">
+							<span className="gh-access-muted">
+								{row.sleeps
+									? "Sleeps when idle, after the idle time in Settings, and wakes when you use it. Waking it from Ateam Go needs your provider's key there."
+									: "Always on: it never sleeps, so nothing needs a key to wake it. It's billed around the clock."}
+							</span>
+							<Button
+								size="xs"
+								variant="outline"
+								disabled={!!busy}
+								onClick={() => void actions.setAlwaysOn(row, row.sleeps === true)}
+							>
+								{row.sleeps ? "Keep it always on" : "Let it sleep when idle"}
+							</Button>
+						</div>
+					)}
+				</div>
+			)}
 			<div className="box-card-section">
 				<div className="box-card-label">Access</div>
 				{row.failure === NEEDS_PAIRING && row.state !== "connected" ? (
@@ -507,7 +545,7 @@ export function BoxPage({
 						}}
 					>
 						<span className="gh-access-muted">
-							It's locked to its paired devices. Enter a code from one of them (Pair a phone on
+							It's private to its paired devices. Enter a code from one of them (Pair a phone on
 							another Mac, or `ateam pair` in the box's terminal).
 						</span>
 						<input
@@ -566,6 +604,12 @@ export function BoxPage({
 					<GithubAccess alias={row.alias} label={row.title} />
 				)}
 			</div>
+			<BoxDotfiles
+				alias={row.alias}
+				label={row.title}
+				version={row.version}
+				connected={row.state === "connected"}
+			/>
 		</section>
 	);
 }

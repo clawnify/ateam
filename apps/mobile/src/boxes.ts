@@ -3,13 +3,14 @@
 //
 // Pure TS, no React Native imports, so it runs under bun test.
 import {
-	type BoxWake,
 	type ConnectStep,
 	filled,
 	inputsAt,
 	NEEDS_PAIRING,
+	type ProviderDefinition,
+	type ProviderReport,
 	providerById,
-	reportedWake,
+	reportedProvider,
 	wakeMachineName,
 } from "@ateam/protocol";
 import type { SavedConnection } from "./storage";
@@ -40,34 +41,80 @@ export function touchBox(
 	return [{ ...conn, lastUsedAt: now }, ...rest];
 }
 
-/** The list once the box at `key` takes the provider it reported in hello
+/** The list once the box at `key` takes what it reported in hello about its provider
  *  (SystemInfo.provider), or null when nothing changes. A box saved by its address
- *  alone (a pairing QR, an IP typed in) has none, so the phone dialled it asleep
- *  until it timed out. Only fills what is missing: a provider the user picked
- *  stays, and only its blank name is filled, from a report at the same provider. */
+ *  alone (a pairing QR, an IP typed in) has no provider, so the phone dialled it asleep
+ *  until it timed out. The provider only fills what is missing: one the user picked
+ *  stays, and only its blank name is filled, from a report at the same provider.
+ *  Whether it sleeps is the box's own fact, so the latest report always replaces it.
+ *  A report of null says no provider puts the box to sleep (a plain server): one saved
+ *  with no provider is then always on, so a try that fails doesn't offer Set provider. */
 export function withReportedProvider(
 	list: SavedBox[],
 	key: string,
-	reported: BoxWake | null | undefined,
+	reported: ProviderReport | null | undefined,
 ): SavedBox[] | null {
-	const wake = reportedWake(reported);
 	const at = list.findIndex((b) => boxKey(b) === key);
 	const box = list[at];
-	if (!wake || !box) return null;
-	const own = providerById(box.provider?.id);
-	if (own && box.provider) {
-		if (own.id !== wake.id || filled(own, "box", box.provider.box)) return null;
+	if (!box) return null;
+	// Undefined is an engine that doesn't say (older, or still looking), which changes
+	// nothing. A box given a provider keeps what it has: a tap still wakes it through it.
+	if (reported === null) {
+		if (providerById(box.provider?.id) || box.sleeps === false) return null;
+		const list2 = [...list];
+		list2[at] = { ...box, sleeps: false };
+		return list2;
 	}
-	const next = [...list];
-	next[at] = { ...box, provider: wake };
-	return next;
+	const wake = reportedProvider(reported);
+	if (!wake || !reported) return null;
+	let next: SavedBox = box;
+	const own = providerById(box.provider?.id);
+	const fill =
+		!own || !box.provider || (own.id === wake.id && !filled(own, "box", box.provider.box));
+	if (fill) next = { ...next, provider: wake };
+	if (typeof reported.sleeps === "boolean" && box.sleeps !== reported.sleeps) {
+		next = { ...next, sleeps: reported.sleeps };
+	}
+	if (next === box) return null;
+	const list2 = [...list];
+	list2[at] = next;
+	return list2;
+}
+
+/** The provider a box goes to sleep through, as far as the phone shows it: its own,
+ *  unless the box said it's always on. Drives "asleep" and asking for a key; a tap
+ *  still wakes through the provider when a key is saved (links.ts), since a box can
+ *  be put back to sleeping after it last said so. */
+export function wakesThrough(box: SavedConnection): ProviderDefinition | undefined {
+	const def = providerById(box.provider?.id);
+	// A provider with nothing to wake (exe.dev) is only a name.
+	return box.sleeps === false || !def?.wake ? undefined : def;
+}
+
+/** Whether a box's card shows it asleep (the moon, "tap to wake") rather than being
+ *  reached. Only a tap wakes a box, so a try in the background can't reach one that
+ *  sleeps, and a card that spun for each of those tries said it was on its way when it
+ *  wasn't. So a box that sleeps shows asleep while it was last seen asleep, and before
+ *  its first try has said anything, since asleep is how such a box is mostly found. If
+ *  it's up after all, that try lands and the card turns live. A try someone asked for
+ *  shows its steps, and one after a drop or another failure shows it's being reached. */
+export function shownAsleep(box: SavedConnection, link: BoxLink): boolean {
+	if (link.state === "live" || link.asked) return false;
+	return link.asleep || (link.error === null && wakesThrough(box) !== undefined);
+}
+
+/** The box form's Always on / Sleeps when idle to begin with: a box being added shows
+ *  always on, as a new box starts (cli.ts); a saved one is as it last said (one that
+ *  never said sleeps, as it did before boxes reported it). Only a pick is sent. */
+export function alwaysOnInForm(box: SavedConnection | null): boolean {
+	return box === null ? true : box.sleeps === false;
 }
 
 /** Why this phone can't wake a box its provider puts to sleep, when it can't (no
  *  waker for it): its name there is missing, else the provider's key. Null for a
  *  box with no provider, which nothing wakes. */
 export function cantWakeReason(box: SavedConnection): string | null {
-	const def = providerById(box.provider?.id);
+	const def = wakesThrough(box);
 	if (!def) return null;
 	if (!filled(def, "box", box.provider?.box ?? {})) {
 		return `This phone doesn't have its name at ${def.label}, so it can't wake it.`;
@@ -86,9 +133,11 @@ export const NO_PROVIDER_HINT =
 /** A box with no provider that isn't answering: if it sleeps, nothing on the phone can
  *  wake it until the phone knows what it runs on. Read from its last failure, which is
  *  kept while it's tried again, so the hint stays put instead of flickering per try. A
- *  box that just dropped is reconnecting, and a locked one answered. */
+ *  box that just dropped is reconnecting, a locked one answered, and one that said it's
+ *  always on has nothing to wake. */
 export function needsProvider(box: SavedConnection, link: BoxLink): boolean {
 	return (
+		box.sleeps !== false &&
 		providerById(box.provider?.id) === undefined &&
 		link.state !== "live" &&
 		link.error !== null &&
@@ -157,6 +206,9 @@ export interface BoxLink {
 	wakeError: string | null;
 	/** The box's protocol version once it has answered. */
 	version: number | null;
+	/** The oldest app protocol the box serves correctly (SystemInfo.minClient); null
+	 *  before it answers, or from an engine that doesn't say. */
+	minClient: number | null;
 	/** Bumps on every connect: keys its open terminal so it remounts onto the fresh link. */
 	gen: number;
 }
@@ -169,6 +221,7 @@ export const NEW_LINK: BoxLink = {
 	asleep: false,
 	wakeError: null,
 	version: null,
+	minClient: null,
 	gen: 0,
 };
 

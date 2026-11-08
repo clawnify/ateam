@@ -6,7 +6,7 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useRef, useState } from "react";
 import { Linking, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
-import { parsePairLink } from "./pair-link";
+import { parsePairLinks } from "./pair-link";
 import { C } from "./theme";
 
 export function PairScanner({
@@ -44,8 +44,8 @@ export function PairScanner({
 		? null
 		: permission.granted
 			? notOurs
-				? "That code isn't a pairing code from Ateam. Point at the one under Pair a phone."
-				: "Point it at the code under Pair a phone in Settings → Boxes on your Mac."
+				? "That isn't a code from Ateam. Point at the one under Pair your iPhone."
+				: "Point it at the code in Ateam on your Mac: Settings → Boxes → Pair your iPhone."
 			: permission.canAskAgain
 				? "Ateam Go needs the camera to read the code."
 				: "Camera access is off for Ateam Go. Turn it on in Settings, or type the code instead.";
@@ -66,7 +66,7 @@ export function PairScanner({
 						barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
 						onBarcodeScanned={({ data }) => {
 							if (ended.current) return;
-							if (!parsePairLink(data)) {
+							if (!parsePairLinks(data)) {
 								setNotOurs(true);
 								return;
 							}

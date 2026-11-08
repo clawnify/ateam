@@ -5,11 +5,11 @@
 import { randomUUID } from "node:crypto";
 import { errorMessage } from "@ateam/git-core";
 import {
-	type BoxWake,
 	CH,
 	type ClientFrame,
 	NEEDS_PAIRING,
 	type PairingState,
+	type ProviderReport,
 	type ServerFrame,
 	type SystemInfo,
 } from "@ateam/protocol";
@@ -151,10 +151,10 @@ export interface ServeOptions {
 	/** The box's network address, reported in hello for other boxes to link to
 	 *  (v30): `<host>:<port>`, or null with no listener. Absent: not reported. */
 	wsAddr?: string | null;
-	/** The provider that puts this box to sleep and the box's name there, reported
-	 *  in hello for clients to wake it through; null on a box none does.
-	 *  Absent: not reported (not known yet, or tests). */
-	provider?: BoxWake | null;
+	/** The provider that puts this box to sleep, the box's name there and whether it
+	 *  sleeps now (sleep/index.ts providerReport), reported in hello for clients to wake
+	 *  it through; null on a box none does. Absent: not reported (not known yet, or tests). */
+	provider?: ProviderReport | null;
 }
 
 /** Wrong tokens or codes on one connection before it is dropped. */
@@ -284,7 +284,7 @@ export function serveRpc(
 				// On an open box a code adds nothing, and a device that paired before
 				// the owner locked would keep its way in: codes come once it is locked.
 				if (!g.store.locked() && opts.trusted !== true)
-					throw new Error("Lock the box first: until then any device can use it.");
+					throw new Error("Make the box private first: until then any device can use it.");
 				return g.store.invite();
 			case CH.pairingRevoke: {
 				const id = String(input.id ?? "");
@@ -294,7 +294,7 @@ export function serveRpc(
 				return g.store.status(device === id ? null : device);
 			}
 			case CH.pairingLock: {
-				if (g.store.locked()) throw new Error("This box is locked already.");
+				if (g.store.locked()) throw new Error("This box is private already.");
 				const grant = g.store.lock(input.label, input.kind);
 				admit(grant.device.id);
 				g.live.dropUnpaired(client);

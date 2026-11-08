@@ -79,7 +79,7 @@ export async function uncommittedCount(worktreePath: string): Promise<number | n
 	}
 }
 
-/** Folders an agent harness or tool keeps in a worktree (Ateam writes `.codex/hooks.json`). */
+/** Folders an agent harness or tool keeps in a worktree (Ateam's older launches wrote `.codex/hooks.json`). */
 const LEFTOVER_DIRS = new Set([".codex", ".claude", ".agents", ".factory", ".cursor", ".gemini"]);
 const LEFTOVER_NAMES = new Set(["GEMINI.md"]);
 /** Screenshots and scratch. */

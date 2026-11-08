@@ -394,7 +394,8 @@ export const boardChanges = sqliteTable(
  * because that agent may be mid-turn, idle at its prompt, or not running at all
  * (see peer-messages.ts for how each case is reached). `deliveredAt` null means
  * still pending; `deliveredVia` says which door it went through, and `error`
- * why it could not.
+ * why it never reached the agent after all (an agent started for it quit
+ * before reading it, or could not start).
  */
 export const peerMessages = sqliteTable(
 	"peer_messages",
@@ -428,6 +429,21 @@ export const taskPages = sqliteTable("task_pages", {
 		.references(() => tasks.id, { onDelete: "cascade" }),
 	html: text("html").notNull(),
 });
+
+/** Independent artifacts, with HTML kept off the task row. */
+export const savedTaskPages = sqliteTable(
+	"saved_task_pages",
+	{
+		id: text("id").primaryKey(),
+		taskId: text("task_id")
+			.notNull()
+			.references(() => tasks.id, { onDelete: "cascade" }),
+		page: text("page", { mode: "json" }).$type<TaskPage>().notNull(),
+		html: text("html").notNull(),
+		at: integer("at").notNull(),
+	},
+	(t) => [index("saved_task_pages_task_idx").on(t.taskId, t.at)],
+);
 
 /** One step of a task's change, as the change steps write it (change-steps.ts). */
 export interface ChangeStep {
@@ -495,6 +511,10 @@ export const hosts = sqliteTable(
 		 *  machine's own inputs (its name there). The provider's key is not here: it is
 		 *  a secret, kept in the app's encrypted store. Null for every other box. */
 		wake: text("wake", { mode: "json" }).$type<{ id: string; box: Record<string, string> }>(),
+		/** Whether the box last said it sleeps when idle (SystemInfo.provider.sleeps):
+		 *  0 while it's always on, so it isn't shown asleep when it doesn't answer.
+		 *  Null until it says, or on a box no provider sleeps. */
+		sleeps: integer("sleeps", { mode: "boolean" }),
 		/** The box's board as last seen (projects, their tasks, loops), so its cards
 		 *  stay on the board while it sleeps or can't be reached. Opaque here: the
 		 *  desktop writes and reads it (main/offline.ts). Null until first held. */

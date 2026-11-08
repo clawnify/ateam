@@ -39,6 +39,10 @@ export interface BoxRow {
 	networkPort?: string | null;
 	/** The coding agents its engine finds, when connected. */
 	agents?: string[];
+	/** Whether it sleeps when idle, as its engine says while connected: false when it's
+	 *  always on, null when no provider puts it to sleep. Absent when not known: not
+	 *  connected, or an engine from before it said. */
+	sleeps?: boolean | null;
 	lastSeen: number | null;
 	/** Why the app's own last attempt to connect failed, if it did. */
 	failure: string | null;
@@ -65,7 +69,9 @@ export function boxRows(
 			const seen = Number(c.serverVersion);
 			const version = info?.protocolVersion ?? (Number.isFinite(seen) && seen > 0 ? seen : null);
 			const release = (info ? info.release : c.engineRelease) ?? null;
-			const provider = c.wake ? providerById(c.wake.id)?.label : undefined;
+			// The provider the Mac wakes it through, else the one a connected box says it
+			// runs on (an always-on one like exe.dev, which nothing wakes).
+			const provider = providerById(c.wake?.id ?? info?.provider?.id)?.label;
 			const reach = c.transport === "ws" ? `Tailscale ${c.alias}` : `SSH ${c.hostName ?? c.alias}`;
 			return {
 				alias: c.alias,
@@ -81,6 +87,7 @@ export function boxRows(
 				pairingReady: version != null && version >= FEATURE_MIN_VERSION.pairing,
 				...(info && info.wsAddr !== undefined ? { networkPort: info.wsAddr } : {}),
 				...(info ? { agents: info.agents } : {}),
+				...(info && info.provider !== undefined ? { sleeps: info.provider?.sleeps ?? null } : {}),
 				lastSeen: c.lastSeen,
 				failure: failures[c.alias] ?? null,
 			};

@@ -5,12 +5,12 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	type BoxWake,
 	CH,
 	type ClientFrame,
 	NEEDS_PAIRING,
 	type PairingGrantDTO,
 	type PairingInviteDTO,
+	type ProviderReport,
 	type ServerFrame,
 } from "@ateam/protocol";
 import type { Dispatcher } from "./dispatcher";
@@ -69,6 +69,32 @@ describe("the pairing store", () => {
 		expect(p.revoke(grant.device.id)).toBe(false);
 	});
 
+	it("pairs a device by its token's hash, leaving the box open or locked as it was", () => {
+		const d = dir();
+		const p = new Pairings(d);
+		const token = "t".repeat(43);
+		const hash = new Bun.CryptoHasher("sha256").update(token).digest("hex");
+		expect(p.addDevice(hash, "iPhone", "phone")).toBe(true);
+		expect(p.locked()).toBe(false);
+		expect(p.verify(token)).toMatchObject({ label: "iPhone", kind: "phone" });
+		// Again is a no-op, not a second device.
+		expect(p.addDevice(hash, "iPhone", "phone")).toBe(false);
+		expect(p.status(null).devices).toHaveLength(1);
+		// A locked box stays locked, and the device gets in.
+		const q = new Pairings(dir());
+		q.lockIfNew();
+		q.addDevice(hash, "iPhone", "phone");
+		expect(q.locked()).toBe(true);
+		expect(q.verify(token)?.label).toBe("iPhone");
+		expect(readFileSync(join(d, PAIRINGS_FILE), "utf8")).not.toContain(token);
+	});
+
+	it("refuses anything but a sha256 hex digest as a device's hash", () => {
+		const p = new Pairings(dir());
+		expect(() => p.addDevice("abc", "x", "phone")).toThrow("token hash");
+		expect(() => p.addDevice("A".repeat(64), "x", "phone")).toThrow("token hash");
+	});
+
 	it("fails closed on a damaged file", () => {
 		const d = dir();
 		writeFileSync(join(d, PAIRINGS_FILE), "{ not json");
@@ -111,7 +137,7 @@ function connect(
 	box: ReturnType<typeof fakeEngine>,
 	guard: PairingGuard,
 	trusted = false,
-	extra: { wsAddr?: string | null; provider?: BoxWake | null } = {},
+	extra: { wsAddr?: string | null; provider?: ProviderReport | null } = {},
 ) {
 	const sent: ServerFrame[] = [];
 	let onFrame: (f: ClientFrame) => void = () => {};
@@ -207,7 +233,7 @@ describe("a connection to a box's network port", () => {
 		const box = fakeEngine();
 		const guard = guardIn();
 		const c = connect(box, guard);
-		await expect(c.call(CH.pairingInvite)).rejects.toThrow("Lock the box first");
+		await expect(c.call(CH.pairingInvite)).rejects.toThrow("Make the box private first");
 		// Over SSH it may: that is the owner.
 		const ssh = connect(box, guard, true);
 		expect(await ssh.call(CH.pairingInvite)).toMatchObject({ code: expect.any(String) });
@@ -290,7 +316,7 @@ describe("a connection to a box's network port", () => {
 	});
 
 	it("says which provider puts the box to sleep, so a client that added it by address can wake it", async () => {
-		const provider = { id: "sprites", box: { machine: "ateam-box" } };
+		const provider = { id: "sprites", box: { machine: "ateam-box" }, sleeps: true };
 		const c = connect(fakeEngine(), guardIn(), false, { provider });
 		expect(await c.call(CH.systemHello)).toMatchObject({ provider });
 		const none = connect(fakeEngine(), guardIn(), false, { provider: null });
@@ -328,7 +354,7 @@ describe("a connection to a box's network port", () => {
 		expect(other.closed()).toBe(true);
 		expect(ssh.closed()).toBe(false);
 		expect(mac.closed()).toBe(false);
-		await expect(mac.call(CH.pairingLock, {})).rejects.toThrow("locked already");
+		await expect(mac.call(CH.pairingLock, {})).rejects.toThrow("private already");
 	});
 
 	it("revoking a device drops its live connections", async () => {

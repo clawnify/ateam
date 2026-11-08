@@ -11,9 +11,28 @@ import { type GithubSeen, NO_GITHUB_SEEN, parseGithubSeen } from "./github-seen"
 const KEY = "ateam.connection";
 const BOXES_KEY = "ateam.boxes";
 const PROJECT_KEY = "ateam.selectedProject";
+const SIDEBAR_COLLAPSED_KEY = "ateam.sidebarCollapsed";
 const COMPOSER_TARGET_KEY = "ateam.composerTarget";
 const PREVIEW_PORT_KEY = "ateam.previewPort";
 const GITHUB_SEEN_KEY = "ateam.githubSeen";
+const CALL_NOTICE_KEY = "ateam.callNotice";
+
+/** Whether the user has read what a call sends to OpenAI, told once before the first call. */
+export async function loadCallNotice(): Promise<boolean> {
+	try {
+		return (await AsyncStorage.getItem(CALL_NOTICE_KEY)) === "1";
+	} catch {
+		return false;
+	}
+}
+
+export async function saveCallNotice(): Promise<void> {
+	try {
+		await AsyncStorage.setItem(CALL_NOTICE_KEY, "1");
+	} catch {
+		/* best-effort: the notice shows again before the next call */
+	}
+}
 
 export interface SavedConnection {
 	host: string;
@@ -21,6 +40,10 @@ export interface SavedConnection {
 	/** The provider the phone wakes this box through before connecting, with this
 	 *  box's own inputs (its machine name). The account inputs live in the Keychain. */
 	provider?: { id: string; box: Record<string, string> };
+	/** Whether the box last said it sleeps when idle (SystemInfo.provider.sleeps);
+	 *  false while it's always on. The box's own fact, so every report replaces it.
+	 *  Absent until a box says, and the phone then goes by its provider. */
+	sleeps?: boolean;
 }
 
 /** Every box the phone has connected to, newest first (src/boxes.ts). Before the
@@ -306,5 +329,22 @@ export async function saveGithubSeen(seen: GithubSeen): Promise<void> {
 		await AsyncStorage.setItem(GITHUB_SEEN_KEY, JSON.stringify(seen));
 	} catch {
 		/* best-effort: a box that shows no accounts just offers fewer to pick */
+	}
+}
+
+/** The wide-window sidebar's explicit choice, independent of window size. */
+export async function loadSidebarCollapsed(): Promise<boolean> {
+	try {
+		return (await AsyncStorage.getItem(SIDEBAR_COLLAPSED_KEY)) === "1";
+	} catch {
+		return false;
+	}
+}
+
+export async function saveSidebarCollapsed(collapsed: boolean): Promise<void> {
+	try {
+		await AsyncStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+	} catch {
+		/* best-effort: the choice still applies for this app session */
 	}
 }

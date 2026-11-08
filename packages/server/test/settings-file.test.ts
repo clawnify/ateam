@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	DEFAULT_SETTINGS,
+	hasBoxChoice,
+	idleSleepMinutesOf,
 	readSettings,
 	SETTINGS_VERSION,
 	settingsPath,
@@ -81,6 +83,40 @@ describe("updateSettings", () => {
 		const p = scratch();
 		updateSettings({}, p);
 		expect(existsSync(`${p}.tmp`)).toBe(false);
+	});
+});
+
+describe("a box's own settings", () => {
+	it("a box is not always on until someone says so, and a file without the section reads that way", () => {
+		const p = scratch();
+		writeFileSync(p, JSON.stringify({ engine: { idleSleepMinutes: 30 } }));
+		expect(readSettings(p).settings.box).toEqual({ alwaysOn: false });
+		expect(idleSleepMinutesOf(readSettings(p).settings)).toBe(30);
+	});
+
+	it("always on wins over the idle window a Mac pushes, and a push of engine leaves it alone", () => {
+		const p = scratch();
+		updateSettings({ box: { alwaysOn: true } }, p);
+		// What a Mac's settings sync sends: engine only.
+		updateSettings({ engine: { idleSleepMinutes: 60 } }, p);
+		const { settings } = readSettings(p);
+		expect(settings.box.alwaysOn).toBe(true);
+		expect(idleSleepMinutesOf(settings)).toBe(0);
+		updateSettings({ box: { alwaysOn: false } }, p);
+		expect(idleSleepMinutesOf(readSettings(p).settings)).toBe(60);
+	});
+
+	it("tells a choice written in the file from the default filling it in", () => {
+		const p = scratch();
+		expect(hasBoxChoice(p)).toBe(false);
+		updateSettings({ engine: { idleSleepMinutes: 30 } }, p);
+		// updateSettings writes the whole object, defaults included, so this reads as a
+		// choice once anything was saved. The engine asks before its first save.
+		expect(hasBoxChoice(p)).toBe(true);
+		writeFileSync(p, JSON.stringify({ engine: { idleSleepMinutes: 30 } }));
+		expect(hasBoxChoice(p)).toBe(false);
+		writeFileSync(p, JSON.stringify({ box: { alwaysOn: false } }));
+		expect(hasBoxChoice(p)).toBe(true);
 	});
 });
 

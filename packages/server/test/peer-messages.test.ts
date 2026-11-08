@@ -14,11 +14,14 @@ import {
 	MAX_PER_SENDER,
 	MOD_GRACE_MS,
 	MOD_LEASE_MS,
+	NOTICE_SENDER,
 	nextHop,
 	PEER_SEARCH_LIMIT,
 	PeerMessenger,
 	planDelivery,
 	planUserDelivery,
+	STARTING_WATCH_MS,
+	terminalTail,
 	type UserDeliveryFacts,
 } from "../src/peer-messages";
 
@@ -62,6 +65,21 @@ describe("planDelivery", () => {
 
 	it("restarts an idle agent without a listener", () => {
 		expect(planDelivery(facts())).toBe("restart");
+	});
+
+	// Codex's own queue waits out the turn and leaves a draft alone (codex-queue.ts).
+	it("queues for a Codex that can take it, busy, typed into or not", () => {
+		const codex = (status: string) => ({
+			agentId: "codex",
+			status,
+			hasListener: false,
+			canQueue: true,
+		});
+		for (const status of ["idle", "running", "awaiting_input"]) {
+			expect(planDelivery(facts({ live: codex(status) }))).toBe("queue");
+		}
+		expect(planDelivery(facts({ live: codex("idle"), lastInputAt: NOW - 1_000 }))).toBe("queue");
+		expect(planDelivery(facts({ live: { ...codex("idle"), hasListener: true } }))).toBe("listener");
 	});
 
 	it("never restarts under someone typing", () => {
@@ -243,6 +261,7 @@ beforeEach(() => {
 		},
 		launch: async (task, prompt) => {
 			launched.push({ taskId: task.id, prompt });
+			return { terminalId: `launched-${launched.length}` };
 		},
 		log: () => {},
 		now: () => now,
@@ -550,6 +569,81 @@ describe("PeerMessenger listeners", () => {
 		expect(launched[0]?.prompt).toContain("your branch conflicts with mine");
 	});
 
+	describe("through Codex's own queue", () => {
+		let queued: { terminalId: string; thread: string | null; text: string }[];
+		let accept: boolean;
+		beforeEach(() => {
+			queued = [];
+			accept = true;
+			messenger = new PeerMessenger({
+				db,
+				isLive: (t) => live.has(t),
+				lastInputAt: () => null,
+				stopSession: async (s) => {
+					stopped.push(s.terminalId);
+					live.delete(s.terminalId);
+				},
+				launch: async (task, prompt) => {
+					launched.push({ taskId: task.id, prompt });
+					return { terminalId: `launched-${launched.length}` };
+				},
+				queue: async (s, text) => {
+					queued.push({ terminalId: s.terminalId, thread: s.agentSessionId, text });
+					return accept;
+				},
+				log: () => {},
+				now: () => now,
+			});
+		});
+
+		function namedCodex(task: Task, terminalId: string, status: string) {
+			const s = addSession(task, "codex", terminalId, status);
+			repo.updateSession(db, s.id, { agentSessionId: "thread-1" });
+		}
+
+		it("hands a message to a Codex mid-turn at once, without a restart", async () => {
+			const a = addTask("a");
+			const b = addTask("b", "codex");
+			addSession(a, "claude", "ta");
+			namedCodex(b, "tb", "running");
+			const sent = messenger.send({ fromTerminalId: "ta", to: b.id, body: "rebase on mine" });
+			expect(sent.reason).toContain("handed to its agent");
+			await flush();
+			await flush();
+			expect(queued).toEqual([
+				{ terminalId: "tb", thread: "thread-1", text: expect.stringContaining("rebase on mine") },
+			]);
+			expect(stopped).toEqual([]);
+			expect(launched).toEqual([]);
+			expect(repo.listPendingPeerMessages(db, b.id)).toEqual([]);
+		});
+
+		it("restarts as before when Codex refuses the queue", async () => {
+			accept = false;
+			const a = addTask("a");
+			const b = addTask("b", "codex");
+			addSession(a, "claude", "ta");
+			namedCodex(b, "tb", "idle");
+			messenger.send({ fromTerminalId: "ta", to: b.id, body: "rebase on mine" });
+			for (let i = 0; i < 5; i++) await flush();
+			expect(queued).toHaveLength(1);
+			expect(stopped).toEqual(["tb"]);
+			expect(launched[0]?.prompt).toContain("rebase on mine");
+		});
+
+		it("restarts a Codex whose conversation Ateam has not heard named", async () => {
+			const a = addTask("a");
+			const b = addTask("b", "codex");
+			addSession(a, "claude", "ta");
+			addSession(b, "codex", "tb", "idle");
+			messenger.send({ fromTerminalId: "ta", to: b.id, body: "x" });
+			await flush();
+			await flush();
+			expect(queued).toEqual([]);
+			expect(stopped).toEqual(["tb"]);
+		});
+	});
+
 	it("holds a message for a Codex mid-turn until its turn ends", async () => {
 		const a = addTask("a");
 		const b = addTask("b", "codex");
@@ -853,5 +947,218 @@ describe("PeerMessenger.sendFrom lead", () => {
 		const over = messenger.sendFrom("lead", { to: b.id, body: "one more" });
 		expect(over.ok).toBe(false);
 		expect(over.reason).toContain("rate limit");
+	});
+});
+
+// What Claude Code 2.1.318 printed into its terminal for `claude --continue "…"`
+// in a folder with no conversation, captured raw with script(1).
+const NO_CONVERSATION =
+	"\u001b7\u001b[r\u001b8\u001b[?25h\u001b[38;5;211mNo conversation found to continue\u001b[39m\r\r\n\u001b[?25h\u001b(B\u000f\u001b[?1016l\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l\u001b[>4m\u001b[?1004l\u001b[?2031l\u001b[?2004l\u001b[<u\u001b[?25h\u001b7\u001b[r\u001b8\u001b[?25h\u001b[?25h";
+
+const allMessages = () => db.select().from(schema.peerMessages).all();
+
+describe("terminalTail", () => {
+	it("reads what an agent printed as it quit, without its terminal codes", () => {
+		expect(terminalTail(NO_CONVERSATION)).toBe("No conversation found to continue");
+	});
+
+	it("keeps the last lines, and nothing for a terminal that said nothing", () => {
+		expect(terminalTail("one\r\ntwo\r\n\r\nthree\nfour\n", 2)).toBe("three / four");
+		expect(terminalTail("\u001b[?25h\u001b[2J")).toBe("");
+	});
+});
+
+describe("A message whose woken agent never reads it", () => {
+	it("tells the sending task when that agent quits before showing up", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "claude");
+		const sent = messenger.send({ fromTerminalId: "ta", to: b.id, body: "what did you do?\nmore" });
+		expect(sent.reason).toContain("Ateam tells you");
+		await flush();
+		expect(launched).toHaveLength(1);
+
+		messenger.agentOutput("launched-1", NO_CONVERSATION);
+		now += 2_000;
+		messenger.agentQuit("launched-1");
+
+		const original = allMessages().find((m) => m.toTaskId === b.id);
+		expect(original?.error).toContain(
+			"quit 2 s after Ateam started it, before it reported starting up",
+		);
+		expect(original?.error).toContain("No conversation found to continue");
+		expect(repo.listPendingPeerMessages(db, b.id)).toHaveLength(0);
+
+		const notice = repo.listPendingPeerMessages(db, a.id);
+		expect(notice).toHaveLength(1);
+		expect(notice[0]?.fromTerminalId).toBe(NOTICE_SENDER);
+		const { result } = messenger.wait("ta");
+		const got = await result;
+		expect(got.kind).toBe("message");
+		const text = got.kind === "message" ? got.text : "";
+		expect(text).toContain("[Ateam] Notice from Ateam itself");
+		expect(text).toContain(`Your message to "b" (task id ${b.id}) that begins "what did you do?"`);
+		expect(text).toContain("No conversation found to continue");
+		expect(text).toContain("No answer to it will come");
+	});
+
+	it("leaves an agent that showed up alone, whenever it quits", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "claude");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "hi" });
+		await flush();
+		messenger.agentEvent("launched-1");
+		messenger.agentQuit("launched-1");
+		expect(allMessages()).toHaveLength(1);
+		expect(allMessages()[0]?.error).toBeNull();
+		expect(allMessages()[0]?.deliveredVia).toBe("launch");
+	});
+
+	it("fails a batch once when its agent cannot be started, instead of retrying it unseen", async () => {
+		let tries = 0;
+		messenger = new PeerMessenger({
+			db,
+			isLive: (t) => live.has(t),
+			lastInputAt: () => null,
+			stopSession: async () => {},
+			launch: async () => {
+				tries++;
+				throw new Error("Claude Code isn't installed here");
+			},
+			log: () => {},
+			now: () => now,
+		});
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "claude");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "hi" });
+		await flush();
+		messenger.sweep();
+		await flush();
+		expect(tries).toBe(1);
+		const original = allMessages().find((m) => m.toTaskId === b.id);
+		expect(original?.deliveredAt).not.toBeNull();
+		expect(original?.error).toContain("Claude Code isn't installed here");
+		expect(repo.listPendingPeerMessages(db, a.id)[0]?.body).toContain(
+			"Ateam could not start its agent",
+		);
+	});
+
+	it("leaves the batch pending for a launch already bringing the conversation back", async () => {
+		messenger = new PeerMessenger({
+			db,
+			isLive: (t) => live.has(t),
+			lastInputAt: () => null,
+			stopSession: async () => {},
+			launch: async () => null,
+			log: () => {},
+			now: () => now,
+		});
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "claude");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "hi" });
+		await flush();
+		expect(repo.listPendingPeerMessages(db, b.id)).toHaveLength(1);
+		expect(allMessages()).toHaveLength(1);
+	});
+
+	it("never answers a notice that did not get through with another", async () => {
+		const a = addTask("a", "claude");
+		addSession(a, "claude", "ta");
+		live.delete("ta"); // the sender has stopped since
+		const b = addTask("b", "claude");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "hi" });
+		await flush();
+		messenger.agentQuit("launched-1");
+		await flush();
+		expect(launched.map((l) => l.taskId)).toEqual([b.id, a.id]);
+		messenger.agentQuit("launched-2");
+		await flush();
+		const rows = allMessages();
+		expect(rows).toHaveLength(2);
+		expect(rows.every((m) => m.error)).toBe(true);
+		expect(launched).toHaveLength(2);
+	});
+
+	it("records why for a message from the Lead, which has no inbox to tell", async () => {
+		const lines: string[] = [];
+		messenger = new PeerMessenger({
+			db,
+			isLive: (t) => live.has(t),
+			lastInputAt: () => null,
+			stopSession: async () => {},
+			launch: async () => ({ terminalId: "launched-1" }),
+			log: (l) => lines.push(l),
+			now: () => now,
+		});
+		const b = addTask("b", "claude");
+		messenger.sendFrom("lead", { to: b.id, body: "please rebase" });
+		await flush();
+		messenger.agentQuit("launched-1");
+		expect(allMessages()).toHaveLength(1);
+		expect(allMessages()[0]?.error).toContain("quit");
+		expect(lines.some((l) => l.includes(b.id))).toBe(true);
+	});
+
+	it("counts a listener asking for messages as the agent being up (OpenCode has no hooks)", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "opencode");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "hi" });
+		await flush();
+		addSession(b, "opencode", "launched-1");
+		messenger.wait("launched-1");
+		messenger.agentQuit("launched-1");
+		expect(allMessages()).toHaveLength(1);
+		expect(allMessages()[0]?.error).toBeNull();
+	});
+
+	it("does not report an agent that quits after the watch, sweep or not", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "codex");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "hi" });
+		await flush();
+		now += STARTING_WATCH_MS + 1;
+		messenger.agentQuit("launched-1");
+		expect(allMessages()).toHaveLength(1);
+		expect(allMessages()[0]?.error).toBeNull();
+	});
+
+	it("tells the sender an agent still unseen after the watch may be held at a prompt", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "claude");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "what did you do?" });
+		await flush();
+		live.add("launched-1"); // still running, at a trust dialog say
+		now += STARTING_WATCH_MS + 1;
+		messenger.sweep();
+		const original = allMessages().find((m) => m.toTaskId === b.id);
+		expect(original?.error).toBeNull();
+		expect(original?.deliveredVia).toBe("launch");
+		const notice = repo.listPendingPeerMessages(db, a.id);
+		expect(notice).toHaveLength(1);
+		expect(notice[0]?.body).toContain("has not reached its agent yet");
+		expect(notice[0]?.body).toContain("An answer may still come");
+		// Told once: neither a later sweep nor its quitting tells again.
+		messenger.sweep();
+		messenger.agentQuit("launched-1");
+		expect(allMessages()).toHaveLength(2);
+	});
+
+	it("lets go of a started agent whose terminal is gone without a word", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "claude");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "hi" });
+		await flush();
+		now += STARTING_WATCH_MS + 1;
+		messenger.sweep();
+		messenger.agentQuit("launched-1");
+		expect(allMessages()).toHaveLength(1);
+		expect(allMessages()[0]?.error).toBeNull();
 	});
 });

@@ -26,6 +26,9 @@ import {
 	createAggregate,
 	createRpcClient,
 	DEFAULT_EDITOR_PORT,
+	type DotfilesConfig,
+	type DotfilesPlan,
+	type DotfilesStatus,
 	type EditorEndpointDTO,
 	type EditorOpenResult,
 	type EngineSettings,
@@ -33,6 +36,7 @@ import {
 	failActive,
 	filled,
 	type GithubAccessDTO,
+	INSTALL_SH_URL,
 	NEEDS_PAIRING,
 	type PairingGrantDTO,
 	type PairingInviteDTO,
@@ -59,6 +63,7 @@ import {
 } from "@ateam/protocol";
 import {
 	judgeGrammar as askJevAboutGrammar,
+	boxSleepsOf,
 	boxSnapshotOf,
 	boxWakeOf,
 	buildCloudInit,
@@ -97,6 +102,8 @@ import {
 	type HostStatus,
 	type InstallAgentResult,
 	type InstallLogEvent,
+	type PhonePairing,
+	type PhonePairingBox,
 	type ProviderOptions,
 	type SecretsStatus,
 	TAILSCALE_LOGIN_URL,
@@ -117,7 +124,7 @@ import {
 	writeSshConfigEntry,
 } from "./box-setup";
 import { boxForwardFlags, browserLocalPort, editorLocalPort } from "./box-tunnel";
-import { pairLinkOf } from "./cross-box-plan";
+import { pairLinkOf, phonePairLinkOf } from "./cross-box-plan";
 import { offlineBackend } from "./offline";
 
 // The one pre-quoted remote command (ssh space-joins remote args, so `bash -lc`
@@ -126,8 +133,7 @@ import { offlineBackend } from "./offline";
 const REMOTE_ATTACH = "bash -lc 'exec ateam attach --stdio'";
 // The canonical box installer, reused verbatim (single source of truth for how a
 // box is set up — the same script the docs tell users to curl by hand).
-const INSTALL_URL =
-	"https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh";
+const INSTALL_URL = INSTALL_SH_URL;
 // Default WebSocket port baked into a provisioned box's Tailscale listener (matches
 // the picker's placeholder). The listener only exists if the box is on Tailscale.
 const WS_DEFAULT_PORT = 8787;
@@ -222,7 +228,13 @@ export interface Host {
 	/** Bring a box's engine up to date: over SSH to this app's release, or, for a
 	 *  Tailscale box, by asking its engine to update itself (what the phone does). */
 	updateBox(alias: string): Promise<BoxUpdateResult>;
-	/** A connected box's GitHub access (githubAccess:status): what gh and git sign in with. */
+	/** Keep a connected box always on, or let it sleep when idle (box.alwaysOn there). */
+	setBoxAlwaysOn(alias: string, on: boolean): Promise<{ sleeps: boolean | null }>;
+	/** Explicit dotfiles preview/apply on the named connected box. */
+	dotfilesStatus(alias: string): Promise<DotfilesStatus>;
+	prepareDotfiles(alias: string, config: DotfilesConfig): Promise<DotfilesPlan>;
+	applyDotfiles(alias: string, planId: string): Promise<DotfilesStatus>;
+	/** A connected box's GitHub access: what its gh and git sign in with. */
 	githubAccess(alias: string): Promise<GithubAccessDTO>;
 	/** Hand a connected box a GitHub token; answers its new access. The token never comes back. */
 	connectGithub(alias: string, token: string): Promise<GithubAccessDTO>;
@@ -258,6 +270,7 @@ export interface Host {
 	pairingInvite(alias: string): Promise<PairingInviteDTO & { link: string | null }>;
 	pairingRevoke(alias: string, id: string): Promise<PairingStatusDTO>;
 	pairingLock(alias: string): Promise<PairingStatusDTO>;
+	phonePairing(): Promise<PhonePairing>;
 }
 
 /** A held box's own wire (Host.boxLink). */
@@ -627,7 +640,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		cancelReconnect(alias);
 		attempts.delete(alias);
 		// A Tailscale box added by its address alone takes the provider it says it runs
-		// on, so a connect the user asks for can wake it rather than time out.
+		// on, so a connect the user asks for can wake it rather than time out, and its
+		// row is named for its machine there. Whether it sleeps is kept beside it
+		// (`sleeps`), so an always-on box that doesn't answer isn't shown asleep.
 		const reported =
 			opts.binding === undefined && wire === "ws" && !boxWakeOf(db, alias)
 				? reportedWake(info.provider)
@@ -639,6 +654,8 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			engineRelease: info.release ?? null,
 			agentsAvailable: info.agents,
 			...(opts.binding !== undefined ? { wake: opts.binding } : reported ? { wake: reported } : {}),
+			// What the box says about sleeping, when it says (an older engine doesn't).
+			...(info.provider !== undefined ? { sleeps: info.provider?.sleeps ?? null } : {}),
 		});
 		// The remote's method set matches the local dispatcher's (same contract). An
 		// engine BEHIND this app is read through tolerantRpc, which fills in what its
@@ -1136,6 +1153,44 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return { ...invite, link };
 	}
 
+	// Pair your iPhone: every box this Mac holds, in one link. A locked box gets a fresh
+	// code (a Mac can always ask its own box for one); an open one goes in by its
+	// address, since it lets in any device that reaches it. Each box is asked on its
+	// own, so one that doesn't answer leaves the others in.
+	async function phonePairing(): Promise<PhonePairing> {
+		const asked = await Promise.all(
+			[...links.entries()].map(async ([alias, l]) => {
+				try {
+					const locked =
+						boxSupports("pairing", l.version) &&
+						((await withTimeout(l.rpc.call(CH.pairingStatus), 10_000)) as PairingStatusDTO).locked;
+					const invite = locked
+						? ((await withTimeout(l.rpc.call(CH.pairingInvite), 10_000)) as PairingInviteDTO)
+						: null;
+					return { alias, wsAddr: l.wsAddr, invite };
+				} catch (err) {
+					return { alias, error: err instanceof Error ? err.message : String(err) };
+				}
+			}),
+		);
+		const answered = asked.flatMap((a) => ("error" in a ? [] : [a]));
+		const { link, unreachable } = phonePairLinkOf(
+			answered.map((a) => ({ alias: a.alias, wsAddr: a.wsAddr, code: a.invite?.code ?? null })),
+		);
+		const codes = answered.flatMap((a) =>
+			a.invite && !unreachable.includes(a.alias) ? [a.invite.expiresAt] : [],
+		);
+		return {
+			link,
+			expiresAt: codes.length ? Math.min(...codes) : null,
+			boxes: asked.map((a): PhonePairingBox => {
+				if ("error" in a) return { alias: a.alias, state: "failed", error: a.error };
+				if (unreachable.includes(a.alias)) return { alias: a.alias, state: "noPort" };
+				return { alias: a.alias, state: a.invite ? "locked" : "open" };
+			}),
+		};
+	}
+
 	async function pairingRevoke(alias: string, id: string): Promise<PairingStatusDTO> {
 		const wire = pairingWire(alias);
 		const before = (await wire.call(CH.pairingStatus)) as PairingStatusDTO;
@@ -1429,6 +1484,35 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			// No dot from a box that couldn't say: its panel shows why when opened.
 		}
 	}
+	// On the box itself (box.alwaysOn), which a Mac's settings sync never pushes, and
+	// which the box then reports in hello. Its answer is kept on the held box's info,
+	// so its page shows it without waiting for the next connect.
+	async function setBoxAlwaysOn(alias: string, on: boolean): Promise<{ sleeps: boolean | null }> {
+		const backend = heldBox(alias);
+		// No provider puts it to sleep (null), or an engine too old to say (undefined):
+		// nothing it would act on.
+		if (!infos.get(alias)?.provider) return { sleeps: null };
+		const r = (await withTimeout(
+			backend.handle(CH.settingsUpdate, [{ box: { alwaysOn: on } }]) as Promise<SettingsResult>,
+			CONNECT_TIMEOUT_MS,
+		)) as SettingsResult;
+		const sleeps = r.settings.box?.alwaysOn !== true && r.settings.engine.idleSleepMinutes > 0;
+		const info = infos.get(alias);
+		if (info?.provider) info.provider = { ...info.provider, sleeps };
+		recordConnection(db, { hostAlias: alias, sleeps });
+		broadcastConnections();
+		return { sleeps };
+	}
+
+	async function dotfilesStatus(alias: string): Promise<DotfilesStatus> {
+		return (await heldBox(alias).handle(CH.dotfilesStatus, [])) as DotfilesStatus;
+	}
+	async function prepareDotfiles(alias: string, config: DotfilesConfig): Promise<DotfilesPlan> {
+		return (await heldBox(alias).handle(CH.dotfilesPrepare, [config])) as DotfilesPlan;
+	}
+	async function applyDotfiles(alias: string, planId: string): Promise<DotfilesStatus> {
+		return (await heldBox(alias).handle(CH.dotfilesApply, [planId])) as DotfilesStatus;
+	}
 	async function githubAccess(alias: string): Promise<GithubAccessDTO> {
 		const access = (await heldBox(alias).handle(CH.githubAccessStatus, [])) as GithubAccessDTO;
 		return rememberGithub(alias, access);
@@ -1507,8 +1591,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	function noteFailure(alias: string, err: unknown): void {
 		// A host:port box a provider puts to sleep can't be asked whether it sleeps
 		// without waking it, so it was tried instead. Not answering is what a
-		// sleeping one does: show it asleep (it wakes when used), not as broken.
-		if (boxWakeOf(db, alias)) {
+		// sleeping one does: show it asleep (it wakes when used), not as broken. Not a
+		// box that last said it's always on: not answering is then a real failure.
+		if (boxWakeOf(db, alias) && boxSleepsOf(db, alias) !== false) {
 			asleep.add(alias);
 			broadcastConnections();
 			return;
@@ -1587,6 +1672,10 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		boxReadiness,
 		updateBox,
 		phoneAccess,
+		setBoxAlwaysOn,
+		dotfilesStatus,
+		prepareDotfiles,
+		applyDotfiles,
 		githubAccess,
 		connectGithub,
 		checkGithub,
@@ -1602,6 +1691,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		pairingInvite,
 		pairingRevoke,
 		pairingLock,
+		phonePairing,
 		onBoxChange(cb) {
 			boxListeners.add(cb);
 			return () => boxListeners.delete(cb);
@@ -1633,6 +1723,7 @@ export function registerHostIpc(host: Host): void {
 		host.pairingRevoke(String(alias), String(id)),
 	);
 	ipcMain.handle(HOST_CH.pairingLock, (_e, alias: string) => host.pairingLock(String(alias)));
+	ipcMain.handle(HOST_CH.phonePairing, () => host.phonePairing());
 	ipcMain.handle(HOST_CH.provision, (_e, alias: string, input: { cloneUrl: string }) =>
 		host.provision(alias, input),
 	);
@@ -1646,6 +1737,16 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.boxReadiness, (_e, alias: string) => host.boxReadiness(alias));
 	ipcMain.handle(HOST_CH.updateBox, (_e, alias: string) => host.updateBox(alias));
 	ipcMain.handle(HOST_CH.phoneAccess, (_e, alias: string) => host.phoneAccess(alias));
+	ipcMain.handle(HOST_CH.boxAlwaysOn, (_e, alias: string, on: boolean) =>
+		host.setBoxAlwaysOn(alias, on === true),
+	);
+	ipcMain.handle(HOST_CH.dotfilesStatus, (_e, alias: string) => host.dotfilesStatus(alias));
+	ipcMain.handle(HOST_CH.prepareDotfiles, (_e, alias: string, config: DotfilesConfig) =>
+		host.prepareDotfiles(alias, config),
+	);
+	ipcMain.handle(HOST_CH.applyDotfiles, (_e, alias: string, id: string) =>
+		host.applyDotfiles(alias, id),
+	);
 	ipcMain.handle(HOST_CH.githubAccess, (_e, alias: string) => host.githubAccess(alias));
 	ipcMain.handle(HOST_CH.connectGithub, (_e, alias: string, token: string) =>
 		host.connectGithub(alias, token),

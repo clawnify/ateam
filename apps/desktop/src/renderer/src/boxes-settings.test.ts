@@ -60,6 +60,16 @@ describe("boxRows", () => {
 		});
 	});
 
+	it("names the provider a connected box says it runs on, when nothing wakes it", () => {
+		const exe: HostStatus = {
+			mode: "remote",
+			alias: "mybox.exe.xyz",
+			info: { protocolVersion: 32, agents: [], provider: { id: "exe", box: {}, sleeps: false } },
+		};
+		const [r] = boxRows([conn({ alias: "mybox.exe.xyz" })], [exe], {}, app);
+		expect(r).toMatchObject({ title: "mybox.exe.xyz", detail: "exe.dev · SSH mybox.exe.xyz" });
+	});
+
 	it("keeps why the last connect failed", () => {
 		expect(rows[2]).toMatchObject({
 			failure: "ssh: connect timed out",
@@ -106,6 +116,44 @@ describe("a box's network port", () => {
 	it("carries the agents a connected engine finds, and none for a box not connected", () => {
 		expect(rows.find((r) => r.alias === "on-tailnet")?.agents).toEqual([]);
 		expect(rows.find((r) => r.alias === "away")?.agents).toBeUndefined();
+	});
+});
+
+describe("whether a box sleeps", () => {
+	const withProvider = (alias: string, provider?: HostStatus["info"]["provider"]): HostStatus => ({
+		mode: "remote",
+		alias,
+		info: { protocolVersion: 31, agents: [], ...(provider !== undefined ? { provider } : {}) },
+	});
+	const box = { id: "boxd", box: { machine: "mybox" } };
+	const rows = boxRows(
+		[
+			conn({ alias: "sleeps" }),
+			conn({ alias: "always-on" }),
+			conn({ alias: "vps" }),
+			conn({ alias: "older" }),
+			conn({ alias: "away" }),
+		],
+		[
+			withProvider("sleeps", { ...box, sleeps: true }),
+			withProvider("always-on", { ...box, sleeps: false }),
+			withProvider("vps", null),
+			withProvider("older"),
+		],
+		{},
+		app,
+	);
+	const sleeps = (alias: string) => rows.find((r) => r.alias === alias)?.sleeps;
+
+	it("is what the connected engine says: sleeping, always on, or no provider to sleep it", () => {
+		expect(sleeps("sleeps")).toBe(true);
+		expect(sleeps("always-on")).toBe(false);
+		expect(sleeps("vps")).toBeNull();
+	});
+
+	it("is unknown for an engine that didn't say, and for a box not connected", () => {
+		expect(sleeps("older")).toBeUndefined();
+		expect(sleeps("away")).toBeUndefined();
 	});
 });
 

@@ -153,6 +153,27 @@ function resultText(content: unknown): string {
 const TOOL_PREFIX = `mcp__${LEAD_MCP_NAME}__`;
 const STDERR_TAIL = 2000;
 
+/**
+ * What to tell the user when Claude's init says Ateam's own server did not
+ * load, or null when it did (or Claude said nothing about its servers). The
+ * Lead passes it with `--mcp-config`, and an organization policy can drop such
+ * a server without a word (allowedMcpServers / deniedMcpServers): then it is
+ * missing from the list. A server still `pending` is not a failure.
+ */
+export function leadToolsMissing(servers: unknown): string | null {
+	if (!Array.isArray(servers)) return null;
+	const ours = servers.find(
+		(s): s is { status?: unknown } =>
+			Boolean(s) && typeof s === "object" && (s as { name?: unknown }).name === LEAD_MCP_NAME,
+	);
+	const cant = "so the Lead can't see the board or act on tasks";
+	if (!ours) {
+		return `Claude didn't load Ateam's Lead tools, ${cant}. An organization policy on MCP servers does this: an admin can allow http://127.0.0.1:*/* in allowedMcpServers.`;
+	}
+	if (ours.status === "connected" || ours.status === "pending") return null;
+	return `Ateam's Lead tools didn't connect (Claude reports them as ${String(ours.status)}), ${cant}.`;
+}
+
 export class LeadSession {
 	private items = new Map<string, LeadItem>();
 	private draft = "";
@@ -548,6 +569,8 @@ export class LeadSession {
 					this.sentBeforeInit = [];
 					if (typeof m.session_id === "string") this.state.sessionId = m.session_id;
 					this.saveState();
+					const missing = leadToolsMissing(m.mcp_servers);
+					if (missing) this.notice(missing, "error");
 				}
 				return;
 			case "control_request": {

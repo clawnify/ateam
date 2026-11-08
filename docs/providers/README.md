@@ -16,6 +16,10 @@ That makes the recipe the same everywhere:
    or later).
 3. Connect GitHub on that page (the git identity follows from the account), and log
    into an agent CLI once: `ssh -t <alias> claude`.
+   - **No Mac?** Ateam Go's first screen has two ways to a box: **Pair with your Mac**
+     (on the Mac, Settings → Boxes → **Pair your iPhone** shows one code for every box
+     it holds), or **Create a box here** on Hetzner ([how](hetzner.md#create-a-box)).
+     A box made by hand with the installer's `--tailscale` is added by its address.
 4. For Ateam Go, **Set up phone access** under the page's Access, or run the
    installer on the box with `--tailscale`. The box joins your tailnet and opens its
    network port there:
@@ -69,6 +73,27 @@ provider, and adding one is a file per seam:
 | The engine lets its box sleep, wakes it for loop ticks, and tells clients what wakes it | `packages/server/src/sleep/` | a `SleepDriver` (hold, release, arm a wake, and `provider`: its id and the box's name there, reported in `system:hello`) beside `boxd.ts`, and a line in `index.ts` |
 | The desktop leaves a sleeping box asleep at launch | `packages/server/src/connections.ts` | a `SleepCheck`: which ssh aliases are its machines, and which are asleep |
 | The phone, and the desktop for a box added by its Tailscale address, wake a box before connecting | `packages/protocol/src/providers.ts` and `packages/protocol/src/wake.ts` | a definition declaring the inputs a wake needs (an account key, a machine name), and an adapter that wakes with them |
+
+Whether a box sleeps at all is the box's own setting (`box.alwaysOn` in its
+settings file, never synced from a Mac): a new box starts always on, and the phone's and
+desktop's box forms and its page in Settings → Boxes switch it. The engine reports it in
+`system:hello` (`provider.sleeps`), so neither client shows an always-on box asleep or
+asks for its key.
+
+Ateam Go tries every box in the background and wakes none of them: only a tap, or
+opening something on a box, wakes it. A box that sleeps therefore shows **Asleep · tap to
+wake** on its card through those tries, and before the first one ends, rather than a
+spinner that can't get anywhere; if it is up, the try lands and the card turns
+connected. A box no provider puts to sleep reports `provider: null`, and the phone saves
+one that has no provider of its own as always on, so a try that fails doesn't offer
+**Set provider** for it.
+
+A provider that never puts a box to sleep has no driver, but its boxes can still say
+where they run, so Ateam Go and Settings → Boxes name them by provider instead of by
+address. That is two lines: a definition without `wake` in `providers.ts`, and a check in
+`alwaysOnProvider` (`packages/server/src/sleep/index.ts`) for something only that
+provider's machines have. exe.dev is the one so far: its VMs boot with
+`init=/exe.dev/bin/exe-init`. Such a box always reports `sleeps: false`.
 
 When to sleep is the engine's call for every provider (`sleep/control.ts`): only
 it can tell an agent mid-turn from one waiting on you. It holds a box while it is
@@ -131,8 +156,8 @@ a box doesn't stop pushing mid-task on the day it lapses.
 
 Open a PR with two files — `docs/providers/<id>.md` using the template below, and
 `assets/providers/<id>.svg` — and add a row to the table above. Docs and an asset;
-no code changes are needed or wanted. Sleep and wake support (above) is the
-exception: that is code, maintained in-tree.
+no code changes are needed or wanted. Sleep and wake support, and a box naming its
+always-on provider (above), are the exception: that is code, maintained in-tree.
 
 **Every page must carry a `Verified against` line.** These pages rot fast: ours was
 wrong within eight days of being written, and confidently-wrong setup instructions

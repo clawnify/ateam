@@ -6,6 +6,8 @@ export type GitCoreErrorCode =
 	| "NO_DEFAULT_BRANCH"
 	| "MERGE_CONFLICT"
 	| "GH_FAILED"
+	/** git has no name and email to commit with (a box no account has signed in to). */
+	| "NO_IDENTITY"
 	| "GENERIC";
 
 /**

@@ -1,0 +1,190 @@
+// The board's place while there is no project at all (a new install, after the
+// theme choice in Welcome.tsx, or the last project removed), and on a new install
+// until its first task, so the steps after Add a project stay in view
+// (get-started.ts). Steps that are done show a check. It covers what
+// stands between the user and a first task (a project, a coding agent), one
+// optional step, and what happens next. The optional step is the AI keys: what
+// they turn on (Needs you sorting, calling the Lead) is otherwise found only by
+// going looking, and their fields are Settings' own (KeyField), so the two can't
+// drift. Other setup stays in Settings, behind one link to Boxes: a checklist of
+// every feature here would drift from Settings as features change.
+import type { AgentDTO } from "@ateam/protocol";
+import { Check, ChevronRight, FolderPlus, Plus } from "lucide-react";
+import { useEffect, useState } from "react";
+import { SessionIcon } from "./AgentIcon";
+import { KeyField, useCredentials } from "./SettingsPanel";
+
+const and = new Intl.ListFormat("en", { type: "conjunction" });
+const or = new Intl.ListFormat("en", { type: "disjunction" });
+
+/** A step's number, or a check once there's nothing left to do in it. */
+function StepNum({ n, done }: { n: number; done: boolean }) {
+	return (
+		<span className={`get-started-num${done ? " done" : ""}`} aria-hidden="true">
+			{done ? <Check size={13} strokeWidth={2.25} /> : n}
+		</span>
+	);
+}
+
+export function GetStarted({
+	agents,
+	projects,
+	onNewTask,
+	onAdd,
+	onRecheckAgents,
+	onOpenBoxes,
+	onOpenAi,
+}: {
+	/** This Mac's agents; empty until the first list arrives (the registry always has some). */
+	agents: AgentDTO[];
+	/** The projects' names: none yet, or those added from here before a first task. */
+	projects: string[];
+	/** New task, once there is a project to start it in. */
+	onNewTask?: () => void;
+	onAdd: () => void;
+	/** Re-read this Mac's agents, so one installed in a terminal meanwhile shows up. */
+	onRecheckAgents: () => void;
+	onOpenBoxes: () => void;
+	/** Settings → AI: everything a key is used for, and the models. */
+	onOpenAi: () => void;
+}) {
+	const [keyError, setKeyError] = useState<string | null>(null);
+	const { credentials, saveKey } = useCredentials(setKeyError);
+	// Optional, so folded until someone opens it. Once both keys are in, it folds
+	// itself again with a check: nothing left to do there. Still opens to change one.
+	const bothKeys = Boolean(credentials?.openRouter?.set && credentials?.openAi?.set);
+	const [aiOpen, setAiOpen] = useState(false);
+	useEffect(() => {
+		if (bothKeys) setAiOpen(false);
+	}, [bothKeys]);
+	// Back from the terminal is when an install would have happened.
+	useEffect(() => {
+		window.addEventListener("focus", onRecheckAgents);
+		return () => window.removeEventListener("focus", onRecheckAgents);
+	}, [onRecheckAgents]);
+
+	const installed = agents.filter((a) => a.available);
+	return (
+		<section className="get-started" aria-labelledby="get-started-title">
+			<h1 id="get-started-title">Get started</h1>
+			<p className="get-started-lede">
+				Hand tasks to coding agents and watch them work side by side.
+			</p>
+			<ol className="get-started-steps">
+				<li>
+					<StepNum n={1} done={projects.length > 0} />
+					<div className="get-started-step">
+						<h2>Add a project</h2>
+						{projects.length > 0 ? (
+							<p>{and.format(projects)} added. Add more from the sidebar any time.</p>
+						) : (
+							<>
+								<p>
+									Pick a folder with a git repository. If it isn't one yet, Ateam offers to make it
+									one.
+								</p>
+								<button type="button" className="primary get-started-add" onClick={onAdd}>
+									<FolderPlus size={14} strokeWidth={1.75} aria-hidden="true" />
+									Add project…
+								</button>
+							</>
+						)}
+					</div>
+				</li>
+				<li>
+					<StepNum n={2} done={installed.length > 0} />
+					<div className="get-started-step">
+						<h2>Coding agents</h2>
+						{agents.length === 0 ? (
+							<p>Checking this Mac…</p>
+						) : installed.length > 0 ? (
+							<p className="get-started-agents">
+								<span className="get-started-glyphs" aria-hidden="true">
+									{installed.map((a) => (
+										<SessionIcon key={a.id} agentId={a.id} />
+									))}
+								</span>
+								{and.format(installed.map((a) => a.label))} {installed.length > 1 ? "are" : "is"}{" "}
+								installed on this Mac.
+							</p>
+						) : (
+							<p>
+								None found on this Mac. Once you add a project, New task can install{" "}
+								{or.format(agents.map((a) => a.label))}.
+							</p>
+						)}
+					</div>
+				</li>
+				<li>
+					<StepNum n={3} done={bothKeys} />
+					<div className="get-started-step">
+						<h2>
+							<button
+								type="button"
+								className="get-started-toggle"
+								aria-expanded={aiOpen}
+								aria-controls="get-started-ai"
+								onClick={() => setAiOpen((o) => !o)}
+							>
+								AI features
+								<span className="get-started-optional">{bothKeys ? "Keys added" : "Optional"}</span>
+								<ChevronRight
+									className="get-started-chevron"
+									size={14}
+									strokeWidth={1.75}
+									aria-hidden="true"
+								/>
+							</button>
+						</h2>
+						{aiOpen && (
+							<div id="get-started-ai">
+								<p>
+									With an OpenRouter or OpenAI key, a small model reads each finished turn and moves
+									the task to Needs you when its agent is waiting on you. An OpenAI key also lets
+									you call the Lead by voice.
+								</p>
+								<div className="get-started-keys">
+									<span>OpenRouter</span>
+									<KeyField provider="openRouter" status={credentials} onSave={saveKey} />
+									<span>OpenAI</span>
+									<KeyField provider="openAi" status={credentials} onSave={saveKey} />
+								</div>
+								{keyError && <p className="get-started-error">{keyError}</p>}
+								<p className="get-started-note">
+									Your agent's last message and your reply go to that provider. Everything else a
+									key does is in{" "}
+									<button type="button" className="get-started-link" onClick={onOpenAi}>
+										Settings › AI
+									</button>
+									.
+								</p>
+							</div>
+						)}
+					</div>
+				</li>
+				<li>
+					<StepNum n={4} done={false} />
+					<div className="get-started-step">
+						<h2>Then start a task</h2>
+						<p>
+							Each task gets its own branch and worktree, so agents never touch each other's files
+							or your checkout.
+						</p>
+						{onNewTask && projects.length > 0 ? (
+							<button type="button" className="primary get-started-add" onClick={onNewTask}>
+								<Plus size={14} strokeWidth={1.75} aria-hidden="true" />
+								New task
+							</button>
+						) : null}
+					</div>
+				</li>
+			</ol>
+			<p className="get-started-more">
+				Run agents on another machine, or follow them from your iPhone:{" "}
+				<button type="button" className="get-started-link" onClick={onOpenBoxes}>
+					Settings › Boxes
+				</button>
+			</p>
+		</section>
+	);
+}

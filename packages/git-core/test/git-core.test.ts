@@ -468,6 +468,45 @@ describe("initRepository — create a repository here instead", () => {
 		expect(existsSync(join(task.worktreePath, "app.ts"))).toBe(true);
 	});
 
+	it("refuses before git init when git has no name and email, so a retry starts clean", async () => {
+		const plain = await mkdtemp(join(repo.dir, "plain-"));
+		const home = await mkdtemp(join(repo.dir, "home-"));
+		const keys = [
+			"HOME",
+			"GIT_CONFIG_NOSYSTEM",
+			"GIT_CONFIG_GLOBAL",
+			"GIT_CONFIG_COUNT",
+			"GIT_CONFIG_KEY_0",
+			"GIT_CONFIG_VALUE_0",
+			"GIT_AUTHOR_NAME",
+			"GIT_AUTHOR_EMAIL",
+			"GIT_COMMITTER_NAME",
+			"GIT_COMMITTER_EMAIL",
+			"EMAIL",
+		];
+		const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+		for (const k of keys) delete process.env[k];
+		// No global or system config, and no guessing one from the hostname: what a
+		// fresh box is before an account signs in.
+		Object.assign(process.env, {
+			HOME: home,
+			GIT_CONFIG_NOSYSTEM: "1",
+			GIT_CONFIG_GLOBAL: join(home, ".gitconfig"),
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "user.useConfigOnly",
+			GIT_CONFIG_VALUE_0: "true",
+		});
+		try {
+			await expect(initRepository(plain)).rejects.toMatchObject({ code: "NO_IDENTITY" });
+			expect(existsSync(join(plain, ".git"))).toBe(false);
+		} finally {
+			for (const k of keys) {
+				if (saved[k] === undefined) delete process.env[k];
+				else process.env[k] = saved[k];
+			}
+		}
+	});
+
 	it("keeps an existing .gitignore and refuses to re-init a repo", async () => {
 		const plain = await mkdtemp(join(repo.dir, "plain-"));
 		await Bun.write(join(plain, ".gitignore"), "custom\n");

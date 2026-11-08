@@ -10,6 +10,7 @@
 import {
 	applyLeadEvent,
 	findLeadTask,
+	findLinkedTask,
 	type LeadAgentItem,
 	type LeadBlock,
 	type LeadClient,
@@ -47,6 +48,7 @@ import {
 	type PickedFile,
 	previews,
 } from "./attach";
+import { CallBar, CallButton } from "./CallBar";
 import { LeadMarkdown } from "./LeadMarkdown";
 import { type QuestionAnswer, QuestionCard } from "./QuestionCard";
 import { C, CONTENT_MAX } from "./theme";
@@ -81,6 +83,9 @@ interface Ctx {
 	tasks: TaskDTO[];
 	openTask: (ref: string) => void;
 	knowsTask: (ref: string) => boolean;
+	/** A link in the Lead's prose: its target and text (findLinkedTask). */
+	openLink: (ref: string, label: string) => void;
+	knowsLink: (ref: string, label: string) => boolean;
 	/** Open a proposal's New task sheet or New loop form, filled in. */
 	startProposal?: (item: Extract<LeadItem, { kind: "proposal" }>) => void;
 }
@@ -104,7 +109,7 @@ function TaskChip({ task, ctx }: { task: LeadTaskRef; ctx: Ctx }) {
 }
 
 function Md({ text, ctx }: { text: string; ctx: Ctx }) {
-	return <LeadMarkdown text={text} onTaskLink={ctx.openTask} knowsTask={ctx.knowsTask} />;
+	return <LeadMarkdown text={text} onTaskLink={ctx.openLink} knowsTask={ctx.knowsLink} />;
 }
 
 function Tools({ tools, ctx }: { tools: LeadToolItem[]; ctx: Ctx }) {
@@ -523,6 +528,8 @@ export function LeadScreen({
 	onUpdateBox,
 	updating,
 	onStartProposal,
+	callKeyMissing,
+	onAddCallKey,
 }: {
 	lead: LeadClient | null;
 	/** The box it runs on, named when the phone holds more than one; else null. */
@@ -537,6 +544,9 @@ export function LeadScreen({
 	updating: boolean;
 	/** "Start it" on a proposal card: the app opens its sheet or form. */
 	onStartProposal?: (item: Extract<LeadItem, { kind: "proposal" }>) => void;
+	/** Whether the box has no OpenAI key for calls, and its AI keys page (CallButton). */
+	callKeyMissing?: () => Promise<boolean>;
+	onAddCallKey?: () => void;
 }) {
 	const [snap, setSnap] = useState<LeadSnapshot | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
@@ -588,9 +598,14 @@ export function LeadScreen({
 			tasks,
 			openTask,
 			knowsTask: (ref) => findLeadTask(tasks, ref) != null,
+			openLink: (ref, label) => {
+				const t = findLinkedTask(tasks, ref, label);
+				if (t) onOpenTask(t);
+			},
+			knowsLink: (ref, label) => findLinkedTask(tasks, ref, label) != null,
 			startProposal: onStartProposal,
 		}),
-		[tasks, openTask, onStartProposal],
+		[tasks, openTask, onOpenTask, onStartProposal],
 	);
 	const blocks = useMemo(() => (snap ? toLeadBlocks(snap.items) : []), [snap]);
 	// Scrolled back to the oldest item held: the page before it, if the box has one.
@@ -687,15 +702,24 @@ export function LeadScreen({
 				<Text style={styles.eyebrow} numberOfLines={1}>
 					Lead · {boxLabel ?? "this box"}
 				</Text>
-				<Pressable
-					onPress={newConversation}
-					disabled={!snap?.items.length}
-					hitSlop={10}
-					accessibilityRole="button"
-					accessibilityLabel="New conversation"
-				>
-					<Feather name="edit" size={16} color={snap?.items.length ? C.ink : C.faint} />
-				</Pressable>
+				<View style={styles.headActions}>
+					<CallButton
+						boxLabel={boxLabel}
+						boxVersion={boxVersion}
+						onUpdateBox={onUpdateBox}
+						keyMissing={callKeyMissing}
+						onAddKey={onAddCallKey}
+					/>
+					<Pressable
+						onPress={newConversation}
+						disabled={!snap?.items.length}
+						hitSlop={10}
+						accessibilityRole="button"
+						accessibilityLabel="New conversation"
+					>
+						<Feather name="edit" size={16} color={snap?.items.length ? C.ink : C.faint} />
+					</Pressable>
+				</View>
 			</View>
 
 			{loadError ? (
@@ -767,6 +791,7 @@ export function LeadScreen({
 			{asking.length > 0 && <Waiting tasks={asking} ctx={ctx} onAnswer={lead.answer} />}
 
 			<View style={styles.composer}>
+				<CallBar />
 				{note && <Text style={[styles.errorText, styles.note]}>{note}</Text>}
 				<AttachmentStrip
 					files={files}
@@ -849,6 +874,7 @@ const styles = StyleSheet.create({
 		maxWidth: CONTENT_MAX,
 		alignSelf: "center",
 	},
+	headActions: { flexDirection: "row", alignItems: "center", gap: 20 },
 	eyebrow: {
 		color: C.muted,
 		fontSize: 11,

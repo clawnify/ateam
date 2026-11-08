@@ -16,6 +16,7 @@ import { join } from "node:path";
 import {
 	LEAD_CH,
 	type LeadAttachResult,
+	type LeadCallTurn,
 	type LeadFile,
 	type LeadHome,
 	type LeadItem,
@@ -25,8 +26,11 @@ import {
 } from "@ateam/protocol";
 import {
 	type Lead as CoreLead,
+	judgeCall,
 	LEAD_IDLE_STOP_MS,
+	nudgeFor,
 	readSettings,
+	startCall,
 	startLead as startLeadCore,
 	updateSettings,
 } from "@ateam/server";
@@ -80,6 +84,7 @@ interface Chat {
 	reset(): void | Promise<void>;
 	permission(id: string, answer: LeadPermissionAnswer): void | Promise<void>;
 	setAuto(on: boolean): void | Promise<void>;
+	setCall(on: boolean): void | Promise<void>;
 	proposal(id: string, outcome: "created" | "dismissed", taskId?: string): Promise<void>;
 	reply(taskId: string, text: string): Promise<void>;
 	react(id: string, emoji: string): Promise<void>;
@@ -136,6 +141,7 @@ function localChat(l: CoreLead): Chat {
 		reset: () => l.reset(),
 		permission: (id, answer) => l.permission(id, answer),
 		setAuto: (on) => l.setAuto(on),
+		setCall: (on) => l.setCall(on),
 		proposal: (id, outcome, taskId) => l.proposal(id, outcome, taskId),
 		reply: (taskId, text) => l.reply(taskId, text),
 		react: (id, emoji) => l.react(id, emoji),
@@ -189,8 +195,13 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	let remote: RemoteLead | null = null;
 	const homeOf = (): LeadHome =>
 		remote
-			? { box: remote.box, connected: remote.connected(), canReact: remote.canReact() }
-			: { box: null, connected: true, canReact: true };
+			? {
+					box: remote.box,
+					connected: remote.connected(),
+					canReact: remote.canReact(),
+					canCall: remote.canCall(),
+				}
+			: { box: null, connected: true, canReact: true, canCall: true };
 	const tellHome = () => deps.sendTo(null, LEAD_CH.evtHome, homeOf());
 	const moveTo = (box: string | null) => {
 		remote?.dispose();
@@ -271,6 +282,9 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 		(await lead(e)).permission(String(id), answer),
 	);
 	ipcMain.handle(LEAD_CH.setAuto, async (e, on: boolean) => (await lead(e)).setAuto(on === true));
+	ipcMain.handle(LEAD_CH.callActive, async (e, on: boolean) =>
+		(await lead(e)).setCall(on === true),
+	);
 	// The user created a proposal from its dialog, or dismissed it.
 	ipcMain.handle(
 		LEAD_CH.proposal,
@@ -288,10 +302,21 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 		async (e, input: { taskId: string; questionId: string; answer: string | string[] | null }) =>
 			(await lead(e)).answer(input),
 	);
+	// A voice call runs in the window; only its session is opened here, from
+	// this Mac's OpenAI key, whichever machine the chat itself lives on.
+	ipcMain.handle(LEAD_CH.callStart, (_e, sdp: string, input: LeadCallTurn[]) =>
+		startCall(String(sdp), input),
+	);
+	ipcMain.handle(LEAD_CH.callJudge, (_e, pieces: unknown, context: unknown, opts: unknown) =>
+		judgeCall(pieces, context, opts),
+	);
+	ipcMain.handle(LEAD_CH.callNudge, (_e, task: unknown, reply: unknown) => nudgeFor(task, reply));
 	ipcMain.handle(
 		LEAD_CH.home,
 		(e): LeadHome =>
-			deps.projectOf(e.sender) ? { box: null, connected: true, canReact: true } : homeOf(),
+			deps.projectOf(e.sender)
+				? { box: null, connected: true, canReact: true, canCall: true }
+				: homeOf(),
 	);
 	// Settings → Boxes moves the main chat. Only to a box that is held now, so
 	// its engine's version says it has a Lead at all.

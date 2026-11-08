@@ -42,9 +42,71 @@ export const LEAD_CH = {
 	home: "lead:home",
 	/** Move the desktop's main chat to a box, or with null back to this Mac. */
 	setHome: "lead:setHome",
+	/** Open a voice call's session with OpenAI (GPT-Live) from this Mac's key:
+	 *  the window's WebRTC offer in, the answer out. The key never reaches the window. */
+	callStart: "lead:callStart",
+	/** Judge what a call heard: was each piece said to the Lead? By this Mac's
+	 *  decision model; null when there is none or it didn't answer in time. */
+	callJudge: "lead:callJudge",
+	/** The user is on a voice call with this chat (true, repeated while it lasts)
+	 *  or hung up (false). While a call is on, the Lead's messages and answers to
+	 *  tasks wait as permission cards for the user's tap (v32 on a box). */
+	callActive: "lead:callActive",
+	/** A task's reply as one short line for a call to say, by this Mac's text model. */
+	callNudge: "lead:callNudge",
 	evtEvent: "evt:lead:event",
 	evtHome: "evt:lead:home",
 } as const;
+
+/** A line of the chat a voice call's session starts with, so the voice knows
+ *  what was said before it (typed or spoken). */
+export interface LeadCallTurn {
+	role: "user" | "assistant" | "developer";
+	text: string;
+}
+
+/** What else the gate weighs a call's speech against (callJudge). */
+export interface LeadCallJudgeOptions {
+	/** What the call just raised, if anything is open. */
+	topic?: LeadCallTopic;
+	/** The user's words to the Lead just before, in the same utterance, when
+	 *  these pieces may carry on from them. */
+	continuing?: string;
+	/** The voice (which hears the room, not only the words) handed these words
+	 *  off as said to it. */
+	handedOff?: boolean;
+}
+
+/** The most pieces of speech a call judges at once: the call joins its oldest
+ *  pieces into one past this, so every word is judged and each verdict is one
+ *  piece's (server call-gate.ts). */
+export const CALL_MAX_PIECES = 4;
+
+/** Whether a piece of speech a call heard was said to the Lead (callJudge). */
+export interface LeadCallVerdict {
+	/** The probability it was said to the Lead. */
+	p: number;
+	send: boolean;
+	/** What it most likely was, for the words the user sees when it isn't sent. */
+	kind: "lead" | "someone" | "background" | "unclear";
+	/** With a topic open (callJudge's `topic`): whether it is about that topic. */
+	onTopic?: boolean;
+	/** With a confirmation open: the user's yes or no to it, when it is one. */
+	answer?: "approve" | "refuse" | null;
+	/** With a decision's options open: the one the user clearly chose, by index. */
+	choice?: number | null;
+}
+
+/** What a call just raised, for judging what comes next against it: a
+ *  confirmation (a card) may be answered by voice; a decision (a task's
+ *  question with options) is talked about, or one of its buttons clearly
+ *  picked; a task's reply, said in one line, is only talked about. */
+export interface LeadCallTopic {
+	kind: "confirm" | "decision" | "reply";
+	text: string;
+	/** A decision's buttons, in order; the user's words may pick one. */
+	options?: { label: string; recommended?: boolean; description?: string }[];
+}
 
 /** The channels a box's engine answers for its own Lead (v24; `react` since
  *  v28). Attaching by path and previews are the client's: it has no paths on
@@ -63,6 +125,10 @@ export const LEAD_RPC = [
 	LEAD_CH.proposal,
 	LEAD_CH.older,
 	LEAD_CH.react,
+	LEAD_CH.callActive,
+	LEAD_CH.callStart,
+	LEAD_CH.callJudge,
+	LEAD_CH.callNudge,
 ] as const;
 
 /** The engine's push event for its Lead, with a LeadEvent payload. Sent only
@@ -143,7 +209,7 @@ export type LeadItem =
 			reaction?: string;
 	  }
 	/** A followed task's agent showed the user a page (show_page): drawn in the
-	 *  thread from the task, so a page replaced since says so. */
+	 *  thread from the task. The page id reads that saved artifact. */
 	| { kind: "page"; id: string; task: LeadTaskRef; pageId: string; title: string; at: number }
 	| { kind: "assistant"; id: string; text: string; at: number }
 	| {
@@ -254,6 +320,19 @@ export interface LeadClient {
 	permission(id: string, answer: LeadPermissionAnswer): Promise<void>;
 	/** Auto mode on or off for the box's Lead (Claude's own auto mode). */
 	setAuto(on: boolean): Promise<void>;
+	/** On a voice call with the box's Lead (true, repeated while it lasts) or
+	 *  not. A box before v32 rejects it: gate on boxSupports("leadCall"). */
+	callActive(on: boolean): Promise<void>;
+	/** The box opens a call's voice session with OpenAI from its own key, the
+	 *  box judges what the call heard, and words a task's reply in one line.
+	 *  A box before v33 rejects them: gate on boxSupports("leadCallSession"). */
+	callStart(sdp: string, input: LeadCallTurn[]): Promise<{ sdp: string; sessionId: string }>;
+	callJudge(
+		pieces: string[],
+		context: string,
+		opts?: LeadCallJudgeOptions,
+	): Promise<LeadCallVerdict[] | null>;
+	callNudge(task: string, reply: string): Promise<string>;
 	dismissProposal(id: string): Promise<void>;
 	/** A proposal was created from its sheet or form on this device: the card
 	 *  says so, and a task (`taskId`) is followed for its replies. */
@@ -271,6 +350,9 @@ export interface LeadHome {
 	connected: boolean;
 	/** Emoji answers work there (this Mac, or a box on v28 or later). */
 	canReact: boolean;
+	/** Voice calls work there (this Mac, or a box on v32 or later, whose Lead
+	 *  holds its messages to tasks for a tap during a call). */
+	canCall: boolean;
 }
 
 /** window.ateamLead. */
@@ -305,4 +387,21 @@ export interface AteamLead {
 	 *  with null back to this Mac's. Nothing is copied between them. */
 	setHome(box: string | null): Promise<LeadHome>;
 	onHome(cb: (home: LeadHome) => void): () => void;
+	/** Start a voice call's session: `sdp` is the window's WebRTC offer, `input`
+	 *  the chat so far. Answers OpenAI's SDP answer. Throws with words for the
+	 *  user (no OpenAI key, OpenAI refused). */
+	callStart(sdp: string, input: LeadCallTurn[]): Promise<{ sdp: string; sessionId: string }>;
+	/** `pieces`: what the call heard, split at pauses; `context`: the last turns. */
+	callJudge(
+		pieces: string[],
+		context: string,
+		opts?: LeadCallJudgeOptions,
+	): Promise<LeadCallVerdict[] | null>;
+	/** The user is on a call with the calling window's chat (true, repeated
+	 *  while it lasts) or hung up (false). Throws when that chat lives on a box
+	 *  too old to hold its Lead's messages for a tap. */
+	callActive(on: boolean): Promise<void>;
+	/** One short spoken line for a task's reply (`task` its name): what it did or
+	 *  found, and "It needs you." only when it asks the user something. */
+	callNudge(task: string, reply: string): Promise<string>;
 }
