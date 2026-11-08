@@ -101,15 +101,29 @@ export async function openBrowserView(dataDir: string): Promise<BrowserViewDTO> 
 			`${BROWSER_NOT_INSTALLED_ERROR}. Install it on the box with:\n${INSTALL_BROWSER_CMD}`,
 		);
 	const port = DEFAULT_BROWSER_VIEW_PORT;
+	let bundledAuth = false;
 	try {
-		await fetch(`http://127.0.0.1:${port}/vnc.html`, { signal: AbortSignal.timeout(2000) });
+		const response = await fetch(`http://127.0.0.1:${port}/vnc.html`, {
+			signal: AbortSignal.timeout(2000),
+		});
+		bundledAuth = response.headers.get("x-ateam-viewer-auth") === "bundle-v1";
 	} catch {
 		throw new Error(
 			`The box's browser view isn't answering on port ${port}. Check its services (ateam-novnc, ateam-x11vnc, ateam-xvfb).`,
 		);
 	}
 	const controlToken = readDesktopSecret(dataDir, "desktop-viewer-token");
-	return { port, password, ...(controlToken ? { controlToken } : {}) };
+	// Released clients forward password unchanged but drop unknown DTO fields.
+	// Only the new viewer advertises this envelope; a legacy noVNC still needs
+	// the raw password, including when a rollback left credential files behind.
+	return {
+		port,
+		password:
+			bundledAuth && controlToken
+				? `ateam-desktop-v1:${JSON.stringify({ password, controlToken })}`
+				: password,
+		...(controlToken ? { controlToken } : {}),
+	};
 }
 
 /**

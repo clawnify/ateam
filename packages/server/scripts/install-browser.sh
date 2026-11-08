@@ -88,10 +88,17 @@ NPM="$(dirname "$NODE")/npm"
 [ -x "$NPM" ] || NPM="$(bash -lc 'command -v npm' 2>/dev/null || true)"
 [ -n "$NPM" ] || die "npm not found beside $NODE"
 # The engine release bundles the independent desktop server beside cli.js.
-# Check BEFORE changing services: an old engine needs upgrading first.
+# main's installer is also fetched by already-released engines. Keep their
+# browser installation working until an engine with desktop.js is installed.
 ENGINE_DIR="$(sed -n 's|^exec [^ ]* "\(.*\)/cli.js".*|\1|p' "$BIN_DIR/ateam" 2>/dev/null)"
 DESKTOP_ENTRY="$ENGINE_DIR/desktop.js"
-[ -f "$DESKTOP_ENTRY" ] || die "desktop-control is missing: update the Ateam engine with install.sh first"
+if [ ! -f "$DESKTOP_ENTRY" ]; then
+	info "this engine predates desktop control; installing the compatible browser viewer"
+	# Pin the last compatible implementation rather than duplicating its stack.
+	# Updating the engine and rerunning this installer enables desktop control.
+	curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/e880aa5cc109d145fd251ed129f4ece38ec59bad/packages/server/scripts/install-browser.sh | bash
+	exit 0
+fi
 
 # ----------------------------------------------------------- packages ------
 

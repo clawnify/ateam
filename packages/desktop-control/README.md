@@ -90,9 +90,18 @@ tailnet listeners; the old separate tailnet websockify service is stopped.
 Ateam stores credentials under its data directory's `browser/` folder and
 registers the MCP server for newly launched Claude, Codex and OpenCode task
 sessions. Existing conversations need a relaunch to discover it. The updated
-macOS and iPhone clients carry the viewer credential in the URL fragment; older
-clients must be updated before using the new viewer. TaskWindow remains the
-browser tool and is unchanged.
+macOS and iPhone clients carry the viewer credential in the URL fragment. The
+engine bundles both credentials in the existing opaque password field when the
+viewer advertises support, so already released clients work without an update.
+Legacy noVNC receives its raw password. WebSocket and takeover authentication
+still require the separate viewer token; there is no password-only fallback.
+Reopen an existing Browser panel after the gateway upgrade to refresh its URL.
+TaskWindow remains the browser tool and is unchanged.
+
+If the installed engine predates `desktop.js`, the main-branch browser installer
+runs the pinned compatible browser installer before changing services. An engine
+update and installer rerun opt that box into desktop control. Merging the script
+does not require a simultaneous engine or App Store release.
 
 ## Verify
 

@@ -8,7 +8,13 @@ export const viewerScript = `
 import RFB from '/core/rfb.js';
 import {InputHandoff} from '/viewer-input.js';
 const settings=new URLSearchParams(location.hash.slice(1));
-const token=settings.get('controlToken'), password=settings.get('password');
+// Older apps forward only the password field. The authenticated engine can
+// carry both credentials there; neither capability needs a public fallback.
+let token=settings.get('controlToken'), password=settings.get('password');
+if(password?.startsWith('ateam-desktop-v1:')) {
+  try { ({password,controlToken:token}=JSON.parse(password.slice(17))); }
+  catch { password=null; token=null; }
+}
 const screen=document.getElementById('screen'), error=document.getElementById('error');
 const keyboard=document.getElementById('keyboard'), textbar=document.getElementById('textbar');
 const text=document.getElementById('text'), send=document.getElementById('send');

@@ -115,6 +115,7 @@ export function createDesktopServer(opts: {
 				mime = "text/javascript";
 			}
 			res.writeHead(200, {
+				"x-ateam-viewer-auth": "bundle-v1",
 				"content-type": mime,
 				"cache-control": "no-store",
 				"x-content-type-options": "nosniff",

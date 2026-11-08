@@ -1412,9 +1412,12 @@ export interface EditorEndpointDTO {
  */
 export type EditorOpenResult = EditorEndpointDTO | { needsInstall: true };
 
-/** Where a box's browser view answers, on ITS machine, and the VNC password. */
+/** Where a box's browser view answers, on ITS machine, and its credentials. */
 export interface BrowserViewDTO {
 	port: number;
+	/** Opaque viewer credential; pass unchanged to browserViewUrl. Legacy noVNC
+	 * uses a raw password; desktop control may bundle its viewer token here so
+	 * already released apps can authenticate without a coordinated update. */
 	password: string;
 	/** Present on boxes with desktop control; grants human viewer takeover. */
 	controlToken?: string;
