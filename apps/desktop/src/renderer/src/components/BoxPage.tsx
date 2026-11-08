@@ -16,6 +16,7 @@ import { setUpPhoneAccess } from "../lib/box-actions";
 import { type BoxSetup, dismissSetup, useSetup } from "../lib/setups";
 import { useLeadHome } from "../useLeadHome";
 import { BoxAccess } from "./BoxAccess";
+import { BoxDotfiles } from "./Dotfiles";
 import { GithubAccess } from "./GithubAccess";
 import { Button } from "./ui/button";
 import { Dialog, DialogOverlay, DialogPortal, DialogTitle } from "./ui/dialog";
@@ -603,6 +604,12 @@ export function BoxPage({
 					<GithubAccess alias={row.alias} label={row.title} />
 				)}
 			</div>
+			<BoxDotfiles
+				alias={row.alias}
+				label={row.title}
+				version={row.version}
+				connected={row.state === "connected"}
+			/>
 		</section>
 	);
 }

@@ -73,6 +73,19 @@ apps/mobile         iOS client (Expo / React Native) — drive a box from your p
 skills/             Claude Code skills for Ateam users (installable, see below)
 ```
 
+## Bring your agent setup to a box
+
+Use a dotfiles Git repository to carry your personal instructions and skills between
+machines. The [agent dotfiles starter](examples/agent-dotfiles/) uses native Claude
+Code, Codex, and OpenCode paths, with chezmoi handling repeatable installation and
+conflicts. It also works outside Ateam.
+
+In Ateam Go, open **Boxes → Settings → Dotfiles**. On desktop, open a box's
+**Dotfiles** section. Enter your repository, preview the revision and install script,
+then explicitly apply it to that box. Saving a default does not run an installer.
+The starter includes a separate file-diff check; Ateam's Preview identifies the
+revision and script, not every change an arbitrary script could make.
+
 ## Run your agents on a server
 
 Ateam is local-first, but the same desktop app can point at a Linux box that runs the

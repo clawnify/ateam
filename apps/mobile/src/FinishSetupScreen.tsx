@@ -41,6 +41,7 @@ export function FinishSetupScreen({
 	agents,
 	onSignIn,
 	onTerminal,
+	onDotfiles,
 	onGithub,
 	onAiKeys,
 	onAddProject,
@@ -52,6 +53,7 @@ export function FinishSetupScreen({
 	/** Open the box's terminal with this command typed in. */
 	onSignIn: (command: string) => void;
 	onTerminal: () => void;
+	onDotfiles: () => void;
 	onGithub: () => void;
 	/** The box's AI keys page (AiKeysScreen). */
 	onAiKeys: () => void;
@@ -97,6 +99,12 @@ export function FinishSetupScreen({
 						title="Connect GitHub"
 						body="A token for the repos this box works on. It also gives commits your name."
 						onPress={onGithub}
+					/>
+					<Step
+						icon="file-text"
+						title="Apply dotfiles"
+						body="Optional. Preview your repository and run its install script on this box."
+						onPress={onDotfiles}
 					/>
 					<Step
 						icon="folder-plus"

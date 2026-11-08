@@ -17,8 +17,8 @@ import type {
 	LoopDTO,
 	ProjectDTO,
 	ProviderDefinition,
-	SettingsResult,
 	SessionDTO,
+	SettingsResult,
 	TaskDTO,
 } from "@ateam/protocol";
 import {
@@ -63,15 +63,17 @@ import {
 	View,
 } from "react-native";
 import { AgentIcon } from "./src/AgentIcon";
+import { AiKeysScreen } from "./src/AiKeysScreen";
 import { filesToBox } from "./src/attach";
 import { BoxesScreen } from "./src/BoxesScreen";
+import { BoxSettingsScreen } from "./src/BoxSettingsScreen";
 import { BoxTerminalScreen } from "./src/BoxTerminalScreen";
 import {
+	alwaysOnInForm,
 	awayOf,
 	type BoxLink,
 	boxKey,
 	boxTitle,
-	alwaysOnInForm,
 	cantWakeReason,
 	leadBoxOf,
 	leadFirst,
@@ -85,13 +87,12 @@ import {
 import { Composer, type ComposerSubmit, type RunOn } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
 import { CreateBoxScreen } from "./src/CreateBoxScreen";
-import { FinishSetupScreen } from "./src/FinishSetupScreen";
-import { GetStartedScreen } from "./src/GetStartedScreen";
 import { connect, mobileNative, redeemPairing } from "./src/connection";
-import { pairTarget, parsePairLinks } from "./src/pair-link";
+import { DotfilesScreen } from "./src/DotfilesScreen";
 import { demoConnection } from "./src/demo";
+import { FinishSetupScreen } from "./src/FinishSetupScreen";
 import { type Board, createFleet, type Fleet, pickProject } from "./src/fleet";
-import { AiKeysScreen } from "./src/AiKeysScreen";
+import { GetStartedScreen } from "./src/GetStartedScreen";
 import { GithubAccessScreen } from "./src/GithubAccessScreen";
 import { HomeScreen, type ProjectRow, placeText, type TaskPlace } from "./src/HomeScreen";
 import { LeadScreen } from "./src/LeadScreen";
@@ -104,6 +105,7 @@ import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminal
 import { ProjectBrowser } from "./src/ProjectBrowser";
 import { type ProposalItem, ProposalSheet } from "./src/ProposalSheet";
 import { ProviderIcon } from "./src/ProviderIcon";
+import { pairTarget, parsePairLinks } from "./src/pair-link";
 import { ScanQrIcon } from "./src/ScanQrIcon";
 import { useScrollFade } from "./src/scroll-fade";
 import {
@@ -1430,8 +1432,10 @@ export default function App() {
 	const [boxTerminalRun, setBoxTerminalRun] = useState<string | null>(null);
 	// A box this phone created, until its Finish setting up page is done with.
 	const [finishKey, setFinishKey] = useState<string | null>(null);
+	const [boxSettingsKey, setBoxSettingsKey] = useState<string | null>(null);
+	const [dotfilesKey, setDotfilesKey] = useState<string | null>(null);
 	const [githubKey, setGithubKey] = useState<string | null>(null);
-	// The box whose AI keys page is open (AiKeysScreen): from its card in Boxes,
+	// The box whose AI keys page is open (AiKeysScreen): from Box settings,
 	// Finish setting up, and a call with a Lead whose box has no OpenAI key.
 	const [aiKeysKey, setAiKeysKey] = useState<string | null>(null);
 	const openAiKeys = useCallback((key: string) => setAiKeysKey(key), []);
@@ -1664,6 +1668,8 @@ export default function App() {
 		[
 			openOwner,
 			boxTerminalKey,
+			boxSettingsKey,
+			dotfilesKey,
 			githubKey,
 			aiKeysKey,
 			browserKey,
@@ -1887,6 +1893,8 @@ export default function App() {
 			void removeBoard(key);
 			setAgentsByBox(({ [key]: _gone, ...rest }) => rest);
 			setBoxTerminalKey((k) => (k === key ? null : k));
+			setBoxSettingsKey((k) => (k === key ? null : k));
+			setDotfilesKey((k) => (k === key ? null : k));
 			setGithubKey((k) => (k === key ? null : k));
 			setAiKeysKey((k) => (k === key ? null : k));
 			setBrowserKey((k) => (k === key ? null : k));
@@ -2470,6 +2478,8 @@ export default function App() {
 			!openTask &&
 			!boxTerminalKey &&
 			!browserKey &&
+			!boxSettingsKey &&
+			!dotfilesKey &&
 			!githubKey &&
 			!aiKeysKey,
 	);
@@ -2480,6 +2490,22 @@ export default function App() {
 	useEffect(() => leadCall.setTasks(tasks), [tasks]);
 	const anyLive = Object.values(links).some((l) => l.state === "live");
 	const linkOf = (key: string | null): BoxLink => (key ? links[key] : undefined) ?? NEW_LINK;
+
+	const dotfilesConn = dotfilesKey ? link.conn(dotfilesKey) : undefined;
+	if (dotfilesKey && dotfilesConn) {
+		return (
+			<DotfilesScreen
+				key={dotfilesKey}
+				rpc={dotfilesConn.rpc}
+				api={dotfilesConn.api}
+				boxLabel={labelOf(dotfilesKey)}
+				supported={boxSupports("dotfiles", dotfilesConn.info.protocolVersion)}
+				onClose={() => setDotfilesKey(null)}
+				onUpdateBox={() => void updateBox(dotfilesKey)}
+				updating={updatingKey === dotfilesKey}
+			/>
+		);
+	}
 
 	const githubConn = githubKey ? link.conn(githubKey) : undefined;
 	if (githubKey && githubConn) {
@@ -2504,6 +2530,29 @@ export default function App() {
 				onClose={() => setAiKeysKey(null)}
 				onUpdateBox={() => void updateBox(aiKeysKey)}
 				updating={updatingKey === aiKeysKey}
+			/>
+		);
+	}
+
+	const settingsBox = boxSettingsKey ? boxByKey(boxSettingsKey) : null;
+	if (boxSettingsKey && settingsBox) {
+		const conn = link.conn(boxSettingsKey);
+		return (
+			<BoxSettingsScreen
+				key={boxSettingsKey}
+				box={settingsBox}
+				connected={!!conn}
+				security={lockedHere.has(boxSettingsKey) ? "paired" : (conn?.pairing?.state ?? "unknown")}
+				onClose={() => {
+					setBoxSettingsKey(null);
+					setDotfilesKey(null);
+					setGithubKey(null);
+					setAiKeysKey(null);
+				}}
+				onGithub={() => setGithubKey(boxSettingsKey)}
+				onAiKeys={() => openAiKeys(boxSettingsKey)}
+				onDotfiles={() => setDotfilesKey(boxSettingsKey)}
+				onLock={() => lockBox(settingsBox)}
 			/>
 		);
 	}
@@ -2553,6 +2602,7 @@ export default function App() {
 					setView("board");
 					setBoxTerminalKey(finishKey);
 				}}
+				onDotfiles={() => setDotfilesKey(finishKey)}
 				onGithub={() => setGithubKey(finishKey)}
 				onAiKeys={() => openAiKeys(finishKey)}
 				onAddProject={() => setBrowserKey(finishKey)}
@@ -2633,22 +2683,11 @@ export default function App() {
 						setOpenTask(null);
 						setBoxTerminalKey(boxKey(box));
 					}}
-					onGithub={(box) => setGithubKey(boxKey(box))}
-					onAiKeys={(box) => openAiKeys(boxKey(box))}
-					openKeys={
-						new Set(
-							boxes
-								.map(boxKey)
-								.filter(
-									(k) =>
-										links[k]?.state === "live" &&
-										link.conn(k)?.pairing?.state === "open" &&
-										!lockedHere.has(k),
-								),
-						)
-					}
+					onSettings={(box) => {
+						setSwipeOpenKey(null);
+						setBoxSettingsKey(boxKey(box));
+					}}
 					onPair={(box, code) => pairBox(box, code)}
-					onLock={lockBox}
 					onScan={openScanner}
 					scanner={scanner}
 				/>
