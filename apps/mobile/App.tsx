@@ -18,6 +18,7 @@ import type {
 	ProjectDTO,
 	ProviderDefinition,
 	SettingsResult,
+	SessionDTO,
 	TaskDTO,
 } from "@ateam/protocol";
 import {
@@ -97,7 +98,7 @@ import { type LoopDraft, LoopForm, LoopsScreen } from "./src/LoopsScreen";
 import type { LeadBadge } from "./src/lead-badge";
 import { leadCall, setCallTarget, useLeadCall } from "./src/lead-call";
 import { createLinks, type LinkDeps, type Waker } from "./src/links";
-import { MissionScreen } from "./src/MissionScreen";
+import { MissionScreen, type MissionViewState } from "./src/MissionScreen";
 import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
 import { type ProposalItem, ProposalSheet } from "./src/ProposalSheet";
@@ -909,10 +910,24 @@ function Shell({
 		onCloseBoxTerminal();
 		onLead(false);
 	};
-	// Mission Control tiles: this project's tasks that have (or had) an agent, in
-	// Home's order, merged work excluded.
+	const [missionSession, setMissionSession] = useState<SessionDTO | undefined>();
+	useEffect(() => {
+		if (!openTask) setMissionSession(undefined);
+	}, [openTask]);
+	const [missionMode, setMissionMode] = useState<"tasks" | "loops">("tasks");
+	const missionViews = useRef(new Map<string, MissionViewState>());
+	const missionScope = `${selectedKey}:${missionMode}`;
+	let missionMemory = missionViews.current.get(missionScope);
+	if (!missionMemory) {
+		missionMemory = { sessions: {} };
+		missionViews.current.set(missionScope, missionMemory);
+	}
+	const [missionJump, setMissionJump] = useState<{ id: string; seq: number } | null>(null);
+	const loopTaskIds = new Set(loops.flatMap((loop) => (loop.taskId ? [loop.taskId] : [])));
 	const missionTasks = sortTasks(
-		shown.filter((t) => t.column !== "merged" && t.agentStatus !== null),
+		shown.filter(
+			(t) => t.column !== "merged" && loopTaskIds.has(t.id) === (missionMode === "loops"),
+		),
 		"status",
 	);
 	// A full terminal (a task's, or a box's) covers the tab's content. The Lead
@@ -969,10 +984,17 @@ function Shell({
 							tasks={shown}
 							loops={loops}
 							loading={loading}
-							selectedTaskId={openTask?.id}
+							selectedTaskId={
+								openTask?.id ?? (contentTab === "mission" ? missionJump?.id : undefined)
+							}
 							onOpenTask={(task) => {
-								leaveDetail();
-								onOpenTask(task);
+								if (contentTab === "mission" && showTab) {
+									setMissionMode(loopTaskIds.has(task.id) ? "loops" : "tasks");
+									setMissionJump((j) => ({ id: task.id, seq: (j?.seq ?? 0) + 1 }));
+								} else {
+									leaveDetail();
+									onOpenTask(task);
+								}
 							}}
 							onOpenLoops={() => {
 								leaveDetail();
@@ -1096,6 +1118,7 @@ function Shell({
 							task={tasks.find((t) => t.id === openTask.id) ?? openTask}
 							onClose={onCloseTask}
 							autoFocus={openTaskFocus}
+							initialSession={missionSession?.taskId === openTask.id ? missionSession : undefined}
 						/>
 					) : boxTerminal && !boxTerminal.api ? (
 						<ReconnectingTerminal
@@ -1181,7 +1204,29 @@ function Shell({
 						/>
 					)}
 					{showTab && contentTab === "mission" && (
-						<MissionScreen api={api} tasks={missionTasks} onExpand={onExpandTask} />
+						<MissionScreen
+							key={missionScope}
+							memory={missionMemory}
+							api={api}
+							tasks={missionTasks}
+							agents={agents}
+							scope={selectedKey ?? "all"}
+							mode={missionMode}
+							onMode={(mode) => {
+								setMissionJump(null);
+								setMissionMode(mode);
+							}}
+							onExpand={(task, session) => {
+								setMissionJump(null);
+								setMissionSession(session);
+								onExpandTask(task);
+							}}
+							jump={missionJump}
+							onJumpMissing={(id) => {
+								const task = shown.find((t) => t.id === id);
+								if (task) onOpenTask(task);
+							}}
+						/>
 					)}
 					{showLead && leadView && (
 						<ReconnectingTerminal

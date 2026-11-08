@@ -70,9 +70,22 @@ function task(
 		mergeStatus: null,
 		prNumber: null,
 		prUrl: null,
+		prState: null,
 		gitStatus: null,
 		lastEventAt: T0,
 		isUnread: false,
+		preparing: false,
+		tags: null,
+		waitingReason: null,
+		waitingUntil: null,
+		waitingFiredAt: null,
+		browserUsedAt: null,
+		archivedAt: null,
+		triage: {
+			bucket: column === "merged" ? "merged_done" : "active",
+			done: column === "merged",
+			reason: "Demo task",
+		},
 		...extra,
 	};
 }
@@ -126,8 +139,9 @@ function sessionFor(taskId: string): SessionDTO {
 		id: `sess-${taskId}`,
 		taskId,
 		agentId: t?.agentId ?? "claude",
+		agentSessionId: null,
 		terminalId: `demo-term-${taskId}`,
-		status: "running",
+		status: t?.agentStatus ?? "running",
 		cwd: "/home/demo/ateam",
 	};
 }
@@ -223,8 +237,25 @@ function handle(method: string, args: unknown[]): unknown {
 			const input = args[0] as { projectId: string; name: string };
 			return task(`new-${T0}`, input.name || "New task", "running", "running");
 		}
-		case CH.ptyListForTask:
-			return [sessionFor(String(args[0]))];
+		case CH.ptyListForTask: {
+			const id = String(args[0]);
+			const task = TASKS.find((t) => t.id === id);
+			if (task && !task.agentStatus) return [];
+			const agent = sessionFor(id);
+			// Exercise live-only tiles and selecting/expanding a second session.
+			return id === "flaky-test"
+				? [
+						{
+							...agent,
+							id: "sess-flaky-shell",
+							terminalId: "demo-shell-flaky-test",
+							agentId: "shell",
+							status: "running",
+						},
+						agent,
+					]
+				: [agent];
+		}
 		case CH.ptySpawnShell:
 			return { terminalId: `demo-shell-${(args[0] as { taskId: string }).taskId}` };
 		case CH.ptyBoxShell:
