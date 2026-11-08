@@ -233,7 +233,7 @@ describe("a connection to a box's network port", () => {
 		const box = fakeEngine();
 		const guard = guardIn();
 		const c = connect(box, guard);
-		await expect(c.call(CH.pairingInvite)).rejects.toThrow("Lock the box first");
+		await expect(c.call(CH.pairingInvite)).rejects.toThrow("Make the box private first");
 		// Over SSH it may: that is the owner.
 		const ssh = connect(box, guard, true);
 		expect(await ssh.call(CH.pairingInvite)).toMatchObject({ code: expect.any(String) });
@@ -354,7 +354,7 @@ describe("a connection to a box's network port", () => {
 		expect(other.closed()).toBe(true);
 		expect(ssh.closed()).toBe(false);
 		expect(mac.closed()).toBe(false);
-		await expect(mac.call(CH.pairingLock, {})).rejects.toThrow("locked already");
+		await expect(mac.call(CH.pairingLock, {})).rejects.toThrow("private already");
 	});
 
 	it("revoking a device drops its live connections", async () => {

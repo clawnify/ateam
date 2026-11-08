@@ -87,13 +87,13 @@ const pairing: PairingGuard = {
 	fromLinks: new LinkLimiter(),
 };
 
-// A box with no database yet is a fresh install, which can come up locked to
-// paired devices (pairing.ts). One that has run before keeps whatever it had:
-// open until someone locks it, so an upgrade never locks a phone out.
-// shortcut: fresh boxes start open too. Ateam Go on the App Store (1.3.x) can't
-// pair, so a locked box would shut that phone out. Turn this on once an Ateam Go
-// that pairs is live on the App Store.
-const LOCK_NEW_BOXES = false;
+// A box with no database yet is a fresh install, which comes up private: only
+// devices paired with it may use its network port (pairing.ts). One that has run
+// before keeps whatever it had, so an upgrade never shuts a phone out. A box set up
+// from a Mac is reached over SSH, which pairing never gates; one Ateam Go creates is
+// paired with that phone before it starts (`--add-device`); one installed by hand
+// gets a first pairing code from the installer. Every Ateam Go since 1.4.0 pairs.
+const LOCK_NEW_BOXES = true;
 
 function isFreshBox(): boolean {
 	return !existsSync(join(DATA_DIR, "ateam.sqlite")) && !existsSync(join(DATA_DIR, "grove.sqlite"));
@@ -129,7 +129,7 @@ async function runDaemon(): Promise<void> {
 		peerRelay: links,
 	});
 	if (LOCK_NEW_BOXES && fresh && pairing.store.lockIfNew())
-		console.log("[ateam] new box: locked to paired devices (pair one with `ateam pair`)");
+		console.log("[ateam] new box: private to paired devices (pair one with `ateam pair`)");
 	engine.startLoops();
 	const dispatcher = createDispatcher(engine);
 	// What this box's Lead reaches: this box, then the boxes it links to, through
@@ -467,7 +467,7 @@ function runPair(args: string[]): void {
 	if (args.includes("--unlock")) {
 		pairing.store.unlock();
 		console.log("This box is open again: any device that can reach its port may use it.");
-		console.log("Lock it from Settings → Boxes in Ateam once a device is connected.");
+		console.log("Make it private from Settings → Boxes in Ateam once a device is connected.");
 		return;
 	}
 	// An open box lets any device in, so a code would unlock nothing, and neither app
@@ -477,7 +477,7 @@ function runPair(args: string[]): void {
 			"This box is open: any device that can reach its port may use it, so there's nothing to pair.",
 		);
 		console.log(
-			"Lock it from Ateam first: Settings → Boxes → Access on a Mac, or Lock it on its card in Ateam Go.",
+			"Make it private from Ateam first: Settings → Boxes → Access on a Mac, or Make private on its card in Ateam Go.",
 		);
 		process.exitCode = 1;
 		return;
