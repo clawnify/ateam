@@ -150,6 +150,14 @@ describe.skipIf(!chezmoi)("agent dotfiles starter (real chezmoi)", () => {
 
 	it("runs the actual starter through Ateam clone, Preview, Apply and reapply", async () => {
 		const f = await fixture("repo");
+		// The manager gives the installer a disposable HOME. Runner-specific agent
+		// directories still point outside it, so clear them only in this fixture's
+		// subprocess before invoking the unchanged real installer.
+		await writeFile(
+			join(f.source, "test-install.sh"),
+			"#!/bin/sh\nunset CODEX_HOME CLAUDE_CONFIG_DIR XDG_CONFIG_HOME OPENCODE_CONFIG_DIR\nexec ./install.sh\n",
+			{ mode: 0o755 },
+		);
 		const git = (...args: string[]) => exec("git", ["-C", f.source, ...args]);
 		await git("init", "--initial-branch=main");
 		await git("add", ".");
@@ -186,9 +194,9 @@ describe.skipIf(!chezmoi)("agent dotfiles starter (real chezmoi)", () => {
 				});
 			});
 			const manager = new Dotfiles(join(f.dir, "engine-state"), f.destination);
-			const config = { repository: `git://127.0.0.1:${port}/repo`, script: "" };
+			const config = { repository: `git://127.0.0.1:${port}/repo`, script: "test-install.sh" };
 			const plan = await manager.prepare(config);
-			expect(plan.script).toBe("install.sh");
+			expect(plan.script).toBe("test-install.sh");
 			expect(existsSync(join(f.destination, skill))).toBe(false);
 			for (let attempt = 0; attempt < 2; attempt++) {
 				const next = attempt === 0 ? plan : await manager.prepare(config);
