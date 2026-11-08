@@ -115,6 +115,7 @@ import {
 	loadProviderAccount,
 	loadRunOn,
 	loadSelectedProject,
+	loadSidebarCollapsed,
 	removeBoard,
 	type SavedConnection,
 	saveBoard,
@@ -127,6 +128,7 @@ import {
 	saveProviderAccount,
 	saveRunOn,
 	saveSelectedProject,
+	saveSidebarCollapsed,
 } from "./src/storage";
 import { type Tab, TabStrip } from "./src/TabStrip";
 import { TerminalScreen } from "./src/TerminalScreen";
@@ -770,6 +772,8 @@ interface BoxTerminalView extends BoxView {
 }
 
 function Shell({
+	sidebarCollapsed,
+	onToggleSidebar,
 	connColor,
 	projects,
 	selectedKey,
@@ -818,6 +822,8 @@ function Shell({
 	updatingLeadBox,
 	onStartProposal,
 }: {
+	sidebarCollapsed: boolean;
+	onToggleSidebar: () => void;
 	connColor: string;
 	projects: ProjectRow[];
 	selectedKey: string | null;
@@ -892,10 +898,11 @@ function Shell({
 	onStartProposal: (item: ProposalItem) => void;
 }) {
 	const { width } = useWindowDimensions();
-	const sidebar = width >= SIDEBAR_MIN_WINDOW;
+	const wide = width >= SIDEBAR_MIN_WINDOW;
+	const sidebar = wide && !sidebarCollapsed;
 	// Home becomes the navigator on wide windows; its main view is the board.
 	// Derive this instead of changing tab state during rotation/Split View.
-	const contentTab = sidebar && tab === "home" ? "board" : tab;
+	const contentTab = wide && tab === "home" ? "board" : tab;
 	const leaveDetail = () => {
 		onCloseTask();
 		onCloseBoxTerminal();
@@ -965,13 +972,24 @@ function Shell({
 						{/* Only behind a list: elsewhere the bar has nothing under it to fade. */}
 						{listUnder && <TopFade height={topInset} />}
 						<View style={styles.boardHeader}>
+							{wide && (
+								<Pressable
+									style={styles.sidebarToggle}
+									onPress={onToggleSidebar}
+									accessibilityRole="button"
+									accessibilityLabel={sidebar ? "Collapse sidebar" : "Expand sidebar"}
+									accessibilityState={{ expanded: sidebar }}
+								>
+									<Feather name="sidebar" size={20} color={sidebar ? C.ink : C.muted} />
+								</Pressable>
+							)}
 							<Pressable style={styles.statusHit} onPress={onOpenConnection} hitSlop={10}>
 								<View style={[styles.statusDot, { backgroundColor: connColor }]} />
 							</Pressable>
 							<View style={styles.headerCenter}>
 								<TabStrip
 									tab={leadOpen ? null : contentTab}
-									hideHome={sidebar}
+									hideHome={wide}
 									onChange={(t) => {
 										// A tab tap from the full terminal (or the Lead) leaves it, like the desktop.
 										onCloseTask();
@@ -985,7 +1003,7 @@ function Shell({
 				    from the project's tabs. As wide as the status dot's slot, so the tabs
 				    stay centered. A box's terminal is on its card in Boxes. */}
 							<Pressable
-								style={styles.cornerHit}
+								style={[styles.cornerHit, wide && styles.wideCornerHit]}
 								onPress={() => {
 									// From a task opened out of the chat, back to the chat.
 									const back = covered;
@@ -1218,6 +1236,8 @@ function Shell({
 }
 
 export default function App() {
+	// null until storage answers; a tap made meanwhile wins over the saved value.
+	const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean | null>(null);
 	useColorScheme(); // reserved: theme-aware later
 	const [view, setView] = useState<"connect" | "board">("connect");
 	// The connection screen shows the Boxes list (src/BoxesScreen.tsx), Get started when
@@ -2181,7 +2201,7 @@ export default function App() {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on mount
 	useEffect(() => {
 		booted.current = (async () => {
-			const [savedBoxes, savedProject, savedPreviewPort, agreed, leadBox, runOnBox] =
+			const [savedBoxes, savedProject, savedPreviewPort, agreed, leadBox, runOnBox, collapsed] =
 				await Promise.all([
 					loadBoxes(),
 					loadSelectedProject(),
@@ -2189,6 +2209,7 @@ export default function App() {
 					loadConsent(),
 					loadLeadBox(),
 					loadRunOn(),
+					loadSidebarCollapsed(),
 				]);
 			boxesRef.current = savedBoxes;
 			setBoxes(savedBoxes);
@@ -2199,6 +2220,7 @@ export default function App() {
 			if (savedPreviewPort) setPreviewPort(savedPreviewPort);
 			setLeadPicked(leadBox);
 			setRunOnPicked(runOnBox);
+			setSidebarCollapsed((current) => current ?? collapsed);
 			if (savedBoxes.length === 0) return;
 			const boards = await loadBoards(savedBoxes.map(boxKey));
 			for (const [key, snap] of boards) kept.current.set(key, snap);
@@ -2641,6 +2663,12 @@ export default function App() {
 	return (
 		<>
 			<Shell
+				sidebarCollapsed={sidebarCollapsed === true}
+				onToggleSidebar={() => {
+					const next = !sidebarCollapsed;
+					setSidebarCollapsed(next);
+					void saveSidebarCollapsed(next);
+				}}
 				connColor={anyLive ? C.green : C.faint}
 				projects={projectRows}
 				selectedKey={selectedKey}
@@ -2893,6 +2921,8 @@ const styles = StyleSheet.create({
 		paddingHorizontal: 14,
 		paddingBottom: 12,
 	},
+	sidebarToggle: { width: 44, height: 44, alignItems: "flex-start", justifyContent: "center" },
+	wideCornerHit: { width: 88 },
 	statusHit: { width: 44, alignItems: "flex-start", justifyContent: "center" },
 	statusDot: { width: 12, height: 12, borderRadius: 6 },
 	headerCenter: { flex: 1, alignItems: "center" },
