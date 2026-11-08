@@ -17,6 +17,7 @@ import {
 	ensureCodexHooks,
 	peerToken,
 } from "./agent-setup";
+import { desktopMcpConfig } from "./browser";
 import { latestCodexThreadInDir } from "./codex-threads";
 import { shell } from "./headless";
 import { refreshLoginPath } from "./login-env";
@@ -348,7 +349,9 @@ async function launchAgent(
 	}
 
 	const token = peerToken(services.peerSecret, terminalId);
+	const desktop = desktopMcpConfig(services.userDataDir);
 	const env = buildAgentEnv({
+		desktop,
 		terminalId,
 		agentId: agent.id,
 		hookPort: services.hookPort,
@@ -383,7 +386,7 @@ async function launchAgent(
 		// The board MCP server rides the same way (codexBoardMcpArgs).
 		agentCmd = agentCmd.replace(
 			/^codex/,
-			`codex -c 'notify=["sh","${codexNotify}"]' ${codexBoardMcpArgs(services.hookPort)}`,
+			`codex -c 'notify=["sh","${codexNotify}"]' ${codexBoardMcpArgs(services.hookPort, desktop)}`,
 		);
 	} else if (agent.id === "claude" && !input.agentMode) {
 		// The board tools (get_board / set_status / set_waiting), served by the
@@ -393,6 +396,7 @@ async function launchAgent(
 		// (`<configs...>`, `<tools...>`) and would swallow a positional prompt
 		// that followed them, so they go AFTER everything agentCommand built.
 		const mcpConfig = await ensureBoardMcpConfig({
+			desktop,
 			hooksDir: services.hooksDir,
 			hookPort: services.hookPort,
 			terminalId,

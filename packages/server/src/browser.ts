@@ -108,7 +108,8 @@ export async function openBrowserView(dataDir: string): Promise<BrowserViewDTO> 
 			`The box's browser view isn't answering on port ${port}. Check its services (ateam-novnc, ateam-x11vnc, ateam-xvfb).`,
 		);
 	}
-	return { port, password };
+	const controlToken = readDesktopSecret(dataDir, "desktop-viewer-token");
+	return { port, password, ...(controlToken ? { controlToken } : {}) };
 }
 
 /**
@@ -121,4 +122,23 @@ export function stampBrowserUse(db: AteamDb, taskId: string, now = Date.now()): 
 	if (!task || task.browserUsedAt != null) return false;
 	repo.updateTask(db, taskId, { browserUsedAt: now });
 	return true;
+}
+
+/** Desktop credentials stay on this box. Only the viewer credential goes to
+ * the authenticated Ateam client; agent launches get the separate MCP one. */
+function readDesktopSecret(dataDir: string, name: string): string | undefined {
+	try {
+		const token = readFileSync(join(dataDir, "browser", name), "utf8").trim();
+		return /^[a-f0-9]{64}$/.test(token) ? token : undefined;
+	} catch {
+		return undefined;
+	}
+}
+export interface DesktopMcpConfig {
+	url: string;
+	token: string;
+}
+export function desktopMcpConfig(dataDir: string): DesktopMcpConfig | undefined {
+	const token = readDesktopSecret(dataDir, "desktop-token");
+	return token ? { url: `http://127.0.0.1:${DEFAULT_BROWSER_VIEW_PORT}/mcp`, token } : undefined;
 }

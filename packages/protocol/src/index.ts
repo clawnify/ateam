@@ -165,7 +165,9 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // since a call's words are transcribed and may not have been meant for it. A new
 // method only: a v31 box answers "Unknown method", and the desktop offers no call
 // when its Lead lives there (FEATURE_MIN_VERSION.leadCall).
-export const PROTOCOL_VERSION = 32;
+// v33: browser:view can carry a separate desktop viewer credential. Updated
+// clients pass it in the URL fragment to the desktop-control viewer.
+export const PROTOCOL_VERSION = 33;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -1414,6 +1416,8 @@ export type EditorOpenResult = EditorEndpointDTO | { needsInstall: true };
 export interface BrowserViewDTO {
 	port: number;
 	password: string;
+	/** Present on boxes with desktop control; grants human viewer takeover. */
+	controlToken?: string;
 }
 
 // ---- the API surface exposed on window.ateam ----

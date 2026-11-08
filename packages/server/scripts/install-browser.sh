@@ -13,6 +13,8 @@
 #     by Chrome policy and pairs with its daemon by itself, and the daemon exposes
 #     the browser to agents as an MCP server on 127.0.0.1:9377. Registered with
 #     Claude Code for this user when `claude` is on the box.
+#   - desktop-control, an independent MCP server and noVNC gateway with exclusive
+#     agent leases and human takeover. Ateam registers it at agent launch.
 #   - noVNC, so you can watch the desktop and take over (a login, a 2FA prompt, a
 #     CAPTCHA): in the desktop app's Browser panel, or from any browser on your
 #     tailnet
@@ -85,6 +87,11 @@ NODE="$(readlink -f "$NODE")"
 NPM="$(dirname "$NODE")/npm"
 [ -x "$NPM" ] || NPM="$(bash -lc 'command -v npm' 2>/dev/null || true)"
 [ -n "$NPM" ] || die "npm not found beside $NODE"
+# The engine release bundles the independent desktop server beside cli.js.
+# Check BEFORE changing services: an old engine needs upgrading first.
+ENGINE_DIR="$(sed -n 's|^exec [^ ]* "\(.*\)/cli.js".*|\1|p' "$BIN_DIR/ateam" 2>/dev/null)"
+DESKTOP_ENTRY="$ENGINE_DIR/desktop.js"
+[ -f "$DESKTOP_ENTRY" ] || die "desktop-control is missing: update the Ateam engine with install.sh first"
 
 # ----------------------------------------------------------- packages ------
 
@@ -93,7 +100,7 @@ case "$(dpkg --print-architecture)" in
 amd64) CHROME_DEB=google-chrome-stable_current_amd64.deb ;;
 *) die "Google Chrome ships for amd64 only, and this box is $(dpkg --print-architecture)" ;;
 esac
-PKGS="xvfb openbox x11vnc novnc websockify fonts-noto-color-emoji"
+PKGS="xvfb openbox x11vnc novnc xdotool scrot fonts-noto-color-emoji"
 if ! command -v google-chrome >/dev/null; then
 	TMP="$(mktemp -d)"
 	trap 'rm -rf "$TMP"' EXIT
@@ -212,7 +219,18 @@ if [ -z "$VIEW_ADDR" ]; then
 	if [ -n "$HOST" ] && ! ip -4 -o addr show 2>/dev/null | grep -qF " $HOST/"; then HOST=""; fi
 	if [ -n "$HOST" ] && [ "$HOST" != 127.0.0.1 ]; then VIEW_ADDR="$HOST:6080"; fi
 fi
-if [ -n "$VIEW_ADDR" ]; then SERVICES="$SERVICES ateam-novnc-tailnet"; fi
+# One process owns BOTH listeners, hence one lease across desktop and phone.
+# The old tailnet websockify must not remain as an unguarded input route.
+if [ "$SVC_MGR" = systemd ]; then
+	sudo systemctl disable --now ateam-novnc-tailnet.service >/dev/null 2>&1 || true
+elif "$SPRITE_ENV" services get ateam-novnc-tailnet >/dev/null 2>&1; then
+	"$SPRITE_ENV" services delete ateam-novnc-tailnet >/dev/null
+fi
+
+# A re-run with the same build/config must not revoke a live desktop lease.
+DESKTOP_SIGNATURE="$( { cat "$DESKTOP_ENTRY"; printf '%s\n' "$NODE" "$BROWSER_DIR" "$VIEW_ADDR"; } | sha256sum | cut -d ' ' -f 1)"
+DESKTOP_CHANGED=""
+if [ "$(cat "$BROWSER_DIR/desktop-installed-build" 2>/dev/null || true)" != "$DESKTOP_SIGNATURE" ]; then DESKTOP_CHANGED=1; fi
 
 # name|needs|env|cmd|args — args comma-separated, as sprite-env takes them.
 service_specs() {
@@ -220,10 +238,7 @@ service_specs() {
 	echo "ateam-openbox|ateam-xvfb|DISPLAY=$DISPLAY_NUM|/usr/bin/openbox|"
 	echo "ateam-chrome|ateam-xvfb,ateam-openbox|DISPLAY=$DISPLAY_NUM|$CHROME_LAUNCHER|"
 	echo "ateam-x11vnc|ateam-xvfb|DISPLAY=$DISPLAY_NUM|/usr/bin/x11vnc|-display,$DISPLAY_NUM,-localhost,-forever,-shared,-quiet,-rfbauth,$VNC_AUTH_FILE"
-	echo "ateam-novnc|ateam-x11vnc||/usr/bin/websockify|--web,/usr/share/novnc,$LOOPBACK_VIEW_ADDR,127.0.0.1:5900"
-	if [ -n "$VIEW_ADDR" ]; then
-		echo "ateam-novnc-tailnet|ateam-x11vnc||/usr/bin/websockify|--web,/usr/share/novnc,$VIEW_ADDR,127.0.0.1:5900"
-	fi
+	echo "ateam-novnc|ateam-x11vnc|DISPLAY=$DISPLAY_NUM,DESKTOP_CONTROL_DIR=$BROWSER_DIR,DESKTOP_LISTEN=$LOOPBACK_VIEW_ADDR${VIEW_ADDR:+,DESKTOP_LISTEN_EXTRA=$VIEW_ADDR}|$NODE|$DESKTOP_ENTRY"
 	echo "ateam-taskwindow||HOME=$HOME,TASKWINDOW_PORT=$TASKWINDOW_PORT|$NODE|$TW_ENTRY"
 }
 
@@ -257,12 +272,11 @@ if [ "$SVC_MGR" = systemd ]; then
 	sudo systemctl daemon-reload
 	# `enable --now` starts what isn't running and leaves a running unit be, so a
 	# re-run never closes the browser under an agent. A new TaskWindow is worth a
-	# restart, and so is noVNC: it holds no state (a viewer reconnects), and a
-	# running one would keep listening where an older run put it.
+	# restart. Desktop control only restarts when its bundle or config changed;
+	# unlike websockify, it holds active leases and input operations.
 	# shellcheck disable=SC2086
 	sudo systemctl enable --now $(printf '%s.service ' $SERVICES) >/dev/null 2>&1
-	sudo systemctl restart ateam-novnc.service
-	if [ -n "$VIEW_ADDR" ]; then sudo systemctl restart ateam-novnc-tailnet.service; fi
+	if [ -n "$DESKTOP_CHANGED" ]; then sudo systemctl restart ateam-novnc.service; fi
 	if [ -n "${TW_UPGRADED:-}" ]; then sudo systemctl restart ateam-taskwindow.service; fi
 else
 	# On a Sprite, deleting or restarting a service kills what it started, so a
@@ -270,7 +284,7 @@ else
 	# whose command differs is recreated: only a newer script changes a command, so
 	# a mismatch is an install that predates a fix, and it may be crash-looping on
 	# the old one (a looping service reads "running" between restarts, so its
-	# status can't say). noVNC is recreated every run: it holds no state.
+	# status can't say). Desktop control also restarts for a changed bundle.
 	#
 	# A replaced service takes everything that needs it along (replacing
 	# ateam-xvfb restarts Chrome, once per upgrade), and they go dependents first:
@@ -288,7 +302,7 @@ else
 			});' || true)"
 		[ -n "$have" ] || continue
 		replace=""
-		case "$name" in ateam-novnc*) replace=1 ;; esac
+		case "$name" in ateam-novnc) if [ -n "$DESKTOP_CHANGED" ]; then replace=1; fi ;; esac
 		if [ "$have" != "$cmd${args:+,$args}" ]; then replace=1; fi
 		for n in ${needs//,/ }; do
 			case " ${stale[*]} " in *" $n "*) replace=1 ;; esac
@@ -321,6 +335,19 @@ if [ -n "$CHROME_STALE" ]; then
 	fi
 	info "Chrome keeps its old launch flags until it restarts. When no agent is using it: $RESTART"
 fi
+
+# The viewer and MCP server are one service. Fail installation if it cannot
+# serve; don't leave users with a success message and a dead control endpoint.
+DESKTOP_READY=""
+for _ in $(seq 1 20); do
+	if curl -fsS "http://127.0.0.1:6080/health" 2>/dev/null | grep -F '"name":"desktop-control"' >/dev/null; then
+		DESKTOP_READY=1
+		break
+	fi
+	sleep 1
+done
+[ -n "$DESKTOP_READY" ] || die "desktop-control did not start: check the ateam-novnc service"
+printf '%s\n' "$DESKTOP_SIGNATURE" >"$BROWSER_DIR/desktop-installed-build"
 
 # -------------------------------------------------------------- verify -----
 
@@ -367,9 +394,15 @@ cat <<EOF
 Browser ready. Watch and take over from the desktop app (the globe button on a
 task on this box opens its Browser panel), or in any browser at:
 
-    http://${VIEW_ADDR:-<ssh -L 6080:127.0.0.1:6080 this box, then> localhost:6080}/vnc.html#autoconnect=true&resize=scale
+    http://${VIEW_ADDR:-<ssh -L 6080:127.0.0.1:6080 this box, then> localhost:6080}/vnc.html
 
-VNC password: $VNC_PASS_FILE. Chrome's window opens with the first agent
+Open the authenticated viewer through Ateam. Manual viewer URLs need both
+password and controlToken in the URL fragment; their files are
+$VNC_PASS_FILE and $BROWSER_DIR/desktop-viewer-token.
+Desktop MCP: http://127.0.0.1:6080/mcp (Bearer token in $BROWSER_DIR/desktop-token).
+New Ateam sessions get the desktop MCP automatically. Other MCP clients can
+register this endpoint directly; the engine does not need to be running.
+Chrome's window opens with the first agent
 that uses it (until then the desktop is empty, so ask one to open the site). Log
 into a site there once and every agent on this box shares the session. Agents
 reach Chrome through the taskwindow MCP tools; CDP is also on 127.0.0.1:$CDP_PORT

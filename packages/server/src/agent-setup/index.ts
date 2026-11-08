@@ -2,6 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { DesktopMcpConfig } from "../browser";
 import { BOARD_INSTRUCTIONS } from "../hooks/board-mcp";
 
 /**
@@ -263,6 +264,12 @@ export const AteamInbox = async ({ client }) => {
 	})();
 
 	return {
+		"tool.execute.before": async (input) => {
+			if (input.tool !== "desktop_computer" && input.tool !== "desktop_control") return;
+			await fetch(\`http://127.0.0.1:\${port}/hook/complete?terminalId=\${encodeURIComponent(terminalId)}&eventType=BrowserUse\`, {
+				signal: AbortSignal.timeout(2000),
+			}).catch(() => {});
+		},
 		event: async ({ event }) => {
 			const p = event.properties ?? {};
 			if (event.type === "session.created" || event.type === "session.updated") {
@@ -538,13 +545,20 @@ export async function ensureClaudeHooks(
 	// (Task.browserUsedAt). Its own entry, so the PreToolUse check above, which
 	// sees any notify.sh, can't count it as already there.
 	const pre = settings.hooks.PreToolUse ?? [];
+	for (const entry of pre) {
+		if (
+			entry.matcher === "mcp__taskwindow__.*" &&
+			entry.hooks.some((h) => h.command.includes("BrowserUse"))
+		)
+			entry.matcher = "mcp__(taskwindow|desktop)__.*";
+	}
 	if (
 		!pre.some((e) =>
 			e.hooks.some((h) => h.command.includes("notify.sh") && h.command.includes("BrowserUse")),
 		)
 	) {
 		pre.push({
-			matcher: "mcp__taskwindow__.*",
+			matcher: "mcp__(taskwindow|desktop)__.*",
 			hooks: [{ type: "command", command: cmd("BrowserUse") }],
 		});
 		settings.hooks.PreToolUse = pre;
@@ -617,6 +631,14 @@ export async function ensureCodexHooks(
 		}
 	}
 
+	const pre = settings.hooks.PreToolUse ?? [];
+	if (!pre.some((e) => e.hooks.some((h) => h.command.endsWith(" BrowserUse")))) {
+		pre.push({
+			matcher: "mcp__desktop__.*",
+			hooks: [{ type: "command", command: cmd("BrowserUse") }],
+		});
+		settings.hooks.PreToolUse = pre;
+	}
 	await writeFile(file, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
 }
 
@@ -629,6 +651,7 @@ export async function ensureCodexHooks(
  * `claude --mcp-config`.
  */
 export async function ensureBoardMcpConfig(opts: {
+	desktop?: DesktopMcpConfig;
 	hooksDir: string;
 	hookPort: number;
 	terminalId: string;
@@ -640,6 +663,15 @@ export async function ensureBoardMcpConfig(opts: {
 	const file = join(dir, `board-${opts.terminalId || "organizer"}.json`);
 	const config = {
 		mcpServers: {
+			...(opts.desktop
+				? {
+						desktop: {
+							type: "http",
+							url: opts.desktop.url,
+							headers: { Authorization: `Bearer ${opts.desktop.token}` },
+						},
+					}
+				: {}),
 			ateam_board: {
 				type: "http",
 				url: `http://127.0.0.1:${opts.hookPort}/mcp`,
@@ -676,8 +708,14 @@ export const BOARD_MCP_TOOLS = [
  * shortcut: this replaces a developer_instructions the user set in their own
  * config.toml; merge with it if anyone sets one.
  */
-export function codexBoardMcpArgs(hookPort: number): string {
+export function codexBoardMcpArgs(hookPort: number, desktop?: DesktopMcpConfig): string {
 	return [
+		...(desktop
+			? [
+					`-c 'mcp_servers.desktop.url="${desktop.url}"'`,
+					`-c 'mcp_servers.desktop.env_http_headers={"Authorization"="ATEAM_DESKTOP_AUTH"}'`,
+				]
+			: []),
 		`-c 'mcp_servers.ateam_board.url="http://127.0.0.1:${hookPort}/mcp"'`,
 		`-c 'developer_instructions="${BOARD_INSTRUCTIONS}"'`,
 		`-c 'mcp_servers.ateam_board.env_http_headers={"x-ateam-terminal-id"="ATEAM_TERMINAL_ID","x-ateam-terminal-token"="ATEAM_TERMINAL_TOKEN"}'`,
@@ -696,6 +734,7 @@ export function codexBoardMcpArgs(hookPort: number): string {
  * `{env:…}` is OpenCode's own substitution, so the token stays in the env.
  */
 export function opencodeConfigContent(opts: {
+	desktop?: DesktopMcpConfig;
 	hookPort: number;
 	hooksDir: string;
 	existing?: string;
@@ -712,6 +751,15 @@ export function opencodeConfigContent(opts: {
 		plugin: [...plugins, pathToFileURL(join(opts.hooksDir, "opencode-inbox.js")).href],
 		mcp: {
 			...(base.mcp ?? {}),
+			...(opts.desktop
+				? {
+						desktop: {
+							type: "remote",
+							url: opts.desktop.url,
+							headers: { Authorization: "{env:ATEAM_DESKTOP_AUTH}" },
+						},
+					}
+				: {}),
 			ateam_board: {
 				type: "remote",
 				url: `http://127.0.0.1:${opts.hookPort}/mcp`,
@@ -726,6 +774,7 @@ export function opencodeConfigContent(opts: {
 
 /** Build the PTY environment for an agent session, injecting hook correlation. */
 export function buildAgentEnv(opts: {
+	desktop?: DesktopMcpConfig;
 	terminalId: string;
 	agentId: string;
 	hookPort: number;
@@ -736,12 +785,14 @@ export function buildAgentEnv(opts: {
 	return {
 		...process.env,
 		ATEAM_TERMINAL_ID: opts.terminalId,
+		...(opts.desktop ? { ATEAM_DESKTOP_AUTH: `Bearer ${opts.desktop.token}` } : {}),
 		ATEAM_AGENT_ID: opts.agentId,
 		ATEAM_HOOK_PORT: String(opts.hookPort),
 		...(opts.token ? { ATEAM_TERMINAL_TOKEN: opts.token } : {}),
 		...(opts.agentId === "opencode"
 			? {
 					OPENCODE_CONFIG_CONTENT: opencodeConfigContent({
+						desktop: opts.desktop,
 						hookPort: opts.hookPort,
 						hooksDir: opts.hooksDir,
 						existing: process.env.OPENCODE_CONFIG_CONTENT,

@@ -34,7 +34,7 @@ const release: string = JSON.parse(
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
-for (const entry of ["src/cli.ts", "src/pty/daemon.ts"]) {
+for (const entry of ["src/cli.ts", "src/pty/daemon.ts", "../desktop-control/src/desktop.ts"]) {
 	const res = await Bun.build({
 		entrypoints: [join(serverRoot, entry)],
 		outdir: dist,

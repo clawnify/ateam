@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AteamDb } from "@ateam/db";
@@ -338,4 +338,26 @@ describe("peer messaging on the launch line", () => {
 		// The task's description stays what the user started it with.
 		expect(repo.getTask(db, taskId)?.description ?? null).toBeNull();
 	});
+});
+
+it("discovers the installed desktop service through the actual launch path", async () => {
+	services.userDataDir = services.hooksDir;
+	mkdirSync(join(services.userDataDir, "browser"));
+	const token = "a".repeat(64);
+	writeFileSync(join(services.userDataDir, "browser", "desktop-token"), token);
+	for (const agentId of ["claude", "codex", "opencode"]) {
+		await spawnAgentInTask(services, () => {}, { taskId, agentId });
+		const launch = launches.at(-1) as { args: string[]; env: Record<string, string> };
+		expect(launch.env.ATEAM_DESKTOP_AUTH).toBe(`Bearer ${token}`);
+		if (agentId === "claude") {
+			const config = launch.args[2]?.match(/--mcp-config '([^']+)'/)?.[1];
+			expect(config).toBeTruthy();
+			const servers = JSON.parse(readFileSync(config ?? "", "utf8")).mcpServers;
+			expect(servers.desktop.url).toBe("http://127.0.0.1:6080/mcp");
+		} else if (agentId === "codex") expect(launch.args[2]).toContain("mcp_servers.desktop.url");
+		else
+			expect(JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT ?? "{}").mcp.desktop.url).toBe(
+				"http://127.0.0.1:6080/mcp",
+			);
+	}
 });
