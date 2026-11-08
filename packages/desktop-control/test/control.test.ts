@@ -92,3 +92,20 @@ test("actions serialize even after release and reacquisition", async () => {
 	expect(await failed).toBeInstanceOf(Error);
 	c.close();
 });
+
+test("confirming the current human owner preserves held keys and buttons", async () => {
+	const c = new DesktopControl();
+	let revoked = 0;
+	c.onRevoke = () => {
+		revoked++;
+	};
+	await c.takeOver("A");
+	const first = revoked;
+	await c.takeOver("A");
+	expect(revoked).toBe(first);
+	expect(c.canInput("A")).toBe(true);
+	await c.takeOver("B");
+	expect(revoked).toBe(first + 1);
+	expect(c.canInput("A")).toBe(false);
+	c.close();
+});

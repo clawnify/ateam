@@ -46,6 +46,9 @@ export class DesktopControl {
 	/** Revoke immediately; don't enable viewer input until the interrupted action
 	 * has exited and cleaned up its keys. Queued agent actions recheck ownership. */
 	async takeOver(viewer: string): Promise<void> {
+		// Direct-input viewers confirm ownership at the start of each gesture.
+		// Re-confirmation must not release modifiers/buttons held by that viewer.
+		if (this.canInput(viewer)) return;
 		this.revoke();
 		this.ready = false;
 		this.lease = { kind: "human", label: "a desktop viewer", token: viewer, expiresAt: null };

@@ -54,15 +54,20 @@ normalized to Return. It is typing, so the focused application's shortcuts,
 autoindent, and text transformations still apply. Scroll amounts are wheel
 steps (1–20) at the current pointer position.
 
-The viewer fills its frame, with controls collapsed behind the corner button.
-Open it to take/release control or use the phone text field. The Ateam installer
-sets a dark wallpaper on the actual X desktop and restores it at display startup.
+The viewer fills its frame and accepts mouse and keyboard input directly, without
+a takeover panel. A keyboard button on touch devices opens a text field for the
+phone's software keyboard. The Ateam installer sets a dark wallpaper on the
+actual X desktop and restores it at display startup.
 
-The viewer starts in watch mode. **Take control** revokes the agent lease,
-cancels its running input, waits for key cleanup, and permits only that viewer's
-input. **Release control** or disconnect makes the desktop available again.
+Watching alone does not interrupt an agent. The first click, touch, scroll or
+keystroke automatically revokes the agent lease, cancels its running input and
+waits for key cleanup. noVNC's encoded input is buffered during that handoff, so
+the first gesture reaches the desktop once ownership is confirmed. Leaving the
+viewer, hiding it, shrinking it to the phone miniature, or disconnecting makes
+the desktop available again. Failed requests time out and reconnect; buffered
+input is discarded rather than replayed after a later connection.
 A broken connection is detected by WebSocket heartbeat (within 20 seconds).
-A second viewer can explicitly take over too. Server-side RFB framing/filtering
+A second viewer can interact to take over too. Server-side RFB framing/filtering
 blocks stale viewer keys, pointer events, clipboard writes and resize requests;
 held keys/buttons are released on handoff. Unknown RFB extensions fail closed.
 The text bar also allows text entry from a phone's software keyboard.

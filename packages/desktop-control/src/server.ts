@@ -8,6 +8,7 @@ import { DesktopControl } from "./control";
 import { dispatchMcp } from "./mcp";
 import { RfbInputGate } from "./rfb";
 import { viewerHtml, viewerScript } from "./viewer";
+import { viewerInputScript } from "./viewer-input";
 import { X11Desktop } from "./x11";
 
 function matches(got: string | undefined, expected: string): boolean {
@@ -96,6 +97,9 @@ export function createDesktopServer(opts: {
 				mime = "text/html";
 			} else if (url.pathname === "/viewer.js") {
 				content = viewerScript;
+				mime = "text/javascript";
+			} else if (url.pathname === "/viewer-input.js") {
+				content = viewerInputScript;
 				mime = "text/javascript";
 			} else {
 				const path = decodeURIComponent(url.pathname);
