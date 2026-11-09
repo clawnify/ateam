@@ -2656,6 +2656,10 @@ export default function App() {
 				onAiKeys={() => openAiKeys(boxSettingsKey)}
 				onDotfiles={() => setDotfilesKey(boxSettingsKey)}
 				onLock={() => lockBox(settingsBox)}
+				onConnection={() => {
+					setBoxSettingsKey(null);
+					void editBox(settingsBox);
+				}}
 			/>
 		);
 	}

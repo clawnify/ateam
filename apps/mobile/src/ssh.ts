@@ -154,7 +154,9 @@ export async function prepareSSH(
 			box = { ...box, ssh: { ...box.ssh, user: "ateam", auth: "key", identity } };
 			await remember(box);
 			// The saved box logs in by key now, so root's password has no further use here.
-			await native.removePassword(identity).catch(() => {});
+			// (A dev build from before removePassword skips it rather than failing setup.)
+			if (typeof native.removePassword === "function")
+				await native.removePassword(identity).catch(() => {});
 			opened = await openSSH(box);
 			({ native, id } = opened);
 		}

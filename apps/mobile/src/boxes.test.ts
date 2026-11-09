@@ -10,6 +10,7 @@ import {
 	boxTitle,
 	CONNECTION_LOST,
 	cantWakeReason,
+	connectionOf,
 	droppedIdentities,
 	leadBoxOf,
 	leadFirst,
@@ -307,4 +308,25 @@ test("an SSH box's Keychain identity goes once no saved box uses it", () => {
 	expect(droppedIdentities([a, twin], [])).toEqual(["id-a"]);
 	// Root becoming the ateam user keeps the identity (src/ssh.ts).
 	expect(droppedIdentities([{ ...a, ssh: { ...a.ssh, user: "root" } }], [a])).toEqual([]);
+});
+
+test("box settings say how this phone reaches each box", () => {
+	expect(
+		connectionOf({
+			host: "203.0.113.7",
+			port: "22",
+			ssh: { user: "ateam", identity: "k", auth: "key" },
+		}),
+	).toEqual({ label: "SSH", detail: "ateam@203.0.113.7:22 · key on this phone" });
+	expect(
+		connectionOf({
+			host: "vps.example",
+			port: "",
+			ssh: { user: "root", identity: "p", auth: "password" },
+		}).detail,
+	).toBe("root@vps.example:22 · password on this phone");
+	expect(connectionOf({ host: "100.64.0.1", port: "8787" })).toEqual({
+		label: "Tailscale",
+		detail: "100.64.0.1:8787 · needs Tailscale on this phone",
+	});
 });

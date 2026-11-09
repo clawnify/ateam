@@ -2,7 +2,7 @@ import type { PairingState } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { boxSubtitle, boxTitle, type SavedBox } from "./boxes";
+import { boxSubtitle, boxTitle, connectionOf, type SavedBox } from "./boxes";
 import { ProviderIcon } from "./ProviderIcon";
 import { C, CONTENT_MAX } from "./theme";
 
@@ -16,6 +16,7 @@ export function BoxSettingsScreen({
 	onAiKeys,
 	onDotfiles,
 	onLock,
+	onConnection,
 }: {
 	box: SavedBox;
 	connected: boolean;
@@ -25,7 +26,10 @@ export function BoxSettingsScreen({
 	onAiKeys: () => void;
 	onDotfiles: () => void;
 	onLock: () => Promise<void>;
+	/** Edit how this phone reaches the box (the Edit box form). */
+	onConnection: () => void;
 }) {
+	const connection = connectionOf(box);
 	return (
 		<View style={styles.root}>
 			<View style={styles.header}>
@@ -50,6 +54,24 @@ export function BoxSettingsScreen({
 								{boxSubtitle(box)} · {connected ? "Connected" : "Not connected"}
 							</Text>
 						</View>
+					</View>
+					<Text style={styles.sectionTitle}>Connection</Text>
+					{/* The phone's own setting, so it can change while the box is away. */}
+					<View style={styles.group}>
+						<Pressable
+							style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+							onPress={onConnection}
+							accessibilityRole="button"
+							accessibilityLabel={`Connection: ${connection.label}, ${connection.detail}`}
+							accessibilityHint="Edits how this phone reaches the box"
+						>
+							<Feather name={box.ssh ? "terminal" : "wifi"} size={20} color={C.muted} />
+							<View style={styles.rowText}>
+								<Text style={styles.rowTitle}>{connection.label}</Text>
+								<Text style={styles.note}>{connection.detail}</Text>
+							</View>
+							<Feather name="chevron-right" size={18} color={C.muted} />
+						</Pressable>
 					</View>
 					<Text style={styles.sectionTitle}>Configuration</Text>
 					<View style={styles.group}>

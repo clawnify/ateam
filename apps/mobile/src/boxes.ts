@@ -180,6 +180,19 @@ export function boxSubtitle(b: SavedConnection): string {
 		.join(" · ");
 }
 
+/** How this phone reaches a box, for its settings: over SSH, with what it logs in
+ *  with (kept on this phone), or at its address on the tailnet. */
+export function connectionOf(b: SavedConnection): { label: string; detail: string } {
+	if (b.ssh) {
+		const login = b.ssh.auth === "key" ? "key" : "password";
+		return {
+			label: "SSH",
+			detail: `${b.ssh.user}@${b.host}:${b.port || "22"} · ${login} on this phone`,
+		};
+	}
+	return { label: "Tailscale", detail: `${b.host}:${b.port} · needs Tailscale on this phone` };
+}
+
 function isConnection(v: unknown): v is SavedConnection {
 	if (typeof v !== "object" || v === null) return false;
 	const c = v as Record<string, unknown>;

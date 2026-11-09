@@ -42,6 +42,7 @@ import {
 } from "./boxes";
 import { ProviderIcon } from "./ProviderIcon";
 import { ScanQrIcon } from "./ScanQrIcon";
+import { openTailscale, useTailnet } from "./tailnet";
 import { C, CONTENT_MAX } from "./theme";
 
 /** How far a card slides open, per action behind it (Edit, Remove, and Lead). */
@@ -116,6 +117,8 @@ export function BoxesScreen({
 }) {
 	// With one box there's nothing to choose: its Lead is the Lead.
 	const choosingLead = boxes.length > 1;
+	// Tailscale is the phone's, not a box's: only the boxes reached over it say so.
+	const tailnet = useTailnet();
 	return (
 		<View style={styles.root}>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
@@ -167,6 +170,7 @@ export function BoxesScreen({
 								asked={link.asked}
 								asleep={asleep}
 								failure={link.state === "down" && !asleep && !making ? link.error : null}
+								tailscaleOff={!box.ssh && !live && tailnet === false}
 								note={making ? "Setting itself up on Hetzner, about 4 minutes" : null}
 								// A try in the background shows only as the spinner; the steps are for one asked for.
 								steps={link.asked ? link.steps : []}
@@ -227,6 +231,7 @@ function BoxCard({
 	asked,
 	asleep,
 	failure,
+	tailscaleOff,
 	note,
 	steps,
 	lead,
@@ -254,6 +259,8 @@ function BoxCard({
 	asleep: boolean;
 	/** Why the last attempt to reach this box failed, or null. */
 	failure: string | null;
+	/** Reached over Tailscale, not connected, and Tailscale is off on this phone. */
+	tailscaleOff: boolean;
 	/** What the box is doing, in place of where it is (one being set up). */
 	note: string | null;
 	/** What reaching this box went through; empty when it isn't being reached. */
@@ -500,6 +507,9 @@ function BoxCard({
 				// Before the steps: a tap that ends in this keeps them, and the code field
 				// is what the card is for now.
 				<PairTray onPair={onPair} onScan={onScan} />
+			) : tailscaleOff && !reaching ? (
+				// Ahead of the steps and the provider: no try reaches it until this is fixed.
+				<TailscaleTray />
 			) : tray && (reaching || !onSetProvider) ? (
 				<StepTray steps={steps} failure={failure} onCancel={reaching ? onCancel : null} />
 			) : onSetProvider ? (
@@ -507,6 +517,26 @@ function BoxCard({
 				// above says what happened, this says what to do about it.
 				<ProviderTray onSetProvider={onSetProvider} />
 			) : null}
+		</View>
+	);
+}
+
+/** Under a box reached over Tailscale while Tailscale is off on this phone. */
+function TailscaleTray() {
+	return (
+		<View style={styles.tray}>
+			<Text style={styles.trayNote}>
+				Tailscale is off on this phone, so a box on your tailnet can't be reached.
+			</Text>
+			<View style={styles.pairRow}>
+				<Pressable
+					style={[styles.pairBtn, styles.scanBtn]}
+					onPress={openTailscale}
+					accessibilityRole="button"
+				>
+					<Text style={styles.trayBtnText}>Turn on Tailscale</Text>
+				</Pressable>
+			</View>
 		</View>
 	);
 }
