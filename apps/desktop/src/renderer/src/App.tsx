@@ -127,6 +127,9 @@ import {
 import { addTailscaleBox, installBox } from "./lib/box-actions";
 import {
 	bestMcShape,
+	fixedMcShape,
+	MC_RESIZE_SETTLE_MS,
+	MC_REORDER_DELAY_MS,
 	MC_PAGE_SIZE,
 	type McArea,
 	type McChoice,
@@ -207,10 +210,6 @@ const MC_TILE_MIME = "application/x-ateam-tile";
 // How long a dragged tile is held over the grid's top or bottom edge before
 // the page flips.
 const FLIP_HOLD_MS = 500;
-// How long the grid's size must hold still before Auto refits to it.
-const MC_RESIZE_SETTLE_MS = 200;
-// Batch automatic priority changes after five seconds without a new order.
-const MC_REORDER_DELAY_MS = 5_000;
 
 // Whether a drag carries files from Finder (not a tile, not dragged text).
 const draggingFiles = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
@@ -269,6 +268,9 @@ function dragWidth(
 // Where collapsing a focused task takes you — it's whatever view the task was
 // opened over, so the tooltip has to name that view, not the board.
 type View = "board" | "mission" | "loops" | "settings" | "lead";
+
+// Where the app opens, in the main window and in a project window.
+const DEFAULT_VIEW: View = "lead";
 
 const FOCUS_COLLAPSE_LABEL: Record<View, string> = {
 	board: "Show beside the board",
@@ -365,7 +367,7 @@ export function App() {
 	const [dropCardKey, setDropCardKey] = useState<string | null>(null);
 	const [newIssueOpen, setNewIssueOpen] = useState(false);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
-	const [view, setView] = useState<View>("board");
+	const [view, setView] = useState<View>(DEFAULT_VIEW);
 	const needingBoxes = useBoxesNeedingYou();
 	const boxesNeedYou = needingBoxes.size > 0;
 	// Layout is per project: one project may run twice the terminals of another.
@@ -951,8 +953,10 @@ export function App() {
 	);
 
 	// Get started takes the board's place with no project at all, and on a new
-	// install until its first task (get-started.ts). A detached window is one
-	// project, so never there.
+	// install until its first task (get-started.ts). The Lead's place too: the
+	// app opens on the Lead, so a first launch lands on it, and adding a project
+	// from it must not swap the list for the chat halfway through. A detached
+	// window is one project, so never there.
 	const [getStarted, setGetStarted] = useState<GetStartedState>(readGetStarted);
 	const startBoard = {
 		projectsLoaded,
@@ -1367,6 +1371,10 @@ export function App() {
 	const rememberView = () => {
 		if (scopeKey) viewMemRef.current[scopeKey] = { taskId: selectedTaskId, mode: panelMode, view };
 	};
+	// A project not opened yet this session opens in the view you're on, so a
+	// pick never moves you off the Lead, the Board or Mission Control. Settings
+	// belongs to no project, so a pick from there lands on the Lead.
+	const unvisitedView: View = view === "settings" ? DEFAULT_VIEW : view;
 	// One project picked in the switcher (or a rail tile): All ends.
 	const selectProject = (id: string) => {
 		if (id === activeProjectId && !allProjects) return;
@@ -1377,7 +1385,7 @@ export function App() {
 		setSwitchedTo(id);
 		setSelectedTaskId(mem?.taskId ?? null);
 		setPanelMode(mem?.mode ?? "side");
-		setView(mem?.view ?? "board");
+		setView(mem?.view ?? unvisitedView);
 	};
 	const selectAll = () => {
 		if (allProjects) return;
@@ -1386,7 +1394,7 @@ export function App() {
 		setAllProjects(true);
 		setSelectedTaskId(mem?.taskId ?? null);
 		setPanelMode(mem?.mode ?? "side");
-		setView(mem?.view ?? "board");
+		setView(mem?.view ?? unvisitedView);
 		// New work goes to the project of the task in front of you.
 		const back = mem?.taskId ? allTasks.find((t) => t.id === mem.taskId) : undefined;
 		if (back) setActiveProjectId(back.projectId);
@@ -1701,11 +1709,14 @@ export function App() {
 
 	// Land a task in whatever the user is actually looking at: a task open
 	// full-width hands its panel to this one, the board opens it beside itself,
-	// and Mission Control just grows a tile. `panelMode` survives deselection,
-	// so "full" only counts while a task is really on screen, otherwise the
-	// board would jump to a full-width panel the user never opened.
+	// and Mission Control just grows a tile. The Lead has no panel beside it, so
+	// there the task opens full-width and collapsing it goes back to the chat.
+	// `panelMode` survives deselection, so "full" only counts while a task is
+	// really on screen, otherwise the board would jump to a full-width panel
+	// the user never opened.
 	const landTask = (id: string) => {
-		if (!(selectedTaskId && panelMode === "full")) setPanelMode("side");
+		if (view === "lead") setPanelMode("full");
+		else if (!(selectedTaskId && panelMode === "full")) setPanelMode("side");
 		setSelectedTaskId(id);
 		// Loops shows only loop-owned tasks, so a new task would land
 		// somewhere it can't be seen; every other view keeps its place.
@@ -2120,7 +2131,9 @@ export function App() {
 							</div>
 							{!tasksCollapsed && (
 								<TaskPeekProvider>
-									<div className="side-list">
+									{/* Status updates move rows. Keep the scroll offset instead of
+									    letting the browser follow an anchor row to its new position. */}
+									<div className="side-list" style={{ overflowAnchor: "none" }}>
 										{!activeProjectId ? (
 											// activeProjectId is only empty while there is no project.
 											projectsLoaded && <div className="tree-empty">Add a project first</div>
@@ -2314,7 +2327,13 @@ export function App() {
 					<div className="tabs">
 						{/* The tab stays lit while a task is focused over it: the focused
 						    task belongs to a view, and the lit tab is where closing it
-						    lands you. */}
+						    lands you. The Lead comes first: it's where the app opens. */}
+						<div
+							className={`tab ${view === "lead" ? "active" : ""}`}
+							onClick={() => goToView("lead")}
+						>
+							Lead
+						</div>
 						<div
 							className={`tab ${view === "board" ? "active" : ""}`}
 							onClick={() => goToView("board")}
@@ -2326,12 +2345,6 @@ export function App() {
 							onClick={() => goToView("loops")}
 						>
 							Loops
-						</div>
-						<div
-							className={`tab ${view === "lead" ? "active" : ""}`}
-							onClick={() => goToView("lead")}
-						>
-							Lead
 						</div>
 					</div>
 					{/* Centered task search: the topbar is a 1fr | search | 1fr grid, so
@@ -2505,7 +2518,7 @@ export function App() {
 							onDelete={() => deleteTask(selectedTask)}
 							onClose={() => setSelectedTaskId(null)}
 						/>
-					) : view === "board" && showGetStarted ? (
+					) : (view === "board" || view === "lead") && showGetStarted ? (
 						<GetStarted
 							agents={agents}
 							projects={unifiedProjects.map((p) => p.name)}
@@ -5343,8 +5356,10 @@ export function MissionControl({
 		);
 	// Auto's page: lines of tiles that fill the grid, every tile a cell and
 	// every cell a tile. The last page is shaped for the tiles it has.
-	const autoGrid =
-		layout === "auto" && fit ? mcShapeGrid(bestMcShape(visible.length, fit.area)) : null;
+	const layoutGrid =
+		layout === "auto"
+			? fit && mcShapeGrid(bestMcShape(visible.length, fit.area))
+			: mcShapeGrid(fixedMcShape(layout));
 
 	return (
 		<div className={wrapClass} ref={wrapRef} {...wrapDropProps}>
@@ -5356,7 +5371,7 @@ export function MissionControl({
 				key={clampedPage}
 				className="mc"
 				data-layout={layout}
-				style={autoGrid?.container}
+				style={layoutGrid?.container}
 				initial={dirRef.current === 0 ? false : { y: dirRef.current * 32, opacity: 0.3 }}
 				animate={{ y: 0, opacity: 1 }}
 				transition={springy}
@@ -5387,7 +5402,7 @@ export function MissionControl({
 							// only: `layout` alone would scale a terminal mid-flight when the
 							// page holds a different number of tiles than it did before.
 							layout="position"
-							style={autoGrid?.tiles[i]}
+							style={layoutGrid?.tiles[i]}
 							initial={{ opacity: 0 }}
 							animate={{ opacity: 1 }}
 							transition={{ layout: springy, opacity: { duration: 0.22 } }}
@@ -5531,7 +5546,7 @@ export function MissionControl({
 				    in its first open slot; the tile that task grows takes the slot,
 				    and the offer moves on to the next one, gliding like the tiles.
 				    Auto leaves no open slot: its tiles fill the page. */}
-				{newTaskButton && !autoGrid && visible.length < pageSize && (
+				{newTaskButton && layout !== "auto" && visible.length < pageSize && (
 					<motion.div
 						key="mc-slot"
 						className="mc-slot"

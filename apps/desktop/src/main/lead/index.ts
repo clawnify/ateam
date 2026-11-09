@@ -258,7 +258,7 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 		if (typeof machine !== "string" || !machine) throw new Error("Choose a machine.");
 		const link = deps.boxes.boxLink(machine);
 		if (!link) throw new Error(`Connect ${machine} in Settings → Boxes first.`);
-		if (link.version < 35) throw new Error(`Update ${machine} to configure its Chat agent.`);
+		if (link.version < 37) throw new Error(`Update ${machine} to configure its Chat agent.`);
 		return link.rpc;
 	};
 	ipcMain.handle(LEAD_CH.settings, async (_e, machine: unknown) => {

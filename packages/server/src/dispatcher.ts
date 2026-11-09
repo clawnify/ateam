@@ -49,6 +49,7 @@ import {
 	type DirEntryDTO,
 	type KanbanColumn,
 	type MergeStrategy,
+	MIN_CLIENT_PROTOCOL,
 	NO_GIT_IDENTITY,
 	PROTOCOL_VERSION,
 	type RegisterProjectOptions,
@@ -62,6 +63,7 @@ import {
 } from "@ateam/protocol";
 import { installBrowser, openBrowserView } from "./browser";
 import { credentialStatuses, credentialsPath, updateCredentials } from "./credentials-file";
+import { dotfilesFor, validateDotfiles } from "./dotfiles";
 import { createEditorHost, installCodeServer } from "./editor";
 import type { Engine } from "./engine";
 import { checkRepoAccess, connectGithubToken, githubAccessStatus } from "./github-access";
@@ -795,6 +797,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			const agents = await listAgents();
 			return {
 				protocolVersion: PROTOCOL_VERSION,
+				minClient: MIN_CLIENT_PROTOCOL,
 				agents: agents.filter((a) => a.available).map((a) => a.id),
 				release: ENGINE_RELEASE,
 			};
@@ -975,6 +978,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			return { settings: r.settings, path: settingsPath(), warning: r.warning };
 		},
 		[CH.settingsUpdate]: async (patch: SettingsPatch): Promise<SettingsResult> => {
+			if (patch.engine?.dotfiles != null) validateDotfiles(patch.engine.dotfiles);
 			updateSettings(patch);
 			const r = readSettings();
 			return { settings: r.settings, path: settingsPath(), warning: r.warning };
@@ -989,6 +993,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			updateCredentials(patch);
 			return { ...credentialStatuses(), path: credentialsPath() };
 		},
+		// Explicit box setup: settings sync and reconnect never call these.
+		[CH.dotfilesStatus]: () => dotfilesFor(services.userDataDir).status(),
+		[CH.dotfilesPrepare]: (config: unknown) => dotfilesFor(services.userDataDir).prepare(config),
+		[CH.dotfilesApply]: (id: unknown) => dotfilesFor(services.userDataDir).apply(id),
 		// GitHub access on this machine (github-access.ts). The token arrives here
 		// once, for connect, and never travels back.
 		[CH.githubAccessStatus]: async () => githubAccessStatus(),

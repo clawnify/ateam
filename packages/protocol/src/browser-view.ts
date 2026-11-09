@@ -8,12 +8,13 @@
  * (app/webutil.js getConfigVar) and which never reaches the server, so the
  * password stays out of websockify's request log.
  */
-export function browserViewUrl(base: string, password: string): string {
+export function browserViewUrl(base: string, password: string, controlToken?: string): string {
 	const opts: [string, string][] = [
 		["autoconnect", "true"],
 		["resize", "scale"],
 		["reconnect", "true"],
 		["password", password],
 	];
+	if (controlToken) opts.push(["controlToken", controlToken]);
 	return `${base}/vnc.html#${opts.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&")}`;
 }

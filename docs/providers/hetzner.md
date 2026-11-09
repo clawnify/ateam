@@ -50,7 +50,7 @@ makes:
   name), and add a project.
 - **It knows the phone before Ateam first starts.** The phone makes a token of its own and
   puts only its sha256 in the cloud-init (`ATEAM_PAIR_DEVICE`, then `ateam pair
-  --add-device`). Locked or open stays as a new box would have it.
+  --add-device`). The box starts private, with that phone paired.
 - **No SSH key, and nothing in from the internet.** It sits behind a Hetzner firewall,
   `ateam-tailnet-only`, made the first time, which lets in only Tailscale's direct
   connections (UDP 41641); cloud-init turns password logins off. Hetzner emails a root

@@ -47,9 +47,10 @@ export const LOOP_SOON_MS = 2 * IDLE_CHECK_MS;
 export const HELD_NOTE_MS = 60 * 60_000;
 
 /** What kept the box awake. */
-export type Why = "start" | "agent" | "lead" | "input" | "connection" | "wake" | "off";
+export type Why = "start" | "agent" | "lead" | "input" | "connection" | "wake" | "off" | "setup";
 
 const WHY: Record<Why, string> = {
+	setup: "box setup",
 	start: "the engine started",
 	agent: "agent work",
 	lead: "the Lead chat",
@@ -148,6 +149,8 @@ export interface SleepDriver {
 }
 
 export interface SleepControlDeps {
+	/** Explicit box setup must finish even after the client disconnects. */
+	setupActive?: () => boolean;
 	/** Agent work in progress (Engine.isWorking). */
 	working: () => boolean;
 	/** When someone last typed into a terminal on this box (Engine.lastInputAt), or null. */
@@ -218,6 +221,7 @@ export async function startSleepControl(
 		const t = now();
 		const seen: Seen[] = [];
 		if (deps.working()) seen.push({ why: "agent", at: t });
+		if (deps.setupActive?.()) seen.push({ why: "setup", at: t });
 		const lead = deps.lead?.();
 		if (lead?.working) seen.push({ why: "lead", at: t });
 		if (lead?.lastUsedAt != null) seen.push({ why: "lead", at: lead.lastUsedAt });

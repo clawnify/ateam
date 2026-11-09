@@ -152,7 +152,13 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 		...mobileNative,
 		browserView: async (taskId) => {
 			const view = (await rpc.call(CH.browserView, [taskId])) as BrowserViewDTO;
-			return { url: browserViewUrl(`http://${boxHost(url)}:${view.port}`, view.password) };
+			return {
+				url: browserViewUrl(
+					`http://${boxHost(url)}:${view.port}`,
+					view.password,
+					view.controlToken,
+				),
+			};
 		},
 	};
 
