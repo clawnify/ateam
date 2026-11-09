@@ -1,7 +1,5 @@
-// Task creation + agent launch, shared by the RPC dispatcher (composer, board)
-// and the Loops runner — a loop tick starts an agent session through the exact
-// same path as typing a prompt in the composer. Lifted verbatim from the
-// dispatcher's tasksCreate / ptySpawnAgent handlers.
+// Task creation and terminal launch, shared by RPC, the board MCP and Loops.
+// Every agent session uses the same launch path as the composer.
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { agentCommand, getAgent, latestSessionInDir, probeAgentBinary } from "@ateam/agents";
@@ -51,6 +49,87 @@ export interface SpawnAgentInput {
 	 * plain sentence are both just text here.
 	 */
 	followUp?: string;
+}
+
+/** Open a login shell in a task's worktree and announce its new tab. */
+export function spawnShellInTask(
+	services: Services,
+	notifyTaskUpdated: (taskId: string) => void,
+	task: Pick<Task, "id" | "worktreePath">,
+): { terminalId: string } {
+	services.worktreeGuard.assertWritable(task.id);
+	const terminalId = randomUUID();
+	repo.createSession(services.db, {
+		taskId: task.id,
+		agentId: "shell",
+		terminalId,
+		cwd: task.worktreePath,
+	});
+	services.pty.spawn({
+		terminalId,
+		shell,
+		args: ["-l"],
+		cwd: task.worktreePath,
+		env: { ...process.env },
+	});
+	notifyTaskUpdated(task.id);
+	return { terminalId };
+}
+
+// Reserve capacity while launches await their CLI/config, before their tabs appear.
+const creatingSessions = new WeakMap<Services, Map<string, number>>();
+export const MAX_MCP_SESSIONS = 10;
+
+/** The board MCP may open tabs only in its live caller's own task. */
+export async function createSessionInCallerTask(
+	services: Services,
+	notifyTaskUpdated: (taskId: string) => void,
+	input: { callerTerminalId: string; agent: string; prompt?: string },
+): Promise<{ taskId: string; terminalId: string; agent: string }> {
+	const caller = repo.getSessionByTerminal(services.db, input.callerTerminalId);
+	if (
+		!caller ||
+		caller.agentId === "shell" ||
+		caller.status === "stopped" ||
+		caller.exitedAt != null ||
+		!services.pty.has(caller.terminalId)
+	) {
+		throw new Error("only a live agent working in a task can create a session");
+	}
+	const task = repo.getTask(services.db, caller.taskId);
+	if (!task) throw new Error("the calling session's task no longer exists");
+	if (task.archivedAt != null) throw new Error("cannot create a session in an archived task");
+
+	let pending = creatingSessions.get(services);
+	if (!pending) {
+		pending = new Map();
+		creatingSessions.set(services, pending);
+	}
+	const count = pending.get(task.id) ?? 0;
+	const sessions = repo.listSessionsByTask(services.db, task.id);
+	const live = sessions.filter((s) => services.pty.has(s.terminalId)).length;
+	const recent = sessions.filter((s) => (s.startedAt ?? 0) >= Date.now() - 60_000).length;
+	if (Math.max(live, recent) + count >= MAX_MCP_SESSIONS) {
+		throw new Error(
+			`session limit: at most ${MAX_MCP_SESSIONS} live sessions or session starts per minute in this task`,
+		);
+	}
+	pending.set(task.id, count + 1);
+	try {
+		const result =
+			input.agent === "shell"
+				? spawnShellInTask(services, notifyTaskUpdated, task)
+				: await spawnAgentInTask(services, notifyTaskUpdated, {
+						taskId: task.id,
+						agentId: input.agent,
+						prompt: input.prompt,
+					});
+		return { taskId: task.id, terminalId: result.terminalId, agent: input.agent };
+	} finally {
+		const left = (pending.get(task.id) ?? 1) - 1;
+		if (left) pending.set(task.id, left);
+		else pending.delete(task.id);
+	}
 }
 
 /** Create a task (branch + worktree + row) in a project and announce it. */
