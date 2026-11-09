@@ -20,6 +20,7 @@ import {
 	View,
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
+import { sshAvailable } from "../modules/expo-ssh/src";
 import {
 	AGENT_CHOICES,
 	boxNameOf,
@@ -199,11 +200,13 @@ function Step({ state, text }: { state: "done" | "active" | "waiting"; text: str
 }
 
 function Progress({
+	onVerify,
 	creation,
 	onReachAt,
 	onDelete,
 	onStartOver,
 }: {
+	onVerify: () => void;
 	creation: Creation;
 	onReachAt: (host: string) => void;
 	onDelete: () => void;
@@ -239,7 +242,11 @@ function Progress({
 				/>
 				<Step
 					state={creation.step === "done" ? "done" : "waiting"}
-					text="This phone connects to it over Tailscale"
+					text={
+						creation.box.ssh
+							? "This phone connects over SSH"
+							: "This phone connects to it over Tailscale"
+					}
 				/>
 			</View>
 
@@ -256,7 +263,19 @@ function Progress({
 				</Text>
 			) : null}
 
-			{installing ? (
+			{installing && creation.box.ssh && !creation.box.ssh.hostKey ? (
+				<Pressable
+					style={styles.primary}
+					disabled={creation.verifying || creation.deleting}
+					onPress={onVerify}
+					accessibilityRole="button"
+				>
+					<Text style={styles.primaryText}>
+						{creation.verifying ? "Checking SSH host…" : "Verify SSH host and connect"}
+					</Text>
+				</Pressable>
+			) : null}
+			{installing && !creation.box.ssh ? (
 				<View style={styles.card}>
 					<Text style={styles.helpText}>
 						Not connecting once it's had its {INSTALL_MINUTES} minutes? Find {creation.name} in the
@@ -315,8 +334,8 @@ function Progress({
 			) : null}
 			{made ? (
 				<Text style={styles.note}>
-					Hetzner bills it until it's deleted, here or in Hetzner's console. Hetzner also emails you
-					a root password for it, which you won't need: the box is reached over your tailnet alone.
+					Hetzner bills it until it's deleted, here or in Hetzner's console. Keep access to your
+					provider account for recovery.
 				</Text>
 			) : null}
 		</View>
@@ -325,12 +344,14 @@ function Progress({
 
 export function CreateBoxScreen({
 	creation,
+	onVerify,
 	onCreate,
 	onReachAt,
 	onDelete,
 	onStartOver,
 	onBack,
 }: {
+	onVerify: () => void;
 	creation: Creation | null;
 	onCreate: (spec: CreateSpec) => void;
 	onReachAt: (host: string) => void;
@@ -343,6 +364,7 @@ export function CreateBoxScreen({
 	const [tokenSaved, setTokenSaved] = useState(false);
 	const [token, setToken] = useState("");
 	const [tsKey, setTsKey] = useState("");
+	const [network, setNetwork] = useState("tailscale");
 	const [name, setName] = useState(() => defaultBoxName(nameRandom));
 	const [options, setOptions] = useState<ProviderOptions | null>(null);
 	const [location, setLocation] = useState("");
@@ -401,7 +423,9 @@ export function CreateBoxScreen({
 	const keyOk = /^tskey-auth-[A-Za-z0-9-]+$/.test(tsKey.trim());
 	const sizes = options ? sizesIn(options, location) : [];
 	const price = options && size && location ? priceLine(options, size, location) : null;
-	const ready = Boolean(savedToken.current && options && boxName && keyOk && size && location);
+	const ready = Boolean(
+		savedToken.current && options && boxName && (network === "ssh" || keyOk) && size && location,
+	);
 
 	return (
 		<View style={styles.root}>
@@ -419,6 +443,7 @@ export function CreateBoxScreen({
 			>
 				{creation ? (
 					<Progress
+						onVerify={onVerify}
 						creation={creation}
 						onReachAt={onReachAt}
 						onDelete={onDelete}
@@ -427,9 +452,8 @@ export function CreateBoxScreen({
 				) : (
 					<View style={styles.column}>
 						<Text style={styles.intro}>
-							A server of your own on Hetzner Cloud. It sets itself up with Ateam, joins your
-							Tailscale network, and knows this phone. Then sign in to a coding agent on it, from
-							its terminal.
+							A server of your own on Hetzner Cloud. It installs Ateam and your coding agents.
+							Connect using Tailscale or a device SSH key, then sign in from its terminal.
 						</Text>
 
 						<Text style={styles.eyebrow}>Hetzner</Text>
@@ -462,25 +486,43 @@ export function CreateBoxScreen({
 							{problem ? <Text style={styles.errorText}>{problem}</Text> : null}
 						</View>
 
-						<Text style={styles.eyebrow}>Tailscale</Text>
-						<View style={styles.card}>
-							<Field
-								label="Auth key"
-								value={tsKey}
-								onChangeText={setTsKey}
-								placeholder="tskey-auth-…"
-								secure
-							/>
-							<Help
-								text="In Tailscale's admin console, Settings, Keys, Generate auth key. Leave Reusable off: the box can read its key back, so one that works once is safest. Turn on Pre-approved if your tailnet approves devices."
-								link="Open Tailscale's keys"
-								url={TAILSCALE_KEYS_URL}
-							/>
-							{tsKey.trim() && !keyOk ? (
-								<Text style={styles.errorText}>An auth key starts with tskey-auth-.</Text>
-							) : null}
-						</View>
-
+						<Picker
+							label="Connection"
+							value={network}
+							onPick={setNetwork}
+							items={[
+								{ slug: "tailscale", label: "Tailscale" },
+								...(sshAvailable ? [{ slug: "ssh", label: "SSH · no Tailscale needed" }] : []),
+							]}
+						/>
+						{network === "ssh" ? (
+							<Text style={styles.helpText}>
+								Ateam generates a key on this phone and installs its public key on the server. Only
+								SSH is open to the internet. Keep your provider account for recovery if you lose
+								this phone.
+							</Text>
+						) : (
+							<>
+								<Text style={styles.eyebrow}>Tailscale</Text>
+								<View style={styles.card}>
+									<Field
+										label="Auth key"
+										value={tsKey}
+										onChangeText={setTsKey}
+										placeholder="tskey-auth-…"
+										secure
+									/>
+									<Help
+										text="In Tailscale's admin console, Settings, Keys, Generate auth key. Leave Reusable off: the box can read its key back, so one that works once is safest. Turn on Pre-approved if your tailnet approves devices."
+										link="Open Tailscale's keys"
+										url={TAILSCALE_KEYS_URL}
+									/>
+									{tsKey.trim() && !keyOk ? (
+										<Text style={styles.errorText}>An auth key starts with tskey-auth-.</Text>
+									) : null}
+								</View>
+							</>
+						)}
 						{options ? (
 							<>
 								<Text style={styles.eyebrow}>Box</Text>
@@ -528,6 +570,7 @@ export function CreateBoxScreen({
 								const t = savedToken.current;
 								if (!t || !boxName) return;
 								onCreate({
+									network: network === "ssh" ? "ssh" : "tailscale",
 									token: t,
 									tailscaleAuthKey: tsKey.trim(),
 									name: boxName,
@@ -549,13 +592,14 @@ export function CreateBoxScreen({
 							style={({ pressed }) => [styles.more, pressed && styles.pressed]}
 							onPress={shareMacApp}
 							accessibilityRole="button"
-							accessibilityLabel="More ways to get a box: Ateam for Mac sets up any Linux machine you can reach over SSH"
+							accessibilityLabel="More ways to get a box"
 						>
 							<LogoStack />
 							<View style={styles.moreText}>
 								<Text style={styles.moreTitle}>More ways to get a box</Text>
 								<Text style={styles.moreBody}>
-									Ateam for Mac sets up any Linux machine you can reach over SSH.
+									Already have a Linux server? Use Add a box and choose SSH. Ateam for Mac can also
+									set up remote machines.
 								</Text>
 							</View>
 							<Feather name="chevron-right" size={16} color={C.muted} />

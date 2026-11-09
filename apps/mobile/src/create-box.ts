@@ -80,6 +80,7 @@ export function newDeviceToken(random: (n: number) => Uint8Array): string {
 
 /** The box's cloud-init: on the tailnet, Ateam installed, this phone paired. */
 export function phoneCloudInit(opts: {
+	sshPublicKey?: string;
 	name: string;
 	tailscaleAuthKey: string;
 	tokenHash: string;
@@ -88,9 +89,13 @@ export function phoneCloudInit(opts: {
 }): string {
 	return buildCloudInit({
 		hostname: opts.name,
-		tailscaleAuthKey: opts.tailscaleAuthKey,
+		...(opts.sshPublicKey
+			? { network: "ssh" as const, sshPublicKey: opts.sshPublicKey }
+			: { tailscaleAuthKey: opts.tailscaleAuthKey }),
 		install: {
-			pairDevice: { tokenHash: opts.tokenHash, label: opts.label },
+			...(!opts.sshPublicKey
+				? { pairDevice: { tokenHash: opts.tokenHash, label: opts.label } }
+				: {}),
 			agents: opts.agents,
 		},
 	});

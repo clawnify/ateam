@@ -59,7 +59,7 @@ export function ConsentScreen({
 						/>
 						<Point
 							title="Where it goes"
-							body="Only to the machine you enter on the next screen, over your own private network. Clawnify runs no server in between and receives none of it."
+							body="Only to the machine you choose, over Tailscale or an encrypted SSH connection. Clawnify runs no server in between and receives none of it."
 						/>
 						<Point
 							title="What happens there"

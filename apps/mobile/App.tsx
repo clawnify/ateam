@@ -1,5 +1,5 @@
 // Ateam mobile: a thin remote for the boxes running the Ateam engine. The phone
-// opens a WebSocket to each saved box's opt-in `ateam` WS listener (over Tailscale),
+// opens a tailnet WebSocket or native SSH channel to each saved box,
 // handshakes, and drives the SAME engines the desktop does via the shared
 // @ateam/protocol contract (see src/connection.ts). Every box is on one LIVE board
 // at once, as on the desktop (src/fleet.ts); the composer creates + launches tasks
@@ -7,8 +7,7 @@
 //
 // Theme = Ateam's real tokens (apps/desktop/src/renderer/src/index.css): near-black
 // #0c0c0e canvas, ink/white for the primary action and every highlight (no accent
-// hue), amber/blue/green status. Connection = ALWAYS a WebSocket to a Tailscale address (RN can't spawn
-// ssh; WireGuard is the auth boundary).
+// hue), amber/blue/green status. Transport and authentication live in src/connection.ts.
 import type {
 	AgentDTO,
 	AteamApi,
@@ -60,15 +59,16 @@ import {
 	View,
 } from "react-native";
 import { AgentIcon } from "./src/AgentIcon";
+import { AiKeysScreen } from "./src/AiKeysScreen";
 import { filesToBox } from "./src/attach";
 import { BoxesScreen } from "./src/BoxesScreen";
 import { BoxTerminalScreen } from "./src/BoxTerminalScreen";
 import {
+	alwaysOnInForm,
 	awayOf,
 	type BoxLink,
 	boxKey,
 	boxTitle,
-	alwaysOnInForm,
 	cantWakeReason,
 	leadBoxOf,
 	leadFirst,
@@ -82,13 +82,11 @@ import {
 import { Composer, type ComposerSubmit, type RunOn } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
 import { CreateBoxScreen } from "./src/CreateBoxScreen";
-import { FinishSetupScreen } from "./src/FinishSetupScreen";
-import { GetStartedScreen } from "./src/GetStartedScreen";
 import { connect, mobileNative, redeemPairing } from "./src/connection";
-import { pairTarget, parsePairLinks } from "./src/pair-link";
 import { demoConnection } from "./src/demo";
+import { FinishSetupScreen } from "./src/FinishSetupScreen";
 import { type Board, createFleet, type Fleet, pickProject } from "./src/fleet";
-import { AiKeysScreen } from "./src/AiKeysScreen";
+import { GetStartedScreen } from "./src/GetStartedScreen";
 import { GithubAccessScreen } from "./src/GithubAccessScreen";
 import { HomeScreen, type ProjectRow, placeText, type TaskPlace } from "./src/HomeScreen";
 import { LeadScreen } from "./src/LeadScreen";
@@ -101,8 +99,12 @@ import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminal
 import { ProjectBrowser } from "./src/ProjectBrowser";
 import { type ProposalItem, ProposalSheet } from "./src/ProposalSheet";
 import { ProviderIcon } from "./src/ProviderIcon";
+import { pairTarget, parsePairLinks } from "./src/pair-link";
 import { ScanQrIcon } from "./src/ScanQrIcon";
+import { emptySSHForm, SSHFields, type SSHForm, savedSSHForm, saveSSHForm } from "./src/SSHFields";
+import { SSHPreview } from "./src/SSHPreview";
 import { useScrollFade } from "./src/scroll-fade";
+import { prepareSSH } from "./src/ssh";
 import {
 	loadBoards,
 	loadBoxes,
@@ -179,9 +181,6 @@ const CONTENT_MAX = 720;
 
 /** How this phone names itself to a box it pairs with. */
 const PHONE_LABEL = Platform.OS === "ios" ? "iPhone" : "Phone";
-
-/** A box's key (boxKey) from the `ws://host:port` URL it is dialled at. */
-const keyOfUrl = (url: string) => url.replace(/^wss?:\/\//, "").toLowerCase();
 
 function taskNote(t: TaskDTO): string {
 	if (t.column === "needs_attention") return "awaiting your input";
@@ -336,6 +335,8 @@ function savedFlags(def: ProviderDefinition, account: InputValues): Record<strin
 }
 
 function ConnectionScreen({
+	sshForm,
+	onSSHChange,
 	host,
 	port,
 	setHost,
@@ -365,6 +366,8 @@ function ConnectionScreen({
 	onScan,
 	scanner,
 }: {
+	sshForm: SSHForm;
+	onSSHChange: (value: SSHForm) => void;
 	/** Add a box by scanning the pairing code a Mac shows (not while editing one). */
 	onScan: (() => void) | null;
 	/** The scanner, while it is open (App's). */
@@ -434,7 +437,7 @@ function ConnectionScreen({
 				</Pressable>
 				{/* The desktop's words for the same thing (EnvironmentPicker.tsx). */}
 				<Text style={styles.navTitle} numberOfLines={1}>
-					{editing ? "Edit box" : "Add a Tailscale box"}
+					{editing ? "Edit box" : "Add a box"}
 				</Text>
 				<View style={styles.spacer} />
 				<Pressable
@@ -453,7 +456,7 @@ function ConnectionScreen({
 
 			<ScrollView contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
 				<View style={styles.contentColumn}>
-					{onScan ? (
+					{onScan && !sshForm.enabled ? (
 						<Pressable
 							style={[styles.formCard, styles.scanRow]}
 							onPress={onScan}
@@ -475,22 +478,23 @@ function ConnectionScreen({
 							<Text style={styles.scanText}>No box yet? Create one on Hetzner from here.</Text>
 						</Pressable>
 					) : null}
+					<SSHFields value={sshForm} onChange={onSSHChange} disabled={connecting} />
 					<View style={styles.eyebrowRow}>
 						<View style={[styles.tick, { backgroundColor: C.ink }]} />
 						<Text style={styles.eyebrow}>Box</Text>
 					</View>
 					<View style={styles.formCard}>
 						<Field
-							label="Tailscale IP or host"
+							label={sshForm.enabled ? "SSH host" : "Tailscale IP or host"}
 							value={host}
 							onChangeText={setHost}
-							placeholder="100.x.y.z"
+							placeholder={sshForm.enabled ? "Server IP or hostname" : "100.x.y.z"}
 						/>
 						<Field
 							label="Port"
 							value={port}
 							onChangeText={setPort}
-							placeholder="8787"
+							placeholder={sshForm.enabled ? "22" : "8787"}
 							keyboardType="numeric"
 						/>
 						<Pressable
@@ -636,9 +640,9 @@ function ConnectionScreen({
 					) : null}
 
 					<Text style={styles.formNote}>
-						The phone reaches Ateam on your box over Tailscale, at the address the box has there. To
-						open that port on a box: Set up phone access on its page in Ateam on a Mac, or run
-						Ateam's installer on it with <Text style={styles.mono}>--tailscale</Text>.
+						{sshForm.enabled
+							? "SSH reaches this box directly and can install Ateam for you. Keep the app open during setup; remote sessions survive a disconnect."
+							: "For Tailscale, use the box’s tailnet address and run Ateam’s installer with --tailscale to enable phone access."}
 					</Text>
 				</View>
 			</ScrollView>
@@ -653,6 +657,7 @@ function ConnectionScreen({
 // 3000) and remembered. See issue #73.
 
 function PreviewModal({
+	ssh,
 	visible,
 	host,
 	port,
@@ -660,6 +665,7 @@ function PreviewModal({
 	onOpen,
 	onClose,
 }: {
+	ssh: boolean;
 	visible: boolean;
 	host: string | null;
 	port: string;
@@ -674,7 +680,9 @@ function PreviewModal({
 				<Pressable style={styles.previewCard} onPress={() => {}}>
 					<Text style={styles.previewTitle}>Open preview</Text>
 					<Text style={styles.previewSub}>
-						Opens a dev server running on the box in your browser, over Tailscale.
+						{ssh
+							? "Opens the box’s dev server here through SSH. Keep Ateam Go in the foreground while viewing it."
+							: "Opens a dev server running on the box in your browser, over Tailscale."}
 					</Text>
 					<View style={styles.previewUrlRow}>
 						<Text style={styles.previewUrlText} numberOfLines={1}>
@@ -697,7 +705,7 @@ function PreviewModal({
 						disabled={!host}
 						hitSlop={6}
 					>
-						<Text style={styles.previewOpenText}>Open in browser</Text>
+						<Text style={styles.previewOpenText}>{ssh ? "Open preview" : "Open in browser"}</Text>
 					</Pressable>
 				</Pressable>
 			</Pressable>
@@ -1191,6 +1199,7 @@ export default function App() {
 	// The form: the box being added or edited.
 	const [host, setHost] = useState("");
 	const [port, setPort] = useState("8787");
+	const [sshForm, setSSHForm] = useState<SSHForm>(emptySSHForm);
 	// Waking a sleeping box through its provider before connecting (packages/protocol/src/wake.ts).
 	// The provider and the box's inputs ride on the saved box; the provider's account
 	// inputs (its key) live in the Keychain and are only ever held here, in a ref,
@@ -1226,8 +1235,8 @@ export default function App() {
 		createLinks({
 			fleet,
 			// With this phone's token for the box, when it is paired with a locked one.
-			dial: async (url, onClose) =>
-				connect(url, { onClose, token: await loadBoxToken(keyOfUrl(url)) }),
+			dial: async (_url, onClose, box) =>
+				connect(box, { onClose, token: box.ssh ? undefined : await loadBoxToken(boxKey(box)) }),
 			boxes: () => boxesRef.current,
 			consented: () => consented.current,
 			askConsent: (then) => hooks.current.askConsent(then),
@@ -1309,6 +1318,8 @@ export default function App() {
 	const [leadPicked, setLeadPicked] = useState<string | null>(null);
 	const [runOnPicked, setRunOnPicked] = useState<string | null>(null);
 	const [previewOpen, setPreviewOpen] = useState(false);
+	const [previewKey, setPreviewKey] = useState<string | null>(null);
+	const [sshPreview, setSSHPreview] = useState<{ key: string; port: number } | null>(null);
 	const [previewPort, setPreviewPort] = useState("3000");
 	// The project to restore on launch (loaded from storage before the first read,
 	// so the board opens on it rather than the first one). Updated on every pick.
@@ -1450,10 +1461,10 @@ export default function App() {
 
 	// The Boxes list as it is now, persisted. Through a ref as well as state, so a
 	// connect that lands mid-render still edits the latest list.
-	const commitBoxes = useCallback((next: SavedBox[]) => {
+	const commitBoxes = useCallback((next: SavedBox[], required = false) => {
 		boxesRef.current = next;
 		setBoxes(next);
-		void saveBoxes(next);
+		return saveBoxes(next, required);
 	}, []);
 
 	// How to wake a box through its provider: its key from the Keychain, one adapter
@@ -1525,6 +1536,9 @@ export default function App() {
 		},
 	};
 
+	useEffect(() => {
+		link.ensure(sshPreview?.key ?? null);
+	}, [sshPreview, link]);
 	const openOwner = openTask ? fleet.ownerOf(openTask.id) : null;
 	const leadKey = demo.current ? DEMO : leadBoxOf(boxes, leadPicked);
 	waitingOn.current = new Set(
@@ -1535,6 +1549,7 @@ export default function App() {
 			aiKeysKey,
 			browserKey,
 			updatingKey,
+			sshPreview?.key ?? null,
 			leadOpen ? leadKey : null,
 		].filter((k): k is string => k !== null),
 	);
@@ -1597,6 +1612,7 @@ export default function App() {
 
 	// Fill the form with a saved box, provider and all, or empty it for a new one.
 	const fillForm = useCallback(async (box: SavedBox | null) => {
+		setSSHForm(savedSSHForm(box));
 		setHost(box?.host ?? "");
 		setPort(box?.port ?? "8787");
 		setError(null);
@@ -1757,6 +1773,8 @@ export default function App() {
 			setGithubKey((k) => (k === key ? null : k));
 			setAiKeysKey((k) => (k === key ? null : k));
 			setBrowserKey((k) => (k === key ? null : k));
+			setSSHPreview((v) => (v?.key === key ? null : v));
+			setPreviewKey((v) => (v === key ? null : v));
 			void refresh();
 		},
 		[fleet, link, refresh],
@@ -1766,8 +1784,14 @@ export default function App() {
 	// soon as it exists, and once it answers, the board, with Add a project open on it.
 	const boxCreation = useBoxCreation({
 		link,
+		savedBox: (host) =>
+			boxesRef.current.find(
+				(b) =>
+					b.ssh?.user === "ateam" && b.host.toLowerCase() === host.toLowerCase() && b.port === "22",
+			),
 		label: PHONE_LABEL,
-		saveBox: (box, replaces) => commitBoxes(touchBox(boxesRef.current, box, Date.now(), replaces)),
+		saveBox: (box, replaces) =>
+			commitBoxes(touchBox(boxesRef.current, box, Date.now(), replaces), true),
 		removeBox: (key) => {
 			commitBoxes(removeBox(boxesRef.current, key));
 			forgetBox(key);
@@ -1814,23 +1838,58 @@ export default function App() {
 	);
 
 	const onConnect = useCallback(async () => {
+		if (formBusy) return;
+		if (!consented.current) {
+			hooks.current.askConsent(() => void onConnect());
+			return;
+		}
 		if (!host.trim()) {
-			setError("Enter the box's Tailscale IP or hostname.");
+			setError("Enter the box's IP or hostname.");
 			return;
 		}
 		const def = providerById(providerId);
-		const box: SavedConnection = {
+		let box: SavedConnection = {
+			...(editingKey ? boxesRef.current.find((b) => boxKey(b) === editingKey) : {}),
 			host: host.trim(),
-			port: port.trim() || "8787",
-			...(def ? { provider: { id: def.id, box: boxValues } } : {}),
+			port: port.trim() || (sshForm.enabled ? "22" : "8787"),
+			provider: def ? { id: def.id, box: boxValues } : undefined,
+			ssh: undefined,
 		};
-		const key = boxKey(box);
 		const replaces = editingKey;
 		landOnBoard.current = false;
 		endDemo();
 		setFormBusy(true);
 		setError(null);
 		try {
+			if (!/^\d+$/.test(box.port) || Number(box.port) < 1 || Number(box.port) > 65535)
+				throw new Error("Enter a port from 1 to 65535.");
+			if (sshForm.enabled) {
+				const known = boxesRef.current.find(
+					(b) =>
+						b.ssh &&
+						b.host.trim().toLowerCase() === box.host.toLowerCase() &&
+						(b.port || "22") === box.port,
+				);
+				const hostKey =
+					known?.ssh?.hostKey ??
+					(sshForm.pinnedHost === box.host.toLowerCase() && sshForm.pinnedPort === box.port
+						? sshForm.hostKey
+						: undefined);
+				box.ssh = await saveSSHForm({ ...sshForm, hostKey });
+				setSSHForm(savedSSHForm(box));
+				let remembered = replaces;
+				box = await prepareSSH(
+					box,
+					async (next) => {
+						await commitBoxes(touchBox(boxesRef.current, next, Date.now(), remembered), true);
+						if (remembered && remembered !== boxKey(next)) forgetBox(remembered);
+						remembered = boxKey(next);
+						setSSHForm(savedSSHForm(next));
+					},
+					setFormNotice,
+				);
+			}
+			const key = boxKey(box);
 			if (!(await link.connect(box, { wake: true, save: true, replaces, onWaking: setWaking }))) {
 				const failed = link.get(key).error;
 				// Locked to its paired devices: saved all the same, so its card asks for a code.
@@ -1855,10 +1914,15 @@ export default function App() {
 			setConnectScreen("list");
 			leaveConnect();
 			if (!lastRead.current.projects.some((p) => fleet.ownerOf(p.id) === key)) setBrowserKey(key);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
 		} finally {
 			setFormBusy(false);
+			if (sshForm.enabled) setFormNotice(null);
 		}
 	}, [
+		sshForm,
+		formBusy,
 		host,
 		port,
 		providerId,
@@ -1888,6 +1952,9 @@ export default function App() {
 		setGithubKey(null);
 		setAiKeysKey(null);
 		setBrowserKey(null);
+		setPreviewKey(null);
+		setPreviewOpen(false);
+		setSSHPreview(null);
 		setLeadOpen(false);
 		const d = demoConnection();
 		link.adopt(DEMO, d);
@@ -2109,17 +2176,21 @@ export default function App() {
 				}
 			: undefined;
 
-	// Open the box's dev server in the phone browser. The box's IP is the host the
-	// phone reaches it at (already on the tailnet): no tunnel, no discovery.
+	// SSH previews stay inside the app so iOS keeps the tunnel in the foreground.
 	const openPreview = useCallback(() => {
-		const key = runOnKey ?? link.liveKeys()[0] ?? null;
+		const key = previewKey ?? runOnKey ?? link.liveKeys()[0] ?? null;
 		const h = key ? boxByKey(key)?.host : undefined;
 		if (!h) return;
 		const p = previewPort.trim() || "3000";
+		if (!/^\d+$/.test(p) || Number(p) < 1 || Number(p) > 65535) {
+			Alert.alert("Invalid port", "Enter a port from 1 to 65535.");
+			return;
+		}
 		void savePreviewPort(p);
 		setPreviewOpen(false);
-		void Linking.openURL(`http://${h}:${p}`);
-	}, [previewPort, runOnKey, boxByKey, link]);
+		if (key && boxByKey(key)?.ssh) setSSHPreview({ key, port: Number(p) });
+		else void Linking.openURL(`http://${h}:${p}`);
+	}, [previewPort, previewKey, runOnKey, boxByKey, link]);
 
 	// Settles once the launch read has: a reminder tap that launched the app waits
 	// for it rather than racing it to a box.
@@ -2439,6 +2510,7 @@ export default function App() {
 		if (connectScreen === "create") {
 			return (
 				<CreateBoxScreen
+					onVerify={() => void boxCreation.verify()}
 					creation={making}
 					onCreate={startCreation}
 					onReachAt={(host) => void boxCreation.reachAt(host)}
@@ -2488,6 +2560,11 @@ export default function App() {
 					onLeadBox={onLeadBox}
 					onAdd={addBox}
 					onDemo={() => void startDemo()}
+					onPreview={(box) => {
+						setPreviewKey(boxKey(box));
+						setPreviewOpen(true);
+						setView("board");
+					}}
 					onBoxTerminal={(box) => {
 						setView("board");
 						setOpenTask(null);
@@ -2501,6 +2578,7 @@ export default function App() {
 								.map(boxKey)
 								.filter(
 									(k) =>
+										!boxByKey(k)?.ssh &&
 										links[k]?.state === "live" &&
 										link.conn(k)?.pairing?.state === "open" &&
 										!lockedHere.has(k),
@@ -2516,6 +2594,11 @@ export default function App() {
 		}
 		return (
 			<ConnectionScreen
+				sshForm={sshForm}
+				onSSHChange={(value) => {
+					if (value.enabled !== sshForm.enabled) setPort(value.enabled ? "22" : "8787");
+					setSSHForm(value);
+				}}
 				host={host}
 				port={port}
 				setHost={setHost}
@@ -2782,10 +2865,18 @@ export default function App() {
 					}}
 				/>
 			)}
+			{sshPreview && (
+				<SSHPreview
+					connection={link.conn(sshPreview.key)}
+					port={sshPreview.port}
+					onClose={() => setSSHPreview(null)}
+				/>
+			)}
 			<PreviewModal
+				ssh={Boolean(boxByKey(previewKey ?? runOnKey ?? link.liveKeys()[0] ?? "")?.ssh)}
 				visible={previewOpen}
 				host={(() => {
-					const key = runOnKey ?? link.liveKeys()[0] ?? null;
+					const key = previewKey ?? runOnKey ?? link.liveKeys()[0] ?? null;
 					return key ? (boxByKey(key)?.host ?? null) : null;
 				})()}
 				port={previewPort}

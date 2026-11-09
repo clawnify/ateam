@@ -66,6 +66,7 @@ export function BoxesScreen({
 	onAdd,
 	onDemo,
 	onBoxTerminal,
+	onPreview,
 	onGithub,
 	onAiKeys,
 	openKeys,
@@ -107,6 +108,7 @@ export function BoxesScreen({
 	onDemo: () => void;
 	/** Open a connected box's own terminal (outside every project). */
 	onBoxTerminal: (box: SavedBox) => void;
+	onPreview: (box: SavedBox) => void;
 	/** Open a connected box's GitHub access (sign-in, token, which repos it can push to). */
 	onGithub: (box: SavedBox) => void;
 	/** The box's AI keys page (AiKeysScreen). */
@@ -145,7 +147,7 @@ export function BoxesScreen({
 					onPress={onAdd}
 					hitSlop={8}
 					accessibilityRole="button"
-					accessibilityLabel="Add a Tailscale box"
+					accessibilityLabel="Add a box"
 				>
 					<Feather name="plus" size={18} color={C.ink} />
 				</Pressable>
@@ -188,6 +190,7 @@ export function BoxesScreen({
 								onRemove={() => onRemove(box)}
 								onLead={choosingLead && !isLead ? () => onLeadBox(box) : undefined}
 								onTerminal={live ? () => onBoxTerminal(box) : undefined}
+								onPreview={live ? () => onPreview(box) : undefined}
 								onGithub={live ? () => onGithub(box) : undefined}
 								onAiKeys={live ? () => onAiKeys(box) : undefined}
 								onPair={(code) => onPair(box, code)}
@@ -199,8 +202,8 @@ export function BoxesScreen({
 
 					<Text style={styles.hint}>
 						{choosingLead
-							? "Swipe left on a box to edit it, remove it from this list, or talk to its Lead."
-							: "Swipe left on a box to edit it or remove it from this list."}
+							? "Swipe left on a box for preview, edit, remove, or its Lead."
+							: "Swipe left on a box for preview, edit, and remove."}
 					</Text>
 
 					{/* An error about one box is on its card; this is for the rest (a key that didn't save). */}
@@ -248,6 +251,7 @@ function BoxCard({
 	onRemove,
 	onLead,
 	onTerminal,
+	onPreview,
 	onGithub,
 	onAiKeys,
 	onPair,
@@ -282,6 +286,7 @@ function BoxCard({
 	onLead?: () => void;
 	/** The box's terminal; only on a connected box's card. */
 	onTerminal?: () => void;
+	onPreview?: () => void;
 	/** Only on a connected box's card, like the terminal. */
 	onGithub?: () => void;
 	onAiKeys?: () => void;
@@ -292,7 +297,8 @@ function BoxCard({
 	/** Lock the box to its paired devices: only on a connected box anyone may use. */
 	onLock?: () => Promise<void>;
 }) {
-	const actionsWidth = ACTION_WIDTH * (onLead ? 3 : 2);
+	const actionsWidth =
+		(onPreview && onLead ? 64 : ACTION_WIDTH) * (2 + (onLead ? 1 : 0) + (onPreview ? 1 : 0));
 	// The responder below is made once, so it reads the width through a ref too.
 	const width = useRef(actionsWidth);
 	width.current = actionsWidth;
@@ -368,6 +374,20 @@ function BoxCard({
 					accessibilityElementsHidden={!open}
 					importantForAccessibility={open ? "auto" : "no-hide-descendants"}
 				>
+					{onPreview ? (
+						<Pressable
+							style={[styles.action, styles.editAction]}
+							accessibilityRole="button"
+							accessibilityLabel={`Preview a port on ${title}`}
+							onPress={() => {
+								onOpenChange(false);
+								onPreview();
+							}}
+						>
+							<Feather name="globe" size={16} color={C.ink} />
+							<Text style={styles.editText}>Preview</Text>
+						</Pressable>
+					) : null}
 					{onLead ? (
 						<Pressable
 							style={[styles.action, styles.editAction]}
@@ -424,6 +444,7 @@ function BoxCard({
 							...(onGithub ? [{ name: "github", label: "GitHub on this box" }] : []),
 							...(onAiKeys ? [{ name: "aiKeys", label: "AI keys on this box" }] : []),
 							...(onTerminal ? [{ name: "terminal", label: "Box terminal" }] : []),
+							...(onPreview ? [{ name: "preview", label: "Preview a port" }] : []),
 							...(onLead ? [{ name: "lead", label: "Talk to this box's Lead" }] : []),
 							{ name: "edit", label: "Edit" },
 							{ name: "remove", label: "Remove from this list" },
@@ -435,6 +456,7 @@ function BoxCard({
 							else if (action === "github") onGithub?.();
 							else if (action === "aiKeys") onAiKeys?.();
 							else if (action === "terminal") onTerminal?.();
+							else if (action === "preview") onPreview?.();
 							else if (action === "lead") onLead?.();
 							else if (!(reaching && asked)) onPress();
 						}}

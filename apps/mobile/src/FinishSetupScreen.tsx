@@ -80,8 +80,12 @@ export function FinishSetupScreen({
 								key={a}
 								icon="log-in"
 								title={`Sign in to ${AGENT_INSTALLS[a].label}`}
-								body={`Opens the box's terminal running ${AGENT_INSTALLS[a].login}: open its link, sign in, and come back.`}
-								onPress={() => onSignIn(AGENT_INSTALLS[a].login)}
+								body={`Opens the box's terminal running ${a === "codex" ? AGENT_INSTALLS.codex.remoteLogin : AGENT_INSTALLS[a].login}: open its link, sign in, and come back.`}
+								onPress={() =>
+									onSignIn(
+										a === "codex" ? AGENT_INSTALLS.codex.remoteLogin : AGENT_INSTALLS[a].login,
+									)
+								}
 							/>
 						))
 					) : (

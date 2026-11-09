@@ -18,7 +18,7 @@ describe("buildCloudInit", () => {
 		});
 		expect(yaml.startsWith("#cloud-config")).toBe(true);
 		expect(yaml).toContain("name: ateam");
-		expect(yaml).toContain(`- ${KEY}`);
+		expect(yaml).toContain(`- ${JSON.stringify(KEY)}`);
 		// Non-interactive Tailscale join, with SSH so the tailnet is the auth boundary.
 		expect(yaml).toContain(
 			`tailscale up --ssh --authkey=${AUTHKEY} --hostname=my-box --operator=ateam`,
@@ -107,6 +107,12 @@ describe("buildCloudInit", () => {
 		expect(() =>
 			buildCloudInit({ hostname: "b", sshPublicKey: "rm -rf /", tailscaleAuthKey: AUTHKEY }),
 		).toThrow(/SSH public key/);
+	});
+	test("quotes public-key comments so YAML punctuation stays part of the key", () => {
+		const key = `${KEY}: phone #1`;
+		const yaml = buildCloudInit({ hostname: "box", network: "ssh", sshPublicKey: key });
+		const entry = yaml.split("\n").find((line) => line.startsWith("      - "));
+		expect(JSON.parse(entry?.slice(8) ?? "null")).toBe(key);
 	});
 });
 
@@ -282,5 +288,101 @@ describe("Hetzner, for a box with no SSH key", () => {
 			"DELETE /primary_ips/5",
 			"DELETE /primary_ips/6",
 		]);
+	});
+});
+
+describe("direct SSH cloud creation", () => {
+	test("installs without Tailscale or a public RPC listener, with key-only SSH", () => {
+		const yaml = buildCloudInit({
+			hostname: "phone",
+			network: "ssh",
+			sshPublicKey: KEY,
+			install: { agents: ["codex"] },
+		});
+		expect(yaml).toContain(KEY);
+		expect(yaml).toContain("ssh_pwauth: false");
+		expect(yaml).toContain("--service");
+		expect(yaml).not.toContain("tailscale");
+		expect(yaml).not.toContain("ATEAM_PAIR_DEVICE");
+		expect(() => buildCloudInit({ hostname: "phone", network: "ssh", install: {} })).toThrow(
+			/public key/,
+		);
+		expect(() =>
+			buildCloudInit({ hostname: "phone", network: "ssh", sshPublicKey: `${KEY}\nruncmd: []` }),
+		).toThrow(/public key/);
+	});
+	test("attaches an SSH-only firewall, persists the id before polling, refuses a modified firewall", async () => {
+		const original = globalThis.fetch;
+		try {
+			for (const changed of [false, true]) {
+				const calls: { path: string; body: Record<string, unknown> | null }[] = [];
+				let saved = false;
+				globalThis.fetch = (async (url: string, init?: RequestInit) => {
+					const path = url.replace("https://api.hetzner.cloud/v1", "");
+					const method = init?.method ?? "GET";
+					calls.push({ path, body: init?.body ? JSON.parse(String(init.body)) : null });
+					const answers: Record<string, unknown> = {
+						"GET /servers?name=phone": { servers: [] },
+						"POST /ssh_keys": { ssh_key: { id: 3 } },
+						"GET /firewalls?name=ateam-ssh-only": {
+							firewalls: changed
+								? [
+										{
+											id: 7,
+											labels: { "managed-by": "ateam" },
+											rules: [{ direction: "in", protocol: "tcp", port: "8787" }],
+										},
+									]
+								: [],
+						},
+						"POST /firewalls": { firewall: { id: 7 } },
+						"POST /servers": {
+							server: { id: 42, public_net: { ipv4: { ip: "203.0.113.9" } } },
+							action: { id: 1 },
+						},
+						"GET /servers/42/actions/1": { action: { status: "success" } },
+						"GET /servers/42": { server: { public_net: { ipv4: { ip: "203.0.113.9" } } } },
+					};
+					if (path.includes("/actions/")) expect(saved).toBe(true);
+					return new Response(JSON.stringify(answers[`${method} ${path}`] ?? {}));
+				}) as typeof fetch;
+				const result = hetznerProvider.createServer({
+					token: "test",
+					name: "phone",
+					region: "nbg1",
+					size: "cx23",
+					sshPublicKey: KEY,
+					directSSH: true,
+					cloudInit: "#cloud-config",
+					onCreated: async (id, ip) => {
+						expect(id).toBe("42");
+						expect(ip).toBe("203.0.113.9");
+						await Promise.resolve();
+						saved = true;
+					},
+				});
+				if (changed) {
+					await expect(result).rejects.toThrow(/different rules/);
+					expect(calls.some((c) => c.path === "/servers")).toBe(false);
+				} else {
+					await result;
+					expect(calls.find((c) => c.path === "/firewalls")?.body?.rules).toEqual([
+						{
+							description: "SSH access",
+							direction: "in",
+							protocol: "tcp",
+							port: "22",
+							source_ips: ["0.0.0.0/0", "::/0"],
+						},
+					]);
+					expect(calls.find((c) => c.path === "/servers")?.body).toMatchObject({
+						ssh_keys: [3],
+						firewalls: [{ firewall: 7 }],
+					});
+				}
+			}
+		} finally {
+			globalThis.fetch = original;
+		}
 	});
 });
