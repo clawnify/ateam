@@ -236,7 +236,9 @@ describe("Hetzner, for a box with no SSH key", () => {
 				region: "nbg1",
 				size: "cx23",
 				cloudInit: "#cloud-config",
-				onCreated: (id) => made.push(id),
+				onCreated: (id) => {
+					made.push(id);
+				},
 			});
 			expect(server).toEqual({ providerId: "42", publicIp: "203.0.113.9" });
 		} finally {

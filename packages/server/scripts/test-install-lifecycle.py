@@ -13,6 +13,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+import tarfile
+import io
 import time
 
 assert os.environ.get("ATEAM_LIFECYCLE_TEST") == "1", "disposable VM opt-in required"
@@ -61,10 +63,10 @@ def service_pid():
     return int(subprocess.check_output(["systemctl", "show", "-p", "MainPID", "--value", "ateam.service"]))
 
 
-def install(extra_env=None):
+def install(extra_env=None, extra_args=()):
     log = open(logs / f"install-{len(processes)}.log", "w")
     # Exercise the documented stdin-pipeline invocation, not only bash FILE.
-    p = subprocess.Popen(["bash", "-o", "pipefail", "-c", 'cat "$1" | bash -s -- --service', "bash", installer],
+    p = subprocess.Popen(["bash", "-o", "pipefail", "-c", 'cat "$1" | bash -s -- --service "${@:2}"', "bash", installer, *extra_args],
                          env={**os.environ, "ATEAM_TARBALL": tarball, **(extra_env or {})},
                          stdout=log, stderr=log, start_new_session=True)
     log.close()
@@ -177,6 +179,28 @@ try:
     wait_for(lambda: marker.exists() and marker.read_text() == "kept")
     rpc("pty:kill", [terminal])
     print("PASS live shell state survives install, interrupted install, retry and RPC update", flush=True)
+    # The browser step must consume the newly activated payload and launcher,
+    # not the previous release's files. Replace only the expensive browser setup
+    # with a fixture that checks those prerequisites on a real installer run.
+    browser_tar = logs / "browser-candidate.tgz"
+    browser_marker = logs / "browser-activated"
+    browser_script = f'#!/bin/bash\nset -eu\ngrep -q LIFECYCLE_BROWSER_PAYLOAD "$HOME/ateam-app/desktop.js"\ntest -x "$HOME/.local/bin/ateam"\ntouch {browser_marker}\n'.encode()
+    with tarfile.open(tarball, "r:gz") as source, tarfile.open(browser_tar, "w:gz") as target:
+        for entry in source:
+            if not entry.isfile():
+                target.addfile(entry)
+                continue
+            content = source.extractfile(entry).read()
+            if entry.name == "install-browser.sh":
+                content = browser_script
+            elif entry.name == "desktop.js":
+                content += b"\n// LIFECYCLE_BROWSER_PAYLOAD\n"
+            entry.size = len(content)
+            target.addfile(entry, io.BytesIO(content))
+    browser_install = install({"ATEAM_TARBALL": str(browser_tar)}, ("--browser",))
+    assert browser_install.wait(timeout=120) == 0
+    assert browser_marker.exists(), "browser installer ran before its payload was activated"
+    print("PASS browser setup consumes the activated payload and launcher", flush=True)
     print(f"Installer logs: {logs}", flush=True)
 finally:
     if paused_pid:
