@@ -1,5 +1,6 @@
-import type { TaskDTO } from "@ateam/protocol";
+import { staleSummaryAt, type TaskDTO } from "@ateam/protocol";
 import type { ReactElement, ReactNode } from "react";
+import { staleSummaryNote } from "../lib/summary";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
 /** How long the pointer rests on a task before its peek opens. Long on
@@ -37,6 +38,7 @@ export function TaskPeek({
 	/** The row or card: one element that takes a ref. */
 	children: ReactElement;
 }) {
+	const stale = staleSummaryAt(task);
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>{children}</TooltipTrigger>
@@ -47,7 +49,12 @@ export function TaskPeek({
 				className="max-w-80 px-2.5 py-2 text-pretty"
 			>
 				<div className="font-medium">{task.name}</div>
-				{task.summary && <div className="mt-1 text-xs text-muted-foreground">{task.summary}</div>}
+				{task.summary && (
+					<div className="mt-1 text-xs text-muted-foreground">
+						{stale != null && <span className="font-medium">{staleSummaryNote(stale)}. </span>}
+						{task.summary}
+					</div>
+				)}
 				{note && <div className="mt-1 text-xs text-muted-foreground">{note}</div>}
 			</TooltipContent>
 		</Tooltip>

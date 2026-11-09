@@ -32,6 +32,19 @@ function toPrState(s: Task["prState"]): WorktreeSignals["prState"] {
 }
 
 /**
+ * The task's PR merged, but its branch carried on: commits the PR didn't carry
+ * that aren't on base yet (GitStatusSnapshot.workAfterMerge, from the merge
+ * probe). Not read off `dirty`, which keeps counting files whose final form
+ * landed. A card in Done is the user's (or a full merge's) call, so it never
+ * reads this way.
+ */
+export function workAfterMerge(task: Task): boolean {
+	return (
+		task.prState === "merged" && task.column !== "merged" && task.gitStatus?.workAfterMerge === true
+	);
+}
+
+/**
  * The signals a task row can answer on its own. Callers with richer evidence
  * (a live pid, a fresh `gh pr view`) spread this and override those fields —
  * see board-signals.gatherSignals.
@@ -56,6 +69,7 @@ export function signalsFromTask(task: Task): WorktreeSignals {
 		commitsAhead: gs?.ahead ?? 0,
 		prState: toPrState(task.prState),
 		mergedAtMs: null,
+		workAfterMerge: workAfterMerge(task),
 	};
 }
 

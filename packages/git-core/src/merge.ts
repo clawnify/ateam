@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { SimpleGit } from "simple-git";
 import { GitCoreError } from "./errors";
-import { gitFor, safeRaw } from "./git-client";
+import { baseRef, gitFor, safeRaw } from "./git-client";
 import { push, trackingStatus } from "./sync";
 import { parseWorktreeList } from "./worktree-list";
 
@@ -120,6 +121,8 @@ export async function updateLocalMain(
 }
 
 export interface DetectMergedResult {
+	/** Everything the branch holds is on base: its PR merged at its tip, or
+	 *  every commit it has beyond the merged PR is already on base too. */
 	merged: boolean;
 	prNumber: number | null;
 	prUrl: string | null;
@@ -148,6 +151,9 @@ export async function detectMerged(input: {
 	/** The task's own branch, used only when the worktree's HEAD names none. */
 	branch: string;
 	baseBranch: string;
+	/** The PR already recorded for this task, if any. A merged PR whose head is
+	 *  no longer the branch tip is still this task's when its number matches. */
+	prNumber?: number | null;
 }): Promise<DetectMergedResult> {
 	const git = gitFor(input.worktreePath);
 	// Ask about the branch the worktree is ON, not the one the task was created
@@ -188,6 +194,21 @@ export async function detectMerged(input: {
 					state: "MERGED",
 				};
 			}
+			// The task's own PR, known by its number, merged and the branch has
+			// moved since: commits on top, or a local branch that never got the
+			// PR's last commit. The PR did merge; whether the branch's own work
+			// all landed depends on the commits the PR didn't carry.
+			// Known by its recorded number only: a PR opened and merged between two
+			// probes never got one. If that shows up, identify it by commits instead
+			// (the PR's commit list holds a commit of this branch, as gh-poi does).
+			if (p.headRefOid && input.prNumber != null && p.number === input.prNumber) {
+				return {
+					merged: await landedBeyond(git, input.baseBranch, tip, p.headRefOid),
+					prNumber: p.number,
+					prUrl: p.url ?? null,
+					state: "MERGED",
+				};
+			}
 			// Stale PR — fall through to the local merge-commit check. `state`
 			// stays null there: we just decided not to trust this PR, so it must
 			// not be persisted as this branch's state either.
@@ -223,6 +244,30 @@ export async function detectMerged(input: {
 		return { merged, prNumber: null, prUrl: null, state: null };
 	} catch {
 		return { merged: false, prNumber: null, prUrl: null, state: null };
+	}
+}
+
+/**
+ * Whether every commit on `tip` that the merged PR (head `prHead`) didn't carry
+ * is already on base, by patch content (`git cherry`), so a squash-merged
+ * follow-up PR counts. False when one isn't, or when git can't tell (the PR's
+ * head was never fetched here): the work then reads as not landed, the safe
+ * side for anything that would clean it up.
+ */
+async function landedBeyond(
+	git: SimpleGit,
+	baseBranch: string,
+	tip: string,
+	prHead: string,
+): Promise<boolean> {
+	const base = await baseRef(git, baseBranch);
+	if (!base) return false;
+	try {
+		// One line per commit in prHead..tip: "+" not on base, "-" on base.
+		const out = await git.raw(["cherry", base, tip, prHead]);
+		return !out.split("\n").some((line) => line.startsWith("+"));
+	} catch {
+		return false;
 	}
 }
 

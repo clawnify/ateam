@@ -519,6 +519,11 @@ export interface GitStatusSnapshot {
 	 *  read-only addition, so no protocol bump. */
 	additions?: number;
 	deletions?: number;
+	/** The task's PR merged, but its branch holds commits the PR didn't carry
+	 *  that aren't on base yet (git-core detectMerged, by patch content). The
+	 *  card stays out of Done and cleanup leaves it alone. Absent when not the
+	 *  case or not known. A read-only addition, so no protocol bump. */
+	workAfterMerge?: boolean;
 	updatedAt: number;
 }
 
@@ -648,6 +653,11 @@ export interface TaskDTO {
 	 *  a few minutes after its agent goes quiet; null until the first one, and
 	 *  absent on an engine older than v23. */
 	summary?: string | null;
+	/** The task's `lastEventAt` when `summary` was written: a later
+	 *  `lastEventAt` means the task moved since, so the text may be out of
+	 *  date. Absent from an older engine, which reads as "not known" (never
+	 *  as out of date). A read-only addition, so no protocol bump. */
+	summaryAsOf?: number | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
 }
@@ -1874,6 +1884,8 @@ export {
 } from "./providers";
 // How recently a task last changed, for the board and the Lead's get_board.
 export { byLatestActivity, relativeAge } from "./recency";
+// Whether a task's summary predates its latest turn, for every reader of it.
+export { STALE_SUMMARY_NOTE, staleSummaryAt } from "./summary-age";
 // Transport-agnostic RPC framing + client (shared by every transport).
 export * from "./rpc";
 // Derived task tags (pure), shared by every client; icons are per-client.

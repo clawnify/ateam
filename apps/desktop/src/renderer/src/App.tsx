@@ -25,6 +25,7 @@ import {
 	type EngineMember,
 	FEATURE_MIN_VERSION,
 	PROTOCOL_VERSION,
+	staleSummaryAt,
 	TASK_REMOVING_ERROR,
 	unifyProjects,
 	wakeMachineName,
@@ -125,6 +126,7 @@ import {
 	showsGetStarted,
 } from "./get-started";
 import { addTailscaleBox, installBox } from "./lib/box-actions";
+import { staleSummaryNote } from "./lib/summary";
 import {
 	bestMcShape,
 	fixedMcShape,
@@ -3589,12 +3591,18 @@ function BranchLine({ task }: { task: TaskDTO }) {
 /**
  * Where the open task stands, in a sentence or two the engine writes once its
  * agent has gone quiet (server/task-summaries.ts). Nothing until the first one,
- * and nothing from an engine older than v23.
+ * and nothing from an engine older than v23. Led by the time it was written
+ * once the task has moved since: until the next one arrives it may describe a
+ * state that is gone. Said in words, not by fading it: a fainter grey would
+ * drop the text below AA contrast.
  */
 function TaskSummary({ task }: { task: TaskDTO }) {
 	if (!task.summary) return null;
+	const staleAt = staleSummaryAt(task);
+	const note = staleAt == null ? null : `${staleSummaryNote(staleAt)}.`;
 	return (
-		<p className="task-summary" title={task.summary}>
+		<p className="task-summary" title={note ? `${note} ${task.summary}` : task.summary}>
+			{note && <span className="task-summary-note">{note} </span>}
 			{task.summary}
 		</p>
 	);

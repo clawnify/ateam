@@ -157,6 +157,7 @@ export function toTaskDTO(
 		page: t.page ?? null,
 		proposals: t.proposals?.length ? t.proposals : null,
 		summary: t.summary ?? null,
+		summaryAsOf: t.summaryAsOf ?? null,
 		triage: triageTask(t),
 	};
 }
