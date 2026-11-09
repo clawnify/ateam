@@ -16,6 +16,8 @@ let scriptPath: string;
 let server: HookServer;
 let events: HookEvent[] = [];
 let followUp: string | undefined;
+let turnNote: string | undefined;
+const noteAsked: string[] = [];
 
 beforeAll(async () => {
 	dir = await mkdtemp(join(tmpdir(), "ateam-hooktext-"));
@@ -23,6 +25,10 @@ beforeAll(async () => {
 	server = new HookServer();
 	server.on("hook", (e: HookEvent) => events.push(e));
 	server.setFollowUpResolver(() => followUp);
+	server.setTurnNoteResolver((terminalId) => {
+		noteAsked.push(terminalId);
+		return turnNote;
+	});
 	await server.start();
 });
 
@@ -63,6 +69,25 @@ describe("notify.sh → hook server", () => {
 		expect(events[0]).toMatchObject({ terminalId: "term-1", eventType: "Working" });
 		expect(events[0].lastAssistantMessage).toBeUndefined();
 		expect(events[0].prompt).toBeUndefined();
+	});
+
+	it("hands a starting turn its note as UserPromptSubmit context, and only a starting turn", async () => {
+		turnNote = "the user created your proposal";
+		const { stdout, events } = await fire("UserReply", { prompt: "fix the claims" });
+		expect(JSON.parse(stdout)).toEqual({
+			hookSpecificOutput: {
+				hookEventName: "UserPromptSubmit",
+				additionalContext: "the user created your proposal",
+			},
+		});
+		// The event itself still lands, prompt and all.
+		expect(events[0]?.prompt).toBe("fix the claims");
+		noteAsked.length = 0;
+		expect((await fire("Working", {})).stdout).toBe("");
+		expect((await fire("Stop", { last_assistant_message: "done" })).stdout).toBe("");
+		expect(noteAsked).toEqual([]);
+		turnNote = undefined;
+		expect((await fire("UserReply", { prompt: "next" })).stdout).toBe("");
 	});
 
 	it("still echoes an armed follow-up back to the agent on a POSTed Stop", async () => {

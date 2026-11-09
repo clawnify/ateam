@@ -55,7 +55,13 @@ import {
 } from "./sessions";
 import { PermissionBridge } from "./permissions";
 import { applyShowPage } from "./pages";
-import { applyPropose, clearProposal } from "./proposals";
+import {
+	applyPropose,
+	type ClearProposalRequest,
+	clearProposal,
+	proposalsOfTask,
+	takeProposalNote,
+} from "./proposals";
 import { answerQuestion, applyAskUser, CLEAR_QUESTION } from "./questions";
 import { readSettings } from "./settings-file";
 import { createTurnClassifier } from "./turn-classifier";
@@ -170,7 +176,7 @@ export interface Engine {
 		via?: "lead";
 	}): void;
 	/** Drop a task or loop the task's agent proposed, once created or dismissed (proposals.ts). */
-	clearProposal(req: { taskId: string; proposalId: string }): void;
+	clearProposal(req: ClearProposalRequest): void;
 	/** Keeps every task's git + PR facts fresh, not just the open one. The
 	 *  `CH.gitStatus` handler shares its throttle (see worktree-sweep.ts). */
 	readonly worktreeSweep: WorktreeSweep;
@@ -380,7 +386,12 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	// Board Organizer tools: the organizer loop's headless `claude -p` turn reads
 	// the board and proposes moves through these, guarded by validateSetStatus.
 	hooks.setBoardHandlers({
-		get: () => buildBoardView(db),
+		get: async (callerTerminalId) => {
+			const view = await buildBoardView(db);
+			const session = callerTerminalId ? repo.getSessionByTerminal(db, callerTerminalId) : undefined;
+			const mine = session ? proposalsOfTask(db, session.taskId) : [];
+			return mine.length > 0 ? { ...view, proposalsFromYourTask: mine } : view;
+		},
 		createSession: (req) => createSessionInCallerTask(services, sendTaskUpdated, req),
 		setStatus: async (req) => applySetStatus(db, req, sendTaskUpdated),
 		setWaiting: async (req) => applySetWaiting(db, req, waits, sendTaskUpdated),
@@ -440,6 +451,12 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	// A finished turn with a follow-up armed continues instead of stopping. The
 	// lookup consumes, so it can only ever fire once per launch.
 	hooks.setFollowUpResolver((terminalId, eventType) => followUps.take(terminalId, eventType));
+	// What the user did with this task's proposals, into the agent's next turn
+	// rather than a turn of its own (proposals.ts).
+	hooks.setTurnNoteResolver((terminalId) => {
+		const session = repo.getSessionByTerminal(db, terminalId);
+		return session ? takeProposalNote(db, session.taskId) : undefined;
+	});
 
 	const services: Services = {
 		db,

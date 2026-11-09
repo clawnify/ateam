@@ -91,6 +91,14 @@ export type MergeHandler = (e: MergeRequestEvent) => Promise<MergeEnqueueDTO | n
 export type FollowUpResolver = (terminalId: string, eventType: string) => string | undefined;
 
 /**
+ * Asks whether a turn that is starting (the user's prompt, notify.sh's
+ * UserReply) should carry a note for the agent: news it was not woken for, such
+ * as what the user did with its proposals (proposals.ts). Consuming is the
+ * resolver's job.
+ */
+export type TurnNoteResolver = (terminalId: string) => string | undefined;
+
+/**
  * The peer inbox behind `/inbox/wait` (see peer-messages.ts): token checks and
  * the long-poll a listener holds open. `/inbox/user/*` is the Claude mod's: the
  * user's own words, leased until it acks them.
@@ -162,6 +170,7 @@ export class HookServer extends EventEmitter {
 	private server?: http.Server;
 	private board?: BoardHandlers;
 	private followUp?: FollowUpResolver;
+	private turnNote?: TurnNoteResolver;
 	private merge?: MergeHandler;
 	private inbox?: PeerInboxHandlers;
 	private permission?: PermissionHandler;
@@ -190,6 +199,11 @@ export class HookServer extends EventEmitter {
 	/** Wire the one-shot follow-up lookup consulted at every turn end. */
 	setFollowUpResolver(resolve: FollowUpResolver): void {
 		this.followUp = resolve;
+	}
+
+	/** Wire the note a starting turn carries in (`additionalContext`). */
+	setTurnNoteResolver(resolve: TurnNoteResolver): void {
+		this.turnNote = resolve;
 	}
 
 	async start(preferred?: number, opts: HookServerStartOptions = {}): Promise<number> {
@@ -439,6 +453,16 @@ export class HookServer extends EventEmitter {
 						const followUp = terminalId ? this.followUp?.(terminalId, eventType) : undefined;
 						if (followUp) {
 							return json(200, { decision: "block", reason: followUp });
+						}
+						// A turn the user's prompt starts can carry a note in, which
+						// UserPromptSubmit's output schema (Claude Code's, and Codex's,
+						// which shares it) adds to the model's context with the prompt.
+						const note =
+							terminalId && eventType === "UserReply" ? this.turnNote?.(terminalId) : undefined;
+						if (note) {
+							return json(200, {
+								hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: note },
+							});
 						}
 						res.writeHead(204);
 						res.end();

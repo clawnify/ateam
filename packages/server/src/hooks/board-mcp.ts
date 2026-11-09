@@ -18,7 +18,8 @@
  * circular import.
  */
 export interface BoardHandlers {
-	get(): Promise<unknown>;
+	/** The board; for a verified agent in a task, also the proposals made there. */
+	get(callerTerminalId?: string): Promise<unknown>;
 	/** Open a fresh terminal in the verified caller's task, never another task. */
 	createSession(req: {
 		callerTerminalId: string;
@@ -121,7 +122,7 @@ const TOOLS = [
 	{
 		name: "get_board",
 		description:
-			"List every in-play task (excludes merged) with its project, the repo that project is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its board column and a triage verdict — whether it looks done or still ongoing, and why. Read this before moving anything.",
+			"List every in-play task (excludes merged) with its project, the repo that project is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its board column and a triage verdict — whether it looks done or still ongoing, and why. For an agent in a task, also lists the tasks and loops proposed there (propose_task, propose_loop) and whether the user created one (and which task it became), dismissed it, or has yet to decide. Read this before moving anything.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 	},
 	{
@@ -350,7 +351,7 @@ const PROPOSAL_FIELDS = {
 } as const;
 
 const PROPOSE_FLOW =
-	"Nothing is created until the user confirms: when they are in this task Ateam opens its dialog filled in with your proposal (otherwise this card waits in Needs You until they open it), and they can edit it before creating it, or dismiss it. You are not told the outcome, so do not wait for it. Several proposals can wait at once; proposing the same name again replaces that one.";
+	"Nothing is created until the user confirms: when they are in this task Ateam opens its dialog filled in with your proposal (otherwise this card waits in Needs You until they open it), and they can edit it before creating it, or dismiss it. Do not wait for it: you are not woken for their decision, get_board lists it, and your next turn may start with a note about it. Several proposals can wait at once; proposing the same name again replaces a waiting one. Once the user has created it, proposing it again is refused: send the task a message instead.";
 
 const PROPOSE_TOOLS = [
 	{
@@ -501,7 +502,7 @@ async function callBoardTool(
 	ctx: McpContext,
 ): Promise<McpToolResult | null> {
 	if (name === "get_board") {
-		const view = await board.get();
+		const view = await board.get(ctx.callerVerified ? ctx.callerTerminalId : undefined);
 		return { text: JSON.stringify(view, null, 2) };
 	}
 	if (name === "set_status") {

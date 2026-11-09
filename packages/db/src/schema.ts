@@ -79,6 +79,28 @@ export interface TaskProposal {
 	proposedAt: number;
 }
 
+/**
+ * What the user did with a proposal once it left `proposals`: created from it,
+ * or dismissed. Kept on the proposing task for its agent (proposals.ts), which
+ * is not woken for it: the next turn's hook carries it in (`told` after that),
+ * get_board lists it, and propose_task refuses to repeat a created one.
+ */
+export interface ProposalOutcome {
+	/** The proposal's id. */
+	id: string;
+	kind: "task" | "loop";
+	/** The proposal's name, as the agent gave it. */
+	name: string;
+	outcome: "created" | "dismissed";
+	/** What the user created from it, named as they saved it (they may have
+	 *  edited the dialog). `id` is a task's, when the client knew it; the task
+	 *  can live on another engine. */
+	created?: { id?: string; name: string };
+	at: number;
+	/** The agent has been told: a turn's note, get_board, or a refusal. */
+	told?: boolean;
+}
+
 /** The task's page, without its HTML (that lives in task_pages); mirrors
  *  @ateam/protocol's TaskPageDTO. */
 export interface TaskPage {
@@ -209,6 +231,9 @@ export const tasks = sqliteTable(
 		/** Tasks and loops the agent proposed for the user to start; null or
 		 *  empty when none is pending. Oldest first, a few at most. */
 		proposals: text("proposals", { mode: "json" }).$type<TaskProposal[]>(),
+		/** What became of this task's decided proposals, newest last; server-side
+		 *  only (not in TaskDTO). */
+		proposalOutcomes: text("proposal_outcomes", { mode: "json" }).$type<ProposalOutcome[]>(),
 		lastReplyAt: integer("last_reply_at"),
 		lastEventAt: integer("last_event_at"),
 		isUnread: integer("is_unread", { mode: "boolean" }).default(false),

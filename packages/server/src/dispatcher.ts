@@ -72,6 +72,7 @@ import { createIssueTask } from "./issue-tasks";
 import { refreshLoginPath } from "./login-env";
 import { nextCronRun } from "./loops/runner";
 import { LOOP_TEMPLATES } from "./loops/templates";
+import type { ClearProposalRequest } from "./proposals";
 import { createSizeArbiter } from "./pty/size-arbiter";
 import { ENGINE_RELEASE } from "./release";
 import {
@@ -511,7 +512,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			);
 		},
 		// The user created a proposed task or loop, or dismissed it (proposals.ts).
-		[CH.tasksClearProposal]: async (req: { taskId: string; proposalId: string }) => {
+		[CH.tasksClearProposal]: async (req: ClearProposalRequest) => {
 			engine.clearProposal(req);
 			return toTaskDTO(
 				repo.getTask(db, req.taskId)!,
