@@ -177,6 +177,10 @@ was paused: about 2s from cold.
 
 ## iOS
 
+Ateam Go's Create a box → **Sprites** links here, so this section is what a phone user
+follows. Its **Add it by its tailnet address** opens Add a box on Tailscale with the
+provider set to Sprites, for the phone to wake the Sprite with your Sprites token.
+
 The phone reaches a Sprite over Tailscale. **Set up phone access**, under Access on the
 box's page in Settings → Boxes (Ateam 0.1.88 or later), does it: Ateam runs the installer
 again with `--tailscale`, which installs Tailscale, runs it as a Sprite service (so it

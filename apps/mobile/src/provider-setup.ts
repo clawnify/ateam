@@ -33,7 +33,15 @@ export interface ProviderSetup {
 	steps?: { text: string; link?: { label: string; url: string } }[];
 	/** Then connect over SSH with this. */
 	ssh?: SSHSetup;
+	/** Set up from a computer, then reached over Tailscale. The commands stay in its
+	 *  docs page (fixed there, not in an app release), so this holds where they are and
+	 *  the provider the phone wakes it through, if it sleeps (providers.ts). */
+	computer?: { guide: string; wakeProvider?: string };
 }
+
+/** A provider page's iOS section, where its phone setup is kept up to date. */
+const guide = (page: string) =>
+	`https://github.com/clawnify/ateam/blob/main/docs/providers/${page}.md#ios`;
 
 export const PROVIDER_SETUPS: readonly ProviderSetup[] = [
 	{
@@ -66,6 +74,21 @@ export const PROVIDER_SETUPS: readonly ProviderSetup[] = [
 				help: "On the machine's phone page (app.boxd.sh/mobile): Another SSH app, Copy token. It works as the SSH password.",
 			},
 		},
+	},
+	{
+		// No SSH server in a Sprite: the phone reaches it over Tailscale (sprites.md "iOS").
+		id: "sprites",
+		label: "Sprites",
+		body: "Set up from a computer, then reached over Tailscale. If you let it sleep when idle, this phone wakes it.",
+		computer: { guide: guide("sprites"), wakeProvider: "sprites" },
+	},
+	{
+		// Its SSH is key-only, the account's key: Tailscale until a phone's own key is
+		// tried through its gateway (exe-dev.md "iOS"). A VM never sleeps.
+		id: "exe-dev",
+		label: "exe.dev",
+		body: "Set up from a computer, then reached over Tailscale. Always on.",
+		computer: { guide: guide("exe-dev") },
 	},
 	{
 		id: "other",

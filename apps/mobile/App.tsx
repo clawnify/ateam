@@ -1896,6 +1896,19 @@ export default function App() {
 		setAccountSaved(savedFlags(def, account));
 	}, []);
 
+	// A box set up from a computer and reached over Tailscale (Create a box: Sprites,
+	// exe.dev): the form on Tailscale, with the provider picked when the phone wakes it.
+	const addBoxTailnet = useCallback(
+		async (wakeProvider?: string) => {
+			landOnBoard.current = false;
+			setEditingKey(null);
+			await fillForm(null);
+			if (wakeProvider) await onPickProvider(wakeProvider);
+			setConnectScreen("form");
+		},
+		[fillForm, onPickProvider],
+	);
+
 	const setBoxValue = useCallback(
 		(key: string, value: string) => setBoxValues((v) => ({ ...v, [key]: value })),
 		[],
@@ -2807,6 +2820,9 @@ export default function App() {
 					onStartOver={boxCreation.dismiss}
 					onBack={() => setConnectScreen("list")}
 					onConnectOver={(setup) => void addBoxOver(setup)}
+					onAddTailnet={(wake) => void addBoxTailnet(wake)}
+					onScan={openScanner}
+					scanner={scanner}
 				/>
 			);
 		}
