@@ -139,6 +139,14 @@ function tile(id: string) {
 	if (!found) throw new Error(`Missing fixture tile: ${id}`);
 	return found;
 }
+// Select a tile the way a click does: the pointerdown highlights it (an
+// offscreen window fires no focus events), then its terminal takes the keys.
+function select(id: string): HTMLTextAreaElement {
+	tile(id).dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+	const textarea = element<HTMLTextAreaElement>("textarea", tile(id));
+	textarea.focus();
+	return textarea;
+}
 async function drop(from: string, onto: string, during?: () => void | Promise<void>) {
 	const transfer = new DataTransfer();
 	const held = order();
@@ -184,7 +192,8 @@ async function run() {
 	assert(grid.style.cssText === shape, "activity changed the layout shape");
 
 	// Two off-page promotions restart the timer. Metadata-only changes do not.
-	element<HTMLTextAreaElement>("textarea", tile("e")).focus();
+	// The selected terminal (e) stays; the lowest of the rest make room.
+	const selected = select("e");
 	tasks = tasks.map((t) =>
 		t.id === "a" ? { ...t, column: "needs_attention" as const, lastEventAt: 200 } : t,
 	);
@@ -198,8 +207,8 @@ async function run() {
 	assert(order() === "hgfedc", "a superseded priority timer was not cancelled");
 	updateTasks(tasks.map((t) => ({ ...t, isUnread: true })));
 	await delay(2700);
-	assert(order() === "hgfbda", `cross-page replacements moved shared terminals: ${order()}`);
-	assert(!document.activeElement?.closest(".tile"), "new arrivals redirected keyboard input");
+	assert(order() === "hgbeda", `cross-page replacements moved shared terminals: ${order()}`);
+	assert(document.activeElement === selected, "a promotion took the selected terminal away");
 	assert(
 		tile("h").querySelector("textarea") === textarea,
 		"cross-page replacement remounted a shared terminal",
@@ -211,12 +220,12 @@ async function run() {
 	);
 	updateTasks(tasks);
 	await delay(5200);
-	assert(order() === "hgfbda", "same-page priority shuffled terminals after a promotion");
+	assert(order() === "hgbeda", "same-page priority shuffled terminals after a promotion");
 
 	// Refresh bypasses both debounce and same-page stability.
 	updateTasks(initial);
 	await delay();
-	assert(order() === "hgfbda", "priority changed before Refresh");
+	assert(order() === "hgbeda", "priority changed before Refresh");
 	refresh();
 	await delay();
 	assert(order() === "hgfedc", "Refresh did not immediately apply the full priority order");
@@ -256,18 +265,16 @@ async function run() {
 	assert(order() === "ahgfed", `Refresh must release pins and fully sort: ${order()}`);
 	assert(Object.keys(latestPins).length === 0, "Refresh did not clear persisted pins");
 
-	// An off-page arrival replaces only the outgoing slot and never takes focus.
-	element<HTMLTextAreaElement>("textarea", tile("d")).focus();
+	// An off-page arrival replaces only the outgoing slot and never takes focus:
+	// not the selected terminal's (d), the lowest of the rest (e).
+	const working = select("d");
 	tasks = tasks.map((t) =>
 		t.id === "b" ? { ...t, lastEventAt: 300, column: "needs_attention" as const } : t,
 	);
 	updateTasks(tasks);
 	await delay(5200);
-	assert(order() === "ahgfeb", `off-page promotion moved shared tiles: ${order()}`);
-	assert(
-		!document.activeElement?.closest(".tile"),
-		"removed focused tile redirected keyboard input",
-	);
+	assert(order() === "ahgfbd", `off-page promotion moved shared tiles: ${order()}`);
+	assert(document.activeElement === working, "an arrival took the selected terminal away");
 
 	// Refresh cancels the placement and focus of a task still waking.
 	tasks = [
@@ -278,7 +285,7 @@ async function run() {
 	await delay();
 	const pill = new DataTransfer();
 	pill.setData(TASK_DRAG_MIME, "z");
-	tile("b").dispatchEvent(
+	tile("d").dispatchEvent(
 		new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: pill }),
 	);
 	await delay();
@@ -291,6 +298,25 @@ async function run() {
 	assert(Object.keys(latestPins).length === 0, "late wake restored cleared pins");
 	assert(!document.activeElement?.closest(".tile"), "late wake restored cleared focus");
 
+	// Working on page 2: the selected terminal turning newest stays on that page
+	// instead of jumping to page 1, and page 1 stays as it was.
+	const flip = (key: "ArrowDown" | "ArrowUp") =>
+		window.dispatchEvent(new KeyboardEvent("keydown", { key, ctrlKey: true }));
+	const firstPage = order();
+	flip("ArrowDown");
+	await delay(600);
+	const secondPage = order();
+	assert(secondPage.length > 0 && !secondPage.includes("b"), `no second page: ${secondPage}`);
+	const last = secondPage[secondPage.length - 1];
+	select(last);
+	tasks = tasks.map((t) => (t.id === last ? { ...t, lastEventAt: 700 } : t));
+	updateTasks(tasks);
+	await delay(5200);
+	assert(order() === secondPage, `the selected terminal left its page: ${order()}`);
+	flip("ArrowUp");
+	await delay(600);
+	assert(order() === firstPage, `page 1 took the selected terminal: ${order()}`);
+
 	setLayout("grid");
 	await delay();
 	const fixed = order();
@@ -301,6 +327,6 @@ async function run() {
 	await delay();
 	assert(!order().includes("a"), "deleted task retained a tile");
 	root.unmount();
-	return "PASS: same-page stability, minimal cross-page replacements, debounce reset, immediate Refresh, pins, stale fetches, fixed layout and focus safety";
+	return "PASS: same-page stability, minimal cross-page replacements, the selected terminal keeps its page, debounce reset, immediate Refresh, pins, stale fetches, fixed layout and focus safety";
 }
 (window as unknown as { runMcOrderTests: typeof run }).runMcOrderTests = run;

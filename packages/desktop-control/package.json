@@ -1,0 +1,20 @@
+{
+	"name": "@ateam/desktop-control",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"test": "bun test",
+		"typecheck": "tsc --noEmit",
+		"build": "bun build src/desktop.ts --target=node --format=cjs --outfile=dist/desktop.cjs --external bufferutil --external utf-8-validate",
+		"test:linux": "node test/linux-smoke.mjs"
+	},
+	"dependencies": {
+		"ws": "^8.21.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.10.5",
+		"@types/ws": "^8.18.1"
+	},
+	"license": "GPL-3.0-or-later"
+}

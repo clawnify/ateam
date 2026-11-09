@@ -127,6 +127,9 @@ import {
 import { addTailscaleBox, installBox } from "./lib/box-actions";
 import {
 	bestMcShape,
+	fixedMcShape,
+	MC_RESIZE_SETTLE_MS,
+	MC_REORDER_DELAY_MS,
 	MC_PAGE_SIZE,
 	type McArea,
 	type McChoice,
@@ -137,6 +140,7 @@ import {
 } from "./mc-layout";
 import {
 	byMcPriority,
+	holdMcTile,
 	type McPins,
 	orderMcTiles,
 	pinMcArrival,
@@ -207,10 +211,6 @@ const MC_TILE_MIME = "application/x-ateam-tile";
 // How long a dragged tile is held over the grid's top or bottom edge before
 // the page flips.
 const FLIP_HOLD_MS = 500;
-// How long the grid's size must hold still before Auto refits to it.
-const MC_RESIZE_SETTLE_MS = 200;
-// Batch automatic priority changes after five seconds without a new order.
-const MC_REORDER_DELAY_MS = 5_000;
 
 // Whether a drag carries files from Finder (not a tile, not dragged text).
 const draggingFiles = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
@@ -4777,6 +4777,8 @@ export function MissionControl({
 	priorityOrderRef.current = priorityOrder;
 	const pinsRef = useRef(pins);
 	pinsRef.current = pins;
+	const highlightRef = useRef(highlightId);
+	highlightRef.current = highlightId;
 	// Explicit Refresh and layout selection always use the latest priority.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: explicit refresh/layout requests flush the pending order, independently of activity changes.
 	useLayoutEffect(() => {
@@ -4791,13 +4793,18 @@ export function MissionControl({
 		}
 		const timer = window.setTimeout(() => {
 			const current = tilesRef.current;
+			const ids = current.map((t) => t.task.id);
 			const priority = new Map(priorityOrder.split(" ").map((id, i) => [id, i]));
-			const next = orderMcTiles(current, pinsRef.current, priority).map((t) => t.task.id);
-			const stable = stabilizeMcPages(
-				next,
-				current.map((t) => t.task.id),
+			// The selected tile on the page in view keeps its slot, like a pin.
+			const held = holdMcTile(
+				pinsRef.current,
+				ids,
+				highlightRef.current,
+				pageRef.current,
 				pageSizeRef.current,
 			);
+			const next = orderMcTiles(current, held, priority).map((t) => t.task.id);
+			const stable = stabilizeMcPages(next, ids, pageSizeRef.current);
 			setSettled({ requested: priorityOrder, order: stable.join(" ") });
 		}, MC_REORDER_DELAY_MS);
 		return () => window.clearTimeout(timer);
@@ -5357,8 +5364,10 @@ export function MissionControl({
 		);
 	// Auto's page: lines of tiles that fill the grid, every tile a cell and
 	// every cell a tile. The last page is shaped for the tiles it has.
-	const autoGrid =
-		layout === "auto" && fit ? mcShapeGrid(bestMcShape(visible.length, fit.area)) : null;
+	const layoutGrid =
+		layout === "auto"
+			? fit && mcShapeGrid(bestMcShape(visible.length, fit.area))
+			: mcShapeGrid(fixedMcShape(layout));
 
 	return (
 		<div className={wrapClass} ref={wrapRef} {...wrapDropProps}>
@@ -5370,7 +5379,7 @@ export function MissionControl({
 				key={clampedPage}
 				className="mc"
 				data-layout={layout}
-				style={autoGrid?.container}
+				style={layoutGrid?.container}
 				initial={dirRef.current === 0 ? false : { y: dirRef.current * 32, opacity: 0.3 }}
 				animate={{ y: 0, opacity: 1 }}
 				transition={springy}
@@ -5401,7 +5410,7 @@ export function MissionControl({
 							// only: `layout` alone would scale a terminal mid-flight when the
 							// page holds a different number of tiles than it did before.
 							layout="position"
-							style={autoGrid?.tiles[i]}
+							style={layoutGrid?.tiles[i]}
 							initial={{ opacity: 0 }}
 							animate={{ opacity: 1 }}
 							transition={{ layout: springy, opacity: { duration: 0.22 } }}
@@ -5545,7 +5554,7 @@ export function MissionControl({
 				    in its first open slot; the tile that task grows takes the slot,
 				    and the offer moves on to the next one, gliding like the tiles.
 				    Auto leaves no open slot: its tiles fill the page. */}
-				{newTaskButton && !autoGrid && visible.length < pageSize && (
+				{newTaskButton && layout !== "auto" && visible.length < pageSize && (
 					<motion.div
 						key="mc-slot"
 						className="mc-slot"

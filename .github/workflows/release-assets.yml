@@ -54,7 +54,7 @@ jobs:
       # cleanly, so check the payload before it becomes the published artifact.
       - name: Sanity-check the tarball
         run: |
-          for f in cli.js daemon.js package.json; do
+          for f in cli.js daemon.js desktop.js desktop-wallpaper.png package.json install-browser.sh; do
             tar -tzf packages/server/dist/ateam-server.tar.gz | grep -qx "$f" \
               || { echo "::error::$f missing from ateam-server.tar.gz"; exit 1; }
           done

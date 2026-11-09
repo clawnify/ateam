@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash
 #
 # Run it AS THE USER that will own the agents (not root) — everything lands under
-# that user's home and no step needs sudo. It is idempotent: re-running upgrades
+# that user's home. The optional browser/tailnet setup needs sudo. Re-running upgrades
 # the dist in place. Files are only ever created or overwritten, never removed.
 #
 # Options:
@@ -22,6 +22,9 @@
 #                   set. Kernel mode where the box has /dev/net/tun; userspace mode,
 #                   with Tailscale Serve forwarding the port, where it hasn't. Needs
 #                   passwordless sudo. A re-run without it keeps the port.
+#   --browser       install the box's browser before the engine first starts.
+#                   Needs amd64 Debian/Ubuntu and passwordless sudo. A failure
+#                   is reported separately and does not prevent terminal work.
 #
 # Env knobs:
 #   ATEAM_VERSION   release tag to install (default: the latest release)
@@ -53,13 +56,15 @@ APP_DIR="$HOME/ateam-app"
 BIN_DIR="$HOME/.local/bin"
 WANT_SERVICE=0
 WANT_TAILSCALE=0
+WANT_BROWSER=0
 for arg in "$@"; do
 	case "$arg" in
 	--service) WANT_SERVICE=1 ;;
 	# The phone needs an engine that's already running, which only a service gives it.
 	--tailscale) WANT_TAILSCALE=1 WANT_SERVICE=1 ;;
+	--browser) WANT_BROWSER=1 ;;
 	*)
-		printf '\n!! unknown option: %s (the options are --service and --tailscale)\n' "$arg" >&2
+		printf '\n!! unknown option: %s (the options are --service, --tailscale and --browser)\n' "$arg" >&2
 		exit 1
 		;;
 	esac
@@ -190,6 +195,10 @@ done
 step "[3/7] install to $APP_DIR"
 mkdir -p "$APP_DIR" "$BIN_DIR"
 cp "$TMP/cli.js" "$TMP/daemon.js" "$TMP/package.json" "$APP_DIR/"
+# Older pinned releases predate desktop control; keep their engine install valid.
+if [ -f "$TMP/desktop.js" ]; then cp "$TMP/desktop.js" "$APP_DIR/"; fi
+if [ -f "$TMP/desktop-wallpaper.png" ]; then cp "$TMP/desktop-wallpaper.png" "$APP_DIR/"; fi
+if [ -f "$TMP/install-browser.sh" ]; then cp "$TMP/install-browser.sh" "$APP_DIR/"; fi
 
 # ------------------------------------------------------------- natives -------
 
@@ -425,6 +434,25 @@ case "$WS_ADDR" in
 	fi
 	;;
 esac
+
+# ------------------------------------------------------------ browser -------
+
+# Only an explicit request installs it. New-box clients pass --browser by
+# default; reconnects and engine upgrades do not change the user's choice.
+# Before starting the engine: a phone can launch its first task as soon as the
+# engine answers. Never fetch main's script for a different/pinned engine release.
+if [ "$WANT_BROWSER" = 1 ]; then
+	step "install the browser (--browser)"
+	mkdir -p "$DATA_DIR"
+	if [ ! -f "$TMP/install-browser.sh" ]; then
+		info "WARNING: this engine release has no bundled browser installer; update Ateam to include the browser"
+	elif ATEAM_DATA_DIR="$DATA_DIR" bash "$APP_DIR/install-browser.sh" >"$DATA_DIR/browser-install.log" 2>&1; then
+		info "browser ready"
+	else
+		info "WARNING: browser setup failed; terminal work is available. See $DATA_DIR/browser-install.log and retry from the Browser panel"
+		tail -5 "$DATA_DIR/browser-install.log"
+	fi
+fi
 
 # ------------------------------------------------------ Sprite service ------
 

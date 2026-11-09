@@ -1,0 +1,49 @@
+name: Agent dotfiles starter
+
+on:
+  pull_request:
+    paths:
+      - examples/agent-dotfiles/**
+      - scripts/agent-dotfiles.test.ts
+      - packages/server/src/dotfiles.ts
+      - .github/workflows/agent-dotfiles.yml
+  push:
+    branches: [main]
+    paths:
+      - examples/agent-dotfiles/**
+      - scripts/agent-dotfiles.test.ts
+      - packages/server/src/dotfiles.ts
+      - .github/workflows/agent-dotfiles.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  starter:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install pinned chezmoi for tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/chezmoi"
+          archive="$RUNNER_TEMP/chezmoi.tar.gz"
+          curl --fail --location --retry 3 --max-time 120 \
+            https://github.com/twpayne/chezmoi/releases/download/v2.74.0/chezmoi_2.74.0_linux_amd64.tar.gz \
+            -o "$archive"
+          echo "1b98a567f726f41540414aea4caf912699d53e248b29ccf8369cf553657b2374  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP/chezmoi" chezmoi
+          echo "$RUNNER_TEMP/chezmoi" >> "$GITHUB_PATH"
+      - name: Configure identity for temporary Git fixtures
+        run: |
+          git config --global user.name "Ateam CI"
+          git config --global user.email "ci@clawnify.dev"
+      - run: sh -n examples/agent-dotfiles/install.sh
+      - run: bun test scripts/agent-dotfiles.test.ts
+        env:
+          REQUIRE_CHEZMOI_TESTS: "1"

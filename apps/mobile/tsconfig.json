@@ -1,10 +1,11 @@
 {
-  "extends": "expo/tsconfig.base",
-  "compilerOptions": {
-    "strict": true,
-    "moduleResolution": "bundler",
-    "paths": {
-      "@ateam/protocol": ["../../packages/protocol/src/index.ts"]
-    }
-  }
+	"extends": "expo/tsconfig.base",
+	"compilerOptions": {
+		"strict": true,
+		"moduleResolution": "bundler",
+		"paths": {
+			"@ateam/protocol": ["../../packages/protocol/src/index.ts"],
+			"@ateam/panes": ["../../packages/panes/src/index.ts"]
+		}
+	}
 }

@@ -267,16 +267,20 @@ ssh my-ateam-box "bash -lc 'ateam'"
 > the box's folders. A box on an Ateam older than the skills menu says so in the
 > menu and takes the next release first.
 
-### Optional: a browser for the box's agents
+### A browser for the box's agents
 
 Browser MCP tools usually drive the Chrome on your laptop, and that only works
 when the agent runs on the laptop too. A box gets a Chrome of its own instead.
+New x86 boxes created in the desktop app or Ateam Go include it by default;
+clear **Include browser** to leave it out. Arm boxes remain terminal-only.
+Connecting an existing box or upgrading its engine keeps its current setup.
+
 In the desktop app, click the globe button on a task on the box: on a box with
-no browser yet, Ateam asks, then installs it there. Or run the installer on the
-box yourself:
+no browser yet, Ateam asks, then installs it there. Or run the installer bundled
+with the installed engine on the box yourself:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install-browser.sh | bash
+bash "$HOME/ateam-app/install-browser.sh"
 ```
 
 Run it as the same user as `install.sh`. It needs passwordless sudo once, and an
@@ -289,15 +293,22 @@ x86_64 box (Google Chrome has no Linux Arm build). It installs:
   desktop is empty; to log in before any agent has, ask one to open the site.
 - [TaskWindow](https://github.com/clawnify/TaskWindow) in that Chrome, its
   extension force-installed by policy and paired with its daemon automatically,
-  registered as the `taskwindow` MCP server for Claude Code. These are the same
-  tools as the TaskWindow extension on a laptop.
+  registered as the `taskwindow` MCP server when Ateam launches Claude Code, Codex,
+  or OpenCode, including agents installed later. Resume or relaunch an existing
+  session to pick up newly installed browser tools. These are the same tools as
+  the TaskWindow extension on a laptop.
 - noVNC on port 6080, so you can watch the desktop and take over for a login, a
   2FA prompt or a CAPTCHA. In the desktop app, the globe button on a task on this
   box opens it in a Browser panel, already signed in. In the iOS app, a task whose
   agent has used the browser shows it as a miniature over its terminal: tap it to
-  bring it above the terminal, and minimize it to put it back. From any other browser, use
-  `http://<tailnet-ip>:6080/vnc.html` (on a box with a tailnet interface) with the
-  password in `~/.ateam/browser/vnc-password`.
+  bring it above the terminal, and minimize it to put it back. The clients provide
+  its VNC password and separate viewer credential automatically.
+
+Browser setup verifies Chrome's sandbox, extension pairing, authenticated MCP
+discovery, and the viewer before reporting success. If setup fails, the engine
+still starts for terminal work; details are in `~/.ateam/browser-install.log`.
+Retry from the desktop Browser panel or with the bundled script above. For a
+manual engine install, add `--browser` to the engine installer's options.
 
 Everything runs as a service (systemd, or Sprite services on a Sprite), so it
 survives reboots and keeps working with no laptop connected. Re-running the script
@@ -577,7 +588,7 @@ The connection menu surfaces the real error inline. Common ones:
 | --- | --- |
 | **"No servers in ~/.ssh/config"** in the menu | Add a `Host` entry (step 3). |
 | Connect hangs or fails | Check `ssh <box>` works, Tailscale is up on **both** ends (`tailscale status`), and `ateam` is on the box's login PATH: `ssh <box> "bash -lc 'command -v ateam'"`. |
-| A box shows **"update available (vN)"** | Version skew no longer blocks anything: the box connects and works. A feature whose data shape changed on a newer engine is switched off with a reason rather than misreading the old shape (Cleanup needs a v6 box, a loop that runs every day at a set time needs a v13 one, and **Pause all** only stops a v14 box's loops; the Loops banner names any box it did not reach); a method the box simply does not have fails on its own, only where you use it. To update it, use the arrow on the box's row in the **Run on** picker, which runs the installer over SSH and streams the log. Connecting from the Mac app also upgrades a box on its own, so this often clears itself; on the phone, tap **Update box** in the banner. A box *ahead* of the client says so instead, and the fix there is to update the client, not the box. |
+| A box shows **"update available (vN)"** | Version skew no longer blocks anything: the box connects and works. A feature whose data shape changed on a newer engine is switched off with a reason rather than misreading the old shape (Cleanup needs a v6 box, a loop that runs every day at a set time needs a v13 one, and **Pause all** only stops a v14 box's loops; the Loops banner names any box it did not reach); a method the box simply does not have fails on its own, only where you use it. To update it, use the arrow on the box's row in the **Run on** picker, which runs the installer over SSH and streams the log. Connecting from the Mac app also upgrades a box on its own, so this often clears itself; on the phone, tap **Update box** in the banner. A box *ahead* of the client works with it as it is, minus the newer features, and says nothing: Ateam Go asks to be updated only when the box needs a newer one (the box sends the oldest app it serves, `minClient`, in its hello). |
 | **The same repo shows twice** on the board | Two copies of one repo merge into a single card by their GitHub `owner/name`, read from each clone's `origin` URL. A clone with no `origin` has no identity to match on, so it stays its own card: that is what you get when a folder is created with **New project** on the phone and the repo is cloned into it afterwards. Add the remote where it's missing (`git -C <repo> remote add origin <url>`) and the rows merge on the next board load. A box also has to be running a server new enough to repair its own rows, so update the box if its copy still shows separately. |
 | Board is empty after connecting | The box has no registered projects yet — add one from the box's filesystem via **Add project** (or register a repo path on the box). |
 | Agents run but commits fail | The box has no git identity — `git config --global user.name/user.email` (step 0). |

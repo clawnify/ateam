@@ -3,7 +3,7 @@
 		"name": "Ateam Go",
 		"slug": "ateam",
 		"scheme": "ateamgo",
-		"version": "1.4.3",
+		"version": "1.4.4",
 		"orientation": "portrait",
 		"icon": "./assets/icon.png",
 		"userInterfaceStyle": "light",
@@ -29,9 +29,15 @@
 		"ios": {
 			"supportsTablet": true,
 			"bundleIdentifier": "com.clawnify.ateam",
-			"buildNumber": "32",
+			"buildNumber": "33",
 			"infoPlist": {
 				"ITSAppUsesNonExemptEncryption": false,
+				"UISupportedInterfaceOrientations~ipad": [
+					"UIInterfaceOrientationPortrait",
+					"UIInterfaceOrientationPortraitUpsideDown",
+					"UIInterfaceOrientationLandscapeLeft",
+					"UIInterfaceOrientationLandscapeRight"
+				],
 				"UIBackgroundModes": ["audio", "voip"],
 				"NSLocalNetworkUsageDescription": "Ateam connects to a coding-agent server you run on your own machine or local network.",
 				"NSAppTransportSecurity": {

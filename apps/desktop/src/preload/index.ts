@@ -211,6 +211,9 @@ const host: AteamHost = {
 	updateBox: (alias) => ipcRenderer.invoke(HOST_CH.updateBox, alias),
 	phoneAccess: (alias) => ipcRenderer.invoke(HOST_CH.phoneAccess, alias),
 	setBoxAlwaysOn: (alias, on) => ipcRenderer.invoke(HOST_CH.boxAlwaysOn, alias, on),
+	dotfilesStatus: (alias) => ipcRenderer.invoke(HOST_CH.dotfilesStatus, alias),
+	prepareDotfiles: (alias, config) => ipcRenderer.invoke(HOST_CH.prepareDotfiles, alias, config),
+	applyDotfiles: (alias, id) => ipcRenderer.invoke(HOST_CH.applyDotfiles, alias, id),
 	githubAccess: (alias) => ipcRenderer.invoke(HOST_CH.githubAccess, alias),
 	connectGithub: (alias, token) => ipcRenderer.invoke(HOST_CH.connectGithub, alias, token),
 	checkGithub: (alias, repos) => ipcRenderer.invoke(HOST_CH.checkGithub, alias, repos),
@@ -253,6 +256,8 @@ const host: AteamHost = {
 contextBridge.exposeInMainWorld("ateamHost", host);
 
 const lead: AteamLead = {
+	settings: (machine) => ipcRenderer.invoke(LEAD_CH.settings, machine),
+	updateSettings: (machine, patch) => ipcRenderer.invoke(LEAD_CH.updateSettings, machine, patch),
 	snapshot: (opts) => ipcRenderer.invoke(LEAD_CH.snapshot, opts),
 	older: (beforeId, limit) => ipcRenderer.invoke(LEAD_CH.older, beforeId, limit),
 	send: (text, files) => ipcRenderer.invoke(LEAD_CH.send, text, files),
