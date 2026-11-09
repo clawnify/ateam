@@ -113,6 +113,7 @@ import { emptySSHForm, SSHFields, type SSHForm, savedSSHForm, saveSSHForm } from
 import { SSHPreview } from "./src/SSHPreview";
 import { useScrollFade } from "./src/scroll-fade";
 import { prepareSSH } from "./src/ssh";
+import { parseSSHLink } from "./src/ssh-link";
 import {
 	loadBoards,
 	loadBoxes,
@@ -1863,15 +1864,20 @@ export default function App() {
 
 	// A machine made at a provider (Create a box, src/provider-setup.ts): the same form,
 	// over SSH, with that provider's login and what its password is called there.
+	// From an `ateamgo://ssh` link (src/ssh-link.ts), `at` is the machine it names.
 	const addBoxOver = useCallback(
-		async (setup: SSHSetup) => {
+		async (setup: SSHSetup, at?: { host: string; port: string | null }) => {
 			landOnBoard.current = false;
 			setEditingKey(null);
 			await fillForm(null);
 			setSSHForm({ ...emptySSHForm(), enabled: true, user: setup.user });
+			setHost(at?.host ?? "");
 			// A provider whose machines each have their own port leaves it to be typed.
-			setPort(setup.portHint ? "" : "22");
+			setPort(at?.port ?? (setup.portHint ? "" : "22"));
 			setFormSetup(setup);
+			// Any page can open such a link: the host is for the user to recognise.
+			if (at)
+				setFormNotice("Filled in from a link. Check the host is yours, then paste the password.");
 			setConnectScreen("form");
 		},
 		[fillForm],
@@ -2275,6 +2281,27 @@ export default function App() {
 		const sub = Linking.addEventListener("url", (e) => offerPairLink(e.url));
 		return () => sub.remove();
 	}, [offerPairLink]);
+	// `ateamgo://ssh?…`: a provider's link to one of its machines (src/ssh-link.ts). It
+	// only fills in Add a box: the user pastes the password and taps Connect, and the
+	// first connection asks them to trust the machine.
+	const openSSHLink = useCallback(
+		(url: string | null): void => {
+			const found = url && sshAvailable ? parseSSHLink(url) : null;
+			if (!found) return;
+			void (async () => {
+				await booted.current;
+				endDemo();
+				setView("connect");
+				await addBoxOver(found.setup, { host: found.host, port: found.port });
+			})();
+		},
+		[addBoxOver, endDemo],
+	);
+	useEffect(() => {
+		void Linking.getInitialURL().then(openSSHLink);
+		const sub = Linking.addEventListener("url", (e) => openSSHLink(e.url));
+		return () => sub.remove();
+	}, [openSSHLink]);
 	// The same link, read by the camera inside the app (src/PairScanner.tsx). Loaded when
 	// first opened: a build made before the camera's native code fails on importing it.
 	const scannerRef = useRef<typeof import("./src/PairScanner").PairScanner | null>(null);

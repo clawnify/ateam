@@ -39,15 +39,17 @@ export const PROVIDER_SETUPS: readonly ProviderSetup[] = [
 		creates: true,
 	},
 	{
-		// docs.boxd.sh/guides/mobile: <machine>.boxd.sh, the port on its phone page, user
-		// boxd, and a token from that page as the password (checked 2026-11-09).
+		// The machine's phone sheet on app.boxd.sh, as it was on 2026-11-09: app icons
+		// (Termius gets host, port and user by a link, the token by the clipboard), then
+		// "Another SSH app": host <machine>.boxd.sh, its own port, user boxd, and a token
+		// with Copy token, shown only while the sheet is open. docs.boxd.sh/guides/mobile.
 		id: "boxd",
 		label: "boxd",
 		body: "Make a machine on boxd, then connect to it over SSH.",
 		steps: [
 			{ text: "Create a machine.", link: { label: "Open boxd", url: "https://app.boxd.sh" } },
 			{
-				text: "Open its phone page and tap Create token: the token is its SSH password. Note the SSH port shown there too.",
+				text: "Open its phone page, then Another SSH app. Note its host and port, and tap Copy token: the token is its password.",
 				link: { label: "Open the phone page", url: "https://app.boxd.sh/mobile" },
 			},
 		],
@@ -57,7 +59,7 @@ export const PROVIDER_SETUPS: readonly ProviderSetup[] = [
 			portHint: "On its phone page",
 			password: {
 				label: "boxd token",
-				help: "From the machine's phone page on app.boxd.sh/mobile: Create token. It works as the SSH password.",
+				help: "On the machine's phone page (app.boxd.sh/mobile): Another SSH app, Copy token. It works as the SSH password.",
 			},
 		},
 	},

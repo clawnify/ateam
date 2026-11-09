@@ -158,6 +158,34 @@ cloning it there. The token never travels back from the box. Two weeks before it
 expires, the box's GitHub section says so and opens the form for its replacement, so
 a box doesn't stop pushing mid-task on the day it lapses.
 
+## Open Ateam Go from your page (a link for providers)
+
+A provider can open Ateam Go with **Add a box** filled in for one of its machines, the
+way boxd's phone page opens Termius:
+
+```
+ateamgo://ssh?host=<host>&port=<port>&user=<user>&provider=<id>
+```
+
+| Parameter | | |
+|---|---|---|
+| `host` | required | The machine's SSH host: a name, an IPv4 address, or an IPv6 one in brackets. |
+| `port` | optional | Its SSH port. Left out, Ateam Go uses 22, or leaves it to be typed for a provider whose machines each have their own. |
+| `user` | optional | The login. Left out: the provider's own (`boxd` for boxd), else `root`. |
+| `provider` | optional | An id Ateam Go knows (`boxd`), for its hints: what the password is called and where it comes from. Any other id is treated as a plain server. |
+
+Values are URL-encoded; a link that doesn't parse opens nothing. Example:
+`ateamgo://ssh?host=my-box.boxd.sh&port=12836&user=boxd&provider=boxd`.
+
+**Never put a password or token in the link.** Whatever opens a link can read it, and
+it lands in browser history. Copy it to the clipboard on the same tap instead, as boxd
+does for Termius; the user pastes it into the password field. Ateam Go reads nothing
+else from the link: it fills in the form with a note to check the host, and nothing
+connects until the user taps **Connect**, whose first connection asks them to trust
+the machine's host key. On a phone without Ateam Go the link opens nothing, so offer
+it next to your other SSH apps rather than in place of them. The parser is
+`apps/mobile/src/ssh-link.ts`.
+
 ## Adding a provider
 
 Open a PR with two files — `docs/providers/<id>.md` using the template below, and

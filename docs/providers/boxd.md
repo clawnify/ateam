@@ -107,12 +107,13 @@ Settings → Boxes.
 ## iOS
 
 **Over SSH, with no Mac or Tailscale:** in Ateam Go, Create a box → **boxd**. Create a
-machine on boxd, open its phone page (`app.boxd.sh/mobile`) and tap **Create token**:
-boxd takes the token as the SSH password of user `boxd` at `<machine>.boxd.sh`, on the
-port that page shows ([boxd's guide](https://docs.boxd.sh/guides/mobile.md)). **Connect
-over SSH** opens the form with the user filled in; enter the host, the port and the
-token. Ateam Go then installs Ateam on the machine and opens Finish setting up. Not yet
-run end to end against a real boxd machine.
+machine on boxd and open its phone page (`app.boxd.sh/mobile`). Its app icons open
+Termius and others; Ateam Go isn't one of them, so open **Another SSH app**: host
+`<machine>.boxd.sh`, the machine's own port, user `boxd`, and **Copy token**, the token
+being the password ([boxd's guide](https://docs.boxd.sh/guides/mobile.md); the sheet as
+it was on 2026-11-09). **Connect over SSH** opens the form with the user filled in;
+enter the host, the port and the token. Ateam Go then installs Ateam on the machine and
+opens Finish setting up. Not yet run end to end against a real boxd machine.
 
 **Over Tailscale:** the phone reaches a box over a WebSocket on your tailnet. **Set up phone access**, under
 Access on the box's page in Settings → Boxes (Ateam 0.1.88 or later), does it: Ateam runs
