@@ -7,7 +7,19 @@
 //   and so does the desktop when its Lead lives on a box (LeadHome).
 // Imports nothing, so both the node and web tsconfigs resolve it.
 
+export type ChatAgent = "claude" | "codex" | "opencode";
+export interface ChatSettings {
+	agent: ChatAgent;
+	auto: boolean;
+}
+export interface ChatSettingsResult {
+	settings: ChatSettings;
+	agents: { id: ChatAgent; available: boolean }[];
+}
+
 export const LEAD_CH = {
+	settings: "lead:settings",
+	updateSettings: "lead:updateSettings",
 	/** The conversation so far, plus whether a turn is running. */
 	snapshot: "lead:snapshot",
 	/** Send the user's message (starts the agent on first use). */
@@ -113,6 +125,8 @@ export interface LeadCallTopic {
  *  the box and keeps its own previews. `attachBytes` takes the file as base64
  *  there, since RPC frames are JSON. */
 export const LEAD_RPC = [
+	LEAD_CH.settings,
+	LEAD_CH.updateSettings,
 	LEAD_CH.snapshot,
 	LEAD_CH.send,
 	LEAD_CH.interrupt,
@@ -357,6 +371,9 @@ export interface LeadHome {
 
 /** window.ateamLead. */
 export interface AteamLead {
+	/** Explicit machine target, independent of general settings sync and Chat home. */
+	settings(machine: string | null): Promise<ChatSettingsResult>;
+	updateSettings(machine: string | null, patch: Partial<ChatSettings>): Promise<ChatSettingsResult>;
 	/** `tail`: only the last that many items (`more` says older ones exist). */
 	snapshot(opts?: { tail?: number }): Promise<LeadSnapshot>;
 	/** Up to `limit` items before `beforeId`, oldest first. */

@@ -47,6 +47,7 @@ export interface EngineLeadOptions {
 	log?: (line: string) => void;
 	/** Tests: how to start `claude`. */
 	spawnClaude?: LeadDeps["spawnClaude"];
+	preferences?: LeadDeps["preferences"];
 	/** Tests: the idle stop (default LEAD_IDLE_STOP_MS). */
 	idleStopMs?: number;
 	/** The boxes this one links to (cross-box, links.ts): the Lead's board, messages
@@ -81,6 +82,7 @@ export function engineLead(
 	const lead = (): Promise<Lead> => {
 		started ??= startLead({
 			place: "box",
+			preferences: opts.preferences,
 			dir: opts.dir,
 			handle: opts.reach
 				? (method, args) => opts.reach?.handle(method, args) as Promise<unknown>
@@ -135,11 +137,26 @@ export function engineLead(
 			return () => listeners.delete(l);
 		},
 		async handle(method, args) {
+			if (method === LEAD_CH.settings) {
+				if (!opts.preferences) throw new Error("Chat settings are unavailable.");
+				return opts.preferences.snapshot();
+			}
+			if (method === LEAD_CH.updateSettings) {
+				if (!opts.preferences) throw new Error("Chat settings are unavailable.");
+				return opts.preferences.update(
+					args[0] as Parameters<NonNullable<LeadDeps["preferences"]>["update"]>[0],
+				);
+			}
 			// Reading a Lead that was never used answers empty rather than start it:
 			// starting makes its folder, and from then on the engine starts it at
 			// boot. The phone reads it on every connect, for the dot on its button.
 			if (method === LEAD_CH.snapshot && !started && !existsSync(opts.dir))
-				return { items: [], draft: "", busy: false, auto: false } satisfies LeadSnapshot;
+				return {
+					items: [],
+					draft: "",
+					busy: false,
+					auto: opts.preferences?.get().auto ?? false,
+				} satisfies LeadSnapshot;
 			// Every call but a snapshot is the user doing something in the chat
 			// (the phone reads a snapshot on its own when it opens the chat, and on
 			// every connect for the dot on its button).

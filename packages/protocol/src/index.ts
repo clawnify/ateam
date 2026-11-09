@@ -175,7 +175,8 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // v35: explicit box-scoped dotfiles preview/apply; settings sync never runs scripts.
 // v36: browser:view carries desktop viewer credentials, including a bundled
 // password value that already-released clients forward unchanged.
-export const PROTOCOL_VERSION = 36;
+// v37: machine-owned Chat agent and Auto preferences.
+export const PROTOCOL_VERSION = 37;
 
 /**
  * The oldest client protocol an engine of this version still serves correctly, sent
@@ -889,12 +890,15 @@ export interface BoxSettings {
 	alwaysOn: boolean;
 }
 export interface AteamSettings {
+	/** Machine-owned; never included in engine settings sync. */
+	chat?: import("./lead").ChatSettings;
 	version: number;
 	client: ClientSettings;
 	engine: EngineSettings;
 	box: BoxSettings;
 }
 export interface SettingsPatch {
+	chat?: Partial<import("./lead").ChatSettings>;
 	client?: Partial<ClientSettings>;
 	engine?: Partial<EngineSettings>;
 	box?: Partial<BoxSettings>;

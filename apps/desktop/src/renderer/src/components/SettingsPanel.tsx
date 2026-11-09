@@ -17,6 +17,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { THEMES } from "../../../shared/theme";
 import { useTheme } from "../lib/theme";
 import { BoxesSettings } from "./BoxesSettings";
+import { ChatSettings } from "./ChatSettings";
 
 /**
  * The settings page: a section list on the left, rows of title + description +
@@ -34,7 +35,7 @@ import { BoxesSettings } from "./BoxesSettings";
  * offered: a setting nothing acts on is a lie, however tidy the row.
  */
 
-export type SectionId = "general" | "boxes" | "agents" | "git" | "ai";
+export type SectionId = "general" | "boxes" | "agents" | "git" | "ai" | "chat";
 
 /** Settings opened from elsewhere: at a section, and at one row of it when `row` names one.
  *  A new `n` opens it again. */
@@ -48,6 +49,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
 	{ id: "general", label: "General" },
 	{ id: "boxes", label: "Boxes" },
 	{ id: "agents", label: "Agents" },
+	{ id: "chat", label: "Chat" },
 	{ id: "git", label: "Git" },
 	{ id: "ai", label: "AI" },
 ];
@@ -112,6 +114,14 @@ const ARCHIVE_OPTIONS: { value: number; label: string }[] = [
 ];
 
 const ROWS: Row[] = [
+	{
+		id: "chat.settings",
+		section: "chat",
+		title: "Chat agent and Auto mode",
+		description:
+			"Claude Code, Codex or OpenCode, per machine. Chat permissions and automatic approval.",
+		control: () => null,
+	},
 	{
 		id: "client.theme",
 		section: "general",
@@ -754,6 +764,12 @@ export function SettingsPanel({
 				) : (
 					shown.map((section) => {
 						const rows = section.rows;
+						if (section.id === "chat")
+							return (
+								<section key={section.id} className="settings-section">
+									<ChatSettings />
+								</section>
+							);
 						if (section.id === "boxes") {
 							return (
 								<section key={section.id} className="settings-section">
@@ -781,26 +797,27 @@ export function SettingsPanel({
 						);
 					})
 				)}
-				{result && shown.some((sec) => sec.id !== "ai" && sec.id !== "boxes") && (
-					<p className="settings-foot">
-						Stored in <code>{result.path}</code>
-						{result.machine === undefined
-							? " on the machine you have selected"
-							: result.machine === null
-								? " on this Mac"
-								: ` on "${result.machine}"`}
-						{result.syncedTo && result.syncedTo.length > 0
-							? `; engine settings synced to ${result.syncedTo.join(", ")}`
-							: ""}
-						{result.syncFailed && result.syncFailed.length > 0
-							? `; not synced to ${result.syncFailed.map((f) => `${f.alias} (${f.reason})`).join(", ")}`
-							: ""}
-						{result.syncedTo && !result.syncedTo.length && !result.syncFailed?.length
-							? "; engine settings sync to each box as it connects"
-							: ""}
-						. Edit it by hand if you like; changes apply on the next read.
-					</p>
-				)}
+				{result &&
+					shown.some((sec) => sec.id !== "ai" && sec.id !== "boxes" && sec.id !== "chat") && (
+						<p className="settings-foot">
+							Stored in <code>{result.path}</code>
+							{result.machine === undefined
+								? " on the machine you have selected"
+								: result.machine === null
+									? " on this Mac"
+									: ` on "${result.machine}"`}
+							{result.syncedTo && result.syncedTo.length > 0
+								? `; engine settings synced to ${result.syncedTo.join(", ")}`
+								: ""}
+							{result.syncFailed && result.syncFailed.length > 0
+								? `; not synced to ${result.syncFailed.map((f) => `${f.alias} (${f.reason})`).join(", ")}`
+								: ""}
+							{result.syncedTo && !result.syncedTo.length && !result.syncFailed?.length
+								? "; engine settings sync to each box as it connects"
+								: ""}
+							. Edit it by hand if you like; changes apply on the next read.
+						</p>
+					)}
 				{credentials && shown.some((sec) => sec.id === "ai") && (
 					<p className="settings-foot">
 						Keys are stored in <code>{credentials.path}</code>, readable only by you and never in
