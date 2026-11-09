@@ -107,6 +107,7 @@ import { ProjectBrowser } from "./src/ProjectBrowser";
 import { type ProposalItem, ProposalSheet } from "./src/ProposalSheet";
 import { ProviderIcon } from "./src/ProviderIcon";
 import { pairTarget, parsePairLinks } from "./src/pair-link";
+import type { SSHSetup } from "./src/provider-setup";
 import { ScanQrIcon } from "./src/ScanQrIcon";
 import { emptySSHForm, SSHFields, type SSHForm, savedSSHForm, saveSSHForm } from "./src/SSHFields";
 import { SSHPreview } from "./src/SSHPreview";
@@ -350,6 +351,7 @@ function savedFlags(def: ProviderDefinition, account: InputValues): Record<strin
 function ConnectionScreen({
 	sshForm,
 	onSSHChange,
+	sshSetup,
 	host,
 	port,
 	setHost,
@@ -381,6 +383,8 @@ function ConnectionScreen({
 }: {
 	sshForm: SSHForm;
 	onSSHChange: (value: SSHForm) => void;
+	/** A machine made at a provider (Create a box): its host and password, as it says. */
+	sshSetup: SSHSetup | null;
 	/** Add a box by scanning the pairing code a Mac shows (not while editing one). */
 	onScan: (() => void) | null;
 	/** The scanner, while it is open (App's). */
@@ -488,10 +492,15 @@ function ConnectionScreen({
 							accessibilityRole="button"
 						>
 							<Feather name="server" size={18} color={C.ink} />
-							<Text style={styles.scanText}>No box yet? Create one on Hetzner from here.</Text>
+							<Text style={styles.scanText}>No box yet? Create one from here.</Text>
 						</Pressable>
 					) : null}
-					<SSHFields value={sshForm} onChange={onSSHChange} disabled={connecting} />
+					<SSHFields
+						value={sshForm}
+						onChange={onSSHChange}
+						disabled={connecting}
+						password={sshSetup?.password}
+					/>
 					<View style={styles.eyebrowRow}>
 						<View style={[styles.tick, { backgroundColor: C.ink }]} />
 						<Text style={styles.eyebrow}>Box</Text>
@@ -501,13 +510,15 @@ function ConnectionScreen({
 							label={sshForm.enabled ? "SSH host" : "Tailscale IP or host"}
 							value={host}
 							onChangeText={setHost}
-							placeholder={sshForm.enabled ? "Server IP or hostname" : "100.x.y.z"}
+							placeholder={
+								sshForm.enabled ? (sshSetup?.hostHint ?? "Server IP or hostname") : "100.x.y.z"
+							}
 						/>
 						<Field
 							label="Port"
 							value={port}
 							onChangeText={setPort}
-							placeholder={sshForm.enabled ? "22" : "8787"}
+							placeholder={sshForm.enabled ? (sshSetup?.portHint ?? "22") : "8787"}
 							keyboardType="numeric"
 						/>
 						<Pressable
@@ -1337,6 +1348,8 @@ export default function App() {
 	const [host, setHost] = useState("");
 	const [port, setPort] = useState("8787");
 	const [sshForm, setSSHForm] = useState<SSHForm>(emptySSHForm);
+	// The provider a new box was made at (Create a box), for the form's hints.
+	const [formSetup, setFormSetup] = useState<SSHSetup | null>(null);
 	// Waking a sleeping box through its provider before connecting (packages/protocol/src/wake.ts).
 	// The provider and the box's inputs ride on the saved box; the provider's account
 	// inputs (its key) live in the Keychain and are only ever held here, in a ref,
@@ -1761,6 +1774,7 @@ export default function App() {
 	// Fill the form with a saved box, provider and all, or empty it for a new one.
 	const fillForm = useCallback(async (box: SavedBox | null) => {
 		setSSHForm(savedSSHForm(box));
+		setFormSetup(null);
 		setHost(box?.host ?? "");
 		setPort(box?.port ?? "8787");
 		setError(null);
@@ -1846,6 +1860,22 @@ export default function App() {
 		setEditingKey(null);
 		setConnectScreen("form");
 	}, [fillForm]);
+
+	// A machine made at a provider (Create a box, src/provider-setup.ts): the same form,
+	// over SSH, with that provider's login and what its password is called there.
+	const addBoxOver = useCallback(
+		async (setup: SSHSetup) => {
+			landOnBoard.current = false;
+			setEditingKey(null);
+			await fillForm(null);
+			setSSHForm({ ...emptySSHForm(), enabled: true, user: setup.user });
+			// A provider whose machines each have their own port leaves it to be typed.
+			setPort(setup.portHint ? "" : "22");
+			setFormSetup(setup);
+			setConnectScreen("form");
+		},
+		[fillForm],
+	);
 
 	const onPickProvider = useCallback(async (id: string | null) => {
 		const def = providerById(id);
@@ -1997,6 +2027,11 @@ export default function App() {
 			setError("Enter the box's IP or hostname.");
 			return;
 		}
+		// Not 22 at a provider whose machines each have their own: never guess it.
+		if (sshForm.enabled && formSetup?.portHint && !port.trim()) {
+			setError(`Enter the box's SSH port. ${formSetup.portHint}.`);
+			return;
+		}
 		const def = providerById(providerId);
 		let box: SavedConnection = {
 			...(editingKey ? boxesRef.current.find((b) => boxKey(b) === editingKey) : {}),
@@ -2078,6 +2113,7 @@ export default function App() {
 		}
 	}, [
 		sshForm,
+		formSetup,
 		formBusy,
 		host,
 		port,
@@ -2743,6 +2779,7 @@ export default function App() {
 					onDelete={() => void boxCreation.deleteServer()}
 					onStartOver={boxCreation.dismiss}
 					onBack={() => setConnectScreen("list")}
+					onConnectOver={(setup) => void addBoxOver(setup)}
 				/>
 			);
 		}
@@ -2809,6 +2846,7 @@ export default function App() {
 		return (
 			<ConnectionScreen
 				sshForm={sshForm}
+				sshSetup={formSetup}
 				onSSHChange={(value) => {
 					if (value.enabled !== sshForm.enabled) setPort(value.enabled ? "22" : "8787");
 					setSSHForm(value);

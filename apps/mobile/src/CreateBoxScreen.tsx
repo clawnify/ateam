@@ -35,7 +35,9 @@ import {
 	TAILSCALE_KEYS_URL,
 } from "./create-box";
 import { shareMacApp } from "./mac-app";
+import { ProviderIcon } from "./ProviderIcon";
 import { PROVIDER_LOGOS } from "./provider-logos";
+import { PROVIDER_SETUPS, type ProviderSetup, type SSHSetup } from "./provider-setup";
 import { loadProviderAccount, saveProviderAccount } from "./storage";
 import { openTailscale, useTailnet } from "./tailnet";
 import { C, CONTENT_MAX } from "./theme";
@@ -95,6 +97,117 @@ function Help({ text, link, url }: { text: string; link: string; url: string }) 
 /** A row that opens the system's own list to choose from (the action sheet on iOS):
  *  an inline list of a dozen sizes was hard to scroll and to hit. Elsewhere, the list
  *  opens below the row. `detail` adds a word to each choice (its price). */
+/** The first step: where the box runs (src/provider-setup.ts). Only Hetzner without
+ *  SSH in this build, as every other way in is SSH. */
+function ProviderStep({ onPick }: { onPick: (p: ProviderSetup) => void }) {
+	return (
+		<View style={styles.column}>
+			<Text style={styles.intro}>
+				Where should your box run? Either way it gets Ateam and your coding agents.
+			</Text>
+			<View style={styles.choices}>
+				{PROVIDER_SETUPS.filter((p) => p.creates || sshAvailable).map((p) => (
+					<Pressable
+						key={p.id}
+						style={({ pressed }) => [styles.choice, styles.providerRow, pressed && styles.pressed]}
+						onPress={() => onPick(p)}
+						accessibilityRole="button"
+						accessibilityLabel={`${p.label}. ${p.body}`}
+					>
+						<ProviderIcon providerId={p.id} size={36} />
+						<View style={styles.choiceText}>
+							<Text style={styles.choiceTitle}>{p.label}</Text>
+							<Text style={styles.helpText}>{p.body}</Text>
+						</View>
+						<Feather name="chevron-right" size={16} color={C.muted} />
+					</Pressable>
+				))}
+			</View>
+		</View>
+	);
+}
+
+/** A machine made at its provider: what to do there first, then on to SSH. */
+function ProviderSteps({ setup, onContinue }: { setup: ProviderSetup; onContinue: () => void }) {
+	return (
+		<View style={styles.column}>
+			<View style={styles.providerHead}>
+				<ProviderIcon providerId={setup.id} size={36} />
+				<Text style={styles.title}>{setup.label}</Text>
+			</View>
+			<Text style={styles.intro}>{setup.body}</Text>
+			{setup.steps?.map((s, i) => (
+				<View key={s.text} style={[styles.card, styles.stepRow]}>
+					<Text style={styles.stepNum}>{i + 1}</Text>
+					<View style={styles.choiceText}>
+						<Text style={styles.stepBody}>{s.text}</Text>
+						{s.link ? (
+							<Pressable
+								onPress={() => void Linking.openURL(s.link?.url ?? "")}
+								hitSlop={6}
+								accessibilityRole="link"
+							>
+								<Text style={styles.link}>{s.link.label}</Text>
+							</Pressable>
+						) : null}
+					</View>
+				</View>
+			))}
+			<Pressable style={styles.primary} onPress={onContinue} accessibilityRole="button">
+				<Text style={styles.primaryText}>Connect over SSH</Text>
+			</Pressable>
+		</View>
+	);
+}
+
+/** How the phone will reach the box, chosen before it exists: it's in the box's
+ *  first-boot setup and its firewall. Each way is a card of its own, with why. */
+function ConnectionChoice({ value, onPick }: { value: string; onPick: (slug: string) => void }) {
+	const choices = [
+		{
+			slug: "tailscale",
+			title: "Tailscale",
+			body: "Recommended for security: the box takes nothing from the internet. Needs a Tailscale account.",
+		},
+		...(sshAvailable
+			? [
+					{
+						slug: "ssh",
+						title: "SSH",
+						body: "No Tailscale account needed. Only SSH is open, and only this phone's key logs in.",
+					},
+				]
+			: []),
+	];
+	return (
+		<View style={styles.choices} accessibilityRole="radiogroup">
+			{choices.map((c) => {
+				const on = c.slug === value;
+				return (
+					<Pressable
+						key={c.slug}
+						style={({ pressed }) => [
+							styles.choice,
+							on && styles.choiceOn,
+							pressed && styles.pressed,
+						]}
+						onPress={() => onPick(c.slug)}
+						accessibilityRole="radio"
+						accessibilityState={{ checked: on }}
+						accessibilityLabel={`${c.title}. ${c.body}`}
+					>
+						<Feather name={on ? "check-circle" : "circle"} size={18} color={on ? C.ink : C.faint} />
+						<View style={styles.choiceText}>
+							<Text style={styles.choiceTitle}>{c.title}</Text>
+							<Text style={styles.helpText}>{c.body}</Text>
+						</View>
+					</Pressable>
+				);
+			})}
+		</View>
+	);
+}
+
 function Picker<T extends { slug: string; label: string }>({
 	label,
 	items,
@@ -157,8 +270,8 @@ function Picker<T extends { slug: string; label: string }>({
 	);
 }
 
-/** Where else Ateam for Mac sets a box up (docs/providers), by their marks. Not boxd:
- *  the user keeps it unpromoted. The last circle is any machine reached over SSH. */
+/** Where else Ateam for Mac sets a box up (docs/providers), by their marks. Not boxd,
+ *  which has its own card on the first step. The last circle is any machine over SSH. */
 const MORE_PROVIDERS = ["sprites"];
 
 function LogoStack() {
@@ -351,6 +464,7 @@ export function CreateBoxScreen({
 	onDelete,
 	onStartOver,
 	onBack,
+	onConnectOver,
 }: {
 	onVerify: () => void;
 	creation: Creation | null;
@@ -359,7 +473,15 @@ export function CreateBoxScreen({
 	onDelete: () => void;
 	onStartOver: () => void;
 	onBack: () => void;
+	/** A machine made at a provider: the Add a box form, over SSH, set up for it. */
+	onConnectOver: (setup: SSHSetup) => void;
 }) {
+	// Where it runs, picked on the first step; Hetzner's is the form below.
+	const [picked, setPicked] = useState<ProviderSetup | null>(null);
+	const pick = (p: ProviderSetup) => {
+		if (p.creates || p.steps) setPicked(p);
+		else if (p.ssh) onConnectOver(p.ssh);
+	};
 	// A saved token is only ever held here, in a ref, never in render state.
 	const savedToken = useRef<string | null>(null);
 	const [tokenSaved, setTokenSaved] = useState(false);
@@ -439,7 +561,12 @@ export function CreateBoxScreen({
 		<View style={styles.root}>
 			<StatusBar barStyle="light-content" backgroundColor={C.bg} />
 			<View style={styles.navBar}>
-				<Pressable onPress={onBack} hitSlop={8} accessibilityRole="button">
+				{/* Back to the providers from one picked; off the page from the first step. */}
+				<Pressable
+					onPress={() => (picked && !creation ? setPicked(null) : onBack())}
+					hitSlop={8}
+					accessibilityRole="button"
+				>
 					<Text style={styles.backText}>‹ Back</Text>
 				</Pressable>
 				<Text style={styles.navTitle}>Create a box</Text>
@@ -456,6 +583,15 @@ export function CreateBoxScreen({
 						onReachAt={onReachAt}
 						onDelete={onDelete}
 						onStartOver={onStartOver}
+					/>
+				) : !picked ? (
+					<ProviderStep onPick={pick} />
+				) : !picked.creates ? (
+					<ProviderSteps
+						setup={picked}
+						onContinue={() => {
+							if (picked.ssh) onConnectOver(picked.ssh);
+						}}
 					/>
 				) : (
 					<View style={styles.column}>
@@ -494,20 +630,12 @@ export function CreateBoxScreen({
 							{problem ? <Text style={styles.errorText}>{problem}</Text> : null}
 						</View>
 
-						<Picker
-							label="Connection"
-							value={network}
-							onPick={setNetwork}
-							items={[
-								{ slug: "tailscale", label: "Tailscale" },
-								...(sshAvailable ? [{ slug: "ssh", label: "SSH · no Tailscale needed" }] : []),
-							]}
-						/>
+						<Text style={styles.eyebrow}>Connection</Text>
+						<ConnectionChoice value={network} onPick={setNetwork} />
 						{network === "ssh" ? (
 							<Text style={styles.helpText}>
-								Ateam generates a key on this phone and installs its public key on the server, so
-								only this phone can reach it. Only SSH is open to the internet. Keep your provider
-								account for recovery if you lose this phone.
+								Ateam generates the key on this phone and installs its public half on the server.
+								Keep your provider account for recovery if you lose this phone.
 							</Text>
 						) : (
 							<>
@@ -678,6 +806,26 @@ const styles = StyleSheet.create({
 	optionText: { color: C.ink, fontSize: 14, flexShrink: 1 },
 	help: { gap: 6 },
 	helpText: { color: C.muted, fontSize: 13, lineHeight: 18 },
+	choices: { gap: 8 },
+	choice: {
+		flexDirection: "row",
+		alignItems: "flex-start",
+		gap: 12,
+		padding: 14,
+		borderRadius: 12,
+		borderWidth: 1,
+		borderColor: C.line,
+		backgroundColor: C.surface,
+	},
+	// The chosen card's edge, in white: the app's highlight colour (no accent hue).
+	choiceOn: { borderColor: C.ink },
+	choiceText: { flex: 1, gap: 3 },
+	choiceTitle: { color: C.ink, fontSize: 15, fontWeight: "600" },
+	providerRow: { alignItems: "center" },
+	providerHead: { flexDirection: "row", alignItems: "center", gap: 12 },
+	stepRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
+	stepNum: { color: C.ink, fontSize: 15, fontWeight: "700", width: 14 },
+	stepBody: { color: C.ink, fontSize: 14, lineHeight: 20 },
 	link: { color: C.ink, fontSize: 13, fontWeight: "600", textDecorationLine: "underline" },
 	savedRow: {
 		flexDirection: "row",

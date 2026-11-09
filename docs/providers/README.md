@@ -18,8 +18,10 @@ That makes the recipe the same everywhere:
    into an agent CLI once: `ssh -t <alias> claude`.
    - **No Mac?** Ateam Go's first screen has two ways to a box: **Pair with your Mac**
      (on the Mac, Settings → Boxes → **Pair your iPhone** shows one code for every box
-     it holds), or **Create a box here** on Hetzner ([how](hetzner.md#create-a-box)).
-     A Linux server of your own is added from **I already have a box** over SSH: the
+     it holds), or **Create a box here**, which asks where it runs: Hetzner, created
+     from the phone ([how](hetzner.md#create-a-box)), boxd ([how](boxd.md#ios)), or
+     another server. A Linux server of your own is added over SSH (also from **I
+     already have a box**): the
      phone installs Ateam on it (as root, it first makes an `ateam` user that logs in
      with a key on the phone), then **Finish setting up** installs and signs in to a
      coding agent. A box made by hand with the installer's `--tailscale` is added by its

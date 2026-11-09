@@ -16,6 +16,11 @@ export const PROVIDER_LOGOS: Readonly<Record<string, ProviderLogo>> = {
 		d: "M 2 0 L 22 0 A 2 2 0 0 1 24 2 L 24 22 A 2 2 0 0 1 22 24 L 6.800000000000001 24 A 2 2 0 0 1 4.800000000000001 22 L 4.800000000000001 21.2 A 2 2 0 0 0 2.8000000000000007 19.2 L 2 19.2 A 2 2 0 0 1 0 17.2 L 0 2 A 2 2 0 0 1 2 0 Z",
 		fill: null,
 	},
+	hetzner: {
+		viewBox: "0 0 24 24",
+		d: "M0 0v24h24V0H0zm4.602 4.025h2.244c.509 0 .716.215.716.717v5.64h8.883v-5.64c0-.509.215-.717.717-.717h2.229c.5 0 .71.23.724.717v14.516c0 .509-.215.717-.717.717h-2.23c-.51 0-.717-.215-.717-.717v-5.735H7.562v5.735c0 .516-.215.717-.716.717H4.602c-.51 0-.717-.208-.717-.717V4.742c0-.509.207-.717.717-.717z",
+		fill: "#D50C2D",
+	},
 	// Sprites is Fly.io's, and sprites.dev carries Fly.io's mark: Sprites has none of its own.
 	sprites: {
 		viewBox: "0 0 24 24",

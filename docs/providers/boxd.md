@@ -106,7 +106,15 @@ Settings → Boxes.
 
 ## iOS
 
-The phone reaches a box over a WebSocket on your tailnet. **Set up phone access**, under
+**Over SSH, with no Mac or Tailscale:** in Ateam Go, Create a box → **boxd**. Create a
+machine on boxd, open its phone page (`app.boxd.sh/mobile`) and tap **Create token**:
+boxd takes the token as the SSH password of user `boxd` at `<machine>.boxd.sh`, on the
+port that page shows ([boxd's guide](https://docs.boxd.sh/guides/mobile.md)). **Connect
+over SSH** opens the form with the user filled in; enter the host, the port and the
+token. Ateam Go then installs Ateam on the machine and opens Finish setting up. Not yet
+run end to end against a real boxd machine.
+
+**Over Tailscale:** the phone reaches a box over a WebSocket on your tailnet. **Set up phone access**, under
 Access on the box's page in Settings → Boxes (Ateam 0.1.88 or later), does it: Ateam runs
 the installer again with `--tailscale`, which installs Tailscale, joins the box to your
 tailnet and opens its network port there. Your browser opens Tailscale's page to approve

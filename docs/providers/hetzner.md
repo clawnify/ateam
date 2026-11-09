@@ -39,7 +39,7 @@ your bill), then pick a region and a size from the account's live catalog.
 When the box is up, its page opens with what's left: GitHub, and signing in to an agent.
 
 **From Ateam Go, with no Mac:** Get started → **Create a box here**, or **No box yet?** on
-Add a box. The same token, then how the phone connects: **SSH** (the default when the
+Add a box, then **Hetzner**. The same token, then how the phone connects: **SSH** (the default when the
 phone isn't on Tailscale: the phone makes a key, and only that phone can log in, through
 an `ateam-ssh-only` firewall that lets in only TCP 22) or **Tailscale**, with an auth key
 the phone needs (nobody would see the link to approve the box with). Then a name, a place

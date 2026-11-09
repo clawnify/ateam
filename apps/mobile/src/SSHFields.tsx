@@ -50,10 +50,13 @@ export function SSHFields({
 	value,
 	onChange,
 	disabled,
+	password,
 }: {
 	value: SSHForm;
 	onChange(value: SSHForm): void;
 	disabled: boolean;
+	/** What the password is called at the box's provider, and where it comes from. */
+	password?: { label: string; help: string };
 }) {
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -129,20 +132,25 @@ export function SSHFields({
 						))}
 					</View>
 					{value.auth === "password" ? (
-						<TextInput
-							style={styles.input}
-							value={value.password}
-							editable={!disabled}
-							accessibilityLabel="SSH password"
-							secureTextEntry
-							autoCapitalize="none"
-							autoCorrect={false}
-							placeholder={
-								value.identity ? "Saved · enter a new password to replace" : "SSH password"
-							}
-							placeholderTextColor={C.muted}
-							onChangeText={(password) => onChange({ ...value, password })}
-						/>
+						<>
+							<TextInput
+								style={styles.input}
+								value={value.password}
+								editable={!disabled}
+								accessibilityLabel={password?.label ?? "SSH password"}
+								secureTextEntry
+								autoCapitalize="none"
+								autoCorrect={false}
+								placeholder={
+									value.identity
+										? "Saved · enter a new password to replace"
+										: (password?.label ?? "SSH password")
+								}
+								placeholderTextColor={C.muted}
+								onChangeText={(typed) => onChange({ ...value, password: typed })}
+							/>
+							{password ? <Text style={styles.help}>{password.help}</Text> : null}
+						</>
 					) : (
 						<>
 							<Pressable
