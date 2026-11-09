@@ -312,7 +312,8 @@ if [ "$SVC_MGR" = systemd ]; then
 	# re-run never closes the browser under an agent. A new TaskWindow is worth a
 	# restart. Desktop control only restarts when its bundle or config changed;
 	# unlike websockify, it holds active leases and input operations.
-	# shellcheck disable=SC2086
+	# The fixed service list expands to one argument per unit.
+	# shellcheck disable=SC2046,SC2086
 	sudo systemctl enable --now $(printf '%s.service ' $SERVICES) >/dev/null 2>&1
 	if [ -n "$DESKTOP_CHANGED" ]; then sudo systemctl restart ateam-novnc.service; fi
 	if [ -n "${TW_UPGRADED:-}" ]; then sudo systemctl restart ateam-taskwindow.service; fi

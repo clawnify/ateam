@@ -301,9 +301,8 @@ x86_64 box (Google Chrome has no Linux Arm build). It installs:
   2FA prompt or a CAPTCHA. In the desktop app, the globe button on a task on this
   box opens it in a Browser panel, already signed in. In the iOS app, a task whose
   agent has used the browser shows it as a miniature over its terminal: tap it to
-  bring it above the terminal, and minimize it to put it back. From any other browser, use
-  `http://<tailnet-ip>:6080/vnc.html` (on a box with a tailnet interface) with the
-  password in `~/.ateam/browser/vnc-password`.
+  bring it above the terminal, and minimize it to put it back. The clients provide
+  its VNC password and separate viewer credential automatically.
 
 Browser setup verifies Chrome's sandbox, extension pairing, authenticated MCP
 discovery, and the viewer before reporting success. If setup fails, the engine

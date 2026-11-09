@@ -42,6 +42,18 @@ test("starts where a 4 GB size is sold, at the smallest of those", () => {
 	expect(defaultsOf(small)).toEqual({ location: "sin", size: "cpx12" });
 });
 
+test("prefers a browser-capable size even when Arm is first, and allows an Arm-only catalog", () => {
+	const arm = { slug: "cax11", label: "Arm", memory: 4, architecture: "arm", locations: ["sin"] };
+	expect(defaultsOf({ ...options, serverTypes: [arm, ...options.serverTypes] })).toEqual({
+		location: "nbg1",
+		size: "cx23",
+	});
+	expect(defaultsOf({ ...options, serverTypes: [arm] })).toEqual({
+		location: "sin",
+		size: "cax11",
+	});
+});
+
 test("says what the box costs a month, its IPv4 address included", () => {
 	expect(priceLine(options, "cx23", "nbg1")).toBe(
 		"4.76 EUR a month: 4.15 EUR for the server and 0.61 EUR for its IPv4 address",

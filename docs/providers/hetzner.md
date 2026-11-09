@@ -30,8 +30,8 @@ your bill), then pick a region and a size from the account's live catalog.
   → Keys → Generate auth key**: turn on **Tags** so the box never drops off your tailnet,
   and **Reusable** if Ateam should use it for your next boxes too (it keeps the key
   encrypted on this Mac; a one-off key works once).
-- **Sizes:** the smallest with 4 GB is picked to start with. Agents need about a gigabyte
-  each; the smallest Hetzner sells has one.
+- **Sizes:** a browser-capable x86 size with at least 4 GB is preferred to start with,
+  falling back to available Arm or smaller sizes. You can choose a different size.
 - **Browser:** included by default on x86 sizes, with an **Include browser** opt-out.
   Arm sizes do not support the browser. A browser setup failure leaves terminal work
   available; see `~/.ateam/browser-install.log` and retry from the Browser panel.

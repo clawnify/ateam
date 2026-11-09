@@ -73,10 +73,16 @@ export function CreateBoxDialog({
 		? options.serverTypes.filter((st) => st.locations.length === 0 || st.locations.includes(region))
 		: [];
 	// Keep the chosen size valid as the region changes, starting from the smallest with
-	// 4 GB: agents need about a gigabyte each, and the smallest Hetzner sells has one.
+	// 4 GB and browser support, falling back when this region only has Arm sizes.
 	useEffect(() => {
 		if (availableSizes.length > 0 && !availableSizes.some((s) => s.slug === size)) {
-			setSize((availableSizes.find((s) => s.memory >= 4) ?? availableSizes[0])?.slug ?? "");
+			setSize(
+				(
+					availableSizes.find((s) => s.memory >= 4 && s.architecture !== "arm") ??
+					availableSizes.find((s) => s.memory >= 4) ??
+					availableSizes[0]
+				)?.slug ?? "",
+			);
 		}
 		// biome-ignore lint/correctness/useExhaustiveDependencies: react to region/options only
 	}, [region, options]);

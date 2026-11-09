@@ -48,13 +48,16 @@ export function sizesIn(options: ProviderOptions, location: string): Size[] {
 	);
 }
 
-/** Where to start: the first location that sells a size with 4 GB, and the smallest of
- *  those (agents need about a gigabyte each; the desktop starts from the same). Else
- *  the smallest anywhere. */
+/** Prefer a browser-capable size with 4 GB. Fall back to Arm or a smaller size
+ *  only when the account's catalog has no such option. */
 export function defaultsOf(options: ProviderOptions): { location: string; size: string } | null {
-	for (const enough of [true, false]) {
+	for (const eligible of [
+		(t: Size) => t.memory >= 4 && t.architecture !== "arm",
+		(t: Size) => t.memory >= 4,
+		(_t: Size) => true,
+	]) {
 		for (const l of options.locations) {
-			const size = sizesIn(options, l.slug).find((t) => !enough || t.memory >= 4);
+			const size = sizesIn(options, l.slug).find(eligible);
 			if (size) return { location: l.slug, size: size.slug };
 		}
 	}
