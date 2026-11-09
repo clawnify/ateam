@@ -11,3 +11,6 @@ release/
 .env.local
 coverage/
 *.tsbuildinfo
+
+# Generated Ateam hooks are supplied at agent launch.
+/.codex/hooks.json
