@@ -264,3 +264,23 @@ describe("which box", () => {
 		expect(awayOf({ ...NEW_LINK, state: "connecting", error: "timed out" })).toBe("offline");
 	});
 });
+
+test("SSH identities are separate from tailnet boxes and survive storage", () => {
+	const ws = { host: "Box", port: "22" };
+	const ssh = {
+		...ws,
+		ssh: {
+			user: "ateam",
+			identity: "device-key",
+			auth: "key" as const,
+			hostKey: "ssh-ed25519 AAAA",
+		},
+		createdServer: { provider: "hetzner" as const, id: "42" },
+	};
+	expect(boxKey(ssh)).not.toBe(boxKey(ws));
+	expect(boxKey({ ...ssh, ssh: { ...ssh.ssh, user: "root" } })).not.toBe(boxKey(ssh));
+	expect(parseBoxes(JSON.stringify([ssh]), null)[0]).toMatchObject(ssh);
+	for (const invalid of [null, {}, { ...ssh.ssh, auth: "unknown" }, { ...ssh.ssh, hostKey: 3 }]) {
+		expect(parseBoxes(JSON.stringify([{ ...ssh, ssh: invalid }]), null)).toEqual([]);
+	}
+});

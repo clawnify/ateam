@@ -85,7 +85,7 @@ function SmallDoor({
 	);
 }
 
-/** Whether this phone is on Tailscale, which both ways to a box need, and the way to
+/** Whether this phone is on Tailscale, used for paired tailnet boxes, and the way to
  *  turn it on where it isn't. A build that can't tell just says it's needed. */
 function TailscaleState() {
 	const up = useTailnet();
@@ -103,7 +103,7 @@ function TailscaleState() {
 				<View style={styles.tsText}>
 					<Text style={styles.tsTitle}>Tailscale is off on this phone</Text>
 					<Text style={styles.tsBody}>
-						It reaches your boxes over Tailscale, signed in to the account they're on.
+						Turn it on for tailnet boxes. Direct SSH boxes do not need Tailscale.
 					</Text>
 				</View>
 				<Pressable style={styles.tsBtn} onPress={openTailscale} accessibilityRole="button">
@@ -115,7 +115,8 @@ function TailscaleState() {
 	return (
 		<View style={styles.tailscale}>
 			<Text style={styles.note}>
-				This phone needs the Tailscale app, signed in to the account your boxes are on.
+				For tailnet boxes, install Tailscale and sign in to their account. Direct SSH also works
+				without it.
 			</Text>
 			<Pressable onPress={openTailscale} hitSlop={6} accessibilityRole="link">
 				<Text style={styles.link}>Get Tailscale</Text>
@@ -155,7 +156,7 @@ export function GetStartedScreen({
 				<View style={styles.column}>
 					<Text style={styles.intro}>
 						Ateam Go runs your agents on a box: a Linux machine of your own, which this phone
-						reaches over Tailscale.
+						reaches over Tailscale or SSH.
 					</Text>
 					<TailscaleState />
 					<Door
@@ -186,7 +187,7 @@ export function GetStartedScreen({
 					<SmallDoor
 						icon={<Feather name="link-2" size={17} color={C.ink} />}
 						title="I already have a box"
-						body="Add it by its address on your tailnet"
+						body="Connect using SSH or a tailnet address"
 						onPress={onHaveBox}
 					/>
 					<SmallDoor

@@ -1,8 +1,4 @@
-// The phone's link to a box: open a WebSocket to the box's opt-in `ateam` WS
-// listener (reachable over Tailscale), handshake the protocol version, then bind
-// the full AteamApi over it. React Native can't spawn `ssh` like the desktop, but
-// it ships a WebSocket — and @ateam/protocol is pure TS, so buildAteamApi runs
-// here unchanged. This is the whole client: everything else is the shared contract.
+// The phone uses tailnet WebSockets or native SSH stdio for the same Ateam RPC.
 import {
 	type AteamApi,
 	type BrowserViewDTO,
@@ -27,6 +23,7 @@ import {
 	tolerantRpc,
 	wsClientTransport,
 } from "@ateam/protocol";
+import type { SavedConnection } from "./storage";
 
 // A remote client owns no local dialogs or clipboard: folder-pick and image
 // attach flow over RPC (fs.listDir / util.writeImageBytes) instead, so this
@@ -42,6 +39,8 @@ export const mobileNative: NativeClientApi = {
 };
 
 export interface Connection {
+	/** Reach a loopback service through SSH, or the box address on a tailnet. */
+	httpUrl?(port: number): Promise<string>;
 	api: AteamApi;
 	/** The RPC under `api`, read through tolerantRpc: what the merged board
 	 *  (src/fleet.ts) routes this box's share of every call to. */
@@ -104,9 +103,21 @@ export interface ConnectOptions {
 const CONNECT_TIMEOUT_MS = 15_000;
 const PING_TIMEOUT_MS = 4_000;
 
-/** Connect to `ws://host:port` (the box's Tailscale address + WS port). */
-export async function connect(url: string, opts: ConnectOptions = {}): Promise<Connection> {
-	const client = wsClientTransport(url);
+/** Connect using the saved transport, retaining URL support for tailnet callers. */
+export async function connect(
+	address: string | SavedConnection,
+	opts: ConnectOptions = {},
+): Promise<Connection> {
+	const url =
+		typeof address === "string" ? address : `ws://${address.host}:${address.port || "8787"}`;
+	const client =
+		typeof address !== "string" && address.ssh
+			? await (await import("./ssh")).sshClient(address)
+			: wsClientTransport(url);
+	const httpUrl = async (port: number) => {
+		if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid port");
+		return "httpUrl" in client ? client.httpUrl(port) : `http://${boxHost(url)}:${port}`;
+	};
 	const rpc = createRpcClient(client.transport);
 
 	// Distinguish an app-initiated close() from an unexpected drop: only the latter
@@ -143,7 +154,10 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 	// call (system:hello) keeps outbound traffic flowing so the mapping stays live.
 	// 15s is well under typical NAT/WireGuard (25s) timeouts. Cleared on close.
 	const keepalive = setInterval(() => {
-		void serverHandshake(rpc).catch(() => {});
+		void withTimeout(serverHandshake(rpc), PING_TIMEOUT_MS).catch(() => {
+			clearInterval(keepalive);
+			client.close();
+		});
 	}, 15_000);
 
 	// The box's browser view answers on the box's tailnet address, the same host
@@ -152,18 +166,13 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 		...mobileNative,
 		browserView: async (taskId) => {
 			const view = (await rpc.call(CH.browserView, [taskId])) as BrowserViewDTO;
-			return {
-				url: browserViewUrl(
-					`http://${boxHost(url)}:${view.port}`,
-					view.password,
-					view.controlToken,
-				),
-			};
+			return { url: browserViewUrl(await httpUrl(view.port), view.password, view.controlToken) };
 		},
 	};
 
 	const tolerant = tolerantRpc(rpc, info.protocolVersion);
 	return {
+		httpUrl,
 		api: buildAteamApi(tolerant, native),
 		rpc: tolerant,
 		info,
@@ -175,7 +184,7 @@ export async function connect(url: string, opts: ConnectOptions = {}): Promise<C
 				rpc.call(CH.projectsClone, [{ cloneUrl }]) as Promise<ProjectDTO>,
 		},
 		lead: leadClient(rpc),
-		pairing: info.pairing,
+		pairing: typeof address !== "string" && address.ssh ? undefined : info.pairing,
 		lock: (label: string) => pairingClient(rpc).lock(label, "phone"),
 		ping: () =>
 			withTimeout(serverHandshake(rpc), PING_TIMEOUT_MS).then(

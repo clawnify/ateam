@@ -37,6 +37,11 @@ export async function saveCallNotice(): Promise<void> {
 export interface SavedConnection {
 	host: string;
 	port: string;
+	/** Absent for existing WebSocket/tailnet boxes. Private credentials live only
+	 * in the native device Keychain; hostKey is the explicitly trusted public key. */
+	ssh?: { user: string; identity: string; auth: "key" | "password"; hostKey?: string };
+	/** Recovery handle retained as soon as a server starts billing. */
+	createdServer?: { provider: "hetzner"; id: string };
 	/** The provider the phone wakes this box through before connecting, with this
 	 *  box's own inputs (its machine name). The account inputs live in the Keychain. */
 	provider?: { id: string; box: Record<string, string> };
@@ -60,11 +65,15 @@ export async function loadBoxes(): Promise<SavedBox[]> {
 	}
 }
 
-export async function saveBoxes(boxes: SavedBox[]): Promise<void> {
+export async function saveBoxes(boxes: SavedBox[], required = false): Promise<void> {
 	try {
 		await AsyncStorage.setItem(BOXES_KEY, JSON.stringify(boxes));
 	} catch {
-		/* best-effort: a failed persist just shows the list as it was next launch */
+		if (required)
+			throw new Error(
+				"Could not save the box on this phone. Free storage before continuing setup.",
+			);
+		/* Other callers retain the current in-memory list. */
 	}
 }
 

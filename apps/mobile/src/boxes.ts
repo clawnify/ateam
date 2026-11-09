@@ -21,7 +21,8 @@ export interface SavedBox extends SavedConnection {
 }
 
 /** A box is its address: the host (case-insensitive) and the port it's reached at. */
-export function boxKey(b: { host: string; port: string }): string {
+export function boxKey(b: Pick<SavedConnection, "host" | "port" | "ssh">): string {
+	if (b.ssh) return `ssh:${b.ssh.user}@${b.host.trim().toLowerCase()}:${b.port.trim() || "22"}`;
 	return `${b.host.trim().toLowerCase()}:${b.port.trim() || "8787"}`;
 }
 
@@ -159,13 +160,34 @@ export function boxTitle(b: SavedConnection): string {
 export function boxSubtitle(b: SavedConnection): string {
 	const addr = boxTitle(b) === b.host ? `port ${b.port}` : `${b.host}:${b.port}`;
 	const def = providerById(b.provider?.id);
-	return def ? `${addr} · ${def.label}` : addr;
+	return [
+		b.ssh ? `SSH · ${b.ssh.user}` : null,
+		addr,
+		def?.label,
+		b.createdServer ? `Hetzner #${b.createdServer.id}` : null,
+	]
+		.filter(Boolean)
+		.join(" · ");
 }
 
 function isConnection(v: unknown): v is SavedConnection {
 	if (typeof v !== "object" || v === null) return false;
 	const c = v as Record<string, unknown>;
-	return typeof c.host === "string" && c.host.trim() !== "" && typeof c.port === "string";
+	if (typeof c.host !== "string" || !c.host.trim() || typeof c.port !== "string") return false;
+	if (c.ssh !== undefined) {
+		if (!c.ssh || typeof c.ssh !== "object") return false;
+		const ssh = c.ssh as Record<string, unknown>;
+		if (
+			typeof ssh.user !== "string" ||
+			!ssh.user ||
+			typeof ssh.identity !== "string" ||
+			!ssh.identity ||
+			(ssh.auth !== "key" && ssh.auth !== "password") ||
+			(ssh.hostKey !== undefined && typeof ssh.hostKey !== "string")
+		)
+			return false;
+	}
+	return true;
 }
 
 /** The stored list, or, from before the phone kept one, the single connection it

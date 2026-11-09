@@ -1902,6 +1902,8 @@ export {
 	LeftoverAddressesError,
 	orderableServerTypes,
 	type ProviderOptions,
+	SSH_INSTALL_COMMAND,
+	SSH_INSTALL_STATUS,
 } from "./provision";
 export { withTimeout } from "./timeout";
 // Reading an engine older than this client (the version gate is advisory now).
