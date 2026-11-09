@@ -50,8 +50,7 @@ A second agent must wait; there is no agent force-takeover operation.
 `mouse_move`, `type`, `key`, and `scroll`. Coordinates refer to full-resolution
 PNG pixels, regardless of how the viewer scales the display. `key` accepts
 combinations such as `Control+s` and `Shift+Tab`. `type` sends real key events,
-including explicit Return/Tab events, with a 4000-character limit, sent in pieces
-of at most 500 characters so no single xdotool call nears its 60 s limit. LF/CRLF are
+including explicit Return/Tab events, with a 4000-character limit. LF/CRLF are
 normalized to Return. It is typing, so the focused application's shortcuts,
 autoindent, and text transformations still apply. Scroll amounts are wheel
 steps (1–20) at the current pointer position.

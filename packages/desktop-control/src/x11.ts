@@ -72,25 +72,6 @@ export function keySequence(value: unknown): string {
 		.join("+");
 }
 
-/** Text to type as xdotool calls: Return/Tab as keys (LF is not Return in
- * libxdo), the rest in pieces of at most `max` code points. libxdo spends the
- * full delay on every character, so 4000 characters at 12ms is 48s before X
- * round trips, close to run()'s 60s kill; 500 stays near 6s. */
-export function typingParts(text: string, max = 500): ({ key: string } | { text: string })[] {
-	const parts: ({ key: string } | { text: string })[] = [];
-	for (const part of text.replace(/\r\n?/g, "\n").split(/([\n\t])/)) {
-		if (!part) continue;
-		if (part === "\n" || part === "\t") {
-			parts.push({ key: part === "\n" ? "Return" : "Tab" });
-			continue;
-		}
-		const chars = Array.from(part);
-		for (let i = 0; i < chars.length; i += max)
-			parts.push({ text: chars.slice(i, i + max).join("") });
-	}
-	return parts;
-}
-
 export class X11Desktop {
 	constructor(private readonly display = ":99") {}
 	async screenshot(): Promise<Buffer> {
@@ -124,17 +105,24 @@ export class X11Desktop {
 						"text must be at most 4000 characters, with only tab/newline control characters.",
 					);
 				try {
-					// Dynamic Unicode keymaps need the normal 12ms delay, or GTK loses keys.
-					for (const part of typingParts(args.text)) {
-						if ("key" in part)
-							await run("xdotool", ["key", "--clearmodifiers", part.key], this.display, signal);
+					// LF is not Return in libxdo. Send newlines explicitly. Its dynamic
+					// Unicode keymaps also need the normal 12ms delay, or GTK loses keys.
+					for (const part of args.text.replace(/\r\n?/g, "\n").split(/([\n\t])/)) {
+						if (!part) continue;
+						if (part === "\n" || part === "\t")
+							await run(
+								"xdotool",
+								["key", "--clearmodifiers", part === "\n" ? "Return" : "Tab"],
+								this.display,
+								signal,
+							);
 						else
 							await run(
 								"xdotool",
 								["type", "--clearmodifiers", "--delay", "12", "--file", "-"],
 								this.display,
 								signal,
-								part.text,
+								part,
 							);
 					}
 				} catch (error) {
