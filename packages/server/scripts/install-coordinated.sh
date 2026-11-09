@@ -836,6 +836,7 @@ fi
 # Unmanaged installs explicitly start one daemon. Verification itself never starts
 # one, and managed installs are started only by their existing supervisor.
 if [ ! -s "$APP_DIR/service-owner" ]; then
+    mkdir -p "$DATA_DIR"
     nohup setsid "$BIN_DIR/ateam" daemon > "$DATA_DIR/daemon.log" 2>&1 < /dev/null &
 fi
 # -------------------------------------------------------------- verify ------
