@@ -123,6 +123,11 @@ listed in Settings → Boxes.
 
 ## iOS
 
+Ateam Go's Create a box → **exe.dev** links here, so this section is what a phone user
+follows; its **Add it by its tailnet address** opens Add a box on Tailscale. Reaching a
+VM straight over SSH with a key of the phone's own (`ssh exe.dev ssh-key add --vm=…`,
+then `vm+<name>@vm.exe.xyz`) hasn't been tried with Ateam Go yet.
+
 The image ships `tailscale` with its daemon off, and `/dev/net/tun` is there, so it runs
 in its normal kernel mode. **Set up phone access**, under Access on the box's page in
 Settings → Boxes (Ateam 0.1.88 or later), does the rest: Ateam runs the installer again
