@@ -1,6 +1,12 @@
-import type { AgentDefinition, BinaryPresence, SessionScan } from "@ateam/agents";
+import {
+	type AgentDefinition,
+	type BinaryPresence,
+	getAgent,
+	type SessionScan,
+} from "@ateam/agents";
 import { type AgentSession, type AteamDb, type Project, repo, type Task } from "@ateam/db";
 import type { ProjectDTO, SessionDTO, TaskDTO } from "@ateam/protocol";
+import { type BoardConnections, boardToolsSentence } from "./board-connections";
 import type { FollowUps } from "./follow-ups";
 import type { HookServer } from "./hooks/hook-server";
 import type { LoopRunner } from "./loops/runner";
@@ -57,6 +63,9 @@ export interface Services {
 	worktreeGuard: WorktreeGuard;
 	/** Resurface timers for tasks parked on an outside party. */
 	waits: WaitTimers;
+	/** Which launched agents reached the board tools (board-connections.ts).
+	 *  The engine always sets it; optional so a test's services can leave it out. */
+	boardConnections?: BoardConnections;
 }
 
 export function toProjectDTO(p: Project): ProjectDTO {
@@ -90,7 +99,26 @@ export function liveAgentIds(
 		.reverse();
 }
 
-export function toTaskDTO(t: Task, preparing = false, agentIds: string[] = []): TaskDTO {
+/**
+ * TaskDTO.boardToolsMissing: the sentence for the first live session of the
+ * task whose agent never reached the board tools, or null. Liveness is the
+ * daemon's word, as for liveAgentIds.
+ */
+export function boardToolsMissing(
+	pty: { has(terminalId: string): boolean },
+	board: BoardConnections | undefined,
+	taskId: string,
+): string | null {
+	const m = board?.missingIn(taskId, (terminalId) => pty.has(terminalId));
+	return m ? boardToolsSentence(m, getAgent(m.agentId)?.label ?? m.agentId) : null;
+}
+
+export function toTaskDTO(
+	t: Task,
+	preparing = false,
+	agentIds: string[] = [],
+	boardTools: string | null = null,
+): TaskDTO {
 	return {
 		id: t.id,
 		projectId: t.projectId,
@@ -105,6 +133,7 @@ export function toTaskDTO(t: Task, preparing = false, agentIds: string[] = []): 
 		agentStatus: t.agentStatus ?? null,
 		agentId: t.agentId ?? null,
 		agentIds,
+		boardToolsMissing: boardTools,
 		mergeStatus: t.mergeStatus ?? null,
 		prNumber: t.prNumber ?? null,
 		prUrl: t.prUrl ?? null,

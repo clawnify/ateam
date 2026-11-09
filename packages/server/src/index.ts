@@ -8,6 +8,17 @@
 
 export type { SpeechKind, SpeechVerdict } from "./call-gate";
 export { judgeSpeech } from "./call-gate";
+export {
+	CALL_INSTRUCTIONS,
+	CALL_MODEL,
+	headlineOf,
+	judgeCall,
+	needWords,
+	nudgeFor,
+	nudgePrompt,
+	seedInput,
+	startCall,
+} from "./lead/call";
 export type { ConnectionDTO, ConnectionRecord, HostTransport, SshHost } from "./connections";
 export {
 	boxSleepsOf,
@@ -34,6 +45,7 @@ export { judgeGrammar } from "./grammar-jev";
 export { classifyTurn } from "./jev";
 // The Lead chat's core: the desktop runs it over every engine it holds (a box's
 // engine runs its own for the phone, cli.ts).
+export { chatPreferences } from "./lead/settings";
 export { LEAD_IDLE_STOP_MS } from "./lead/engine-lead";
 export { type Lead, type LeadDeps, type LeadPlace, startLead } from "./lead/index";
 // Creating a box at a provider lives in @ateam/protocol, which Ateam Go shares.

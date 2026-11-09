@@ -153,9 +153,14 @@ from the tailnet after it has been offline a while, and comes back with a new
 address, which strands the phone's port the engine was given. Then run the installer
 with `--tailscale` as above: it finds the VM on the tailnet and only opens the port.
 
-A VM never sleeps, so the phone needs no provider or wake settings. Until the VM is
-locked to your devices, anyone on your tailnet can use its network port: lock it under
-Access on the VM's page.
+A VM never sleeps, so the phone needs no provider or wake settings. From the release
+after Ateam 0.1.90, the VM's engine says it runs on exe.dev (it reads
+`init=/exe.dev/bin/exe-init` on the kernel command line). Ateam Go then names the box's
+card exe.dev (from the version after 1.4.1), and Settings → Boxes names its row while
+it's connected. exe.dev publishes no square vector mark, so the card keeps the plain
+server tile. A VM set up with Ateam from v0.1.93 starts private to your paired devices;
+an older one stays open to your tailnet until you make it private under Access on the
+VM's page.
 
 ## Left alone
 

@@ -7,8 +7,10 @@
 // (EnvironmentPicker.tsx): a box, Add a Tailscale box, Remove from this list.
 //
 // The phone dials every box over the tailnet, which leaves a sleeping one asleep;
-// only a tap (or opening something on it) wakes one through its provider. While a
-// box is being reached, a tray under its card lists the steps (@ateam/protocol
+// only a tap (or opening something on it) wakes one through its provider. So a box
+// that sleeps shows asleep through those tries rather than a spinner that never gets
+// anywhere (boxes.ts shownAsleep). While a box is being reached for a tap, a tray
+// under its card lists the steps (@ateam/protocol
 // connect-steps): a woken box can take minutes to answer, and a bare spinner for
 // that long reads as stuck.
 
@@ -17,7 +19,6 @@ import Feather from "@expo/vector-icons/Feather";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
 	ActivityIndicator,
-	Alert,
 	Animated,
 	PanResponder,
 	Pressable,
@@ -37,6 +38,7 @@ import {
 	NO_PROVIDER_HINT,
 	needsProvider,
 	type SavedBox,
+	shownAsleep,
 } from "./boxes";
 import { ProviderIcon } from "./ProviderIcon";
 import { ScanQrIcon } from "./ScanQrIcon";
@@ -63,10 +65,9 @@ export function BoxesScreen({
 	onAdd,
 	onDemo,
 	onBoxTerminal,
-	onGithub,
-	openKeys,
+	onPreview,
+	onSettings,
 	onPair,
-	onLock,
 	onScan,
 	scanner,
 	settingUp,
@@ -103,14 +104,11 @@ export function BoxesScreen({
 	onDemo: () => void;
 	/** Open a connected box's own terminal (outside every project). */
 	onBoxTerminal: (box: SavedBox) => void;
-	/** Open a connected box's GitHub access (sign-in, token, which repos it can push to). */
-	onGithub: (box: SavedBox) => void;
-	/** Connected boxes that can be locked and aren't: anyone on the network may use them. */
-	openKeys: Set<string>;
+	onPreview: (box: SavedBox) => void;
+	/** Open this box’s configuration and security settings. */
+	onSettings: (box: SavedBox) => void;
 	/** Pair this phone with a locked box using a one-time code. */
 	onPair: (box: SavedBox, code: string) => Promise<void>;
-	/** Lock an open box to the devices paired with it, starting with this phone. */
-	onLock: (box: SavedBox) => Promise<void>;
 	/** Scan the pairing code a Mac shows: pairs the box it names, adding it if new. */
 	onScan: () => void;
 	/** The scanner, while it is open (App's). */
@@ -139,7 +137,7 @@ export function BoxesScreen({
 					onPress={onAdd}
 					hitSlop={8}
 					accessibilityRole="button"
-					accessibilityLabel="Add a Tailscale box"
+					accessibilityLabel="Add a box"
 				>
 					<Feather name="plus" size={18} color={C.ink} />
 				</Pressable>
@@ -158,15 +156,17 @@ export function BoxesScreen({
 						const live = link.state === "live";
 						const isLead = choosingLead && key === leadKey;
 						const making = settingUp?.key === key && !live ? settingUp : null;
+						// A box that sleeps rests asleep through the tries in the background.
+						const asleep = shownAsleep(box, link);
 						return (
 							<BoxCard
 								key={key}
 								box={box}
 								live={live}
-								reaching={link.state === "connecting"}
+								reaching={link.state === "connecting" && !asleep}
 								asked={link.asked}
-								asleep={link.state === "down" && link.asleep}
-								failure={link.state === "down" && !link.asleep && !making ? link.error : null}
+								asleep={asleep}
+								failure={link.state === "down" && !asleep && !making ? link.error : null}
 								note={making ? "Setting itself up on Hetzner, about 4 minutes" : null}
 								// A try in the background shows only as the spinner; the steps are for one asked for.
 								steps={link.asked ? link.steps : []}
@@ -180,18 +180,18 @@ export function BoxesScreen({
 								onRemove={() => onRemove(box)}
 								onLead={choosingLead && !isLead ? () => onLeadBox(box) : undefined}
 								onTerminal={live ? () => onBoxTerminal(box) : undefined}
-								onGithub={live ? () => onGithub(box) : undefined}
+								onPreview={live ? () => onPreview(box) : undefined}
+								onSettings={() => onSettings(box)}
 								onPair={(code) => onPair(box, code)}
 								onScan={onScan}
-								onLock={live && openKeys.has(key) ? () => onLock(box) : undefined}
 							/>
 						);
 					})}
 
 					<Text style={styles.hint}>
 						{choosingLead
-							? "Swipe left on a box to edit it, remove it from this list, or talk to its Lead."
-							: "Swipe left on a box to edit it or remove it from this list."}
+							? "Swipe left on a box for preview, edit, remove, or its Lead."
+							: "Swipe left on a box for preview, edit, and remove."}
 					</Text>
 
 					{/* An error about one box is on its card; this is for the rest (a key that didn't save). */}
@@ -239,10 +239,10 @@ function BoxCard({
 	onRemove,
 	onLead,
 	onTerminal,
-	onGithub,
+	onPreview,
+	onSettings,
 	onPair,
 	onScan,
-	onLock,
 }: {
 	box: SavedBox;
 	live: boolean;
@@ -272,16 +272,15 @@ function BoxCard({
 	onLead?: () => void;
 	/** The box's terminal; only on a connected box's card. */
 	onTerminal?: () => void;
-	/** Only on a connected box's card, like the terminal. */
-	onGithub?: () => void;
+	onPreview?: () => void;
+	onSettings: () => void;
 	/** Pair this phone with the box using a code (shown when it's locked to others). */
 	onPair: (code: string) => Promise<void>;
 	/** Scan the code with the camera instead. */
 	onScan: () => void;
-	/** Lock the box to its paired devices: only on a connected box anyone may use. */
-	onLock?: () => Promise<void>;
 }) {
-	const actionsWidth = ACTION_WIDTH * (onLead ? 3 : 2);
+	const actionsWidth =
+		(onPreview && onLead ? 64 : ACTION_WIDTH) * (2 + (onLead ? 1 : 0) + (onPreview ? 1 : 0));
 	// The responder below is made once, so it reads the width through a ref too.
 	const width = useRef(actionsWidth);
 	width.current = actionsWidth;
@@ -357,6 +356,20 @@ function BoxCard({
 					accessibilityElementsHidden={!open}
 					importantForAccessibility={open ? "auto" : "no-hide-descendants"}
 				>
+					{onPreview ? (
+						<Pressable
+							style={[styles.action, styles.editAction]}
+							accessibilityRole="button"
+							accessibilityLabel={`Preview a port on ${title}`}
+							onPress={() => {
+								onOpenChange(false);
+								onPreview();
+							}}
+						>
+							<Feather name="globe" size={16} color={C.ink} />
+							<Text style={styles.editText}>Preview</Text>
+						</Pressable>
+					) : null}
 					{onLead ? (
 						<Pressable
 							style={[styles.action, styles.editAction]}
@@ -397,7 +410,10 @@ function BoxCard({
 					</Pressable>
 				</View>
 
-				<Animated.View style={{ transform: [{ translateX: x }] }} {...pan.panHandlers}>
+				<Animated.View
+					style={[styles.cardShell, { transform: [{ translateX: x }] }]}
+					{...pan.panHandlers}
+				>
 					<Pressable
 						style={styles.card}
 						// An open card's tap closes it; only a closed card connects.
@@ -410,8 +426,9 @@ function BoxCard({
 						// actions too, or VoiceOver couldn't reach them.
 						accessibilityActions={[
 							{ name: "activate" },
-							...(onGithub ? [{ name: "github", label: "GitHub on this box" }] : []),
+							{ name: "settings", label: "Box settings" },
 							...(onTerminal ? [{ name: "terminal", label: "Box terminal" }] : []),
+							...(onPreview ? [{ name: "preview", label: "Preview a port" }] : []),
 							...(onLead ? [{ name: "lead", label: "Talk to this box's Lead" }] : []),
 							{ name: "edit", label: "Edit" },
 							{ name: "remove", label: "Remove from this list" },
@@ -420,8 +437,9 @@ function BoxCard({
 							const action = e.nativeEvent.actionName;
 							if (action === "edit") onEdit();
 							else if (action === "remove") onRemove();
-							else if (action === "github") onGithub?.();
+							else if (action === "settings") onSettings();
 							else if (action === "terminal") onTerminal?.();
+							else if (action === "preview") onPreview?.();
 							else if (action === "lead") onLead?.();
 							else if (!(reaching && asked)) onPress();
 						}}
@@ -447,17 +465,6 @@ function BoxCard({
 											: subtitle}
 							</Text>
 						</View>
-						{onGithub ? (
-							<Pressable
-								style={styles.terminalBtn}
-								onPress={onGithub}
-								hitSlop={8}
-								accessibilityRole="button"
-								accessibilityLabel="GitHub on this box"
-							>
-								<Feather name="github" size={16} color={C.ink} />
-							</Pressable>
-						) : null}
 						{onTerminal ? (
 							<Pressable
 								style={styles.terminalBtn}
@@ -469,6 +476,14 @@ function BoxCard({
 								<Feather name="terminal" size={16} color={C.ink} />
 							</Pressable>
 						) : null}
+						<Pressable
+							style={styles.terminalBtn}
+							onPress={() => (open ? onOpenChange(false) : onSettings())}
+							accessibilityRole="button"
+							accessibilityLabel={`Settings for ${title}`}
+						>
+							<Feather name="settings" size={18} color={C.ink} />
+						</Pressable>
 						{live ? (
 							<Feather name="check" size={17} color={C.ink} />
 						) : reaching ? (
@@ -491,8 +506,6 @@ function BoxCard({
 				// Once a tap's try has ended, and through the tries after it: the failure
 				// above says what happened, this says what to do about it.
 				<ProviderTray onSetProvider={onSetProvider} />
-			) : onLock ? (
-				<LockTray onLock={onLock} />
 			) : null}
 		</View>
 	);
@@ -543,8 +556,8 @@ function PairTray({
 	return (
 		<View style={styles.tray}>
 			<Text style={styles.trayText}>
-				Locked to its paired devices. On your Mac, Pair a phone (Settings, Boxes) shows a code: type
-				it here or scan it. `ateam pair` on the box prints a code too.
+				Private to its paired devices. Type or scan a code from Pair a phone on your Mac (Settings,
+				Boxes). The box's installer prints one too, and so does `ateam pair` on the box.
 			</Text>
 			<View style={styles.pairRow}>
 				<TextInput
@@ -572,51 +585,6 @@ function PairTray({
 					accessibilityLabel="Scan the pairing code"
 				>
 					<ScanQrIcon size={17} color={C.ink} />
-				</Pressable>
-			</View>
-			{error ? <Text style={styles.pairError}>{error}</Text> : null}
-		</View>
-	);
-}
-
-/** Under a box anyone on the network may use: lock it, pairing this phone first. */
-function LockTray({ onLock }: { onLock: () => Promise<void> }) {
-	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const run = async () => {
-		setBusy(true);
-		setError(null);
-		try {
-			await onLock();
-		} catch (e) {
-			setError(e instanceof Error ? e.message : String(e));
-		} finally {
-			setBusy(false);
-		}
-	};
-	const lock = () =>
-		Alert.alert(
-			"Lock this box?",
-			"Only devices paired with it can use it from then on, starting with this phone. Your Mac, if it reaches the box over Tailscale, needs a code too: get one with `ateam pair` in this box's terminal (the terminal button on its card).",
-			[
-				{ text: "Cancel", style: "cancel" },
-				{ text: "Lock it", onPress: () => void run() },
-			],
-		);
-	return (
-		<View style={styles.tray}>
-			<Text style={styles.trayWarn}>
-				Anyone on your Tailscale network can control this box. Lock it so only the devices you pair
-				can.
-			</Text>
-			<View style={styles.pairRow}>
-				<Pressable
-					style={[styles.pairBtn, busy && styles.pairBtnOff]}
-					disabled={busy}
-					onPress={lock}
-					accessibilityRole="button"
-				>
-					<Text style={styles.pairBtnText}>{busy ? "Locking…" : "Lock it"}</Text>
 				</Pressable>
 			</View>
 			{error ? <Text style={styles.pairError}>{error}</Text> : null}
@@ -726,14 +694,17 @@ const styles = StyleSheet.create({
 		gap: 12,
 		paddingHorizontal: 14,
 		paddingVertical: 12,
+	},
+	cardShell: {
 		backgroundColor: C.surface,
 		borderWidth: 1,
 		borderColor: C.line,
 		borderRadius: 12,
+		overflow: "hidden",
 	},
 	terminalBtn: {
-		width: 34,
-		height: 34,
+		width: 44,
+		height: 44,
 		borderRadius: 8,
 		backgroundColor: C.sunken,
 		alignItems: "center",
@@ -756,7 +727,6 @@ const styles = StyleSheet.create({
 	cardSubError: { color: C.red },
 
 	trayText: { color: C.muted, fontSize: 13, lineHeight: 18 },
-	trayWarn: { color: C.amber, fontSize: 13, lineHeight: 18 },
 	trayNote: { color: C.muted, fontSize: 13, lineHeight: 18 },
 	trayBtnText: { color: C.ink, fontSize: 14, fontWeight: "600" },
 	pairError: { color: C.red, fontSize: 13 },

@@ -5,15 +5,18 @@
 import { hetznerProvider, type InstallableAgent, LeftoverAddressesError } from "@ateam/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert } from "react-native";
+import { sshNative } from "../modules/expo-ssh/src";
 import { boxKey } from "./boxes";
 import { BOX_PORT, newDeviceToken, phoneCloudInit } from "./create-box";
 import type { Links } from "./links";
+import { verifySSH } from "./ssh";
 import { type SavedConnection, saveBoxToken } from "./storage";
 
 /** How often the phone tries the box while its install runs. */
 const TRY_EVERY_MS = 5_000;
 
 export interface CreateSpec {
+	network?: "tailscale" | "ssh";
 	/** The Hetzner API token (the user's own: their account, their bill). */
 	token: string;
 	tailscaleAuthKey: string;
@@ -22,6 +25,8 @@ export interface CreateSpec {
 	location: string;
 	/** Coding agents the box installs at first boot. */
 	agents: InstallableAgent[];
+	/** New boxes include a browser unless explicitly declined. */
+	browser?: boolean;
 }
 
 export interface Creation {
@@ -38,6 +43,7 @@ export interface Creation {
 	createdAt: number | null;
 	/** Deleting it on Hetzner. */
 	deleting: boolean;
+	verifying: boolean;
 }
 
 /** expo-crypto, loaded when first used: a build from before it has no native side. */
@@ -47,10 +53,11 @@ function crypto(): typeof import("expo-crypto") {
 
 export function useBoxCreation(deps: {
 	link: Links;
+	savedBox: (host: string) => SavedConnection | undefined;
 	/** How this phone names itself to the box. */
 	label: string;
 	/** Put the box on the Boxes list (in place of `replaces`). */
-	saveBox: (box: SavedConnection, replaces?: string | null) => void;
+	saveBox: (box: SavedConnection, replaces?: string | null) => Promise<void>;
 	/** Take it off the list, and off the board. */
 	removeBox: (key: string) => void;
 	/** It answered: what the app does for a new box. */
@@ -58,20 +65,30 @@ export function useBoxCreation(deps: {
 }) {
 	const [creation, setCreation] = useState<Creation | null>(null);
 	// The token the box was made with: Delete needs it, and it's never in render state.
+	const creating = useRef(false);
+	const verifying = useRef(false);
+	const revision = useRef(0);
 	const hetznerToken = useRef<string | null>(null);
 	// This phone's token for the box, for a move to another address.
 	const deviceToken = useRef<string | null>(null);
 	const { link, label, saveBox, removeBox, onConnected } = deps;
-	const latest = useRef({ saveBox, removeBox, onConnected });
-	latest.current = { saveBox, removeBox, onConnected };
+	const latest = useRef({ saveBox, removeBox, onConnected, savedBox: deps.savedBox });
+	latest.current = { saveBox, removeBox, onConnected, savedBox: deps.savedBox };
 	const creationRef = useRef(creation);
 	creationRef.current = creation;
 
 	const create = useCallback(
 		async (spec: CreateSpec) => {
+			if (creating.current) return;
+			creating.current = true;
+			revision.current++;
 			// Always on: a Hetzner server bills while it's up and nothing sleeps it, so the
 			// phone never waits to wake it, nor asks which provider would.
-			const box: SavedConnection = { host: spec.name, port: BOX_PORT, sleeps: false };
+			let box: SavedConnection = {
+				host: spec.name,
+				port: spec.network === "ssh" ? "22" : BOX_PORT,
+				sleeps: false,
+			};
 			const base: Creation = {
 				name: spec.name,
 				box,
@@ -80,38 +97,69 @@ export function useBoxCreation(deps: {
 				serverId: null,
 				createdAt: null,
 				deleting: false,
+				verifying: false,
 			};
 			setCreation(base);
 			hetznerToken.current = spec.token;
 			try {
 				// The async one: the sync one falls back to Math.random under a debugger.
 				const c = crypto();
+				let sshPublicKey: string | undefined;
+				if (spec.network === "ssh") {
+					const previous = latest.current.savedBox(spec.name);
+					if (previous?.createdServer)
+						throw new Error("This server is already saved. Edit its address to reconnect.");
+					const identity = previous?.ssh?.auth === "key" ? previous.ssh.identity : c.randomUUID();
+					sshPublicKey = await sshNative().createKey(identity);
+					box = { ...box, ssh: { user: "ateam", identity, auth: "key" } };
+					setCreation((cur) => (cur ? { ...cur, box } : cur));
+					// Persist the device key reference BEFORE a billable request. If its
+					// response is lost, the user can recover the IP from Hetzner.
+					await latest.current.saveBox(box);
+				}
 				const bytes = await c.getRandomBytesAsync(32);
 				const token = newDeviceToken(() => bytes);
 				const tokenHash = await c.digestStringAsync(c.CryptoDigestAlgorithm.SHA256, token, {
 					encoding: c.CryptoEncoding.HEX,
 				});
 				// Kept before the box exists: it's the phone's way in from its first boot.
-				await saveBoxToken(boxKey(box), token);
+				if (!box.ssh) await saveBoxToken(boxKey(box), token);
 				deviceToken.current = token;
-				await hetznerProvider.createServer({
+				const made = await hetznerProvider.createServer({
+					sshPublicKey,
+					directSSH: spec.network === "ssh",
 					token: spec.token,
 					name: spec.name,
 					region: spec.location,
 					size: spec.size,
 					cloudInit: phoneCloudInit({
+						sshPublicKey,
 						name: spec.name,
 						tailscaleAuthKey: spec.tailscaleAuthKey,
 						tokenHash,
 						label,
 						agents: spec.agents,
+						browser: spec.browser,
 					}),
-					onCreated: (serverId) => {
-						latest.current.saveBox(box);
-						setCreation((cur) => (cur ? { ...cur, serverId, createdAt: Date.now() } : cur));
+					onCreated: async (serverId, publicIp) => {
+						const old = boxKey(box);
+						box = {
+							...box,
+							createdServer: { provider: "hetzner", id: serverId },
+							...(box.ssh && publicIp ? { host: publicIp } : {}),
+						};
+						setCreation((cur) => (cur ? { ...cur, box, serverId, createdAt: Date.now() } : cur));
+						await latest.current.saveBox(box, old);
+						if (old !== boxKey(box)) latest.current.removeBox(old);
 					},
 				});
-				setCreation((cur) => (cur ? { ...cur, step: "installing" } : cur));
+				if (box.ssh && box.host !== made.publicIp) {
+					const old = boxKey(box);
+					box = { ...box, host: made.publicIp };
+					await latest.current.saveBox(box, old);
+					latest.current.removeBox(old);
+				}
+				setCreation((cur) => (cur ? { ...cur, box, step: "installing" } : cur));
 			} catch (e) {
 				const error = e instanceof Error ? e.message : String(e);
 				setCreation((cur) => {
@@ -119,6 +167,8 @@ export function useBoxCreation(deps: {
 					if (cur && !cur.serverId) void saveBoxToken(boxKey(box), null).catch(() => {});
 					return cur ? { ...cur, step: "failed", error } : cur;
 				});
+			} finally {
+				creating.current = false;
 			}
 		},
 		[label],
@@ -127,7 +177,7 @@ export function useBoxCreation(deps: {
 	// While it installs, try it every few seconds: it answers once its engine is up.
 	const installing = creation?.step === "installing" ? creation.box : null;
 	useEffect(() => {
-		if (!installing) return;
+		if (!installing || (installing.ssh && !installing.ssh.hostKey)) return;
 		let live = true;
 		const key = boxKey(installing);
 		const attempt = async () => {
@@ -147,6 +197,25 @@ export function useBoxCreation(deps: {
 		};
 	}, [installing, link]);
 
+	const verify = useCallback(async () => {
+		const cur = creationRef.current;
+		if (!cur?.box.ssh || cur.deleting || verifying.current) return;
+		const version = revision.current;
+		verifying.current = true;
+		setCreation((v) => (v ? { ...v, verifying: true } : v));
+		try {
+			const box = await verifySSH(cur.box);
+			if (version !== revision.current) return;
+			await latest.current.saveBox(box);
+			setCreation((v) => (v ? { ...v, box, error: null } : v));
+		} catch (e) {
+			if (version === revision.current) setCreation((v) => (v ? { ...v, error: String(e) } : v));
+		} finally {
+			verifying.current = false;
+			if (version === revision.current) setCreation((v) => (v ? { ...v, verifying: false } : v));
+		}
+	}, []);
+
 	/** Reach it at an address typed in (from the Tailscale app) instead of its name. */
 	const reachAt = useCallback(async (host: string) => {
 		const cur = creationRef.current;
@@ -155,7 +224,7 @@ export function useBoxCreation(deps: {
 		const next: SavedConnection = { host: host.trim(), port: BOX_PORT, sleeps: false };
 		const old = boxKey(cur.box);
 		await saveBoxToken(boxKey(next), token);
-		latest.current.saveBox(next, old);
+		await latest.current.saveBox(next, old);
 		// As the form does for a box moved to another address: the old one stops being
 		// tried, and its token goes.
 		if (old !== boxKey(next)) {
@@ -170,6 +239,7 @@ export function useBoxCreation(deps: {
 		const cur = creationRef.current;
 		const token = hetznerToken.current;
 		if (!cur) return;
+		revision.current++;
 		if (cur.serverId && token) {
 			setCreation({ ...cur, deleting: true });
 			try {
@@ -197,9 +267,10 @@ export function useBoxCreation(deps: {
 
 	/** Done with it (connected, or a failure read): the page starts over next time. */
 	const dismiss = useCallback(() => {
+		revision.current++;
 		hetznerToken.current = null;
 		setCreation(null);
 	}, []);
 
-	return { creation, create, reachAt, deleteServer, dismiss };
+	return { creation, create, reachAt, deleteServer, dismiss, verify };
 }

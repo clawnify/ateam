@@ -19,6 +19,7 @@ import {
 	LEAD_CH,
 	LEAD_EVENT,
 	LEAD_RPC,
+	type LeadCallTurn,
 	type LeadEvent,
 	type LeadSnapshot,
 	type TaskDTO,
@@ -26,6 +27,7 @@ import {
 import type { Dispatcher } from "../dispatcher";
 import type { Engine } from "../engine";
 import type { RpcExtension } from "../rpc";
+import { judgeCall, nudgeFor, startCall } from "./call";
 import { type Lead, type LeadDeps, startLead } from "./index";
 
 /** How long a box's Lead sits idle before its claude is stopped. A message
@@ -45,6 +47,7 @@ export interface EngineLeadOptions {
 	log?: (line: string) => void;
 	/** Tests: how to start `claude`. */
 	spawnClaude?: LeadDeps["spawnClaude"];
+	preferences?: LeadDeps["preferences"];
 	/** Tests: the idle stop (default LEAD_IDLE_STOP_MS). */
 	idleStopMs?: number;
 	/** The boxes this one links to (cross-box, links.ts): the Lead's board, messages
@@ -79,6 +82,7 @@ export function engineLead(
 	const lead = (): Promise<Lead> => {
 		started ??= startLead({
 			place: "box",
+			preferences: opts.preferences,
 			dir: opts.dir,
 			handle: opts.reach
 				? (method, args) => opts.reach?.handle(method, args) as Promise<unknown>
@@ -133,11 +137,26 @@ export function engineLead(
 			return () => listeners.delete(l);
 		},
 		async handle(method, args) {
+			if (method === LEAD_CH.settings) {
+				if (!opts.preferences) throw new Error("Chat settings are unavailable.");
+				return opts.preferences.snapshot();
+			}
+			if (method === LEAD_CH.updateSettings) {
+				if (!opts.preferences) throw new Error("Chat settings are unavailable.");
+				return opts.preferences.update(
+					args[0] as Parameters<NonNullable<LeadDeps["preferences"]>["update"]>[0],
+				);
+			}
 			// Reading a Lead that was never used answers empty rather than start it:
 			// starting makes its folder, and from then on the engine starts it at
 			// boot. The phone reads it on every connect, for the dot on its button.
 			if (method === LEAD_CH.snapshot && !started && !existsSync(opts.dir))
-				return { items: [], draft: "", busy: false, auto: false } satisfies LeadSnapshot;
+				return {
+					items: [],
+					draft: "",
+					busy: false,
+					auto: opts.preferences?.get().auto ?? false,
+				} satisfies LeadSnapshot;
 			// Every call but a snapshot is the user doing something in the chat
 			// (the phone reads a snapshot on its own when it opens the chat, and on
 			// every connect for the dot on its button).
@@ -186,6 +205,19 @@ export function engineLead(
 				// v32: the desktop is on a voice call with this Lead.
 				case LEAD_CH.callActive:
 					return l.setCall(args[0] === true);
+				// v33: a client without its own keys (Ateam Go) calls this Lead:
+				// the box opens the voice session, judges and words replies.
+				case LEAD_CH.callStart:
+					return startCall(
+						str(args[0], "The connection offer"),
+						Array.isArray(args[1]) ? (args[1] as LeadCallTurn[]) : [],
+						// Keys reach a box from the Mac that holds it (host.ts pushCredentials).
+						"This box has no OpenAI key for calls. Add yours from the box's card in Ateam Go (the key button), or in Ateam on your Mac, Settings → AI.",
+					);
+				case LEAD_CH.callJudge:
+					return judgeCall(args[0], args[1], args[2]);
+				case LEAD_CH.callNudge:
+					return nudgeFor(args[0], args[1]);
 				case LEAD_CH.attachBytes: {
 					const name = str(args[0], "The file name");
 					const base64 = str(args[1], "The file");

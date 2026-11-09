@@ -7,7 +7,19 @@
 //   and so does the desktop when its Lead lives on a box (LeadHome).
 // Imports nothing, so both the node and web tsconfigs resolve it.
 
+export type ChatAgent = "claude" | "codex" | "opencode";
+export interface ChatSettings {
+	agent: ChatAgent;
+	auto: boolean;
+}
+export interface ChatSettingsResult {
+	settings: ChatSettings;
+	agents: { id: ChatAgent; available: boolean }[];
+}
+
 export const LEAD_CH = {
+	settings: "lead:settings",
+	updateSettings: "lead:updateSettings",
 	/** The conversation so far, plus whether a turn is running. */
 	snapshot: "lead:snapshot",
 	/** Send the user's message (starts the agent on first use). */
@@ -113,6 +125,8 @@ export interface LeadCallTopic {
  *  the box and keeps its own previews. `attachBytes` takes the file as base64
  *  there, since RPC frames are JSON. */
 export const LEAD_RPC = [
+	LEAD_CH.settings,
+	LEAD_CH.updateSettings,
 	LEAD_CH.snapshot,
 	LEAD_CH.send,
 	LEAD_CH.interrupt,
@@ -126,6 +140,9 @@ export const LEAD_RPC = [
 	LEAD_CH.older,
 	LEAD_CH.react,
 	LEAD_CH.callActive,
+	LEAD_CH.callStart,
+	LEAD_CH.callJudge,
+	LEAD_CH.callNudge,
 ] as const;
 
 /** The engine's push event for its Lead, with a LeadEvent payload. Sent only
@@ -206,7 +223,7 @@ export type LeadItem =
 			reaction?: string;
 	  }
 	/** A followed task's agent showed the user a page (show_page): drawn in the
-	 *  thread from the task, so a page replaced since says so. */
+	 *  thread from the task. The page id reads that saved artifact. */
 	| { kind: "page"; id: string; task: LeadTaskRef; pageId: string; title: string; at: number }
 	| { kind: "assistant"; id: string; text: string; at: number }
 	| {
@@ -320,6 +337,16 @@ export interface LeadClient {
 	/** On a voice call with the box's Lead (true, repeated while it lasts) or
 	 *  not. A box before v32 rejects it: gate on boxSupports("leadCall"). */
 	callActive(on: boolean): Promise<void>;
+	/** The box opens a call's voice session with OpenAI from its own key, the
+	 *  box judges what the call heard, and words a task's reply in one line.
+	 *  A box before v33 rejects them: gate on boxSupports("leadCallSession"). */
+	callStart(sdp: string, input: LeadCallTurn[]): Promise<{ sdp: string; sessionId: string }>;
+	callJudge(
+		pieces: string[],
+		context: string,
+		opts?: LeadCallJudgeOptions,
+	): Promise<LeadCallVerdict[] | null>;
+	callNudge(task: string, reply: string): Promise<string>;
 	dismissProposal(id: string): Promise<void>;
 	/** A proposal was created from its sheet or form on this device: the card
 	 *  says so, and a task (`taskId`) is followed for its replies. */
@@ -344,6 +371,9 @@ export interface LeadHome {
 
 /** window.ateamLead. */
 export interface AteamLead {
+	/** Explicit machine target, independent of general settings sync and Chat home. */
+	settings(machine: string | null): Promise<ChatSettingsResult>;
+	updateSettings(machine: string | null, patch: Partial<ChatSettings>): Promise<ChatSettingsResult>;
 	/** `tail`: only the last that many items (`more` says older ones exist). */
 	snapshot(opts?: { tail?: number }): Promise<LeadSnapshot>;
 	/** Up to `limit` items before `beforeId`, oldest first. */

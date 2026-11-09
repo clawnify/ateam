@@ -5,6 +5,7 @@
 // to start, only to find, or to install once the user said yes.
 import { spawn } from "node:child_process";
 import { closeSync, openSync, readFileSync, writeSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { type AteamDb, repo } from "@ateam/db";
 import {
@@ -13,8 +14,29 @@ import {
 	DEFAULT_BROWSER_VIEW_PORT,
 } from "@ateam/protocol";
 
-export const INSTALL_BROWSER_CMD =
-	"curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install-browser.sh | bash";
+export const INSTALL_BROWSER_CMD = 'bash "$HOME/ateam-app/install-browser.sh"';
+
+export interface TaskWindowMcpConfig {
+	url: string;
+	token: string;
+}
+
+/** Only a browser installed by Ateam belongs in its agent launches. Local
+ * TaskWindow installations keep the user's own configuration. */
+export function taskwindowMcpConfig(
+	dataDir: string,
+	tokenFile = join(homedir(), ".taskwindow", "token"),
+): TaskWindowMcpConfig | undefined {
+	if (!readVncPassword(dataDir)) return undefined;
+	try {
+		const token = readFileSync(tokenFile, "utf8").trim();
+		return /^[A-Za-z0-9_-]{32,512}$/.test(token)
+			? { url: "http://127.0.0.1:9377/mcp", token }
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 /** The VNC password install-browser.sh generated, or null when it never ran here. */
 export function readVncPassword(dataDir: string): string | null {
@@ -107,6 +129,7 @@ export async function openBrowserView(dataDir: string): Promise<BrowserViewDTO> 
 			signal: AbortSignal.timeout(2000),
 		});
 		bundledAuth = response.headers.get("x-ateam-viewer-auth") === "bundle-v1";
+		if (!response.ok) throw new Error(`HTTP ${response.status}`);
 	} catch {
 		throw new Error(
 			`The box's browser view isn't answering on port ${port}. Check its services (ateam-novnc, ateam-x11vnc, ateam-xvfb).`,

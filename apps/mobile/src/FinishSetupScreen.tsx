@@ -1,7 +1,7 @@
 // What's left once a box this phone created answers (src/useBoxCreation.ts): signing in
-// to the coding agent it installed, GitHub, and a first project. Each opens its own
-// screen and comes back here; Done goes to the board. The same three stay on the box's
-// card in Boxes (its terminal and GitHub buttons) for later.
+// to the coding agent it installed, GitHub, a first project, and, optionally, the box's
+// AI keys. Each opens its own screen and comes back here; Done goes to the board. They
+// stay on the box's card in Boxes (its terminal, GitHub and key buttons) for later.
 import { AGENT_INSTALLS, type InstallableAgent } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import type { ComponentProps } from "react";
@@ -41,7 +41,9 @@ export function FinishSetupScreen({
 	agents,
 	onSignIn,
 	onTerminal,
+	onDotfiles,
 	onGithub,
+	onAiKeys,
 	onAddProject,
 	onDone,
 }: {
@@ -51,7 +53,10 @@ export function FinishSetupScreen({
 	/** Open the box's terminal with this command typed in. */
 	onSignIn: (command: string) => void;
 	onTerminal: () => void;
+	onDotfiles: () => void;
 	onGithub: () => void;
+	/** The box's AI keys page (AiKeysScreen). */
+	onAiKeys: () => void;
 	onAddProject: () => void;
 	onDone: () => void;
 }) {
@@ -77,8 +82,12 @@ export function FinishSetupScreen({
 								key={a}
 								icon="log-in"
 								title={`Sign in to ${AGENT_INSTALLS[a].label}`}
-								body={`Opens the box's terminal running ${AGENT_INSTALLS[a].login}: open its link, sign in, and come back.`}
-								onPress={() => onSignIn(AGENT_INSTALLS[a].login)}
+								body={`Opens the box's terminal running ${a === "codex" ? AGENT_INSTALLS.codex.remoteLogin : AGENT_INSTALLS[a].login}: open its link, sign in, and come back.`}
+								onPress={() =>
+									onSignIn(
+										a === "codex" ? AGENT_INSTALLS.codex.remoteLogin : AGENT_INSTALLS[a].login,
+									)
+								}
 							/>
 						))
 					) : (
@@ -96,10 +105,22 @@ export function FinishSetupScreen({
 						onPress={onGithub}
 					/>
 					<Step
+						icon="file-text"
+						title="Apply dotfiles"
+						body="Optional. Preview your repository and run its install script on this box."
+						onPress={onDotfiles}
+					/>
+					<Step
 						icon="folder-plus"
 						title="Add a project"
 						body="Bring one over from GitHub, or start a new one."
 						onPress={onAddProject}
+					/>
+					<Step
+						icon="key"
+						title="Add AI keys"
+						body="Optional. An OpenAI key lets you call the Lead, and sorts finished tasks into Needs you."
+						onPress={onAiKeys}
 					/>
 				</View>
 			</ScrollView>

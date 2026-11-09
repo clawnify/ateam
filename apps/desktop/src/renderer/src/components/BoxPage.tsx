@@ -16,6 +16,7 @@ import { setUpPhoneAccess } from "../lib/box-actions";
 import { type BoxSetup, dismissSetup, useSetup } from "../lib/setups";
 import { useLeadHome } from "../useLeadHome";
 import { BoxAccess } from "./BoxAccess";
+import { BoxDotfiles } from "./Dotfiles";
 import { GithubAccess } from "./GithubAccess";
 import { Button } from "./ui/button";
 import { Dialog, DialogOverlay, DialogPortal, DialogTitle } from "./ui/dialog";
@@ -35,7 +36,7 @@ export const errorText = (e: unknown) =>
 export function statusLine(row: BoxRow, now: number): string {
 	if (row.state === "connected") return "Connected";
 	if (row.state === "asleep") return "Asleep";
-	if (row.failure === NEEDS_PAIRING) return "Locked: this Mac needs pairing";
+	if (row.failure === NEEDS_PAIRING) return "Private: this Mac needs pairing";
 	if (row.failure) return `Couldn't connect: ${row.failure}`;
 	const age = relativeAge(row.lastSeen, now);
 	return age
@@ -544,7 +545,7 @@ export function BoxPage({
 						}}
 					>
 						<span className="gh-access-muted">
-							It's locked to its paired devices. Enter a code from one of them (Pair a phone on
+							It's private to its paired devices. Enter a code from one of them (Pair a phone on
 							another Mac, or `ateam pair` in the box's terminal).
 						</span>
 						<input
@@ -603,6 +604,12 @@ export function BoxPage({
 					<GithubAccess alias={row.alias} label={row.title} />
 				)}
 			</div>
+			<BoxDotfiles
+				alias={row.alias}
+				label={row.title}
+				version={row.version}
+				connected={row.state === "connected"}
+			/>
 		</section>
 	);
 }

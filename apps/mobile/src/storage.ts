@@ -11,13 +11,37 @@ import { type GithubSeen, NO_GITHUB_SEEN, parseGithubSeen } from "./github-seen"
 const KEY = "ateam.connection";
 const BOXES_KEY = "ateam.boxes";
 const PROJECT_KEY = "ateam.selectedProject";
+const SIDEBAR_COLLAPSED_KEY = "ateam.sidebarCollapsed";
 const COMPOSER_TARGET_KEY = "ateam.composerTarget";
 const PREVIEW_PORT_KEY = "ateam.previewPort";
 const GITHUB_SEEN_KEY = "ateam.githubSeen";
+const CALL_NOTICE_KEY = "ateam.callNotice";
+
+/** Whether the user has read what a call sends to OpenAI, told once before the first call. */
+export async function loadCallNotice(): Promise<boolean> {
+	try {
+		return (await AsyncStorage.getItem(CALL_NOTICE_KEY)) === "1";
+	} catch {
+		return false;
+	}
+}
+
+export async function saveCallNotice(): Promise<void> {
+	try {
+		await AsyncStorage.setItem(CALL_NOTICE_KEY, "1");
+	} catch {
+		/* best-effort: the notice shows again before the next call */
+	}
+}
 
 export interface SavedConnection {
 	host: string;
 	port: string;
+	/** Absent for existing WebSocket/tailnet boxes. Private credentials live only
+	 * in the native device Keychain; hostKey is the explicitly trusted public key. */
+	ssh?: { user: string; identity: string; auth: "key" | "password"; hostKey?: string };
+	/** Recovery handle retained as soon as a server starts billing. */
+	createdServer?: { provider: "hetzner"; id: string };
 	/** The provider the phone wakes this box through before connecting, with this
 	 *  box's own inputs (its machine name). The account inputs live in the Keychain. */
 	provider?: { id: string; box: Record<string, string> };
@@ -41,11 +65,15 @@ export async function loadBoxes(): Promise<SavedBox[]> {
 	}
 }
 
-export async function saveBoxes(boxes: SavedBox[]): Promise<void> {
+export async function saveBoxes(boxes: SavedBox[], required = false): Promise<void> {
 	try {
 		await AsyncStorage.setItem(BOXES_KEY, JSON.stringify(boxes));
 	} catch {
-		/* best-effort: a failed persist just shows the list as it was next launch */
+		if (required)
+			throw new Error(
+				"Could not save the box on this phone. Free storage before continuing setup.",
+			);
+		/* Other callers retain the current in-memory list. */
 	}
 }
 
@@ -310,5 +338,22 @@ export async function saveGithubSeen(seen: GithubSeen): Promise<void> {
 		await AsyncStorage.setItem(GITHUB_SEEN_KEY, JSON.stringify(seen));
 	} catch {
 		/* best-effort: a box that shows no accounts just offers fewer to pick */
+	}
+}
+
+/** The wide-window sidebar's explicit choice, independent of window size. */
+export async function loadSidebarCollapsed(): Promise<boolean> {
+	try {
+		return (await AsyncStorage.getItem(SIDEBAR_COLLAPSED_KEY)) === "1";
+	} catch {
+		return false;
+	}
+}
+
+export async function saveSidebarCollapsed(collapsed: boolean): Promise<void> {
+	try {
+		await AsyncStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+	} catch {
+		/* best-effort: the choice still applies for this app session */
 	}
 }

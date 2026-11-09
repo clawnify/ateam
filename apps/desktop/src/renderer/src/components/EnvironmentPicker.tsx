@@ -290,7 +290,7 @@ export function EnvironmentPicker({
 			const said = errorText(err);
 			if (said === NEEDS_PAIRING) {
 				setNeedsCode(true);
-				setError("It's locked to its paired devices. Enter a pairing code to add it.");
+				setError("It's private to its paired devices. Enter a pairing code to add it.");
 			} else setError(said);
 		} finally {
 			setBusy(false);

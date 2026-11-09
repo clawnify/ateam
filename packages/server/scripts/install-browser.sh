@@ -32,6 +32,8 @@
 #                     nothing with no tailnet. The VNC password is the second lock,
 #                     not the first: never set this to a public address.
 #   TASKWINDOW_VERSION       the TaskWindow release to pin (default below)
+#   ATEAM_BROWSER_ALLOW_NO_SANDBOX  1 explicitly permits Chrome without its sandbox
+#                     on hosts that cannot support it. Never enabled by Ateam setup.
 set -euo pipefail
 
 TASKWINDOW_VERSION="${TASKWINDOW_VERSION:-0.2.13}"
@@ -116,10 +118,29 @@ if ! command -v google-chrome >/dev/null; then
 	chmod 755 "$TMP"
 	PKGS="$PKGS $TMP/chrome.deb"
 fi
+sudo apt-get update -qq >/dev/null || die "apt-get update failed"
 # shellcheck disable=SC2086
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $PKGS >/dev/null ||
 	die "apt-get install failed: re-run with the packages listed above to see why"
 info "$(google-chrome --version)"
+
+# Probe the actual installed Chrome, with a temporary profile and no network.
+# Chrome stable has an Ubuntu AppArmor profile; disabling its sandbox for every
+# host is not necessary. Never turn it off automatically when a probe fails.
+SANDBOX_FLAG=""
+SANDBOX_PROBE="$(mktemp -d)"
+if ! (ulimit -c 0; timeout 20 google-chrome --headless --disable-gpu --no-first-run \
+	--user-data-dir="$SANDBOX_PROBE/profile" --dump-dom about:blank >"$SANDBOX_PROBE/result" 2>"$SANDBOX_PROBE/error"); then
+	if [ "${ATEAM_BROWSER_ALLOW_NO_SANDBOX:-}" = 1 ]; then
+		SANDBOX_FLAG="--no-sandbox"
+		info "WARNING: Chrome's sandbox was explicitly disabled for this box"
+	else
+		tail -5 "$SANDBOX_PROBE/error" >&2
+		rm -rf "$SANDBOX_PROBE"
+		die "sandboxed Chrome could not start. Fix this host's Chrome sandbox; terminal work is unaffected. ATEAM_BROWSER_ALLOW_NO_SANDBOX=1 is an explicit security exception, not a default"
+	fi
+fi
+rm -rf "$SANDBOX_PROBE"
 
 # ------------------------------------------------------------- config ------
 
@@ -129,10 +150,8 @@ step "[2/6] configure Chrome, the desktop and the VNC password"
 sudo mkdir -p /etc/opt/chrome/policies/managed
 printf '{"ExtensionInstallForcelist":["%s;https://clients2.google.com/service/update2/crx"]}\n' \
 	"$TASKWINDOW_EXTENSION_ID" | sudo tee /etc/opt/chrome/policies/managed/taskwindow.json >/dev/null
-# --no-sandbox (see the launcher below) is deliberate here, so its "unsupported
-# command-line flag" bar would only take room on every screen you watch. Read at
-# Chrome's start, so a Chrome already running keeps the bar until it restarts.
-echo '{"CommandLineFlagSecurityWarningsEnabled":false}' |
+# Keep warnings visible when an operator explicitly permits a sandbox bypass.
+echo '{"CommandLineFlagSecurityWarningsEnabled":true}' |
 	sudo tee /etc/opt/chrome/policies/managed/ateam.json >/dev/null
 
 # Focus follows the mouse, so a click through noVNC always reaches Chrome.
@@ -156,10 +175,8 @@ fi
 x11vnc -storepasswd "$(cat "$VNC_PASS_FILE")" "$VNC_AUTH_FILE" >/dev/null 2>&1
 chmod 600 "$VNC_AUTH_FILE"
 
-# --no-sandbox: Chrome's sandbox needs unprivileged user namespaces, which
-# containers (a Sprite) and Ubuntu's AppArmor defaults withhold. The marked-clean
-# exit and the cleared Singleton locks let Chrome come back after a kill without
-# a "restore pages?" bubble or a "profile in use" refusal.
+# The marked-clean exit and cleared Singleton locks let Chrome come back after a
+# kill without a "restore pages?" bubble or a "profile in use" refusal.
 #
 # --no-startup-window: the desktop's one window is TaskWindow's. It keeps agent
 # tabs out of any window it didn't open (on a laptop, those are yours): it opens
@@ -174,7 +191,7 @@ cat >"$CHROME_LAUNCHER" <<EOF
 P="$PROFILE_DIR"
 sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/' "\$P/Default/Preferences" 2>/dev/null
 rm -f "\$P"/Singleton*
-exec /usr/bin/google-chrome --no-sandbox --disable-gpu --remote-debugging-port=$CDP_PORT \\
+exec /usr/bin/google-chrome $SANDBOX_FLAG --disable-gpu --remote-debugging-port=$CDP_PORT \\
 	--user-data-dir="\$P" --no-first-run --disable-session-crashed-bubble --lang=en-US \\
 	--start-maximized --window-size=1280,720 --no-startup-window
 EOF
@@ -295,7 +312,8 @@ if [ "$SVC_MGR" = systemd ]; then
 	# re-run never closes the browser under an agent. A new TaskWindow is worth a
 	# restart. Desktop control only restarts when its bundle or config changed;
 	# unlike websockify, it holds active leases and input operations.
-	# shellcheck disable=SC2086
+	# The fixed service list expands to one argument per unit.
+	# shellcheck disable=SC2046,SC2086
 	sudo systemctl enable --now $(printf '%s.service ' $SERVICES) >/dev/null 2>&1
 	if [ -n "$DESKTOP_CHANGED" ]; then sudo systemctl restart ateam-novnc.service; fi
 	if [ -n "${TW_UPGRADED:-}" ]; then sudo systemctl restart ateam-taskwindow.service; fi
@@ -389,7 +407,7 @@ done
 if [ -n "$PAIRED" ]; then
 	info "TaskWindow: extension connected"
 else
-	info "WARNING: the extension hasn't connected yet. Check: curl -s 127.0.0.1:$TASKWINDOW_PORT/health"
+	die "TaskWindow's extension has not connected. Check the Chrome and ateam-taskwindow services, then retry"
 fi
 
 # ------------------------------------------------------------- agents ------
@@ -401,6 +419,29 @@ for _ in $(seq 1 20); do
 	sleep 1
 done
 [ -s "$TOKEN_FILE" ] || die "the TaskWindow daemon never wrote $TOKEN_FILE"
+# Verify authenticated MCP discovery, not only an unauthenticated health route.
+# The bundled SDK handles the protocol handshake; the token never enters argv.
+TASKWINDOW_CHECK_TOKEN="$TOKEN_FILE" TASKWINDOW_CHECK_ENTRY="$TW_ENTRY" "$NODE" --input-type=module <<'JS'
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+const require = createRequire(process.env.TASKWINDOW_CHECK_ENTRY);
+const { Client } = await import(pathToFileURL(require.resolve('@modelcontextprotocol/sdk/client/index.js')));
+const { StreamableHTTPClientTransport } = await import(pathToFileURL(require.resolve('@modelcontextprotocol/sdk/client/streamableHttp.js')));
+const client = new Client({ name: 'ateam-browser-check', version: '1.0.0' });
+const timeout = setTimeout(() => { console.error('TaskWindow MCP check timed out'); process.exit(1); }, 15000);
+try {
+  await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:9377/mcp'), {
+    requestInit: { headers: { Authorization: `Bearer ${readFileSync(process.env.TASKWINDOW_CHECK_TOKEN, 'utf8').trim()}` } },
+  }));
+  const { tools } = await client.listTools();
+  if (!tools.some(tool => tool.name === 'tabs_create')) throw new Error('TaskWindow browser tools are missing');
+} finally {
+  await client.close();
+  clearTimeout(timeout);
+}
+JS
+curl -fsS --max-time 5 "http://127.0.0.1:6080/vnc.html" >/dev/null || die "the browser viewer is not ready"
 CLAUDE_BIN="$(bash -lc 'command -v claude' 2>/dev/null || true)"
 if [ -n "$CLAUDE_BIN" ]; then
 	# Re-added each run so a rotated token takes. `remove` fails when absent; fine.

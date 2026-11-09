@@ -13,7 +13,7 @@
 // cli.ts resolves the daemon as `daemon.js` BESIDE itself. Building each alone
 // flattens both to the dist root.
 //
-// Output: dist/{cli.js, daemon.js, package.json}. Run: `bun run build`.
+// Output: dist/{cli.js, daemon.js, desktop.js, desktop-wallpaper.png, package.json, install-browser.sh}.
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +33,7 @@ const release: string = JSON.parse(
 
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
+copyFileSync(join(serverRoot, "scripts", "install-browser.sh"), join(dist, "install-browser.sh"));
 
 for (const entry of ["src/cli.ts", "src/pty/daemon.ts", "../desktop-control/src/desktop.ts"]) {
 	const res = await Bun.build({
@@ -63,6 +64,7 @@ writeFileSync(
 			name: "ateam-server-dist",
 			version: release,
 			private: true,
+			ateamLifecycle: 1,
 			bin: { ateam: "./cli.js" },
 			dependencies: {
 				// 13, not the ^11 the workspace pins (the desktop runs its engine inside

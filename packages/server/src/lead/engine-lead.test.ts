@@ -3,7 +3,7 @@
 import { describe, expect, it } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -20,6 +20,7 @@ import type { Dispatcher } from "../dispatcher";
 import type { Engine } from "../engine";
 import { serveRpc } from "../rpc";
 import { engineLead, MAX_LEAD_ATTACH_BYTES } from "./engine-lead";
+import { chatPreferences } from "./settings";
 import { leadPrompt } from "./session";
 import { createLeadTools } from "./tools";
 
@@ -296,6 +297,82 @@ describe("a box's Lead stays light", () => {
 	});
 });
 
+describe("a call with the box's Lead (v33, Ateam Go)", () => {
+	/** This box's settings and keys in a folder of their own, and OpenAI faked. */
+	async function withBoxKeys(
+		run: (cfg: string, asked: { url: string; init: RequestInit }[]) => Promise<void>,
+	) {
+		const cfg = mkdtempSync(join(tmpdir(), "box-call-"));
+		const env = { config: process.env.ATEAM_CONFIG, openRouter: process.env.OPENROUTER_API_KEY };
+		const realFetch = globalThis.fetch;
+		const asked: { url: string; init: RequestInit }[] = [];
+		process.env.ATEAM_CONFIG = join(cfg, "settings.json");
+		delete process.env.OPENROUTER_API_KEY;
+		globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+			asked.push({ url: String(url), init: init ?? {} });
+			return Response.json({ session: { id: "sess_1" }, transport: { sdp: "v=0 answer" } });
+		}) as typeof fetch;
+		try {
+			await run(cfg, asked);
+		} finally {
+			globalThis.fetch = realFetch;
+			if (env.config === undefined) delete process.env.ATEAM_CONFIG;
+			else process.env.ATEAM_CONFIG = env.config;
+			if (env.openRouter !== undefined) process.env.OPENROUTER_API_KEY = env.openRouter;
+		}
+	}
+
+	it("opens the voice session with the box's own key, which never reaches the phone", () =>
+		withBoxKeys(async (cfg, asked) => {
+			const { ext } = setup();
+			const phone = connect(ext);
+			// No key on this box: the phone hears what is missing, OpenAI isn't asked.
+			await expect(phone.call(LEAD_CH.callStart, "v=0 offer", [])).rejects.toThrow(
+				"This box has no OpenAI key for calls. Add yours from the box's card in Ateam Go",
+			);
+			expect(asked).toHaveLength(0);
+
+			writeFileSync(join(cfg, "credentials.json"), JSON.stringify({ openAiApiKey: "sk-box-1234" }));
+			const answer = await phone.call(LEAD_CH.callStart, "v=0 offer", [
+				{ role: "user", text: "how is the search task doing?" },
+			]);
+			expect(answer).toEqual({ sdp: "v=0 answer", sessionId: "sess_1" });
+			expect(JSON.stringify(answer)).not.toContain("sk-box");
+			const req = asked[0];
+			expect(req?.url).toBe("https://api.openai.com/v1/live/sessions");
+			expect((req?.init.headers as Record<string, string>).Authorization).toBe(
+				"Bearer sk-box-1234",
+			);
+			const body = JSON.parse(String(req?.init.body));
+			expect(body.session.model).toBe("gpt-live-1");
+			expect(body.session.delegation).toEqual({ type: "client", acknowledgement_delay_ms: 800 });
+			expect(body.session.input).toEqual([
+				{ role: "user", content: [{ type: "input_text", text: "how is the search task doing?" }] },
+			]);
+			expect(body.transport).toEqual({ type: "webrtc", sdp: "v=0 offer" });
+			await expect(phone.call(LEAD_CH.callStart, 42)).rejects.toThrow(
+				"The connection offer must be text.",
+			);
+			ext.dispose();
+		}));
+
+	it("judges what the call heard and words a task's reply, on the box", () =>
+		withBoxKeys(async (_cfg, asked) => {
+			const { ext } = setup();
+			const phone = connect(ext);
+			// No decision model on this box: no verdict, and the phone trusts the
+			// voice's hand-off (lead-call's judgeBatch).
+			expect(await phone.call(LEAD_CH.callJudge, ["Delete the old box."], "", {})).toBeNull();
+			expect(await phone.call(LEAD_CH.callJudge, "not a list", "")).toBeNull();
+			// An empty reply needs no model to say it.
+			expect(await phone.call(LEAD_CH.callNudge, "Faster search", "")).toBe(
+				'The task "Faster search" replied. It\'s in the chat.',
+			);
+			expect(asked).toHaveLength(0);
+			ext.dispose();
+		}));
+});
+
 describe("the box's words", () => {
 	it("never send the user to a Mac or a dialog the phone doesn't have", () => {
 		const tools = createLeadTools({ place: "box", handle: async () => [], machineOf: () => null });
@@ -304,4 +381,20 @@ describe("the box's words", () => {
 		expect(text).not.toMatch(/dialog/i);
 		expect(text).not.toContain("mermaid");
 	});
+});
+
+
+it("shares machine Chat settings between desktop and legacy phone Auto calls", async () => {
+ const dir = join(mkdtempSync(join(tmpdir(), "box-chat-prefs-")), "lead");
+ const preferences = chatPreferences(dir, join(dir, "../settings.json"), async () => true);
+ const ext = engineLead({ ...fakeEngine(), dir, preferences, spawnClaude: args => new FakeClaude(args) as unknown as ChildProcess });
+ const desktop = connect(ext), phone = connect(ext);
+ try {
+  await desktop.call(LEAD_CH.updateSettings, { agent: "codex", auto: true });
+  expect(await phone.call(LEAD_CH.snapshot)).toMatchObject({ auto: true, items: [] });
+  expect(existsSync(dir)).toBe(false);
+  await phone.call(LEAD_CH.setAuto, false);
+  expect(await desktop.call(LEAD_CH.settings)).toMatchObject({ settings: { agent: "codex", auto: false } });
+  await expect(phone.call(LEAD_CH.updateSettings, { auto: "yes" })).rejects.toThrow("Auto");
+ } finally { ext.dispose(); }
 });

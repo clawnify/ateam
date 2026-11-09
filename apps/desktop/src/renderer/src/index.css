@@ -319,6 +319,25 @@ input {
 }
 /* Slim header row sharing the traffic-light strip: the collapse toggle lives
    here (like Arc/Linear), and the accordions start right below — no dead gap. */
+.side-header {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	flex: none;
+	width: 100%;
+}
+/* Full screen frees the traffic-light strip for the project and settings.
+   Keep one mounted selector so its menu and focus survive the transition. */
+.side-header.fullscreen {
+	grid-template-columns: minmax(0, 1fr) auto;
+}
+.side-header.fullscreen .side-top {
+	grid-area: 1 / 2;
+}
+.side-header.fullscreen .side-project {
+	grid-area: 1 / 1;
+	align-self: center;
+	padding: 0 0 0 6px;
+}
 .side-top {
 	height: 38px;
 	flex: none;
@@ -443,6 +462,7 @@ input {
    project name sits in the same row. */
 .side-project {
 	flex: none;
+	min-width: 0;
 	padding: 0 6px 4px;
 }
 .project-title {
@@ -1176,6 +1196,13 @@ input {
 	-webkit-box-orient: vertical;
 	overflow: hidden;
 }
+/* An agent in the open task without the board tools (TaskDTO.boardToolsMissing). */
+.board-tools-note {
+	margin: 4px 0 6px;
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--amber);
+}
 /* The open task's branch: the one place it shows, and a click copies it. */
 .branch-line {
 	display: flex;
@@ -1865,38 +1892,6 @@ input {
 	/* Tiles are paged, never scrolled: every layout sizes its rows so exactly
 	   one pageful fills the box, so there is nothing to scroll to. */
 	overflow: hidden;
-	/* Default ("grid"): 2x2 — each tile is half the window wide and half the
-	   window tall (percentage rows resolve against the visible content box). */
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	grid-auto-rows: 50%;
-}
-/* 3x2: three columns, two rows (a page holds six). */
-.mc[data-layout="grid3x2"] {
-	grid-template-columns: repeat(3, minmax(0, 1fr));
-	grid-auto-rows: 50%;
-}
-/* Main + side: the first tile takes the full-height left half, the next two
-   stack in the right half (a page holds three). Auto-placement fills the right
-   column's two rows once the first tile spans both. */
-.mc[data-layout="main"] {
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	grid-auto-rows: 50%;
-}
-.mc[data-layout="main"] > .tile:first-child {
-	grid-row: span 2;
-}
-/* Split: two side-by-side columns on one full-height row (a page holds two).
-   minmax(0,1fr) columns stop wide terminal output from blowing out the track
-   width. */
-.mc[data-layout="split"] {
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	grid-auto-rows: 100%;
-}
-/* Stack: a single full-window terminal per page. 100% (not a min-height) so a
-   short window shrinks the tile instead of overflowing into a scrollbar. */
-.mc[data-layout="stack"] {
-	grid-template-columns: minmax(0, 1fr);
-	grid-auto-rows: 100%;
 }
 /* Nothing live: the message is centered in the whole area. As a grid item it
    would sit in the layout's first cell, up and to the left. */
@@ -4923,12 +4918,8 @@ input {
 	font-size: 12px;
 	color: var(--text-dim);
 }
-/* The task's page, closed: a bar between the terminal and its toolbar. */
-.panel-page {
-	padding: 6px 8px;
-}
-/* The task's page, open: beside the terminal, or over it where the panel body
-   is too narrow for both (TaskPanel's PAGE_SPLIT_MIN). */
+/* A selected doc or terminal beside the last session, filling the panel when
+   it is too narrow for both (TaskPanel's PAGE_SPLIT_MIN). */
 .page-pane {
 	flex: 0 0 50%;
 	min-width: 0;
@@ -5532,6 +5523,38 @@ input {
 	font-size: 12px;
 	font-weight: 400;
 }
+/* An optional step's title opens and folds it. */
+.get-started-toggle {
+	display: inline-flex;
+	align-items: center;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+.get-started-chevron {
+	margin-left: 4px;
+	color: var(--text-dim);
+	transition: transform 0.15s ease;
+}
+.get-started-toggle[aria-expanded="true"] .get-started-chevron {
+	transform: rotate(90deg);
+}
+.get-started-toggle:hover .get-started-chevron {
+	color: var(--text);
+}
+@media (prefers-reduced-motion: reduce) {
+	.get-started-chevron {
+		transition: none;
+	}
+}
+/* A step with nothing left to do: a check in place of its number. */
+.get-started-num.done {
+	border-color: var(--text-dim);
+	color: var(--text);
+}
 .get-started-keys {
 	display: grid;
 	grid-template-columns: auto minmax(0, 1fr);
@@ -5579,4 +5602,37 @@ input {
 }
 .get-started-link:hover {
 	text-decoration-color: currentColor;
+}
+
+/* Dotfiles preview and logs fit both Settings and the setup dialog. */
+.dotfiles {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	min-width: 0;
+}
+.dotfiles-field {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-size: 12px;
+}
+.dotfiles-preview,
+.dotfiles-result {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	overflow-wrap: anywhere;
+	min-width: 0;
+}
+.dotfiles-log {
+	margin: 0;
+	padding: 12px;
+	max-height: 280px;
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 11px;
+	background: var(--background);
+	border-radius: 6px;
 }

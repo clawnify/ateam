@@ -394,7 +394,7 @@ export class BoxLinks implements PeerRelay {
 				return this.down(
 					l,
 					"refused",
-					"It's locked to its paired devices, and this link isn't one of them. Turning cross-box off and on again on the Mac pairs it.",
+					"It's private to its paired devices, and this link isn't one of them. Turning cross-box off and on again on the Mac pairs it.",
 				);
 			}
 			if (l.close !== conn.close || l.stopped) return;

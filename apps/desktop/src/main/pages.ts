@@ -68,11 +68,14 @@ export function servePages(router: Router): void {
 			.map(decodeURIComponent);
 		let body: string;
 		try {
-			const page = (await router.handle(CH.tasksPage, [taskId])) as TaskPageContentDTO | null;
+			const page = (await router.handle(CH.tasksPage, [
+				taskId,
+				pageId,
+			])) as TaskPageContentDTO | null;
 			body =
 				page && page.id === pageId
 					? PRELUDE + page.html
-					: note("This page was replaced by a newer one, or removed.");
+					: note("This page is no longer available.");
 		} catch (e) {
 			body = note(`Could not load this page: ${e instanceof Error ? e.message : String(e)}`);
 		}

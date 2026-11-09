@@ -18,12 +18,11 @@ const config = getDefaultConfig(projectRoot);
 // always win for app code.
 config.resolver.nodeModulesPaths = [path.resolve(projectRoot, "node_modules")];
 
-// Surgically link the one workspace package the app consumes — @ateam/protocol,
-// the pure-TS wire contract (no deps of its own). We watch its folder so Metro
-// transpiles its source, and map just its name, WITHOUT reopening hierarchical
-// lookup — so the bun-root node_modules still can't shadow react/react-native.
+// Link the shared wire contract and pane-layout rules without exposing the
+// workspace root's React dependencies to Metro.
 const protocolDir = path.resolve(projectRoot, "../../packages/protocol");
-config.watchFolders = [protocolDir];
-config.resolver.extraNodeModules = { "@ateam/protocol": protocolDir };
+const panesDir = path.resolve(projectRoot, "../../packages/panes");
+config.watchFolders = [protocolDir, panesDir];
+config.resolver.extraNodeModules = { "@ateam/protocol": protocolDir, "@ateam/panes": panesDir };
 
 module.exports = config;

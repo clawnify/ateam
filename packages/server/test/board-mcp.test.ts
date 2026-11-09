@@ -10,6 +10,7 @@ import {
 function fakeBoard() {
 	const calls: {
 		setStatus: unknown[];
+		createSession: unknown[];
 		setWaiting: unknown[];
 		sendMessage: unknown[];
 		askUser: unknown[];
@@ -18,6 +19,7 @@ function fakeBoard() {
 		listPeers: unknown[];
 	} = {
 		setStatus: [],
+		createSession: [],
 		setWaiting: [],
 		sendMessage: [],
 		askUser: [],
@@ -27,6 +29,10 @@ function fakeBoard() {
 	};
 	const board: BoardHandlers = {
 		get: async () => ({ tasks: [{ taskId: "t1" }] }),
+		createSession: async (req) => {
+			calls.createSession.push(req);
+			return { taskId: "t1", terminalId: "new-terminal", agent: req.agent };
+		},
 		setStatus: async (req) => {
 			calls.setStatus.push(req);
 			return { ok: true, reason: `moved ${req.taskId}` };
@@ -95,6 +101,7 @@ describe("dispatchMcp", () => {
 			);
 			expect(names).toEqual([
 				"get_board",
+				"create_session",
 				"set_status",
 				"set_waiting",
 				"list_peers",
@@ -169,6 +176,75 @@ describe("dispatchMcp", () => {
 		if (r.kind === "json") {
 			expect((r.body as { error: { code: number } }).error.code).toBe(-32602);
 		}
+	});
+});
+
+describe("create_session", () => {
+	const call = (args: unknown) => rpc("tools/call", { name: "create_session", arguments: args });
+	const verified = { callerTerminalId: "term-1", callerVerified: true };
+	const result = (r: Awaited<ReturnType<typeof dispatchMcp>>) => {
+		if (r.kind !== "json") throw new Error("expected JSON");
+		return (r.body as { result: { content: { text: string }[]; isError: boolean } }).result;
+	};
+
+	it("creates each kind of session for the authenticated caller and returns its handle", async () => {
+		const { board, calls } = fakeBoard();
+		for (const agent of ["shell", "claude", "codex", "opencode"]) {
+			const args = agent === "shell" ? { agent } : { agent, prompt: "review the diff" };
+			const r = result(await dispatchMcp(call(args), board, verified));
+			expect(r.isError).toBe(false);
+			expect(JSON.parse(r.content[0]!.text)).toEqual({
+				taskId: "t1",
+				terminalId: "new-terminal",
+				agent,
+			});
+			expect(calls.createSession.at(-1)).toEqual({
+				callerTerminalId: "term-1",
+				agent,
+				prompt: "prompt" in args ? args.prompt : undefined,
+			});
+		}
+	});
+
+	it("requires a verified terminal token", async () => {
+		const { board, calls } = fakeBoard();
+		for (const ctx of [{}, { callerTerminalId: "term-1" }, { callerVerified: true }]) {
+			expect(result(await dispatchMcp(call({ agent: "shell" }), board, ctx)).isError).toBe(true);
+		}
+		expect(calls.createSession).toHaveLength(0);
+	});
+
+	it("validates arguments even when a client bypasses the advertised schema", async () => {
+		const { board, calls } = fakeBoard();
+		for (const args of [
+			{},
+			{ agent: "other" },
+			{ agent: ["shell"] },
+			{ agent: "shell", prompt: "echo hello" },
+			{ agent: "codex", prompt: false },
+			{ agent: "codex", prompt: null },
+			{ agent: "codex", prompt: "x".repeat(20_001) },
+			{ agent: "codex", prompt: "bad\0prompt" },
+			{ agent: "shell", taskId: "another-task" },
+			{ agent: "shell", callerTerminalId: "another-terminal" },
+			{ agent: "shell", cwd: "/" },
+			{ agent: "shell", command: "echo hello" },
+			{ agent: "codex", yolo: true },
+			{ agent: "codex", resume: true },
+		]) {
+			expect(result(await dispatchMcp(call(args), board, verified)).isError).toBe(true);
+		}
+		expect(calls.createSession).toHaveLength(0);
+	});
+
+	it("reports launch failures as tool errors", async () => {
+		const { board } = fakeBoard();
+		board.createSession = async () => {
+			throw new Error("Codex is not installed");
+		};
+		const r = result(await dispatchMcp(call({ agent: "codex" }), board, verified));
+		expect(r.isError).toBe(true);
+		expect(r.content[0]!.text).toContain("Codex is not installed");
 	});
 });
 
@@ -308,6 +384,17 @@ describe("ask_user", () => {
 
 describe("show_page", () => {
 	const show = (args: unknown) => rpc("tools/call", { name: "show_page", arguments: args });
+
+	it("passes an explicit revision id to the verified caller's task", async () => {
+		const { board, calls } = fakeBoard();
+		await dispatchMcp(show({ pageId: "artifact-1", html: "revised" }), board, {
+			callerTerminalId: "term-1",
+			callerVerified: true,
+		});
+		expect(calls.showPage).toEqual([
+			{ callerTerminalId: "term-1", pageId: "artifact-1", html: "revised" },
+		]);
+	});
 
 	it("shows the page on the verified caller's task, and only theirs", async () => {
 		const { board, calls } = fakeBoard();

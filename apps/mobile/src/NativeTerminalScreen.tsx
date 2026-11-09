@@ -4,7 +4,7 @@
 // scroll / selection / copy are native (the whole reason for the swap). Kept
 // separate from TerminalScreen so the webview path stays intact while we evaluate.
 
-import type { AteamApi, TaskDTO } from "@ateam/protocol";
+import type { AteamApi, SessionDTO, TaskDTO } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import * as ImagePicker from "expo-image-picker";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
@@ -61,6 +61,7 @@ export function NativeTerminalScreen({
 	task,
 	onClose,
 	autoFocus = false,
+	initialSession,
 }: {
 	api: AteamApi;
 	task: TaskDTO;
@@ -68,14 +69,24 @@ export function NativeTerminalScreen({
 	/** Bring the keyboard up as soon as the terminal is ready (expanding from a
 	 *  Mission Control tile to type). */
 	autoFocus?: boolean;
+	/** Keep the session chosen in the expanded Mission Control tile. */
+	initialSession?: SessionDTO;
 }) {
 	// The desktop's tabs, as a switch: the agent's conversation, or a shell in the
 	// worktree. A task with no agent already opens on a shell, so it has no switch.
 	const hasAgent = !!task.agentId && task.agentId !== "shell";
-	const [shellOn, setShellOn] = useState(false);
+	const [shellOn, setShellOn] = useState(initialSession?.agentId === "shell");
+	const [picked, setPicked] = useState(initialSession?.terminalId ?? null);
 	const shell = hasAgent && shellOn;
-	// Attach or restore like Mission Control.
-	const open = useTaskOpen(api, task, true, shell);
+	const resolve = useTaskOpen(api, task, true, shell);
+	const open = useCallback(
+		async (cancelled: () => boolean) => {
+			if (picked && (await api.pty.listForTask(task.id)).some((s) => s.terminalId === picked))
+				return picked;
+			return cancelled() ? null : resolve(cancelled);
+		},
+		[api, task.id, picked, resolve],
+	);
 	return (
 		<NativeTerminal
 			api={api}
@@ -90,7 +101,14 @@ export function NativeTerminalScreen({
 					expanded
 					onToggle={onClose}
 					shell={shell}
-					onShell={hasAgent ? setShellOn : undefined}
+					onShell={
+						hasAgent
+							? (on) => {
+									setPicked(null);
+									setShellOn(on);
+								}
+							: undefined
+					}
 				/>
 			}
 		/>

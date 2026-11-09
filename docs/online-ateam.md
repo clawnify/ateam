@@ -110,6 +110,10 @@ knows, greys out the ones this box hasn't got, and offers **Install** beside the
 which runs that agent's official installer on the box. The one-time OAuth login is
 still yours to do, in a terminal there, on first use.
 
+The first Codex task on a box also stops at Codex's **Hooks need review** prompt in
+its terminal. Pick **Trust all and continue** once: Ateam's status hooks then run in
+every Codex task on that box, so its card follows the agent's turns.
+
 ## 1. Install the `ateam` server on the box
 
 One command, run **on the box as your non-root user**:
@@ -263,16 +267,20 @@ ssh my-ateam-box "bash -lc 'ateam'"
 > the box's folders. A box on an Ateam older than the skills menu says so in the
 > menu and takes the next release first.
 
-### Optional: a browser for the box's agents
+### A browser for the box's agents
 
 Browser MCP tools usually drive the Chrome on your laptop, and that only works
 when the agent runs on the laptop too. A box gets a Chrome of its own instead.
+New x86 boxes created in the desktop app or Ateam Go include it by default;
+clear **Include browser** to leave it out. Arm boxes remain terminal-only.
+Connecting an existing box or upgrading its engine keeps its current setup.
+
 In the desktop app, click the globe button on a task on the box: on a box with
-no browser yet, Ateam asks, then installs it there. Or run the installer on the
-box yourself:
+no browser yet, Ateam asks, then installs it there. Or run the installer bundled
+with the installed engine on the box yourself:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install-browser.sh | bash
+bash "$HOME/ateam-app/install-browser.sh"
 ```
 
 Run it as the same user as `install.sh`. It needs passwordless sudo once, and an
@@ -285,15 +293,22 @@ x86_64 box (Google Chrome has no Linux Arm build). It installs:
   desktop is empty; to log in before any agent has, ask one to open the site.
 - [TaskWindow](https://github.com/clawnify/TaskWindow) in that Chrome, its
   extension force-installed by policy and paired with its daemon automatically,
-  registered as the `taskwindow` MCP server for Claude Code. These are the same
-  tools as the TaskWindow extension on a laptop.
+  registered as the `taskwindow` MCP server when Ateam launches Claude Code, Codex,
+  or OpenCode, including agents installed later. Resume or relaunch an existing
+  session to pick up newly installed browser tools. These are the same tools as
+  the TaskWindow extension on a laptop.
 - noVNC on port 6080, so you can watch the desktop and take over for a login, a
   2FA prompt or a CAPTCHA. In the desktop app, the globe button on a task on this
   box opens it in a Browser panel, already signed in. In the iOS app, a task whose
   agent has used the browser shows it as a miniature over its terminal: tap it to
-  bring it above the terminal, and minimize it to put it back. From any other browser, use
-  `http://<tailnet-ip>:6080/vnc.html` (on a box with a tailnet interface) with the
-  password in `~/.ateam/browser/vnc-password`.
+  bring it above the terminal, and minimize it to put it back. The clients provide
+  its VNC password and separate viewer credential automatically.
+
+Browser setup verifies Chrome's sandbox, extension pairing, authenticated MCP
+discovery, and the viewer before reporting success. If setup fails, the engine
+still starts for terminal work; details are in `~/.ateam/browser-install.log`.
+Retry from the desktop Browser panel or with the bundled script above. For a
+manual engine install, add `--browser` to the engine installer's options.
 
 Everything runs as a service (systemd, or Sprite services on a Sprite), so it
 survives reboots and keeps working with no laptop connected. Re-running the script
@@ -458,26 +473,30 @@ should have it — your phone and your Mac, not "anything I ever add to this tai
 The SSH transport doesn't need this — OpenSSH authenticates with your key regardless
 of who can reach port 22. It's specific to the WebSocket.
 
-### Lock the box to your devices (v29)
+### Keep the box private to your devices (v29)
 
 A box on v29 or later can serve its WebSocket only to the devices paired with it.
 A connection from anything else gets no events (no terminal output, no board) and
 every call is refused with "This box needs pairing." until it pairs. SSH is never
-affected. Keep the ACL anyway: the lock and the ACL guard against different things.
+affected. Keep the ACL anyway: pairing and the ACL guard against different things.
 
-- **A box starts open**, a new one too, and stays open until you lock it. Its card
-  says anyone on your tailnet can control it.
-- **Lock one** from **Settings → Boxes → the box → Access → Lock it** on the Mac, or **Lock it**
-  under its card in the phone's **Boxes**. The device you lock it from is paired first.
-  A phone needs Ateam Go 1.4 or later to pair: an older one can't use a locked box.
+- **A new box starts private** (from v0.1.93). One set up from a Mac is reached over
+  SSH, which pairing never gates, and the Mac pairs your phone from there. One created
+  from Ateam Go is paired with that phone before it first starts. One installed by hand
+  prints a pairing code for its first device at the end of the installer.
+- **An older box stays as it was**: one that has run before keeps whatever it had, so
+  an upgrade never shuts a device out. While it's open, its card says it's open to your
+  Tailscale network.
+- **Make one private** from **Settings → Boxes → the box → Access → Make private** on the
+  Mac, or **Make private** under its card in the phone's **Boxes**. The device you do it
+  from is paired first. A phone needs Ateam Go 1.4 or later to pair.
 - **Pair a phone** from the same place on the Mac: a QR code the iPhone's Camera opens
   in Ateam Go (`ateamgo://pair?...`), which asks before it pairs, naming the box, and the
   code itself to type on the box's card in **Boxes** on the phone. A code works once, for
   10 minutes.
-- **No paired device at hand** (the phone locked the box and the Mac reaches it only
-  over Tailscale, or the one paired phone is lost): run `ateam pair` in the box's
-  terminal, which prints a code for a locked box. `ateam pair --unlock` opens a box
-  again when no paired device is left.
+- **No paired device at hand** (the Mac reaches the box only over Tailscale, or the one
+  paired phone is lost): run `ateam pair` in the box's terminal, which prints a code for
+  a private box. `ateam pair --unlock` opens a box again when no paired device is left.
 - **Unpair** a device from **Settings → Boxes → the box → Access**: its token stops working and
   its connection drops at once. Do it for a lost phone.
 
@@ -504,8 +523,8 @@ every box this Mac holds to every other one:
   **Access** there. Unpair it to cut that link; turning this off and on again sets it up
   anew. The Mac sets the pairings up, since it holds every box: it asks the box being
   reached for a one-time code and hands it to the other box, which redeems it itself, so
-  the token never comes through the Mac. A box that isn't locked takes a link as it
-  takes any device, and once you lock it, the Mac pairs the links to it.
+  the token never comes through the Mac. An open box takes a link as it takes any
+  device, and once you make it private, the Mac pairs the links to it.
 - **A box that's asleep or off the tailnet** is listed as unreachable, and a message to
   one of its tasks fails with that reason. Boxes don't wake each other.
 - **What a box needs:** v30, and a network port the other boxes can reach (the one Ateam
@@ -569,7 +588,7 @@ The connection menu surfaces the real error inline. Common ones:
 | --- | --- |
 | **"No servers in ~/.ssh/config"** in the menu | Add a `Host` entry (step 3). |
 | Connect hangs or fails | Check `ssh <box>` works, Tailscale is up on **both** ends (`tailscale status`), and `ateam` is on the box's login PATH: `ssh <box> "bash -lc 'command -v ateam'"`. |
-| A box shows **"update available (vN)"** | Version skew no longer blocks anything: the box connects and works. A feature whose data shape changed on a newer engine is switched off with a reason rather than misreading the old shape (Cleanup needs a v6 box, a loop that runs every day at a set time needs a v13 one, and **Pause all** only stops a v14 box's loops; the Loops banner names any box it did not reach); a method the box simply does not have fails on its own, only where you use it. To update it, use the arrow on the box's row in the **Run on** picker, which runs the installer over SSH and streams the log. Connecting from the Mac app also upgrades a box on its own, so this often clears itself; on the phone, tap **Update box** in the banner. A box *ahead* of the client says so instead, and the fix there is to update the client, not the box. |
+| A box shows **"update available (vN)"** | Version skew no longer blocks anything: the box connects and works. A feature whose data shape changed on a newer engine is switched off with a reason rather than misreading the old shape (Cleanup needs a v6 box, a loop that runs every day at a set time needs a v13 one, and **Pause all** only stops a v14 box's loops; the Loops banner names any box it did not reach); a method the box simply does not have fails on its own, only where you use it. To update it, use the arrow on the box's row in the **Run on** picker, which runs the installer over SSH and streams the log. Connecting from the Mac app also upgrades a box on its own, so this often clears itself; on the phone, tap **Update box** in the banner. A box *ahead* of the client works with it as it is, minus the newer features, and says nothing: Ateam Go asks to be updated only when the box needs a newer one (the box sends the oldest app it serves, `minClient`, in its hello). |
 | **The same repo shows twice** on the board | Two copies of one repo merge into a single card by their GitHub `owner/name`, read from each clone's `origin` URL. A clone with no `origin` has no identity to match on, so it stays its own card: that is what you get when a folder is created with **New project** on the phone and the repo is cloned into it afterwards. Add the remote where it's missing (`git -C <repo> remote add origin <url>`) and the rows merge on the next board load. A box also has to be running a server new enough to repair its own rows, so update the box if its copy still shows separately. |
 | Board is empty after connecting | The box has no registered projects yet — add one from the box's filesystem via **Add project** (or register a repo path on the box). |
 | Agents run but commits fail | The box has no git identity — `git config --global user.name/user.email` (step 0). |

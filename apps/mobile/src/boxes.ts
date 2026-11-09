@@ -10,7 +10,7 @@ import {
 	type ProviderDefinition,
 	type ProviderReport,
 	providerById,
-	reportedWake,
+	reportedProvider,
 	wakeMachineName,
 } from "@ateam/protocol";
 import type { SavedConnection } from "./storage";
@@ -21,7 +21,8 @@ export interface SavedBox extends SavedConnection {
 }
 
 /** A box is its address: the host (case-insensitive) and the port it's reached at. */
-export function boxKey(b: { host: string; port: string }): string {
+export function boxKey(b: Pick<SavedConnection, "host" | "port" | "ssh">): string {
+	if (b.ssh) return `ssh:${b.ssh.user}@${b.host.trim().toLowerCase()}:${b.port.trim() || "22"}`;
 	return `${b.host.trim().toLowerCase()}:${b.port.trim() || "8787"}`;
 }
 
@@ -46,16 +47,27 @@ export function touchBox(
  *  alone (a pairing QR, an IP typed in) has no provider, so the phone dialled it asleep
  *  until it timed out. The provider only fills what is missing: one the user picked
  *  stays, and only its blank name is filled, from a report at the same provider.
- *  Whether it sleeps is the box's own fact, so the latest report always replaces it. */
+ *  Whether it sleeps is the box's own fact, so the latest report always replaces it.
+ *  A report of null says no provider puts the box to sleep (a plain server): one saved
+ *  with no provider is then always on, so a try that fails doesn't offer Set provider. */
 export function withReportedProvider(
 	list: SavedBox[],
 	key: string,
 	reported: ProviderReport | null | undefined,
 ): SavedBox[] | null {
-	const wake = reportedWake(reported);
 	const at = list.findIndex((b) => boxKey(b) === key);
 	const box = list[at];
-	if (!wake || !reported || !box) return null;
+	if (!box) return null;
+	// Undefined is an engine that doesn't say (older, or still looking), which changes
+	// nothing. A box given a provider keeps what it has: a tap still wakes it through it.
+	if (reported === null) {
+		if (providerById(box.provider?.id) || box.sleeps === false) return null;
+		const list2 = [...list];
+		list2[at] = { ...box, sleeps: false };
+		return list2;
+	}
+	const wake = reportedProvider(reported);
+	if (!wake || !reported) return null;
 	let next: SavedBox = box;
 	const own = providerById(box.provider?.id);
 	const fill =
@@ -75,7 +87,21 @@ export function withReportedProvider(
  *  still wakes through the provider when a key is saved (links.ts), since a box can
  *  be put back to sleeping after it last said so. */
 export function wakesThrough(box: SavedConnection): ProviderDefinition | undefined {
-	return box.sleeps === false ? undefined : providerById(box.provider?.id);
+	const def = providerById(box.provider?.id);
+	// A provider with nothing to wake (exe.dev) is only a name.
+	return box.sleeps === false || !def?.wake ? undefined : def;
+}
+
+/** Whether a box's card shows it asleep (the moon, "tap to wake") rather than being
+ *  reached. Only a tap wakes a box, so a try in the background can't reach one that
+ *  sleeps, and a card that spun for each of those tries said it was on its way when it
+ *  wasn't. So a box that sleeps shows asleep while it was last seen asleep, and before
+ *  its first try has said anything, since asleep is how such a box is mostly found. If
+ *  it's up after all, that try lands and the card turns live. A try someone asked for
+ *  shows its steps, and one after a drop or another failure shows it's being reached. */
+export function shownAsleep(box: SavedConnection, link: BoxLink): boolean {
+	if (link.state === "live" || link.asked) return false;
+	return link.asleep || (link.error === null && wakesThrough(box) !== undefined);
 }
 
 /** The box form's Always on / Sleeps when idle to begin with: a box being added shows
@@ -134,13 +160,34 @@ export function boxTitle(b: SavedConnection): string {
 export function boxSubtitle(b: SavedConnection): string {
 	const addr = boxTitle(b) === b.host ? `port ${b.port}` : `${b.host}:${b.port}`;
 	const def = providerById(b.provider?.id);
-	return def ? `${addr} · ${def.label}` : addr;
+	return [
+		b.ssh ? `SSH · ${b.ssh.user}` : null,
+		addr,
+		def?.label,
+		b.createdServer ? `Hetzner #${b.createdServer.id}` : null,
+	]
+		.filter(Boolean)
+		.join(" · ");
 }
 
 function isConnection(v: unknown): v is SavedConnection {
 	if (typeof v !== "object" || v === null) return false;
 	const c = v as Record<string, unknown>;
-	return typeof c.host === "string" && c.host.trim() !== "" && typeof c.port === "string";
+	if (typeof c.host !== "string" || !c.host.trim() || typeof c.port !== "string") return false;
+	if (c.ssh !== undefined) {
+		if (!c.ssh || typeof c.ssh !== "object") return false;
+		const ssh = c.ssh as Record<string, unknown>;
+		if (
+			typeof ssh.user !== "string" ||
+			!ssh.user ||
+			typeof ssh.identity !== "string" ||
+			!ssh.identity ||
+			(ssh.auth !== "key" && ssh.auth !== "password") ||
+			(ssh.hostKey !== undefined && typeof ssh.hostKey !== "string")
+		)
+			return false;
+	}
+	return true;
 }
 
 /** The stored list, or, from before the phone kept one, the single connection it
@@ -181,6 +228,9 @@ export interface BoxLink {
 	wakeError: string | null;
 	/** The box's protocol version once it has answered. */
 	version: number | null;
+	/** The oldest app protocol the box serves correctly (SystemInfo.minClient); null
+	 *  before it answers, or from an engine that doesn't say. */
+	minClient: number | null;
 	/** Bumps on every connect: keys its open terminal so it remounts onto the fresh link. */
 	gen: number;
 }
@@ -193,6 +243,7 @@ export const NEW_LINK: BoxLink = {
 	asleep: false,
 	wakeError: null,
 	version: null,
+	minClient: null,
 	gen: 0,
 };
 

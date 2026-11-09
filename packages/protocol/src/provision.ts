@@ -30,6 +30,7 @@ export interface ProviderOptions {
 		label: string;
 		locations: string[];
 		memory: number;
+		architecture?: string;
 		monthly?: Record<string, number>;
 	}[];
 	/** The currency those prices are in ("EUR"), when the provider says. */
@@ -51,11 +52,13 @@ export interface CreateServerInput {
 	/** The OpenSSH public key to authorize on the box (`ssh-ed25519 AAAA…`). None for a
 	 *  box Ateam Go creates, which is reached over the tailnet alone. */
 	sshPublicKey?: string;
+	/** Direct SSH creation keeps only port 22 reachable from the public network. */
+	directSSH?: boolean;
 	/** cloud-init `user_data` run on first boot. */
 	cloudInit: string;
 	onProgress?: (stage: string) => void;
 	/** The server exists (and bills) from here on, even if the rest fails. */
-	onCreated?: (providerId: string) => void;
+	onCreated?: (providerId: string, publicIp?: string) => void | Promise<void>;
 }
 
 export interface CreatedServer {
@@ -79,12 +82,13 @@ export const AGENT_INSTALLS = {
 	claude: {
 		label: "Claude Code",
 		install: "curl -fsSL https://claude.ai/install.sh | bash",
-		login: "claude login",
+		login: "claude auth login",
 	},
 	codex: {
 		label: "Codex",
 		install: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
 		login: "codex login",
+		remoteLogin: "codex login --device-auth",
 	},
 } as const;
 
@@ -94,14 +98,43 @@ export type InstallableAgent = keyof typeof AGENT_INSTALLS;
 export const INSTALL_SH_URL =
 	"https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh";
 
+const quoteShell = (text: string) => `'${text.replace(/'/g, `'"'"'`)}'`;
+/** Phone/cloud-init download and Git preparation. The shared installer owns
+ * the engine transaction and coordinates startup for every caller. */
+const sshInstallScript = (browser: boolean) => `exec > "$HOME/ateam-install.log" 2>&1
+rm -f "$HOME/.ateam-phone-install-exit"
+set -o pipefail
+install_ateam() {
+  if ! command -v git >/dev/null; then
+    if command -v apt-get >/dev/null && sudo -n true; then
+      sudo -n apt-get update && sudo -n apt-get install -y git || return 1
+    else
+      echo 'Git is required. Install it with your server package manager, then retry.' >&2
+      return 1
+    fi
+  fi
+  curl -fsSL ${INSTALL_SH_URL} | bash -s -- --service${browser ? " --browser" : ""}
+}
+install_ateam
+rc=$?
+printf '%s' "$rc" > "$HOME/.ateam-phone-install-exit"
+exit "$rc"`;
+const sshInstallCommand = (browser: boolean) =>
+	`flock -n "$HOME/.ateam-phone-install.lock" bash -lc ${quoteShell(sshInstallScript(browser))}`;
+export const SSH_INSTALL_COMMAND = sshInstallCommand(false);
+/** 75: installing; 74: interrupted/failed; 0: last installation completed.
+ * This is a progress check, not startup authorization: the server owns that.
+ * Older installations without a lock remain compatible without flock. */
+export const SSH_INSTALL_STATUS = `d="$HOME/ateam-app"; if test -f "$d/install.lock"; then command -v flock >/dev/null || exit 69; flock -sn -E 75 "$d/install.lock" sh -c 'test "$(cat "$1/install-state" 2>/dev/null)" = ready || exit 74' sh "$d"; exit $?; elif test -f "$HOME/.ateam-phone-install.lock"; then command -v flock >/dev/null || exit 69; flock -sn "$HOME/.ateam-phone-install.lock" true || exit 75; test -f "$HOME/.ateam-phone-install-exit" && test "$(cat "$HOME/.ateam-phone-install-exit")" = 0 || { tail -c 2000 "$HOME/ateam-install.log" >&2; exit 74; }; fi`;
+
 /**
  * Build the cloud-init that makes a fresh box reachable exactly the way the rest of
  * Ateam expects: a non-root `ateam` user (the installer refuses to run as root), and
- * Tailscale up with SSH so the tailnet, not a password, is the auth boundary for both
- * the desktop (SSH) and the phone (the daemon's WebSocket). The desktop installs the
- * engine afterward over SSH, streamed; `install` has the box install it at first boot.
+ * either direct key-authenticated SSH or Tailscale for SSH and the phone's WebSocket.
+ * The desktop can install the engine afterward; `install` runs it at first boot.
  */
 export function buildCloudInit(opts: {
+	network?: "tailscale" | "ssh";
 	hostname: string;
 	/** The OpenSSH key `ateam` logs in with. Without one (a box Ateam Go creates), no
 	 *  one logs in over the box's public SSH: password logins are off too, and the box
@@ -110,15 +143,16 @@ export function buildCloudInit(opts: {
 	/** Joins the tailnet at boot. Without one, Tailscale is only installed, and the
 	 *  engine's installer joins later (`--tailscale`), the user approving the box. */
 	tailscaleAuthKey?: string;
-	/** Install the engine at first boot, as a service on the tailnet: for a phone, which
-	 *  has no SSH to stream the installer over. Needs the auth key, because nobody
-	 *  would see the link to approve the box with. */
+	/** Install the engine as a service at first boot. Tailscale mode needs an auth
+	 *  key because nobody would see an interactive approval link. */
 	install?: {
 		/** The device creating the box, paired before the engine first starts: the sha256
 		 *  (hex) of a token only that device holds, and what the box calls it. */
 		pairDevice?: { tokenHash: string; label: string };
 		/** Coding agents to install first, so the engine finds them when it starts. */
 		agents?: InstallableAgent[];
+		/** New boxes include a browser unless explicitly declined. */
+		browser?: boolean;
 	};
 }): string {
 	const { hostname, sshPublicKey, tailscaleAuthKey, install } = opts;
@@ -126,10 +160,16 @@ export function buildCloudInit(opts: {
 	if (tailscaleAuthKey !== undefined && !AUTHKEY_RE.test(tailscaleAuthKey)) {
 		throw new Error("invalid Tailscale auth key");
 	}
-	if (sshPublicKey !== undefined && !/^ssh-(ed25519|rsa) /.test(sshPublicKey)) {
+	if (
+		sshPublicKey !== undefined &&
+		!/^ssh-(ed25519|rsa) [A-Za-z0-9+/]+={0,2}(?: [^\r\n]*)?$/.test(sshPublicKey)
+	) {
 		throw new Error("invalid SSH public key");
 	}
-	if (install && !tailscaleAuthKey) {
+	const directSSH = opts.network === "ssh";
+	if (directSSH && (!sshPublicKey || tailscaleAuthKey))
+		throw new Error("Direct SSH requires a public key and no Tailscale key");
+	if (install && !tailscaleAuthKey && !directSSH) {
 		throw new Error("a box that installs itself needs a Tailscale auth key");
 	}
 	const pair = install?.pairDevice;
@@ -143,26 +183,30 @@ export function buildCloudInit(opts: {
 	// The values are validated above, so none can break out of the document or of
 	// the shell lines below.
 	const installer = install
-		? [
-				"set -o pipefail;",
-				`curl -fsSL ${INSTALL_SH_URL} |`,
-				...(pair ? [`ATEAM_PAIR_DEVICE=${pair.tokenHash} ATEAM_PAIR_LABEL=${pair.label}`] : []),
-				"bash -s -- --service --tailscale >~/ateam-install.log 2>&1",
-			].join(" ")
+		? directSSH
+			? sshInstallCommand(install.browser !== false)
+			: [
+					"set -o pipefail;",
+					`curl -fsSL ${INSTALL_SH_URL} |`,
+					...(pair ? [`ATEAM_PAIR_DEVICE=${pair.tokenHash} ATEAM_PAIR_LABEL=${pair.label}`] : []),
+					`bash -s -- --service --tailscale${install.browser === false ? "" : " --browser"} >~/ateam-install.log 2>&1`,
+				].join(" ")
 		: null;
 	return [
 		"#cloud-config",
 		"package_update: true",
-		"packages: [curl]",
+		directSSH ? "packages: [curl, git]" : "packages: [curl]",
 		"users:",
 		"  - name: ateam",
 		"    groups: [sudo]",
 		'    sudo: "ALL=(ALL) NOPASSWD:ALL"',
 		"    shell: /bin/bash",
-		...(sshPublicKey ? ["    ssh_authorized_keys:", `      - ${sshPublicKey}`] : []),
-		...(sshPublicKey ? [] : ["ssh_pwauth: false"]),
+		...(sshPublicKey
+			? ["    ssh_authorized_keys:", `      - ${JSON.stringify(sshPublicKey)}`]
+			: []),
+		...(directSSH || !sshPublicKey ? ["ssh_pwauth: false"] : []),
 		"runcmd:",
-		"  - curl -fsSL https://tailscale.com/install.sh | sh",
+		...(directSSH ? [] : ["  - curl -fsSL https://tailscale.com/install.sh | sh"]),
 		// --operator=ateam lets the non-root user run `tailscale ip -4`, which the
 		// engine installer reads to bake ATEAM_WS_ADDR (the phone's WebSocket listener).
 		...(tailscaleAuthKey
@@ -289,6 +333,7 @@ export function orderableServerTypes(types: HetznerServerType[]): ProviderOption
 				label: `${type.name.toUpperCase()} · ${type.cores} vCPU / ${type.memory} GB${kind.length ? ` (${kind.join(", ")})` : ""}`,
 				locations,
 				memory: type.memory,
+				architecture: type.architecture,
 				monthly: Object.fromEntries(
 					(type.prices ?? [])
 						.map((p) => [p.location, Number(p.price_monthly?.gross)] as const)
@@ -323,6 +368,48 @@ async function tailnetOnlyFirewall(call: HetznerCall): Promise<number> {
 			],
 		}),
 	});
+	return made.firewall.id;
+}
+
+async function sshOnlyFirewall(call: HetznerCall): Promise<number> {
+	const name = "ateam-ssh-only";
+	const found = await call(`/firewalls?name=${name}`);
+	const existing = found.firewalls?.[0];
+	if (existing) {
+		const rules = existing.rules;
+		if (
+			!Number.isInteger(existing.id) ||
+			existing.labels?.["managed-by"] !== "ateam" ||
+			!Array.isArray(rules) ||
+			rules.length !== 1 ||
+			rules[0].direction !== "in" ||
+			rules[0].protocol !== "tcp" ||
+			rules[0].port !== "22"
+		) {
+			throw new Error(
+				`The ${name} firewall has different rules. Review it in Hetzner before creating a box.`,
+			);
+		}
+		return existing.id;
+	}
+	const made = await call("/firewalls", {
+		method: "POST",
+		body: JSON.stringify({
+			name,
+			labels: { "managed-by": "ateam" },
+			rules: [
+				{
+					description: "SSH access",
+					direction: "in",
+					protocol: "tcp",
+					port: "22",
+					source_ips: ["0.0.0.0/0", "::/0"],
+				},
+			],
+		}),
+	});
+	if (!Number.isInteger(made.firewall?.id))
+		throw new Error("Hetzner did not return an SSH firewall id");
 	return made.firewall.id;
 }
 
@@ -404,6 +491,7 @@ export const hetznerProvider: BoxProvider = {
 	},
 
 	async createServer(input) {
+		if (input.directSSH && !input.sshPublicKey) throw new Error("Direct SSH requires a public key");
 		const call = (path: string, init?: RequestInit) => hetznerCall(input.token, path, init);
 
 		// Never spin up (and bill) a second server with the same name, or touch an
@@ -432,7 +520,12 @@ export const hetznerProvider: BoxProvider = {
 			} catch {
 				const found = await call(`/ssh_keys?name=${encodeURIComponent(keyName)}`);
 				const existing = found.ssh_keys?.[0];
-				if (!existing) throw new Error(`could not upload or find SSH key "${keyName}"`);
+				if (
+					!existing ||
+					existing.public_key?.trim().split(/\s+/).slice(0, 2).join(" ") !==
+						input.sshPublicKey.trim().split(/\s+/).slice(0, 2).join(" ")
+				)
+					throw new Error(`could not upload or find a matching SSH key "${keyName}"`);
 				keyId = existing.id;
 			}
 		}
@@ -448,6 +541,7 @@ export const hetznerProvider: BoxProvider = {
 				image: "ubuntu-24.04",
 				location: input.region,
 				public_net: { enable_ipv4: true, enable_ipv6: true },
+				...(input.directSSH ? { firewalls: [{ firewall: await sshOnlyFirewall(call) }] } : {}),
 				...(keyId !== null
 					? { ssh_keys: [keyId] }
 					: { firewalls: [{ firewall: await tailnetOnlyFirewall(call) }] }),
@@ -460,7 +554,7 @@ export const hetznerProvider: BoxProvider = {
 		});
 		const serverId: number = created.server.id;
 		const actionId: number = created.action.id;
-		input.onCreated?.(String(serverId));
+		await input.onCreated?.(String(serverId), created.server.public_net?.ipv4?.ip);
 
 		input.onProgress?.("Provisioning");
 		let ok = false;

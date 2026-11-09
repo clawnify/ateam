@@ -3,7 +3,8 @@
 // with everything it touches passed in, so these rules run under bun test:
 //
 //   - A box is reached in the background and never woken: dialling a sleeping box
-//     over the tailnet leaves it asleep, and its board as last seen stands in.
+//     over the tailnet leaves it asleep, and its board as last seen stands in. Its
+//     card shows it asleep meanwhile, not reached (boxes.ts shownAsleep).
 //   - Only someone asking for a box wakes it: a card, opening one of its tasks,
 //     starting a task there, its terminal, the Lead on it. A box someone waits on
 //     is retried sooner, and woken again once the last wake is stale (REWAKE_MS).
@@ -106,7 +107,7 @@ export interface Waker {
 export interface LinkDeps {
 	fleet: Pick<Fleet, "attach" | "detach" | "remove">;
 	/** Open a box's socket (src/connection.ts); `onClose` fires when it drops on its own. */
-	dial(url: string, onClose: () => void): Promise<Connection>;
+	dial(url: string, onClose: () => void, box: SavedConnection): Promise<Connection>;
 	/** The saved boxes, in list order. A key not among them is off the list. */
 	boxes(): SavedConnection[];
 	/** Whether the privacy disclosure was accepted: nothing is dialled before it is. */
@@ -324,7 +325,11 @@ export function createLinks(deps: LinkDeps): Links {
 			for (;;) {
 				try {
 					// onClose: it dropped on its own (network flip, box restart, NAT reap).
-					const dialing = deps.dial(`ws://${box.host}:${box.port || "8787"}`, () => drop(key, c));
+					const dialing = deps.dial(
+						`ws://${box.host}:${box.port || "8787"}`,
+						() => drop(key, c),
+						box,
+					);
 					// One that answers after Cancel is closed: nothing waits for it now.
 					void dialing.then(
 						(late) => {
@@ -363,6 +368,7 @@ export function createLinks(deps: LinkDeps): Links {
 			backoff.set(key, 0);
 			await deps.prepare?.(key, c);
 			const version = c.info.protocolVersion;
+			const minClient = c.info.minClient ?? null;
 			set(key, (l) => ({
 				state: "live",
 				asked: false,
@@ -371,6 +377,7 @@ export function createLinks(deps: LinkDeps): Links {
 				asleep: false,
 				wakeError: null,
 				version,
+				minClient,
 				gen: l.gen + 1,
 			}));
 			await deps.onConnected(key, c);
@@ -500,7 +507,13 @@ export function createLinks(deps: LinkDeps): Links {
 		adopt(key, conn) {
 			conns.set(key, conn);
 			deps.fleet.attach(key, conn.rpc);
-			set(key, () => ({ ...NEW_LINK, state: "live", version: conn.info.protocolVersion, gen: 1 }));
+			set(key, () => ({
+				...NEW_LINK,
+				state: "live",
+				version: conn.info.protocolVersion,
+				minClient: conn.info.minClient ?? null,
+				gen: 1,
+			}));
 		},
 		conn: (key) => conns.get(key),
 		liveKeys: () => [...conns.keys()],
