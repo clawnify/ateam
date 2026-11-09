@@ -224,9 +224,9 @@ use it. While a dropped connection retries with one of its tasks or its terminal
 open, it wakes again whenever the last wake is over a minute old, so a Sprite that
 paused again before the phone got through is not left asleep. A
 Sprites token works on every Sprite in its organization, so give the phone one for
-an organization that holds only your Ateam boxes. Until the Sprite is locked to your
-devices, anyone on your tailnet can use its network port: lock it under Access on
-the Sprite's page.
+an organization that holds only your Ateam boxes. A Sprite set up with Ateam from
+v0.1.93 starts private to your paired devices; an older one stays open to your tailnet
+until you make it private under Access on the Sprite's page.
 
 What we measured (2026-10-24):
 

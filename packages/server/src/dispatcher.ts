@@ -49,6 +49,7 @@ import {
 	type DirEntryDTO,
 	type KanbanColumn,
 	type MergeStrategy,
+	MIN_CLIENT_PROTOCOL,
 	NO_GIT_IDENTITY,
 	PROTOCOL_VERSION,
 	type RegisterProjectOptions,
@@ -62,6 +63,7 @@ import {
 } from "@ateam/protocol";
 import { installBrowser, openBrowserView } from "./browser";
 import { credentialStatuses, credentialsPath, updateCredentials } from "./credentials-file";
+import { dotfilesFor, validateDotfiles } from "./dotfiles";
 import { createEditorHost, installCodeServer } from "./editor";
 import type { Engine } from "./engine";
 import { checkRepoAccess, connectGithubToken, githubAccessStatus } from "./github-access";
@@ -72,7 +74,14 @@ import { nextCronRun } from "./loops/runner";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { createSizeArbiter } from "./pty/size-arbiter";
 import { ENGINE_RELEASE } from "./release";
-import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
+import {
+	boardToolsMissing,
+	liveAgentIds,
+	type Services,
+	toProjectDTO,
+	toSessionDTO,
+	toTaskDTO,
+} from "./services";
 import { searchSessions } from "./session-search";
 import {
 	createTaskInProject,
@@ -395,7 +404,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			repo
 				.listTasks(db, projectId)
 				.map((t) =>
-					toTaskDTO(t, services.pendingSeeds.has(t.id), liveAgentIds(db, services.pty, t.id)),
+					toTaskDTO(
+						t,
+						services.pendingSeeds.has(t.id),
+						liveAgentIds(db, services.pty, t.id),
+						boardToolsMissing(services.pty, services.boardConnections, t.id),
+					),
 				),
 		[CH.tasksCreate]: async (input: {
 			projectId: string;
@@ -433,7 +447,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.tasksMarkRead]: async (id: string) => {
 			const row = repo.updateTask(db, id, { isUnread: false });
 			engine.sendTaskUpdated(id);
-			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
+			return toTaskDTO(
+				row!,
+				false,
+				liveAgentIds(db, services.pty, id),
+				boardToolsMissing(services.pty, services.boardConnections, id),
+			);
 		},
 		// The Lead chat (desktop main) reads what a task last said, and messages
 		// its agent on the user's behalf. Not on window.ateam: only main calls them.
@@ -444,11 +463,14 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				? { text: task.lastReply, at: task.lastReplyAt }
 				: null;
 		},
-		[CH.tasksPage]: async (id: string): Promise<TaskPageContentDTO | null> => {
+		[CH.tasksPages]: async (id: string) => {
+			if (!repo.getTask(db, id)) throw new Error(`Task not found: ${id}`);
+			return repo.listTaskPages(db, id);
+		},
+		[CH.tasksPage]: async (id: string, pageId?: string): Promise<TaskPageContentDTO | null> => {
 			const task = repo.getTask(db, id);
 			if (!task) throw new Error(`Task not found: ${id}`);
-			const html = task.page ? repo.getTaskPageHtml(db, id) : undefined;
-			return task.page && html != null ? { ...task.page, html } : null;
+			return repo.getTaskPage(db, id, pageId);
 		},
 		// The task's diff as steps; asking starts a write when the diff moved on.
 		[CH.tasksChangeSteps]: async (id: string): Promise<ChangeStepsDTO> =>
@@ -456,7 +478,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.tasksGet]: async (id: string) => {
 			const task = repo.getTask(db, id);
 			if (!task) throw new Error(`Task not found: ${id}`);
-			return toTaskDTO(task, false, liveAgentIds(db, services.pty, id));
+			return toTaskDTO(
+				task,
+				false,
+				liveAgentIds(db, services.pty, id),
+				boardToolsMissing(services.pty, services.boardConnections, id),
+			);
 		},
 		[CH.peersSendFromLead]: async (req: { taskId: string; body: string }) =>
 			engine.messageFrom("lead", { to: req.taskId, body: req.body }),
@@ -480,6 +507,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				repo.getTask(db, req.taskId)!,
 				false,
 				liveAgentIds(db, services.pty, req.taskId),
+				boardToolsMissing(services.pty, services.boardConnections, req.taskId),
 			);
 		},
 		// The user created a proposed task or loop, or dismissed it (proposals.ts).
@@ -489,6 +517,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				repo.getTask(db, req.taskId)!,
 				false,
 				liveAgentIds(db, services.pty, req.taskId),
+				boardToolsMissing(services.pty, services.boardConnections, req.taskId),
 			);
 		},
 		// The user parks a task from the sidebar (or clears the wait). The agent's
@@ -514,7 +543,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			// Broadcast so every view (board, sidebar) reflects the move — e.g. the
 			// "Done" button under the terminal that sends a review task to merged.
 			engine.sendTaskUpdated(id);
-			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
+			return toTaskDTO(
+				row!,
+				false,
+				liveAgentIds(db, services.pty, id),
+				boardToolsMissing(services.pty, services.boardConnections, id),
+			);
 		},
 
 		[CH.tasksListArchived]: async (projectId: string) =>
@@ -528,7 +562,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				archived ? { archivedAt: Date.now() } : { archivedAt: null, restoredAt: Date.now() },
 			);
 			engine.sendTaskUpdated(id);
-			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
+			return toTaskDTO(
+				row!,
+				false,
+				liveAgentIds(db, services.pty, id),
+				boardToolsMissing(services.pty, services.boardConnections, id),
+			);
 		},
 
 		// Candidates for the interactive cleanup dialog: EVERY task in the project,
@@ -735,6 +774,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			const agents = await listAgents();
 			return {
 				protocolVersion: PROTOCOL_VERSION,
+				minClient: MIN_CLIENT_PROTOCOL,
 				agents: agents.filter((a) => a.available).map((a) => a.id),
 				release: ENGINE_RELEASE,
 			};
@@ -915,6 +955,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			return { settings: r.settings, path: settingsPath(), warning: r.warning };
 		},
 		[CH.settingsUpdate]: async (patch: SettingsPatch): Promise<SettingsResult> => {
+			if (patch.engine?.dotfiles != null) validateDotfiles(patch.engine.dotfiles);
 			updateSettings(patch);
 			const r = readSettings();
 			return { settings: r.settings, path: settingsPath(), warning: r.warning };
@@ -929,6 +970,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			updateCredentials(patch);
 			return { ...credentialStatuses(), path: credentialsPath() };
 		},
+		// Explicit box setup: settings sync and reconnect never call these.
+		[CH.dotfilesStatus]: () => dotfilesFor(services.userDataDir).status(),
+		[CH.dotfilesPrepare]: (config: unknown) => dotfilesFor(services.userDataDir).prepare(config),
+		[CH.dotfilesApply]: (id: unknown) => dotfilesFor(services.userDataDir).apply(id),
 		// GitHub access on this machine (github-access.ts). The token arrives here
 		// once, for connect, and never travels back.
 		[CH.githubAccessStatus]: async () => githubAccessStatus(),

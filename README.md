@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/cover.png" alt="Ateam — coding agents from anywhere: the Ateam app icon over a beach with an empty deck chair by the sea" width="900" />
+  <img src="./assets/cover.png" alt="Ateam — coding agents from anywhere: Claude Code, Codex and OpenCode, one git worktree per task, local and remote environments, Mac, iPhone and iPad access, Lead chat and voice calls, and scheduled agent loops." width="900" />
 </p>
 
 <p align="center">
@@ -72,6 +72,19 @@ apps/desktop        Electron + React app (main · preload · renderer)
 apps/mobile         iOS client (Expo / React Native) — drive a box from your phone
 skills/             Claude Code skills for Ateam users (installable, see below)
 ```
+
+## Bring your agent setup to a box
+
+Use a dotfiles Git repository to carry your personal instructions and skills between
+machines. The [agent dotfiles starter](examples/agent-dotfiles/) uses native Claude
+Code, Codex, and OpenCode paths, with chezmoi handling repeatable installation and
+conflicts. It also works outside Ateam.
+
+In Ateam Go, open **Boxes → Settings → Dotfiles**. On desktop, open a box's
+**Dotfiles** section. Enter your repository, preview the revision and install script,
+then explicitly apply it to that box. Saving a default does not run an installer.
+The starter includes a separate file-diff check; Ateam's Preview identifies the
+revision and script, not every change an arbitrary script could make.
 
 ## Run your agents on a server
 
@@ -266,8 +279,8 @@ loop dialog opens filled in, and nothing starts until you create it), messages
 their agents and brings their replies back, with every task it names a chip
 that opens it; it runs as
 your own Claude Code, with your skills, plugins and MCP servers, and asks for
-its permissions in the chat; it has its own tab, or sits as a sidebar on the
-right beside the board; a project opened in its own window has a chat of its
+its permissions in the chat; it has its own tab, the first one and where Ateam
+opens, or sits as a sidebar on the right beside the board; a project opened in its own window has a chat of its
 own about that project, which can still read your other projects and asks you
 before it messages one of their tasks; files you attach or paste there can go to a new task or
 to a running one, copied to its box when it runs on one, up to 10 MB a file),
@@ -292,6 +305,12 @@ shows under the open task's title, beside its full title when the pointer
 rests on its sidebar row or board card for two seconds, and in the Lead's and
 the agents' board tools; written by an OpenRouter or OpenAI model when you add that key in Settings, otherwise
 by Claude Code, or turned off there),
+board tools with nothing to install (every launch hands them to the agent, so
+the Claude Code, Codex or OpenCode you already use gets them and its own config
+is never touched; an agent that never loaded them, because an organization's
+MCP policy dropped them, its CLI is too old, or it was started by hand in the
+task's terminal, gets a note under the task's title saying why, and the Lead
+says the same about itself in its chat),
 and signed/notarized builds
 with in-app auto-update. The git engine and db layer are unit-tested; the
 Electron main process is boot-verified with native modules.

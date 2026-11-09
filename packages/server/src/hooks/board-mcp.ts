@@ -63,6 +63,7 @@ export interface BoardHandlers {
 	/** Show the user an HTML page on the caller's task (pages.ts). */
 	showPage(req: {
 		callerTerminalId: string;
+		pageId?: unknown;
 		title?: unknown;
 		html?: unknown;
 	}): Promise<{ ok: boolean; reason: string }>;
@@ -289,10 +290,15 @@ const TOOLS = [
 	{
 		name: "show_page",
 		description:
-			"Show the user an HTML page you made: a dashboard, a comparison, a report with charts, a diagram, anything easier to see than to read. It appears on this task's panel in Ateam and in the Lead chat. One page per task: calling it again replaces the last one. It is for showing, not asking: to get a decision, use ask_user (which can carry a page too). After calling it, say in a line what the page shows; do not paste the HTML into your reply.",
+			"Show the user an HTML page you made: a dashboard, a comparison, a report with charts, a diagram, anything easier to see than to read. It appears on this task's panel in Ateam and in the Lead chat. Each call saves a separate artifact. To revise an existing artifact, pass the pageId returned when it was shown. It is for showing, not asking: to get a decision, use ask_user (which can carry a page too). After calling it, say in a line what the page shows; do not paste the HTML into your reply.",
 		inputSchema: {
 			type: "object",
 			properties: {
+				pageId: {
+					type: "string",
+					description:
+						"Revise this saved artifact id on the current task. Omit to create a new artifact.",
+				},
 				title: { type: "string", description: "A short name for the page, at most 80 characters." },
 				html: {
 					type: "string",
@@ -602,6 +608,7 @@ async function callBoardTool(
 				callerTerminalId: ctx.callerTerminalId,
 				title: args.title,
 				html: args.html,
+				...(args.pageId !== undefined ? { pageId: args.pageId } : {}),
 			});
 			return { text: res.reason, isError: !res.ok };
 		}

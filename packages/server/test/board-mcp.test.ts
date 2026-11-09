@@ -385,6 +385,17 @@ describe("ask_user", () => {
 describe("show_page", () => {
 	const show = (args: unknown) => rpc("tools/call", { name: "show_page", arguments: args });
 
+	it("passes an explicit revision id to the verified caller's task", async () => {
+		const { board, calls } = fakeBoard();
+		await dispatchMcp(show({ pageId: "artifact-1", html: "revised" }), board, {
+			callerTerminalId: "term-1",
+			callerVerified: true,
+		});
+		expect(calls.showPage).toEqual([
+			{ callerTerminalId: "term-1", pageId: "artifact-1", html: "revised" },
+		]);
+	});
+
 	it("shows the page on the verified caller's task, and only theirs", async () => {
 		const { board, calls } = fakeBoard();
 		await dispatchMcp(show({ title: "Tests", html: "<h1>3</h1>" }), board, {

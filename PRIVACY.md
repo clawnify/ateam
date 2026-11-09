@@ -31,7 +31,7 @@ Ateam Go stores a small amount of data locally on your phone, and only there:
 - your preview-port preference, and
 - your API key for each provider you have the app wake a machine through, which
   is kept in the iOS Keychain,
-- for each machine you have locked to its paired devices, this phone's key to
+- for each machine kept private to its paired devices, this phone's key to
   it, which that machine gave the phone when you paired them. It is kept in the
   iOS Keychain and is only ever sent to that machine, and
 - reminders for tasks you parked until a date: the task's name, what it waits on and when it comes

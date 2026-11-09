@@ -170,7 +170,39 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // lead:callNudge (a task's reply in one line), which Ateam Go needs to call.
 // New methods only: a v32 box answers "Unknown method", and Ateam Go offers no
 // call there (FEATURE_MIN_VERSION.leadCallSession).
-export const PROTOCOL_VERSION = 33;
+// v34: tasks:pages lists saved artifacts; tasks:page accepts an optional page id.
+// Older engines still serve their latest page; clients fall back to that binding.
+// v35: explicit box-scoped dotfiles preview/apply; settings sync never runs scripts.
+// v36: browser:view carries desktop viewer credentials, including a bundled
+// password value that already-released clients forward unchanged.
+// v37: machine-owned Chat agent and Auto preferences.
+export const PROTOCOL_VERSION = 37;
+
+/**
+ * The oldest client protocol an engine of this version still serves correctly, sent
+ * in system:hello (SystemInfo.minClient). A client older than the engine but at or
+ * above this floor works on, without the newer features (each is gated by
+ * FEATURE_MIN_VERSION), so it says nothing: an additive bump never asks anyone to
+ * update. Below it, the client tells the user to update itself. Raise it ONLY for a
+ * change an older client would misread or can't follow, in the same PR, and never
+ * above the protocol of the Ateam Go live on the App Store: until that phone is out,
+ * there is nothing to update to. That one case is the only one that still needs the
+ * phone released before the desktop and engine.
+ *
+ * 29: a box can be private to its paired devices (pairing, v29), and a new one is;
+ * a client below v29 can't pair.
+ */
+export const MIN_CLIENT_PROTOCOL = 29;
+
+/** Whether a box running a newer protocol than this client needs a newer client:
+ *  only below the box's floor. One that doesn't say (an engine from before the
+ *  floor) is taken as serving this client, as every engine since v7 does. */
+export function clientBelowFloor(
+	clientProtocol: number,
+	box: { protocolVersion: number; minClient?: number },
+): boolean {
+	return box.protocolVersion > clientProtocol && (box.minClient ?? 0) > clientProtocol;
+}
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -202,7 +234,7 @@ export interface TaskQuestionDTO {
 	kind?: "permission" | "askUserQuestion";
 	/** The task's page (TaskDTO.page) drawn with this question: the agent laid
 	 *  the decision out in HTML, and the page's own buttons can answer. Only
-	 *  while TaskDTO.page still has this id; a newer page replaces it. */
+	 *  independently of TaskDTO.page, which names only the latest artifact. */
 	pageId?: string;
 }
 
@@ -239,20 +271,20 @@ export interface TaskProposalDTO {
 
 /**
  * An HTML page an agent made for the user (show_page, or ask_user's `page`):
- * a dashboard, a comparison, a report. One per task; a new one replaces it.
+ * a dashboard, a comparison, a report. Tasks retain multiple independent pages.
  * The HTML itself is read with tasks:page, so the board's task list stays small.
  */
 export interface TaskPageDTO {
 	id: string;
 	title: string;
 	at: number;
-	/** Came with an ask_user question (its `page`), not from show_page: the
-	 *  question's card draws it, and once the question ends it is history, so
-	 *  the task panel never opens it by itself. Absent from engines before it. */
+	/** Came with an ask_user question (its `page`). While pending, the question
+	 *  card draws it; afterwards it remains available as a saved doc tab.
+	 *  Absent from older engines. */
 	fromQuestion?: boolean;
 }
 
-/** tasks:page: the task's page with its HTML, as the agent wrote it. */
+/** tasks:page: a saved page by id, or the latest page when the id is omitted. */
 export interface TaskPageContentDTO extends TaskPageDTO {
 	html: string;
 }
@@ -334,6 +366,7 @@ export interface TaskLastReplyDTO {
  * so nothing forced a bump to answer "what stops working under this?". Now it does.
  */
 export const FEATURE_MIN_VERSION = {
+	dotfiles: 35,
 	/** v6 turned CleanupCandidate from a flat row into `{ task: TaskDTO, recommended }`.
 	 *  The dialog dereferences `.task` on every row, so a v5 engine's reply is not a
 	 *  degraded dialog, it is a thrown TypeError. */
@@ -551,6 +584,15 @@ export interface TaskDTO {
 	 * the same as empty — a read-only addition, so no protocol bump.
 	 */
 	agentIds?: string[];
+	/**
+	 * Why an agent live in this task can't use the board tools (ask_user,
+	 * send_message, show_page, proposals): a sentence for the user, set once the
+	 * agent has been up for a minute without connecting to the board (an
+	 * organization policy, an old CLI, or an agent started by hand). Null when
+	 * every agent has them or the engine can't tell. Runtime-only, never stored;
+	 * absent from an older engine, which reads the same as null.
+	 */
+	boardToolsMissing?: string | null;
 	/** Merge-queue position; null when the task is not queued to merge. */
 	mergeStatus: MergeStatus | null;
 	prNumber: number | null;
@@ -595,7 +637,7 @@ export interface TaskDTO {
 	/** When the agent last finished a turn with a reply (read it with
 	 *  tasks:lastReply); null until one has. Absent on an engine older than v19. */
 	lastReplyAt?: number | null;
-	/** The page the task's agent made for the user (show_page); null when none.
+	/** Latest page the task's agent made (show_page); null when none.
 	 *  Absent on an engine older than v20. */
 	page?: TaskPageDTO | null;
 	/** Tasks and loops the task's agent proposed and the user has not yet
@@ -693,6 +735,8 @@ export type UpdateStrategy = "merge" | "rebase";
  * with a reader exist — a setting nothing reads is a lie.
  */
 export interface EngineSettings {
+	/** Default for explicit dotfiles previews. Syncing this never applies it. */
+	dotfiles: import("./dotfiles").DotfilesConfig | null;
 	/** Agent a new task launches with when the composer doesn't say. */
 	defaultAgentId: string;
 	/** How "Merge via PR" lands the branch. */
@@ -846,12 +890,15 @@ export interface BoxSettings {
 	alwaysOn: boolean;
 }
 export interface AteamSettings {
+	/** Machine-owned; never included in engine settings sync. */
+	chat?: import("./lead").ChatSettings;
 	version: number;
 	client: ClientSettings;
 	engine: EngineSettings;
 	box: BoxSettings;
 }
 export interface SettingsPatch {
+	chat?: Partial<import("./lead").ChatSettings>;
 	client?: Partial<ClientSettings>;
 	engine?: Partial<EngineSettings>;
 	box?: Partial<BoxSettings>;
@@ -1083,6 +1130,9 @@ export interface SystemInfo {
 	protocolVersion: number;
 	/** Ids of agents installed + available on the engine's machine. */
 	agents: string[];
+	/** The oldest client protocol this engine serves correctly (MIN_CLIENT_PROTOCOL).
+	 *  Absent from engines before it was reported. */
+	minClient?: number;
 	/** The Ateam release the engine was built from ("0.1.80"). Absent from engines
 	 *  before it was reported, null from one run from source. A release can change
 	 *  the engine without a protocol bump, so clients compare this to offer updates. */
@@ -1323,6 +1373,7 @@ export interface SessionHitDTO {
 
 // ---- IPC channel names (their own module: see channels.ts) ----
 export { CH } from "./channels";
+export * from "./dotfiles";
 
 // ---- event payloads ----
 export interface PtyDataEvent {
@@ -1418,10 +1469,15 @@ export interface EditorEndpointDTO {
  */
 export type EditorOpenResult = EditorEndpointDTO | { needsInstall: true };
 
-/** Where a box's browser view answers, on ITS machine, and the VNC password. */
+/** Where a box's browser view answers, on ITS machine, and its credentials. */
 export interface BrowserViewDTO {
 	port: number;
+	/** Opaque viewer credential; pass unchanged to browserViewUrl. Legacy noVNC
+	 * uses a raw password; desktop control may bundle its viewer token here so
+	 * already released apps can authenticate without a coordinated update. */
 	password: string;
+	/** Present on boxes with desktop control; grants human viewer takeover. */
+	controlToken?: string;
 }
 
 // ---- the API surface exposed on window.ateam ----
@@ -1495,6 +1551,8 @@ export interface AteamApi {
 		/** The task's diff told as steps. Asking starts writing new ones when the
 		 *  diff moved on; the answer says so (`working`) and the caller asks again. */
 		changeSteps(taskId: string): Promise<ChangeStepsDTO>;
+		/** Saved artifact metadata, without HTML. Older engines have only task.page. */
+		pages(taskId: string): Promise<TaskPageDTO[]>;
 	};
 	git: {
 		commit(taskId: string, message: string): Promise<{ sha: string }>;
@@ -1869,3 +1927,11 @@ export {
 } from "./wake";
 export type { WsClient } from "./ws";
 export { wsClientTransport } from "./ws";
+
+// Mission Control task ordering, shared by desktop and native clients.
+export * from "./mc-order";
+
+export * from "./session-tabs";
+
+export * from "./sidebar-view";
+export { byWhatsNext, nextRank, taskWaitingLabel, waitState } from "./triage-order";

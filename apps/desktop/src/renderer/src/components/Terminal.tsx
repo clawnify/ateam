@@ -2,7 +2,7 @@ import type { AttachDelivery } from "@ateam/protocol";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { FileUp, ImageUp, Plus } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { checkGrammar } from "../grammar/check";
 import { DraftTracker, retype } from "../grammar/draft";
 import type { GrammarIssue } from "../grammar/filter";
@@ -52,7 +52,6 @@ export function TerminalView({
 	onAddSkill,
 	showDone,
 	onDone,
-	aboveToolbar,
 }: {
 	terminalId: string;
 	/** Grids opt out so a newly visible terminal cannot take keyboard input. */
@@ -69,11 +68,11 @@ export function TerminalView({
 	showDone?: boolean;
 	/** Called when Done is clicked — the parent owns the status change. */
 	onDone?: () => void;
-	/** Drawn between the terminal and its toolbar (the task's page bar). */
-	aboveToolbar?: ReactNode;
 }) {
 	const ref = useRef<HTMLDivElement>(null);
 	const termRef = useRef<Terminal | null>(null);
+	const autoFocusRef = useRef(autoFocus);
+	autoFocusRef.current = autoFocus;
 	const [issues, setIssues] = useState<GrammarIssue[]>([]);
 	// Prompts sent from this terminal, counted so the skills bar knows to recount.
 	const [submits, setSubmits] = useState(0);
@@ -124,11 +123,17 @@ export function TerminalView({
 		// to the agent. A proposal's dialog opens by itself, so it can be up when
 		// this terminal mounts (its session attaches a moment after the panel
 		// opens) and when the window comes back (it opened while you were away).
-		const mayTakeFocus = () => !document.querySelector(".overlay");
+		const mayTakeFocus = () =>
+			el.clientWidth > 0 && el.clientHeight > 0 && !document.querySelector(".overlay");
 
 		// A single terminal focuses on mount; a grid focuses only on a click or
 		// an explicit jump, since background reordering can mount another tile.
-		if (autoFocus && mayTakeFocus()) term.focus();
+		if (
+			autoFocusRef.current &&
+			mayTakeFocus() &&
+			!document.activeElement?.classList.contains("xterm-helper-textarea")
+		)
+			term.focus();
 		const focusTerm = () => term.focus();
 		el.addEventListener("mousedown", focusTerm);
 
@@ -240,7 +245,10 @@ export function TerminalView({
 
 		// The task panel asks us to take focus after layout toggles, so Enter
 		// reaches the agent instead of re-triggering the clicked button.
-		const onFocusRequest = () => term.focus();
+		const onFocusRequest = (event: Event) => {
+			if ((event as CustomEvent<string | null>).detail === terminalId && mayTakeFocus())
+				term.focus();
+		};
 		window.addEventListener("ateam:focus-terminal", onFocusRequest);
 
 		// Reattach ordering matters: the snapshot is a point-in-time serialize of
@@ -475,7 +483,7 @@ export function TerminalView({
 			termRef.current = null;
 			term.dispose();
 		};
-	}, [terminalId, autoFocus]);
+	}, [terminalId]);
 
 	// "+ → Files…": native picker, then type the escaped paths into the PTY —
 	// same effect as dragging the files onto the terminal.
@@ -497,14 +505,13 @@ export function TerminalView({
 	};
 
 	return (
-		<div className="term-shell">
+		<div className="term-shell" data-terminal-id={terminalId}>
 			{/* .term-area is the flex-sized box; .term is absolutely positioned to
 			    fill it, so the xterm canvas can never prop the layout open — the
 			    available space drives the terminal size, not the other way round. */}
 			<div className="term-area">
 				<div className="term" ref={ref} />
 			</div>
-			{aboveToolbar}
 			<div className="term-toolbar">
 				<Menu
 					icon={Plus}

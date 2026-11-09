@@ -8,6 +8,9 @@ import type {
 	BoxWake,
 	ConnectionDTO,
 	ConnectStep,
+	DotfilesConfig,
+	DotfilesPlan,
+	DotfilesStatus,
 	GithubAccessDTO,
 	PairingInviteDTO,
 	PairingStatusDTO,
@@ -69,6 +72,10 @@ export const HOST_CH = {
 	phoneAccess: "host:phoneAccess",
 	/** Keep a connected box always on, or let it sleep when idle (box.alwaysOn there). */
 	boxAlwaysOn: "host:boxAlwaysOn",
+	/** Explicit dotfiles operations on a named box. */
+	dotfilesStatus: "host:dotfilesStatus",
+	prepareDotfiles: "host:prepareDotfiles",
+	applyDotfiles: "host:applyDotfiles",
 	/** A connected box's GitHub access, handing it a token, and its per-repo access. */
 	githubAccess: "host:githubAccess",
 	connectGithub: "host:connectGithub",
@@ -128,6 +135,8 @@ export interface CreateBoxSpec {
 	tailscaleAuthKey?: string;
 	/** Agent CLIs to preinstall on the box after the engine (by id, e.g. "claude"). */
 	agents?: string[];
+	/** Include the box's browser during setup (default true). */
+	browser?: boolean;
 }
 
 /** A connected box's task-readiness — what a task needs beyond the engine. */
@@ -207,7 +216,13 @@ export interface SecretsStatus {
 export interface ProviderOptions {
 	locations: { slug: string; label: string }[];
 	/** `locations` = the slugs a size can be ordered in (empty = unknown → offer anywhere). */
-	serverTypes: { slug: string; label: string; locations: string[]; memory: number }[];
+	serverTypes: {
+		slug: string;
+		label: string;
+		locations: string[];
+		memory: number;
+		architecture?: string;
+	}[];
 }
 
 /** Which engine is driving the app right now. */
@@ -319,7 +334,11 @@ export interface AteamHost {
 	 *  box itself; answers whether it sleeps now, which a Mac's idle window of "never"
 	 *  can keep false either way. */
 	setBoxAlwaysOn(alias: string, on: boolean): Promise<{ sleeps: boolean | null }>;
-	/** A connected box's GitHub access: what its gh and git sign in with (v25 engines). */
+	/** Explicit dotfiles preview/apply on the named connected box (v35). */
+	dotfilesStatus(alias: string): Promise<DotfilesStatus>;
+	prepareDotfiles(alias: string, config: DotfilesConfig): Promise<DotfilesPlan>;
+	applyDotfiles(alias: string, planId: string): Promise<DotfilesStatus>;
+	/** A connected box's GitHub access: what its gh and git sign in with. */
 	githubAccess(alias: string): Promise<GithubAccessDTO>;
 	/** Hand a connected box a GitHub token; answers its new access. Rejects with a
 	 *  sentence the user can act on (a bad paste, a refused token). */
