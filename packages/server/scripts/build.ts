@@ -58,6 +58,7 @@ writeFileSync(
 			name: "ateam-server-dist",
 			version: release,
 			private: true,
+			ateamLifecycle: 1,
 			bin: { ateam: "./cli.js" },
 			dependencies: {
 				// 13, not the ^11 the workspace pins (the desktop runs its engine inside

@@ -98,8 +98,8 @@ export const INSTALL_SH_URL =
 	"https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh";
 
 const quoteShell = (text: string) => `'${text.replace(/'/g, `'"'"'`)}'`;
-/** Shared by cloud-init and phone setup. The lock covers the service handover:
- * an SSH reconnect must not auto-start a competing daemon during installation. */
+/** Phone/cloud-init download and Git preparation. The shared installer owns
+ * the engine transaction and coordinates startup for every caller. */
 const SSH_INSTALL_SCRIPT = `exec > "$HOME/ateam-install.log" 2>&1
 rm -f "$HOME/.ateam-phone-install-exit"
 set -o pipefail
@@ -119,9 +119,10 @@ rc=$?
 printf '%s' "$rc" > "$HOME/.ateam-phone-install-exit"
 exit "$rc"`;
 export const SSH_INSTALL_COMMAND = `flock -n "$HOME/.ateam-phone-install.lock" bash -lc ${quoteShell(SSH_INSTALL_SCRIPT)}`;
-/** 75: still installing; 74: interrupted/failed setup; 0: safe to attach. Older
- * installations without our lock remain compatible and need no flock binary. */
-export const SSH_INSTALL_STATUS = `if test -f "$HOME/.ateam-phone-install.lock"; then command -v flock >/dev/null || exit 69; flock -sn "$HOME/.ateam-phone-install.lock" true || exit 75; test -f "$HOME/.ateam-phone-install-exit" && test "$(cat "$HOME/.ateam-phone-install-exit")" = 0 || { tail -c 2000 "$HOME/ateam-install.log" >&2; exit 74; }; fi`;
+/** 75: installing; 74: interrupted/failed; 0: last installation completed.
+ * This is a progress check, not startup authorization: the server owns that.
+ * Older installations without a lock remain compatible without flock. */
+export const SSH_INSTALL_STATUS = `d="\${ATEAM_DATA_DIR:-$HOME/.ateam}"; if test -f "$d/install.lock"; then command -v flock >/dev/null || exit 69; flock -sn -E 75 "$d/install.lock" sh -c 'test "$(cat "$1/install-state" 2>/dev/null)" = ready || exit 74' sh "$d"; exit $?; elif test -f "$HOME/.ateam-phone-install.lock"; then command -v flock >/dev/null || exit 69; flock -sn "$HOME/.ateam-phone-install.lock" true || exit 75; test -f "$HOME/.ateam-phone-install-exit" && test "$(cat "$HOME/.ateam-phone-install-exit")" = 0 || { tail -c 2000 "$HOME/ateam-install.log" >&2; exit 74; }; fi`;
 
 /**
  * Build the cloud-init that makes a fresh box reachable exactly the way the rest of

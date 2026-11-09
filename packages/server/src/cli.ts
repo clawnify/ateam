@@ -18,11 +18,12 @@
 // JS. Wire that up when standing the first server; the logic below is runtime-
 // agnostic.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, realpathSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync } from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { type AggregateBackend, type BoxWake, CH, createAggregate } from "@ateam/protocol";
+import { ownDaemon, startupGate } from "./daemon-ownership";
 import type { Dispatcher } from "./dispatcher";
 import { createDispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
@@ -100,17 +101,61 @@ function isFreshBox(): boolean {
 }
 
 async function runDaemon(): Promise<void> {
-	// Single-instance guard: if a daemon already serves SOCK, bow out — do NOT
-	// steal it. The old code blindly unlink()'d the socket then listen()'d, on the
-	// false premise that a live daemon would trip EADDRINUSE; but unlinking the file
-	// is exactly what defeats that guard, so a second `ateam daemon` silently
-	// supplanted the first — orphaning its engine, live PTY sessions, and SQLite
-	// writer. Probe by connecting first: only a live listener should stop us.
-	if (await isDaemonLive(SOCK)) {
-		console.log(`[ateam] a daemon is already listening at ${SOCK}; nothing to do`);
-		return;
+	const releaseStartup = await startupGate(DATA_DIR);
+	let releaseOwner: (() => void) | null = null;
+	try {
+		let state = "";
+		try {
+			state = readFileSync(join(DATA_DIR, "install-state"), "utf8").trim();
+		} catch {}
+		if (state === "activating" || state.startsWith("failed:")) {
+			throw new Error(`Ateam setup is ${state}; retry installation before starting`);
+		}
+		const owner = serviceOwner();
+		let legacyKeeper = false;
+		if (owner === "sprite") {
+			try {
+				legacyKeeper = readFileSync(`/proc/${process.ppid}/cmdline`, "utf8").includes(
+					"ateam-keeper",
+				);
+			} catch {}
+		}
+		if (owner && !process.argv.includes("--supervised") && !legacyKeeper) {
+			throw new Error("Ateam is service-managed; connect with ateam attach or start its service");
+		}
+		releaseOwner = ownDaemon(DATA_DIR, SOCK);
+		if (!releaseOwner) {
+			releaseStartup();
+			console.log("[ateam] another daemon owns this engine or socket; nothing to do");
+			return;
+		}
+		// Migration from a daemon predating ownership locks: never steal its socket.
+		if (await isDaemonLive(SOCK)) {
+			releaseOwner();
+			releaseStartup();
+			return;
+		}
+		process.once("exit", releaseOwner);
+		await initializeDaemon(releaseStartup);
+	} catch (e) {
+		releaseStartup();
+		if (releaseOwner) {
+			process.removeListener("exit", releaseOwner);
+			releaseOwner();
+		}
+		throw e;
 	}
+}
 
+function serviceOwner(): string | null {
+	try {
+		return readFileSync(join(DATA_DIR, "service-owner"), "utf8").trim() || null;
+	} catch {
+		return null;
+	}
+}
+
+async function initializeDaemon(releaseStartup: () => void): Promise<void> {
 	// The PTY daemon bundle (node-pty + xterm). Shipped beside the ateam bin on
 	// the server; overridable for dev.
 	const ptyDaemon = process.env.ATEAM_PTY_DAEMON ?? join(dirname(SELF), "daemon.js");
@@ -191,8 +236,8 @@ async function runDaemon(): Promise<void> {
 
 	const dir = dirname(SOCK);
 	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-	// The probe found no live daemon, so any socket file here is stale (a crashed
-	// daemon leaves the file behind) — remove it so listen() can bind.
+	// Both ownership locks are held before engine creation and through exit.
+	// No cooperating daemon can create a live socket between this check and bind.
 	try {
 		if (existsSync(SOCK)) unlinkSync(SOCK);
 	} catch {
@@ -226,6 +271,7 @@ async function runDaemon(): Promise<void> {
 		process.exit(1);
 	});
 	server.listen(SOCK, () => {
+		releaseStartup();
 		console.log(`[ateam] daemon listening at ${SOCK}`);
 		// Connect the PTY daemon in the BACKGROUND, and only once we own the socket:
 		// don't block RPC on it (git/tasks/board serves immediately; agent spawning
@@ -389,27 +435,53 @@ function runAttach(): void {
 			// listening; ENOENT = socket file absent (a fresh box's first attach).
 			const noDaemon = err.code === "ECONNREFUSED" || err.code === "ENOENT";
 			if (noDaemon) {
-				if (!spawnedDaemon) {
+				if (!spawnedDaemon && !process.argv.includes("--no-start")) {
 					spawnedDaemon = true;
-					// Start one detached, then poll until it's listening — first-run
-					// startup (native module load + engine setup) takes a variable
-					// moment, so retry with backoff rather than a single fixed wait.
-					// Route its output to a log file: a detached daemon with no logs is
-					// undebuggable on a remote box (and this is where its startup errors
-					// surface).
-					const sockDir = dirname(SOCK);
-					if (!existsSync(sockDir)) mkdirSync(sockDir, { recursive: true });
-					const log = openSync(join(sockDir, "daemon.log"), "a");
-					// Say so, on STDERR — stdout is the RPC wire (piped above). A daemon
-					// started here owns DATA_DIR, and on a desktop machine that is NOT
-					// where the app keeps its database (Electron uses its own userData
-					// dir), so starting one silently would serve an empty board from a
-					// second engine with no hint that it had happened.
-					console.error(`[ateam] no daemon at ${SOCK}; starting one (data dir ${DATA_DIR})`);
-					spawn(process.execPath, [SELF, "daemon"], {
-						detached: true,
-						stdio: ["ignore", log, log],
-					}).unref();
+					let state = "";
+					try {
+						state = readFileSync(join(DATA_DIR, "install-state"), "utf8").trim();
+					} catch {}
+					if (state && state !== "ready") {
+						console.error(
+							`[ateam] setup is ${state}; retry installation or reconnect when it finishes`,
+						);
+						process.exit(75);
+					}
+					const owner = serviceOwner();
+					if (owner) {
+						// Only the supervisor may create the process. Sprite's keeper is
+						// already running and must never be restarted (it owns the PTYs).
+						const args =
+							owner === "system"
+								? ["-n", "systemctl", "start", "ateam.service"]
+								: ["--user", "start", "ateam.service"];
+						if (owner === "system" || owner === "user") {
+							const start = spawn(owner === "system" ? "sudo" : "systemctl", args, {
+								stdio: ["ignore", "ignore", "inherit"],
+							});
+							start.on("error", (e) => console.error(`[ateam] service start: ${e.message}`));
+						}
+					} else {
+						// Start one detached, then poll until it's listening — first-run
+						// startup (native module load + engine setup) takes a variable
+						// moment, so retry with backoff rather than a single fixed wait.
+						// Route its output to a log file: a detached daemon with no logs is
+						// undebuggable on a remote box (and this is where its startup errors
+						// surface).
+						const sockDir = dirname(SOCK);
+						if (!existsSync(sockDir)) mkdirSync(sockDir, { recursive: true });
+						const log = openSync(join(sockDir, "daemon.log"), "a");
+						// Say so, on STDERR — stdout is the RPC wire (piped above). A daemon
+						// started here owns DATA_DIR, and on a desktop machine that is NOT
+						// where the app keeps its database (Electron uses its own userData
+						// dir), so starting one silently would serve an empty board from a
+						// second engine with no hint that it had happened.
+						console.error(`[ateam] no daemon at ${SOCK}; starting one (data dir ${DATA_DIR})`);
+						spawn(process.execPath, [SELF, "daemon"], {
+							detached: true,
+							stdio: ["ignore", log, log],
+						}).unref();
+					}
 				}
 				if (retries < 40) {
 					retries++;
@@ -426,7 +498,10 @@ function runAttach(): void {
 
 const cmd = process.argv[2];
 if (cmd === "daemon") {
-	void runDaemon();
+	void runDaemon().catch((e) => {
+		console.error(`[ateam] ${e instanceof Error ? e.message : String(e)}`);
+		process.exit(1);
+	});
 } else if (cmd === "attach") {
 	// `--stdio` is the only (and default) mode today; accepted for forward-compat.
 	runAttach();

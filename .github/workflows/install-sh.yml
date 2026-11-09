@@ -6,8 +6,8 @@ name: install.sh
 # raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh
 # into bash. A merge is therefore a rollout to every new install, with no release
 # in between, so this runs the PR's copy for real before it gets there. It also
-# runs daily against main, because what install.sh installs changes without any
-# PR touching it: a new release, a new Node 22, npm prebuilds, gh's release assets.
+# builds the matching server payload and runs daily against main to catch changes
+# in Node 22, npm prebuilds and gh's release assets.
 #
 # Not a required check: the "Protect" ruleset requires `ci` only, and these runs
 # depend on nodejs.org (nvm), GitHub releases and the npm registry.
@@ -16,6 +16,11 @@ on:
     branches: [main]
     paths:
       - packages/server/scripts/install.sh
+      - packages/server/scripts/build.ts
+      - packages/server/scripts/test-lifecycle.py
+      - packages/server/scripts/test-install-lifecycle.py
+      - packages/server/src/cli.ts
+      - packages/server/src/daemon-ownership.ts
       - .github/workflows/install-sh.yml
   schedule:
     - cron: "23 5 * * *"
@@ -68,7 +73,23 @@ jobs:
           fi
           echo "$out" | grep -F "unknown option: --tailscle"
 
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun run packages/server/scripts/build.ts
+      - run: tar -czf /tmp/ateam-server.tar.gz -C packages/server/dist cli.js daemon.js package.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-server
+          path: /tmp/ateam-server.tar.gz
+
   e2e:
+    needs: build
     name: e2e (${{ matrix.runner }})
     strategy:
       fail-fast: false
@@ -91,14 +112,18 @@ jobs:
           apt-get install -y -qq curl ca-certificates procps git
           useradd -m -s /bin/bash tester
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: candidate-server
+          path: /tmp/ateam-candidate
       # The way the desktop runs it: a login shell piping the script into
       # `bash -s`, so the script is on stdin and anything in it that reads stdin
-      # would eat the rest of the script. It installs the latest release's dist,
-      # not this PR's build: install.sh on main always installs a release.
+      # would eat the rest of the script. Use this commit's server: startup and
+      # installation share a lifecycle contract, checked before activation.
       - name: Run install.sh as the box user
         run: |
           install -o tester -m 0644 packages/server/scripts/install.sh /home/tester/install.sh
-          su - tester -c 'cat ~/install.sh | bash -s' 2>&1 | tee "$RUNNER_TEMP/install.log"
+          su - tester -c 'cat ~/install.sh | ATEAM_TARBALL=/tmp/ateam-candidate/ateam-server.tar.gz bash -s' 2>&1 | tee "$RUNNER_TEMP/install.log"
       - name: Check the handshake step printed OK
         run: awk "$HANDSHAKE_OK" "$RUNNER_TEMP/install.log"
       - name: Check gh runs as the box user
@@ -109,7 +134,7 @@ jobs:
       - name: Note the daemon the re-run must replace
         run: pgrep -f "$DAEMON_PAT" | tee "$RUNNER_TEMP/daemon.pid"
       - name: Re-run install.sh over the running install
-        run: su - tester -c 'cat ~/install.sh | bash -s' 2>&1 | tee "$RUNNER_TEMP/rerun.log"
+        run: su - tester -c 'cat ~/install.sh | ATEAM_TARBALL=/tmp/ateam-candidate/ateam-server.tar.gz bash -s' 2>&1 | tee "$RUNNER_TEMP/rerun.log"
       # The pid check is the one that does not take install.sh's word for it: a
       # re-run that never stopped the old daemon still prints "stopped" and gets
       # an OK from it.
@@ -127,10 +152,15 @@ jobs:
   # gets the system unit, the scope install.sh prefers. Not a bare box (the image
   # ships Node and gh); the e2e job covers that part.
   service:
+    needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: candidate-server
+          path: /tmp/ateam-candidate
       - name: Prepare a box user with passwordless sudo
         run: |
           sudo useradd -m -s /bin/bash tester
@@ -138,7 +168,7 @@ jobs:
           sudo chmod 0440 /etc/sudoers.d/tester
           sudo install -o tester -m 0644 packages/server/scripts/install.sh /home/tester/install.sh
       - name: Run install.sh --service as the box user
-        run: sudo su - tester -c 'cat ~/install.sh | bash -s -- --service' 2>&1 | tee "$RUNNER_TEMP/install.log"
+        run: sudo su - tester -c 'cat ~/install.sh | ATEAM_TARBALL=/tmp/ateam-candidate/ateam-server.tar.gz bash -s -- --service' 2>&1 | tee "$RUNNER_TEMP/install.log"
       - name: Check the service owns the daemon
         run: |
           awk "$HANDSHAKE_OK" "$RUNNER_TEMP/install.log"
@@ -154,7 +184,7 @@ jobs:
           [ "$(cat "/proc/$main/oom_score_adj")" = -500 ]
           echo "$main" >"$RUNNER_TEMP/main.pid"
       - name: Re-run install.sh --service over the running service
-        run: sudo su - tester -c 'cat ~/install.sh | bash -s -- --service' 2>&1 | tee "$RUNNER_TEMP/rerun.log"
+        run: sudo su - tester -c 'cat ~/install.sh | ATEAM_TARBALL=/tmp/ateam-candidate/ateam-server.tar.gz bash -s -- --service' 2>&1 | tee "$RUNNER_TEMP/rerun.log"
       - name: Check the upgrade restarted the service
         run: |
           grep -E '^    stopped the old daemon \(pid [0-9]+\)' "$RUNNER_TEMP/rerun.log"
@@ -167,3 +197,12 @@ jobs:
           echo "MainPID $old -> $main; daemons: $daemons"
           [ "$main" != "$old" ]
           [ "$daemons" = "$main" ]
+
+      - name: Race and crash recovery with real daemons
+        run: |
+          sudo install -o tester -m 0644 packages/server/scripts/test-lifecycle.py /home/tester/test-lifecycle.py
+          sudo su - tester -c 'ATEAM_LIFECYCLE_TEST=1 python3 ~/test-lifecycle.py ~/ateam-app/cli.js'
+      - name: Installer interruption, reconnects, RPC update and live PTY
+        run: |
+          sudo install -o tester -m 0644 packages/server/scripts/test-install-lifecycle.py /home/tester/test-install-lifecycle.py
+          sudo su - tester -c 'ATEAM_LIFECYCLE_TEST=1 python3 ~/test-install-lifecycle.py ~/install.sh /tmp/ateam-candidate/ateam-server.tar.gz'

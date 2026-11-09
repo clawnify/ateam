@@ -838,7 +838,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			const env = { ...process.env };
 			delete env.ATEAM_TARBALL;
 			delete env.ATEAM_VERSION;
-			spawn("bash", ["-lc", `curl -fsSL ${INSTALL_URL} | bash -s -- --service`], {
+			spawn("bash", ["-o", "pipefail", "-lc", `curl -fsSL ${INSTALL_URL} | bash -s -- --service`], {
 				detached: true,
 				stdio: ["ignore", log, log],
 				env,
