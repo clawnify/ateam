@@ -64,3 +64,46 @@ describe("PtyClient input", () => {
 		c.disconnect();
 	});
 });
+
+describe("PtyClient snapshot", () => {
+	test.each([
+		{ wire: { cols: 135, rows: 30 }, expected: { cols: 135, rows: 30 } },
+		{ wire: {}, expected: {} }, // a daemon still running from before the update
+		{ wire: { cols: 0, rows: 30 }, expected: {} },
+	])("forwards valid snapshot dimensions: %j", async ({ wire, expected }) => {
+		const sock = join(tmpdir(), `ateam-ptya-${process.pid}-${n++}.sock`);
+		const server = createServer((connection) => {
+			connection.write(`${JSON.stringify({ t: "hello", terminals: [] })}\n`);
+			let pending = "";
+			connection.on("data", (chunk) => {
+				pending += chunk.toString();
+				let end: number;
+				// biome-ignore lint/suspicious/noAssignInExpressions: stream framing
+				while ((end = pending.indexOf("\n")) !== -1) {
+					const message = JSON.parse(pending.slice(0, end));
+					pending = pending.slice(end + 1);
+					if (message.t === "snapshot") {
+						connection.write(
+							`${JSON.stringify({
+								t: "snapshot",
+								id: message.id,
+								data: Buffer.from("screen").toString("base64"),
+								seq: 7,
+								...wire,
+							})}\n`,
+						);
+					}
+				}
+			});
+		});
+		servers.push(server);
+		await new Promise<void>((resolve) => server.listen(sock, resolve));
+		const client = new PtyClient(import.meta.path, sock, "/usr/bin/false");
+		try {
+			await client.connect();
+			expect(await client.snapshot("terminal")).toEqual({ data: "screen", seq: 7, ...expected });
+		} finally {
+			client.disconnect();
+		}
+	});
+});

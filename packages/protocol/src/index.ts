@@ -1385,6 +1385,9 @@ export interface PtyDataEvent {
 export interface PtySnapshot {
 	data: string;
 	seq: number;
+	/** Replay at this size before fitting the view. Absent on older daemons. */
+	cols?: number;
+	rows?: number;
 }
 export interface PtyExitEvent {
 	terminalId: string;
