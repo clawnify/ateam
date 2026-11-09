@@ -18,6 +18,8 @@ import {
 	type AgentDTO,
 	type AteamApi,
 	byMcPriority,
+	holdMcTile,
+	orderMcTiles,
 	sessionTabs,
 	type SessionDTO,
 	stabilizeMcPages,
@@ -337,6 +339,10 @@ export function MissionScreen({
 	tilesRef.current = tiles;
 	const pageSizeRef = useRef(pageSize);
 	pageSizeRef.current = pageSize;
+	const pageRef = useRef(current);
+	pageRef.current = current;
+	const focusedRef = useRef(focusedId);
+	focusedRef.current = focusedId;
 	useEffect(() => {
 		if (!loaded || layout !== "auto" || settled.requested === priorityOrder) return;
 		if (!settled.order || !priorityOrder) {
@@ -344,11 +350,12 @@ export function MissionScreen({
 			return;
 		}
 		const timer = setTimeout(() => {
-			const order = stabilizeMcPages(
-				priorityOrder.split(" "),
-				tilesRef.current.map((t) => t.task.id),
-				pageSizeRef.current,
-			).join(" ");
+			const ids = tilesRef.current.map((t) => t.task.id);
+			const priority = new Map(priorityOrder.split(" ").map((id, i) => [id, i]));
+			// The selected tile on the page in view keeps its slot, like a pin.
+			const held = holdMcTile({}, ids, focusedRef.current, pageRef.current, pageSizeRef.current);
+			const next = orderMcTiles(tilesRef.current, held, priority).map((t) => t.task.id);
+			const order = stabilizeMcPages(next, ids, pageSizeRef.current).join(" ");
 			setSettled({ requested: priorityOrder, order });
 		}, MC_REORDER_DELAY_MS);
 		return () => clearTimeout(timer);

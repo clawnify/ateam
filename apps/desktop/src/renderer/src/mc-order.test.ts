@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { TaskDTO } from "@ateam/protocol";
 import {
+	holdMcTile,
 	orderMcTiles,
 	pinMcArrival,
 	pinMcSwap,
@@ -176,4 +177,42 @@ test("page stabilization keeps pinned slots and handles a partial last page", ()
 	expect(
 		stabilizeMcPages(["a", "b", "c", "e", "f", "g", "d"], ["a", "b", "c", "d", "e", "f", "g"], 3),
 	).toEqual(["a", "b", "c", "g", "e", "f", "d"]);
+});
+
+test("the selected tile on the page in view keeps its slot when its activity would move it", () => {
+	// Page 2 (slots 3 to 5) is in view and f is selected. f turning newest would
+	// send it to page 1; held, it stays, and page 1 keeps its tiles.
+	const tiles = [
+		tile("a", 60),
+		tile("b", 50),
+		tile("c", 40),
+		tile("d", 30),
+		tile("e", 20),
+		tile("f", 900),
+	];
+	const current = ids(tiles);
+	const held = holdMcTile({}, current, "f", 1, 3);
+	expect(held).toEqual({ f: 5 });
+	const next = ids(orderMcTiles(tiles, held));
+	expect(stabilizeMcPages(next, current, 3)).toEqual(current);
+	// Not selected, f goes to page 1 and the lowest there (c) makes room.
+	expect(stabilizeMcPages(ids(orderMcTiles(tiles, {})), current, 3)).toEqual([
+		"a",
+		"b",
+		"f",
+		"d",
+		"e",
+		"c",
+	]);
+});
+
+test("a selected tile off the page in view, already pinned, or gone is not held", () => {
+	const current = ["a", "b", "c", "d"];
+	// On page 2 while page 1 is in view: free to come to page 1.
+	expect(holdMcTile({}, current, "d", 0, 2)).toEqual({});
+	expect(holdMcTile({ b: 1 }, current, "b", 0, 2)).toEqual({ b: 1 });
+	// A pin already claims that slot: the pin wins.
+	expect(holdMcTile({ c: 0 }, current, "a", 0, 2)).toEqual({ c: 0 });
+	expect(holdMcTile({}, current, "z", 0, 2)).toEqual({});
+	expect(holdMcTile({}, current, null, 0, 2)).toEqual({});
 });
