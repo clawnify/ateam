@@ -127,8 +127,13 @@ function ProviderStep({ onPick }: { onPick: (p: ProviderSetup) => void }) {
 	);
 }
 
-/** A machine made at its provider: what to do there first, then on to SSH. */
+/** A machine made at its provider: what to do there, one step at a time (side by
+ *  side they read as a choice between them), then on to SSH. */
 function ProviderSteps({ setup, onContinue }: { setup: ProviderSetup; onContinue: () => void }) {
+	const steps = setup.steps ?? [];
+	const [at, setAt] = useState(0);
+	const step = steps[at];
+	const last = at >= steps.length - 1;
 	return (
 		<View style={styles.column}>
 			<View style={styles.providerHead}>
@@ -136,26 +141,38 @@ function ProviderSteps({ setup, onContinue }: { setup: ProviderSetup; onContinue
 				<Text style={styles.title}>{setup.label}</Text>
 			</View>
 			<Text style={styles.intro}>{setup.body}</Text>
-			{setup.steps?.map((s, i) => (
-				<View key={s.text} style={[styles.card, styles.stepRow]}>
-					<Text style={styles.stepNum}>{i + 1}</Text>
-					<View style={styles.choiceText}>
-						<Text style={styles.stepBody}>{s.text}</Text>
-						{s.link ? (
+			{step ? (
+				<>
+					<Text style={styles.eyebrow}>
+						Step {at + 1} of {steps.length}
+					</Text>
+					<View style={styles.card}>
+						<Text style={styles.stepBody}>{step.text}</Text>
+						{step.link ? (
 							<Pressable
-								onPress={() => void Linking.openURL(s.link?.url ?? "")}
-								hitSlop={6}
+								style={({ pressed }) => [styles.stepLink, pressed && styles.pressed]}
+								onPress={() => void Linking.openURL(step.link?.url ?? "")}
 								accessibilityRole="link"
 							>
-								<Text style={styles.link}>{s.link.label}</Text>
+								<Text style={styles.stepLinkText}>{step.link.label}</Text>
+								<Feather name="external-link" size={14} color={C.ink} />
 							</Pressable>
 						) : null}
 					</View>
-				</View>
-			))}
-			<Pressable style={styles.primary} onPress={onContinue} accessibilityRole="button">
-				<Text style={styles.primaryText}>Connect over SSH</Text>
+				</>
+			) : null}
+			<Pressable
+				style={styles.primary}
+				onPress={() => (last ? onContinue() : setAt(at + 1))}
+				accessibilityRole="button"
+			>
+				<Text style={styles.primaryText}>{last ? "Connect over SSH" : "Next"}</Text>
 			</Pressable>
+			{at > 0 ? (
+				<Pressable onPress={() => setAt(at - 1)} hitSlop={8} accessibilityRole="button">
+					<Text style={styles.stepBack}>Previous step</Text>
+				</Pressable>
+			) : null}
 		</View>
 	);
 }
@@ -823,9 +840,19 @@ const styles = StyleSheet.create({
 	choiceTitle: { color: C.ink, fontSize: 15, fontWeight: "600" },
 	providerRow: { alignItems: "center" },
 	providerHead: { flexDirection: "row", alignItems: "center", gap: 12 },
-	stepRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
-	stepNum: { color: C.ink, fontSize: 15, fontWeight: "700", width: 14 },
-	stepBody: { color: C.ink, fontSize: 14, lineHeight: 20 },
+	stepBody: { color: C.ink, fontSize: 15, lineHeight: 21 },
+	stepLink: {
+		flexDirection: "row",
+		alignItems: "center",
+		justifyContent: "center",
+		gap: 6,
+		height: 40,
+		borderRadius: 10,
+		borderWidth: 1,
+		borderColor: C.line,
+	},
+	stepLinkText: { color: C.ink, fontSize: 14, fontWeight: "600" },
+	stepBack: { color: C.muted, fontSize: 14, textAlign: "center" },
 	link: { color: C.ink, fontSize: 13, fontWeight: "600", textDecorationLine: "underline" },
 	savedRow: {
 		flexDirection: "row",
