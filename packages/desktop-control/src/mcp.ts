@@ -2,7 +2,7 @@ import type { DesktopControl } from "./control";
 import type { X11Desktop } from "./x11";
 
 const instructions =
-	"Desktop computer use on a shared Linux X11 display. Take a screenshot to inspect it. Call control acquire with a short task label, then pass its lease to every input call. Only one agent can control the desktop. A person can take over at any time; stop input if your lease is rejected. Release when done. Leases expire after 90 seconds without actions; renew during longer thinking. Coordinates are pixels in the full-resolution screenshot. Use TaskWindow for isolated browser tabs; this tool drives global focus and native apps. Never route this tool through the viewer.";
+	"Desktop computer use on a shared Linux X11 display. Take a screenshot to inspect it. Call control acquire with a short task label, then pass its lease to every input call. Only one agent can control the desktop. A person can take over at any time; stop input if your lease is rejected. A person's control lapses after 60 seconds without their input (control status shows when). Release when done. Leases expire after 90 seconds without actions; renew during longer thinking. Coordinates are pixels in the full-resolution screenshot. Use TaskWindow for isolated browser tabs; this tool drives global focus and native apps. Never route this tool through the viewer.";
 const tools = [
 	{
 		name: "control",

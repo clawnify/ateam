@@ -2,10 +2,10 @@ import { expect, test } from "bun:test";
 import { runInNewContext } from "node:vm";
 import { viewerInputScript } from "../src/viewer-input";
 
-type State = { controlling: boolean };
+type State = { controlling: boolean; owner?: { kind: "agent" | "human" } | null };
 type Request = (action: string) => Promise<State>;
 type Handoff = {
-	begin(): Promise<void>;
+	begin(onlyIfFree?: boolean): Promise<void>;
 	release(): void;
 	sync(state: State, generation: number): void;
 	closed: boolean;
@@ -202,4 +202,33 @@ test("phone text submission waits for an already-pending gesture takeover", asyn
 	take.resolve({ controlling: true });
 	await Promise.all([first, second]);
 	expect(submitted).toBe(true);
+});
+
+test("a scroll never interrupts a working agent; a click still does", async () => {
+	const requests: string[] = [];
+	const f = setup(async (action) => {
+		requests.push(action);
+		return { controlling: true };
+	});
+	f.input.sync({ controlling: false, owner: { kind: "agent" } }, f.input.generation);
+	await f.input.begin(true);
+	expect(requests).toEqual([]);
+	expect(f.enabled()).toBe(false); // noVNC stays view-only and drops the wheel.
+	await f.input.begin();
+	expect(requests).toEqual(["take"]);
+	expect(f.enabled()).toBe(true);
+	await f.input.begin(true); // While this viewer controls, scrolls confirm as usual.
+	expect(requests).toEqual(["take", "take"]);
+});
+
+test("a scroll takes control of a desktop no agent holds", async () => {
+	const requests: string[] = [];
+	const f = setup(async (action) => {
+		requests.push(action);
+		return { controlling: true };
+	});
+	f.input.sync({ controlling: false, owner: null }, f.input.generation);
+	await f.input.begin(true);
+	expect(requests).toEqual(["take"]);
+	expect(f.enabled()).toBe(true);
 });

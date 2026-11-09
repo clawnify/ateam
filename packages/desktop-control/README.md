@@ -42,14 +42,16 @@ Configuration:
 
 `control` supports `status`, `acquire` (with a task label), `renew`, and `release`.
 Acquire returns an opaque lease. Input through `computer` requires that lease;
-screenshots do not. Leases expire after 90 seconds without input or renewal.
+screenshots do not. Leases expire after 90 seconds without input or renewal;
+an input command still running keeps its lease.
 A second agent must wait; there is no agent force-takeover operation.
 
 `computer` supports `screenshot`, `left_click`, `right_click`, `double_click`,
 `mouse_move`, `type`, `key`, and `scroll`. Coordinates refer to full-resolution
 PNG pixels, regardless of how the viewer scales the display. `key` accepts
 combinations such as `Control+s` and `Shift+Tab`. `type` sends real key events,
-including explicit Return/Tab events, with a 4000-character limit. LF/CRLF are
+including explicit Return/Tab events, with a 4000-character limit, sent in pieces
+of at most 500 characters so no single xdotool call nears its 60 s limit. LF/CRLF are
 normalized to Return. It is typing, so the focused application's shortcuts,
 autoindent, and text transformations still apply. Scroll amounts are wheel
 steps (1–20) at the current pointer position.
@@ -59,9 +61,11 @@ a takeover panel. A keyboard button on touch devices opens a text field for the
 phone's software keyboard. The Ateam installer sets a dark wallpaper on the
 actual X desktop and restores it at display startup.
 
-Watching alone does not interrupt an agent. The first click, touch, scroll or
-keystroke automatically revokes the agent lease, cancels its running input and
-waits for key cleanup. noVNC's encoded input is buffered during that handoff, so
+Watching alone does not interrupt an agent. The first click, touch or keystroke
+automatically revokes the agent lease, cancels its running input and waits for
+key cleanup. A scroll takes control only when no agent holds the desktop, so a
+glance never interrupts one. A person's control lapses after 60 seconds without
+input, and their next gesture takes it back. noVNC's encoded input is buffered during that handoff, so
 the first gesture reaches the desktop once ownership is confirmed. Leaving the
 viewer, hiding it, shrinking it to the phone miniature, or disconnecting makes
 the desktop available again. Failed requests time out and reconnect; buffered
