@@ -12,7 +12,13 @@ export class DesktopControl {
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	// Called before switching owners: release keys/buttons held by a VNC viewer.
 	onRevoke = () => {};
-	constructor(private readonly ttlMs = 90_000) {}
+	// A click is a takeover, so a person who clicked and then only watches must
+	// not lock the agent out until they leave the viewer. Their next gesture
+	// takes control back.
+	constructor(
+		private readonly ttlMs = 90_000,
+		private readonly humanIdleMs = 60_000,
+	) {}
 
 	status(): Owner | null {
 		this.expire();
@@ -51,9 +57,23 @@ export class DesktopControl {
 		if (this.canInput(viewer)) return;
 		this.revoke();
 		this.ready = false;
-		this.lease = { kind: "human", label: "a desktop viewer", token: viewer, expiresAt: null };
+		this.lease = {
+			kind: "human",
+			label: "a desktop viewer",
+			token: viewer,
+			expiresAt: Date.now() + this.humanIdleMs,
+		};
+		this.armExpiry();
 		await this.enqueue(async () => {});
 		if (this.lease?.token === viewer) this.ready = true;
+	}
+
+	/** Input from the controlling viewer keeps its control alive. Called per
+	 * forwarded RFB message, so it only moves the deadline; the timer re-arms
+	 * itself when it fires early. */
+	viewerInput(viewer: string): void {
+		if (this.lease?.kind === "human" && this.lease.token === viewer)
+			this.lease.expiresAt = Date.now() + this.humanIdleMs;
 	}
 
 	releaseViewer(viewer: string): void {
@@ -78,6 +98,8 @@ export class DesktopControl {
 				return result;
 			} finally {
 				this.running = null;
+				// A failed action skips renew(); its overdue lease now expires.
+				this.armExpiry();
 			}
 		});
 	}
@@ -100,11 +122,25 @@ export class DesktopControl {
 		return this.lease;
 	}
 	private expire(): void {
+		// An agent action in progress is activity, not an abandoned lease: long
+		// typing must not revoke its own lease. act() renews when it finishes.
+		if (this.running && this.lease?.kind === "agent") return;
 		if (this.lease?.expiresAt != null && this.lease.expiresAt <= Date.now()) this.revoke();
 	}
 	private armExpiry(): void {
 		clearTimeout(this.timer);
-		this.timer = setTimeout(() => this.expire(), this.ttlMs + 1);
+		const expiresAt = this.lease?.expiresAt;
+		if (expiresAt == null) return;
+		this.timer = setTimeout(
+			() => {
+				this.expire();
+				// Re-arm for a deadline viewerInput() moved. A lease held past its
+				// deadline by a running action is rechecked when the action ends.
+				const next = this.lease?.expiresAt;
+				if (next != null && next > Date.now()) this.armExpiry();
+			},
+			Math.max(expiresAt - Date.now(), 0) + 1,
+		);
 		this.timer.unref();
 	}
 	private revoke(): void {

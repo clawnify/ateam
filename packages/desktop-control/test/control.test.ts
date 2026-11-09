@@ -109,3 +109,49 @@ test("confirming the current human owner preserves held keys and buttons", async
 	expect(c.canInput("A")).toBe(false);
 	c.close();
 });
+
+test("a person's control lapses without input, and their input keeps it", async () => {
+	// Wide margins: a loaded CI runner can fire timers tens of ms late.
+	const c = new DesktopControl(10_000, 300);
+	await c.takeOver("A");
+	expect(c.status()?.expiresAt).toBeNumber();
+	await delay(100);
+	c.viewerInput("A");
+	c.viewerInput("B"); // Another viewer's input never extends A.
+	await delay(250); // Past the first deadline (300), inside the moved one (400).
+	expect(c.status()?.kind).toBe("human");
+	expect(c.canInput("A")).toBe(true);
+	await delay(200);
+	expect(c.status()).toBeNull(); // status() expires an overdue lease itself.
+	expect(c.canInput("A")).toBe(false);
+	expect(c.acquire("agent").lease).toBeTruthy();
+	c.close();
+});
+
+test("a lapsed person takes control back with their next gesture", async () => {
+	const c = new DesktopControl(10_000, 20);
+	await c.takeOver("A");
+	await delay(40);
+	expect(c.status()).toBeNull();
+	expect(c.canInput("A")).toBe(false);
+	const { lease } = c.acquire("agent");
+	await c.takeOver("A");
+	expect(c.canInput("A")).toBe(true);
+	await expect(c.act(lease, async () => {})).rejects.toThrow("No valid");
+	c.close();
+});
+
+test("a running action outlives its lease TTL, and the lease expires once it ends", async () => {
+	const c = new DesktopControl(30);
+	const { lease } = c.acquire("agent");
+	await c.act(lease, () => delay(80));
+	expect(() => c.acquire("other")).toThrow("agent"); // Renewed when the action ended.
+	const failed = c.act(lease, async () => {
+		await delay(80);
+		throw new Error("xdotool failed");
+	});
+	await expect(failed).rejects.toThrow("xdotool failed");
+	await delay(10);
+	expect(c.status()).toBeNull(); // Overdue without renewal: expires at once.
+	c.close();
+});

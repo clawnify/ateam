@@ -43,10 +43,10 @@ function fail(connection, e) {
   error.textContent=e.message;
   connection.handoff.close(); connection.socket.close();
 }
-function begin() {
+function begin(event) {
   if(!current?.connected || innerWidth<=180) return;
   error.textContent='';
-  return current.handoff.begin();
+  return current.handoff.begin(event?.type==='wheel');
 }
 // Capture intent before noVNC handles it. Its encoded first click/key is queued
 // until the existing server lock has cancelled and cleaned up agent input.

@@ -13,6 +13,8 @@ export class RfbInputGate {
 	constructor(
 		private readonly send: (data: Buffer) => void,
 		private readonly canInput: () => boolean,
+		/** Called for each input message forwarded while this viewer controls. */
+		private readonly onInput: () => void = () => {},
 	) {}
 
 	feed(data: Buffer): void {
@@ -50,6 +52,7 @@ export class RfbInputGate {
 					else this.keys.delete(id);
 				}
 				if (type === 5) this.pointer = Buffer.from(message);
+				this.onInput();
 			}
 			this.send(message);
 		}

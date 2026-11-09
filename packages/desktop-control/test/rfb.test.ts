@@ -75,3 +75,20 @@ test("rejects an alternate authentication mode instead of misparsing subsequent 
 		"password",
 	);
 });
+test("reports only input it forwarded for the controlling viewer", () => {
+	let allowed = false;
+	let inputs = 0;
+	const gate = new RfbInputGate(
+		() => {},
+		() => allowed,
+		() => {
+			inputs++;
+		},
+	);
+	gate.feed(handshake);
+	gate.feed(Buffer.concat([key(true), pointer]));
+	expect(inputs).toBe(0);
+	allowed = true;
+	gate.feed(Buffer.concat([key(false), pointer, Buffer.from([3, 1, 0, 0, 0, 0, 5, 0, 2, 208])]));
+	expect(inputs).toBe(2); // The pixel request is not input.
+});

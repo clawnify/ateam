@@ -4,7 +4,7 @@ export const viewerInputScript = `
 export class InputHandoff {
   constructor(socket, request, enable, fail) {
     this.socket=socket; this.request=request; this.enable=enable; this.fail=fail;
-    this.owned=false; this.pending=false; this.closed=false; this.generation=0;
+    this.owned=false; this.pending=false; this.closed=false; this.generation=0; this.agentOwns=false;
     this.queue=[]; this.bytes=0; this.releasing=Promise.resolve(); this.releasePending=false;
     this.send=socket.send.bind(socket);
     socket.send=data=>{
@@ -17,11 +17,15 @@ export class InputHandoff {
       this.queue.push(copy);
     };
   }
-  begin() {
+  begin(onlyIfFree=false) {
     // Another viewer can take over between status polls. Confirm each new
     // gesture; the server treats a confirmation by the same owner as a no-op.
     if(this.closed) return Promise.resolve();
     if(this.pending) return this.taking;
+    // A scroll is often a glance, so it never interrupts a working agent; a
+    // click, touch or key still does. shortcut: trusts the last status poll
+    // (up to 1s old); move the check server-side if stale-poll takeovers show up.
+    if(onlyIfFree && !this.owned && this.agentOwns) return Promise.resolve();
     const generation=++this.generation;
     this.pending=true; this.enable(true);
     this.taking=(async()=>{
@@ -60,6 +64,7 @@ export class InputHandoff {
     }
   }
   sync(state, generation) {
+    if(!this.closed) this.agentOwns=state.owner?.kind==='agent';
     if(this.closed || this.pending || this.releasePending || generation!==this.generation) return;
     this.owned=state.controlling; this.enable(this.owned);
   }

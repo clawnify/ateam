@@ -162,6 +162,7 @@ export function createDesktopServer(opts: {
 							if (!tcp.destroyed) tcp.write(data);
 						},
 						() => control.canInput(id),
+						() => control.viewerInput(id),
 					);
 					viewers.set(id, { gate, socket: ws });
 					let alive = true;
