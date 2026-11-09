@@ -111,25 +111,28 @@ test("confirming the current human owner preserves held keys and buttons", async
 });
 
 test("a person's control lapses without input, and their input keeps it", async () => {
-	const c = new DesktopControl(1000, 60);
+	// Wide margins: a loaded CI runner can fire timers tens of ms late.
+	const c = new DesktopControl(10_000, 300);
 	await c.takeOver("A");
 	expect(c.status()?.expiresAt).toBeNumber();
-	await delay(40);
+	await delay(100);
 	c.viewerInput("A");
 	c.viewerInput("B"); // Another viewer's input never extends A.
-	await delay(40);
+	await delay(250); // Past the first deadline (300), inside the moved one (400).
+	expect(c.status()?.kind).toBe("human");
 	expect(c.canInput("A")).toBe(true);
-	await delay(80);
+	await delay(200);
+	expect(c.status()).toBeNull(); // status() expires an overdue lease itself.
 	expect(c.canInput("A")).toBe(false);
-	expect(c.status()).toBeNull();
 	expect(c.acquire("agent").lease).toBeTruthy();
 	c.close();
 });
 
 test("a lapsed person takes control back with their next gesture", async () => {
-	const c = new DesktopControl(1000, 20);
+	const c = new DesktopControl(10_000, 20);
 	await c.takeOver("A");
 	await delay(40);
+	expect(c.status()).toBeNull();
 	expect(c.canInput("A")).toBe(false);
 	const { lease } = c.acquire("agent");
 	await c.takeOver("A");
