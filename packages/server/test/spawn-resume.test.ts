@@ -360,7 +360,7 @@ it("discovers the installed desktop service through the actual launch path", asy
 			expect(servers.desktop.url).toBe("http://127.0.0.1:6080/mcp");
 		} else if (agentId === "codex") {
 			expect(launch.args[2]).toContain("mcp_servers.desktop.url");
-			expect(launch.args[2]).toContain('matcher="mcp__desktop__.*"');
+			expect(launch.args[2]).toContain('matcher="mcp__(taskwindow|desktop)__.*"');
 			expect(launch.args[2]).toContain("BrowserUse");
 		} else
 			expect(JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT ?? "{}").mcp.desktop.url).toBe(

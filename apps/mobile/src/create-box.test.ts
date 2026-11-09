@@ -66,4 +66,18 @@ test("pairs the phone by a hash of a token the box never sees", () => {
 	expect(yaml).toContain(`ATEAM_PAIR_DEVICE=${"c".repeat(64)}`);
 	expect(yaml).not.toContain(token);
 	expect(yaml).toContain("--hostname=ateam-abc9");
+	expect(yaml).toContain("--browser");
+});
+
+test("the phone passes an explicit browser opt-out through to provisioning", () => {
+	const yaml = phoneCloudInit({
+		name: "ateam-abc9",
+		tailscaleAuthKey: "tskey-auth-abc123DEF-ghi",
+		tokenHash: "c".repeat(64),
+		label: "iPhone",
+		agents: [],
+		browser: false,
+	});
+	expect(yaml).not.toContain("--browser");
+	expect(yaml).toContain("--service --tailscale");
 });

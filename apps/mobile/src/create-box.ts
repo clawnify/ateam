@@ -85,6 +85,7 @@ export function phoneCloudInit(opts: {
 	tokenHash: string;
 	label: string;
 	agents: InstallableAgent[];
+	browser?: boolean;
 }): string {
 	return buildCloudInit({
 		hostname: opts.name,
@@ -92,6 +93,7 @@ export function phoneCloudInit(opts: {
 		install: {
 			pairDevice: { tokenHash: opts.tokenHash, label: opts.label },
 			agents: opts.agents,
+			browser: opts.browser,
 		},
 	});
 }
