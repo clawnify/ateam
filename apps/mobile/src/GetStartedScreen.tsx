@@ -163,7 +163,7 @@ export function GetStartedScreen({
 						body={
 							creating
 								? `${creating} is being set up on Hetzner.`
-								: "Pick where it runs: Hetzner, set up from this phone, or boxd or another server, over SSH."
+								: "Pick where it runs: Hetzner, set up from this phone, boxd, Sprites, exe.dev or another server."
 						}
 						action={creating ? "See how it's going" : "Create a box"}
 						onPress={onCreate}

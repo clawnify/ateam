@@ -5,7 +5,7 @@
 // it by address when its name doesn't resolve, and a way to delete it.
 import { hetznerProvider, type ProviderOptions } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
 	ActionSheetIOS,
 	ActivityIndicator,
@@ -38,6 +38,7 @@ import { shareMacApp } from "./mac-app";
 import { ProviderIcon } from "./ProviderIcon";
 import { PROVIDER_LOGOS } from "./provider-logos";
 import { PROVIDER_SETUPS, type ProviderSetup, type SSHSetup } from "./provider-setup";
+import { ScanQrIcon } from "./ScanQrIcon";
 import { loadProviderAccount, saveProviderAccount } from "./storage";
 import { openTailscale, useTailnet } from "./tailnet";
 import { C, CONTENT_MAX } from "./theme";
@@ -106,7 +107,7 @@ function ProviderStep({ onPick }: { onPick: (p: ProviderSetup) => void }) {
 				Where should your box run? Either way it gets Ateam and your coding agents.
 			</Text>
 			<View style={styles.choices}>
-				{PROVIDER_SETUPS.filter((p) => p.creates || sshAvailable).map((p) => (
+				{PROVIDER_SETUPS.filter((p) => p.creates || p.computer || sshAvailable).map((p) => (
 					<Pressable
 						key={p.id}
 						style={({ pressed }) => [styles.choice, styles.providerRow, pressed && styles.pressed]}
@@ -116,13 +117,78 @@ function ProviderStep({ onPick }: { onPick: (p: ProviderSetup) => void }) {
 					>
 						<ProviderIcon providerId={p.id} size={36} />
 						<View style={styles.choiceText}>
-							<Text style={styles.choiceTitle}>{p.label}</Text>
+							<View style={styles.providerTitleRow}>
+								<Text style={styles.choiceTitle}>{p.label}</Text>
+								{/* Said on the card, before the tap: no surprise a page later. */}
+								{p.computer ? <Text style={styles.computerTag}>Needs a computer</Text> : null}
+							</View>
 							<Text style={styles.helpText}>{p.body}</Text>
 						</View>
 						<Feather name="chevron-right" size={16} color={C.muted} />
 					</Pressable>
 				))}
 			</View>
+		</View>
+	);
+}
+
+/** A provider set up from a computer, then reached over Tailscale (provider-setup.ts
+ *  `computer`): its guide, Ateam for Mac's way, then the box by its tailnet address. */
+function ComputerSetup({
+	setup,
+	onScan,
+	onAdd,
+}: {
+	setup: ProviderSetup;
+	onScan: () => void;
+	onAdd: () => void;
+}) {
+	const tailnet = useTailnet();
+	const computer = setup.computer;
+	if (!computer) return null;
+	return (
+		<View style={styles.column}>
+			<View style={styles.providerHead}>
+				<ProviderIcon providerId={setup.id} size={36} />
+				<Text style={styles.title}>{setup.label}</Text>
+			</View>
+			<Text style={styles.intro}>{setup.body}</Text>
+			<View style={styles.card}>
+				<Text style={styles.stepBody}>
+					On a computer, Ateam's installer joins it to your Tailscale network and opens its port for
+					this phone. The guide has the commands.
+				</Text>
+				<Pressable
+					style={({ pressed }) => [styles.stepLink, pressed && styles.pressed]}
+					onPress={() => void Linking.openURL(computer.guide)}
+					accessibilityRole="link"
+				>
+					<Text style={styles.stepLinkText}>Open the setup guide</Text>
+					<Feather name="external-link" size={14} color={C.ink} />
+				</Pressable>
+			</View>
+			<View style={styles.card}>
+				<Text style={styles.stepBody}>
+					On a Mac, Ateam does it for you: Set up phone access on the box's page, then Pair your
+					iPhone in Settings, Boxes adds every box to this phone in one scan.
+				</Text>
+				<Pressable
+					style={({ pressed }) => [styles.stepLink, pressed && styles.pressed]}
+					onPress={onScan}
+					accessibilityRole="button"
+				>
+					<ScanQrIcon size={15} color={C.ink} />
+					<Text style={styles.stepLinkText}>Scan the code from Ateam for Mac</Text>
+				</Pressable>
+			</View>
+			{tailnet === false ? (
+				<Pressable onPress={openTailscale} hitSlop={6} accessibilityRole="button">
+					<Text style={styles.link}>Tailscale is off on this phone. Turn it on</Text>
+				</Pressable>
+			) : null}
+			<Pressable style={styles.primary} onPress={onAdd} accessibilityRole="button">
+				<Text style={styles.primaryText}>Add it by its tailnet address</Text>
+			</Pressable>
 		</View>
 	);
 }
@@ -482,6 +548,9 @@ export function CreateBoxScreen({
 	onStartOver,
 	onBack,
 	onConnectOver,
+	onAddTailnet,
+	onScan,
+	scanner,
 }: {
 	onVerify: () => void;
 	creation: Creation | null;
@@ -492,11 +561,17 @@ export function CreateBoxScreen({
 	onBack: () => void;
 	/** A machine made at a provider: the Add a box form, over SSH, set up for it. */
 	onConnectOver: (setup: SSHSetup) => void;
+	/** One set up from a computer: the form on Tailscale, with the provider that wakes it. */
+	onAddTailnet: (wakeProvider?: string) => void;
+	/** Scan the code Ateam for Mac shows (App's scanner). */
+	onScan: () => void;
+	/** The scanner, while it is open (App's, drawn by the screen showing). */
+	scanner: ReactNode;
 }) {
 	// Where it runs, picked on the first step; Hetzner's is the form below.
 	const [picked, setPicked] = useState<ProviderSetup | null>(null);
 	const pick = (p: ProviderSetup) => {
-		if (p.creates || p.steps) setPicked(p);
+		if (p.creates || p.steps || p.computer) setPicked(p);
 		else if (p.ssh) onConnectOver(p.ssh);
 	};
 	// A saved token is only ever held here, in a ref, never in render state.
@@ -603,6 +678,12 @@ export function CreateBoxScreen({
 					/>
 				) : !picked ? (
 					<ProviderStep onPick={pick} />
+				) : picked.computer ? (
+					<ComputerSetup
+						setup={picked}
+						onScan={onScan}
+						onAdd={() => onAddTailnet(picked.computer?.wakeProvider)}
+					/>
 				) : !picked.creates ? (
 					<ProviderSteps
 						setup={picked}
@@ -772,6 +853,7 @@ export function CreateBoxScreen({
 					</View>
 				)}
 			</ScrollView>
+			{scanner}
 		</View>
 	);
 }
@@ -839,6 +921,18 @@ const styles = StyleSheet.create({
 	choiceText: { flex: 1, gap: 3 },
 	choiceTitle: { color: C.ink, fontSize: 15, fontWeight: "600" },
 	providerRow: { alignItems: "center" },
+	providerTitleRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 },
+	computerTag: {
+		color: C.muted,
+		fontSize: 11,
+		fontWeight: "600",
+		paddingHorizontal: 7,
+		paddingVertical: 2,
+		borderRadius: 6,
+		borderWidth: 1,
+		borderColor: C.line,
+		overflow: "hidden",
+	},
 	providerHead: { flexDirection: "row", alignItems: "center", gap: 12 },
 	stepBody: { color: C.ink, fontSize: 15, lineHeight: 21 },
 	stepLink: {
