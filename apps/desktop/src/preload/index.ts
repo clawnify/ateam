@@ -253,6 +253,8 @@ const host: AteamHost = {
 contextBridge.exposeInMainWorld("ateamHost", host);
 
 const lead: AteamLead = {
+	settings: (machine) => ipcRenderer.invoke(LEAD_CH.settings, machine),
+	updateSettings: (machine, patch) => ipcRenderer.invoke(LEAD_CH.updateSettings, machine, patch),
 	snapshot: (opts) => ipcRenderer.invoke(LEAD_CH.snapshot, opts),
 	older: (beforeId, limit) => ipcRenderer.invoke(LEAD_CH.older, beforeId, limit),
 	send: (text, files) => ipcRenderer.invoke(LEAD_CH.send, text, files),

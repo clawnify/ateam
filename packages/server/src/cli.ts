@@ -28,6 +28,7 @@ import { createDispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
 import { createEngine } from "./engine";
 import { engineLead } from "./lead/engine-lead";
+import { chatPreferences } from "./lead/settings";
 import { BoxLinks } from "./links";
 import { Pairings } from "./pairing";
 import {
@@ -144,6 +145,7 @@ async function runDaemon(): Promise<void> {
 	// This box's own Lead chat, for the phone (lead/engine-lead.ts). Only here:
 	// the desktop's in-process engine has the desktop's Lead instead.
 	const lead = engineLead({
+		preferences: chatPreferences(join(DATA_DIR, "lead")),
 		engine,
 		dispatcher,
 		dir: join(DATA_DIR, "lead"),

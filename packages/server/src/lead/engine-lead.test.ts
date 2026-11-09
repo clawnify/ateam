@@ -20,6 +20,7 @@ import type { Dispatcher } from "../dispatcher";
 import type { Engine } from "../engine";
 import { serveRpc } from "../rpc";
 import { engineLead, MAX_LEAD_ATTACH_BYTES } from "./engine-lead";
+import { chatPreferences } from "./settings";
 import { leadPrompt } from "./session";
 import { createLeadTools } from "./tools";
 
@@ -380,4 +381,20 @@ describe("the box's words", () => {
 		expect(text).not.toMatch(/dialog/i);
 		expect(text).not.toContain("mermaid");
 	});
+});
+
+
+it("shares machine Chat settings between desktop and legacy phone Auto calls", async () => {
+ const dir = join(mkdtempSync(join(tmpdir(), "box-chat-prefs-")), "lead");
+ const preferences = chatPreferences(dir, join(dir, "../settings.json"), async () => true);
+ const ext = engineLead({ ...fakeEngine(), dir, preferences, spawnClaude: args => new FakeClaude(args) as unknown as ChildProcess });
+ const desktop = connect(ext), phone = connect(ext);
+ try {
+  await desktop.call(LEAD_CH.updateSettings, { agent: "codex", auto: true });
+  expect(await phone.call(LEAD_CH.snapshot)).toMatchObject({ auto: true, items: [] });
+  expect(existsSync(dir)).toBe(false);
+  await phone.call(LEAD_CH.setAuto, false);
+  expect(await desktop.call(LEAD_CH.settings)).toMatchObject({ settings: { agent: "codex", auto: false } });
+  await expect(phone.call(LEAD_CH.updateSettings, { auto: "yes" })).rejects.toThrow("Auto");
+ } finally { ext.dispose(); }
 });

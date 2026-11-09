@@ -131,6 +131,9 @@ export function updateSettings(patch: SettingsPatch, path: string = settingsPath
 		client: { ...current.client, ...patch.client },
 		engine: { ...current.engine, ...patch.engine },
 		box: { ...current.box, ...patch.box },
+		...(patch.chat
+			? { chat: { agent: "claude", auto: false, ...current.chat, ...patch.chat } }
+			: {}),
 	};
 	mkdirSync(dirname(path), { recursive: true });
 	const tmp = `${path}.tmp`;

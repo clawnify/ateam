@@ -39,7 +39,6 @@ import {
 	Square,
 	SquarePen,
 	X,
-	Zap,
 } from "lucide-react";
 import {
 	type ClipboardEvent,
@@ -1724,20 +1723,6 @@ export function LeadChat({
 						</div>
 					)}
 					<IconButton icon={Paperclip} label="Attach files" size={15} onClick={pickFiles} />
-					{/* The ⚡ a new task gets, for the Lead's own Claude. It applies at once,
-					    mid-turn included, and stays on for the next conversation. */}
-					<button
-						type="button"
-						className={`iconbtn comp-yolo ${snap.auto ? "active" : ""}`}
-						title="Auto mode"
-						aria-label="Auto mode"
-						aria-pressed={snap.auto}
-						onClick={() =>
-							void window.ateamLead.setAuto(!snap.auto).catch((e) => setAttachNote(cleanError(e)))
-						}
-					>
-						<Zap size={15} strokeWidth={1.75} />
-					</button>
 					{/* A voice call with the Lead (lead-call.ts): what you say goes into
 					    this chat as your message, and the Lead's replies are spoken. */}
 					<button

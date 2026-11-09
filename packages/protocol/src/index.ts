@@ -172,7 +172,8 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // call there (FEATURE_MIN_VERSION.leadCallSession).
 // v34: tasks:pages lists saved artifacts; tasks:page accepts an optional page id.
 // Older engines still serve their latest page; clients fall back to that binding.
-export const PROTOCOL_VERSION = 34;
+// v35: machine-owned Chat agent and Auto preferences.
+export const PROTOCOL_VERSION = 35;
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -857,12 +858,15 @@ export interface BoxSettings {
 	alwaysOn: boolean;
 }
 export interface AteamSettings {
+	/** Machine-owned; never included in engine settings sync. */
+	chat?: import("./lead").ChatSettings;
 	version: number;
 	client: ClientSettings;
 	engine: EngineSettings;
 	box: BoxSettings;
 }
 export interface SettingsPatch {
+	chat?: Partial<import("./lead").ChatSettings>;
 	client?: Partial<ClientSettings>;
 	engine?: Partial<EngineSettings>;
 	box?: Partial<BoxSettings>;
