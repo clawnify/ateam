@@ -32,6 +32,7 @@ import {
 	boxKey,
 	CONNECTION_LOST,
 	cantWakeReason,
+	dialWakes,
 	NEW_LINK,
 	NO_PROVIDER_HINT,
 	wakesThrough,
@@ -218,6 +219,12 @@ export function createLinks(deps: LinkDeps): Links {
 	async function reconnect(key: string, wakeNow = false): Promise<void> {
 		const box = boxOf(key);
 		if (!box || paused || !deps.consented() || conns.has(key)) return;
+		// Dialling this one wakes it (boxes.ts dialWakes): only for someone who wants it
+		// now, never a try in the background. It rests asleep on its card until then.
+		if (dialWakes(box) && !wakeNow && !deps.waitedOn(key)) {
+			set(key, (l) => ({ ...l, state: "down", asleep: true }));
+			return;
+		}
 		const stale = clock.now() - (lastWakeAt.get(key) ?? 0) >= REWAKE_MS;
 		// A box that said it's always on is woken only when asked for (wakeNow), never
 		// by a retry: a tap still can, should it have been put back to sleeping.
@@ -289,7 +296,8 @@ export function createLinks(deps: LinkDeps): Links {
 			// Asked to wake a box this phone has nothing to wake it with (no provider, or
 			// no key or name for it): the one dial below is all there is, so a failure
 			// says why, on its card and on whatever waits on it.
-			if (opts.wake && !waker && box.sleeps !== false) {
+			// One that connecting wakes needs nothing more: the dial below is its wake.
+			if (opts.wake && !waker && box.sleeps !== false && !dialWakes(box)) {
 				cantWake = wakeable
 					? `${cantWakeReason(box)} Tap the box in Boxes to add it.`
 					: `${NO_PROVIDER_HINT} You can set it from the box's card in Boxes.`;
@@ -407,7 +415,13 @@ export function createLinks(deps: LinkDeps): Links {
 				// Not answering when nobody woke it is what a box that sleeps does. A
 				// box that refused for pairing answered, so it isn't asleep. One someone
 				// asked for that this phone can't wake shows why instead.
-				asleep: wakeable && waker === null && cantWake === null && msg !== NEEDS_PAIRING,
+				// One that connecting wakes was woken by this try, so a failure is a failure.
+				asleep:
+					wakeable &&
+					!dialWakes(box) &&
+					waker === null &&
+					cantWake === null &&
+					msg !== NEEDS_PAIRING,
 				...(cantWake && msg !== NEEDS_PAIRING ? { wakeError: cantWake } : {}),
 			}));
 			return false;

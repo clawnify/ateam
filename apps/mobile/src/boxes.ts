@@ -111,12 +111,19 @@ export function alwaysOnInForm(box: SavedConnection | null): boolean {
 	return box === null ? true : box.sleeps === false;
 }
 
+/** A box that connecting to wakes: reached over SSH at a provider whose gateway wakes
+ *  the machine on its first packet (providers.ts sshWakes). The phone needs no key to
+ *  wake it, and a try in the background mustn't dial it, as the dial is the wake. */
+export function dialWakes(box: SavedConnection): boolean {
+	return Boolean(box.ssh) && wakesThrough(box)?.sshWakes === true;
+}
+
 /** Why this phone can't wake a box its provider puts to sleep, when it can't (no
  *  waker for it): its name there is missing, else the provider's key. Null for a
- *  box with no provider, which nothing wakes. */
+ *  box with no provider, which nothing wakes, and for one connecting to wakes. */
 export function cantWakeReason(box: SavedConnection): string | null {
 	const def = wakesThrough(box);
-	if (!def) return null;
+	if (!def || dialWakes(box)) return null;
 	if (!filled(def, "box", box.provider?.box ?? {})) {
 		return `This phone doesn't have its name at ${def.label}, so it can't wake it.`;
 	}

@@ -69,6 +69,13 @@ const sleepy: SavedConnection = {
 	port: "8787",
 	provider: { id: "sprites", box: { machine: "m" } },
 };
+// A boxd machine reached over SSH: boxd's gateway wakes it on connect (providers.ts).
+const sshBoxd: SavedConnection = {
+	host: "m.boxd.sh",
+	port: "12836",
+	ssh: { user: "boxd", identity: "id", auth: "password", hostKey: "ssh-ed25519 AAAA" },
+	provider: { id: "boxd", box: { machine: "m" } },
+};
 const key = boxKey;
 
 function harness(over: Partial<LinkDeps> = {}) {
@@ -523,4 +530,40 @@ test("a woken box that refuses for pairing says so at once instead of trying for
 		error: NEEDS_PAIRING,
 		asleep: false,
 	});
+});
+
+test("a box that connecting wakes is never dialled in the background, and a tap dials it with no key", async () => {
+	const h = harness({ wakerFor: async () => null });
+	h.setBoxes([sshBoxd]);
+	h.links.holdAll();
+	await settle();
+	// The dial would wake it: the card rests asleep instead.
+	expect(h.calls).toHaveLength(0);
+	expect(h.state()[key(sshBoxd)]).toMatchObject({ state: "down", asleep: true });
+	// Coming back to the foreground, and time passing, don't dial it either.
+	h.links.foreground();
+	await settle();
+	await h.fc.advance(120_000);
+	expect(h.calls).toHaveLength(0);
+	// A tap dials it with no boxd key, since connecting is its wake.
+	const tapped = h.links.connect(sshBoxd, { wake: true });
+	await settle();
+	expect(h.calls).toHaveLength(1);
+	h.calls[0]?.reject(new Error("refused"));
+	expect(await tapped).toBe(false);
+	// Woken by that dial, so its failure is a failure: not asleep, and no key asked for.
+	expect(h.state()[key(sshBoxd)]).toMatchObject({
+		state: "down",
+		asleep: false,
+		error: "refused",
+		wakeError: null,
+	});
+});
+
+test("a box that connecting wakes is dialled once something on it is opened", async () => {
+	const h = harness({ wakerFor: async () => null });
+	h.setBoxes([sshBoxd]);
+	h.links.ensure(key(sshBoxd));
+	await settle();
+	expect(h.calls).toHaveLength(1);
 });

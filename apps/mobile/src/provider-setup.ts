@@ -1,3 +1,7 @@
+// shortcut: boxd's SSH facts live here while its wake facts (incl. sshWakes) live in
+// packages/protocol/src/providers.ts. Fold the `ssh` facts into ProviderDefinition when
+// a second provider is reached over SSH, so each provider is described once.
+//
 // Where a new box can run, the first step of Create a box (src/CreateBoxScreen.tsx).
 // Ateam Go creates a Hetzner server itself; at any other provider you make the
 // machine there, and the phone then reaches it over SSH with what's below. Each

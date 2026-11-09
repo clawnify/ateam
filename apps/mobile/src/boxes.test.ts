@@ -11,6 +11,7 @@ import {
 	CONNECTION_LOST,
 	cantWakeReason,
 	connectionOf,
+	dialWakes,
 	droppedIdentities,
 	leadBoxOf,
 	leadFirst,
@@ -265,6 +266,26 @@ describe("which box", () => {
 		// Tried again: still away until the try says otherwise.
 		expect(awayOf({ ...NEW_LINK, state: "connecting", error: "timed out" })).toBe("offline");
 	});
+});
+
+test("a boxd box reached over SSH needs no boxd key to wake: connecting wakes it", () => {
+	const machine = { provider: { id: "boxd", box: { machine: "m" } } };
+	const tailnet = { host: "100.64.0.9", port: "8787", ...machine };
+	const ssh = {
+		host: "m.boxd.sh",
+		port: "12836",
+		ssh: { user: "boxd", identity: "id", auth: "password" as const },
+		...machine,
+	};
+	// Over the tailnet a dial leaves it asleep: the phone needs boxd's key.
+	expect(dialWakes(tailnet)).toBe(false);
+	expect(cantWakeReason(tailnet)).toContain("API key");
+	// Over boxd's SSH gateway the dial is the wake.
+	expect(dialWakes(ssh)).toBe(true);
+	expect(cantWakeReason(ssh)).toBeNull();
+	// Still shown asleep until tapped, and not once it said it's always on.
+	expect(shownAsleep(ssh, NEW_LINK)).toBe(true);
+	expect(dialWakes({ ...ssh, sleeps: false })).toBe(false);
 });
 
 test("SSH identities are separate from tailnet boxes and survive storage", () => {
