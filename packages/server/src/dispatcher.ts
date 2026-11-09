@@ -81,6 +81,7 @@ import {
 	type SpawnAgentInput,
 	shell,
 	spawnAgentInTask,
+	spawnShellInTask,
 } from "./sessions";
 import { readSettings, settingsPath, updateSettings } from "./settings-file";
 import { linkSkill, listSkills } from "./skills";
@@ -233,30 +234,6 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		}
 		return { removable, kept };
 	}
-
-	/** Open a login shell in a task's worktree and record the session. */
-	const spawnShellInTask = (task: { id: string; worktreePath: string }) => {
-		services.worktreeGuard.assertWritable(task.id);
-		const terminalId = randomUUID();
-		repo.createSession(db, {
-			taskId: task.id,
-			agentId: "shell",
-			terminalId,
-			cwd: task.worktreePath,
-		});
-		services.pty.spawn({
-			terminalId,
-			shell,
-			args: ["-l"],
-			cwd: task.worktreePath,
-			env: { ...process.env },
-		});
-		// A new session IS a change to the task — say so, exactly as the agent
-		// spawn does. Without this, a shell opened in one window is invisible to
-		// every other client until something else touches the task.
-		engine.sendTaskUpdated(task.id);
-		return { terminalId };
-	};
 
 	/** The box's own shell, in its home folder and outside every project: where a
 	 *  first visit signs into gh or a secrets CLI before any project exists. One per
@@ -971,7 +948,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.ptySpawnAgent]: async (input: SpawnAgentInput) =>
 			spawnAgentInTask(services, engine.sendTaskUpdated, input),
 		[CH.ptySpawnShell]: async (input: { taskId: string }) =>
-			spawnShellInTask(requireTask(services, input.taskId)),
+			spawnShellInTask(services, engine.sendTaskUpdated, requireTask(services, input.taskId)),
 		[CH.ptyBoxShell]: async () => openBoxShell(),
 		[CH.ptyKill]: async (terminalId: string) => {
 			// Stamp WHY before the exit lands: closing a tab is the one ending that
@@ -1026,7 +1003,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			// shell where it stood, which is all it ever was.
 			if (dead.agentId === "shell") {
 				repo.updateSession(db, dead.id, { exitReason: "restored" });
-				return spawnShellInTask(task);
+				return spawnShellInTask(services, engine.sendTaskUpdated, task);
 			}
 			// With a known conversation, resume THAT one. Without (a harness that
 			// mints its own ids, or a tab that started life as a `--continue`),

@@ -700,6 +700,7 @@ export async function ensureBoardMcpConfig(opts: {
 /** The board tools, named for `claude --allowedTools`. */
 export const BOARD_MCP_TOOLS = [
 	"mcp__ateam_board__get_board",
+	"mcp__ateam_board__create_session",
 	"mcp__ateam_board__set_status",
 	"mcp__ateam_board__set_waiting",
 	"mcp__ateam_board__list_peers",
