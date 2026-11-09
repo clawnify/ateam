@@ -7,7 +7,9 @@ name: install.sh
 # into bash. A merge is therefore a rollout to every new install, with no release
 # in between, so this runs the PR's copy for real before it gets there. It also
 # builds the matching server payload and runs daily against main to catch changes
-# in Node 22, npm prebuilds and gh's release assets.
+# in Node 22, npm prebuilds and gh's release assets. During lifecycle rollout, test
+# both the live installer and the coordinated candidate. Activate the candidate
+# only after the latest released server contains ateamLifecycle:1.
 #
 # Not a required check: the "Protect" ruleset requires `ci` only, and these runs
 # depend on nodejs.org (nvm), GitHub releases and the npm registry.
@@ -16,6 +18,7 @@ on:
     branches: [main]
     paths:
       - packages/server/scripts/install.sh
+      - packages/server/scripts/install-coordinated.sh
       - packages/server/scripts/build.ts
       - packages/server/scripts/test-lifecycle.py
       - packages/server/scripts/test-install-lifecycle.py
@@ -62,8 +65,8 @@ jobs:
           echo "$SHELLCHECK_SHA256  $tarball" | sha256sum -c -
           tar -xzf "$tarball" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION" >>"$GITHUB_PATH"
-      - run: bash -n packages/server/scripts/install.sh
-      - run: shellcheck --version && shellcheck -S warning packages/server/scripts/install.sh
+      - run: bash -n packages/server/scripts/install.sh && bash -n packages/server/scripts/install-coordinated.sh
+      - run: shellcheck --version && shellcheck -S warning packages/server/scripts/install.sh packages/server/scripts/install-coordinated.sh
       # An option it doesn't know stops it before it touches anything: a typo such as
       # --tailscle must not install a box without what was asked for.
       - name: An unknown option is refused
@@ -90,11 +93,12 @@ jobs:
 
   e2e:
     needs: build
-    name: e2e (${{ matrix.runner }})
+    name: e2e (${{ matrix.runner }}, ${{ matrix.installer }})
     strategy:
       fail-fast: false
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        installer: [install.sh, install-coordinated.sh]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     # A bare box. No systemd in a container, so no --service: the service job
@@ -122,7 +126,7 @@ jobs:
       # installation share a lifecycle contract, checked before activation.
       - name: Run install.sh as the box user
         run: |
-          install -o tester -m 0644 packages/server/scripts/install.sh /home/tester/install.sh
+          install -o tester -m 0644 packages/server/scripts/${{ matrix.installer }} /home/tester/install.sh
           su - tester -c 'cat ~/install.sh | ATEAM_TARBALL=/tmp/ateam-candidate/ateam-server.tar.gz bash -s' 2>&1 | tee "$RUNNER_TEMP/install.log"
       - name: Check the handshake step printed OK
         run: awk "$HANDSHAKE_OK" "$RUNNER_TEMP/install.log"
@@ -153,6 +157,10 @@ jobs:
   # ships Node and gh); the e2e job covers that part.
   service:
     needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        installer: [install.sh, install-coordinated.sh]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -166,7 +174,7 @@ jobs:
           sudo useradd -m -s /bin/bash tester
           echo 'tester ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/tester >/dev/null
           sudo chmod 0440 /etc/sudoers.d/tester
-          sudo install -o tester -m 0644 packages/server/scripts/install.sh /home/tester/install.sh
+          sudo install -o tester -m 0644 packages/server/scripts/${{ matrix.installer }} /home/tester/install.sh
       - name: Run install.sh --service as the box user
         run: sudo su - tester -c 'cat ~/install.sh | ATEAM_TARBALL=/tmp/ateam-candidate/ateam-server.tar.gz bash -s -- --service' 2>&1 | tee "$RUNNER_TEMP/install.log"
       - name: Check the service owns the daemon
@@ -203,6 +211,7 @@ jobs:
           sudo install -o tester -m 0644 packages/server/scripts/test-lifecycle.py /home/tester/test-lifecycle.py
           sudo su - tester -c 'ATEAM_LIFECYCLE_TEST=1 python3 ~/test-lifecycle.py ~/ateam-app/cli.js'
       - name: Installer interruption, reconnects, RPC update and live PTY
+        if: matrix.installer == 'install-coordinated.sh'
         run: |
           sudo install -o tester -m 0644 packages/server/scripts/test-install-lifecycle.py /home/tester/test-install-lifecycle.py
           sudo su - tester -c 'ATEAM_LIFECYCLE_TEST=1 python3 ~/test-install-lifecycle.py ~/install.sh /tmp/ateam-candidate/ateam-server.tar.gz'
