@@ -32,12 +32,18 @@ export interface ProviderDefinition {
 		/** Shown under the fields once picked: what happens with them, and how far a key reaches. */
 		note: string;
 	};
+	/** Connecting over SSH wakes a sleeping machine (its SSH gateway wakes it on the first
+	 *  packet), so a box reached that way needs no key to wake, and any dial wakes it. */
+	sshWakes?: boolean;
 }
 
 export const PROVIDERS: readonly ProviderDefinition[] = [
 	{
 		id: "boxd",
 		label: "boxd",
+		// A machine in standby wakes on its first inbound packet, SSH included (boxd's CLI
+		// reference); <machine>.boxd.sh:<port> is how a phone's SSH app reaches it.
+		sshWakes: true,
 		wake: {
 			inputs: [
 				{ key: "machine", label: "Machine", placeholder: "mybox", scope: "box" },

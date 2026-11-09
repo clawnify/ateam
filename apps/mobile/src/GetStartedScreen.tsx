@@ -1,7 +1,8 @@
 // The first screen, for a phone with no box yet: two ways to one. Pair with a Mac
 // that has boxes (one scan of Settings → Boxes → Pair your iPhone), or create a box
-// on Hetzner from here (src/CreateBoxScreen.tsx). A box set up some other way, with
-// Ateam's installer, is added by its address; and the demo needs nothing.
+// on Hetzner from here (src/CreateBoxScreen.tsx). A server of your own is added over
+// SSH or by its tailnet address; and the demo needs nothing. Only the Mac's boxes need
+// Tailscale on this phone, so that's the one door that says whether it's on.
 import Feather from "@expo/vector-icons/Feather";
 import type { ReactNode } from "react";
 import { Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
@@ -18,6 +19,7 @@ function Door({
 	action,
 	onPress,
 	link,
+	note,
 }: {
 	icon: ReactNode;
 	title: string;
@@ -26,6 +28,8 @@ function Door({
 	onPress: () => void;
 	/** A page to read about it, beside the action. */
 	link?: { label: string; onPress: () => void };
+	/** What this way in needs on the phone, under its body. */
+	note?: ReactNode;
 }) {
 	return (
 		<Pressable
@@ -39,6 +43,7 @@ function Door({
 				<Text style={styles.doorTitle}>{title}</Text>
 			</View>
 			<Text style={styles.doorBody}>{body}</Text>
+			{note}
 			<View style={styles.doorFoot}>
 				{link ? (
 					<Pressable onPress={link.onPress} hitSlop={8} accessibilityRole="link">
@@ -85,41 +90,26 @@ function SmallDoor({
 	);
 }
 
-/** Whether this phone is on Tailscale, used for paired tailnet boxes, and the way to
- *  turn it on where it isn't. A build that can't tell just says it's needed. */
-function TailscaleState() {
+/** Whether this phone is on Tailscale, which the Mac's boxes are reached over, and
+ *  the way to turn it on where it isn't. A build that can't tell says it's needed. */
+function TailscaleNote() {
 	const up = useTailnet();
 	if (up) {
 		return (
-			<View style={styles.tsOn}>
+			<View style={styles.tsRow}>
 				<Feather name="check" size={14} color={C.green} />
 				<Text style={styles.note}>This phone is on Tailscale.</Text>
 			</View>
 		);
 	}
-	if (up === false) {
-		return (
-			<View style={styles.tsOff}>
-				<View style={styles.tsText}>
-					<Text style={styles.tsTitle}>Tailscale is off on this phone</Text>
-					<Text style={styles.tsBody}>
-						Turn it on for tailnet boxes. Direct SSH boxes do not need Tailscale.
-					</Text>
-				</View>
-				<Pressable style={styles.tsBtn} onPress={openTailscale} accessibilityRole="button">
-					<Text style={styles.tsBtnText}>Turn on</Text>
-				</Pressable>
-			</View>
-		);
-	}
 	return (
-		<View style={styles.tailscale}>
+		<View style={styles.tsRow}>
+			<View style={[styles.tsDot, up === false && { backgroundColor: C.amber }]} />
 			<Text style={styles.note}>
-				For tailnet boxes, install Tailscale and sign in to their account. Direct SSH also works
-				without it.
+				{up === false ? "Tailscale is off on this phone." : "Needs Tailscale on this phone."}
 			</Text>
-			<Pressable onPress={openTailscale} hitSlop={6} accessibilityRole="link">
-				<Text style={styles.link}>Get Tailscale</Text>
+			<Pressable onPress={openTailscale} hitSlop={8} accessibilityRole="link">
+				<Text style={styles.link}>{up === false ? "Turn on" : "Get Tailscale"}</Text>
 			</Pressable>
 		</View>
 	);
@@ -158,7 +148,6 @@ export function GetStartedScreen({
 						Ateam Go runs your agents on a box: a Linux machine of your own, which this phone
 						reaches over Tailscale or SSH.
 					</Text>
-					<TailscaleState />
 					<Door
 						icon={<ScanQrIcon size={18} color={C.ink} />}
 						title="Pair with Ateam for Mac"
@@ -166,6 +155,7 @@ export function GetStartedScreen({
 						action="Scan the code"
 						onPress={onScan}
 						link={{ label: "Get Ateam for Mac", onPress: shareMacApp }}
+						note={<TailscaleNote />}
 					/>
 					<Door
 						icon={<Feather name="server" size={17} color={C.ink} />}
@@ -173,7 +163,7 @@ export function GetStartedScreen({
 						body={
 							creating
 								? `${creating} is being set up on Hetzner.`
-								: "A server of your own on Hetzner Cloud, billed to your Hetzner account and set up from this phone."
+								: "Pick where it runs: Hetzner, set up from this phone, or boxd or another server, over SSH."
 						}
 						action={creating ? "See how it's going" : "Create a box"}
 						onPress={onCreate}
@@ -233,30 +223,8 @@ const styles = StyleSheet.create({
 	doorFoot: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
 	doorAction: { flexDirection: "row", alignItems: "center", gap: 2, marginLeft: "auto" },
 	doorActionText: { color: C.ink, fontSize: 14, fontWeight: "600" },
-	tailscale: { gap: 6, paddingHorizontal: 4 },
-	tsOn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 4 },
-	tsOff: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: 12,
-		padding: 14,
-		borderRadius: 12,
-		borderWidth: 1,
-		borderColor: C.amber,
-		backgroundColor: C.surface,
-	},
-	tsText: { flex: 1, gap: 3 },
-	tsTitle: { color: C.ink, fontSize: 15, fontWeight: "600" },
-	tsBody: { color: C.muted, fontSize: 12, lineHeight: 17 },
-	tsBtn: {
-		height: 34,
-		paddingHorizontal: 14,
-		borderRadius: 17,
-		backgroundColor: C.ink,
-		alignItems: "center",
-		justifyContent: "center",
-	},
-	tsBtnText: { color: C.bg, fontSize: 14, fontWeight: "700" },
+	tsRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
+	tsDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.faint },
 	note: { color: C.faint, fontSize: 12, lineHeight: 17 },
 	link: { color: C.ink, fontSize: 13, fontWeight: "600", textDecorationLine: "underline" },
 	errorBox: {

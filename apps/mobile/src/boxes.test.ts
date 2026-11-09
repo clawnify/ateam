@@ -10,6 +10,9 @@ import {
 	boxTitle,
 	CONNECTION_LOST,
 	cantWakeReason,
+	connectionOf,
+	dialWakes,
+	droppedIdentities,
 	leadBoxOf,
 	leadFirst,
 	NEW_LINK,
@@ -265,6 +268,26 @@ describe("which box", () => {
 	});
 });
 
+test("a boxd box reached over SSH needs no boxd key to wake: connecting wakes it", () => {
+	const machine = { provider: { id: "boxd", box: { machine: "m" } } };
+	const tailnet = { host: "100.64.0.9", port: "8787", ...machine };
+	const ssh = {
+		host: "m.boxd.sh",
+		port: "12836",
+		ssh: { user: "boxd", identity: "id", auth: "password" as const },
+		...machine,
+	};
+	// Over the tailnet a dial leaves it asleep: the phone needs boxd's key.
+	expect(dialWakes(tailnet)).toBe(false);
+	expect(cantWakeReason(tailnet)).toContain("API key");
+	// Over boxd's SSH gateway the dial is the wake.
+	expect(dialWakes(ssh)).toBe(true);
+	expect(cantWakeReason(ssh)).toBeNull();
+	// Still shown asleep until tapped, and not once it said it's always on.
+	expect(shownAsleep(ssh, NEW_LINK)).toBe(true);
+	expect(dialWakes({ ...ssh, sleeps: false })).toBe(false);
+});
+
 test("SSH identities are separate from tailnet boxes and survive storage", () => {
 	const ws = { host: "Box", port: "22" };
 	const ssh = {
@@ -283,4 +306,48 @@ test("SSH identities are separate from tailnet boxes and survive storage", () =>
 	for (const invalid of [null, {}, { ...ssh.ssh, auth: "unknown" }, { ...ssh.ssh, hostKey: 3 }]) {
 		expect(parseBoxes(JSON.stringify([{ ...ssh, ssh: invalid }]), null)).toEqual([]);
 	}
+});
+
+test("an SSH box's Keychain identity goes once no saved box uses it", () => {
+	const ssh = (host: string, identity: string) => ({
+		host,
+		port: "22",
+		ssh: { user: "ateam", identity, auth: "key" as const },
+	});
+	const tailnet = { host: "100.64.0.1", port: "8787" };
+	const a = ssh("a.example", "id-a");
+	const b = ssh("b.example", "id-b");
+	// Removed: its identity goes; the other box's stays, and a tailnet box has none.
+	expect(droppedIdentities([a, b, tailnet], [b, tailnet])).toEqual(["id-a"]);
+	// Moved to another address with the same key (an edit, or a created box's IP): kept.
+	expect(droppedIdentities([a], [{ ...a, host: "203.0.113.7" }])).toEqual([]);
+	// Edited onto a new key: the old one goes.
+	expect(droppedIdentities([a], [ssh("a.example", "id-new")])).toEqual(["id-a"]);
+	// Shared by two saved boxes: kept while either is left, and named once.
+	const twin = ssh("a2.example", "id-a");
+	expect(droppedIdentities([a, twin], [twin])).toEqual([]);
+	expect(droppedIdentities([a, twin], [])).toEqual(["id-a"]);
+	// Root becoming the ateam user keeps the identity (src/ssh.ts).
+	expect(droppedIdentities([{ ...a, ssh: { ...a.ssh, user: "root" } }], [a])).toEqual([]);
+});
+
+test("box settings say how this phone reaches each box", () => {
+	expect(
+		connectionOf({
+			host: "203.0.113.7",
+			port: "22",
+			ssh: { user: "ateam", identity: "k", auth: "key" },
+		}),
+	).toEqual({ label: "SSH", detail: "ateam@203.0.113.7:22 · key on this phone" });
+	expect(
+		connectionOf({
+			host: "vps.example",
+			port: "",
+			ssh: { user: "root", identity: "p", auth: "password" },
+		}).detail,
+	).toBe("root@vps.example:22 · password on this phone");
+	expect(connectionOf({ host: "100.64.0.1", port: "8787" })).toEqual({
+		label: "Tailscale",
+		detail: "100.64.0.1:8787 · needs Tailscale on this phone",
+	});
 });

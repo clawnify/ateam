@@ -1,13 +1,33 @@
 import { expect, test } from "bun:test";
-import type { ProviderOptions } from "@ateam/protocol";
+import { AGENT_INSTALLS, type ProviderOptions } from "@ateam/protocol";
 import {
 	boxNameOf,
 	defaultBoxName,
 	defaultsOf,
+	installAndSignIn,
 	newDeviceToken,
 	phoneCloudInit,
 	priceLine,
+	signInCommand,
 } from "./create-box";
+
+test("Finish setting up installs an agent, then signs in from a fresh login shell", () => {
+	expect(signInCommand("claude")).toBe("claude auth login");
+	// No browser on the box: Codex signs in by a device code.
+	expect(signInCommand("codex")).toBe("codex login --device-auth");
+	expect(installAndSignIn("claude")).toBe(
+		"curl -fsSL https://claude.ai/install.sh | bash && bash -lc 'claude auth login'",
+	);
+	// Codex's installer would ask to start Codex first (checked on a box, 2026-11-09).
+	expect(installAndSignIn("codex")).toBe(
+		"env CODEX_NON_INTERACTIVE=1 sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | sh' && bash -lc 'codex login --device-auth'",
+	);
+	// Each command is wrapped in single quotes above, so none may contain one.
+	for (const a of Object.keys(AGENT_INSTALLS) as (keyof typeof AGENT_INSTALLS)[]) {
+		expect(AGENT_INSTALLS[a].install).not.toContain("'");
+		expect(signInCommand(a)).not.toContain("'");
+	}
+});
 
 const bytes =
 	(...b: number[]) =>

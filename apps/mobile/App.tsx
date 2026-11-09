@@ -61,6 +61,7 @@ import {
 	useWindowDimensions,
 	View,
 } from "react-native";
+import { sshAvailable, sshNative } from "./modules/expo-ssh/src";
 import { AgentIcon } from "./src/AgentIcon";
 import { AiKeysScreen } from "./src/AiKeysScreen";
 import { filesToBox } from "./src/attach";
@@ -74,6 +75,7 @@ import {
 	boxKey,
 	boxTitle,
 	cantWakeReason,
+	droppedIdentities,
 	leadBoxOf,
 	leadFirst,
 	NEW_LINK,
@@ -105,11 +107,13 @@ import { ProjectBrowser } from "./src/ProjectBrowser";
 import { type ProposalItem, ProposalSheet } from "./src/ProposalSheet";
 import { ProviderIcon } from "./src/ProviderIcon";
 import { pairTarget, parsePairLinks } from "./src/pair-link";
+import type { SSHSetup } from "./src/provider-setup";
 import { ScanQrIcon } from "./src/ScanQrIcon";
 import { emptySSHForm, SSHFields, type SSHForm, savedSSHForm, saveSSHForm } from "./src/SSHFields";
 import { SSHPreview } from "./src/SSHPreview";
 import { useScrollFade } from "./src/scroll-fade";
 import { prepareSSH } from "./src/ssh";
+import { parseSSHLink } from "./src/ssh-link";
 import {
 	loadBoards,
 	loadBoxes,
@@ -348,6 +352,7 @@ function savedFlags(def: ProviderDefinition, account: InputValues): Record<strin
 function ConnectionScreen({
 	sshForm,
 	onSSHChange,
+	sshSetup,
 	host,
 	port,
 	setHost,
@@ -379,6 +384,8 @@ function ConnectionScreen({
 }: {
 	sshForm: SSHForm;
 	onSSHChange: (value: SSHForm) => void;
+	/** A machine made at a provider (Create a box): its host and password, as it says. */
+	sshSetup: SSHSetup | null;
 	/** Add a box by scanning the pairing code a Mac shows (not while editing one). */
 	onScan: (() => void) | null;
 	/** The scanner, while it is open (App's). */
@@ -486,10 +493,15 @@ function ConnectionScreen({
 							accessibilityRole="button"
 						>
 							<Feather name="server" size={18} color={C.ink} />
-							<Text style={styles.scanText}>No box yet? Create one on Hetzner from here.</Text>
+							<Text style={styles.scanText}>No box yet? Create one from here.</Text>
 						</Pressable>
 					) : null}
-					<SSHFields value={sshForm} onChange={onSSHChange} disabled={connecting} />
+					<SSHFields
+						value={sshForm}
+						onChange={onSSHChange}
+						disabled={connecting}
+						password={sshSetup?.password}
+					/>
 					<View style={styles.eyebrowRow}>
 						<View style={[styles.tick, { backgroundColor: C.ink }]} />
 						<Text style={styles.eyebrow}>Box</Text>
@@ -499,13 +511,15 @@ function ConnectionScreen({
 							label={sshForm.enabled ? "SSH host" : "Tailscale IP or host"}
 							value={host}
 							onChangeText={setHost}
-							placeholder={sshForm.enabled ? "Server IP or hostname" : "100.x.y.z"}
+							placeholder={
+								sshForm.enabled ? (sshSetup?.hostHint ?? "Server IP or hostname") : "100.x.y.z"
+							}
 						/>
 						<Field
 							label="Port"
 							value={port}
 							onChangeText={setPort}
-							placeholder={sshForm.enabled ? "22" : "8787"}
+							placeholder={sshForm.enabled ? (sshSetup?.portHint ?? "22") : "8787"}
 							keyboardType="numeric"
 						/>
 						<Pressable
@@ -1335,6 +1349,8 @@ export default function App() {
 	const [host, setHost] = useState("");
 	const [port, setPort] = useState("8787");
 	const [sshForm, setSSHForm] = useState<SSHForm>(emptySSHForm);
+	// The provider a new box was made at (Create a box), for the form's hints.
+	const [formSetup, setFormSetup] = useState<SSHSetup | null>(null);
 	// Waking a sleeping box through its provider before connecting (packages/protocol/src/wake.ts).
 	// The provider and the box's inputs ride on the saved box; the provider's account
 	// inputs (its key) live in the Keychain and are only ever held here, in a ref,
@@ -1598,10 +1614,17 @@ export default function App() {
 
 	// The Boxes list as it is now, persisted. Through a ref as well as state, so a
 	// connect that lands mid-render still edits the latest list.
-	const commitBoxes = useCallback((next: SavedBox[], required = false) => {
+	const commitBoxes = useCallback(async (next: SavedBox[], required = false) => {
+		const dropped = droppedIdentities(boxesRef.current, next);
 		boxesRef.current = next;
 		setBoxes(next);
-		return saveBoxes(next, required);
+		// The Keychain follows the saved list: a box's SSH key and password leave with it,
+		// once the list without it is stored (a failed save would bring the box back).
+		if (!(await saveBoxes(next, required)) || !dropped.length || !sshAvailable) return;
+		for (const id of dropped)
+			await sshNative()
+				.removeIdentity(id)
+				.catch(() => {});
 	}, []);
 
 	// How to wake a box through its provider: its key from the Keychain, one adapter
@@ -1752,6 +1775,7 @@ export default function App() {
 	// Fill the form with a saved box, provider and all, or empty it for a new one.
 	const fillForm = useCallback(async (box: SavedBox | null) => {
 		setSSHForm(savedSSHForm(box));
+		setFormSetup(null);
 		setHost(box?.host ?? "");
 		setPort(box?.port ?? "8787");
 		setError(null);
@@ -1837,6 +1861,27 @@ export default function App() {
 		setEditingKey(null);
 		setConnectScreen("form");
 	}, [fillForm]);
+
+	// A machine made at a provider (Create a box, src/provider-setup.ts): the same form,
+	// over SSH, with that provider's login and what its password is called there.
+	// From an `ateamgo://ssh` link (src/ssh-link.ts), `at` is the machine it names.
+	const addBoxOver = useCallback(
+		async (setup: SSHSetup, at?: { host: string; port: string | null }) => {
+			landOnBoard.current = false;
+			setEditingKey(null);
+			await fillForm(null);
+			setSSHForm({ ...emptySSHForm(), enabled: true, user: setup.user });
+			setHost(at?.host ?? "");
+			// A provider whose machines each have their own port leaves it to be typed.
+			setPort(at?.port ?? (setup.portHint ? "" : "22"));
+			setFormSetup(setup);
+			// Any page can open such a link: the host is for the user to recognise.
+			if (at)
+				setFormNotice("Filled in from a link. Check the host is yours, then paste the password.");
+			setConnectScreen("form");
+		},
+		[fillForm],
+	);
 
 	const onPickProvider = useCallback(async (id: string | null) => {
 		const def = providerById(id);
@@ -1988,6 +2033,11 @@ export default function App() {
 			setError("Enter the box's IP or hostname.");
 			return;
 		}
+		// Not 22 at a provider whose machines each have their own: never guess it.
+		if (sshForm.enabled && formSetup?.portHint && !port.trim()) {
+			setError(`Enter the box's SSH port. ${formSetup.portHint}.`);
+			return;
+		}
 		const def = providerById(providerId);
 		let box: SavedConnection = {
 			...(editingKey ? boxesRef.current.find((b) => boxKey(b) === editingKey) : {}),
@@ -1997,6 +2047,8 @@ export default function App() {
 			ssh: undefined,
 		};
 		const replaces = editingKey;
+		// Ateam's installer just ran on it over SSH: a new box, so Finish setting up.
+		let installed = false;
 		landOnBoard.current = false;
 		endDemo();
 		setFormBusy(true);
@@ -2019,7 +2071,7 @@ export default function App() {
 				box.ssh = await saveSSHForm({ ...sshForm, hostKey });
 				setSSHForm(savedSSHForm(box));
 				let remembered = replaces;
-				box = await prepareSSH(
+				({ box, installed } = await prepareSSH(
 					box,
 					async (next) => {
 						await commitBoxes(touchBox(boxesRef.current, next, Date.now(), remembered), true);
@@ -2028,7 +2080,7 @@ export default function App() {
 						setSSHForm(savedSSHForm(next));
 					},
 					setFormNotice,
-				);
+				));
 			}
 			const key = boxKey(box);
 			if (!(await link.connect(box, { wake: true, save: true, replaces, onWaking: setWaking }))) {
@@ -2054,7 +2106,11 @@ export default function App() {
 			setEditingKey(null);
 			setConnectScreen("list");
 			leaveConnect();
-			if (!lastRead.current.projects.some((p) => fleet.ownerOf(p.id) === key)) setBrowserKey(key);
+			// New to Ateam, or no coding agent to run a task with: the same checklist a box
+			// created here gets (sign in or install an agent, GitHub, a first project).
+			if (installed || !link.conn(key)?.info.agents.length) setFinishKey(key);
+			else if (!lastRead.current.projects.some((p) => fleet.ownerOf(p.id) === key))
+				setBrowserKey(key);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -2063,6 +2119,7 @@ export default function App() {
 		}
 	}, [
 		sshForm,
+		formSetup,
 		formBusy,
 		host,
 		port,
@@ -2224,6 +2281,27 @@ export default function App() {
 		const sub = Linking.addEventListener("url", (e) => offerPairLink(e.url));
 		return () => sub.remove();
 	}, [offerPairLink]);
+	// `ateamgo://ssh?…`: a provider's link to one of its machines (src/ssh-link.ts). It
+	// only fills in Add a box: the user pastes the password and taps Connect, and the
+	// first connection asks them to trust the machine.
+	const openSSHLink = useCallback(
+		(url: string | null): void => {
+			const found = url && sshAvailable ? parseSSHLink(url) : null;
+			if (!found) return;
+			void (async () => {
+				await booted.current;
+				endDemo();
+				setView("connect");
+				await addBoxOver(found.setup, { host: found.host, port: found.port });
+			})();
+		},
+		[addBoxOver, endDemo],
+	);
+	useEffect(() => {
+		void Linking.getInitialURL().then(openSSHLink);
+		const sub = Linking.addEventListener("url", (e) => openSSHLink(e.url));
+		return () => sub.remove();
+	}, [openSSHLink]);
 	// The same link, read by the camera inside the app (src/PairScanner.tsx). Loaded when
 	// first opened: a build made before the camera's native code fails on importing it.
 	const scannerRef = useRef<typeof import("./src/PairScanner").PairScanner | null>(null);
@@ -2441,9 +2519,26 @@ export default function App() {
 	const onRemoveBox = useCallback(
 		(box: SavedBox) => {
 			const key = boxKey(box);
-			commitBoxes(removeBox(boxesRef.current, key));
-			setSwipeOpenKey(null);
-			forgetBox(key);
+			const remove = () => {
+				void commitBoxes(removeBox(boxesRef.current, key));
+				setSwipeOpenKey(null);
+				forgetBox(key);
+			};
+			// Its SSH key leaves the Keychain with it (commitBoxes), and it may be the only
+			// key the server takes: say so before it's gone.
+			const ownKey = droppedIdentities(boxesRef.current, removeBox(boxesRef.current, key));
+			if (box.ssh?.auth !== "key" || !ownKey.length) {
+				remove();
+				return;
+			}
+			Alert.alert(
+				`Remove ${boxTitle(box)}?`,
+				"This phone's SSH key for it is deleted too. The server itself keeps running at your provider, and if no other key opens it, getting back in takes the provider's console.",
+				[
+					{ text: "Cancel", style: "cancel", onPress: () => setSwipeOpenKey(null) },
+					{ text: "Remove", style: "destructive", onPress: remove },
+				],
+			);
 		},
 		[commitBoxes, forgetBox],
 	);
@@ -2624,6 +2719,10 @@ export default function App() {
 				onAiKeys={() => openAiKeys(boxSettingsKey)}
 				onDotfiles={() => setDotfilesKey(boxSettingsKey)}
 				onLock={() => lockBox(settingsBox)}
+				onConnection={() => {
+					setBoxSettingsKey(null);
+					void editBox(settingsBox);
+				}}
 			/>
 		);
 	}
@@ -2707,6 +2806,7 @@ export default function App() {
 					onDelete={() => void boxCreation.deleteServer()}
 					onStartOver={boxCreation.dismiss}
 					onBack={() => setConnectScreen("list")}
+					onConnectOver={(setup) => void addBoxOver(setup)}
 				/>
 			);
 		}
@@ -2773,6 +2873,7 @@ export default function App() {
 		return (
 			<ConnectionScreen
 				sshForm={sshForm}
+				sshSetup={formSetup}
 				onSSHChange={(value) => {
 					if (value.enabled !== sshForm.enabled) setPort(value.enabled ? "22" : "8787");
 					setSSHForm(value);

@@ -65,15 +65,18 @@ export async function loadBoxes(): Promise<SavedBox[]> {
 	}
 }
 
-export async function saveBoxes(boxes: SavedBox[], required = false): Promise<void> {
+/** Whether the list reached storage (a required save throws instead of saying no). */
+export async function saveBoxes(boxes: SavedBox[], required = false): Promise<boolean> {
 	try {
 		await AsyncStorage.setItem(BOXES_KEY, JSON.stringify(boxes));
+		return true;
 	} catch {
 		if (required)
 			throw new Error(
 				"Could not save the box on this phone. Free storage before continuing setup.",
 			);
 		/* Other callers retain the current in-memory list. */
+		return false;
 	}
 }
 

@@ -12,7 +12,25 @@ import type { SavedConnection } from "./storage";
 const PAIR_CODE = /^[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}$/;
 
 /** A plain host: a name, an IPv4 address, or an IPv6 one in brackets. */
-const HOST = /^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]{1,253})$/;
+export const HOST = /^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]{1,253})$/;
+
+/** The decoded query of an `ateamgo://<path>?…` link, or null for another link or a
+ *  malformed one. Also read by src/ssh-link.ts. */
+export function linkParams(url: string, path: string): [string, string][] | null {
+	if (!url.startsWith(`ateamgo://${path}?`) && !url.startsWith(`ateamgo://${path}/?`)) return null;
+	const query = url.slice(url.indexOf("?") + 1).split("#")[0] ?? "";
+	const params: [string, string][] = [];
+	for (const part of query.split("&")) {
+		const at = part.indexOf("=");
+		if (at < 0) continue;
+		try {
+			params.push([part.slice(0, at), decodeURIComponent(part.slice(at + 1))]);
+		} catch {
+			return null;
+		}
+	}
+	return params;
+}
 
 /** More boxes than any Mac holds: a link with more is not one of ours. */
 const MAX_BOXES = 50;
@@ -25,18 +43,8 @@ export interface PairLink {
 
 /** The boxes a pairing link names, or null for anything malformed. */
 export function parsePairLinks(url: string): PairLink[] | null {
-	if (!url.startsWith("ateamgo://pair?") && !url.startsWith("ateamgo://pair/?")) return null;
-	const query = url.slice(url.indexOf("?") + 1).split("#")[0] ?? "";
-	const params: [string, string][] = [];
-	for (const part of query.split("&")) {
-		const at = part.indexOf("=");
-		if (at < 0) continue;
-		try {
-			params.push([part.slice(0, at), decodeURIComponent(part.slice(at + 1))]);
-		} catch {
-			return null;
-		}
-	}
+	const params = linkParams(url, "pair");
+	if (!params) return null;
 	const many = params.filter(([k]) => k === "b").map(([, v]) => v);
 	if (many.length > MAX_BOXES) return null;
 	if (many.length) {

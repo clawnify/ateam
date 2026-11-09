@@ -18,8 +18,14 @@ That makes the recipe the same everywhere:
    into an agent CLI once: `ssh -t <alias> claude`.
    - **No Mac?** Ateam Go's first screen has two ways to a box: **Pair with your Mac**
      (on the Mac, Settings → Boxes → **Pair your iPhone** shows one code for every box
-     it holds), or **Create a box here** on Hetzner ([how](hetzner.md#create-a-box)).
-     A box made by hand with the installer's `--tailscale` is added by its address.
+     it holds), or **Create a box here**, which asks where it runs: Hetzner, created
+     from the phone ([how](hetzner.md#create-a-box)), boxd ([how](boxd.md#ios)), or
+     another server. A Linux server of your own is added over SSH (also from **I
+     already have a box**): the
+     phone installs Ateam on it (as root, it first makes an `ateam` user that logs in
+     with a key on the phone), then **Finish setting up** installs and signs in to a
+     coding agent. A box made by hand with the installer's `--tailscale` is added by its
+     address.
 4. For Ateam Go, **Set up phone access** under the page's Access, or run the
    installer on the box with `--tailscale`. The box joins your tailnet and opens its
    network port there:
@@ -151,6 +157,34 @@ login`'s, a classic one, a provider's), and checks the box can push to a repo be
 cloning it there. The token never travels back from the box. Two weeks before it
 expires, the box's GitHub section says so and opens the form for its replacement, so
 a box doesn't stop pushing mid-task on the day it lapses.
+
+## Open Ateam Go from your page (a link for providers)
+
+A provider can open Ateam Go with **Add a box** filled in for one of its machines, the
+way boxd's phone page opens Termius:
+
+```
+ateamgo://ssh?host=<host>&port=<port>&user=<user>&provider=<id>
+```
+
+| Parameter | | |
+|---|---|---|
+| `host` | required | The machine's SSH host: a name, an IPv4 address, or an IPv6 one in brackets. |
+| `port` | optional | Its SSH port. Left out, Ateam Go uses 22, or leaves it to be typed for a provider whose machines each have their own. |
+| `user` | optional | The login. Left out: the provider's own (`boxd` for boxd), else `root`. |
+| `provider` | optional | An id Ateam Go knows (`boxd`), for its hints: what the password is called and where it comes from. Any other id is treated as a plain server. |
+
+Values are URL-encoded; a link that doesn't parse opens nothing. Example:
+`ateamgo://ssh?host=my-box.boxd.sh&port=12836&user=boxd&provider=boxd`.
+
+**Never put a password or token in the link.** Whatever opens a link can read it, and
+it lands in browser history. Copy it to the clipboard on the same tap instead, as boxd
+does for Termius; the user pastes it into the password field. Ateam Go reads nothing
+else from the link: it fills in the form with a note to check the host, and nothing
+connects until the user taps **Connect**, whose first connection asks them to trust
+the machine's host key. On a phone without Ateam Go the link opens nothing, so offer
+it next to your other SSH apps rather than in place of them. The parser is
+`apps/mobile/src/ssh-link.ts`.
 
 ## Adding a provider
 

@@ -1,6 +1,6 @@
 # Privacy Policy — Ateam & Ateam Go
 
-**Effective date: November 6, 2026**
+**Effective date: November 9, 2026**
 
 Ateam (the desktop app) and Ateam Go (the iOS companion app) are local-first
 tools published by Clawnify. This policy describes what data the apps handle,
@@ -33,7 +33,13 @@ Ateam Go stores a small amount of data locally on your phone, and only there:
   is kept in the iOS Keychain,
 - for each machine kept private to its paired devices, this phone's key to
   it, which that machine gave the phone when you paired them. It is kept in the
-  iOS Keychain and is only ever sent to that machine, and
+  iOS Keychain and is only ever sent to that machine,
+- for each machine you reach over SSH, the user the app logs in as, the
+  machine's host key (to recognise it), and the password or private key it logs
+  in with. The password and key are kept in the iOS Keychain, are only ever used
+  to log in to that machine, and are deleted when you remove it from the list.
+  A key the app creates never leaves the phone; only its public half goes to
+  the machine, and
 - reminders for tasks you parked until a date: the task's name, what it waits on and when it comes
   due, handed to iOS as local notifications that the phone itself delivers. No
   push service is involved, and the app asks for notification permission the
@@ -42,7 +48,8 @@ Ateam Go stores a small amount of data locally on your phone, and only there:
 This exists solely so the app reopens where you left off, shows every machine's
 projects even while one is asleep, and never asks you to retype a machine. Apart
 from the provider key and machine name, which go to that provider as described
-below, it never leaves the device, and deleting the app deletes it.
+below, and the SSH login, which goes only to its own machine, it never leaves the
+device, and deleting the app deletes it.
 
 The Ateam desktop app stores your projects, tasks, and settings in a local
 database on your computer. That data likewise never leaves your machine through
@@ -50,16 +57,25 @@ anything we operate.
 
 ## Where your data goes when you use the app
 
-Ateam Go is a remote control for **your own computer**. It connects over
-**your private network** (typically a [Tailscale](https://tailscale.com)
-tailnet you configured) directly to the Ateam server running on a machine you
-own. Everything you see and type in the app — terminal output, task boards,
-diffs, prompts — travels only between your phone and that machine. There is no
-intermediary server, and Clawnify is not part of the connection.
+Ateam Go is a remote control for **your own computer**. It connects directly
+to the Ateam server running on a machine you own, either over **your private
+network** (typically a [Tailscale](https://tailscale.com) tailnet you
+configured) or over an **encrypted SSH connection** across the internet, which
+the machine accepts only with its SSH password or key and which the phone uses
+only after recognising the machine's host key. Everything you see and type in
+the app — terminal output, task boards, diffs, prompts — travels only between
+your phone and that machine. There is no intermediary server, and Clawnify is
+not part of the connection.
 
 If you attach a photo from your library, it is sent to your own machine over
-that same private connection so the agent running there can use it. Photo
-library access is invoked only when you explicitly attach an image.
+that same connection so the agent running there can use it. Photo library
+access is invoked only when you explicitly attach an image.
+
+When you add a machine over SSH and Ateam is not on it yet, the app asks before
+installing it there. If you log in as root, the app asks before creating an
+`ateam` user on the machine, with administrator rights and a key this phone
+creates, and from then on logs in as that user and deletes the root password
+from the phone.
 
 To pair the phone with a machine you have locked to its paired devices, you can
 scan the pairing code the Ateam desktop app shows. Ateam Go uses the camera only
@@ -97,10 +113,18 @@ If you create a machine from Ateam Go (Create a box), the app sends the Hetzner
 API token you enter, and the machine's name, place and size, to Hetzner's API
 (`api.hetzner.cloud`), under your own Hetzner account, which Hetzner bills, and
 Hetzner's terms and privacy policy. The token is kept in the iOS Keychain. The
-machine's setup script, which Hetzner keeps with the machine, carries the
-Tailscale auth key you enter (so the machine can join your network) and a
-one-way hash of a token this phone keeps (so the machine recognises the phone);
-the token itself never leaves the phone. Nothing goes to us.
+machine's setup script, which Hetzner keeps with the machine, carries either:
+
+- with Tailscale, the Tailscale auth key you enter (so the machine can join your
+  network) and a one-way hash of a token this phone keeps (so the machine
+  recognises the phone); the token itself never leaves the phone, or
+- with SSH, the public half of a key this phone creates, which the app also adds
+  to your Hetzner account's SSH keys, so only this phone can log in. The private
+  half never leaves the phone. The app also adds a firewall named
+  `ateam-ssh-only` to your Hetzner account, which leaves only SSH open on the
+  machine.
+
+Nothing goes to us.
 
 ### AI features with your own keys (optional)
 
