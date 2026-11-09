@@ -70,6 +70,25 @@ export function stabilizeMcPages(next: string[], current: string[], pageSize: nu
 	return stable;
 }
 
+/**
+ * Hold the selected tile in its slot through a priority re-sort, as if pinned,
+ * while it is on the page being viewed: the terminal you are working in never
+ * leaves your page because its own activity (or anyone else's) moved its rank.
+ * A selected tile on another page is not held, so it can come to yours.
+ */
+export function holdMcTile(
+	pins: McPins,
+	ids: string[],
+	selected: string | null | undefined,
+	page: number,
+	pageSize: number,
+): McPins {
+	const slot = selected ? ids.indexOf(selected) : -1;
+	if (!selected || slot < 0 || Math.floor(slot / pageSize) !== page) return pins;
+	if (pins[selected] !== undefined || Object.values(pins).includes(slot)) return pins;
+	return { ...pins, [selected]: slot };
+}
+
 /** Pin the dragged tile; a pinned destination trades slots with it. */
 export function pinMcSwap(pins: McPins, ids: string[], from: string, onto: string): McPins {
 	const a = ids.indexOf(from);

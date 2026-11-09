@@ -140,6 +140,7 @@ import {
 } from "./mc-layout";
 import {
 	byMcPriority,
+	holdMcTile,
 	type McPins,
 	orderMcTiles,
 	pinMcArrival,
@@ -4776,6 +4777,8 @@ export function MissionControl({
 	priorityOrderRef.current = priorityOrder;
 	const pinsRef = useRef(pins);
 	pinsRef.current = pins;
+	const highlightRef = useRef(highlightId);
+	highlightRef.current = highlightId;
 	// Explicit Refresh and layout selection always use the latest priority.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: explicit refresh/layout requests flush the pending order, independently of activity changes.
 	useLayoutEffect(() => {
@@ -4790,13 +4793,18 @@ export function MissionControl({
 		}
 		const timer = window.setTimeout(() => {
 			const current = tilesRef.current;
+			const ids = current.map((t) => t.task.id);
 			const priority = new Map(priorityOrder.split(" ").map((id, i) => [id, i]));
-			const next = orderMcTiles(current, pinsRef.current, priority).map((t) => t.task.id);
-			const stable = stabilizeMcPages(
-				next,
-				current.map((t) => t.task.id),
+			// The selected tile on the page in view keeps its slot, like a pin.
+			const held = holdMcTile(
+				pinsRef.current,
+				ids,
+				highlightRef.current,
+				pageRef.current,
 				pageSizeRef.current,
 			);
+			const next = orderMcTiles(current, held, priority).map((t) => t.task.id);
+			const stable = stabilizeMcPages(next, ids, pageSizeRef.current);
 			setSettled({ requested: priorityOrder, order: stable.join(" ") });
 		}, MC_REORDER_DELAY_MS);
 		return () => window.clearTimeout(timer);

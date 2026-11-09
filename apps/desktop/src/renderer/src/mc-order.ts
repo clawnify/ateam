@@ -2,6 +2,7 @@ import type { McPins } from "@ateam/protocol";
 
 export {
 	byMcPriority,
+	holdMcTile,
 	orderMcTiles,
 	pinMcArrival,
 	pinMcSwap,
