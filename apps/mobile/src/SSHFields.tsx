@@ -1,3 +1,4 @@
+import { requireOptionalNativeModule } from "expo";
 import { randomUUID } from "expo-crypto";
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
@@ -45,6 +46,17 @@ export async function saveSSHForm(form: SSHForm): Promise<NonNullable<SavedConne
 		throw new Error("Generate a key and authorize its public key on the server first.");
 	return { user: form.user.trim(), identity, auth: form.auth, hostKey: form.hostKey };
 }
+
+/** iOS's own Paste control (UIPasteControl, iOS 16+): one tap pastes what a provider
+ *  copied (boxd copies the token), with no "Allow Paste" prompt. Importing
+ *  expo-clipboard loads its native side at once (ExpoClipboard.js), which a build made
+ *  before it lacks, so it's required only once that side is known to be there. */
+function pasteControl(): typeof import("expo-clipboard").ClipboardPasteButton | null {
+	if (!requireOptionalNativeModule("ExpoClipboard")) return null;
+	const clipboard = require("expo-clipboard") as typeof import("expo-clipboard");
+	return clipboard.isPasteButtonAvailable ? clipboard.ClipboardPasteButton : null;
+}
+const PasteButton = pasteControl();
 
 export function SSHFields({
 	value,
@@ -133,22 +145,41 @@ export function SSHFields({
 					</View>
 					{value.auth === "password" ? (
 						<>
-							<TextInput
-								style={styles.input}
-								value={value.password}
-								editable={!disabled}
-								accessibilityLabel={password?.label ?? "SSH password"}
-								secureTextEntry
-								autoCapitalize="none"
-								autoCorrect={false}
-								placeholder={
-									value.identity
-										? "Saved · enter a new password to replace"
-										: (password?.label ?? "SSH password")
-								}
-								placeholderTextColor={C.muted}
-								onChangeText={(typed) => onChange({ ...value, password: typed })}
-							/>
+							<View style={styles.passwordRow}>
+								<TextInput
+									style={[styles.input, styles.passwordInput]}
+									value={value.password}
+									editable={!disabled}
+									accessibilityLabel={password?.label ?? "SSH password"}
+									secureTextEntry
+									autoCapitalize="none"
+									autoCorrect={false}
+									placeholder={
+										value.identity
+											? "Saved · enter a new password to replace"
+											: (password?.label ?? "SSH password")
+									}
+									placeholderTextColor={C.muted}
+									onChangeText={(typed) => onChange({ ...value, password: typed })}
+								/>
+								{PasteButton && !disabled ? (
+									<PasteButton
+										style={styles.paste}
+										acceptedContentTypes={["plain-text"]}
+										displayMode="labelOnly"
+										cornerStyle="medium"
+										// White on the app's dark ground: the highlight colour, and
+										// contrast iOS asks of this control.
+										backgroundColor={C.ink}
+										foregroundColor={C.bg}
+										onPress={(data) => {
+											// A copied token can carry the line break it was copied with.
+											if (data.type === "text")
+												onChange({ ...value, password: data.text.replace(/\r?\n$/, "") });
+										}}
+									/>
+								) : null}
+							</View>
 							{password ? <Text style={styles.help}>{password.help}</Text> : null}
 						</>
 					) : (
@@ -196,4 +227,8 @@ const styles = StyleSheet.create({
 	text: { color: C.ink, fontSize: 14 },
 	help: { color: C.muted, fontSize: 12, lineHeight: 18 },
 	input: { color: C.ink, borderWidth: 1, borderColor: C.line, borderRadius: 8, padding: 12 },
+	passwordRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+	passwordInput: { flex: 1 },
+	// iOS draws nothing for this control without a size of its own.
+	paste: { width: 80, height: 44 },
 });
