@@ -428,25 +428,6 @@ case "$WS_ADDR" in
 	;;
 esac
 
-# ------------------------------------------------------------ browser -------
-
-# Only an explicit request installs it. New-box clients pass --browser by
-# default; reconnects and engine upgrades do not change the user's choice.
-# Before starting the engine: a phone can launch its first task as soon as the
-# engine answers. Never fetch main's script for a different/pinned engine release.
-if [ "$WANT_BROWSER" = 1 ]; then
-	step "install the browser (--browser)"
-	mkdir -p "$DATA_DIR"
-	if [ ! -f "$TMP/install-browser.sh" ]; then
-		info "WARNING: this engine release has no bundled browser installer; update Ateam to include the browser"
-	elif ATEAM_DATA_DIR="$DATA_DIR" bash "$APP_DIR/install-browser.sh" >"$DATA_DIR/browser-install.log" 2>&1; then
-		info "browser ready"
-	else
-		info "WARNING: browser setup failed; terminal work is available. See $DATA_DIR/browser-install.log and retry from the Browser panel"
-		tail -5 "$DATA_DIR/browser-install.log"
-	fi
-fi
-
 # ------------------------------------------------------ Sprite service ------
 
 # On a Sprite the service must own the engine and must never be restarted.
@@ -603,6 +584,25 @@ if [ -n "${ATEAM_PAIR_DEVICE:-}" ]; then
 	fi
 fi
 
+
+# ------------------------------------------------------------ browser -------
+
+# Only an explicit request installs it. New-box clients pass --browser by
+# default; reconnects and engine upgrades do not change the user's choice.
+# Before starting the engine: a phone can launch its first task as soon as the
+# engine answers. Never fetch main's script for a different/pinned engine release.
+if [ "$WANT_BROWSER" = 1 ]; then
+	step "install the browser (--browser)"
+	mkdir -p "$DATA_DIR"
+	if [ ! -f "$TMP/install-browser.sh" ]; then
+		info "WARNING: this engine release has no bundled browser installer; update Ateam to include the browser"
+	elif ATEAM_DATA_DIR="$DATA_DIR" bash "$APP_DIR/install-browser.sh" >"$DATA_DIR/browser-install.log" 2>&1; then
+		info "browser ready"
+	else
+		info "WARNING: browser setup failed; terminal work is available. See $DATA_DIR/browser-install.log and retry from the Browser panel"
+		tail -5 "$DATA_DIR/browser-install.log"
+	fi
+fi
 
 install_state starting
 exec 9>&-
