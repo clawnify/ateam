@@ -22,6 +22,8 @@ export interface CreateSpec {
 	location: string;
 	/** Coding agents the box installs at first boot. */
 	agents: InstallableAgent[];
+	/** New boxes include a browser unless explicitly declined. */
+	browser?: boolean;
 }
 
 export interface Creation {
@@ -105,6 +107,7 @@ export function useBoxCreation(deps: {
 						tokenHash,
 						label,
 						agents: spec.agents,
+						browser: spec.browser,
 					}),
 					onCreated: (serverId) => {
 						latest.current.saveBox(box);

@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AteamDb } from "@ateam/db";
@@ -272,7 +272,7 @@ describe("spawnAgentInTask and a task parked on an outside party", () => {
 		const mcp = command.indexOf("--mcp-config");
 		expect(mcp).toBeGreaterThan(command.indexOf("'hi there'"));
 		expect(command).toContain(
-			"--allowedTools 'mcp__ateam_board__get_board,mcp__ateam_board__set_status,mcp__ateam_board__set_waiting,mcp__ateam_board__list_peers,mcp__ateam_board__send_message,mcp__ateam_board__ask_user,mcp__ateam_board__show_page'",
+			"--allowedTools 'mcp__ateam_board__get_board,mcp__ateam_board__create_session,mcp__ateam_board__set_status,mcp__ateam_board__set_waiting,mcp__ateam_board__list_peers,mcp__ateam_board__send_message,mcp__ateam_board__ask_user,mcp__ateam_board__show_page'",
 		);
 		// The config file names this terminal, which is how set_waiting knows whose card it is.
 		const file = /--mcp-config '([^']+)'/.exec(command)?.[1] ?? "";
@@ -342,6 +342,31 @@ describe("peer messaging on the launch line", () => {
 		// The task's description stays what the user started it with.
 		expect(repo.getTask(db, taskId)?.description ?? null).toBeNull();
 	});
+});
+
+it("discovers the installed desktop service through the actual launch path", async () => {
+	services.userDataDir = services.hooksDir;
+	mkdirSync(join(services.userDataDir, "browser"));
+	const token = "a".repeat(64);
+	writeFileSync(join(services.userDataDir, "browser", "desktop-token"), token);
+	for (const agentId of ["claude", "codex", "opencode"]) {
+		await spawnAgentInTask(services, () => {}, { taskId, agentId });
+		const launch = launches.at(-1) as { args: string[]; env: Record<string, string> };
+		expect(launch.env.ATEAM_DESKTOP_AUTH).toBe(`Bearer ${token}`);
+		if (agentId === "claude") {
+			const config = launch.args[2]?.match(/--mcp-config '([^']+)'/)?.[1];
+			expect(config).toBeTruthy();
+			const servers = JSON.parse(readFileSync(config ?? "", "utf8")).mcpServers;
+			expect(servers.desktop.url).toBe("http://127.0.0.1:6080/mcp");
+		} else if (agentId === "codex") {
+			expect(launch.args[2]).toContain("mcp_servers.desktop.url");
+			expect(launch.args[2]).toContain('matcher="mcp__(taskwindow|desktop)__.*"');
+			expect(launch.args[2]).toContain("BrowserUse");
+		} else
+			expect(JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT ?? "{}").mcp.desktop.url).toBe(
+				"http://127.0.0.1:6080/mcp",
+			);
+	}
 });
 
 // Codex names its own conversations, so a fresh Codex tab has no id until its

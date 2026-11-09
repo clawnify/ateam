@@ -1,9 +1,18 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { describe, expect, spyOn, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { BROWSER_NOT_INSTALLED_ERROR } from "@ateam/protocol";
-import { installBrowser, openBrowserView, readVncPassword } from "../src/browser";
+import { createDesktopServer } from "../../desktop-control/src/server";
+import { viewerScript } from "../../desktop-control/src/viewer";
+import {
+	installBrowser,
+	openBrowserView,
+	readVncPassword,
+	taskwindowMcpConfig,
+} from "../src/browser";
 
 // The Browser button installs through these once the user said yes. The real
 // script needs apt and sudo, so each test stands a one-line script in for it.
@@ -63,4 +72,86 @@ describe("browser: view", () => {
 	test("a box with no browser says so in the text the desktop matches", async () => {
 		await expect(openBrowserView(dataDir())).rejects.toThrow(BROWSER_NOT_INSTALLED_ERROR);
 	});
+
+	test("released clients forward bundled credentials into the actual viewer script", async () => {
+		const dir = dataDir();
+		mkdirSync(join(dir, "browser"));
+		writeFileSync(join(dir, "browser/vnc-password"), "old-pass");
+		const token = "a".repeat(64);
+		writeFileSync(join(dir, "browser/desktop-viewer-token"), token);
+		const gateway = createDesktopServer({ token: "agent-secret", viewerToken: token });
+		const server = gateway.server();
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+		const originalFetch = globalThis.fetch;
+		const fetchMock = spyOn(globalThis, "fetch").mockImplementation(() =>
+			originalFetch(`${url}/vnc.html`),
+		);
+		try {
+			const view = await openBrowserView(dir);
+			// This is the released clients' URL contract: unknown DTO fields vanish.
+			const hash = `#autoconnect=true&resize=scale&reconnect=true&password=${encodeURIComponent(view.password)}`;
+			let protocols: string[] = [];
+			let credentials: unknown;
+			const element = { addEventListener() {} };
+			runInNewContext(viewerScript.replace(/^import .*;$/gm, ""), {
+				URLSearchParams,
+				location: { hash, protocol: "http:", host: "localhost" },
+				document: { getElementById: () => element, addEventListener() {} },
+				ResizeObserver: class {
+					observe() {}
+				},
+				crypto: { randomUUID: () => "12345678-1234-1234-1234-123456789abc" },
+				WebSocket: class {
+					constructor(_url: string, offered: string[]) {
+						protocols = offered;
+					}
+				},
+				InputHandoff: class {},
+				RFB: class {
+					constructor(_screen: unknown, _socket: unknown, opts: unknown) {
+						credentials = opts;
+					}
+					addEventListener() {}
+				},
+				addEventListener() {},
+				setInterval() {},
+			});
+			expect(protocols).toEqual(["binary", `desktop-view.${token}`]);
+			expect(credentials).toEqual({ credentials: { password: "old-pass" }, shared: true });
+			// A legacy viewer after rollback must still receive its raw VNC password.
+			fetchMock.mockImplementation(() => Promise.resolve(new Response("legacy noVNC")));
+			expect((await openBrowserView(dir)).password).toBe("old-pass");
+		} finally {
+			fetchMock.mockRestore();
+			gateway.close();
+		}
+	});
+	test("a viewer HTTP failure is not reported as ready", async () => {
+		const dir = dataDir();
+		mkdirSync(join(dir, "browser"));
+		writeFileSync(join(dir, "browser", "vnc-password"), "password");
+		const request = spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response("unavailable", { status: 503 }),
+		);
+		try {
+			await expect(openBrowserView(dir)).rejects.toThrow("isn't answering");
+		} finally {
+			request.mockRestore();
+		}
+	});
+});
+
+test("per-launch TaskWindow credentials require an Ateam browser and a valid token", () => {
+	const dir = dataDir();
+	const tokenFile = join(dir, "token");
+	const token = "a".repeat(32);
+	writeFileSync(tokenFile, token);
+	expect(taskwindowMcpConfig(dir, tokenFile)).toBeUndefined();
+	mkdirSync(join(dir, "browser"));
+	writeFileSync(join(dir, "browser", "vnc-password"), "password");
+	expect(taskwindowMcpConfig(dir, tokenFile)).toEqual({ url: "http://127.0.0.1:9377/mcp", token });
+	writeFileSync(tokenFile, "header\r\ninjection");
+	expect(taskwindowMcpConfig(dir, tokenFile)).toBeUndefined();
+	expect(taskwindowMcpConfig(dir, join(dir, "missing"))).toBeUndefined();
 });

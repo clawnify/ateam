@@ -41,7 +41,7 @@ export interface LeadToolDeps {
 	 *  a voice call (index.ts), it keeps `run` for the user's tap and answers
 	 *  what to tell the Lead instead; otherwise null, and the tool goes ahead.
 	 *  `text` is the card the user decides on, in markdown. */
-	hold?(r: { text: string; run: () => Promise<McpToolResult> }): string | null;
+	hold?(r: { text: string; required?: boolean; run: () => Promise<McpToolResult> }): string | null;
 	/** Put a proposal in the chat, where the user creates it from its dialog. */
 	propose?(p: {
 		projectId: string;
@@ -594,18 +594,26 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 				text: `"${task.name}" is in this chat's own project: use send_message.`,
 				isError: true,
 			};
-		const res = await deliver(task, args);
-		if (!res.isError && deps.onElsewhere) {
-			const projects = await call<ProjectDTO[]>(CH.projectsList, []).catch(() => []);
-			const nameOf = (id: string) => projects.find((p) => p.id === id)?.name ?? "another project";
-			deps.onElsewhere({
-				task,
-				projectName: nameOf(task.projectId),
-				homeName: nameOf(home),
-				body: String(args.message ?? ""),
-			});
-		}
-		return res;
+		const run = async () => {
+			const res = await deliver(task, args);
+			if (!res.isError && deps.onElsewhere) {
+				const projects = await call<ProjectDTO[]>(CH.projectsList, []).catch(() => []);
+				const nameOf = (id: string) => projects.find((p) => p.id === id)?.name ?? "another project";
+				deps.onElsewhere({
+					task,
+					projectName: nameOf(task.projectId),
+					homeName: nameOf(home),
+					body: String(args.message ?? ""),
+				});
+			}
+			return res;
+		};
+		const held = deps.hold?.({
+			required: true,
+			text: `**Message "${task.name}", outside this chat's project?**\n\n${quote(String(args.message ?? ""))}`,
+			run,
+		});
+		return held ? { text: held } : run();
 	}
 
 	async function deliver(task: TaskDTO, args: Record<string, unknown>): Promise<McpToolResult> {

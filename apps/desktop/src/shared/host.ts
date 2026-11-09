@@ -135,6 +135,8 @@ export interface CreateBoxSpec {
 	tailscaleAuthKey?: string;
 	/** Agent CLIs to preinstall on the box after the engine (by id, e.g. "claude"). */
 	agents?: string[];
+	/** Include the box's browser during setup (default true). */
+	browser?: boolean;
 }
 
 /** A connected box's task-readiness — what a task needs beyond the engine. */
@@ -214,7 +216,13 @@ export interface SecretsStatus {
 export interface ProviderOptions {
 	locations: { slug: string; label: string }[];
 	/** `locations` = the slugs a size can be ordered in (empty = unknown → offer anywhere). */
-	serverTypes: { slug: string; label: string; locations: string[]; memory: number }[];
+	serverTypes: {
+		slug: string;
+		label: string;
+		locations: string[];
+		memory: number;
+		architecture?: string;
+	}[];
 }
 
 /** Which engine is driving the app right now. */

@@ -30,6 +30,7 @@ export interface ProviderOptions {
 		label: string;
 		locations: string[];
 		memory: number;
+		architecture?: string;
 		monthly?: Record<string, number>;
 	}[];
 	/** The currency those prices are in ("EUR"), when the provider says. */
@@ -119,6 +120,8 @@ export function buildCloudInit(opts: {
 		pairDevice?: { tokenHash: string; label: string };
 		/** Coding agents to install first, so the engine finds them when it starts. */
 		agents?: InstallableAgent[];
+		/** New boxes include a browser unless explicitly declined. */
+		browser?: boolean;
 	};
 }): string {
 	const { hostname, sshPublicKey, tailscaleAuthKey, install } = opts;
@@ -147,7 +150,7 @@ export function buildCloudInit(opts: {
 				"set -o pipefail;",
 				`curl -fsSL ${INSTALL_SH_URL} |`,
 				...(pair ? [`ATEAM_PAIR_DEVICE=${pair.tokenHash} ATEAM_PAIR_LABEL=${pair.label}`] : []),
-				"bash -s -- --service --tailscale >~/ateam-install.log 2>&1",
+				`bash -s -- --service --tailscale${install.browser === false ? "" : " --browser"} >~/ateam-install.log 2>&1`,
 			].join(" ")
 		: null;
 	return [
@@ -289,6 +292,7 @@ export function orderableServerTypes(types: HetznerServerType[]): ProviderOption
 				label: `${type.name.toUpperCase()} · ${type.cores} vCPU / ${type.memory} GB${kind.length ? ` (${kind.join(", ")})` : ""}`,
 				locations,
 				memory: type.memory,
+				architecture: type.architecture,
 				monthly: Object.fromEntries(
 					(type.prices ?? [])
 						.map((p) => [p.location, Number(p.price_monthly?.gross)] as const)
