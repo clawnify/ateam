@@ -32,9 +32,9 @@ export function ownDaemon(dataDir: string, socket: string): (() => void) | null 
  * it only until listening, never for an SSH session or the daemon's lifetime.
  * --close keeps the lock out of the child; closing stdin releases its holder,
  * even if this process is killed. Non-Linux hosts do not run the Linux installer. */
-export async function startupGate(dataDir: string): Promise<() => void> {
+export async function startupGate(installDir: string): Promise<() => void> {
 	if (process.platform !== "linux") return () => {};
-	mkdirSync(dataDir, { recursive: true });
+	mkdirSync(installDir, { recursive: true });
 	const holder = spawn(
 		"flock",
 		[
@@ -44,7 +44,7 @@ export async function startupGate(dataDir: string): Promise<() => void> {
 			"-E",
 			"75",
 			"--close",
-			join(dataDir, "startup.lock"),
+			join(installDir, "startup.lock"),
 			"sh",
 			"-c",
 			"printf 'locked\\n'; read -r release",

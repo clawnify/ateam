@@ -284,7 +284,7 @@ export function serveRpc(
 				// On an open box a code adds nothing, and a device that paired before
 				// the owner locked would keep its way in: codes come once it is locked.
 				if (!g.store.locked() && opts.trusted !== true)
-					throw new Error("Lock the box first: until then any device can use it.");
+					throw new Error("Make the box private first: until then any device can use it.");
 				return g.store.invite();
 			case CH.pairingRevoke: {
 				const id = String(input.id ?? "");
@@ -294,7 +294,7 @@ export function serveRpc(
 				return g.store.status(device === id ? null : device);
 			}
 			case CH.pairingLock: {
-				if (g.store.locked()) throw new Error("This box is locked already.");
+				if (g.store.locked()) throw new Error("This box is private already.");
 				const grant = g.store.lock(input.label, input.kind);
 				admit(grant.device.id);
 				g.live.dropUnpaired(client);

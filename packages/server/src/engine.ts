@@ -47,6 +47,7 @@ import { queueCodexMessage } from "./codex-queue";
 import { boardToolsMissing, liveAgentIds, type Services, toTaskDTO } from "./services";
 import {
 	adoptReportedConversation,
+	createSessionInCallerTask,
 	createTaskInProject,
 	isCodexSideThreadEvent,
 	ResumeInFlightError,
@@ -380,6 +381,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 	// the board and proposes moves through these, guarded by validateSetStatus.
 	hooks.setBoardHandlers({
 		get: () => buildBoardView(db),
+		createSession: (req) => createSessionInCallerTask(services, sendTaskUpdated, req),
 		setStatus: async (req) => applySetStatus(db, req, sendTaskUpdated),
 		setWaiting: async (req) => applySetWaiting(db, req, waits, sendTaskUpdated),
 		listPeers: async (callerTerminalId, search) => {

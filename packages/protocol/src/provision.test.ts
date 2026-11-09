@@ -65,8 +65,19 @@ describe("buildCloudInit", () => {
 		expect(argv.slice(0, 4)).toEqual(["runuser", "-l", "ateam", "-c"]);
 		expect(argv[4]).toBe(
 			"set -o pipefail; curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | " +
-				`ATEAM_PAIR_DEVICE=${HASH} ATEAM_PAIR_LABEL=iPhone bash -s -- --service --tailscale >~/ateam-install.log 2>&1`,
+				`ATEAM_PAIR_DEVICE=${HASH} ATEAM_PAIR_LABEL=iPhone bash -s -- --service --tailscale --browser >~/ateam-install.log 2>&1`,
 		);
+	});
+
+	test("an explicit browser opt-out keeps the engine and selected agents", () => {
+		const yaml = buildCloudInit({
+			hostname: "minimal-box",
+			tailscaleAuthKey: AUTHKEY,
+			install: { browser: false, agents: ["codex"] },
+		});
+		expect(yaml).not.toContain("--browser");
+		expect(yaml).toContain("--service --tailscale");
+		expect(yaml).toContain("chatgpt.com/codex/install.sh");
 	});
 
 	test("installs the chosen agents first, as ateam, so the engine finds them when it starts", () => {
@@ -188,6 +199,7 @@ describe("orderableServerTypes", () => {
 		expect(offered[0]?.label).toBe("CAX11 · 2 vCPU / 4 GB (Arm)");
 		expect(offered[1]?.label).toBe("CCX13 · 2 vCPU / 8 GB (dedicated)");
 		expect(offered[0]?.memory).toBe(4);
+		expect(offered[0]?.architecture).toBe("arm");
 	});
 });
 
@@ -292,6 +304,18 @@ describe("Hetzner, for a box with no SSH key", () => {
 });
 
 describe("direct SSH cloud creation", () => {
+	test("preserves the browser default and explicit opt-out over SSH", () => {
+		for (const browser of [undefined, false]) {
+			const config = buildCloudInit({
+				network: "ssh",
+				hostname: "ssh-browser",
+				sshPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest",
+				install: { browser },
+			});
+			expect(config.includes("--browser")).toBe(browser !== false);
+		}
+	});
+
 	test("installs without Tailscale or a public RPC listener, with key-only SSH", () => {
 		const yaml = buildCloudInit({
 			hostname: "phone",

@@ -27,15 +27,25 @@ logs = []
 def env_for(name):
     folder = root / name
     folder.mkdir(exist_ok=True)
-    return {**os.environ, "ATEAM_DATA_DIR": str(folder),
-            "ATEAM_RPC_SOCK": str(folder / "rpc.sock"),
-            "ATEAM_CONFIG": str(folder / "settings.json")}
+    # Separate payloads isolate activation gates without repurposing HOME.
+    shutil.copyfile(cli, folder / "cli.js")
+    for asset in ("daemon.js", "node_modules"):
+        (folder / asset).symlink_to(Path(cli).parent / asset)
+    data = folder / "data"
+    data.mkdir()
+    return {**os.environ, "ATEAM_DATA_DIR": str(data),
+            "ATEAM_RPC_SOCK": str(data / "rpc.sock"),
+            "ATEAM_CONFIG": str(data / "settings.json")}
+
+
+def payload(env):
+    return Path(env["ATEAM_DATA_DIR"]).parent
 
 
 def start(env, *args):
     log = open(root / f"process-{len(children)}.log", "w+")
     logs.append(log)
-    p = subprocess.Popen(["node", cli, *args], env=env, stdin=subprocess.DEVNULL,
+    p = subprocess.Popen(["node", str(payload(env) / "cli.js"), *args], env=env, stdin=subprocess.DEVNULL,
                          stdout=log, stderr=log)
     children.append(p)
     return p
@@ -104,7 +114,7 @@ try:
     # No application DB may be initialized while activation owns it.
     env = env_for("activation")
     folder = Path(env["ATEAM_DATA_DIR"])
-    with open(folder / "startup.lock", "w") as gate:
+    with open(payload(env) / "startup.lock", "w") as gate:
         fcntl.flock(gate, fcntl.LOCK_EX)
         p = start(env, "daemon")
         time.sleep(0.5)
@@ -114,18 +124,18 @@ try:
         fcntl.flock(gate, fcntl.LOCK_UN)
     assert wait_for(lambda: hello(env)) == p.pid
     # A running daemon/connection must not keep the startup gate locked.
-    with open(folder / "startup.lock", "w") as gate:
+    with open(payload(env) / "startup.lock", "w") as gate:
         fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)
     stop(p)
     print("PASS activation excludes initialization, not normal operation", flush=True)
 
     env = env_for("interrupted")
     folder = Path(env["ATEAM_DATA_DIR"])
-    for phase in ("activating", "failed:1"):
-        (folder / "install-state").write_text(phase)
+    for phase in ("preparing", "activating", "failed:1"):
+        (payload(env) / "install-state").write_text(phase)
         assert start(env, "daemon").wait(timeout=10) != 0
         assert not (folder / "ateam.sqlite").exists()
-    (folder / "install-state").write_text("starting")
+    (payload(env) / "install-state").write_text("starting")
     p = start(env, "daemon")
     assert wait_for(lambda: hello(env)) == p.pid
     stop(p)
@@ -139,7 +149,7 @@ try:
 
     env = env_for("managed")
     folder = Path(env["ATEAM_DATA_DIR"])
-    (folder / "service-owner").write_text("system")
+    (payload(env) / "service-owner").write_text("system")
     assert start(env, "daemon").wait(timeout=10) != 0
     assert not (folder / "ateam.sqlite").exists()
     p = start(env, "daemon", "--supervised")

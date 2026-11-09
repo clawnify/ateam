@@ -368,6 +368,7 @@ export function createLinks(deps: LinkDeps): Links {
 			backoff.set(key, 0);
 			await deps.prepare?.(key, c);
 			const version = c.info.protocolVersion;
+			const minClient = c.info.minClient ?? null;
 			set(key, (l) => ({
 				state: "live",
 				asked: false,
@@ -376,6 +377,7 @@ export function createLinks(deps: LinkDeps): Links {
 				asleep: false,
 				wakeError: null,
 				version,
+				minClient,
 				gen: l.gen + 1,
 			}));
 			await deps.onConnected(key, c);
@@ -505,7 +507,13 @@ export function createLinks(deps: LinkDeps): Links {
 		adopt(key, conn) {
 			conns.set(key, conn);
 			deps.fleet.attach(key, conn.rpc);
-			set(key, () => ({ ...NEW_LINK, state: "live", version: conn.info.protocolVersion, gen: 1 }));
+			set(key, () => ({
+				...NEW_LINK,
+				state: "live",
+				version: conn.info.protocolVersion,
+				minClient: conn.info.minClient ?? null,
+				gen: 1,
+			}));
 		},
 		conn: (key) => conns.get(key),
 		liveKeys: () => [...conns.keys()],

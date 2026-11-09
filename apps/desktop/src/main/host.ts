@@ -26,6 +26,9 @@ import {
 	createAggregate,
 	createRpcClient,
 	DEFAULT_EDITOR_PORT,
+	type DotfilesConfig,
+	type DotfilesPlan,
+	type DotfilesStatus,
 	type EditorEndpointDTO,
 	type EditorOpenResult,
 	type EngineSettings,
@@ -227,7 +230,11 @@ export interface Host {
 	updateBox(alias: string): Promise<BoxUpdateResult>;
 	/** Keep a connected box always on, or let it sleep when idle (box.alwaysOn there). */
 	setBoxAlwaysOn(alias: string, on: boolean): Promise<{ sleeps: boolean | null }>;
-	/** A connected box's GitHub access (githubAccess:status): what gh and git sign in with. */
+	/** Explicit dotfiles preview/apply on the named connected box. */
+	dotfilesStatus(alias: string): Promise<DotfilesStatus>;
+	prepareDotfiles(alias: string, config: DotfilesConfig): Promise<DotfilesPlan>;
+	applyDotfiles(alias: string, planId: string): Promise<DotfilesStatus>;
+	/** A connected box's GitHub access: what its gh and git sign in with. */
 	githubAccess(alias: string): Promise<GithubAccessDTO>;
 	/** Hand a connected box a GitHub token; answers its new access. The token never comes back. */
 	connectGithub(alias: string, token: string): Promise<GithubAccessDTO>;
@@ -1020,7 +1027,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 
 	async function install(
 		dest: string,
-		opts?: { wsAddr?: string; tailscale?: boolean; rerun?: boolean },
+		opts?: { wsAddr?: string; tailscale?: boolean; rerun?: boolean; browser?: boolean },
 	): Promise<HostStatus> {
 		// `dest` reaches ssh as an argument, where a leading "-" would make it an option,
 		// and one with a space in it (a pasted `ssh mybox`) names no host ssh can reach.
@@ -1055,7 +1062,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// main's protocol and the upgrade is then guaranteed futile (see connect()).
 		const pin = app.isPackaged ? `ATEAM_VERSION=v${app.getVersion()} ` : "";
 		// --tailscale joins the box to the tailnet and opens its network port there.
-		const flags = opts?.tailscale ? "--service --tailscale" : "--service";
+		const flags = `${opts?.tailscale ? "--service --tailscale" : "--service"}${opts?.browser ? " --browser" : ""}`;
 		// pipefail for the download: a curl that fails hands bash nothing, bash exits 0 on
 		// an empty script, and the set-up went on to connect to an engine never installed
 		// ("RPC connection closed", seen on a boxd machine whose DNS came and went). Only
@@ -1328,7 +1335,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			// Reuse the streamed installer (Gap A): it derives the box's tailnet IP into
 			// ATEAM_WS_ADDR (so the phone can connect) and connects on success.
 			progress("Installing the engine");
-			status = await install(boxAlias);
+			status = await install(boxAlias, { browser: spec.browser !== false });
 		} else {
 			// SSH answers once cloud-init has made the user, while its apt run and its
 			// Tailscale install go on for most of a minute (measured on a Hetzner box,
@@ -1341,7 +1348,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			progress(
 				"Installing the engine and joining your tailnet: approve the box on the Tailscale page that opens in your browser, and press Connect there",
 			);
-			status = await install(boxAlias, { tailscale: true });
+			status = await install(boxAlias, { tailscale: true, browser: spec.browser !== false });
 		}
 
 		// Preinstall any requested agent CLIs (best-effort — the box is usable without
@@ -1497,6 +1504,15 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		return { sleeps };
 	}
 
+	async function dotfilesStatus(alias: string): Promise<DotfilesStatus> {
+		return (await heldBox(alias).handle(CH.dotfilesStatus, [])) as DotfilesStatus;
+	}
+	async function prepareDotfiles(alias: string, config: DotfilesConfig): Promise<DotfilesPlan> {
+		return (await heldBox(alias).handle(CH.dotfilesPrepare, [config])) as DotfilesPlan;
+	}
+	async function applyDotfiles(alias: string, planId: string): Promise<DotfilesStatus> {
+		return (await heldBox(alias).handle(CH.dotfilesApply, [planId])) as DotfilesStatus;
+	}
 	async function githubAccess(alias: string): Promise<GithubAccessDTO> {
 		const access = (await heldBox(alias).handle(CH.githubAccessStatus, [])) as GithubAccessDTO;
 		return rememberGithub(alias, access);
@@ -1632,7 +1648,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		const base = ws
 			? `http://${new URL(ws).hostname}:${view.port}`
 			: `http://127.0.0.1:${browserLocalPort(alias)}`;
-		return { url: browserViewUrl(base, view.password) };
+		return { url: browserViewUrl(base, view.password, view.controlToken) };
 	}
 
 	return {
@@ -1657,6 +1673,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		updateBox,
 		phoneAccess,
 		setBoxAlwaysOn,
+		dotfilesStatus,
+		prepareDotfiles,
+		applyDotfiles,
 		githubAccess,
 		connectGithub,
 		checkGithub,
@@ -1720,6 +1739,13 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.phoneAccess, (_e, alias: string) => host.phoneAccess(alias));
 	ipcMain.handle(HOST_CH.boxAlwaysOn, (_e, alias: string, on: boolean) =>
 		host.setBoxAlwaysOn(alias, on === true),
+	);
+	ipcMain.handle(HOST_CH.dotfilesStatus, (_e, alias: string) => host.dotfilesStatus(alias));
+	ipcMain.handle(HOST_CH.prepareDotfiles, (_e, alias: string, config: DotfilesConfig) =>
+		host.prepareDotfiles(alias, config),
+	);
+	ipcMain.handle(HOST_CH.applyDotfiles, (_e, alias: string, id: string) =>
+		host.applyDotfiles(alias, id),
 	);
 	ipcMain.handle(HOST_CH.githubAccess, (_e, alias: string) => host.githubAccess(alias));
 	ipcMain.handle(HOST_CH.connectGithub, (_e, alias: string, token: string) =>

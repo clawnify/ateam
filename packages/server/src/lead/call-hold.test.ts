@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { CH, type LeadItem } from "@ateam/protocol";
 import { startLead } from "./index";
+import { chatPreferences } from "./settings";
 
 const TASK = {
 	id: "t1",
@@ -57,11 +58,14 @@ class FakeClaude extends EventEmitter {
 	}
 }
 
-async function setup() {
+async function setup(home?: string) {
 	const dir = mkdtempSync(join(tmpdir(), "lead-call-"));
 	const router = fakeRouter();
+	const preferences = chatPreferences(dir, join(dir, "settings.json"), async () => true);
 	const lead = await startLead({
 		place: "mac",
+		home,
+		preferences,
 		dir,
 		handle: router.handle,
 		machineOf: () => null,
@@ -94,7 +98,7 @@ async function setup() {
 			.snapshot()
 			.items.filter((i): i is Extract<LeadItem, { kind: "permission" }> => i.kind === "permission");
 	const did = (method: string) => router.calls.filter((c) => c.method === method).length;
-	return { lead, tool, cards, did };
+	return { lead, tool, cards, did, preferences };
 }
 
 describe("a voice call holds the Lead's messages and answers for a tap", () => {
@@ -157,3 +161,23 @@ describe("a voice call holds the Lead's messages and answers for a tap", () => {
 		}
 	});
 });
+
+for (const agent of ["codex", "opencode"] as const) {
+	it(`${agent} Auto cannot bypass the cross-project message card`, async () => {
+		const { lead, tool, cards, did, preferences } = await setup("p2");
+		try {
+			lead.reset();
+			await preferences.update({ agent, auto: true });
+			await tool("message_other_project", { task: "t1", message: "Please review this" });
+			expect(did(CH.peersSendFromLead)).toBe(0);
+			expect(cards()).toHaveLength(1);
+			await lead.permission(cards()[0]!.id, "deny");
+			expect(did(CH.peersSendFromLead)).toBe(0);
+			await tool("message_other_project", { task: "t1", message: "Approved request" });
+			await lead.permission(cards()[1]!.id, "allow");
+			expect(did(CH.peersSendFromLead)).toBe(1);
+		} finally {
+			lead.dispose();
+		}
+	});
+}

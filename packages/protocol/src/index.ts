@@ -172,7 +172,37 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // call there (FEATURE_MIN_VERSION.leadCallSession).
 // v34: tasks:pages lists saved artifacts; tasks:page accepts an optional page id.
 // Older engines still serve their latest page; clients fall back to that binding.
-export const PROTOCOL_VERSION = 34;
+// v35: explicit box-scoped dotfiles preview/apply; settings sync never runs scripts.
+// v36: browser:view carries desktop viewer credentials, including a bundled
+// password value that already-released clients forward unchanged.
+// v37: machine-owned Chat agent and Auto preferences.
+export const PROTOCOL_VERSION = 37;
+
+/**
+ * The oldest client protocol an engine of this version still serves correctly, sent
+ * in system:hello (SystemInfo.minClient). A client older than the engine but at or
+ * above this floor works on, without the newer features (each is gated by
+ * FEATURE_MIN_VERSION), so it says nothing: an additive bump never asks anyone to
+ * update. Below it, the client tells the user to update itself. Raise it ONLY for a
+ * change an older client would misread or can't follow, in the same PR, and never
+ * above the protocol of the Ateam Go live on the App Store: until that phone is out,
+ * there is nothing to update to. That one case is the only one that still needs the
+ * phone released before the desktop and engine.
+ *
+ * 29: a box can be private to its paired devices (pairing, v29), and a new one is;
+ * a client below v29 can't pair.
+ */
+export const MIN_CLIENT_PROTOCOL = 29;
+
+/** Whether a box running a newer protocol than this client needs a newer client:
+ *  only below the box's floor. One that doesn't say (an engine from before the
+ *  floor) is taken as serving this client, as every engine since v7 does. */
+export function clientBelowFloor(
+	clientProtocol: number,
+	box: { protocolVersion: number; minClient?: number },
+): boolean {
+	return box.protocolVersion > clientProtocol && (box.minClient ?? 0) > clientProtocol;
+}
 
 /**
  * A decision an agent is waiting on (ask_user). Answered from any client with
@@ -336,6 +366,7 @@ export interface TaskLastReplyDTO {
  * so nothing forced a bump to answer "what stops working under this?". Now it does.
  */
 export const FEATURE_MIN_VERSION = {
+	dotfiles: 35,
 	/** v6 turned CleanupCandidate from a flat row into `{ task: TaskDTO, recommended }`.
 	 *  The dialog dereferences `.task` on every row, so a v5 engine's reply is not a
 	 *  degraded dialog, it is a thrown TypeError. */
@@ -704,6 +735,8 @@ export type UpdateStrategy = "merge" | "rebase";
  * with a reader exist — a setting nothing reads is a lie.
  */
 export interface EngineSettings {
+	/** Default for explicit dotfiles previews. Syncing this never applies it. */
+	dotfiles: import("./dotfiles").DotfilesConfig | null;
 	/** Agent a new task launches with when the composer doesn't say. */
 	defaultAgentId: string;
 	/** How "Merge via PR" lands the branch. */
@@ -857,12 +890,15 @@ export interface BoxSettings {
 	alwaysOn: boolean;
 }
 export interface AteamSettings {
+	/** Machine-owned; never included in engine settings sync. */
+	chat?: import("./lead").ChatSettings;
 	version: number;
 	client: ClientSettings;
 	engine: EngineSettings;
 	box: BoxSettings;
 }
 export interface SettingsPatch {
+	chat?: Partial<import("./lead").ChatSettings>;
 	client?: Partial<ClientSettings>;
 	engine?: Partial<EngineSettings>;
 	box?: Partial<BoxSettings>;
@@ -1094,6 +1130,9 @@ export interface SystemInfo {
 	protocolVersion: number;
 	/** Ids of agents installed + available on the engine's machine. */
 	agents: string[];
+	/** The oldest client protocol this engine serves correctly (MIN_CLIENT_PROTOCOL).
+	 *  Absent from engines before it was reported. */
+	minClient?: number;
 	/** The Ateam release the engine was built from ("0.1.80"). Absent from engines
 	 *  before it was reported, null from one run from source. A release can change
 	 *  the engine without a protocol bump, so clients compare this to offer updates. */
@@ -1334,6 +1373,7 @@ export interface SessionHitDTO {
 
 // ---- IPC channel names (their own module: see channels.ts) ----
 export { CH } from "./channels";
+export * from "./dotfiles";
 
 // ---- event payloads ----
 export interface PtyDataEvent {
@@ -1429,10 +1469,15 @@ export interface EditorEndpointDTO {
  */
 export type EditorOpenResult = EditorEndpointDTO | { needsInstall: true };
 
-/** Where a box's browser view answers, on ITS machine, and the VNC password. */
+/** Where a box's browser view answers, on ITS machine, and its credentials. */
 export interface BrowserViewDTO {
 	port: number;
+	/** Opaque viewer credential; pass unchanged to browserViewUrl. Legacy noVNC
+	 * uses a raw password; desktop control may bundle its viewer token here so
+	 * already released apps can authenticate without a coordinated update. */
 	password: string;
+	/** Present on boxes with desktop control; grants human viewer takeover. */
+	controlToken?: string;
 }
 
 // ---- the API surface exposed on window.ateam ----
@@ -1884,3 +1929,11 @@ export {
 } from "./wake";
 export type { WsClient } from "./ws";
 export { wsClientTransport } from "./ws";
+
+// Mission Control task ordering, shared by desktop and native clients.
+export * from "./mc-order";
+
+export * from "./session-tabs";
+
+export * from "./sidebar-view";
+export { byWhatsNext, nextRank, taskWaitingLabel, waitState } from "./triage-order";

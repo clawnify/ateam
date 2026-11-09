@@ -30,6 +30,7 @@ export interface ProviderOptions {
 		label: string;
 		locations: string[];
 		memory: number;
+		architecture?: string;
 		monthly?: Record<string, number>;
 	}[];
 	/** The currency those prices are in ("EUR"), when the provider says. */
@@ -100,7 +101,7 @@ export const INSTALL_SH_URL =
 const quoteShell = (text: string) => `'${text.replace(/'/g, `'"'"'`)}'`;
 /** Phone/cloud-init download and Git preparation. The shared installer owns
  * the engine transaction and coordinates startup for every caller. */
-const SSH_INSTALL_SCRIPT = `exec > "$HOME/ateam-install.log" 2>&1
+const sshInstallScript = (browser: boolean) => `exec > "$HOME/ateam-install.log" 2>&1
 rm -f "$HOME/.ateam-phone-install-exit"
 set -o pipefail
 install_ateam() {
@@ -112,17 +113,19 @@ install_ateam() {
       return 1
     fi
   fi
-  curl -fsSL ${INSTALL_SH_URL} | bash -s -- --service
+  curl -fsSL ${INSTALL_SH_URL} | bash -s -- --service${browser ? " --browser" : ""}
 }
 install_ateam
 rc=$?
 printf '%s' "$rc" > "$HOME/.ateam-phone-install-exit"
 exit "$rc"`;
-export const SSH_INSTALL_COMMAND = `flock -n "$HOME/.ateam-phone-install.lock" bash -lc ${quoteShell(SSH_INSTALL_SCRIPT)}`;
+const sshInstallCommand = (browser: boolean) =>
+	`flock -n "$HOME/.ateam-phone-install.lock" bash -lc ${quoteShell(sshInstallScript(browser))}`;
+export const SSH_INSTALL_COMMAND = sshInstallCommand(false);
 /** 75: installing; 74: interrupted/failed; 0: last installation completed.
  * This is a progress check, not startup authorization: the server owns that.
  * Older installations without a lock remain compatible without flock. */
-export const SSH_INSTALL_STATUS = `d="\${ATEAM_DATA_DIR:-$HOME/.ateam}"; if test -f "$d/install.lock"; then command -v flock >/dev/null || exit 69; flock -sn -E 75 "$d/install.lock" sh -c 'test "$(cat "$1/install-state" 2>/dev/null)" = ready || exit 74' sh "$d"; exit $?; elif test -f "$HOME/.ateam-phone-install.lock"; then command -v flock >/dev/null || exit 69; flock -sn "$HOME/.ateam-phone-install.lock" true || exit 75; test -f "$HOME/.ateam-phone-install-exit" && test "$(cat "$HOME/.ateam-phone-install-exit")" = 0 || { tail -c 2000 "$HOME/ateam-install.log" >&2; exit 74; }; fi`;
+export const SSH_INSTALL_STATUS = `d="$HOME/ateam-app"; if test -f "$d/install.lock"; then command -v flock >/dev/null || exit 69; flock -sn -E 75 "$d/install.lock" sh -c 'test "$(cat "$1/install-state" 2>/dev/null)" = ready || exit 74' sh "$d"; exit $?; elif test -f "$HOME/.ateam-phone-install.lock"; then command -v flock >/dev/null || exit 69; flock -sn "$HOME/.ateam-phone-install.lock" true || exit 75; test -f "$HOME/.ateam-phone-install-exit" && test "$(cat "$HOME/.ateam-phone-install-exit")" = 0 || { tail -c 2000 "$HOME/ateam-install.log" >&2; exit 74; }; fi`;
 
 /**
  * Build the cloud-init that makes a fresh box reachable exactly the way the rest of
@@ -148,6 +151,8 @@ export function buildCloudInit(opts: {
 		pairDevice?: { tokenHash: string; label: string };
 		/** Coding agents to install first, so the engine finds them when it starts. */
 		agents?: InstallableAgent[];
+		/** New boxes include a browser unless explicitly declined. */
+		browser?: boolean;
 	};
 }): string {
 	const { hostname, sshPublicKey, tailscaleAuthKey, install } = opts;
@@ -179,12 +184,12 @@ export function buildCloudInit(opts: {
 	// the shell lines below.
 	const installer = install
 		? directSSH
-			? SSH_INSTALL_COMMAND
+			? sshInstallCommand(install.browser !== false)
 			: [
 					"set -o pipefail;",
 					`curl -fsSL ${INSTALL_SH_URL} |`,
 					...(pair ? [`ATEAM_PAIR_DEVICE=${pair.tokenHash} ATEAM_PAIR_LABEL=${pair.label}`] : []),
-					`bash -s -- --service${directSSH ? "" : " --tailscale"} >~/ateam-install.log 2>&1`,
+					`bash -s -- --service --tailscale${install.browser === false ? "" : " --browser"} >~/ateam-install.log 2>&1`,
 				].join(" ")
 		: null;
 	return [
@@ -328,6 +333,7 @@ export function orderableServerTypes(types: HetznerServerType[]): ProviderOption
 				label: `${type.name.toUpperCase()} · ${type.cores} vCPU / ${type.memory} GB${kind.length ? ` (${kind.join(", ")})` : ""}`,
 				locations,
 				memory: type.memory,
+				architecture: type.architecture,
 				monthly: Object.fromEntries(
 					(type.prices ?? [])
 						.map((p) => [p.location, Number(p.price_monthly?.gross)] as const)

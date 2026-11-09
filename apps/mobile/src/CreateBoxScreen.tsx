@@ -15,6 +15,7 @@ import {
 	ScrollView,
 	StatusBar,
 	StyleSheet,
+	Switch,
 	Text,
 	TextInput,
 	View,
@@ -40,7 +41,6 @@ import { C, CONTENT_MAX } from "./theme";
 import type { CreateSpec, Creation } from "./useBoxCreation";
 
 /** About how long a box takes from Hetzner's go to Ateam answering on it. */
-const INSTALL_MINUTES = 4;
 /** Past this, the page says it's taking too long, and where to look. */
 const SLOW_MS = 12 * 60_000;
 
@@ -236,7 +236,7 @@ function Progress({
 					state={creation.step === "done" ? "done" : installing ? "active" : "waiting"}
 					text={
 						installing
-							? `It's installing Ateam on itself, about ${INSTALL_MINUTES} minutes (${minutes})`
+							? `It's installing Ateam on itself. This can take several minutes (${minutes})`
 							: "It installs Ateam on itself"
 					}
 				/>
@@ -278,8 +278,8 @@ function Progress({
 			{installing && !creation.box.ssh ? (
 				<View style={styles.card}>
 					<Text style={styles.helpText}>
-						Not connecting once it's had its {INSTALL_MINUTES} minutes? Find {creation.name} in the
-						Tailscale app, copy its address, and put it here.
+						Still not connecting? Find {creation.name} in the Tailscale app, copy its address, and
+						put it here.
 					</Text>
 					<View style={styles.addressRow}>
 						<TextInput
@@ -370,6 +370,7 @@ export function CreateBoxScreen({
 	const [location, setLocation] = useState("");
 	const [size, setSize] = useState("");
 	const [agentChoice, setAgentChoice] = useState("claude");
+	const [browser, setBrowser] = useState(true);
 	const [loading, setLoading] = useState(false);
 	const [problem, setProblem] = useState<string | null>(null);
 
@@ -422,6 +423,8 @@ export function CreateBoxScreen({
 	const boxName = boxNameOf(name);
 	const keyOk = /^tskey-auth-[A-Za-z0-9-]+$/.test(tsKey.trim());
 	const sizes = options ? sizesIn(options, location) : [];
+	const browserSupported =
+		options?.serverTypes.find((s) => s.slug === size)?.architecture !== "arm";
 	const price = options && size && location ? priceLine(options, size, location) : null;
 	const ready = Boolean(
 		savedToken.current && options && boxName && (network === "ssh" || keyOk) && size && location,
@@ -546,6 +549,17 @@ export function CreateBoxScreen({
 										value={agentChoice}
 										onPick={setAgentChoice}
 									/>
+									<View style={styles.field}>
+										<Text style={[styles.fieldLabel, { flex: 1 }]}>
+											{browserSupported ? "Include browser" : "Browser requires an x86 size"}
+										</Text>
+										<Switch
+											value={browser && browserSupported}
+											disabled={!browserSupported}
+											onValueChange={setBrowser}
+											accessibilityLabel="Include browser for web tasks"
+										/>
+									</View>
 									<Picker
 										label="Size"
 										items={sizes}
@@ -577,6 +591,7 @@ export function CreateBoxScreen({
 									size,
 									location,
 									agents: AGENT_CHOICES.find((c) => c.slug === agentChoice)?.agents ?? [],
+									browser: browser && browserSupported,
 								});
 							}}
 							accessibilityRole="button"

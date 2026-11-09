@@ -22,7 +22,7 @@ test.skipIf(!container)(
 		// Refuse to overwrite a previous test or a real install, even in a labelled container.
 		expect(
 			run(
-				"test ! -e ~/.ateam/install.lock && test ! -e ~/.ateam/install-state && test ! -e ~/.ateam-phone-install.lock && test ! -e ~/.ateam-phone-install-exit && test ! -e ~/ateam-install.log",
+				"test ! -e ~/ateam-app/install.lock && test ! -e ~/ateam-app/install-state && test ! -e ~/.ateam-phone-install.lock && test ! -e ~/.ateam-phone-install-exit && test ! -e ~/ateam-install.log",
 			).exitCode,
 		).toBe(0);
 		expect(run(SSH_INSTALL_STATUS).exitCode).toBe(0);

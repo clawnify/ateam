@@ -14,9 +14,7 @@ test.skipIf(process.platform !== "linux")(
 		// legacy phone setup markers in their real home directory.
 		writeFileSync(lock, "");
 		const status = () =>
-			Bun.spawnSync(["sh", "-c", SSH_INSTALL_STATUS], {
-				env: { ...process.env, ATEAM_DATA_DIR: dir },
-			}).exitCode;
+			Bun.spawnSync(["sh", "-c", SSH_INSTALL_STATUS.replace("$HOME/ateam-app", dir)], {}).exitCode;
 		try {
 			expect(status()).toBe(74);
 			for (const phase of ["preparing", "activating", "starting", "failed:1"]) {

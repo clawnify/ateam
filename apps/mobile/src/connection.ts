@@ -166,7 +166,7 @@ export async function connect(
 		...mobileNative,
 		browserView: async (taskId) => {
 			const view = (await rpc.call(CH.browserView, [taskId])) as BrowserViewDTO;
-			return { url: browserViewUrl(await httpUrl(view.port), view.password) };
+			return { url: browserViewUrl(await httpUrl(view.port), view.password, view.controlToken) };
 		},
 	};
 

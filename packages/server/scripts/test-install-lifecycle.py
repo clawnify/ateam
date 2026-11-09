@@ -18,6 +18,7 @@ import time
 assert os.environ.get("ATEAM_LIFECYCLE_TEST") == "1", "disposable VM opt-in required"
 installer, tarball = map(lambda x: str(Path(x).resolve()), sys.argv[1:3])
 data = Path.home() / ".ateam"
+lifecycle = Path.home() / "ateam-app"
 sock = str(data / "rpc.sock")
 cli = str(Path.home() / ".local/bin/ateam")
 logs = Path(tempfile.mkdtemp(prefix="ateam-installer-tests-"))
@@ -53,18 +54,18 @@ def rpc(method, args=None):
 
 
 def state():
-    return (data / "install-state").read_text().strip()
+    return (lifecycle / "install-state").read_text().strip()
 
 
 def service_pid():
     return int(subprocess.check_output(["systemctl", "show", "-p", "MainPID", "--value", "ateam.service"]))
 
 
-def install():
+def install(extra_env=None):
     log = open(logs / f"install-{len(processes)}.log", "w")
     # Exercise the documented stdin-pipeline invocation, not only bash FILE.
     p = subprocess.Popen(["bash", "-o", "pipefail", "-c", 'cat "$1" | bash -s -- --service', "bash", installer],
-                         env={**os.environ, "ATEAM_TARBALL": tarball},
+                         env={**os.environ, "ATEAM_TARBALL": tarball, **(extra_env or {})},
                          stdout=log, stderr=log, start_new_session=True)
     log.close()
     processes.append(p)
@@ -72,7 +73,7 @@ def install():
 
 
 def unlocked():
-    with open(data / "install.lock", "a") as lock:
+    with open(lifecycle / "install.lock", "a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return True
@@ -100,11 +101,11 @@ try:
 
     # An active initializer owns a shared startup gate. Installer must wait,
     # while another installer is rejected without changing transaction state.
-    with open(data / "startup.lock", "a") as gate:
+    with open(lifecycle / "startup.lock", "a") as gate:
         fcntl.flock(gate, fcntl.LOCK_SH)
         first = install()
         wait_for(lambda: not unlocked())
-        second = install()
+        second = install({"ATEAM_DATA_DIR": str(logs / "other-data")})
         assert second.wait(timeout=15) == 75
         assert rpc("system:hello")[1] == initial
         fcntl.flock(gate, fcntl.LOCK_UN)

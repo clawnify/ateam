@@ -30,8 +30,11 @@ your bill), then pick a region and a size from the account's live catalog.
   → Keys → Generate auth key**: turn on **Tags** so the box never drops off your tailnet,
   and **Reusable** if Ateam should use it for your next boxes too (it keeps the key
   encrypted on this Mac; a one-off key works once).
-- **Sizes:** the smallest with 4 GB is picked to start with. Agents need about a gigabyte
-  each; the smallest Hetzner sells has one.
+- **Sizes:** a browser-capable x86 size with at least 4 GB is preferred to start with,
+  falling back to available Arm or smaller sizes. You can choose a different size.
+- **Browser:** included by default on x86 sizes, with an **Include browser** opt-out.
+  Arm sizes do not support the browser. A browser setup failure leaves terminal work
+  available; see `~/.ateam/browser-install.log` and retry from the Browser panel.
 
 When the box is up, its page opens with what's left: GitHub, and signing in to an agent.
 
@@ -42,7 +45,7 @@ what Hetzner bills for them. The phone has no SSH, so the box differs from one t
 makes:
 
 - **It installs Ateam itself at first boot**, from its cloud-init: the same installer,
-  with `--service --tailscale`, run as the `ateam` user once Tailscale is up, after the
+  with `--service --tailscale` and `--browser` when selected, run as the `ateam` user once Tailscale is up, after the
   coding agent picked on the page (Claude Code to start with, Codex, both, or none), so
   the engine finds it when it starts. Their output is `~/ateam-install.log` on the box.
 - **Once it answers, Finish setting up**: sign in to the agent (its terminal opens with
@@ -50,7 +53,7 @@ makes:
   name), and add a project.
 - **It knows the phone before Ateam first starts.** The phone makes a token of its own and
   puts only its sha256 in the cloud-init (`ATEAM_PAIR_DEVICE`, then `ateam pair
-  --add-device`). Locked or open stays as a new box would have it.
+  --add-device`). The box starts private, with that phone paired.
 - **No SSH key, and nothing in from the internet.** It sits behind a Hetzner firewall,
   `ateam-tailnet-only`, made the first time, which lets in only Tailscale's direct
   connections (UDP 41641); cloud-init turns password logins off. Hetzner emails a root

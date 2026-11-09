@@ -82,7 +82,7 @@ jobs:
           bun-version: 1.3.11
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run packages/server/scripts/build.ts
-      - run: tar -czf /tmp/ateam-server.tar.gz -C packages/server/dist cli.js daemon.js package.json
+      - run: tar -czf /tmp/ateam-server.tar.gz -C packages/server/dist cli.js daemon.js desktop.js desktop-wallpaper.png package.json install-browser.sh
       - uses: actions/upload-artifact@v4
         with:
           name: candidate-server

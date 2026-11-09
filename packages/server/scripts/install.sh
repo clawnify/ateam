@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install.sh | bash
 #
 # Run it AS THE USER that will own the agents (not root) — everything lands under
-# that user's home and no step needs sudo. It is idempotent: re-running upgrades
+# that user's home. The optional browser/tailnet setup needs sudo. Re-running upgrades
 # the dist in place. Files are only ever created or overwritten, never removed.
 #
 # Options:
@@ -22,6 +22,9 @@
 #                   set. Kernel mode where the box has /dev/net/tun; userspace mode,
 #                   with Tailscale Serve forwarding the port, where it hasn't. Needs
 #                   passwordless sudo. A re-run without it keeps the port.
+#   --browser       install the box's browser before the engine first starts.
+#                   Needs amd64 Debian/Ubuntu and passwordless sudo. A failure
+#                   is reported separately and does not prevent terminal work.
 #
 # Env knobs:
 #   ATEAM_VERSION   release tag to install (default: the latest release)
@@ -55,13 +58,15 @@ APP_DIR="$HOME/ateam-app"
 BIN_DIR="$HOME/.local/bin"
 WANT_SERVICE=0
 WANT_TAILSCALE=0
+WANT_BROWSER=0
 for arg in "$@"; do
 	case "$arg" in
 	--service) WANT_SERVICE=1 ;;
 	# The phone needs an engine that's already running, which only a service gives it.
 	--tailscale) WANT_TAILSCALE=1 WANT_SERVICE=1 ;;
+	--browser) WANT_BROWSER=1 ;;
 	*)
-		printf '\n!! unknown option: %s (the options are --service and --tailscale)\n' "$arg" >&2
+		printf '\n!! unknown option: %s (the options are --service, --tailscale and --browser)\n' "$arg" >&2
 		exit 1
 		;;
 	esac
@@ -87,7 +92,7 @@ else
 	SVC_MGR=none
 fi
 TMP="$(mktemp -d)"
-install_state() { printf '%s\n' "$1" > "$DATA_DIR/install-state.tmp"; mv "$DATA_DIR/install-state.tmp" "$DATA_DIR/install-state"; }
+install_state() { printf '%s\n' "$1" > "$APP_DIR/install-state.tmp"; mv "$APP_DIR/install-state.tmp" "$APP_DIR/install-state"; }
 finish_install() {
     rc=$?
     if [ "$rc" = 0 ]; then install_state ready; else install_state "failed:$rc"; fi
@@ -423,6 +428,25 @@ case "$WS_ADDR" in
 	;;
 esac
 
+# ------------------------------------------------------------ browser -------
+
+# Only an explicit request installs it. New-box clients pass --browser by
+# default; reconnects and engine upgrades do not change the user's choice.
+# Before starting the engine: a phone can launch its first task as soon as the
+# engine answers. Never fetch main's script for a different/pinned engine release.
+if [ "$WANT_BROWSER" = 1 ]; then
+	step "install the browser (--browser)"
+	mkdir -p "$DATA_DIR"
+	if [ ! -f "$TMP/install-browser.sh" ]; then
+		info "WARNING: this engine release has no bundled browser installer; update Ateam to include the browser"
+	elif ATEAM_DATA_DIR="$DATA_DIR" bash "$APP_DIR/install-browser.sh" >"$DATA_DIR/browser-install.log" 2>&1; then
+		info "browser ready"
+	else
+		info "WARNING: browser setup failed; terminal work is available. See $DATA_DIR/browser-install.log and retry from the Browser panel"
+		tail -5 "$DATA_DIR/browser-install.log"
+	fi
+fi
+
 # ------------------------------------------------------ Sprite service ------
 
 # On a Sprite the service must own the engine and must never be restarted.
@@ -479,7 +503,7 @@ fi
 
 # Serialize only activation with daemon initialization. Existing sessions hold
 # no startup gate. The outer install lock still covers staging through verification.
-exec 9>"$DATA_DIR/startup.lock"
+exec 9>"$APP_DIR/startup.lock"
 flock -x 9
 install_state activating
 # Publish the guarded CLI atomically BEFORE stopping legacy processes. An older
@@ -492,11 +516,11 @@ mv "$APP_DIR/.cli-next.js" "$APP_DIR/cli.js"
 # Publish supervisor ownership before stopping the old daemon. Reconnecting
 # clients must never fill this gap with an out-of-service engine.
 if [ "$SVC_MGR" = sprite ] && { [ "$SPRITE_PLAN" = keeper ] || [ "$SPRITE_PLAN" = create ] || [ "$SPRITE_PLAN" = migrate ]; }; then
-    printf 'sprite\n' > "$DATA_DIR/service-owner"
+    printf 'sprite\n' > "$APP_DIR/service-owner"
 elif [ "$SVC_MGR" = systemd ] && { [ "$WANT_SERVICE" = 1 ] || [ -f "$SYS_UNIT" ] || [ -f "$USER_UNIT" ]; }; then
     WANT_SERVICE=1
     if sudo -n true 2>/dev/null; then OWNER=system; else OWNER=user; fi
-    printf '%s\n' "$OWNER" > "$DATA_DIR/service-owner"
+    printf '%s\n' "$OWNER" > "$APP_DIR/service-owner"
 fi
 
 step "[5/7] stop the daemon still running the old dist"
@@ -535,6 +559,10 @@ fi
 # interrupted activation leaves a non-ready state and is repaired by a retry.
 mkdir -p "$APP_DIR"
 cp "$TMP/daemon.js" "$TMP/package.json" "$APP_DIR/"
+# Optional assets introduced by newer server releases.
+for asset in desktop.js desktop-wallpaper.png install-browser.sh; do
+    if [ -f "$TMP/$asset" ]; then cp "$TMP/$asset" "$APP_DIR/"; fi
+done
 rm -rf "$APP_DIR/node_modules"
 mv "$TMP/node_modules" "$APP_DIR/node_modules"
 # -------------------------------------------------------------- launcher ----
@@ -807,7 +835,7 @@ fi
 
 # Unmanaged installs explicitly start one daemon. Verification itself never starts
 # one, and managed installs are started only by their existing supervisor.
-if [ ! -s "$DATA_DIR/service-owner" ]; then
+if [ ! -s "$APP_DIR/service-owner" ]; then
     nohup setsid "$BIN_DIR/ateam" daemon > "$DATA_DIR/daemon.log" 2>&1 < /dev/null &
 fi
 # -------------------------------------------------------------- verify ------
@@ -923,14 +951,20 @@ case "$WS_ADDR" in
 	;;
 esac
 
-# The phone's WebSocket serves any device that can reach it until the box is locked
-# to the devices paired with it (pairing.ts), so say which it is and where the lock is.
+# The phone's WebSocket serves only devices paired with the box once it's private,
+# which a new box is from its first start (pairing.ts, LOCK_NEW_BOXES in cli.ts). An
+# older box can still be open. Say which it is. A private box nothing is paired with
+# yet gets the code its first device pairs with: this terminal may be the only way in.
+FIRST_CODE=""
 if [ -n "$WS_ADDR" ]; then
 	if grep -qs '"locked": true' "$DATA_DIR/pairings.json"; then
-		mark ok 'locked to paired devices (pair another from Ateam, or with: ateam pair)'
+		mark ok 'private to paired devices (pair another from Ateam, or with: ateam pair)'
+		if grep -qs '"devices": \[\]' "$DATA_DIR/pairings.json"; then
+			FIRST_CODE="$(ATEAM_DATA_DIR="$DATA_DIR" "$BIN_DIR/ateam" pair 2>/dev/null | sed -n 's/^Pairing code: //p' | head -1 || true)"
+		fi
 	else
-		mark no "open to any device that can reach $PHONE_AT: lock it from Ateam"
-		info '     (Settings → Boxes → Access on a Mac, or Lock it on its card in Ateam Go)'
+		mark no "open to any device that can reach $PHONE_AT: make it private from Ateam"
+		info '     (Settings → Boxes → Access on a Mac, or Make private on its card in Ateam Go)'
 	fi
 fi
 
@@ -944,6 +978,9 @@ EOF
 if [ -n "$TS_IP" ] && [ -n "$WS_ADDR" ]; then
 	printf '\nAteam Go reaches it at %s on your tailnet.\n' "$PHONE_AT"
 fi
+if [ -n "$FIRST_CODE" ]; then
+	printf '\nPair your first device with code %s: enter it in Ateam (Ateam Go, or Add a box on\na Mac) within 10 minutes. It works once; `ateam pair` makes another.\n' "$FIRST_CODE"
+fi
 
 }
 
@@ -951,11 +988,12 @@ fi
 # system:update all serialize. --close prevents installer children (including a
 # detached daemon) from inheriting the operation lock after the installer exits.
 for arg in "$@"; do
-    case "$arg" in --service|--tailscale) ;; *) printf '\n!! unknown option: %s (the options are --service and --tailscale)\n' "$arg" >&2; exit 1 ;; esac
+    case "$arg" in --service|--tailscale|--browser) ;; *) printf '\n!! unknown option: %s (the options are --service, --tailscale and --browser)\n' "$arg" >&2; exit 1 ;; esac
 done
 [ "$(id -u)" != 0 ] || { echo '!! run this as the user that will own the agents, not as root' >&2; exit 1; }
 command -v flock >/dev/null || { echo '!! flock (util-linux) is required' >&2; exit 1; }
-INSTALL_DATA_DIR="${ATEAM_DATA_DIR:-$HOME/.ateam}"
-mkdir -p "$INSTALL_DATA_DIR"
+# The payload is shared by every data directory under this account.
+INSTALL_DIR="$HOME/ateam-app"
+mkdir -p "$INSTALL_DIR"
 export -f install_main
-flock -n -E 75 --close "$INSTALL_DATA_DIR/install.lock" bash -c 'install_main "$@"' bash "$@"
+flock -n -E 75 --close "$INSTALL_DIR/install.lock" bash -c 'install_main "$@"' bash "$@"

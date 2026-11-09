@@ -29,6 +29,7 @@ import { createLeadTools, LEAD_TOOL_NAMES } from "./tools";
 export type { LeadPlace } from "./session";
 
 export interface LeadDeps {
+	preferences?: LeadSessionOptions["preferences"];
 	/** Where it runs, for the words its agent and tools use. */
 	place: LeadPlace;
 	/** Its folder: transcript, session id, MCP config, followed tasks, attachments.
@@ -74,8 +75,8 @@ export interface Lead {
 	reset(): void;
 	/** Claude's own prompt, or a message or answer held during a call (below). */
 	permission(id: string, answer: LeadPermissionAnswer): void | Promise<void>;
-	/** Auto mode on or off: Claude's own auto mode, applied to the running agent. */
-	setAuto(on: boolean): void;
+	/** Machine-owned Auto mode, applied through the selected agent runtime. */
+	setAuto(on: boolean): void | Promise<unknown>;
 	/** The user is on a voice call with this chat (true, repeated while it
 	 *  lasts; it lapses after CALL_GUARD_MS without one) or hung up. While a
 	 *  call is on, the Lead's messages and answers to tasks wait as permission
@@ -112,7 +113,7 @@ export const CALL_GUARD_MS = 90_000;
 
 /** What the Lead hears when a message or answer is held for the user's tap. */
 const HELD_FOR_TAP =
-	"Held for the user's OK: they are on a voice call with you, so Ateam shows this as a card in the chat and nothing goes to the task until they tap Allow. Tell them in a few words that it is waiting for their OK. Do not send it again; you hear what they decided with their next message.";
+	"Held for the user's OK: Ateam shows this as a card in the chat and nothing goes to the task until they tap Allow. Tell them in a few words that it is waiting for their OK. Do not send it again; you hear what they decided with their next message.";
 
 export async function startLead(deps: LeadDeps): Promise<Lead> {
 	const { handle } = deps;
@@ -133,7 +134,8 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 		machineOf: deps.machineOf,
 		onTouch: (task) => follower.follow(task),
 		hold: (r) => {
-			if (!session || Date.now() >= callUntil) return null;
+			if (!session || (Date.now() >= callUntil && !(r.required && session.agent() !== "claude")))
+				return null;
 			const id = randomUUID();
 			held.set(id, r);
 			session.record({
@@ -181,6 +183,7 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	});
 	const mcp = await startLeadMcpServer(tools);
 	session = new LeadSession({
+		preferences: deps.preferences,
 		dir: deps.dir,
 		place: deps.place,
 		mcp,
@@ -239,7 +242,7 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 			);
 			if (res.isError) throw new Error(res.text);
 		},
-		setAuto: (on) => lead.setAuto(on),
+		setAuto: (on) => (deps.preferences ? deps.preferences.update({ auto: on }) : lead.setAuto(on)),
 		setCall(on) {
 			callUntil = on ? Date.now() + CALL_GUARD_MS : 0;
 		},
