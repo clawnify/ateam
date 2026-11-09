@@ -2,7 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { DesktopMcpConfig } from "../browser";
+import type { DesktopMcpConfig, TaskWindowMcpConfig } from "../browser";
 import { BOARD_INSTRUCTIONS } from "../hooks/board-mcp";
 
 /**
@@ -265,7 +265,7 @@ export const AteamInbox = async ({ client }) => {
 
 	return {
 		"tool.execute.before": async (input) => {
-			if (input.tool !== "desktop_computer" && input.tool !== "desktop_control") return;
+			if (input.tool !== "desktop_computer" && input.tool !== "desktop_control" && !input.tool.startsWith("taskwindow_")) return;
 			await fetch(\`http://127.0.0.1:\${port}/hook/complete?terminalId=\${encodeURIComponent(terminalId)}&eventType=BrowserUse\`, {
 				signal: AbortSignal.timeout(2000),
 			}).catch(() => {});
@@ -629,7 +629,7 @@ export function codexHookArgs(notifyScriptPath: string): string {
 			const command = JSON.stringify(codexHookCommand(notifyScriptPath, ateamEvent));
 			const desktop =
 				codexEvent === "PreToolUse"
-					? `,{matcher="mcp__desktop__.*",hooks=[{type="command",command=${JSON.stringify(codexHookCommand(notifyScriptPath, "BrowserUse"))}}]}`
+					? `,{matcher="mcp__(taskwindow|desktop)__.*",hooks=[{type="command",command=${JSON.stringify(codexHookCommand(notifyScriptPath, "BrowserUse"))}}]}`
 					: "";
 			return `-c ${sq(`hooks.${codexEvent}=[{hooks=[{type="command",command=${command}}]}${desktop}]`)}`;
 		})
@@ -689,6 +689,7 @@ export async function removeAteamCodexHooks(worktreePath: string): Promise<void>
  */
 export async function ensureBoardMcpConfig(opts: {
 	desktop?: DesktopMcpConfig;
+	taskwindow?: TaskWindowMcpConfig;
 	hooksDir: string;
 	hookPort: number;
 	terminalId: string;
@@ -706,6 +707,15 @@ export async function ensureBoardMcpConfig(opts: {
 							type: "http",
 							url: opts.desktop.url,
 							headers: { Authorization: `Bearer ${opts.desktop.token}` },
+						},
+					}
+				: {}),
+			...(opts.taskwindow
+				? {
+						taskwindow: {
+							type: "http",
+							url: opts.taskwindow.url,
+							headers: { Authorization: `Bearer ${opts.taskwindow.token}` },
 						},
 					}
 				: {}),
@@ -745,12 +755,22 @@ export const BOARD_MCP_TOOLS = [
  * shortcut: this replaces a developer_instructions the user set in their own
  * config.toml; merge with it if anyone sets one.
  */
-export function codexBoardMcpArgs(hookPort: number, desktop?: DesktopMcpConfig): string {
+export function codexBoardMcpArgs(
+	hookPort: number,
+	desktop?: DesktopMcpConfig,
+	taskwindow?: TaskWindowMcpConfig,
+): string {
 	return [
 		...(desktop
 			? [
 					`-c 'mcp_servers.desktop.url="${desktop.url}"'`,
 					`-c 'mcp_servers.desktop.env_http_headers={"Authorization"="ATEAM_DESKTOP_AUTH"}'`,
+				]
+			: []),
+		...(taskwindow
+			? [
+					`-c 'mcp_servers.taskwindow.url="${taskwindow.url}"'`,
+					`-c 'mcp_servers.taskwindow.env_http_headers={"Authorization"="ATEAM_TASKWINDOW_AUTH"}'`,
 				]
 			: []),
 		`-c 'mcp_servers.ateam_board.url="http://127.0.0.1:${hookPort}/mcp"'`,
@@ -772,6 +792,7 @@ export function codexBoardMcpArgs(hookPort: number, desktop?: DesktopMcpConfig):
  */
 export function opencodeConfigContent(opts: {
 	desktop?: DesktopMcpConfig;
+	taskwindow?: TaskWindowMcpConfig;
 	hookPort: number;
 	hooksDir: string;
 	existing?: string;
@@ -797,6 +818,15 @@ export function opencodeConfigContent(opts: {
 						},
 					}
 				: {}),
+			...(opts.taskwindow
+				? {
+						taskwindow: {
+							type: "remote",
+							url: opts.taskwindow.url,
+							headers: { Authorization: "{env:ATEAM_TASKWINDOW_AUTH}" },
+						},
+					}
+				: {}),
 			ateam_board: {
 				type: "remote",
 				url: `http://127.0.0.1:${opts.hookPort}/mcp`,
@@ -812,6 +842,7 @@ export function opencodeConfigContent(opts: {
 /** Build the PTY environment for an agent session, injecting hook correlation. */
 export function buildAgentEnv(opts: {
 	desktop?: DesktopMcpConfig;
+	taskwindow?: TaskWindowMcpConfig;
 	terminalId: string;
 	agentId: string;
 	hookPort: number;
@@ -823,6 +854,7 @@ export function buildAgentEnv(opts: {
 		...process.env,
 		ATEAM_TERMINAL_ID: opts.terminalId,
 		...(opts.desktop ? { ATEAM_DESKTOP_AUTH: `Bearer ${opts.desktop.token}` } : {}),
+		...(opts.taskwindow ? { ATEAM_TASKWINDOW_AUTH: `Bearer ${opts.taskwindow.token}` } : {}),
 		ATEAM_AGENT_ID: opts.agentId,
 		ATEAM_HOOK_PORT: String(opts.hookPort),
 		...(opts.token ? { ATEAM_TERMINAL_TOKEN: opts.token } : {}),
@@ -830,6 +862,7 @@ export function buildAgentEnv(opts: {
 			? {
 					OPENCODE_CONFIG_CONTENT: opencodeConfigContent({
 						desktop: opts.desktop,
+						taskwindow: opts.taskwindow,
 						hookPort: opts.hookPort,
 						hooksDir: opts.hooksDir,
 						existing: process.env.OPENCODE_CONFIG_CONTENT,

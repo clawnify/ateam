@@ -18,7 +18,7 @@ import {
 	peerToken,
 	removeAteamCodexHooks,
 } from "./agent-setup";
-import { desktopMcpConfig } from "./browser";
+import { desktopMcpConfig, taskwindowMcpConfig } from "./browser";
 import { codexThreadIsConversation, latestCodexThreadInDir } from "./codex-threads";
 import { shell } from "./headless";
 import { refreshLoginPath } from "./login-env";
@@ -435,8 +435,10 @@ async function launchAgent(
 
 	const token = peerToken(services.peerSecret, terminalId);
 	const desktop = desktopMcpConfig(services.userDataDir);
+	const taskwindow = taskwindowMcpConfig(services.userDataDir);
 	const env = buildAgentEnv({
 		desktop,
+		taskwindow,
 		terminalId,
 		agentId: agent.id,
 		hookPort: services.hookPort,
@@ -472,7 +474,7 @@ async function launchAgent(
 		// The board MCP server and the hooks ride the same way.
 		agentCmd = agentCmd.replace(
 			/^codex/,
-			`codex -c 'notify=["sh","${codexNotify}"]' ${codexHookArgs(services.notifyScriptPath)} ${codexBoardMcpArgs(services.hookPort, desktop)}`,
+			`codex -c 'notify=["sh","${codexNotify}"]' ${codexHookArgs(services.notifyScriptPath)} ${codexBoardMcpArgs(services.hookPort, desktop, taskwindow)}`,
 		);
 	} else if (agent.id === "claude" && !input.agentMode) {
 		// The board tools (get_board / set_status / set_waiting), served by the
@@ -483,6 +485,7 @@ async function launchAgent(
 		// that followed them, so they go AFTER everything agentCommand built.
 		const mcpConfig = await ensureBoardMcpConfig({
 			desktop,
+			taskwindow,
 			hooksDir: services.hooksDir,
 			hookPort: services.hookPort,
 			terminalId,

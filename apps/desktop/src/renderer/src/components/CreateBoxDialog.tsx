@@ -1,6 +1,6 @@
+import type { AgentDTO } from "@ateam/protocol";
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { AgentDTO } from "@ateam/protocol";
 import type { ProviderOptions } from "../../../shared/host";
 import { stripAnsi } from "../lib/ansi";
 import { HetznerLogo } from "./HetznerLogo";
@@ -36,6 +36,9 @@ export function CreateBoxDialog({
 	const [error, setError] = useState<string | null>(null);
 	const [agents, setAgents] = useState<AgentDTO[]>([]);
 	const [preinstall, setPreinstall] = useState<string[]>([]);
+	const [browser, setBrowser] = useState(true);
+	const browserSupported =
+		options?.serverTypes.find((s) => s.slug === size)?.architecture !== "arm";
 	const logRef = useRef<HTMLPreElement>(null);
 
 	const loadOptions = async () => {
@@ -70,10 +73,16 @@ export function CreateBoxDialog({
 		? options.serverTypes.filter((st) => st.locations.length === 0 || st.locations.includes(region))
 		: [];
 	// Keep the chosen size valid as the region changes, starting from the smallest with
-	// 4 GB: agents need about a gigabyte each, and the smallest Hetzner sells has one.
+	// 4 GB and browser support, falling back when this region only has Arm sizes.
 	useEffect(() => {
 		if (availableSizes.length > 0 && !availableSizes.some((s) => s.slug === size)) {
-			setSize((availableSizes.find((s) => s.memory >= 4) ?? availableSizes[0])?.slug ?? "");
+			setSize(
+				(
+					availableSizes.find((s) => s.memory >= 4 && s.architecture !== "arm") ??
+					availableSizes.find((s) => s.memory >= 4) ??
+					availableSizes[0]
+				)?.slug ?? "",
+			);
 		}
 		// biome-ignore lint/correctness/useExhaustiveDependencies: react to region/options only
 	}, [region, options]);
@@ -102,6 +111,7 @@ export function CreateBoxDialog({
 				hetznerToken: token.trim() || undefined,
 				tailscaleAuthKey: tsKey.trim() || undefined,
 				agents: preinstall.length ? preinstall : undefined,
+				browser: browser && browserSupported,
 			});
 			// Created + connected (always a remote engine): what's left to make it
 			// task-ready (GitHub, phone, agent sign-in) is on its own page.
@@ -274,6 +284,17 @@ export function CreateBoxDialog({
 											</option>
 										))}
 									</select>
+								</label>
+								<label className="cb-agent">
+									<input
+										type="checkbox"
+										checked={browser && browserSupported}
+										disabled={!browserSupported}
+										onChange={(e) => setBrowser(e.target.checked)}
+									/>
+									{browserSupported
+										? "Include browser for web tasks"
+										: "Browser requires an x86 size"}
 								</label>
 								{agents.length > 0 && (
 									<div className="cb-row">

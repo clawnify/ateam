@@ -1027,7 +1027,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 
 	async function install(
 		dest: string,
-		opts?: { wsAddr?: string; tailscale?: boolean; rerun?: boolean },
+		opts?: { wsAddr?: string; tailscale?: boolean; rerun?: boolean; browser?: boolean },
 	): Promise<HostStatus> {
 		// `dest` reaches ssh as an argument, where a leading "-" would make it an option,
 		// and one with a space in it (a pasted `ssh mybox`) names no host ssh can reach.
@@ -1062,7 +1062,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		// main's protocol and the upgrade is then guaranteed futile (see connect()).
 		const pin = app.isPackaged ? `ATEAM_VERSION=v${app.getVersion()} ` : "";
 		// --tailscale joins the box to the tailnet and opens its network port there.
-		const flags = opts?.tailscale ? "--service --tailscale" : "--service";
+		const flags = `${opts?.tailscale ? "--service --tailscale" : "--service"}${opts?.browser ? " --browser" : ""}`;
 		// pipefail for the download: a curl that fails hands bash nothing, bash exits 0 on
 		// an empty script, and the set-up went on to connect to an engine never installed
 		// ("RPC connection closed", seen on a boxd machine whose DNS came and went). Only
@@ -1335,7 +1335,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			// Reuse the streamed installer (Gap A): it derives the box's tailnet IP into
 			// ATEAM_WS_ADDR (so the phone can connect) and connects on success.
 			progress("Installing the engine");
-			status = await install(boxAlias);
+			status = await install(boxAlias, { browser: spec.browser !== false });
 		} else {
 			// SSH answers once cloud-init has made the user, while its apt run and its
 			// Tailscale install go on for most of a minute (measured on a Hetzner box,
@@ -1348,7 +1348,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			progress(
 				"Installing the engine and joining your tailnet: approve the box on the Tailscale page that opens in your browser, and press Connect there",
 			);
-			status = await install(boxAlias, { tailscale: true });
+			status = await install(boxAlias, { tailscale: true, browser: spec.browser !== false });
 		}
 
 		// Preinstall any requested agent CLIs (best-effort — the box is usable without

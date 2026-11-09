@@ -7,7 +7,12 @@ import { runInNewContext } from "node:vm";
 import { BROWSER_NOT_INSTALLED_ERROR } from "@ateam/protocol";
 import { createDesktopServer } from "../../desktop-control/src/server";
 import { viewerScript } from "../../desktop-control/src/viewer";
-import { installBrowser, openBrowserView, readVncPassword } from "../src/browser";
+import {
+	installBrowser,
+	openBrowserView,
+	readVncPassword,
+	taskwindowMcpConfig,
+} from "../src/browser";
 
 // The Browser button installs through these once the user said yes. The real
 // script needs apt and sudo, so each test stands a one-line script in for it.
@@ -122,4 +127,31 @@ describe("browser: view", () => {
 			gateway.close();
 		}
 	});
+	test("a viewer HTTP failure is not reported as ready", async () => {
+		const dir = dataDir();
+		mkdirSync(join(dir, "browser"));
+		writeFileSync(join(dir, "browser", "vnc-password"), "password");
+		const request = spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response("unavailable", { status: 503 }),
+		);
+		try {
+			await expect(openBrowserView(dir)).rejects.toThrow("isn't answering");
+		} finally {
+			request.mockRestore();
+		}
+	});
+});
+
+test("per-launch TaskWindow credentials require an Ateam browser and a valid token", () => {
+	const dir = dataDir();
+	const tokenFile = join(dir, "token");
+	const token = "a".repeat(32);
+	writeFileSync(tokenFile, token);
+	expect(taskwindowMcpConfig(dir, tokenFile)).toBeUndefined();
+	mkdirSync(join(dir, "browser"));
+	writeFileSync(join(dir, "browser", "vnc-password"), "password");
+	expect(taskwindowMcpConfig(dir, tokenFile)).toEqual({ url: "http://127.0.0.1:9377/mcp", token });
+	writeFileSync(tokenFile, "header\r\ninjection");
+	expect(taskwindowMcpConfig(dir, tokenFile)).toBeUndefined();
+	expect(taskwindowMcpConfig(dir, join(dir, "missing"))).toBeUndefined();
 });

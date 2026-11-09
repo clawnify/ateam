@@ -267,16 +267,20 @@ ssh my-ateam-box "bash -lc 'ateam'"
 > the box's folders. A box on an Ateam older than the skills menu says so in the
 > menu and takes the next release first.
 
-### Optional: a browser for the box's agents
+### A browser for the box's agents
 
 Browser MCP tools usually drive the Chrome on your laptop, and that only works
 when the agent runs on the laptop too. A box gets a Chrome of its own instead.
+New x86 boxes created in the desktop app or Ateam Go include it by default;
+clear **Include browser** to leave it out. Arm boxes remain terminal-only.
+Connecting an existing box or upgrading its engine keeps its current setup.
+
 In the desktop app, click the globe button on a task on the box: on a box with
-no browser yet, Ateam asks, then installs it there. Or run the installer on the
-box yourself:
+no browser yet, Ateam asks, then installs it there. Or run the installer bundled
+with the installed engine on the box yourself:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/clawnify/ateam/main/packages/server/scripts/install-browser.sh | bash
+bash "$HOME/ateam-app/install-browser.sh"
 ```
 
 Run it as the same user as `install.sh`. It needs passwordless sudo once, and an
@@ -289,15 +293,22 @@ x86_64 box (Google Chrome has no Linux Arm build). It installs:
   desktop is empty; to log in before any agent has, ask one to open the site.
 - [TaskWindow](https://github.com/clawnify/TaskWindow) in that Chrome, its
   extension force-installed by policy and paired with its daemon automatically,
-  registered as the `taskwindow` MCP server for Claude Code. These are the same
-  tools as the TaskWindow extension on a laptop.
+  registered as the `taskwindow` MCP server when Ateam launches Claude Code, Codex,
+  or OpenCode, including agents installed later. Resume or relaunch an existing
+  session to pick up newly installed browser tools. These are the same tools as
+  the TaskWindow extension on a laptop.
 - noVNC on port 6080, so you can watch the desktop and take over for a login, a
   2FA prompt or a CAPTCHA. In the desktop app, the globe button on a task on this
   box opens it in a Browser panel, already signed in. In the iOS app, a task whose
   agent has used the browser shows it as a miniature over its terminal: tap it to
-  bring it above the terminal, and minimize it to put it back. From any other browser, use
-  `http://<tailnet-ip>:6080/vnc.html` (on a box with a tailnet interface) with the
-  password in `~/.ateam/browser/vnc-password`.
+  bring it above the terminal, and minimize it to put it back. The clients provide
+  its VNC password and separate viewer credential automatically.
+
+Browser setup verifies Chrome's sandbox, extension pairing, authenticated MCP
+discovery, and the viewer before reporting success. If setup fails, the engine
+still starts for terminal work; details are in `~/.ateam/browser-install.log`.
+Retry from the desktop Browser panel or with the bundled script above. For a
+manual engine install, add `--browser` to the engine installer's options.
 
 Everything runs as a service (systemd, or Sprite services on a Sprite), so it
 survives reboots and keeps working with no laptop connected. Re-running the script
