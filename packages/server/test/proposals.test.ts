@@ -9,6 +9,8 @@ import {
 	clearProposal,
 	MAX_PENDING,
 	type ProposeRequest,
+	proposalsOfTask,
+	takeProposalNote,
 	validateProposal,
 } from "../src/proposals";
 
@@ -157,5 +159,153 @@ describe("clearProposal", () => {
 		notified = [];
 		clearProposal(db, { taskId: task.id, proposalId: id }, notify);
 		expect(notified).toEqual([]);
+	});
+});
+
+describe("what the agent learns of its proposals", () => {
+	/** The task the user creates from a proposal, as the client reports it. */
+	const startTask = (name: string) =>
+		repo.createTask(db, {
+			projectId: task.projectId,
+			name,
+			slug: name,
+			branch: name,
+			baseBranch: "main",
+			worktreePath: `/tmp/${name}`,
+		});
+	const pending = (name: string) => row()!.proposals!.find((p) => p.name === name)!;
+
+	it("records nothing for a client that does not say what the user did", () => {
+		propose({ kind: "task", name: "Retry budget", prompt: "x" });
+		clearProposal(db, { taskId: task.id, proposalId: pending("Retry budget").id }, notify);
+		expect(row()?.proposalOutcomes ?? []).toEqual([]);
+		expect(takeProposalNote(db, task.id)).toBeUndefined();
+		expect(propose({ kind: "task", name: "Retry budget", prompt: "x" }).ok).toBe(true);
+	});
+
+	it("tells the next turn once that a proposal became a task, under its current name", () => {
+		propose({ kind: "task", name: "Retry budget", prompt: "x" });
+		const made = startTask("retry-budget");
+		repo.updateTask(db, made.id, { name: "Retry budget for webhook sends", column: "running" });
+		clearProposal(
+			db,
+			{
+				taskId: task.id,
+				proposalId: pending("Retry budget").id,
+				outcome: "created",
+				created: { id: made.id, name: "Retry budget, webhooks" },
+			},
+			notify,
+			2000,
+		);
+		expect(row()?.proposalOutcomes).toEqual([
+			{
+				id: expect.any(String),
+				kind: "task",
+				name: "Retry budget",
+				outcome: "created",
+				created: { id: made.id, name: "Retry budget, webhooks" },
+				at: 2000,
+			},
+		]);
+		const note = takeProposalNote(db, task.id);
+		expect(note).toContain('"Retry budget for webhook sends"');
+		expect(note).toContain(`task ${made.id}, running`);
+		expect(note).toContain("send_message");
+		expect(takeProposalNote(db, task.id)).toBeUndefined();
+	});
+
+	it("refuses proposing a created task again while it is in play, and allows it once merged", () => {
+		propose({ kind: "task", name: "Retry budget", prompt: "x" });
+		const made = startTask("retry-budget");
+		clearProposal(
+			db,
+			{
+				taskId: task.id,
+				proposalId: pending("Retry budget").id,
+				outcome: "created",
+				created: { id: made.id, name: made.name },
+			},
+			notify,
+		);
+		const again = propose({ kind: "task", name: " retry budget ", prompt: "x, corrected" });
+		expect(again.ok).toBe(false);
+		expect(again.reason).toContain(`send_message (to: ${made.id})`);
+		expect(row()?.proposals).toEqual([]);
+		// The refusal told it, so the next turn has nothing to add.
+		expect(takeProposalNote(db, task.id)).toBeUndefined();
+		// A loop of the same name is other work.
+		expect(propose({ kind: "loop", name: "Retry budget", prompt: "x", everyMinutes: 60 }).ok).toBe(true);
+
+		repo.updateTask(db, made.id, { column: "merged" });
+		expect(propose({ kind: "task", name: "Retry budget", prompt: "redo" }).ok).toBe(true);
+	});
+
+	it("refuses one created on another engine, saying where to look", () => {
+		propose({ kind: "task", name: "Retry budget", prompt: "x" });
+		clearProposal(
+			db,
+			{
+				taskId: task.id,
+				proposalId: pending("Retry budget").id,
+				outcome: "created",
+				created: { id: "on-another-box", name: "Retry budget" },
+			},
+			notify,
+		);
+		const again = propose({ kind: "task", name: "Retry budget", prompt: "x" });
+		expect(again.ok).toBe(false);
+		expect(again.reason).toContain("list_peers");
+	});
+
+	it("tells a dismissal, and accepts the name again with a word that it was dismissed", () => {
+		propose({ kind: "task", name: "Flake", prompt: "x" });
+		clearProposal(
+			db,
+			{ taskId: task.id, proposalId: pending("Flake").id, outcome: "dismissed" },
+			notify,
+		);
+		expect(takeProposalNote(db, task.id)).toContain('Dismissed the task proposed as "Flake"');
+		const again = propose({ kind: "task", name: "Flake", prompt: "x" });
+		expect(again.ok).toBe(true);
+		expect(again.reason).toContain("dismissed");
+	});
+
+	it("lists pending and decided proposals for get_board, which counts as telling", () => {
+		propose({ kind: "task", name: "A", prompt: "a" });
+		propose({ kind: "loop", name: "Nightly", prompt: "n", dailyAt: "09:00" });
+		propose({ kind: "task", name: "B", prompt: "b" });
+		const made = startTask("a");
+		clearProposal(
+			db,
+			{
+				taskId: task.id,
+				proposalId: pending("A").id,
+				outcome: "created",
+				created: { id: made.id, name: "A" },
+			},
+			notify,
+		);
+		clearProposal(
+			db,
+			{
+				taskId: task.id,
+				proposalId: pending("Nightly").id,
+				outcome: "created",
+				created: { name: "Nightly deps" },
+			},
+			notify,
+		);
+		expect(proposalsOfTask(db, task.id)).toEqual([
+			{
+				kind: "task",
+				name: "A",
+				status: "created",
+				created: { name: "a", taskId: made.id, column: made.column },
+			},
+			{ kind: "loop", name: "Nightly", status: "created", created: { name: "Nightly deps" } },
+			{ kind: "task", name: "B", status: "waiting for the user" },
+		]);
+		expect(takeProposalNote(db, task.id)).toBeUndefined();
 	});
 });

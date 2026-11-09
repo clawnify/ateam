@@ -56,6 +56,7 @@ export function bootstrap(db: SqliteExecutor): void {
 			question TEXT,
 			page TEXT,
 			proposals TEXT,
+			proposal_outcomes TEXT,
 			created_by TEXT NOT NULL DEFAULT 'ateam',
 			created_at INTEGER,
 			updated_at INTEGER
@@ -218,6 +219,7 @@ export function bootstrap(db: SqliteExecutor): void {
 		"ALTER TABLE tasks ADD COLUMN question TEXT",
 		"ALTER TABLE tasks ADD COLUMN page TEXT",
 		"ALTER TABLE tasks ADD COLUMN proposals TEXT",
+		"ALTER TABLE tasks ADD COLUMN proposal_outcomes TEXT",
 		// Every row that predates it carries a name someone chose or the six words
 		// already shown for months: either way, not one to rename now.
 		"ALTER TABLE tasks ADD COLUMN name_auto INTEGER NOT NULL DEFAULT 0",

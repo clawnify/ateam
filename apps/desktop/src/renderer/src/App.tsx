@@ -1096,9 +1096,21 @@ export function App() {
 	useEffect(() => {
 		if (proposalOpen && !openTaskProposal) setProposalOpen(null);
 	}, [proposalOpen, openTaskProposal]);
-	const clearProposal = (taskId: string, proposalId: string) =>
+	// What the user did with it goes along: the engine tells the proposing agent
+	// at its next turn (proposals.ts), so it never proposes a created one again.
+	const clearProposal = (
+		taskId: string,
+		proposalId: string,
+		outcome: "created" | "dismissed",
+		created?: { id?: string; name: string },
+	) =>
 		run(async () => {
-			await window.ateam.tasks.clearProposal({ taskId, proposalId });
+			await window.ateam.tasks.clearProposal({
+				taskId,
+				proposalId,
+				outcome,
+				...(created ? { created } : {}),
+			});
 		});
 	const decideLeadProposal = (id: string, outcome: "created" | "dismissed", taskId?: string) =>
 		run(async () => {
@@ -2882,7 +2894,7 @@ export function App() {
 							waiting={(task.proposals?.length ?? 1) - 1}
 							onDismiss={() => {
 								setProposalOpen(null);
-								void clearProposal(task.id, p.id);
+								void clearProposal(task.id, p.id, "dismissed");
 							}}
 						/>
 					);
@@ -2906,7 +2918,11 @@ export function App() {
 							onClose={() => setProposalOpen(null)}
 							onCreate={(input) => {
 								setProposalOpen(null);
-								void composeTask(input, () => void clearProposal(task.id, p.id));
+								void composeTask(
+									input,
+									(made) =>
+										void clearProposal(task.id, p.id, "created", { id: made.id, name: made.name }),
+								);
 							}}
 						/>
 					) : (
@@ -2927,8 +2943,8 @@ export function App() {
 							envProtocol={envProtocol}
 							onInstallAgent={installAgentOn}
 							onCancel={() => setProposalOpen(null)}
-							onSaved={() => {
-								void clearProposal(task.id, p.id);
+							onSaved={(saved) => {
+								void clearProposal(task.id, p.id, "created", saved);
 								refreshLoops();
 								setLoopsCollapsed(false);
 								setProposalOpen(null);
@@ -4539,7 +4555,11 @@ export function TaskPanel({
 					onOpen={onOpenProposal}
 					onDismiss={(proposalId) =>
 						void run(async () => {
-							await window.ateam.tasks.clearProposal({ taskId: task.id, proposalId });
+							await window.ateam.tasks.clearProposal({
+								taskId: task.id,
+								proposalId,
+								outcome: "dismissed",
+							});
 						})
 					}
 				/>

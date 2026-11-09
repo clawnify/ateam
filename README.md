@@ -295,7 +295,9 @@ agent pages (HTML an agent makes for you with `show_page`, such as a dashboard
 or a comparison, drawn in a sandboxed frame; a question can carry one whose
 buttons answer it), tasks and loops an agent proposes with `propose_task` and
 `propose_loop` (the New task or New loop dialog opens filled in when you are in
-that task, and its card waits in Needs You until you create or dismiss them),
+that task, and its card waits in Needs You until you create or dismiss them;
+the agent is not woken for your decision, but learns it when its next turn
+starts, and can't propose a task you already created again),
 task titles and summaries (a task you start without a name gets a short title
 a few seconds in, once, so other agents never lose track of it; when its prompt
 names nothing, such as a screenshot alone or "what's going on?", the title comes

@@ -176,7 +176,11 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // v36: browser:view carries desktop viewer credentials, including a bundled
 // password value that already-released clients forward unchanged.
 // v37: machine-owned Chat agent and Auto preferences.
-export const PROTOCOL_VERSION = 37;
+// v38: tasks:clearProposal takes `outcome` and `created`, so the proposing
+// agent learns at its next turn whether the user created its proposal (and as
+// which task) or dismissed it. Both optional: an older engine ignores them, and
+// an older client's clear records nothing. No gate.
+export const PROTOCOL_VERSION = 38;
 
 /**
  * The oldest client protocol an engine of this version still serves correctly, sent
@@ -243,7 +247,8 @@ export interface TaskQuestionDTO {
  * propose_loop board tools). Nothing is created until the user confirms it in
  * the New task or New loop dialog, filled in from these fields and editable.
  * Cleared with tasks:clearProposal once created or dismissed; the agent is not
- * told either way. While any is pending the card is held in Needs You.
+ * woken for either, but its engine keeps which it was and tells it at its next
+ * turn (v38). While any is pending the card is held in Needs You.
  */
 export interface TaskProposalDTO {
 	/** Names the proposal to clear, so a click can't clear a newer one. */
@@ -1536,8 +1541,18 @@ export interface AteamApi {
 			via?: "lead";
 		}): Promise<TaskDTO>;
 		/** Drop a proposal the task's agent made, once the user created what it
-		 *  proposed or dismissed it. A proposal already gone is not an error. */
-		clearProposal(input: { taskId: string; proposalId: string }): Promise<TaskDTO>;
+		 *  proposed or dismissed it. A proposal already gone is not an error.
+		 *  `outcome` (v38) says which, and `created` what came of it, so the
+		 *  engine can tell the agent at its next turn; an older engine ignores
+		 *  both, and without `outcome` nothing is recorded. */
+		clearProposal(input: {
+			taskId: string;
+			proposalId: string;
+			outcome?: "created" | "dismissed";
+			/** As the user saved it: the dialog is editable. `id` is the task
+			 *  created, when there is one. */
+			created?: { id?: string; name: string };
+		}): Promise<TaskDTO>;
 		/** Preview which tasks a cleanup would remove vs keep (and why). */
 		cleanupPreview(projectId: string): Promise<CleanupReport>;
 		/** Worktrees advised for cleanup (idle/finished), with their terminals. */

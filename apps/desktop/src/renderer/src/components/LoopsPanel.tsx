@@ -127,7 +127,8 @@ export function LoopForm({
 	agents: AgentDTO[];
 	envProtocol: Record<string, number>;
 	onInstallAgent?: (alias: string | null, agentId: string) => Promise<{ loginCommand?: string }>;
-	onSaved: () => void;
+	/** `name` as saved, which a proposal's agent is told (it may be edited). */
+	onSaved: (saved: { name: string }) => void;
 	onCancel: () => void;
 }) {
 	// Where the cursor lands when the form opens. A new loop cannot be created
@@ -257,7 +258,7 @@ export function LoopForm({
 					},
 				});
 			}
-			onSaved();
+			onSaved({ name: name.trim() });
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {

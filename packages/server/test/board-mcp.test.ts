@@ -139,6 +139,20 @@ describe("dispatchMcp", () => {
 		}
 	});
 
+	it("get_board names the caller only when it is a verified agent (its proposals are listed then)", async () => {
+		const { board } = fakeBoard();
+		const asked: (string | undefined)[] = [];
+		board.get = async (caller) => {
+			asked.push(caller);
+			return { tasks: [] };
+		};
+		const get = rpc("tools/call", { name: "get_board", arguments: {} }, 2);
+		await dispatchMcp(get, board, { callerTerminalId: "term-1", callerVerified: true });
+		await dispatchMcp(get, board, { callerTerminalId: "term-1", callerVerified: false });
+		await dispatchMcp(get, board);
+		expect(asked).toEqual(["term-1", undefined, undefined]);
+	});
+
 	it("tools/call set_status threads the caller terminal id through as a self-move", async () => {
 		const { board, calls } = fakeBoard();
 		await dispatchMcp(
