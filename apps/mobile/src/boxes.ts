@@ -111,12 +111,19 @@ export function alwaysOnInForm(box: SavedConnection | null): boolean {
 	return box === null ? true : box.sleeps === false;
 }
 
+/** A box that connecting to wakes: reached over SSH at a provider whose gateway wakes
+ *  the machine on its first packet (providers.ts sshWakes). The phone needs no key to
+ *  wake it, and a try in the background mustn't dial it, as the dial is the wake. */
+export function dialWakes(box: SavedConnection): boolean {
+	return Boolean(box.ssh) && wakesThrough(box)?.sshWakes === true;
+}
+
 /** Why this phone can't wake a box its provider puts to sleep, when it can't (no
  *  waker for it): its name there is missing, else the provider's key. Null for a
- *  box with no provider, which nothing wakes. */
+ *  box with no provider, which nothing wakes, and for one connecting to wakes. */
 export function cantWakeReason(box: SavedConnection): string | null {
 	const def = wakesThrough(box);
-	if (!def) return null;
+	if (!def || dialWakes(box)) return null;
 	if (!filled(def, "box", box.provider?.box ?? {})) {
 		return `This phone doesn't have its name at ${def.label}, so it can't wake it.`;
 	}
@@ -151,6 +158,16 @@ export function removeBox(list: SavedBox[], key: string): SavedBox[] {
 	return list.filter((b) => boxKey(b) !== key);
 }
 
+/** The SSH identities (Keychain entries) `before` used and `after` no longer does: a
+ *  box removed, or edited onto a new key or password. One still in use stays. */
+export function droppedIdentities(before: SavedConnection[], after: SavedConnection[]): string[] {
+	const kept = new Set(after.flatMap((b) => (b.ssh ? [b.ssh.identity] : [])));
+	const dropped = before.flatMap((b) =>
+		b.ssh && !kept.has(b.ssh.identity) ? [b.ssh.identity] : [],
+	);
+	return [...new Set(dropped)];
+}
+
 /** What a card is called: the box's name at its provider, else its host. */
 export function boxTitle(b: SavedConnection): string {
 	return wakeMachineName(b.provider) || b.host;
@@ -168,6 +185,19 @@ export function boxSubtitle(b: SavedConnection): string {
 	]
 		.filter(Boolean)
 		.join(" · ");
+}
+
+/** How this phone reaches a box, for its settings: over SSH, with what it logs in
+ *  with (kept on this phone), or at its address on the tailnet. */
+export function connectionOf(b: SavedConnection): { label: string; detail: string } {
+	if (b.ssh) {
+		const login = b.ssh.auth === "key" ? "key" : "password";
+		return {
+			label: "SSH",
+			detail: `${b.ssh.user}@${b.host}:${b.port || "22"} · ${login} on this phone`,
+		};
+	}
+	return { label: "Tailscale", detail: `${b.host}:${b.port} · needs Tailscale on this phone` };
 }
 
 function isConnection(v: unknown): v is SavedConnection {

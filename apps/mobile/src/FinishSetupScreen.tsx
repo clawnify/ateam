@@ -1,12 +1,16 @@
-// What's left once a box this phone created answers (src/useBoxCreation.ts): signing in
-// to the coding agent it installed, GitHub, a first project, and, optionally, the box's
-// AI keys. Each opens its own screen and comes back here; Done goes to the board. They
-// stay on the box's card in Boxes (its terminal, GitHub and key buttons) for later.
+// What's left once a box this phone created answers (src/useBoxCreation.ts), or one it
+// just set up over SSH, or any box with no coding agent: signing in to the agent (or
+// installing one), GitHub, a first project, and, optionally, the box's AI keys. Each
+// opens its own screen and comes back here; Done goes to the board. They stay on the
+// box's card in Boxes (its terminal, GitHub and key buttons) for later.
 import { AGENT_INSTALLS, type InstallableAgent } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import type { ComponentProps } from "react";
 import { Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
+import { installAndSignIn, signInCommand as signIn } from "./create-box";
 import { C, CONTENT_MAX } from "./theme";
+
+const INSTALLABLE = Object.keys(AGENT_INSTALLS) as InstallableAgent[];
 
 function Step({
 	icon,
@@ -82,21 +86,29 @@ export function FinishSetupScreen({
 								key={a}
 								icon="log-in"
 								title={`Sign in to ${AGENT_INSTALLS[a].label}`}
-								body={`Opens the box's terminal running ${a === "codex" ? AGENT_INSTALLS.codex.remoteLogin : AGENT_INSTALLS[a].login}: open its link, sign in, and come back.`}
-								onPress={() =>
-									onSignIn(
-										a === "codex" ? AGENT_INSTALLS.codex.remoteLogin : AGENT_INSTALLS[a].login,
-									)
-								}
+								body={`Opens the box's terminal running ${signIn(a)}: open its link, sign in, and come back.`}
+								onPress={() => onSignIn(signIn(a))}
 							/>
 						))
 					) : (
-						<Step
-							icon="terminal"
-							title="Install a coding agent"
-							body="None is on the box yet. Install one from its terminal, for example Claude Code."
-							onPress={onTerminal}
-						/>
+						<>
+							<Text style={styles.note}>No coding agent is on the box yet. Install one:</Text>
+							{INSTALLABLE.map((a) => (
+								<Step
+									key={a}
+									icon="download"
+									title={`Install ${AGENT_INSTALLS[a].label}`}
+									body="Opens the box's terminal, installs it, then signs in: open its link, sign in, and come back."
+									onPress={() => onSignIn(installAndSignIn(a))}
+								/>
+							))}
+							<Step
+								icon="terminal"
+								title="Open the terminal"
+								body="Install another agent yourself."
+								onPress={onTerminal}
+							/>
+						</>
 					)}
 					<Step
 						icon="github"
@@ -153,6 +165,7 @@ const styles = StyleSheet.create({
 	content: { padding: 16, paddingTop: 20, paddingBottom: 40 },
 	column: { width: "100%", maxWidth: CONTENT_MAX, alignSelf: "center", gap: 10 },
 	intro: { color: C.muted, fontSize: 14, lineHeight: 20, marginBottom: 4 },
+	note: { color: C.muted, fontSize: 13, lineHeight: 18, marginTop: 2 },
 	step: {
 		flexDirection: "row",
 		alignItems: "center",
