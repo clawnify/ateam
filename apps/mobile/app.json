@@ -3,7 +3,7 @@
 		"name": "Ateam Go",
 		"slug": "ateam",
 		"scheme": "ateamgo",
-		"version": "1.4.4",
+		"version": "1.4.5",
 		"orientation": "portrait",
 		"icon": "./assets/icon.png",
 		"userInterfaceStyle": "light",
@@ -29,7 +29,7 @@
 		"ios": {
 			"supportsTablet": true,
 			"bundleIdentifier": "com.clawnify.ateam",
-			"buildNumber": "33",
+			"buildNumber": "34",
 			"infoPlist": {
 				"ITSAppUsesNonExemptEncryption": false,
 				"UISupportedInterfaceOrientations~ipad": [
