@@ -98,13 +98,15 @@ export async function verifySSH(box: SavedConnection): Promise<SavedConnection> 
 }
 
 /** User-initiated setup, also used after creating a provider box. Remember the
- * verified address before installing so leaving the app cannot lose access. */
+ * verified address before installing so leaving the app cannot lose access.
+ * `installed`: this setup ran Ateam's installer, so the box is new to Ateam and has
+ * no coding agent yet (the installer adds none). */
 export async function prepareSSH(
 	box: SavedConnection,
 	remember: (box: SavedConnection) => Promise<void>,
 	progress: (text: string) => void,
-): Promise<SavedConnection> {
-	if (!box.ssh) return box;
+): Promise<{ box: SavedConnection; installed: boolean }> {
+	if (!box.ssh) return { box, installed: false };
 	let opened: Awaited<ReturnType<typeof openSSH>> | null = null;
 	try {
 		progress("Verifying SSH access…");
@@ -151,6 +153,8 @@ export async function prepareSSH(
 			await native.close(id);
 			box = { ...box, ssh: { ...box.ssh, user: "ateam", auth: "key", identity } };
 			await remember(box);
+			// The saved box logs in by key now, so root's password has no further use here.
+			await native.removePassword(identity).catch(() => {});
 			opened = await openSSH(box);
 			({ native, id } = opened);
 		}
@@ -189,13 +193,13 @@ export async function prepareSSH(
 				if (status.code === 75) continue;
 				if (status.code)
 					throw new Error(`Installation did not finish. Reconnect to retry. ${status.stderr}`);
-				if ((await check()).code === 0) return box;
+				if ((await check()).code === 0) return { box, installed: true };
 			}
 			throw new Error(
 				"The box is still installing. It is saved; reconnect later. See ~/ateam-install.log on the box.",
 			);
 		}
-		return box;
+		return { box, installed: false };
 	} finally {
 		if (opened) await opened.native.close(opened.id).catch(() => {});
 	}

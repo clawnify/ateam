@@ -19,7 +19,11 @@ That makes the recipe the same everywhere:
    - **No Mac?** Ateam Go's first screen has two ways to a box: **Pair with your Mac**
      (on the Mac, Settings → Boxes → **Pair your iPhone** shows one code for every box
      it holds), or **Create a box here** on Hetzner ([how](hetzner.md#create-a-box)).
-     A box made by hand with the installer's `--tailscale` is added by its address.
+     A Linux server of your own is added from **I already have a box** over SSH: the
+     phone installs Ateam on it (as root, it first makes an `ateam` user that logs in
+     with a key on the phone), then **Finish setting up** installs and signs in to a
+     coding agent. A box made by hand with the installer's `--tailscale` is added by its
+     address.
 4. For Ateam Go, **Set up phone access** under the page's Access, or run the
    installer on the box with `--tailscale`. The box joins your tailnet and opens its
    network port there:

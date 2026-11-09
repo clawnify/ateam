@@ -39,8 +39,8 @@ private enum SSHSecrets {
             guard updated == errSecSuccess else { throw SSHFailure("Could not save SSH credential (\(updated))") }
         } else if status != errSecSuccess { throw SSHFailure("Could not save SSH credential (\(status))") }
     }
-    static func remove(_ id: String) throws {
-        for kind in ["key", "password"] {
+    static func remove(_ id: String, kinds: [String] = ["key", "password"]) throws {
+        for kind in kinds {
             let status = SecItemDelete(try query(id, kind) as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else {
                 throw SSHFailure("Could not remove SSH credential (\(status))")
@@ -90,6 +90,8 @@ public final class SSHModule: Module {
             try SSHSecrets.save(id, "password", Data(password.utf8))
         }
         AsyncFunction("removeIdentity") { (id: String) throws in try SSHSecrets.remove(id) }
+        // Keeps the identity's key: setup drops root's password once the box logs in by key.
+        AsyncFunction("removePassword") { (id: String) throws in try SSHSecrets.remove(id, kinds: ["password"]) }
         AsyncFunction("fingerprint") { (key: String) throws -> String in try sshFingerprint(key) }
         AsyncFunction("open") { (id: String, host: String, port: Int, user: String,
                                   identity: String, auth: String, hostKey: String?) async throws in

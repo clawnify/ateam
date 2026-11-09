@@ -3,7 +3,12 @@
 // the same the desktop's Create a box uses; what differs is that the phone has no
 // SSH, so the box installs Ateam itself at first boot and pairs this phone before its
 // engine first starts (`install` in buildCloudInit). Pure, so it's tested on its own.
-import { buildCloudInit, type InstallableAgent, type ProviderOptions } from "@ateam/protocol";
+import {
+	AGENT_INSTALLS,
+	buildCloudInit,
+	type InstallableAgent,
+	type ProviderOptions,
+} from "@ateam/protocol";
 
 /** The provider definition's id for Hetzner, for its account key in the Keychain. */
 export const HETZNER_ACCOUNT = "hetzner";
@@ -104,6 +109,28 @@ export function phoneCloudInit(opts: {
 			browser: opts.browser,
 		},
 	});
+}
+
+/** Signs in to an agent from the box's terminal: Codex by a device code, as the box
+ *  has no browser. */
+export function signInCommand(a: InstallableAgent): string {
+	return a === "codex" ? AGENT_INSTALLS.codex.remoteLogin : AGENT_INSTALLS[a].login;
+}
+
+/** What an agent's installer needs so it doesn't stop to ask: Codex's offers to start
+ *  Codex, before it's signed in (its install.sh reads CODEX_NON_INTERACTIVE). */
+const QUIET_INSTALL: Partial<Record<InstallableAgent, string>> = {
+	codex: "CODEX_NON_INTERACTIVE=1",
+};
+
+/** Installs it, then signs in from a fresh login shell, which reads the PATH line an
+ *  installer may have just added (the terminal's own shell started before it). */
+export function installAndSignIn(a: InstallableAgent): string {
+	const quiet = QUIET_INSTALL[a];
+	const install = quiet
+		? `env ${quiet} sh -c '${AGENT_INSTALLS[a].install}'`
+		: AGENT_INSTALLS[a].install;
+	return `${install} && bash -lc '${signInCommand(a)}'`;
 }
 
 /** The Agent choices on Create a box: what each puts on the box. */

@@ -4,6 +4,8 @@ export interface SSHNative {
 	createKey(id: string): Promise<string>;
 	savePassword(id: string, password: string): Promise<void>;
 	removeIdentity(id: string): Promise<void>;
+	/** Only the password, keeping the identity's key. */
+	removePassword(id: string): Promise<void>;
 	fingerprint(key: string): Promise<string>;
 	open(
 		id: string,

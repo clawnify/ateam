@@ -39,17 +39,20 @@ your bill), then pick a region and a size from the account's live catalog.
 When the box is up, its page opens with what's left: GitHub, and signing in to an agent.
 
 **From Ateam Go, with no Mac:** Get started → **Create a box here**, or **No box yet?** on
-Add a Tailscale box. The same token, then a Tailscale auth key, which the phone needs
-(nobody would see the link to approve the box with), then a name, a place and a size, with
-what Hetzner bills for them. The phone has no SSH, so the box differs from one the Mac
-makes:
+Add a box. The same token, then how the phone connects: **SSH** (the default when the
+phone isn't on Tailscale: the phone makes a key, and only that phone can log in, through
+an `ateam-ssh-only` firewall that lets in only TCP 22) or **Tailscale**, with an auth key
+the phone needs (nobody would see the link to approve the box with). Then a name, a place
+and a size, with what Hetzner bills for them. With Tailscale, the box differs from one
+the Mac makes:
 
 - **It installs Ateam itself at first boot**, from its cloud-init: the same installer,
   with `--service --tailscale` and `--browser` when selected, run as the `ateam` user once Tailscale is up, after the
   coding agent picked on the page (Claude Code to start with, Codex, both, or none), so
   the engine finds it when it starts. Their output is `~/ateam-install.log` on the box.
 - **Once it answers, Finish setting up**: sign in to the agent (its terminal opens with
-  the agent's login command typed in), connect GitHub (which also gives commits your
+  the agent's login command typed in), or, with none on the box, install one (its
+  terminal installs it, then signs in), connect GitHub (which also gives commits your
   name), and add a project.
 - **It knows the phone before Ateam first starts.** The phone makes a token of its own and
   puts only its sha256 in the cloud-init (`ATEAM_PAIR_DEVICE`, then `ateam pair

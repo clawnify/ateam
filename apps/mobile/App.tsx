@@ -61,6 +61,7 @@ import {
 	useWindowDimensions,
 	View,
 } from "react-native";
+import { sshAvailable, sshNative } from "./modules/expo-ssh/src";
 import { AgentIcon } from "./src/AgentIcon";
 import { AiKeysScreen } from "./src/AiKeysScreen";
 import { filesToBox } from "./src/attach";
@@ -74,6 +75,7 @@ import {
 	boxKey,
 	boxTitle,
 	cantWakeReason,
+	droppedIdentities,
 	leadBoxOf,
 	leadFirst,
 	NEW_LINK,
@@ -1598,10 +1600,17 @@ export default function App() {
 
 	// The Boxes list as it is now, persisted. Through a ref as well as state, so a
 	// connect that lands mid-render still edits the latest list.
-	const commitBoxes = useCallback((next: SavedBox[], required = false) => {
+	const commitBoxes = useCallback(async (next: SavedBox[], required = false) => {
+		const dropped = droppedIdentities(boxesRef.current, next);
 		boxesRef.current = next;
 		setBoxes(next);
-		return saveBoxes(next, required);
+		// The Keychain follows the saved list: a box's SSH key and password leave with it,
+		// once the list without it is stored (a failed save would bring the box back).
+		if (!(await saveBoxes(next, required)) || !dropped.length || !sshAvailable) return;
+		for (const id of dropped)
+			await sshNative()
+				.removeIdentity(id)
+				.catch(() => {});
 	}, []);
 
 	// How to wake a box through its provider: its key from the Keychain, one adapter
@@ -1997,6 +2006,8 @@ export default function App() {
 			ssh: undefined,
 		};
 		const replaces = editingKey;
+		// Ateam's installer just ran on it over SSH: a new box, so Finish setting up.
+		let installed = false;
 		landOnBoard.current = false;
 		endDemo();
 		setFormBusy(true);
@@ -2019,7 +2030,7 @@ export default function App() {
 				box.ssh = await saveSSHForm({ ...sshForm, hostKey });
 				setSSHForm(savedSSHForm(box));
 				let remembered = replaces;
-				box = await prepareSSH(
+				({ box, installed } = await prepareSSH(
 					box,
 					async (next) => {
 						await commitBoxes(touchBox(boxesRef.current, next, Date.now(), remembered), true);
@@ -2028,7 +2039,7 @@ export default function App() {
 						setSSHForm(savedSSHForm(next));
 					},
 					setFormNotice,
-				);
+				));
 			}
 			const key = boxKey(box);
 			if (!(await link.connect(box, { wake: true, save: true, replaces, onWaking: setWaking }))) {
@@ -2054,7 +2065,11 @@ export default function App() {
 			setEditingKey(null);
 			setConnectScreen("list");
 			leaveConnect();
-			if (!lastRead.current.projects.some((p) => fleet.ownerOf(p.id) === key)) setBrowserKey(key);
+			// New to Ateam, or no coding agent to run a task with: the same checklist a box
+			// created here gets (sign in or install an agent, GitHub, a first project).
+			if (installed || !link.conn(key)?.info.agents.length) setFinishKey(key);
+			else if (!lastRead.current.projects.some((p) => fleet.ownerOf(p.id) === key))
+				setBrowserKey(key);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -2441,9 +2456,26 @@ export default function App() {
 	const onRemoveBox = useCallback(
 		(box: SavedBox) => {
 			const key = boxKey(box);
-			commitBoxes(removeBox(boxesRef.current, key));
-			setSwipeOpenKey(null);
-			forgetBox(key);
+			const remove = () => {
+				void commitBoxes(removeBox(boxesRef.current, key));
+				setSwipeOpenKey(null);
+				forgetBox(key);
+			};
+			// Its SSH key leaves the Keychain with it (commitBoxes), and it may be the only
+			// key the server takes: say so before it's gone.
+			const ownKey = droppedIdentities(boxesRef.current, removeBox(boxesRef.current, key));
+			if (box.ssh?.auth !== "key" || !ownKey.length) {
+				remove();
+				return;
+			}
+			Alert.alert(
+				`Remove ${boxTitle(box)}?`,
+				"This phone's SSH key for it is deleted too. The server itself keeps running at your provider, and if no other key opens it, getting back in takes the provider's console.",
+				[
+					{ text: "Cancel", style: "cancel", onPress: () => setSwipeOpenKey(null) },
+					{ text: "Remove", style: "destructive", onPress: remove },
+				],
+			);
 		},
 		[commitBoxes, forgetBox],
 	);

@@ -151,6 +151,16 @@ export function removeBox(list: SavedBox[], key: string): SavedBox[] {
 	return list.filter((b) => boxKey(b) !== key);
 }
 
+/** The SSH identities (Keychain entries) `before` used and `after` no longer does: a
+ *  box removed, or edited onto a new key or password. One still in use stays. */
+export function droppedIdentities(before: SavedConnection[], after: SavedConnection[]): string[] {
+	const kept = new Set(after.flatMap((b) => (b.ssh ? [b.ssh.identity] : [])));
+	const dropped = before.flatMap((b) =>
+		b.ssh && !kept.has(b.ssh.identity) ? [b.ssh.identity] : [],
+	);
+	return [...new Set(dropped)];
+}
+
 /** What a card is called: the box's name at its provider, else its host. */
 export function boxTitle(b: SavedConnection): string {
 	return wakeMachineName(b.provider) || b.host;

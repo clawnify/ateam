@@ -10,6 +10,7 @@ import {
 	boxTitle,
 	CONNECTION_LOST,
 	cantWakeReason,
+	droppedIdentities,
 	leadBoxOf,
 	leadFirst,
 	NEW_LINK,
@@ -283,4 +284,27 @@ test("SSH identities are separate from tailnet boxes and survive storage", () =>
 	for (const invalid of [null, {}, { ...ssh.ssh, auth: "unknown" }, { ...ssh.ssh, hostKey: 3 }]) {
 		expect(parseBoxes(JSON.stringify([{ ...ssh, ssh: invalid }]), null)).toEqual([]);
 	}
+});
+
+test("an SSH box's Keychain identity goes once no saved box uses it", () => {
+	const ssh = (host: string, identity: string) => ({
+		host,
+		port: "22",
+		ssh: { user: "ateam", identity, auth: "key" as const },
+	});
+	const tailnet = { host: "100.64.0.1", port: "8787" };
+	const a = ssh("a.example", "id-a");
+	const b = ssh("b.example", "id-b");
+	// Removed: its identity goes; the other box's stays, and a tailnet box has none.
+	expect(droppedIdentities([a, b, tailnet], [b, tailnet])).toEqual(["id-a"]);
+	// Moved to another address with the same key (an edit, or a created box's IP): kept.
+	expect(droppedIdentities([a], [{ ...a, host: "203.0.113.7" }])).toEqual([]);
+	// Edited onto a new key: the old one goes.
+	expect(droppedIdentities([a], [ssh("a.example", "id-new")])).toEqual(["id-a"]);
+	// Shared by two saved boxes: kept while either is left, and named once.
+	const twin = ssh("a2.example", "id-a");
+	expect(droppedIdentities([a, twin], [twin])).toEqual([]);
+	expect(droppedIdentities([a, twin], [])).toEqual(["id-a"]);
+	// Root becoming the ateam user keeps the identity (src/ssh.ts).
+	expect(droppedIdentities([{ ...a, ssh: { ...a.ssh, user: "root" } }], [a])).toEqual([]);
 });

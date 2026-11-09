@@ -22,6 +22,7 @@ import {
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import { sshAvailable } from "../modules/expo-ssh/src";
+import { onTailnet } from "../modules/expo-tailnet/src";
 import {
 	AGENT_CHOICES,
 	boxNameOf,
@@ -364,7 +365,11 @@ export function CreateBoxScreen({
 	const [tokenSaved, setTokenSaved] = useState(false);
 	const [token, setToken] = useState("");
 	const [tsKey, setTsKey] = useState("");
-	const [network, setNetwork] = useState("tailscale");
+	// SSH when this phone isn't on a tailnet: no Tailscale account or auth key to get
+	// first. Where the build can't tell, Tailscale as before.
+	const [network, setNetwork] = useState(() =>
+		sshAvailable && onTailnet() === false ? "ssh" : "tailscale",
+	);
 	const [name, setName] = useState(() => defaultBoxName(nameRandom));
 	const [options, setOptions] = useState<ProviderOptions | null>(null);
 	const [location, setLocation] = useState("");
@@ -500,9 +505,9 @@ export function CreateBoxScreen({
 						/>
 						{network === "ssh" ? (
 							<Text style={styles.helpText}>
-								Ateam generates a key on this phone and installs its public key on the server. Only
-								SSH is open to the internet. Keep your provider account for recovery if you lose
-								this phone.
+								Ateam generates a key on this phone and installs its public key on the server, so
+								only this phone can reach it. Only SSH is open to the internet. Keep your provider
+								account for recovery if you lose this phone.
 							</Text>
 						) : (
 							<>

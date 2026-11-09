@@ -16,9 +16,10 @@ export interface SSHForm {
 	pinnedHost?: string;
 	pinnedPort?: string;
 }
+/** A new server's own login: root, which setup turns into an `ateam` user (src/ssh.ts). */
 export const emptySSHForm = (): SSHForm => ({
 	enabled: false,
-	user: "ateam",
+	user: "root",
 	auth: "password",
 	identity: "",
 	password: "",
@@ -104,6 +105,12 @@ export function SSHFields({
 						autoCorrect={false}
 						onChangeText={(user) => onChange({ ...value, user })}
 					/>
+					{value.user.trim() === "root" ? (
+						<Text style={styles.help}>
+							A new server's password is the one your provider emailed or showed when you created
+							it. Ateam then sets up its own user, which logs in with a key on this phone.
+						</Text>
+					) : null}
 					<View style={styles.row}>
 						{(["password", "key"] as const).map((auth) => (
 							<Pressable
