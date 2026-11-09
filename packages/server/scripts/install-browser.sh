@@ -109,7 +109,7 @@ case "$(dpkg --print-architecture)" in
 amd64) CHROME_DEB=google-chrome-stable_current_amd64.deb ;;
 *) die "Google Chrome ships for amd64 only, and this box is $(dpkg --print-architecture)" ;;
 esac
-PKGS="xvfb openbox x11vnc novnc xdotool scrot feh fonts-noto-color-emoji"
+PKGS="xvfb openbox x11vnc novnc xdotool x11-xserver-utils scrot feh fonts-noto-color-emoji"
 if ! command -v google-chrome >/dev/null; then
 	TMP="$(mktemp -d)"
 	trap 'rm -rf "$TMP"' EXIT
