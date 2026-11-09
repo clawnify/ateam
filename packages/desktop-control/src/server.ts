@@ -211,6 +211,7 @@ export function createDesktopServer(opts: {
 		server,
 		close() {
 			control.close();
+			desktop.close();
 			for (const v of viewers.values()) v.socket.terminate();
 			wss.close();
 			for (const s of servers) s.close();

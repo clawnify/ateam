@@ -106,8 +106,16 @@ try {
 	assert(png);
 	await writeFile(join(scratch, "screen.png"), Buffer.from(png.data, "base64"));
 	assert.equal(actual, expected);
+	// Short text survives xdotool's own rebinding by luck; check that each
+	// non-ASCII character had a keycode of its own instead.
+	const keymap = execFileSync("xmodmap", ["-pk"], { env, encoding: "utf8" });
+	for (const c of new Set(expected.match(/[^\x20-\x7e\n]/gu))) {
+		const cp = c.codePointAt(0);
+		const sym = `0x${(cp >= 0x100 ? 0x1000000 + cp : cp).toString(16).padStart(4, "0")}`;
+		assert(keymap.includes(sym), `${c} (${sym}) was not bound to a keycode`);
+	}
 	console.log(
-		`PASS: native click, multilingual typing, Control+s, exact saved bytes and PNG. Evidence: ${scratch}`,
+		`PASS: native click, multilingual typing on bound keycodes, Control+s, exact saved bytes and PNG. Evidence: ${scratch}`,
 	);
 } finally {
 	await call("control", { action: "release", lease });

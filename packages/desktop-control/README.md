@@ -7,8 +7,9 @@ configuration, and a panel that opens its viewer.
 ## Run
 
 Requires Node 22+, Xvfb (or another X11 display), a window manager, `xdotool`,
-`scrot`, `x11vnc`, and noVNC's browser modules at `/usr/share/novnc`. The VNC
-server must use RFB 3.8 with VNC password authentication on loopback port 5900.
+`xmodmap`, `scrot`, `x11vnc`, and noVNC's browser modules at
+`/usr/share/novnc`. The VNC server must use RFB 3.8 with VNC password
+authentication on loopback port 5900.
 Wayland and control of a user's macOS/Windows desktop are outside this version.
 
 ```sh
@@ -51,9 +52,12 @@ A second agent must wait; there is no agent force-takeover operation.
 PNG pixels, regardless of how the viewer scales the display. `key` accepts
 combinations such as `Control+s` and `Shift+Tab`. `type` sends real key events,
 including explicit Return/Tab events, with a 4000-character limit. LF/CRLF are
-normalized to Return. It is typing, so the focused application's shortcuts,
-autoindent, and text transformations still apply. Scroll amounts are wheel
-steps (1–20) at the current pointer position.
+normalized to Return. Characters missing from the keyboard map (accents, Greek,
+CJK) are bound to free keycodes with `xmodmap` before typing and stay bound
+until a later character needs the keycode; the service unbinds them when it
+stops. It is typing, so the focused application's shortcuts, autoindent, and
+text transformations still apply. Scroll amounts are wheel steps (1–20) at the
+current pointer position.
 
 The viewer fills its frame and accepts mouse and keyboard input directly, without
 a takeover panel. A keyboard button on touch devices opens a text field for the

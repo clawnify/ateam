@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 export function run(
 	file: string,
@@ -72,7 +73,99 @@ export function keySequence(value: unknown): string {
 		.join("+");
 }
 
+/** `xmodmap -pk` → keycode → its non-empty keysyms. */
+export function parseKeymap(out: string): Map<number, number[]> {
+	const keymap = new Map<number, number[]>();
+	for (const line of out.split("\n")) {
+		const code = /^\s*(\d+)(?:\s|$)/.exec(line)?.[1];
+		if (code)
+			keymap.set(Number(code), (line.match(/0x[0-9a-f]+/gi) ?? []).map(Number).filter(Boolean));
+	}
+	return keymap;
+}
+
+export type KeyRun = { text: string; map: [keycode: number, keysym: number][]; overwrite: boolean };
+
+/**
+ * xdotool types a character missing from the keymap by rebinding ONE scratch
+ * keycode for every key press and clearing it 3 ms later. An application that
+ * reads the keymap after that has moved on types nothing or a neighbour; a
+ * 4000-character multilingual text lost up to 137 of its 1237 non-ASCII characters.
+ * Instead, each such character gets an empty keycode of its own before xdotool
+ * runs, so xdotool finds it in the keymap and never rebinds. Text needing more
+ * keycodes than are free is split into runs; a run that rebinds a keycode
+ * already in use is marked `overwrite` so the caller can let the app catch up.
+ */
+export function planKeys(
+	text: string,
+	keymap: Map<number, number[]>,
+	owned: Map<number, number>,
+): KeyRun[] {
+	const present = new Set<number>();
+	const empty: number[] = [];
+	for (const [code, syms] of keymap) {
+		if (owned.has(code)) continue;
+		if (!syms.length) empty.push(code);
+		for (const sym of syms) present.add(sym);
+	}
+	empty.sort((a, b) => a - b);
+	// Leave the lowest empty keycode to xdotool's scratch binding and the
+	// highest to x11vnc's keysym additions for a viewer.
+	const slots = [...empty.slice(1, -1), ...owned.keys()];
+	const chars = Array.from(text);
+	// The keysym xdotool itself would bind (xdo.c, _xdo_keysym_from_char).
+	const syms = chars.map((c) => {
+		const cp = c.codePointAt(0) ?? 0;
+		const sym = cp >= 0x100 ? 0x1000000 + cp : cp;
+		return cp >= 0xa0 && !present.has(sym) ? sym : 0;
+	});
+	if (!slots.length || !syms.some(Boolean)) return [{ text, map: [], overwrite: false }];
+	const held = new Map(owned);
+	// Rebind empty keycodes first, then the ones whose last key press is oldest.
+	const lastUse = new Map<number, number>();
+	const age = (code: number) => {
+		const sym = held.get(code);
+		return sym === undefined ? -2 : (lastUse.get(sym) ?? -1);
+	};
+	const runs: KeyRun[] = [];
+	for (let start = 0; start < chars.length; ) {
+		const need = new Set<number>();
+		let end = start;
+		for (; end < chars.length; end++) {
+			const sym = syms[end];
+			if (!sym || need.has(sym)) continue;
+			if (need.size === slots.length) break;
+			need.add(sym);
+		}
+		const holding = new Set(held.values());
+		const spare = slots
+			.filter((code) => !need.has(held.get(code) ?? 0))
+			.sort((a, b) => age(a) - age(b));
+		const map: KeyRun["map"] = [];
+		let overwrite = false;
+		for (const sym of need) {
+			if (holding.has(sym)) continue;
+			const code = spare.shift() as number;
+			overwrite ||= held.has(code);
+			held.set(code, sym);
+			map.push([code, sym]);
+		}
+		runs.push({ text: chars.slice(start, end).join(""), map, overwrite });
+		for (; start < end; start++) if (syms[start]) lastUse.set(syms[start] as number, start);
+	}
+	return runs;
+}
+
+// shortcut: a fixed pause before reusing a keycode. Measured on a 1-vCPU box,
+// no pause at all lost nothing; 100 ms is margin for a busier app. An app that
+// lags longer can still misread the end of the previous run. Binding a second
+// keysym per keycode (Shift level) would halve the reuses if this gets slow.
+const REBIND_SETTLE_MS = 100;
+let warnedNoXmodmap = false;
+
 export class X11Desktop {
+	/** Keycodes this process bound for typing → keysym. Kept between calls. */
+	private readonly owned = new Map<number, number>();
 	constructor(private readonly display = ":99") {}
 	async screenshot(): Promise<Buffer> {
 		// Ubuntu's scrot/imlib cannot save to Node's socket-backed stdout pipe.
@@ -105,25 +198,41 @@ export class X11Desktop {
 						"text must be at most 4000 characters, with only tab/newline control characters.",
 					);
 				try {
-					// LF is not Return in libxdo. Send newlines explicitly. Its dynamic
-					// Unicode keymaps also need the normal 12ms delay, or GTK loses keys.
-					for (const part of args.text.replace(/\r\n?/g, "\n").split(/([\n\t])/)) {
-						if (!part) continue;
-						if (part === "\n" || part === "\t")
+					for (const chunk of await this.keyRuns(args.text.replace(/\r\n?/g, "\n"), signal)) {
+						if (chunk.map.length) {
+							if (chunk.overwrite) await sleep(REBIND_SETTLE_MS, undefined, { signal });
+							// Claimed first: the next call drops any an interrupted xmodmap missed.
+							for (const [code, sym] of chunk.map) this.owned.set(code, sym);
 							await run(
-								"xdotool",
-								["key", "--clearmodifiers", part === "\n" ? "Return" : "Tab"],
+								"xmodmap",
+								["-"],
 								this.display,
 								signal,
+								chunk.map
+									.map(([code, sym]) => `keycode ${code} = 0x${sym.toString(16)}`)
+									.join("\n"),
 							);
-						else
-							await run(
-								"xdotool",
-								["type", "--clearmodifiers", "--delay", "12", "--file", "-"],
-								this.display,
-								signal,
-								part,
-							);
+						}
+						// LF is not Return in libxdo. Send newlines explicitly. Keep the
+						// normal 12ms delay: faster typing loses keys in GTK.
+						for (const part of chunk.text.split(/([\n\t])/)) {
+							if (!part) continue;
+							if (part === "\n" || part === "\t")
+								await run(
+									"xdotool",
+									["key", "--clearmodifiers", part === "\n" ? "Return" : "Tab"],
+									this.display,
+									signal,
+								);
+							else
+								await run(
+									"xdotool",
+									["type", "--clearmodifiers", "--delay", "12", "--file", "-"],
+									this.display,
+									signal,
+									part,
+								);
+						}
 					}
 				} catch (error) {
 					await this.resetInput();
@@ -194,6 +303,31 @@ export class X11Desktop {
 			await this.resetInput();
 			throw error;
 		}
+	}
+	private async keyRuns(text: string, signal: AbortSignal): Promise<KeyRun[]> {
+		if (!/[\u00a0-\u{10ffff}]/u.test(text)) return [{ text, map: [], overwrite: false }];
+		let keymap: Map<number, number[]>;
+		try {
+			keymap = parseKeymap((await run("xmodmap", ["-pk"], this.display, signal)).toString());
+		} catch (error) {
+			if (signal.aborted) throw error;
+			// xdotool still types, with its per-character rebinding race.
+			if (!warnedNoXmodmap)
+				console.error(`Typing without reserved keycodes: ${(error as Error).message}`);
+			warnedNoXmodmap = true;
+			return [{ text, map: [], overwrite: false }];
+		}
+		// A restarted display starts from its default keymap.
+		for (const [code, sym] of this.owned)
+			if (!keymap.get(code)?.includes(sym)) this.owned.delete(code);
+		return planKeys(text, keymap, this.owned);
+	}
+	/** Hand the keycodes bound for typing back to the display. */
+	close(): void {
+		if (!this.owned.size) return;
+		const clear = [...this.owned.keys()].map((code) => `keycode ${code} =`).join("\n");
+		this.owned.clear();
+		run("xmodmap", ["-"], this.display, undefined, clear).catch(() => {});
 	}
 	async resetInput(): Promise<void> {
 		await run(
