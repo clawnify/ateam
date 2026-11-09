@@ -22,3 +22,10 @@ describe("browserViewUrl", () => {
 		expect(hashVar(browserViewUrl("http://h:6080", "a&b=c#d"), "password")).toBe("a&b=c#d");
 	});
 });
+
+test("desktop takeover credential stays in the fragment alongside the VNC password", () => {
+	const url = browserViewUrl("http://box:6080", "password", "viewer-token");
+	expect(hashVar(url, "controlToken")).toBe("viewer-token");
+	expect(url.split("#")[0]).toBe("http://box:6080/vnc.html");
+	expect(browserViewUrl("http://box:6080", "password")).not.toContain("controlToken");
+});

@@ -22,6 +22,7 @@ import {
 	type InstallLogEvent,
 } from "../shared/host";
 import { type AteamTheme, THEME_CH, themeOrDefault } from "../shared/theme";
+import { type AteamWindow, WINDOW_CH } from "../shared/window";
 
 const api: AteamApi = {
 	projects: {
@@ -35,6 +36,7 @@ const api: AteamApi = {
 		remove: (id) => ipcRenderer.invoke(CH.projectsRemove, id),
 	},
 	tasks: {
+		pages: (taskId) => ipcRenderer.invoke(CH.tasksPages, taskId),
 		createFromIssue: (input) => ipcRenderer.invoke(CH.tasksCreateFromIssue, input),
 		list: (projectId) => ipcRenderer.invoke(CH.tasksList, projectId),
 		create: (input) => ipcRenderer.invoke(CH.tasksCreate, input),
@@ -210,6 +212,9 @@ const host: AteamHost = {
 	updateBox: (alias) => ipcRenderer.invoke(HOST_CH.updateBox, alias),
 	phoneAccess: (alias) => ipcRenderer.invoke(HOST_CH.phoneAccess, alias),
 	setBoxAlwaysOn: (alias, on) => ipcRenderer.invoke(HOST_CH.boxAlwaysOn, alias, on),
+	dotfilesStatus: (alias) => ipcRenderer.invoke(HOST_CH.dotfilesStatus, alias),
+	prepareDotfiles: (alias, config) => ipcRenderer.invoke(HOST_CH.prepareDotfiles, alias, config),
+	applyDotfiles: (alias, id) => ipcRenderer.invoke(HOST_CH.applyDotfiles, alias, id),
 	githubAccess: (alias) => ipcRenderer.invoke(HOST_CH.githubAccess, alias),
 	connectGithub: (alias, token) => ipcRenderer.invoke(HOST_CH.connectGithub, alias, token),
 	checkGithub: (alias, repos) => ipcRenderer.invoke(HOST_CH.checkGithub, alias, repos),
@@ -252,6 +257,8 @@ const host: AteamHost = {
 contextBridge.exposeInMainWorld("ateamHost", host);
 
 const lead: AteamLead = {
+	settings: (machine) => ipcRenderer.invoke(LEAD_CH.settings, machine),
+	updateSettings: (machine, patch) => ipcRenderer.invoke(LEAD_CH.updateSettings, machine, patch),
 	snapshot: (opts) => ipcRenderer.invoke(LEAD_CH.snapshot, opts),
 	older: (beforeId, limit) => ipcRenderer.invoke(LEAD_CH.older, beforeId, limit),
 	send: (text, files) => ipcRenderer.invoke(LEAD_CH.send, text, files),
@@ -299,3 +306,13 @@ const theme: AteamTheme = {
 	},
 };
 contextBridge.exposeInMainWorld("ateamTheme", theme);
+
+const nativeWindow: AteamWindow = {
+	isFullScreen: () => ipcRenderer.sendSync(WINDOW_CH.fullScreen),
+	onFullScreen: (cb) => {
+		const handler = (_: unknown, fullScreen: boolean) => cb(fullScreen);
+		ipcRenderer.on(WINDOW_CH.evtFullScreen, handler);
+		return () => ipcRenderer.off(WINDOW_CH.evtFullScreen, handler);
+	},
+};
+contextBridge.exposeInMainWorld("ateamWindow", nativeWindow);

@@ -3,6 +3,6 @@
 
 export const PAGE_SCHEME = "ateam-page";
 
-/** A task's page, by the page id: a replaced page's address stops serving it. */
+/** A saved artifact by id. Explicit revisions keep this address. */
 export const pageUrl = (taskId: string, pageId: string) =>
 	`${PAGE_SCHEME}://page/${encodeURIComponent(taskId)}/${encodeURIComponent(pageId)}`;

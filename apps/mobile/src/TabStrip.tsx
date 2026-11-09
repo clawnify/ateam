@@ -19,10 +19,19 @@ const TABS: { key: Tab; label: string; icon: "home" | "columns" | "grid" | "repe
 const INK_ON_WHITE = "#15151a";
 
 /** `tab` null: none is active (the Lead covers them). */
-export function TabStrip({ tab, onChange }: { tab: Tab | null; onChange: (t: Tab) => void }) {
+export function TabStrip({
+	tab,
+	onChange,
+	hideHome = false,
+}: {
+	tab: Tab | null;
+	onChange: (t: Tab) => void;
+	/** Home is already visible as the project/task sidebar. */
+	hideHome?: boolean;
+}) {
 	return (
 		<GlassPill style={styles.track}>
-			{TABS.map((t) => {
+			{TABS.filter((t) => !hideHome || t.key !== "home").map((t) => {
 				const active = t.key === tab;
 				return (
 					<Pressable

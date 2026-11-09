@@ -6,7 +6,7 @@
 // here gets its own policy instead, and the frame's sandbox (allow-scripts
 // only, no same origin) keeps it away from Ateam: it cannot read the window,
 // call window.ateam, submit forms, open popups or navigate anything but
-// itself, and that last one is stopped below. Its scripts may load libraries
+// itself, and page-navigation.ts stops that last one. Its scripts may load libraries
 // from https CDNs but cannot fetch (no connect-src), so a page shows what the
 // agent put in it and nothing more.
 //
@@ -21,7 +21,7 @@
 // activation, which only a real click or key press in the frame gives. Every
 // built-in it calls is captured before the page's scripts can replace it.
 import { CH, type TaskPageContentDTO } from "@ateam/protocol";
-import { protocol, type WebContents } from "electron";
+import { protocol } from "electron";
 import { PAGE_SCHEME } from "../shared/pages";
 import type { Router } from "./backend";
 
@@ -68,11 +68,14 @@ export function servePages(router: Router): void {
 			.map(decodeURIComponent);
 		let body: string;
 		try {
-			const page = (await router.handle(CH.tasksPage, [taskId])) as TaskPageContentDTO | null;
+			const page = (await router.handle(CH.tasksPage, [
+				taskId,
+				pageId,
+			])) as TaskPageContentDTO | null;
 			body =
 				page && page.id === pageId
 					? PRELUDE + page.html
-					: note("This page was replaced by a newer one, or removed.");
+					: note("This page is no longer available.");
 		} catch (e) {
 			body = note(`Could not load this page: ${e instanceof Error ? e.message : String(e)}`);
 		}
@@ -84,16 +87,5 @@ export function servePages(router: Router): void {
 				"cache-control": "no-store",
 			},
 		});
-	});
-}
-
-/** A page's frame may not navigate away from its page (a link, a location
- *  change, another task's page): it would show something its agent did not
- *  write. Anchors within the page are not navigations and still work. */
-export function guardPageFrames(contents: WebContents): void {
-	contents.on("will-frame-navigate", (e) => {
-		if (e.isMainFrame) return;
-		const from = e.frame?.url ?? "";
-		if (from.startsWith(`${PAGE_SCHEME}:`) && e.url !== from) e.preventDefault();
 	});
 }

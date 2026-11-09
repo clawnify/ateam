@@ -14,6 +14,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
+	type ChatSettings,
 	LEAD_CH,
 	type LeadAttachResult,
 	type LeadCallTurn,
@@ -26,6 +27,7 @@ import {
 } from "@ateam/protocol";
 import {
 	type Lead as CoreLead,
+	chatPreferences,
 	judgeCall,
 	LEAD_IDLE_STOP_MS,
 	nudgeFor,
@@ -140,7 +142,9 @@ function localChat(l: CoreLead): Chat {
 		interrupt: () => l.interrupt(),
 		reset: () => l.reset(),
 		permission: (id, answer) => l.permission(id, answer),
-		setAuto: (on) => l.setAuto(on),
+		setAuto: async (on) => {
+			await l.setAuto(on);
+		},
 		setCall: (on) => l.setCall(on),
 		proposal: (id, outcome, taskId) => l.proposal(id, outcome, taskId),
 		reply: (taskId, text) => l.reply(taskId, text),
@@ -151,6 +155,7 @@ function localChat(l: CoreLead): Chat {
 
 export async function startLead(deps: LeadDeps): Promise<Lead> {
 	const projectsDir = join(deps.dir, "projects");
+	const preferences = chatPreferences(deps.dir);
 	// Every chat by project ("" = the main one), started once and kept until
 	// quit: a project chat's followed tasks keep reporting back with its window
 	// closed, and its agent stops itself when idle.
@@ -164,6 +169,7 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 		if (!p) {
 			p = startLeadCore({
 				place: "mac",
+				preferences,
 				dir: project ? join(projectsDir, project) : deps.dir,
 				handle: async (method, args) => deps.router.handle(method, args),
 				machineOf: deps.machineOf,
@@ -246,6 +252,26 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 		return remote ?? localChat(main);
 	};
 
+	// Machine settings deliberately bypass the general Settings sync route.
+	const settingsTarget = (machine: unknown) => {
+		if (machine === null) return null;
+		if (typeof machine !== "string" || !machine) throw new Error("Choose a machine.");
+		const link = deps.boxes.boxLink(machine);
+		if (!link) throw new Error(`Connect ${machine} in Settings → Boxes first.`);
+		if (link.version < 37) throw new Error(`Update ${machine} to configure its Chat agent.`);
+		return link.rpc;
+	};
+	ipcMain.handle(LEAD_CH.settings, async (_e, machine: unknown) => {
+		const rpc = settingsTarget(machine);
+		return rpc ? rpc.call(LEAD_CH.settings) : preferences.snapshot();
+	});
+	ipcMain.handle(
+		LEAD_CH.updateSettings,
+		async (_e, machine: unknown, patch: Partial<ChatSettings>) => {
+			const rpc = settingsTarget(machine);
+			return rpc ? rpc.call(LEAD_CH.updateSettings, [patch]) : preferences.update(patch);
+		},
+	);
 	ipcMain.handle(LEAD_CH.snapshot, async (e, opts?: { tail?: unknown }) => {
 		const tail = opts?.tail;
 		return (await lead(e)).snapshot(typeof tail === "number" && tail >= 0 ? tail : undefined);

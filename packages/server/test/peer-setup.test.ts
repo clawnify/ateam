@@ -4,12 +4,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	buildAgentEnv,
+	codexBoardMcpArgs,
+	codexHookArgs,
 	ensureBoardMcpConfig,
 	ensureClaudeHooks,
 	ensureNotifyScript,
 	ensurePeerSecret,
 	opencodeConfigContent,
 	peerToken,
+	removeAteamCodexHooks,
 	verifyPeerToken,
 } from "../src/agent-setup";
 
@@ -147,6 +151,56 @@ describe("peer tokens", () => {
 });
 
 describe("per-launch agent config", () => {
+	test("every agent receives the box browser without writing user-level configuration", async () => {
+		const taskwindow = { url: "http://127.0.0.1:9377/mcp", token: "a".repeat(32) };
+		const desktop = { url: "http://127.0.0.1:6080/mcp", token: "b".repeat(64) };
+		const hooksDir = join(dir, "browser-hooks");
+		const file = await ensureBoardMcpConfig({
+			hooksDir,
+			hookPort: 1234,
+			terminalId: "browser",
+			taskwindow,
+			desktop,
+		});
+		const claude = JSON.parse(await readFile(file, "utf8"));
+		expect(claude.mcpServers.taskwindow.headers.Authorization).toBe(`Bearer ${taskwindow.token}`);
+		expect(claude.mcpServers.ateam_board).toBeDefined();
+		expect(claude.mcpServers.desktop.headers.Authorization).toBe(`Bearer ${desktop.token}`);
+		expect((await stat(file)).mode & 0o777).toBe(0o600);
+
+		const args = codexBoardMcpArgs(1234, desktop, taskwindow);
+		const proc = Bun.spawn(["sh", "-c", `printf '%s\\0' ${args}`], { stdout: "pipe" });
+		const argv = (await new Response(proc.stdout).text()).split("\0").filter(Boolean);
+		expect(await proc.exited).toBe(0);
+		const parsed = Bun.TOML.parse(argv.filter((_v, i) => argv[i - 1] === "-c").join("\n")) as {
+			mcp_servers: { taskwindow: { url: string; env_http_headers: { Authorization: string } } };
+		};
+		expect(parsed.mcp_servers.taskwindow.url).toBe(taskwindow.url);
+		expect(parsed.mcp_servers.taskwindow.env_http_headers.Authorization).toBe(
+			"ATEAM_TASKWINDOW_AUTH",
+		);
+		expect(args).not.toContain(taskwindow.token);
+		expect(args).toContain("mcp_servers.desktop.url");
+
+		const env = buildAgentEnv({
+			taskwindow,
+			desktop,
+			hooksDir,
+			hookPort: 1234,
+			terminalId: "browser",
+			agentId: "opencode",
+		});
+		expect(env.ATEAM_TASKWINDOW_AUTH).toBe(`Bearer ${taskwindow.token}`);
+		const opencode = JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? "{}");
+		expect(opencode.mcp.taskwindow).toEqual({
+			type: "remote",
+			url: taskwindow.url,
+			headers: { Authorization: "{env:ATEAM_TASKWINDOW_AUTH}" },
+		});
+		expect(opencode.mcp.ateam_board).toBeDefined();
+		expect(codexBoardMcpArgs(1234)).not.toContain("mcp_servers.taskwindow");
+	});
+
 	test("Claude gets the inbox listener at SessionStart and Stop, once", async () => {
 		const wt = join(dir, "wt");
 		await ensureClaudeHooks(wt, notifyPath);
@@ -168,7 +222,9 @@ describe("per-launch agent config", () => {
 		const s = JSON.parse(await readFile(join(wt, ".claude", "settings.local.json"), "utf8"));
 		const pre = s.hooks.PreToolUse as { matcher?: string; hooks: { command: string }[] }[];
 		const browser = pre.filter((e) => e.hooks.some((h) => h.command.endsWith(" BrowserUse")));
-		expect(browser).toEqual([{ matcher: "mcp__taskwindow__.*", hooks: [expect.anything()] }]);
+		expect(browser).toEqual([
+			{ matcher: "mcp__(taskwindow|desktop)__.*", hooks: [expect.anything()] },
+		]);
 		// Every tool call still reports Working, browser calls included.
 		expect(
 			pre.filter((e) => !e.matcher && e.hooks.some((h) => h.command.endsWith(" Working"))),
@@ -189,7 +245,7 @@ describe("per-launch agent config", () => {
 		const s = JSON.parse(await readFile(file, "utf8"));
 		expect(s.hooks.PreToolUse.map((e: { matcher?: string }) => e.matcher ?? null)).toEqual([
 			null,
-			"mcp__taskwindow__.*",
+			"mcp__(taskwindow|desktop)__.*",
 		]);
 	});
 
@@ -215,5 +271,202 @@ describe("per-launch agent config", () => {
 		expect(cfg.plugin[0]).toBe("mine");
 		// The space in "Application Support" must survive as a file URL.
 		expect(fileURLToPath(cfg.plugin[1])).toBe(join(hooksDir, "opencode-inbox.js"));
+	});
+});
+
+test("installed desktop control is configured for every task agent without granting viewer takeover", async () => {
+	const { buildAgentEnv, codexBoardMcpArgs } = await import("../src/agent-setup");
+	const desktop = { url: "http://127.0.0.1:6080/mcp", token: "agent-only-secret" };
+	const opts = {
+		desktop,
+		hooksDir: join(dir, "hooks"),
+		hookPort: 1234,
+		terminalId: "desktop-test",
+	};
+	const file = await ensureBoardMcpConfig(opts);
+	const claude = JSON.parse(await readFile(file, "utf8"));
+	expect(claude.mcpServers.desktop).toEqual({
+		type: "http",
+		url: desktop.url,
+		headers: { Authorization: "Bearer agent-only-secret" },
+	});
+	const codex = codexBoardMcpArgs(1234, desktop);
+	expect(codex).toContain('mcp_servers.desktop.url="http://127.0.0.1:6080/mcp"');
+	expect(codex).toContain('"Authorization"="ATEAM_DESKTOP_AUTH"');
+	expect(codex).not.toContain(desktop.token);
+	const env = buildAgentEnv({ ...opts, agentId: "opencode" });
+	expect(env.ATEAM_DESKTOP_AUTH).toBe("Bearer agent-only-secret");
+	expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? "{}").mcp.desktop).toEqual({
+		type: "remote",
+		url: desktop.url,
+		headers: { Authorization: "{env:ATEAM_DESKTOP_AUTH}" },
+	});
+	expect(codexBoardMcpArgs(1234)).not.toContain("mcp_servers.desktop");
+});
+
+test("an existing browser-only hook is upgraded in place", async () => {
+	const wt = join(dir, "browser-hook-upgrade");
+	const file = join(wt, ".claude", "settings.local.json");
+	await mkdir(dirname(file), { recursive: true });
+	await writeFile(
+		file,
+		JSON.stringify({
+			hooks: {
+				PreToolUse: [
+					{
+						matcher: "mcp__taskwindow__.*",
+						hooks: [{ type: "command", command: `sh "${notifyPath}" BrowserUse` }],
+					},
+				],
+			},
+		}),
+	);
+	await ensureClaudeHooks(wt, notifyPath);
+	const s = JSON.parse(await readFile(file, "utf8"));
+	const browser = s.hooks.PreToolUse.filter((e: { hooks: { command: string }[] }) =>
+		e.hooks.some((h) => h.command.endsWith(" BrowserUse")),
+	);
+	expect(browser).toHaveLength(1);
+	expect(browser[0].matcher).toBe("mcp__(taskwindow|desktop)__.*");
+});
+
+test("OpenCode desktop and browser calls send BrowserUse through the shipped plugin", async () => {
+	const file = join(dir, "hooks", "opencode-inbox.js");
+	const source = await readFile(file, "utf8");
+	// Run the real emitted plugin in an isolated process: its inbox exits on 410.
+	// The stub records the desktop notification separately from the inbox request.
+	const paths: string[] = [];
+	const endpoint = Bun.serve({
+		port: 0,
+		fetch: (req) => {
+			paths.push(new URL(req.url).pathname + new URL(req.url).search);
+			return new Response(null, { status: 410 });
+		},
+	});
+	try {
+		const probe = join(dir, "opencode-desktop-probe.mjs");
+		await writeFile(
+			probe,
+			source +
+				'\nconst hooks=await AteamInbox({client:{}}); await hooks["tool.execute.before"]({tool:"desktop_computer"}); await hooks["tool.execute.before"]({tool:"taskwindow_navigate"}); await hooks["tool.execute.before"]({tool:"bash"});',
+		);
+		const child = Bun.spawn([process.execPath, probe], {
+			env: {
+				...process.env,
+				ATEAM_HOOK_PORT: String(endpoint.port),
+				ATEAM_TERMINAL_ID: "desktop-term",
+				ATEAM_TERMINAL_TOKEN: "test",
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		expect(await child.exited).toBe(0);
+		expect(paths.filter((p) => p.includes("eventType=BrowserUse"))).toEqual([
+			"/hook/complete?terminalId=desktop-term&eventType=BrowserUse",
+			"/hook/complete?terminalId=desktop-term&eventType=BrowserUse",
+		]);
+	} finally {
+		endpoint.stop(true);
+	}
+});
+
+// Codex 0.165 loads a worktree's `.codex/hooks.json` only in a folder the user
+// trusted, and asks again for every new worktree path; hooks given with `-c`
+// are trusted once per machine (agent-setup, codexHookArgs).
+describe("Codex hooks on the launch line", () => {
+	/** What a real shell hands Codex: the `-c` values, split as `sh` splits them. */
+	async function argv(args: string): Promise<string[]> {
+		const proc = Bun.spawn(["sh", "-c", `printf '%s\\0' ${args}`], { stdout: "pipe" });
+		const out = await new Response(proc.stdout).text();
+		await proc.exited;
+		return out.split("\0").filter(Boolean);
+	}
+
+	test("each event runs notify.sh, as TOML Codex parses, whatever the path holds", async () => {
+		const path = "/Users/o'neil/Library/Application Support/ateam/hooks/notify.sh";
+		const values = (await argv(codexHookArgs(path))).filter((a) => a !== "-c");
+		const parsed = Object.fromEntries(
+			values.map((v) => {
+				const eq = v.indexOf("=");
+				const key = v.slice(0, eq).replace(/^hooks\./, "");
+				return [key, (Bun.TOML.parse(`v = ${v.slice(eq + 1)}`) as { v: unknown }).v];
+			}),
+		);
+		const hook = (event: string) => [
+			{ hooks: [{ type: "command", command: `sh ${JSON.stringify(path)} ${event}` }] },
+		];
+		expect(parsed).toEqual({
+			SessionStart: hook("Start"),
+			Stop: hook("Stop"),
+			PermissionRequest: hook("PermissionRequest"),
+			PreToolUse: [
+				...hook("Working"),
+				{
+					matcher: "mcp__(taskwindow|desktop)__.*",
+					hooks: [{ type: "command", command: `sh ${JSON.stringify(path)} BrowserUse` }],
+				},
+			],
+			UserPromptSubmit: hook("UserReply"),
+		});
+	});
+
+	// Codex keys a hook's trust on its hash: any change asks every machine again.
+	test("the commands never change between launches", () => {
+		expect(codexHookArgs("/h/notify.sh")).toBe(codexHookArgs("/h/notify.sh"));
+	});
+});
+
+describe("removeAteamCodexHooks", () => {
+	const ours = (event: string) => ({
+		hooks: [
+			{
+				type: "command",
+				command: `sh "/Users/x/Library/Application Support/ateam/hooks/notify.sh" ${event}`,
+			},
+		],
+	});
+
+	test("removes a file and folder that held only Ateam's hooks", async () => {
+		const wt = join(dir, "codex-only-ours");
+		await mkdir(join(wt, ".codex"), { recursive: true });
+		await writeFile(
+			join(wt, ".codex", "hooks.json"),
+			JSON.stringify({ hooks: { SessionStart: [ours("Start")], Stop: [ours("Stop")] } }),
+		);
+		await removeAteamCodexHooks(wt);
+		expect(await stat(join(wt, ".codex")).catch(() => null)).toBeNull();
+	});
+
+	test("keeps the repo's own hooks and settings", async () => {
+		const wt = join(dir, "codex-mixed");
+		await mkdir(join(wt, ".codex"), { recursive: true });
+		const theirs = { hooks: [{ type: "command", command: "sh ./scripts/notify.sh Stop" }] };
+		await writeFile(
+			join(wt, ".codex", "hooks.json"),
+			JSON.stringify({
+				description: "repo hooks",
+				hooks: {
+					Stop: [theirs, ours("Stop")],
+					PreToolUse: [ours("Working"), { ...ours("BrowserUse"), matcher: "mcp__desktop__.*" }],
+				},
+			}),
+		);
+		await removeAteamCodexHooks(wt);
+		const left = JSON.parse(await readFile(join(wt, ".codex", "hooks.json"), "utf8"));
+		expect(left).toEqual({ description: "repo hooks", hooks: { Stop: [theirs] } });
+	});
+
+	test("leaves a folder with other files in it, and no file at all", async () => {
+		const wt = join(dir, "codex-folder-kept");
+		await mkdir(join(wt, ".codex"), { recursive: true });
+		await writeFile(join(wt, ".codex", "config.toml"), "model = 'x'\n");
+		await writeFile(
+			join(wt, ".codex", "hooks.json"),
+			JSON.stringify({ hooks: { Stop: [ours("Stop")] } }),
+		);
+		await removeAteamCodexHooks(wt);
+		expect(await stat(join(wt, ".codex", "hooks.json")).catch(() => null)).toBeNull();
+		expect(await readFile(join(wt, ".codex", "config.toml"), "utf8")).toBe("model = 'x'\n");
+		await removeAteamCodexHooks(join(dir, "no-such-worktree"));
 	});
 });

@@ -49,6 +49,7 @@ import {
 	type DirEntryDTO,
 	type KanbanColumn,
 	type MergeStrategy,
+	MIN_CLIENT_PROTOCOL,
 	NO_GIT_IDENTITY,
 	PROTOCOL_VERSION,
 	type RegisterProjectOptions,
@@ -62,6 +63,7 @@ import {
 } from "@ateam/protocol";
 import { installBrowser, openBrowserView } from "./browser";
 import { credentialStatuses, credentialsPath, updateCredentials } from "./credentials-file";
+import { dotfilesFor, validateDotfiles } from "./dotfiles";
 import { createEditorHost, installCodeServer } from "./editor";
 import type { Engine } from "./engine";
 import { checkRepoAccess, connectGithubToken, githubAccessStatus } from "./github-access";
@@ -72,14 +74,23 @@ import { nextCronRun } from "./loops/runner";
 import { LOOP_TEMPLATES } from "./loops/templates";
 import { createSizeArbiter } from "./pty/size-arbiter";
 import { ENGINE_RELEASE } from "./release";
-import { liveAgentIds, type Services, toProjectDTO, toSessionDTO, toTaskDTO } from "./services";
+import {
+	boardToolsMissing,
+	liveAgentIds,
+	type Services,
+	toProjectDTO,
+	toSessionDTO,
+	toTaskDTO,
+} from "./services";
 import { searchSessions } from "./session-search";
 import {
 	createTaskInProject,
-	resumeInFlight,
+	liveTabOn,
+	resumesSettled,
 	type SpawnAgentInput,
 	shell,
 	spawnAgentInTask,
+	spawnShellInTask,
 } from "./sessions";
 import { readSettings, settingsPath, updateSettings } from "./settings-file";
 import { linkSkill, listSkills } from "./skills";
@@ -232,30 +243,6 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		}
 		return { removable, kept };
 	}
-
-	/** Open a login shell in a task's worktree and record the session. */
-	const spawnShellInTask = (task: { id: string; worktreePath: string }) => {
-		services.worktreeGuard.assertWritable(task.id);
-		const terminalId = randomUUID();
-		repo.createSession(db, {
-			taskId: task.id,
-			agentId: "shell",
-			terminalId,
-			cwd: task.worktreePath,
-		});
-		services.pty.spawn({
-			terminalId,
-			shell,
-			args: ["-l"],
-			cwd: task.worktreePath,
-			env: { ...process.env },
-		});
-		// A new session IS a change to the task — say so, exactly as the agent
-		// spawn does. Without this, a shell opened in one window is invisible to
-		// every other client until something else touches the task.
-		engine.sendTaskUpdated(task.id);
-		return { terminalId };
-	};
 
 	/** The box's own shell, in its home folder and outside every project: where a
 	 *  first visit signs into gh or a secrets CLI before any project exists. One per
@@ -417,7 +404,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			repo
 				.listTasks(db, projectId)
 				.map((t) =>
-					toTaskDTO(t, services.pendingSeeds.has(t.id), liveAgentIds(db, services.pty, t.id)),
+					toTaskDTO(
+						t,
+						services.pendingSeeds.has(t.id),
+						liveAgentIds(db, services.pty, t.id),
+						boardToolsMissing(services.pty, services.boardConnections, t.id),
+					),
 				),
 		[CH.tasksCreate]: async (input: {
 			projectId: string;
@@ -455,7 +447,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.tasksMarkRead]: async (id: string) => {
 			const row = repo.updateTask(db, id, { isUnread: false });
 			engine.sendTaskUpdated(id);
-			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
+			return toTaskDTO(
+				row!,
+				false,
+				liveAgentIds(db, services.pty, id),
+				boardToolsMissing(services.pty, services.boardConnections, id),
+			);
 		},
 		// The Lead chat (desktop main) reads what a task last said, and messages
 		// its agent on the user's behalf. Not on window.ateam: only main calls them.
@@ -466,11 +463,14 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				? { text: task.lastReply, at: task.lastReplyAt }
 				: null;
 		},
-		[CH.tasksPage]: async (id: string): Promise<TaskPageContentDTO | null> => {
+		[CH.tasksPages]: async (id: string) => {
+			if (!repo.getTask(db, id)) throw new Error(`Task not found: ${id}`);
+			return repo.listTaskPages(db, id);
+		},
+		[CH.tasksPage]: async (id: string, pageId?: string): Promise<TaskPageContentDTO | null> => {
 			const task = repo.getTask(db, id);
 			if (!task) throw new Error(`Task not found: ${id}`);
-			const html = task.page ? repo.getTaskPageHtml(db, id) : undefined;
-			return task.page && html != null ? { ...task.page, html } : null;
+			return repo.getTaskPage(db, id, pageId);
 		},
 		// The task's diff as steps; asking starts a write when the diff moved on.
 		[CH.tasksChangeSteps]: async (id: string): Promise<ChangeStepsDTO> =>
@@ -478,7 +478,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.tasksGet]: async (id: string) => {
 			const task = repo.getTask(db, id);
 			if (!task) throw new Error(`Task not found: ${id}`);
-			return toTaskDTO(task, false, liveAgentIds(db, services.pty, id));
+			return toTaskDTO(
+				task,
+				false,
+				liveAgentIds(db, services.pty, id),
+				boardToolsMissing(services.pty, services.boardConnections, id),
+			);
 		},
 		[CH.peersSendFromLead]: async (req: { taskId: string; body: string }) =>
 			engine.messageFrom("lead", { to: req.taskId, body: req.body }),
@@ -502,6 +507,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				repo.getTask(db, req.taskId)!,
 				false,
 				liveAgentIds(db, services.pty, req.taskId),
+				boardToolsMissing(services.pty, services.boardConnections, req.taskId),
 			);
 		},
 		// The user created a proposed task or loop, or dismissed it (proposals.ts).
@@ -511,6 +517,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				repo.getTask(db, req.taskId)!,
 				false,
 				liveAgentIds(db, services.pty, req.taskId),
+				boardToolsMissing(services.pty, services.boardConnections, req.taskId),
 			);
 		},
 		// The user parks a task from the sidebar (or clears the wait). The agent's
@@ -536,7 +543,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			// Broadcast so every view (board, sidebar) reflects the move — e.g. the
 			// "Done" button under the terminal that sends a review task to merged.
 			engine.sendTaskUpdated(id);
-			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
+			return toTaskDTO(
+				row!,
+				false,
+				liveAgentIds(db, services.pty, id),
+				boardToolsMissing(services.pty, services.boardConnections, id),
+			);
 		},
 
 		[CH.tasksListArchived]: async (projectId: string) =>
@@ -550,7 +562,12 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				archived ? { archivedAt: Date.now() } : { archivedAt: null, restoredAt: Date.now() },
 			);
 			engine.sendTaskUpdated(id);
-			return toTaskDTO(row!, false, liveAgentIds(db, services.pty, id));
+			return toTaskDTO(
+				row!,
+				false,
+				liveAgentIds(db, services.pty, id),
+				boardToolsMissing(services.pty, services.boardConnections, id),
+			);
 		},
 
 		// Candidates for the interactive cleanup dialog: EVERY task in the project,
@@ -757,6 +774,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			const agents = await listAgents();
 			return {
 				protocolVersion: PROTOCOL_VERSION,
+				minClient: MIN_CLIENT_PROTOCOL,
 				agents: agents.filter((a) => a.available).map((a) => a.id),
 				release: ENGINE_RELEASE,
 			};
@@ -937,6 +955,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			return { settings: r.settings, path: settingsPath(), warning: r.warning };
 		},
 		[CH.settingsUpdate]: async (patch: SettingsPatch): Promise<SettingsResult> => {
+			if (patch.engine?.dotfiles != null) validateDotfiles(patch.engine.dotfiles);
 			updateSettings(patch);
 			const r = readSettings();
 			return { settings: r.settings, path: settingsPath(), warning: r.warning };
@@ -951,6 +970,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			updateCredentials(patch);
 			return { ...credentialStatuses(), path: credentialsPath() };
 		},
+		// Explicit box setup: settings sync and reconnect never call these.
+		[CH.dotfilesStatus]: () => dotfilesFor(services.userDataDir).status(),
+		[CH.dotfilesPrepare]: (config: unknown) => dotfilesFor(services.userDataDir).prepare(config),
+		[CH.dotfilesApply]: (id: unknown) => dotfilesFor(services.userDataDir).apply(id),
 		// GitHub access on this machine (github-access.ts). The token arrives here
 		// once, for connect, and never travels back.
 		[CH.githubAccessStatus]: async () => githubAccessStatus(),
@@ -970,7 +993,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		[CH.ptySpawnAgent]: async (input: SpawnAgentInput) =>
 			spawnAgentInTask(services, engine.sendTaskUpdated, input),
 		[CH.ptySpawnShell]: async (input: { taskId: string }) =>
-			spawnShellInTask(requireTask(services, input.taskId)),
+			spawnShellInTask(services, engine.sendTaskUpdated, requireTask(services, input.taskId)),
 		[CH.ptyBoxShell]: async () => openBoxShell(),
 		[CH.ptyKill]: async (terminalId: string) => {
 			// Stamp WHY before the exit lands: closing a tab is the one ending that
@@ -1011,13 +1034,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 				// Including a launch still on its way up (the peer messenger handing
 				// this agent a message): it has no live terminal yet, and it may
 				// already have stamped this tab `restored`, which the check below
-				// would refuse. Join it (sessions.ts, resumeInFlight).
-				const coming = resumeInFlight(services, dead.agentSessionId);
-				if (coming) return coming;
-				const open = repo
-					.listSessionsByTask(db, task.id)
-					.find((s) => s.agentSessionId === dead.agentSessionId && services.pty.has(s.terminalId));
-				if (open) return { terminalId: open.terminalId };
+				// would refuse. Wait for it (sessions.ts, resumesSettled).
+				await resumesSettled(services, task.id, dead.agentId);
+				const open = liveTabOn(services, task.id, dead.agentSessionId);
+				if (open) return open;
 			}
 			// Both endings mean "this tab is coming back if you ask": the app went
 			// down under it, or the app reclaimed its idle process.
@@ -1028,7 +1048,7 @@ export function createDispatcher(engine: Engine): Dispatcher {
 			// shell where it stood, which is all it ever was.
 			if (dead.agentId === "shell") {
 				repo.updateSession(db, dead.id, { exitReason: "restored" });
-				return spawnShellInTask(task);
+				return spawnShellInTask(services, engine.sendTaskUpdated, task);
 			}
 			// With a known conversation, resume THAT one. Without (a harness that
 			// mints its own ids, or a tab that started life as a `--continue`),

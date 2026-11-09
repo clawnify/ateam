@@ -1,7 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { DesktopMcpConfig, TaskWindowMcpConfig } from "../browser";
 import { BOARD_INSTRUCTIONS } from "../hooks/board-mcp";
 
 /**
@@ -78,8 +79,8 @@ case "$1" in
 	*) exit 0 ;;
 esac
 # Same follow-up echo as notify.sh. The notify program is fire-and-forget, so a
-# follow-up only reaches the agent through .codex/hooks.json, where Stop shares
-# Claude's hook schema.
+# follow-up only reaches the agent through the Stop hook Ateam passes on the
+# launch line, which shares Claude's hook schema.
 # The payload rides along for the board classifier (see notify.sh).
 BODY=$(printf '%s' "$1" | curl -s -m 2 --data-binary @- "http://127.0.0.1:\${PORT}/hook/complete?terminalId=\${TID}&eventType=\${EVENT}" 2>/dev/null || true)
 [ -n "$BODY" ] && printf '%s' "$BODY"
@@ -263,6 +264,12 @@ export const AteamInbox = async ({ client }) => {
 	})();
 
 	return {
+		"tool.execute.before": async (input) => {
+			if (input.tool !== "desktop_computer" && input.tool !== "desktop_control" && !input.tool.startsWith("taskwindow_")) return;
+			await fetch(\`http://127.0.0.1:\${port}/hook/complete?terminalId=\${encodeURIComponent(terminalId)}&eventType=BrowserUse\`, {
+				signal: AbortSignal.timeout(2000),
+			}).catch(() => {});
+		},
 		event: async ({ event }) => {
 			const p = event.properties ?? {};
 			if (event.type === "session.created" || event.type === "session.updated") {
@@ -538,13 +545,20 @@ export async function ensureClaudeHooks(
 	// (Task.browserUsedAt). Its own entry, so the PreToolUse check above, which
 	// sees any notify.sh, can't count it as already there.
 	const pre = settings.hooks.PreToolUse ?? [];
+	for (const entry of pre) {
+		if (
+			entry.matcher === "mcp__taskwindow__.*" &&
+			entry.hooks.some((h) => h.command.includes("BrowserUse"))
+		)
+			entry.matcher = "mcp__(taskwindow|desktop)__.*";
+	}
 	if (
 		!pre.some((e) =>
 			e.hooks.some((h) => h.command.includes("notify.sh") && h.command.includes("BrowserUse")),
 		)
 	) {
 		pre.push({
-			matcher: "mcp__taskwindow__.*",
+			matcher: "mcp__(taskwindow|desktop)__.*",
 			hooks: [{ type: "command", command: cmd("BrowserUse") }],
 		});
 		settings.hooks.PreToolUse = pre;
@@ -575,49 +589,94 @@ export async function ensureClaudeHooks(
 	await writeFile(file, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
 }
 
-/**
- * Register Ateam's status hooks in `<worktree>/.codex/hooks.json` — Codex
- * supports the same lifecycle-event schema as Claude Code (verified against
- * the Codex config reference). Project-local hooks load once the repo's
- * `.codex` layer is trusted; the `notify` override injected at launch covers
- * Stop until then.
- */
-export async function ensureCodexHooks(
-	worktreePath: string,
-	notifyScriptPath: string,
-): Promise<void> {
-	const dir = join(worktreePath, ".codex");
-	await mkdir(dir, { recursive: true });
-	const file = join(dir, "hooks.json");
+/** Codex's lifecycle events, and what Ateam's notify.sh calls each one. */
+const CODEX_HOOK_EVENTS: Record<string, string> = {
+	SessionStart: "Start",
+	Stop: "Stop",
+	PermissionRequest: "PermissionRequest",
+	PreToolUse: "Working",
+	UserPromptSubmit: "UserReply",
+};
 
-	let settings: ClaudeSettings = {};
+/** The command each Codex hook runs. Kept byte for byte: see codexHookArgs. */
+const codexHookCommand = (notifyScriptPath: string, event: string) =>
+	`sh ${JSON.stringify(notifyScriptPath)} ${event}`;
+
+/**
+ * Ateam's status hooks for one Codex launch, as `-c hooks.<Event>=…` flags
+ * (Codex's hook schema is Claude Code's).
+ *
+ * On the launch line rather than in `<worktree>/.codex/hooks.json`, because of
+ * how Codex 0.165 decides which hooks may run (codex-rs/hooks discovery.rs).
+ * A worktree's `.codex/` layer only loads in a folder the user has trusted,
+ * which a fresh worktree never is, so its hooks were skipped without a word:
+ * Ateam heard from Codex only when a turn ended, through `notify`. Hooks given
+ * with `-c` form Codex's session-flags layer, which always loads, and are
+ * trusted under one fixed key, `/<session-flags>/config.toml:<event>:0:0`,
+ * whatever the folder. So the user approves them once per machine, at the
+ * first Codex launch's "hooks need review" prompt ("Trust all and continue"),
+ * and never again while they stay the same. Codex keys that trust on a hash of
+ * each hook: changing a command here asks every machine to approve again.
+ *
+ * Never `--dangerously-bypass-hook-trust`: it would run every hook of the
+ * session unreviewed, a repo's own `.codex/hooks.json` included.
+ */
+export function codexHookArgs(notifyScriptPath: string): string {
+	const sq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+	return Object.entries(CODEX_HOOK_EVENTS)
+		.map(([codexEvent, ateamEvent]) => {
+			// A JSON string is a TOML basic string.
+			const command = JSON.stringify(codexHookCommand(notifyScriptPath, ateamEvent));
+			const desktop =
+				codexEvent === "PreToolUse"
+					? `,{matcher="mcp__(taskwindow|desktop)__.*",hooks=[{type="command",command=${JSON.stringify(codexHookCommand(notifyScriptPath, "BrowserUse"))}}]}`
+					: "";
+			return `-c ${sq(`hooks.${codexEvent}=[{hooks=[{type="command",command=${command}}]}${desktop}]`)}`;
+		})
+		.join(" ");
+}
+
+/**
+ * Take Ateam's own entries back out of `<worktree>/.codex/hooks.json`, where
+ * Ateam used to write them before they moved to the launch line
+ * (codexHookArgs). Left there, a worktree the user did trust would report
+ * every event twice. Only Ateam's exact commands go; anything else in the file
+ * stays, and a file (and folder) left with nothing in it is removed.
+ */
+export async function removeAteamCodexHooks(worktreePath: string): Promise<void> {
+	const dir = join(worktreePath, ".codex");
+	const file = join(dir, "hooks.json");
+	let settings: ClaudeSettings;
 	try {
 		settings = JSON.parse(await readFile(file, "utf8")) as ClaudeSettings;
 	} catch {
-		/* no existing file */
+		return; // none, or not ours to read
 	}
-
-	const cmd = (event: string) => `sh ${JSON.stringify(notifyScriptPath)} ${event}`;
-	const map: Record<string, string> = {
-		SessionStart: "Start",
-		Stop: "Stop",
-		PermissionRequest: "PermissionRequest",
-		PreToolUse: "Working",
-		UserPromptSubmit: "UserReply",
-	};
-
-	settings.hooks ??= {};
-	for (const [codexEvent, ateamEvent] of Object.entries(map)) {
-		const command = cmd(ateamEvent);
-		const entries = settings.hooks[codexEvent] ?? [];
-		const already = entries.some((e) => e.hooks.some((h) => h.command.includes("notify.sh")));
-		if (!already) {
-			entries.push({ hooks: [{ type: "command", command }] });
-			settings.hooks[codexEvent] = entries;
+	const ateam = /^sh ".*\/notify\.sh" (Start|Stop|PermissionRequest|Working|UserReply|BrowserUse)$/;
+	const hooks = settings.hooks ?? {};
+	let changed = false;
+	for (const [event, groups] of Object.entries(hooks)) {
+		const kept = groups
+			.map((g) => ({ ...g, hooks: g.hooks.filter((h) => !ateam.test(h.command)) }))
+			.filter((g) => g.hooks.length > 0);
+		if (
+			kept.length !== groups.length ||
+			kept.some((g, i) => g.hooks.length !== groups[i]?.hooks.length)
+		) {
+			changed = true;
 		}
+		if (kept.length > 0) hooks[event] = kept;
+		else delete hooks[event];
 	}
-
-	await writeFile(file, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+	if (!changed) return;
+	const { hooks: _, ...rest } = settings;
+	if (Object.keys(hooks).length === 0 && Object.keys(rest).length === 0) {
+		await rm(file, { force: true });
+		// Only if nothing else lives there: rmdir refuses a folder with files.
+		await rmdir(dir).catch(() => {});
+		return;
+	}
+	await writeFile(file, `${JSON.stringify({ ...settings, hooks }, null, 2)}\n`, "utf8");
 }
 
 /**
@@ -629,6 +688,8 @@ export async function ensureCodexHooks(
  * `claude --mcp-config`.
  */
 export async function ensureBoardMcpConfig(opts: {
+	desktop?: DesktopMcpConfig;
+	taskwindow?: TaskWindowMcpConfig;
 	hooksDir: string;
 	hookPort: number;
 	terminalId: string;
@@ -640,6 +701,24 @@ export async function ensureBoardMcpConfig(opts: {
 	const file = join(dir, `board-${opts.terminalId || "organizer"}.json`);
 	const config = {
 		mcpServers: {
+			...(opts.desktop
+				? {
+						desktop: {
+							type: "http",
+							url: opts.desktop.url,
+							headers: { Authorization: `Bearer ${opts.desktop.token}` },
+						},
+					}
+				: {}),
+			...(opts.taskwindow
+				? {
+						taskwindow: {
+							type: "http",
+							url: opts.taskwindow.url,
+							headers: { Authorization: `Bearer ${opts.taskwindow.token}` },
+						},
+					}
+				: {}),
 			ateam_board: {
 				type: "http",
 				url: `http://127.0.0.1:${opts.hookPort}/mcp`,
@@ -659,6 +738,7 @@ export async function ensureBoardMcpConfig(opts: {
 /** The board tools, named for `claude --allowedTools`. */
 export const BOARD_MCP_TOOLS = [
 	"mcp__ateam_board__get_board",
+	"mcp__ateam_board__create_session",
 	"mcp__ateam_board__set_status",
 	"mcp__ateam_board__set_waiting",
 	"mcp__ateam_board__list_peers",
@@ -676,8 +756,24 @@ export const BOARD_MCP_TOOLS = [
  * shortcut: this replaces a developer_instructions the user set in their own
  * config.toml; merge with it if anyone sets one.
  */
-export function codexBoardMcpArgs(hookPort: number): string {
+export function codexBoardMcpArgs(
+	hookPort: number,
+	desktop?: DesktopMcpConfig,
+	taskwindow?: TaskWindowMcpConfig,
+): string {
 	return [
+		...(desktop
+			? [
+					`-c 'mcp_servers.desktop.url="${desktop.url}"'`,
+					`-c 'mcp_servers.desktop.env_http_headers={"Authorization"="ATEAM_DESKTOP_AUTH"}'`,
+				]
+			: []),
+		...(taskwindow
+			? [
+					`-c 'mcp_servers.taskwindow.url="${taskwindow.url}"'`,
+					`-c 'mcp_servers.taskwindow.env_http_headers={"Authorization"="ATEAM_TASKWINDOW_AUTH"}'`,
+				]
+			: []),
 		`-c 'mcp_servers.ateam_board.url="http://127.0.0.1:${hookPort}/mcp"'`,
 		`-c 'developer_instructions="${BOARD_INSTRUCTIONS}"'`,
 		`-c 'mcp_servers.ateam_board.env_http_headers={"x-ateam-terminal-id"="ATEAM_TERMINAL_ID","x-ateam-terminal-token"="ATEAM_TERMINAL_TOKEN"}'`,
@@ -696,6 +792,8 @@ export function codexBoardMcpArgs(hookPort: number): string {
  * `{env:…}` is OpenCode's own substitution, so the token stays in the env.
  */
 export function opencodeConfigContent(opts: {
+	desktop?: DesktopMcpConfig;
+	taskwindow?: TaskWindowMcpConfig;
 	hookPort: number;
 	hooksDir: string;
 	existing?: string;
@@ -712,6 +810,24 @@ export function opencodeConfigContent(opts: {
 		plugin: [...plugins, pathToFileURL(join(opts.hooksDir, "opencode-inbox.js")).href],
 		mcp: {
 			...(base.mcp ?? {}),
+			...(opts.desktop
+				? {
+						desktop: {
+							type: "remote",
+							url: opts.desktop.url,
+							headers: { Authorization: "{env:ATEAM_DESKTOP_AUTH}" },
+						},
+					}
+				: {}),
+			...(opts.taskwindow
+				? {
+						taskwindow: {
+							type: "remote",
+							url: opts.taskwindow.url,
+							headers: { Authorization: "{env:ATEAM_TASKWINDOW_AUTH}" },
+						},
+					}
+				: {}),
 			ateam_board: {
 				type: "remote",
 				url: `http://127.0.0.1:${opts.hookPort}/mcp`,
@@ -726,6 +842,8 @@ export function opencodeConfigContent(opts: {
 
 /** Build the PTY environment for an agent session, injecting hook correlation. */
 export function buildAgentEnv(opts: {
+	desktop?: DesktopMcpConfig;
+	taskwindow?: TaskWindowMcpConfig;
 	terminalId: string;
 	agentId: string;
 	hookPort: number;
@@ -736,12 +854,16 @@ export function buildAgentEnv(opts: {
 	return {
 		...process.env,
 		ATEAM_TERMINAL_ID: opts.terminalId,
+		...(opts.desktop ? { ATEAM_DESKTOP_AUTH: `Bearer ${opts.desktop.token}` } : {}),
+		...(opts.taskwindow ? { ATEAM_TASKWINDOW_AUTH: `Bearer ${opts.taskwindow.token}` } : {}),
 		ATEAM_AGENT_ID: opts.agentId,
 		ATEAM_HOOK_PORT: String(opts.hookPort),
 		...(opts.token ? { ATEAM_TERMINAL_TOKEN: opts.token } : {}),
 		...(opts.agentId === "opencode"
 			? {
 					OPENCODE_CONFIG_CONTENT: opencodeConfigContent({
+						desktop: opts.desktop,
+						taskwindow: opts.taskwindow,
 						hookPort: opts.hookPort,
 						hooksDir: opts.hooksDir,
 						existing: process.env.OPENCODE_CONFIG_CONTENT,
