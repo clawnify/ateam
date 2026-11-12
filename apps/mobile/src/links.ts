@@ -47,6 +47,12 @@ import type { SavedConnection } from "./storage";
 export const REWAKE_MS = 60_000;
 // A box someone waits on is retried 1 s after a failure, doubling up to this.
 export const WAITED_RETRY_CAP_MS = 15_000;
+// A box that isn't answering, and isn't asleep, is tried at least this often. The
+// phone's tunnel takes a minute or two to settle after a wake or a network change,
+// and at the steady pace (reconnectDelay, up to 2 min) the box stayed offline long
+// after it could be reached again. Retries only run while the app is open (iOS
+// suspends it), so the pace costs nothing in the background.
+export const AWAY_RETRY_CAP_MS = 15_000;
 
 // One try at reaching a box. Every wait in it (the wake call, a dial, the gap
 // between dials) races `stopped`, so Cancel ends the try at once rather than after
@@ -157,6 +163,10 @@ export interface Links {
 	holdAll(): void;
 	/** Back in the foreground: probe each socket, and try every box that isn't up. */
 	foreground(): void;
+	/** Before sending something that mustn't be lost (a new task): whether the box
+	 *  answers right now. A socket that doesn't is dropped, so the caller can reach
+	 *  the box again rather than send into a dead one. False when there is none. */
+	verify(key: string): Promise<boolean>;
 	/** Stop waiting for a box that's being woken. */
 	cancel(key: string): void;
 	/** Off the list: no more tries, its socket closed, off the board. */
@@ -195,14 +205,18 @@ export function createLinks(deps: LinkDeps): Links {
 		timers.delete(key);
 	};
 
-	// Soon, then at a steady pace (reconnectDelay). One someone waits on: sooner.
+	// Soon, then at a steady pace (reconnectDelay): the pace for a box that sleeps,
+	// which no retry wakes. One that should be up is tried at least every
+	// AWAY_RETRY_CAP_MS, and one someone waits on sooner still.
 	function retry(key: string): void {
 		if (paused || conns.has(key) || timers.has(key) || stopped.has(key) || !boxOf(key)) return;
 		const n = backoff.get(key) ?? 0;
 		backoff.set(key, n + 1);
 		const delay = deps.waitedOn(key)
 			? Math.min(WAITED_RETRY_CAP_MS, 1_000 * 2 ** n)
-			: reconnectDelay(n);
+			: state[key]?.asleep
+				? reconnectDelay(n)
+				: Math.min(AWAY_RETRY_CAP_MS, reconnectDelay(n));
 		timers.set(
 			key,
 			clock.after(delay, () => {
@@ -473,6 +487,14 @@ export function createLinks(deps: LinkDeps): Links {
 					void reconnect(key, deps.waitedOn(key));
 				})();
 			}
+		},
+		async verify(key) {
+			const c = conns.get(key);
+			if (!c) return false;
+			if (await c.ping()) return true;
+			// Not tried again from here: the caller reaches it next, waking it if need be.
+			drop(key, c, false);
+			return false;
 		},
 		cancel(key) {
 			const tries = attempts.get(key);

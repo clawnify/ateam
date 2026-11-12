@@ -82,7 +82,8 @@ const FLOAT = 48;
 
 /** Which box a new task starts on, when its project is on more than one. */
 export interface RunOn {
-	options: { key: string; label: string; live: boolean }[];
+	/** `away`: why the box isn't up right now (boxes.ts awayOf), null while it is. */
+	options: { key: string; label: string; away: "asleep" | "offline" | null }[];
 	value: string;
 	onChange: (key: string) => void;
 }
@@ -101,7 +102,8 @@ export function Composer({
 }: {
 	agents: AgentDTO[];
 	busy: boolean;
-	onSubmit: (input: ComposerSubmit) => void;
+	/** Start the task. Resolves with why it couldn't, null once it has started. */
+	onSubmit: (input: ComposerSubmit) => Promise<string | null>;
 	/** The box's own Lead. Absent when it has none: no switch, it starts tasks. */
 	lead?: LeadClient;
 	/** A message went to the Lead (`open`: show the chat). */
@@ -201,13 +203,20 @@ export function Composer({
 			return;
 		}
 		const sent = agentMode ? [] : files;
-		onSubmit(
+		const kept = { text, files };
+		setText("");
+		setFiles([]);
+		const failed = await onSubmit(
 			agentMode
 				? { prompt: "", name: value, agentId, yolo, agentMode: true, open, files: sent }
 				: { prompt: value, agentId, yolo, agentMode: false, open, files: sent },
 		);
-		setText("");
-		setFiles([]);
+		if (!failed) return;
+		// Not started: say why, with what was typed back in the field to send again
+		// (unless something else has been typed there since).
+		setNote(failed);
+		setText((cur) => cur || kept.text);
+		setFiles((cur) => (cur.length ? cur : kept.files));
 	};
 
 	// Long-press send: choose between opening and staying here. A tap starts a
@@ -220,7 +229,7 @@ export function Composer({
 	const chooseRunOn = () => {
 		if (!runOn) return;
 		// A box that isn't answering still starts the task: it is woken first.
-		const labels = runOn.options.map((o) => (o.live ? o.label : `${o.label} (asleep)`));
+		const labels = runOn.options.map((o) => (o.away ? `${o.label} (${o.away})` : o.label));
 		const pick = (i: number) => {
 			const o = runOn.options[i];
 			if (o) runOn.onChange(o.key);
@@ -243,7 +252,8 @@ export function Composer({
 			{ text: "Cancel", style: "cancel" as const },
 		]);
 	};
-	const runOnLabel = runOn?.options.find((o) => o.key === runOn.value)?.label;
+	const runOnPick = runOn?.options.find((o) => o.key === runOn.value);
+	const runOnLabel = runOnPick?.label;
 
 	const chooseLanding = () => {
 		if (!canSubmit) return;
@@ -353,7 +363,7 @@ export function Composer({
 							onPress={chooseRunOn}
 							hitSlop={4}
 							accessibilityRole="button"
-							accessibilityLabel={`Run on ${runOnLabel}`}
+							accessibilityLabel={`Run on ${runOnLabel}${runOnPick?.away ? `, ${runOnPick.away}` : ""}`}
 							accessibilityHint="Picks the box this task starts on"
 						>
 							<Feather name="server" size={12} color={C.muted} />
@@ -361,6 +371,8 @@ export function Composer({
 							<Text style={styles.runOnBox} numberOfLines={1}>
 								{runOnLabel}
 							</Text>
+							{/* As its task rows say it: the task still starts, the box reached first. */}
+							{runOnPick?.away ? <Text style={styles.runOnAway}>{runOnPick.away}</Text> : null}
 							<Text style={styles.caret}>▾</Text>
 						</Pressable>
 					) : null}
@@ -611,6 +623,7 @@ const styles = StyleSheet.create({
 	},
 	runOnLabel: { color: C.muted, fontSize: 12, fontWeight: "600" },
 	runOnBox: { flexShrink: 1, color: C.ink, fontSize: 12, fontWeight: "600" },
+	runOnAway: { color: C.faint, fontSize: 12 },
 	chipText: { color: C.muted, fontSize: 12, fontWeight: "600" },
 	chipTextOn: { color: C.ink },
 	mode: {
