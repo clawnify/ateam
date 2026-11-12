@@ -98,7 +98,12 @@ import { GithubAccessScreen } from "./src/GithubAccessScreen";
 import { HomeScreen, type ProjectRow, placeText, type TaskPlace } from "./src/HomeScreen";
 import { LeadScreen } from "./src/LeadScreen";
 import { type LoopDraft, LoopForm, LoopsScreen } from "./src/LoopsScreen";
-import type { LeadBadge } from "./src/lead-badge";
+import {
+	type LeadBadge,
+	questionSnack,
+	unannouncedQuestions,
+	withQuestions,
+} from "./src/lead-badge";
 import { leadCall, setCallTarget, useLeadCall } from "./src/lead-call";
 import { createLinks, type LinkDeps, type Waker } from "./src/links";
 import { MissionScreen, type MissionViewState } from "./src/MissionScreen";
@@ -1449,6 +1454,14 @@ export default function App() {
 	}, [leadSent]);
 	// A task that couldn't start, said in the snackbar until dismissed or replaced.
 	const [failure, setFailure] = useState<string | null>(null);
+	// Tasks that just asked the user something, said in the snackbar for a few
+	// seconds; the Lead button's amber dot stays until they're answered.
+	const [asked, setAsked] = useState<string | null>(null);
+	useEffect(() => {
+		if (!asked) return;
+		const timer = setTimeout(() => setAsked(null), 8000);
+		return () => clearTimeout(timer);
+	}, [asked]);
 	const [openTaskFocus, setOpenTaskFocus] = useState(false);
 	// What's open over the board that belongs to one box: its terminal, its GitHub
 	// access, or adding a project to it. Each holds that box's key.
@@ -2649,19 +2662,31 @@ export default function App() {
 	const leadClient = leadConn && boxSupports("lead", leadVersion) ? leadConn.lead : null;
 	// The dot on the header's Lead button (src/lead-badge.ts): the Lead has something
 	// for the user while its chat isn't on screen.
-	const leadBadge = useLeadBadge(
-		leadClient,
-		leadConn ? leadKey : null,
+	const leadOnScreen =
 		view === "board" &&
-			leadOpen &&
-			!openTask &&
-			!boxTerminalKey &&
-			!browserKey &&
-			!boxSettingsKey &&
-			!dotfilesKey &&
-			!githubKey &&
-			!aiKeysKey,
-	);
+		leadOpen &&
+		!openTask &&
+		!boxTerminalKey &&
+		!browserKey &&
+		!boxSettingsKey &&
+		!dotfilesKey &&
+		!githubKey &&
+		!aiKeysKey;
+	const leadOwnBadge = useLeadBadge(leadClient, leadConn ? leadKey : null, leadOnScreen);
+	// A task's question waits in the chat's "Waiting on you" tray, which the phone
+	// only shows inside the chat: outside it the dot goes amber and a new question
+	// is said once in the snackbar, whose Open leads there.
+	const leadBadge = leadClient && !leadOnScreen ? withQuestions(leadOwnBadge, tasks) : leadOwnBadge;
+	const announced = useRef<ReadonlySet<string>>(new Set());
+	useEffect(() => {
+		const { fresh, open } = unannouncedQuestions(tasks, announced.current);
+		announced.current = open;
+		// On screen in the chat, its tray already shows them.
+		if (leadClient && !leadOnScreen && fresh.length) setAsked(questionSnack(fresh));
+	}, [tasks, leadClient, leadOnScreen]);
+	useEffect(() => {
+		if (leadOnScreen) setAsked(null);
+	}, [leadOnScreen]);
 	// A call with the Lead follows its box and connection (src/lead-call.ts), and
 	// tells a task's new question once, as the desktop's does.
 	const callName = multi && leadKey ? `Lead on ${labelOf(leadKey)}` : "Lead";
@@ -2990,20 +3015,26 @@ export default function App() {
 				loading={loading}
 				creating={creating}
 				snack={
-					startedTask ? `Started ${startedTask.name}` : leadSent ? "Sent to the Lead" : failure
+					startedTask
+						? `Started ${startedTask.name}`
+						: leadSent
+							? "Sent to the Lead"
+							: (failure ?? asked)
 				}
 				onOpenSnack={() => {
 					// The list copy has the launch's newer status, if it has arrived.
 					if (startedTask) setOpenTask(tasks.find((t) => t.id === startedTask.id) ?? startedTask);
-					else if (leadSent) setLeadOpen(true);
+					else if (leadSent || (!failure && asked)) setLeadOpen(true);
 					setStartedTask(null);
 					setLeadSent(false);
 					setFailure(null);
+					setAsked(null);
 				}}
 				onDismissSnack={() => {
 					setStartedTask(null);
 					setLeadSent(false);
 					setFailure(null);
+					setAsked(null);
 				}}
 				composerLead={leadClient ?? undefined}
 				onLeadSent={(open) => {
