@@ -7,7 +7,7 @@
 //
 // "Seen" is the newest item's time (the box's clock, so the phone's clock can't
 // skew it) when the chat was last on screen, kept per box across launches.
-import type { LeadItem } from "@ateam/protocol";
+import type { LeadItem, TaskDTO } from "@ateam/protocol";
 
 export type LeadBadge = "waiting" | "new" | null;
 
@@ -44,4 +44,36 @@ export function foldBadge(s: LeadBadgeState, items: LeadItem[]): LeadBadgeState 
 export function badgeOf(s: LeadBadgeState, seen: number | null): LeadBadge {
 	if (s.waiting.length) return "waiting";
 	return seen !== null && s.newest > seen ? "new" : null;
+}
+
+/** A task's question waits in the chat's "Waiting on you" tray, which is out of
+ *  sight while the chat is closed: any open one turns the dot amber. */
+export function withQuestions(badge: LeadBadge, tasks: Pick<TaskDTO, "question">[]): LeadBadge {
+	return tasks.some((t) => t.question) ? "waiting" : badge;
+}
+
+/** The tasks whose question hasn't been announced yet, newest first, and the
+ *  ids to remember: only the open ones, so the set never grows past the board. */
+export function unannouncedQuestions<T extends Pick<TaskDTO, "question">>(
+	tasks: T[],
+	announced: ReadonlySet<string>,
+): { fresh: T[]; open: Set<string> } {
+	const open = new Set<string>();
+	const fresh: T[] = [];
+	for (const t of tasks) {
+		if (!t.question) continue;
+		open.add(t.question.id);
+		if (!announced.has(t.question.id)) fresh.push(t);
+	}
+	fresh.sort((a, b) => (b.question?.askedAt ?? 0) - (a.question?.askedAt ?? 0));
+	return { fresh, open };
+}
+
+/** The snackbar's words for questions that just arrived. */
+export function questionSnack(fresh: Pick<TaskDTO, "name">[]): string | null {
+	const first = fresh[0];
+	if (!first) return null;
+	return fresh.length === 1
+		? `${first.name} is waiting on you`
+		: `${fresh.length} tasks are waiting on you`;
 }
