@@ -567,3 +567,70 @@ test("a box that connecting wakes is dialled once something on it is opened", as
 	await settle();
 	expect(h.calls).toHaveLength(1);
 });
+
+test("a box that should be up is tried at least every 15 s, however long it has been away", async () => {
+	const h = harness();
+	h.setBoxes([plain]);
+	h.links.holdAll();
+	await settle();
+	const timedOut = new Error("connection timed out after 15000ms");
+	// 5 s after the first failure, then 15 s after each one: never the 30 s, 1 min
+	// and 2 min of the steady pace, which kept it offline after it could be reached.
+	for (const [wait, dials] of [
+		[5_000, 2],
+		[15_000, 3],
+		[15_000, 4],
+		[15_000, 5],
+		[15_000, 6],
+	] as const) {
+		h.calls.at(-1)?.reject(timedOut);
+		await settle();
+		await h.fc.advance(wait - 1);
+		expect(h.calls).toHaveLength(dials - 1);
+		await h.fc.advance(1);
+		expect(h.calls).toHaveLength(dials);
+	}
+	expect(awayOf(h.state()[key(plain)])).toBe("offline");
+});
+
+test("a box that sleeps keeps the steady pace: no retry wakes it", async () => {
+	const h = harness();
+	h.setBoxes([sleepy]);
+	h.links.holdAll();
+	await settle();
+	const timedOut = new Error("connection timed out after 15000ms");
+	for (const [wait, dials] of [
+		[5_000, 2],
+		[15_000, 3],
+		[30_000, 4],
+		[60_000, 5],
+	] as const) {
+		h.calls.at(-1)?.reject(timedOut);
+		await settle();
+		await h.fc.advance(wait - 1);
+		expect(h.calls).toHaveLength(dials - 1);
+		await h.fc.advance(1);
+		expect(h.calls).toHaveLength(dials);
+	}
+	expect(awayOf(h.state()[key(sleepy)])).toBe("asleep");
+	expect(h.wakes).toEqual([]);
+});
+
+test("verify drops a socket that no longer answers, and leaves the reaching to the caller", async () => {
+	const h = harness();
+	h.setBoxes([plain]);
+	expect(await h.links.verify(key(plain))).toBe(false); // never connected
+	const tried = h.links.connect(plain);
+	const c = fakeConn();
+	h.calls[0]?.resolve(c);
+	await tried;
+	expect(await h.links.verify(key(plain))).toBe(true);
+	expect(h.links.liveKeys()).toEqual([key(plain)]);
+	c.ping = async () => false; // half-open: the socket is there, nothing comes back
+	expect(await h.links.verify(key(plain))).toBe(false);
+	expect(c.closed).toBe(true);
+	expect(h.links.liveKeys()).toEqual([]);
+	expect(awayOf(h.state()[key(plain)])).toBe("offline");
+	await settle();
+	expect(h.calls).toHaveLength(1);
+});

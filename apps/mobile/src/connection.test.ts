@@ -100,3 +100,77 @@ describe("browser view", () => {
 		expect(boxHost("ws://[fd7a::1]:8787")).toBe("[fd7a::1]");
 	});
 });
+
+// A socket whose far end stops answering, and whose close never completes: what a
+// phone holds after its tunnel drops. Nothing here ever fires `onclose`.
+describe("a half-open socket", () => {
+	let muted = false;
+	let slowMs = 0;
+	class HalfOpen {
+		onopen: (() => void) | null = null;
+		onmessage: ((e: { data: string }) => void) | null = null;
+		onclose: (() => void) | null = null;
+		onerror: (() => void) | null = null;
+		constructor() {
+			setTimeout(() => this.onopen?.(), 0);
+		}
+		send(raw: string) {
+			if (muted) return;
+			const frame = JSON.parse(raw);
+			const result =
+				frame.method === "system:hello" ? { protocolVersion: PROTOCOL_VERSION, agents: [] } : null;
+			setTimeout(
+				() =>
+					this.onmessage?.({ data: JSON.stringify({ t: "res", id: frame.id, ok: true, result }) }),
+				frame.method === "system:hello" ? 0 : slowMs,
+			);
+		}
+		close() {}
+	}
+	const real = globalThis.WebSocket;
+	const dial = (onClose: () => void) => {
+		muted = false;
+		slowMs = 0;
+		globalThis.WebSocket = HalfOpen as never;
+		return connect("ws://box:8787", { onClose, timing: { stallProbeMs: 20, pingTimeoutMs: 20 } });
+	};
+	afterAll(() => {
+		globalThis.WebSocket = real;
+	});
+
+	test("a call that goes unanswered has the socket probed, then rejects and reports the drop", async () => {
+		let drops = 0;
+		const c = await dial(() => drops++);
+		expect(await c.rpc.call("tasks:list")).toBeNull();
+		muted = true;
+		const started = Date.now();
+		await expect(c.rpc.call("tasks:list")).rejects.toThrow("RPC connection closed");
+		expect(drops).toBe(1);
+		expect(Date.now() - started).toBeLessThan(1_000);
+		// Gone for good: a later call rejects rather than waiting on a reply.
+		await expect(c.rpc.call("tasks:list")).rejects.toThrow("RPC connection closed");
+		expect(await c.ping()).toBe(false);
+		c.close();
+		expect(drops).toBe(1);
+	});
+
+	test("a slow call on a socket that still answers carries on", async () => {
+		let drops = 0;
+		const c = await dial(() => drops++);
+		// Slower than the stall wait, so the probe runs; its hello is answered.
+		slowMs = 100;
+		expect(await c.rpc.call("tasks:list")).toBeNull();
+		expect(drops).toBe(0);
+		c.close();
+	});
+
+	test("closing it is not a drop, and rejects what was in flight", async () => {
+		let drops = 0;
+		const c = await dial(() => drops++);
+		muted = true;
+		const pending = c.rpc.call("tasks:list");
+		c.close();
+		await expect(pending).rejects.toThrow("RPC connection closed");
+		expect(drops).toBe(0);
+	});
+});

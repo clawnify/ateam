@@ -13,6 +13,7 @@ import {
 	connectionOf,
 	dialWakes,
 	droppedIdentities,
+	fleetHealth,
 	leadBoxOf,
 	leadFirst,
 	NEW_LINK,
@@ -349,5 +350,27 @@ test("box settings say how this phone reaches each box", () => {
 	expect(connectionOf({ host: "100.64.0.1", port: "8787" })).toEqual({
 		label: "Tailscale",
 		detail: "100.64.0.1:8787 · needs Tailscale on this phone",
+	});
+});
+
+describe("fleetHealth", () => {
+	const live: BoxLink = { ...NEW_LINK, state: "live" };
+	const asleep: BoxLink = { ...NEW_LINK, state: "down", asleep: true, error: "timed out" };
+	const offline: BoxLink = { ...NEW_LINK, state: "down", error: "The connection dropped." };
+
+	test("up while every box that should answer does, sleeping ones aside", () => {
+		expect(fleetHealth([live])).toBe("up");
+		expect(fleetHealth([live, asleep, undefined])).toBe("up");
+	});
+
+	test("partial while one box is offline behind another that is up", () => {
+		expect(fleetHealth([offline, live])).toBe("partial");
+		// Still offline while it is being tried again.
+		expect(fleetHealth([{ ...offline, state: "connecting" }, live])).toBe("partial");
+	});
+
+	test("down when nothing is up", () => {
+		expect(fleetHealth([])).toBe("down");
+		expect(fleetHealth([offline, asleep])).toBe("down");
 	});
 });
