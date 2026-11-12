@@ -420,6 +420,22 @@ async function launchAgent(
 	// worktree has no conversation yet, so a fresh launch is the honest answer.
 	let resumeSessionId = input.resumeSessionId;
 	let resumeNewest = Boolean(input.resume);
+	let neverStarted = false;
+	// A task whose agent never started has no conversation to come back to:
+	// its launch failed or never reached the engine (the phone lost the box
+	// between creating the task and starting its agent), and opening the task
+	// later asks to resume. Claude's `--continue` then runs the first-run setup
+	// if the box needs it and exits with "No conversation found to continue",
+	// leaving a shell where the agent should be. Start the conversation instead,
+	// named like any fresh launch so it can be resumed by id later.
+	if (
+		resumeNewest &&
+		!resumeSessionId &&
+		!repo.listSessionsByTask(services.db, task.id).some((s) => s.agentId !== "shell")
+	) {
+		resumeNewest = false;
+		neverStarted = true;
+	}
 	const scopesResume = Boolean(agent.sessionListArgs) || agent.id === "codex";
 	if (resumeNewest && !resumeSessionId && scopesResume) {
 		const scan = services.latestSession
@@ -463,7 +479,8 @@ async function launchAgent(
 	// `--continue` (which lands on whatever conversation the worktree saw last),
 	// or agent mode (a board, not a conversation). Recording the terminal id
 	// there would be a lie the restore then acts on.
-	const mintsId = Boolean(agent.sessionIdFlag) && !input.resume && !input.agentMode;
+	const mintsId =
+		Boolean(agent.sessionIdFlag) && (!input.resume || neverStarted) && !input.agentMode;
 	const agentSessionId = resumeSessionId ?? (mintsId ? terminalId : null);
 	const isResume = Boolean(input.resume || input.resumeSessionId);
 	repo.createSession(services.db, {
