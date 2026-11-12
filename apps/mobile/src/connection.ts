@@ -5,6 +5,7 @@ import {
 	browserViewUrl,
 	buildAteamApi,
 	CH,
+	type ClientTransport,
 	createRpcClient,
 	type LeadClient,
 	leadClient,
@@ -98,10 +99,45 @@ export interface ConnectOptions {
 	onClose?: () => void;
 	/** This phone's device token for the box, when it is paired with it (v29). */
 	token?: string;
+	/** The waits below, shortened by a test. */
+	timing?: { stallProbeMs?: number; pingTimeoutMs?: number };
 }
+
+/** What a call rejects with when its socket is gone (packages/protocol/src/rpc.ts). */
+export const RPC_CLOSED = "RPC connection closed";
 
 const CONNECT_TIMEOUT_MS = 15_000;
 const PING_TIMEOUT_MS = 4_000;
+// A call still unanswered after this long has the socket probed there and then,
+// rather than at the next keepalive: a half-open socket otherwise held a screen on
+// its spinner, the box still shown as connected, for up to 19 s.
+const STALL_PROBE_MS = 5_000;
+
+/**
+ * A transport this file can declare gone. Closing a socket whose far end no longer
+ * answers starts a closing handshake that nothing completes, so its close event can
+ * come long after (or never): the calls in flight kept waiting and the box kept
+ * showing as connected. `kill` fires the close handlers now, once; the socket's own
+ * event, should it come later, is then ignored.
+ */
+function killable(t: ClientTransport): { transport: ClientTransport; kill(): void } {
+	const handlers: (() => void)[] = [];
+	let gone = false;
+	const kill = () => {
+		if (gone) return;
+		gone = true;
+		for (const h of handlers) h();
+	};
+	t.onClose?.(kill);
+	return {
+		transport: {
+			send: (frame) => t.send(frame),
+			onFrame: (handler) => t.onFrame(handler),
+			onClose: (handler) => void handlers.push(handler),
+		},
+		kill,
+	};
+}
 
 /** Connect using the saved transport, retaining URL support for tailnet callers. */
 export async function connect(
@@ -118,27 +154,66 @@ export async function connect(
 		if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid port");
 		return "httpUrl" in client ? client.httpUrl(port) : `http://${boxHost(url)}:${port}`;
 	};
-	const rpc = createRpcClient(client.transport);
+	const wire = killable(client.transport);
+	const raw = createRpcClient(wire.transport);
+	const pingMs = opts.timing?.pingTimeoutMs ?? PING_TIMEOUT_MS;
+	const stallMs = opts.timing?.stallProbeMs ?? STALL_PROBE_MS;
 
 	// Distinguish an app-initiated close() from an unexpected drop: only the latter
 	// should trigger a reattach. Registered before the handshake so a drop mid-connect
 	// is still classified correctly (the throw path below sets `intentional`).
 	let intentional = false;
-	client.transport.onClose?.(() => {
+	let gone = false;
+	wire.transport.onClose?.(() => {
+		gone = true;
 		if (!intentional) opts.onClose?.();
 	});
+	// The socket is closed and declared gone at once: the calls in flight reject and
+	// `onClose` fires now, not when (if ever) the socket's own close event arrives.
+	const shut = () => {
+		clearInterval(keepalive);
+		client.close();
+		wire.kill();
+	};
+	let keepalive: ReturnType<typeof setInterval> | undefined;
+	// One probe at a time: a timed handshake, the socket shut if it goes unanswered.
+	let probing = false;
+	const probe = () => {
+		if (probing || gone) return;
+		probing = true;
+		withTimeout(serverHandshake(raw), pingMs).then(
+			() => {
+				probing = false;
+			},
+			() => shut(),
+		);
+	};
+	// Every call the app makes goes through here. One that is slow to answer has the
+	// socket probed (a slow call on a live socket just carries on); one made after the
+	// socket is gone rejects, where it would otherwise wait on a reply forever.
+	const rpc: RpcClient = {
+		on: raw.on,
+		call(method, args) {
+			if (gone) return Promise.reject(new Error(RPC_CLOSED));
+			const p = raw.call(method, args);
+			const timer = setTimeout(probe, stallMs);
+			const done = () => clearTimeout(timer);
+			p.then(done, done);
+			return p;
+		},
+	};
 
 	let info: SystemInfo;
 	try {
 		// A bad host / firewalled port leaves the socket hanging with no error, so
 		// cap the handshake — the UI must not wait forever on connect.
-		info = await withTimeout(serverHandshake(rpc, opts.token), CONNECT_TIMEOUT_MS);
+		info = await withTimeout(serverHandshake(raw, opts.token), CONNECT_TIMEOUT_MS);
 		// A locked box gives an unpaired phone nothing but a way to pair: say so
 		// rather than hold a connection that can't be used.
 		if (info.pairing?.state === "needed") throw new Error(NEEDS_PAIRING);
 	} catch (err) {
 		intentional = true; // a failed connect isn't a drop to reattach from
-		client.close();
+		shut();
 		throw err;
 	}
 	// A skew is no longer a refusal. Refusing was total: it made a box on last
@@ -153,12 +228,7 @@ export async function connect(
 	// timeout with no close event — a later RPC then hangs forever. A periodic cheap
 	// call (system:hello) keeps outbound traffic flowing so the mapping stays live.
 	// 15s is well under typical NAT/WireGuard (25s) timeouts. Cleared on close.
-	const keepalive = setInterval(() => {
-		void withTimeout(serverHandshake(rpc), PING_TIMEOUT_MS).catch(() => {
-			clearInterval(keepalive);
-			client.close();
-		});
-	}, 15_000);
+	keepalive = setInterval(probe, 15_000);
 
 	// The box's browser view answers on the box's tailnet address, the same host
 	// this socket dialed, so the engine's port is all it takes to reach it.
@@ -187,14 +257,15 @@ export async function connect(
 		pairing: typeof address !== "string" && address.ssh ? undefined : info.pairing,
 		lock: (label: string) => pairingClient(rpc).lock(label, "phone"),
 		ping: () =>
-			withTimeout(serverHandshake(rpc), PING_TIMEOUT_MS).then(
-				() => true,
-				() => false,
-			),
+			gone
+				? Promise.resolve(false)
+				: withTimeout(serverHandshake(raw), pingMs).then(
+						() => true,
+						() => false,
+					),
 		close: () => {
 			intentional = true;
-			clearInterval(keepalive);
-			client.close();
+			shut();
 		},
 	};
 }

@@ -285,6 +285,15 @@ export function awayOf(link: BoxLink | undefined): "asleep" | "offline" | null {
 	return link.error ? "offline" : null;
 }
 
+/** The board's status dot, over every box: "up" while each one that should be
+ *  answering is, "partial" while some box is offline and another is up, "down" when
+ *  none is up. A box that sleeps is where it should be, so it doesn't count against
+ *  "up": a dot that went amber for every sleeping box would never be green. */
+export function fleetHealth(links: (BoxLink | undefined)[]): "up" | "partial" | "down" {
+	if (!links.some((l) => l?.state === "live")) return "down";
+	return links.some((l) => awayOf(l) === "offline") ? "partial" : "up";
+}
+
 /** The box whose Lead the phone talks to: the one picked in Boxes while it is
  *  still on the list, else the box used last. */
 export function leadBoxOf(boxes: SavedBox[], picked: string | null): string | null {

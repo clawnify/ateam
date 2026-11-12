@@ -76,6 +76,7 @@ import {
 	boxTitle,
 	cantWakeReason,
 	droppedIdentities,
+	fleetHealth,
 	leadBoxOf,
 	leadFirst,
 	NEW_LINK,
@@ -88,7 +89,7 @@ import {
 import { Composer, type ComposerSubmit, type RunOn } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
 import { CreateBoxScreen } from "./src/CreateBoxScreen";
-import { connect, mobileNative, redeemPairing } from "./src/connection";
+import { connect, mobileNative, RPC_CLOSED, redeemPairing } from "./src/connection";
 import { DotfilesScreen } from "./src/DotfilesScreen";
 import { demoConnection } from "./src/demo";
 import { FinishSetupScreen } from "./src/FinishSetupScreen";
@@ -867,7 +868,7 @@ function Shell({
 	creating: boolean;
 	onOpenConnection: () => void;
 	onOpenTask: (task: TaskDTO) => void;
-	onCreate: (input: ComposerSubmit) => void;
+	onCreate: (input: ComposerSubmit) => Promise<string | null>;
 	onAddProject: () => void;
 	/** A box that runs another Ateam than this app; null when none does. */
 	notice: SkewNotice | null;
@@ -1447,8 +1448,6 @@ export default function App() {
 		const timer = setTimeout(() => setLeadSent(false), 6000);
 		return () => clearTimeout(timer);
 	}, [leadSent]);
-	// A task that couldn't start, said in the snackbar until dismissed or replaced.
-	const [failure, setFailure] = useState<string | null>(null);
 	const [openTaskFocus, setOpenTaskFocus] = useState(false);
 	// What's open over the board that belongs to one box: its terminal, its GitHub
 	// access, or adding a project to it. Each holds that box's key.
@@ -2404,7 +2403,7 @@ export default function App() {
 	const runOn: RunOn | undefined =
 		runOnKeys.length > 1 && runOnKey
 			? {
-					options: runOnKeys.map((k) => ({ key: k, label: labelOf(k), live: isLive(k) })),
+					options: runOnKeys.map((k) => ({ key: k, label: labelOf(k), away: awayOf(links[k]) })),
 					value: runOnKey,
 					onChange: (k) => {
 						setRunOnPicked(k);
@@ -2594,15 +2593,20 @@ export default function App() {
 	// Composer submit: create a task in the selected project on its Run on box (woken
 	// first if it sleeps), launch the agent, and open its terminal (which attaches to
 	// the just-spawned session), or, asked to stay, leave the board where it is and
-	// say so in the snackbar.
+	// say so in the snackbar. Resolves with why it couldn't, which the composer says
+	// with the prompt back in its field; null once the task has started.
 	const onCreate = useCallback(
-		async (input: ComposerSubmit) => {
+		async (input: ComposerSubmit): Promise<string | null> => {
 			const member = runOnMember;
-			if (!member) return;
+			if (!member) return "Pick a project to start the task in.";
 			const key = member.alias;
 			setCreating(true);
-			setFailure(null);
+			let created: TaskDTO | null = null;
 			try {
+				// A socket the phone still holds can be dead already (its tunnel dropped
+				// with no close event): the task would be sent into it and lost. So the
+				// box is asked first, and reached again below if it doesn't answer.
+				if (key && link.conn(key)) await link.verify(key);
 				if (key && !link.conn(key)) {
 					const box = boxByKey(key);
 					if (!box || !(await link.connect(box, { wake: true }))) {
@@ -2619,6 +2623,7 @@ export default function App() {
 					// The engine may replace a name nobody typed with a model title, once.
 					nameAuto: !input.name?.trim(),
 				});
+				created = task;
 				// Attached on the phone: put on the task's box, where its agent reads them.
 				const boxApi = key ? link.conn(key)?.api : undefined;
 				const files = input.files.length && boxApi ? await filesToBox(boxApi, input.files) : [];
@@ -2634,8 +2639,17 @@ export default function App() {
 				setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [task, ...prev]));
 				if (input.open) setOpenTask(task);
 				else setStartedTask(task);
+				return null;
 			} catch (err) {
-				setFailure(err instanceof Error ? err.message : String(err));
+				const msg = err instanceof Error ? err.message : String(err);
+				const box = key ? labelOf(key) : "the box";
+				const why = msg === RPC_CLOSED ? `the connection to ${box} dropped` : msg;
+				if (!created) return msg === RPC_CLOSED ? `Not started: ${why}.` : msg;
+				// The task exists on the box, with no agent in it: say so, since sending
+				// again starts a second one.
+				const task = created;
+				setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [task, ...prev]));
+				return `"${task.name}" was created, but its agent didn't start: ${why}.`;
 			} finally {
 				setCreating(false);
 			}
@@ -2668,6 +2682,9 @@ export default function App() {
 	useEffect(() => setCallTarget(leadKey, leadClient, callName), [leadKey, leadClient, callName]);
 	useEffect(() => leadCall.setTasks(tasks), [tasks]);
 	const anyLive = Object.values(links).some((l) => l.state === "live");
+	// Green only while every box that should be up is: one offline behind a green
+	// dot read as connected while its tasks couldn't be opened or started.
+	const health = fleetHealth(Object.values(links));
 	const linkOf = (key: string | null): BoxLink => (key ? links[key] : undefined) ?? NEW_LINK;
 
 	const dotfilesConn = dotfilesKey ? link.conn(dotfilesKey) : undefined;
@@ -2979,7 +2996,7 @@ export default function App() {
 					setSidebarCollapsed(next);
 					void saveSidebarCollapsed(next);
 				}}
-				connColor={anyLive ? C.green : C.faint}
+				connColor={health === "up" ? C.green : health === "partial" ? C.amber : C.faint}
 				projects={projectRows}
 				selectedKey={selectedKey}
 				onSelectProject={selectProject}
@@ -2989,21 +3006,17 @@ export default function App() {
 				placeOf={placeOf}
 				loading={loading}
 				creating={creating}
-				snack={
-					startedTask ? `Started ${startedTask.name}` : leadSent ? "Sent to the Lead" : failure
-				}
+				snack={startedTask ? `Started ${startedTask.name}` : leadSent ? "Sent to the Lead" : null}
 				onOpenSnack={() => {
 					// The list copy has the launch's newer status, if it has arrived.
 					if (startedTask) setOpenTask(tasks.find((t) => t.id === startedTask.id) ?? startedTask);
 					else if (leadSent) setLeadOpen(true);
 					setStartedTask(null);
 					setLeadSent(false);
-					setFailure(null);
 				}}
 				onDismissSnack={() => {
 					setStartedTask(null);
 					setLeadSent(false);
-					setFailure(null);
 				}}
 				composerLead={leadClient ?? undefined}
 				onLeadSent={(open) => {
@@ -3019,7 +3032,7 @@ export default function App() {
 					setConnectScreen("list");
 				}}
 				onOpenTask={setOpenTask}
-				onCreate={(input) => void onCreate(input)}
+				onCreate={onCreate}
 				onAddProject={onAddProject}
 				notice={notice}
 				api={board}
