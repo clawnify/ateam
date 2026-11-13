@@ -18,6 +18,8 @@ import {
 	type ProjectDTO,
 	projectRepo,
 	relativeAge,
+	STALE_SUMMARY_NOTE,
+	staleSummaryAt,
 	TASK_LINK_SCHEME,
 	type TaskDTO,
 	type TaskLastReplyDTO,
@@ -168,7 +170,7 @@ const messageSchema = (w: Words) =>
 const toolsFor = (w: Words, scoped = false) => [
 	{
 		name: "get_board",
-		description: `List the tasks ${w.board}, grouped under each project's name, the repo it is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its machine and its id; one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus where it stands now (a summary written a few minutes after its agent goes quiet) and what it waits for or asks the user. Filter to what you need: all (the default) is every task on the board, Done ones included (archived ones are not listed); needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.${scoped ? " This chat is one project's: without project, every filter lists that project's tasks only." : ""}`,
+		description: `List the tasks ${w.board}, grouped under each project's name, the repo it is a clone of (GitHub owner/name, or the clone's path when it has no GitHub remote), its machine and its id; one line each, latest activity first: id | name | board column | state (working, needs_you, idle or not_running) | agent | updated (how long ago the task last changed: a turn starting or ending, a question, a reply), plus where it stands now (a summary written a few minutes after its agent goes quiet; "before its latest turn" instead of "now" when the task moved after it was written, so it may be out of date) and what it waits for or asks the user. Filter to what you need: all (the default) is every task on the board, Done ones included (archived ones are not listed); needs_you is what waits on the user; working is what runs; recent is the latest tasks across every project (the 10 newest, or limit), for when the user asks what happened lately or for a briefing on the latest tasks. For what a task was asked to do and its last reply, use read_task.${scoped ? " This chat is one project's: without project, every filter lists that project's tasks only." : ""}`,
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -496,7 +498,9 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 			lines.push("", where);
 			for (const t of rows) {
 				const extra = [
-					t.summary ? `now: ${clipLine(t.summary, SUMMARY_IN_BOARD)}` : "",
+					t.summary
+						? `${staleSummaryAt(t) == null ? "now" : "before its latest turn"}: ${clipLine(t.summary, SUMMARY_IN_BOARD)}`
+						: "",
 					t.waitingReason ? `waits for: ${t.waitingReason}` : "",
 					t.question ? `asks the user: ${firstLine(t.question.text)}` : "",
 					t.proposals?.length
@@ -656,6 +660,7 @@ export function createLeadTools(deps: LeadToolDeps): McpToolServer & {
 			...(task.proposals?.length ? { proposes: task.proposals.map(proposalView) } : {}),
 			asked: task.description,
 			...(task.summary ? { summary: task.summary } : {}),
+			...(staleSummaryAt(task) != null ? { summaryStale: STALE_SUMMARY_NOTE } : {}),
 			lastReply: reply
 				? { at: new Date(reply.at).toISOString(), text: reply.text }
 				: (replyNote ??

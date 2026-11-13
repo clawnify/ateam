@@ -606,6 +606,118 @@ describe("detectMerged — external merge detection (no GitHub needed)", () => {
 	});
 });
 
+describe("detectMerged — the task's own PR merged, then the branch moved", () => {
+	let savedPath: string | undefined;
+
+	// A fake `gh` answering every `pr view` with the PR in $FAKE_GH_PR.
+	beforeEach(async () => {
+		const bin = join(repo.dir, "fake-gh-bin");
+		await mkdir(bin);
+		await writeFile(join(bin, "gh"), '#!/bin/sh\nprintf "%s" "$FAKE_GH_PR"\n');
+		await chmod(join(bin, "gh"), 0o755);
+		savedPath = process.env.PATH;
+		process.env.PATH = `${bin}:${process.env.PATH}`;
+	});
+	afterEach(() => {
+		process.env.PATH = savedPath;
+		delete process.env.FAKE_GH_PR;
+	});
+
+	const mergedPr = (headRefOid: string) => {
+		process.env.FAKE_GH_PR = JSON.stringify({
+			number: 7,
+			state: "MERGED",
+			url: "https://github.com/acme/demo/pull/7",
+			headRefOid,
+		});
+	};
+	/** What the sweep's freshenBase does before it asks. */
+	const fetchAll = (dir: string) => simpleGit(dir).raw(["fetch", "origin"]);
+
+	it("reports the PR merged and the work not landed when a commit followed the merge", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "carried on" });
+		const head = await commitFile(task.worktreePath, "a.txt", "a\n", "the PR");
+		await push({ worktreePath: task.worktreePath, branch: task.branch });
+		await squashMergeOnOrigin(repo, task.branch);
+		await commitFile(task.worktreePath, "b.txt", "b\n", "after the merge");
+		await fetchAll(task.worktreePath);
+		mergedPr(head);
+
+		const res = await detectMerged({
+			worktreePath: task.worktreePath,
+			branch: task.branch,
+			baseBranch: "main",
+			prNumber: 7,
+		});
+		expect(res).toMatchObject({ merged: false, prNumber: 7, state: "MERGED" });
+	});
+
+	// The shape that left a merged PR reading "open": the PR's last commit was
+	// made in another checkout, and the local branch, which never pulled it,
+	// got one more commit that landed through a PR of its own.
+	it("calls the branch merged when what it holds beyond the PR is on base already", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "behind its pr" });
+		await commitFile(task.worktreePath, "a.txt", "a\n", "the PR");
+		await push({ worktreePath: task.worktreePath, branch: task.branch });
+
+		const clone = await mkdtemp(join(repo.dir, "pr-head-"));
+		await simpleGit().clone(repo.origin, clone);
+		const g = simpleGit(clone);
+		await g.addConfig("user.email", "tester@ateam.dev");
+		await g.addConfig("user.name", "Ateam Tester");
+		await g.raw(["checkout", task.branch]);
+		await writeFile(join(clone, "a.txt"), "a, adapted\n");
+		await g.add(".");
+		await g.commit("adapt to main");
+		const head = (await g.revparse(["HEAD"])).trim();
+		await g.push("origin", task.branch);
+		await squashMergeOnOrigin(repo, task.branch);
+
+		await commitFile(task.worktreePath, "c.txt", "c\n", "cleanup");
+		await advanceOrigin(repo, { file: "c.txt", content: "c\n", message: "cleanup (#8)" });
+		await fetchAll(task.worktreePath);
+		mergedPr(head);
+
+		const res = await detectMerged({
+			worktreePath: task.worktreePath,
+			branch: task.branch,
+			baseBranch: "main",
+			prNumber: 7,
+		});
+		expect(res).toMatchObject({ merged: true, prNumber: 7, state: "MERGED" });
+	});
+
+	it("still ignores a merged PR this task never recorded (a reused branch name)", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "reused name" });
+		await commitFile(task.worktreePath, "n.txt", "n\n", "new work");
+		mergedPr("1111111111111111111111111111111111111111");
+
+		for (const prNumber of [null, 3]) {
+			const res = await detectMerged({
+				worktreePath: task.worktreePath,
+				branch: task.branch,
+				baseBranch: "main",
+				prNumber,
+			});
+			expect(res).toMatchObject({ merged: false, prNumber: null, state: null });
+		}
+	});
+
+	it("reads the work as not landed when the PR's head was never fetched here", async () => {
+		const task = await createTask({ repoPath: repo.work, name: "unknown head" });
+		await commitFile(task.worktreePath, "u.txt", "u\n", "work");
+		mergedPr("2222222222222222222222222222222222222222");
+
+		const res = await detectMerged({
+			worktreePath: task.worktreePath,
+			branch: task.branch,
+			baseBranch: "main",
+			prNumber: 7,
+		});
+		expect(res).toMatchObject({ merged: false, prNumber: 7, state: "MERGED" });
+	});
+});
+
 describe("removeTask", () => {
 	it("refuses a dirty worktree instead of deleting it behind git's back", async () => {
 		const task = await createTask({ repoPath: repo.work, name: "dirty" });

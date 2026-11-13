@@ -902,6 +902,17 @@ describe("PeerMessenger.listPeers", () => {
 		expect(messenger.listPeers(undefined)[0]?.summary).toBe(
 			"Board loads in 200ms; PR #12 is open.",
 		);
+		expect(messenger.listPeers(undefined)[0]?.summaryStale).toBeUndefined();
+	});
+
+	it("says when a summary predates the task's latest turn", () => {
+		const a = addTask("a", "claude");
+		repo.updateTask(db, a.id, {
+			summary: "One file with uncommitted changes.",
+			summaryAsOf: NOW - 60_000,
+			lastEventAt: NOW,
+		});
+		expect(messenger.listPeers(undefined)[0]?.summaryStale).toContain("may be out of date");
 	});
 });
 

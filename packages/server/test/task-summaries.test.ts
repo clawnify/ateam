@@ -130,6 +130,24 @@ describe("buildSummaryPrompt", () => {
 		expect(buildSummaryPrompt(task(id), [])).not.toContain("uncommitted");
 	});
 
+	it("says a merged PR's branch carried on, and only then", () => {
+		const carried = seedTask("carried", {
+			column: "review",
+			prNumber: 12,
+			prState: "merged",
+			gitStatus: { ahead: 0, behind: 0, dirty: 2, workAfterMerge: true, updatedAt: NOW },
+		});
+		expect(buildSummaryPrompt(task(carried), [])).toContain("Pull request #12 is merged.");
+		expect(buildSummaryPrompt(task(carried), [])).toContain("later work");
+		const landed = seedTask("landed", {
+			column: "merged",
+			prNumber: 13,
+			prState: "merged",
+			gitStatus: { ahead: 0, behind: 0, dirty: 2, updatedAt: NOW },
+		});
+		expect(buildSummaryPrompt(task(landed), [])).not.toContain("later work");
+	});
+
 	it("keeps the start and the end of a very long reply", () => {
 		const reply = `RESULT ${"x".repeat(8_000)} QUESTION?`;
 		const prompt = buildSummaryPrompt(task(seedTask("long", { lastReply: reply })), []);

@@ -1196,6 +1196,11 @@ input {
 	-webkit-box-orient: vertical;
 	overflow: hidden;
 }
+/* Before a summary the task has moved past (lib/summary.ts): when it was
+   written. Weight, not a fainter grey, which would fall below AA contrast. */
+.task-summary-note {
+	font-weight: 500;
+}
 /* An agent in the open task without the board tools (TaskDTO.boardToolsMissing). */
 .board-tools-note {
 	margin: 4px 0 6px;
