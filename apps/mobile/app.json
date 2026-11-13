@@ -29,7 +29,7 @@
 		"ios": {
 			"supportsTablet": true,
 			"bundleIdentifier": "com.clawnify.ateam",
-			"buildNumber": "34",
+			"buildNumber": "35",
 			"infoPlist": {
 				"ITSAppUsesNonExemptEncryption": false,
 				"UISupportedInterfaceOrientations~ipad": [
