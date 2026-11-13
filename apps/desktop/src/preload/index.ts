@@ -196,6 +196,7 @@ const host: AteamHost = {
 	canUpdateBoxes: () => ipcRenderer.invoke(HOST_CH.canUpdateBoxes),
 	appRelease: () => ipcRenderer.invoke(HOST_CH.appRelease),
 	boxGithub: () => ipcRenderer.invoke(HOST_CH.boxGithub),
+	boxCredentials: (alias) => ipcRenderer.invoke(HOST_CH.boxCredentials, alias),
 	pairingStatus: (alias) => ipcRenderer.invoke(HOST_CH.pairingStatus, alias),
 	pairingInvite: (alias) => ipcRenderer.invoke(HOST_CH.pairingInvite, alias),
 	pairingRevoke: (alias, id) => ipcRenderer.invoke(HOST_CH.pairingRevoke, alias, id),

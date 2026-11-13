@@ -1,5 +1,6 @@
 import {
 	type ConnectionDTO,
+	type CredentialsResult,
 	type GithubAccessDTO,
 	githubAccessProblem,
 	NEEDS_PAIRING,
@@ -229,7 +230,15 @@ const dateOf = (iso: string) =>
  * git identity and Tailscale's key expiry from one SSH probe (boxReadiness), read again
  * when the GitHub access or the port changes.
  */
-function BoxFinish({ row, access }: { row: BoxRow; access: GithubAccessDTO | undefined }) {
+function BoxFinish({
+	row,
+	access,
+	keys,
+}: {
+	row: BoxRow;
+	access: GithubAccessDTO | undefined;
+	keys: BoxKeys;
+}) {
 	const [ready, setReady] = useState<BoxReadiness | null>(null);
 	const [names, setNames] = useState<Record<string, string>>({});
 	const githubKey = JSON.stringify(access ?? null);
@@ -264,6 +273,8 @@ function BoxFinish({ row, access }: { row: BoxRow; access: GithubAccessDTO | und
 		(ready !== null && !ready.gitName) ||
 		agents.length === 0;
 	const first = agents.includes("claude") ? "claude" : agents[0];
+	// Optional, so it never turns "Ready for tasks" back into a to-do list.
+	const hasKey = keys && keys !== "failed" ? hasAiKey(keys) : null;
 
 	return (
 		<div className="box-card-section">
@@ -323,6 +334,13 @@ function BoxFinish({ row, access }: { row: BoxRow; access: GithubAccessDTO | und
 						</code>
 					</li>
 				)}
+				{/* No tick when a key is set: a key the provider refuses (an OpenRouter account
+				    that blocks the decision model, a revoked or capped key) reads the same here. */}
+				{hasKey === false ? (
+					<li className="todo">
+						Optional: no AI key, so finished tasks won't move to Needs you. Add one under AI keys.
+					</li>
+				) : null}
 			</ul>
 		</div>
 	);
@@ -418,6 +436,7 @@ export function BoxPage({
 	const note = actions.notes[row.alias];
 	const busy = actions.busy[row.alias];
 	const setup = useSetup(row.alias);
+	const keys = useBoxKeys(row.alias, row.state === "connected");
 	const canUpdate =
 		row.state === "connected" &&
 		row.engine === "behind" &&
@@ -476,7 +495,7 @@ export function BoxPage({
 			{setup && setup.state !== "done" ? (
 				<SetupProgress setup={setup} onDismiss={() => dismissSetup(row.alias)} />
 			) : row.state === "connected" ? (
-				<BoxFinish row={row} access={access} />
+				<BoxFinish row={row} access={access} keys={keys} />
 			) : null}
 			<div className="box-card-section">
 				<div className="box-card-label">Lead</div>
@@ -604,6 +623,10 @@ export function BoxPage({
 					<GithubAccess alias={row.alias} label={row.title} />
 				)}
 			</div>
+			<div className="box-card-section">
+				<div className="box-card-label">AI keys</div>
+				<BoxAiKeys keys={keys} connected={row.state === "connected"} />
+			</div>
 			<BoxDotfiles
 				alias={row.alias}
 				label={row.title}
@@ -612,6 +635,60 @@ export function BoxPage({
 			/>
 		</section>
 	);
+}
+
+/** A connected box's own key status: null while asking (or not connected), "failed"
+ *  when it couldn't say. */
+type BoxKeys = CredentialsResult | "failed" | null;
+
+function hasAiKey(keys: CredentialsResult): boolean {
+	return keys.openRouter.set || keys.openAi?.set === true;
+}
+
+/** Asked of the box itself (each box keeps its own keys), once per opening of its page. */
+function useBoxKeys(alias: string, connected: boolean): BoxKeys {
+	const [keys, setKeys] = useState<BoxKeys>(null);
+	useEffect(() => {
+		setKeys(null);
+		if (!connected) return;
+		let live = true;
+		window.ateamHost.boxCredentials(alias).then(
+			(r) => live && setKeys(r),
+			() => live && setKeys("failed"),
+		);
+		return () => {
+			live = false;
+		};
+	}, [alias, connected]);
+	return keys;
+}
+
+/**
+ * Which AI keys the box itself holds, asked of that box (each box keeps its own).
+ * With neither, nothing on it moves a finished task to Needs you, and nothing else
+ * on the board says why. Titles and summaries still come from Claude Code there.
+ */
+function BoxAiKeys({ keys, connected }: { keys: BoxKeys; connected: boolean }) {
+	if (!connected) {
+		return <div className="gh-access-muted">Connect to see which AI keys it has.</div>;
+	}
+	if (keys === null) return <div className="gh-access-muted">Checking…</div>;
+	if (keys === "failed") return <div className="gh-access-muted">Couldn't read its AI keys.</div>;
+	const held = [
+		keys.openAi?.set ? `OpenAI key …${keys.openAi.hint ?? ""}` : null,
+		keys.openRouter.set
+			? `OpenRouter key …${keys.openRouter.hint ?? ""}${keys.openRouter.source === "env" ? " (from OPENROUTER_API_KEY)" : ""}`
+			: null,
+	].filter((k): k is string => k !== null);
+	if (!hasAiKey(keys)) {
+		return (
+			<div className="gh-access-warn">
+				No AI key on this box: finished tasks won't move to Needs you when they wait on you. Add one
+				in Settings → AI on this Mac: it's copied to your boxes when sync is on.
+			</div>
+		);
+	}
+	return <div className="gh-access-muted">{held.join(" · ")}</div>;
 }
 
 /**

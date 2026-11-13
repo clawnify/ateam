@@ -2242,6 +2242,39 @@ export default function App() {
 	// Boxes locked from here this session: their open warning goes at once,
 	// before the next connect reports them paired.
 	const [lockedHere, setLockedHere] = useState<Set<string>>(() => new Set());
+	// Connected boxes that answered they hold no AI key at all (neither OpenAI nor
+	// OpenRouter): no decision model there moves a finished task to Needs you, so its
+	// Box settings say so. Asked once per connection, and again when that box's AI keys
+	// page closes. A box that can't say (an older engine, a failed call) shows nothing.
+	const [keyless, setKeyless] = useState<Set<string>>(() => new Set());
+	const keyChecked = useRef<Set<string>>(new Set());
+	const keysPageWas = useRef<string | null>(null);
+	useEffect(() => {
+		const closed = keysPageWas.current;
+		keysPageWas.current = aiKeysKey;
+		if (closed && closed !== aiKeysKey) keyChecked.current.delete(closed);
+		for (const k of [...keyChecked.current]) {
+			if (links[k]?.state !== "live") keyChecked.current.delete(k);
+		}
+		const mark = (k: string, none: boolean) =>
+			setKeyless((s) => {
+				if (s.has(k) === none) return s;
+				const next = new Set(s);
+				if (none) next.add(k);
+				else next.delete(k);
+				return next;
+			});
+		for (const [k, l] of Object.entries(links)) {
+			if (l.state !== "live" || keyChecked.current.has(k)) continue;
+			const api = link.conn(k)?.api;
+			if (!api) continue;
+			keyChecked.current.add(k);
+			api.credentials.get().then(
+				(r) => mark(k, !r.openRouter.set && !r.openAi?.set),
+				() => mark(k, false),
+			);
+		}
+	}, [links, aiKeysKey, link]);
 	const lockBox = useCallback(
 		async (box: SavedBox) => {
 			const key = boxKey(box);
@@ -2764,6 +2797,7 @@ export default function App() {
 				box={settingsBox}
 				connected={!!conn}
 				security={lockedHere.has(boxSettingsKey) ? "paired" : (conn?.pairing?.state ?? "unknown")}
+				noAiKey={!!conn && keyless.has(boxSettingsKey)}
 				onClose={() => {
 					setBoxSettingsKey(null);
 					setDotfilesKey(null);

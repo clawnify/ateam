@@ -25,7 +25,7 @@ export const AI_KEY_FIELDS: readonly AiKeyField[] = [
 		label: "OpenAI API key",
 		placeholder: "sk-…",
 		purpose:
-			"Calls with the Lead, and a small model that moves a finished task to Needs you when its agent is waiting on you.",
+			"Calls with the Lead, and a small model that moves a finished task to Needs you when its agent is waiting on you. OpenAI sets spend limits per project, so make the key in a project with a monthly limit (Project settings).",
 		console: {
 			url: "https://platform.openai.com/api-keys",
 			path: "platform.openai.com › API keys",
@@ -37,7 +37,8 @@ export const AI_KEY_FIELDS: readonly AiKeyField[] = [
 		field: "openRouterApiKey",
 		label: "OpenRouter API key",
 		placeholder: "sk-or-…",
-		purpose: "Does that sorting through OpenRouter instead. Not needed with an OpenAI key.",
+		purpose:
+			"Does that sorting through OpenRouter instead. Not needed with an OpenAI key. Set a credit limit on the key, and let your OpenRouter account use Jev or OpenAI models: its privacy or guardrail settings can block them.",
 		console: {
 			url: "https://openrouter.ai/settings/keys",
 			path: "openrouter.ai › Settings › API Keys",
