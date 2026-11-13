@@ -92,4 +92,23 @@ describe("the phone's WS listener", () => {
 		client.close();
 		listener.close();
 	});
+
+	it("logs each client coming and going, so a dropping phone shows on the box", async () => {
+		const logs: string[] = [];
+		const port = await freePort();
+		const listener = startWsListener({
+			host: "127.0.0.1",
+			port,
+			onConnection: () => {},
+			log: (l) => logs.push(l),
+		});
+		await waitFor(() => logs.some((l) => /listening on ws/.test(l)));
+		const client = new WebSocket(`ws://127.0.0.1:${port}`);
+		await waitFor(() => logs.some((l) => /ws client 127\.0\.0\.1 connected/.test(l)));
+		client.close();
+		await waitFor(() =>
+			logs.some((l) => /ws client 127\.0\.0\.1 closed after \d+s \(code \d+\)/.test(l)),
+		);
+		listener.close();
+	});
 });
