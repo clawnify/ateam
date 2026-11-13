@@ -1,4 +1,5 @@
-import type { AteamApi, PtyDataEvent } from "@ateam/protocol";
+import type { AteamApi, PtyDataEvent, PtySnapshot } from "@ateam/protocol";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { Terminal } from "@xterm/xterm";
 import { createRoot } from "react-dom/client";
 import { TerminalView } from "../src/renderer/src/components/Terminal";
@@ -23,7 +24,8 @@ Terminal.prototype.open = function (el) {
 let terminalId = "first";
 let seq = 0;
 let listener: ((event: PtyDataEvent) => void) | undefined;
-let snapshot = async () => ({ data: lines(400), seq });
+let snapshot: () => Promise<PtySnapshot> = async () => ({ data: lines(400), seq });
+const resizes: [number, number][] = [];
 window.ateam = {
 	pty: {
 		onData(fn: (event: PtyDataEvent) => void) {
@@ -34,7 +36,9 @@ window.ateam = {
 		},
 		snapshot: () => snapshot(),
 		write() {},
-		resize() {},
+		resize(_id: string, cols: number, rows: number) {
+			resizes.push([cols, rows]);
+		},
 	},
 } as unknown as AteamApi;
 
@@ -49,7 +53,16 @@ async function mount(id: string) {
 function assert(ok: boolean, message: string) {
 	if (!ok) throw new Error(message);
 }
-function bottom(label: string) {
+async function bottom(label: string) {
+	// Snapshot parsing and the following two animation frames can take longer
+	// than mount's delay when the full repository suite is using the CPU.
+	for (let attempt = 0; attempt < 100; attempt++) {
+		const { baseY, viewportY } = term.buffer.active;
+		const rowHeight = element(".xterm-screen").clientHeight / term.rows;
+		const scrollTop = element(".xterm-viewport").scrollTop;
+		if (baseY > 0 && viewportY === baseY && Math.abs(scrollTop - baseY * rowHeight) < 2) return;
+		await delay(10);
+	}
 	const { baseY, viewportY } = term.buffer.active;
 	assert(baseY > 0 && viewportY === baseY, `${label}: viewport ${viewportY}, bottom ${baseY}`);
 	const viewport = element(".xterm-viewport");
@@ -68,7 +81,45 @@ async function scrollUp() {
 
 async function run() {
 	await mount("first");
-	bottom("snapshot");
+	await bottom("snapshot");
+	const fitted = { cols: term.cols, rows: term.rows };
+	// OpenCode paints padded, coloured rows on the alternate screen. Replay
+	// them across a tile-width change: the old view wraps the padding, loses
+	// the top rows, and leaves the striped blanks from the reported screenshot.
+	for (const cols of [135, 66]) {
+		const source = new Terminal({ cols, rows: fitted.rows, allowProposedApi: true });
+		const serialize = new SerializeAddon();
+		source.loadAddon(serialize);
+		const frame = Array.from(
+			{ length: source.rows },
+			(_, i) => `\x1b[48;5;${i % 2 ? 235 : 236}m${`OpenCode row ${i}`.padEnd(cols, " ")}`,
+		).join("\r\n");
+		await new Promise<void>((resolve) => source.write(`\x1b[?1049h\x1b[H${frame}\x1b[H`, resolve));
+		const data = serialize.serialize();
+		snapshot = async () => ({ data, seq, cols, rows: source.rows });
+		await mount(`fullscreen-${cols}`);
+		for (
+			let attempt = 0;
+			attempt < 100 && (term.cols !== fitted.cols || term.rows !== fitted.rows);
+			attempt++
+		) {
+			await delay(10);
+		}
+		assert(
+			term.cols === fitted.cols && term.rows === fitted.rows,
+			`Restore must fit the tile afterward: ${term.cols}x${term.rows}, expected ${fitted.cols}x${fitted.rows}`,
+		);
+		for (let i = 0; i < term.rows; i++) {
+			assert(
+				term.buffer.active.getLine(i)?.translateToString(true).startsWith(`OpenCode row ${i}`) ===
+					true,
+				`Snapshot width ${cols}: row ${i} was wrapped or lost`,
+			);
+		}
+		source.dispose();
+	}
+	snapshot = async () => ({ data: lines(400), seq }); // old daemon compatibility
+	await mount("scrolling");
 	// An ED3 redraw split across writes races native scroll events in xterm 5.
 	// Vary the gap across a frame boundary; the unfixed view jumps to row zero.
 	for (let i = 0; i < 40; i++) {
@@ -78,7 +129,7 @@ async function run() {
 		await delay(i % 20);
 		send(lines(100));
 		await delay(80);
-		bottom(`split redraw ${i}`);
+		await bottom(`split redraw ${i}`);
 	}
 
 	const reading = await scrollUp();
@@ -92,7 +143,7 @@ async function run() {
 	await delay(100);
 	host.style.height = "500px";
 	await delay(100);
-	bottom("resize while following");
+	await bottom("resize while following");
 
 	// Input arriving between a write and its deferred correction cancels it.
 	send("\r\nqueued output");
@@ -100,16 +151,16 @@ async function run() {
 	await delay(100);
 	assert(term.buffer.active.viewportY === interrupted, "Queued follow must yield to the wheel");
 	await mount("second");
-	bottom("switch task");
+	await bottom("switch task");
 	await mount("first");
-	bottom("switch back");
+	await bottom("switch back");
 	host.style.display = "none";
 	await delay(100);
 	send(`\r\n${lines(20)}`);
 	await delay(100);
 	host.style.display = "flex";
 	await delay(120);
-	bottom("reveal after hidden output");
+	await bottom("reveal after hidden output");
 
 	// A late snapshot from the previous task must not write to a disposed xterm.
 	let resolveOld!: (value: { data: string; seq: number }) => void;
@@ -117,7 +168,9 @@ async function run() {
 		new Promise((resolve) => {
 			resolveOld = resolve;
 		});
+	const beforeSlow = resizes.length;
 	await mount("slow");
+	assert(resizes.length === beforeSlow, "Do not resize the PTY before its snapshot arrives");
 	const staleTerm = term;
 	snapshot = async () => ({ data: lines(400), seq });
 	await mount("current");
@@ -128,7 +181,7 @@ async function run() {
 	resolveOld({ data: "obsolete snapshot", seq });
 	await delay(100);
 	assert(staleWrites === 0, "Late snapshot must not write to a disposed terminal");
-	bottom("late snapshot");
+	await bottom("late snapshot");
 	send("\r\npending at unmount");
 	root.unmount();
 	let staleScrolls = 0;
@@ -137,7 +190,7 @@ async function run() {
 	};
 	await delay(100);
 	assert(staleScrolls === 0, "Unmount must cancel pending scroll corrections");
-	return "PASS: split redraws, manual scrolling, resize, task switches, hidden output and teardown";
+	return "PASS: snapshot dimensions, split redraws, manual scrolling, resize, task switches, hidden output and teardown";
 }
 
 (window as unknown as { runTerminalScrollTests: typeof run }).runTerminalScrollTests = run;
