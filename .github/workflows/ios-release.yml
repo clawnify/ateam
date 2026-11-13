@@ -1,0 +1,158 @@
+name: iOS release
+
+# Builds Ateam Go (apps/mobile) on a GitHub Mac and uploads it to TestFlight, so a
+# release needs no Mac of your own. Internal testers get every processed build;
+# submitting a build for App Store review is a separate, later step.
+#
+# Run it by hand from main (Actions > iOS release > Run workflow, or
+# `gh workflow run ios-release.yml`) after the PR that bumps `ios.buildNumber` in
+# apps/mobile/app.json has merged: App Store Connect refuses a build number twice.
+#
+# A PR that changes this file runs the same build unsigned, with no secrets, as
+# the check that the runner can still build the app.
+#
+# Signing is Xcode's cloud signing: no certificate or profile is stored anywhere.
+# xcodebuild asks App Store Connect for them with an API key, which must have the
+# Admin role (a lesser key can't use the cloud distribution certificate). The key
+# lives in the `ios-release` environment as three secrets:
+#   ASC_KEY_ID      the key's ID, e.g. ABC123DEFG
+#   ASC_ISSUER_ID   the issuer UUID shown above the key list
+#   ASC_KEY_P8      the contents of the downloaded AuthKey_<id>.p8 file
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/ios-release.yml
+
+concurrency:
+  group: ios-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TEAM_ID: X2VZX44YM2
+
+jobs:
+  check:
+    name: Build (unsigned)
+    if: github.event_name == 'pull_request'
+    # Pinned: Xcode 26.6 is this image's default. `macos-latest` moves on its own.
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.5
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          # SwiftTerm's .metal shaders need it, and it isn't part of Xcode itself.
+          xcodebuild -downloadComponent MetalToolchain
+      - name: Install
+        run: npm install --no-audit --no-fund --no-workspaces --legacy-peer-deps
+      - name: Prebuild
+        run: CI=1 npx expo prebuild -p ios --no-install
+      - name: Pods
+        run: cd ios && pod install
+      - name: Build
+        run: >
+          xcodebuild -workspace ios/AteamGo.xcworkspace -scheme AteamGo
+          -configuration Release -destination generic/platform=iOS
+          CODE_SIGNING_ALLOWED=NO build -quiet
+
+  release:
+    name: Build and upload to TestFlight
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    timeout-minutes: 90
+    environment: ios-release
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - name: Only from main
+        working-directory: .
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Releases are built from main, not $GITHUB_REF."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.5
+      - name: Version
+        run: |
+          node -e '
+            const { expo } = require("./app.json");
+            console.log(`Ateam Go ${expo.version} (${expo.ios.buildNumber})`);
+          ' | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: App Store Connect key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          if [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$ASC_KEY_P8" ]; then
+            echo "::error::Set ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 in the ios-release environment."
+            exit 1
+          fi
+          # altool only looks for the key in a few fixed folders; this is one.
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s\n' "$ASC_KEY_P8" > ~/.appstoreconnect/private_keys/AuthKey_"$ASC_KEY_ID".p8
+          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_"$ASC_KEY_ID".p8
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -downloadComponent MetalToolchain
+      - name: Install
+        run: npm install --no-audit --no-fund --no-workspaces --legacy-peer-deps
+      - name: Prebuild
+        run: CI=1 npx expo prebuild -p ios --no-install
+      - name: Pods
+        run: cd ios && pod install
+      - name: Archive
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: >
+          xcodebuild -workspace ios/AteamGo.xcworkspace -scheme AteamGo
+          -configuration Release -destination generic/platform=iOS
+          -archivePath build/AteamGo.xcarchive
+          DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic
+          -allowProvisioningUpdates
+          -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
+          -authenticationKeyID "$ASC_KEY_ID"
+          -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          archive -quiet
+      # A Mac that already holds the distribution certificate exports without the
+      # key. A fresh runner holds nothing, so the key is passed here too and Xcode
+      # signs with the cloud certificate.
+      - name: Export
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: >
+          xcodebuild -exportArchive -archivePath build/AteamGo.xcarchive
+          -exportPath build/export -exportOptionsPlist ExportOptions.plist
+          -allowProvisioningUpdates
+          -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
+          -authenticationKeyID "$ASC_KEY_ID"
+          -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+      - name: Upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: >
+          xcrun altool --upload-app -f build/export/AteamGo.ipa -t ios
+          --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+      - name: Remove the key
+        if: always()
+        run: rm -rf ~/.appstoreconnect
