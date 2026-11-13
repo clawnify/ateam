@@ -56,7 +56,7 @@ jobs:
           # SwiftTerm's .metal shaders need it, and it isn't part of Xcode itself.
           xcodebuild -downloadComponent MetalToolchain
       - name: Install
-        run: npm install --no-audit --no-fund --no-workspaces --legacy-peer-deps
+        run: npm ci --no-audit --no-fund --no-workspaces --legacy-peer-deps
       - name: Prebuild
         run: CI=1 npx expo prebuild -p ios --no-install
       - name: Pods
@@ -94,7 +94,7 @@ jobs:
             const { expo } = require("./app.json");
             console.log(`Ateam Go ${expo.version} (${expo.ios.buildNumber})`);
           ' | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: App Store Connect key
+      - name: Secrets are set
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -104,20 +104,28 @@ jobs:
             echo "::error::Set ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 in the ios-release environment."
             exit 1
           fi
-          # altool only looks for the key in a few fixed folders; this is one.
-          mkdir -p ~/.appstoreconnect/private_keys
-          printf '%s\n' "$ASC_KEY_P8" > ~/.appstoreconnect/private_keys/AuthKey_"$ASC_KEY_ID".p8
-          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_"$ASC_KEY_ID".p8
       - name: Toolchain
         run: |
           xcodebuild -version
           xcodebuild -downloadComponent MetalToolchain
       - name: Install
-        run: npm install --no-audit --no-fund --no-workspaces --legacy-peer-deps
+        run: npm ci --no-audit --no-fund --no-workspaces --legacy-peer-deps
       - name: Prebuild
         run: CI=1 npx expo prebuild -p ios --no-install
       - name: Pods
         run: cd ios && pod install
+      # Written only now: the install, prebuild and pod steps above run third-party
+      # install scripts, and none of them should find an Admin key on disk.
+      - name: App Store Connect key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          # altool only looks for the key in a few fixed folders; this is one.
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s\n' "$ASC_KEY_P8" > ~/.appstoreconnect/private_keys/AuthKey_"$ASC_KEY_ID".p8
+          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_"$ASC_KEY_ID".p8
       - name: Archive
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
