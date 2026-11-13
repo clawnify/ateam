@@ -43,7 +43,18 @@ export function startWsListener(opts: {
 		});
 		current = server;
 		server.on("upgrade", (req, sock, head) => {
-			wss.handleUpgrade(req, sock, head, (ws) => wss.emit("connection", ws, req));
+			wss.handleUpgrade(req, sock, head, (ws) => {
+				// One line per client coming and going: without it, "the phone keeps
+				// dropping" can't be told from "the phone never arrived" on the box.
+				const peer = req.socket.remoteAddress ?? "?";
+				const since = Date.now();
+				opts.log(`[ateam] ws client ${peer} connected`);
+				ws.once("close", (code: number) => {
+					const secs = Math.round((Date.now() - since) / 1000);
+					opts.log(`[ateam] ws client ${peer} closed after ${secs}s (code ${code})`);
+				});
+				wss.emit("connection", ws, req);
+			});
 		});
 		server.on("listening", () => {
 			// A bind that lands after close() must not leave a server behind.
