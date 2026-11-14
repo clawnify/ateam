@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { NEEDS_PAIRING, PROTOCOL_VERSION, WOKEN_CONNECT_MS } from "@ateam/protocol";
 import { awayOf, type BoxLink, boxKey, NO_PROVIDER_HINT } from "./boxes";
 import type { Connection } from "./connection";
-import { type Clock, createLinks, type LinkDeps, REWAKE_MS } from "./links";
+import { type Clock, createLinks, type LinkDeps, REWAKE_MS, SETTLE_MS } from "./links";
 import type { SavedConnection } from "./storage";
 
 // Lets every promise chain started so far run to its next real wait.
@@ -568,7 +568,7 @@ test("a box that connecting wakes is dialled once something on it is opened", as
 	expect(h.calls).toHaveLength(1);
 });
 
-test("a box that should be up is tried at least every 15 s, however long it has been away", async () => {
+test("a box that should be up is tried at least every 15 s while it may be settling", async () => {
 	const h = harness();
 	h.setBoxes([plain]);
 	h.links.holdAll();
@@ -614,6 +614,86 @@ test("a box that sleeps keeps the steady pace: no retry wakes it", async () => {
 	}
 	expect(awayOf(h.state()[key(sleepy)])).toBe("asleep");
 	expect(h.wakes).toEqual([]);
+});
+
+test("a box that stays away is tried less and less, down to every 10 min", async () => {
+	const h = harness();
+	h.setBoxes([sleepy]);
+	h.links.holdAll();
+	await settle();
+	const timedOut = new Error("connection timed out after 15000ms");
+	let dials = 1;
+	for (const wait of [5_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 600_000]) {
+		h.calls.at(-1)?.reject(timedOut);
+		await settle();
+		await h.fc.advance(wait - 1);
+		expect(h.calls).toHaveLength(dials);
+		await h.fc.advance(1);
+		expect(h.calls).toHaveLength(++dials);
+	}
+});
+
+test("a box that should be up but stays away past 5 min drops to the steady pace", async () => {
+	const h = harness();
+	h.setBoxes([plain]);
+	h.links.holdAll();
+	await settle();
+	const timedOut = new Error("connection timed out after 15000ms");
+	// Every dial fails at once: 5 s, then every 15 s, until 5 min have gone by.
+	for (let left = SETTLE_MS + 15_000; left > 0; left -= 1_000) {
+		h.calls.at(-1)?.reject(timedOut);
+		await settle();
+		await h.fc.advance(1_000);
+	}
+	h.calls.at(-1)?.reject(timedOut);
+	await settle();
+	const before = h.calls.length;
+	await h.fc.advance(9 * 60_000);
+	expect(h.calls).toHaveLength(before);
+	await h.fc.advance(60_000);
+	expect(h.calls).toHaveLength(before + 1);
+});
+
+test("coming to the foreground doesn't dial a sleeping box again, or reset its pace", async () => {
+	const h = harness();
+	h.setBoxes([sleepy]);
+	h.links.holdAll();
+	await settle();
+	const timedOut = new Error("connection timed out after 15000ms");
+	h.calls.at(-1)?.reject(timedOut);
+	await settle();
+	await h.fc.advance(5_000);
+	h.calls.at(-1)?.reject(timedOut);
+	await settle();
+	expect(h.calls).toHaveLength(2);
+	// Its next try is 15 s out. The app comes to the front three times meanwhile.
+	for (let i = 0; i < 3; i++) {
+		h.links.foreground();
+		await settle();
+		await h.fc.advance(1_000);
+	}
+	expect(h.calls).toHaveLength(2);
+	await h.fc.advance(12_000);
+	expect(h.calls).toHaveLength(3);
+	// Someone asking for it still reaches it at once.
+	h.calls.at(-1)?.reject(timedOut);
+	await settle();
+	h.links.ensure(key(sleepy));
+	await settle();
+	expect(h.calls).toHaveLength(4);
+});
+
+test("coming to the foreground still redials at once a box that dropped a moment ago", async () => {
+	const h = harness();
+	h.setBoxes([plain]);
+	h.links.holdAll();
+	await settle();
+	h.calls.at(-1)?.reject(new Error("connection timed out after 15000ms"));
+	await settle();
+	expect(h.calls).toHaveLength(1);
+	h.links.foreground();
+	await settle();
+	expect(h.calls).toHaveLength(2);
 });
 
 test("verify drops a socket that no longer answers, and leaves the reaching to the caller", async () => {
