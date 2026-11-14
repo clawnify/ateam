@@ -136,6 +136,8 @@ export interface LinkDeps {
 	onConnected(key: string, conn: Connection): Promise<void> | void;
 	/** Where every link stands, after each change. */
 	onLinks(links: Record<string, BoxLink>): void;
+	/** What happened to a box's link, for the phone's connection log (src/conn-log.ts). */
+	log?(key: string, event: string): void;
 	clock?: Clock;
 }
 
@@ -217,6 +219,7 @@ export function createLinks(deps: LinkDeps): Links {
 			: state[key]?.asleep
 				? reconnectDelay(n)
 				: Math.min(AWAY_RETRY_CAP_MS, reconnectDelay(n));
+		deps.log?.(key, `next try in ${Math.round(delay / 1000)} s`);
 		timers.set(
 			key,
 			clock.after(delay, () => {
@@ -259,6 +262,7 @@ export function createLinks(deps: LinkDeps): Links {
 		const snap = deps.lastBoard(key);
 		deps.fleet.detach(key, snap ? { snapshot: snap, label: deps.labelOf(key) } : null);
 		set(key, (l) => ({ ...l, state: "down", error: CONNECTION_LOST, asleep: false }));
+		deps.log?.(key, "link dropped");
 		backoff.set(key, 0);
 		if (again) void reconnect(key);
 	}
@@ -296,6 +300,8 @@ export function createLinks(deps: LinkDeps): Links {
 		};
 		// The last failure stays until this try ends: the box is still away meanwhile.
 		set(key, (l) => ({ ...l, state: "connecting", asked: opts.wake === true, steps: [] }));
+		const began = clock.now();
+		deps.log?.(key, opts.wake ? "dialling (asked for)" : "dialling");
 		const step = (f: (steps: ConnectStep[]) => ConnectStep[]) =>
 			set(key, (l) => ({ ...l, steps: f(l.steps) }));
 		let stopTick: (() => void) | null = null;
@@ -387,6 +393,7 @@ export function createLinks(deps: LinkDeps): Links {
 			if (opts.save) deps.save(box, opts.replaces);
 			conns.set(key, c);
 			deps.fleet.attach(key, c.rpc);
+			deps.log?.(key, `connected in ${clock.now() - began} ms`);
 			backoff.set(key, 0);
 			await deps.prepare?.(key, c);
 			const version = c.info.protocolVersion;
@@ -407,12 +414,16 @@ export function createLinks(deps: LinkDeps): Links {
 		} catch (err) {
 			if (paused || conns.has(key)) return conns.has(key);
 			// Cancel (or forget) has put the card where it belongs already.
-			if (attempt.cancelled) return false;
+			if (attempt.cancelled) {
+				deps.log?.(key, "dial cancelled");
+				return false;
+			}
 			// Another try at this box is still running (a tap waking it while a try
 			// from the background timed out): the card is that one's to show.
 			if ([...tries].some((a) => a !== attempt)) return false;
 			step(failActive);
 			const msg = err instanceof Error ? err.message : String(err);
+			deps.log?.(key, `dial failed after ${clock.now() - began} ms: ${msg}`);
 			// A locked box's refusal stays exact: the card offers a code field for it.
 			const said =
 				msg === NEEDS_PAIRING
@@ -480,7 +491,11 @@ export function createLinks(deps: LinkDeps): Links {
 				const c = conns.get(key);
 				void (async () => {
 					if (c) {
-						if (await c.ping()) return;
+						if (await c.ping()) {
+							deps.log?.(key, "foreground: socket answers");
+							return;
+						}
+						deps.log?.(key, "foreground: socket dead");
 						drop(key, c, false);
 					}
 					backoff.set(key, 0);
@@ -493,6 +508,7 @@ export function createLinks(deps: LinkDeps): Links {
 			if (!c) return false;
 			if (await c.ping()) return true;
 			// Not tried again from here: the caller reaches it next, waking it if need be.
+			deps.log?.(key, "no answer before a send: socket dead");
 			drop(key, c, false);
 			return false;
 		},

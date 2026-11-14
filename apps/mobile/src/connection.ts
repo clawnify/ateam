@@ -99,6 +99,8 @@ export interface ConnectOptions {
 	onClose?: () => void;
 	/** This phone's device token for the box, when it is paired with it (v29). */
 	token?: string;
+	/** What the socket did, for the phone's connection log (src/conn-log.ts). */
+	log?: (event: string) => void;
 	/** The waits below, shortened by a test. */
 	timing?: { stallProbeMs?: number; pingTimeoutMs?: number };
 }
@@ -164,13 +166,17 @@ export async function connect(
 	// is still classified correctly (the throw path below sets `intentional`).
 	let intentional = false;
 	let gone = false;
+	// Set by `shut`: a close that follows is this file's doing, not the socket's own.
+	let shutting = false;
 	wire.transport.onClose?.(() => {
 		gone = true;
+		if (!intentional && !shutting) opts.log?.("socket closed on its own");
 		if (!intentional) opts.onClose?.();
 	});
 	// The socket is closed and declared gone at once: the calls in flight reject and
 	// `onClose` fires now, not when (if ever) the socket's own close event arrives.
 	const shut = () => {
+		shutting = true;
 		clearInterval(keepalive);
 		client.close();
 		wire.kill();
@@ -178,14 +184,17 @@ export async function connect(
 	let keepalive: ReturnType<typeof setInterval> | undefined;
 	// One probe at a time: a timed handshake, the socket shut if it goes unanswered.
 	let probing = false;
-	const probe = () => {
+	const probe = (why: string) => {
 		if (probing || gone) return;
 		probing = true;
 		withTimeout(serverHandshake(raw), pingMs).then(
 			() => {
 				probing = false;
 			},
-			() => shut(),
+			() => {
+				if (!gone) opts.log?.(`no answer in ${pingMs} ms (${why}): socket closed`);
+				shut();
+			},
 		);
 	};
 	// Every call the app makes goes through here. One that is slow to answer has the
@@ -196,7 +205,7 @@ export async function connect(
 		call(method, args) {
 			if (gone) return Promise.reject(new Error(RPC_CLOSED));
 			const p = raw.call(method, args);
-			const timer = setTimeout(probe, stallMs);
+			const timer = setTimeout(() => probe(`${method} unanswered for ${stallMs} ms`), stallMs);
 			const done = () => clearTimeout(timer);
 			p.then(done, done);
 			return p;
@@ -228,7 +237,7 @@ export async function connect(
 	// timeout with no close event — a later RPC then hangs forever. A periodic cheap
 	// call (system:hello) keeps outbound traffic flowing so the mapping stays live.
 	// 15s is well under typical NAT/WireGuard (25s) timeouts. Cleared on close.
-	keepalive = setInterval(probe, 15_000);
+	keepalive = setInterval(() => probe("keepalive"), 15_000);
 
 	// The box's browser view answers on the box's tailnet address, the same host
 	// this socket dialed, so the engine's port is all it takes to reach it.
