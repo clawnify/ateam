@@ -53,6 +53,21 @@ export const WAITED_RETRY_CAP_MS = 15_000;
 // after it could be reached again. Retries only run while the app is open (iOS
 // suspends it), so the pace costs nothing in the background.
 export const AWAY_RETRY_CAP_MS = 15_000;
+// ...for this long after it stopped answering. Past it the box is simply off, and
+// it gets the steady pace like one that sleeps.
+export const SETTLE_MS = 5 * 60_000;
+// The steady pace goes on past reconnectDelay's 2 min for a box that stays away:
+// every dial of a machine that is off makes the phone's tunnel look for it again,
+// for nothing. A tap on its card still reaches it at once.
+export const LONG_AWAY_DELAYS_MS = [5 * 60_000, 10 * 60_000];
+const STEADY_STEPS = 5; // reconnectDelay's own steps, up to its 2 min
+
+/** The pace for a box that sleeps or is off: reconnectDelay, then on to 10 min. */
+export function steadyDelay(attempt: number): number {
+	if (attempt < STEADY_STEPS) return reconnectDelay(attempt);
+	const i = Math.min(attempt - STEADY_STEPS, LONG_AWAY_DELAYS_MS.length - 1);
+	return LONG_AWAY_DELAYS_MS[i] ?? 600_000;
+}
 
 // One try at reaching a box. Every wait in it (the wake call, a dial, the gap
 // between dials) races `stopped`, so Cancel ends the try at once rather than after
@@ -191,6 +206,8 @@ export function createLinks(deps: LinkDeps): Links {
 	const backoff = new Map<string, number>();
 	const timers = new Map<string, () => void>();
 	const lastWakeAt = new Map<string, number>();
+	// When each box's current run of failed tries began.
+	const awaySince = new Map<string, number>();
 	// Boxes whose wait Cancel stopped: not retried until a try is asked for again.
 	const stopped = new Set<string>();
 	let state: Record<string, BoxLink> = {};
@@ -207,17 +224,23 @@ export function createLinks(deps: LinkDeps): Links {
 		timers.delete(key);
 	};
 
-	// Soon, then at a steady pace (reconnectDelay): the pace for a box that sleeps,
+	// Whether the box has been away long enough to count as off, not as settling.
+	const longAway = (key: string): boolean =>
+		clock.now() - (awaySince.get(key) ?? clock.now()) >= SETTLE_MS;
+
+	// Soon, then at a steady pace (steadyDelay): the pace for a box that sleeps,
 	// which no retry wakes. One that should be up is tried at least every
-	// AWAY_RETRY_CAP_MS, and one someone waits on sooner still.
+	// AWAY_RETRY_CAP_MS while it may be settling (SETTLE_MS), and one someone waits
+	// on sooner still.
 	function retry(key: string): void {
 		if (paused || conns.has(key) || timers.has(key) || stopped.has(key) || !boxOf(key)) return;
 		const n = backoff.get(key) ?? 0;
 		backoff.set(key, n + 1);
+		if (n === 0) awaySince.set(key, clock.now());
 		const delay = deps.waitedOn(key)
 			? Math.min(WAITED_RETRY_CAP_MS, 1_000 * 2 ** n)
-			: state[key]?.asleep
-				? reconnectDelay(n)
+			: state[key]?.asleep || longAway(key)
+				? steadyDelay(n)
 				: Math.min(AWAY_RETRY_CAP_MS, reconnectDelay(n));
 		deps.log?.(key, `next try in ${Math.round(delay / 1000)} s`);
 		timers.set(
@@ -482,13 +505,17 @@ export function createLinks(deps: LinkDeps): Links {
 		},
 		// The sockets iOS suspended in the background are usually dead with no close
 		// event, so each is probed and only redialled if the probe fails. Only a box
-		// someone waits on is woken.
+		// someone waits on is woken. A box that sleeps or has long been away, with its
+		// next try set, keeps its pace: the app comes to the front many times a minute
+		// (a banner, the app switcher), and each one used to dial every such box again.
 		foreground() {
 			if (paused) return;
 			for (const box of deps.boxes()) {
 				const key = boxKey(box);
 				if (attempts.has(key)) continue;
 				const c = conns.get(key);
+				const off = state[key]?.asleep || longAway(key);
+				if (!c && off && timers.has(key) && !deps.waitedOn(key)) continue;
 				void (async () => {
 					if (c) {
 						if (await c.ping()) {
@@ -526,6 +553,7 @@ export function createLinks(deps: LinkDeps): Links {
 		forget(key) {
 			clearTimer(key);
 			backoff.delete(key);
+			awaySince.delete(key);
 			lastWakeAt.delete(key);
 			stopped.delete(key);
 			for (const a of attempts.get(key) ?? []) a.stop();
