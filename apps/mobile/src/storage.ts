@@ -34,6 +34,25 @@ export async function saveCallNotice(): Promise<void> {
 	}
 }
 
+// The connection log (src/conn-log.ts) as it stood, so a restart doesn't lose it.
+const CONN_LOG_KEY = "ateam.connLog";
+
+export async function loadConnLog(): Promise<string | null> {
+	try {
+		return await AsyncStorage.getItem(CONN_LOG_KEY);
+	} catch {
+		return null;
+	}
+}
+
+export async function saveConnLog(raw: string): Promise<void> {
+	try {
+		await AsyncStorage.setItem(CONN_LOG_KEY, raw);
+	} catch {
+		// The log is a diagnostic: failing to keep it costs nothing else.
+	}
+}
+
 export interface SavedConnection {
 	host: string;
 	port: string;

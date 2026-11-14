@@ -634,3 +634,23 @@ test("verify drops a socket that no longer answers, and leaves the reaching to t
 	await settle();
 	expect(h.calls).toHaveLength(1);
 });
+
+test("the connection log follows a box through a drop, a failed dial and the next try", async () => {
+	const events: string[] = [];
+	const h = harness({ log: (k, e) => void events.push(`${k === key(plain) ? "plain" : k}: ${e}`) });
+	const tried = h.links.connect(plain);
+	h.calls[0]?.resolve(fakeConn());
+	expect(await tried).toBe(true);
+	h.calls[0]?.onClose();
+	await settle();
+	h.calls[1]?.reject(new Error("connection timed out after 15000ms"));
+	await settle();
+	expect(events).toEqual([
+		"plain: dialling",
+		"plain: connected in 0 ms",
+		"plain: link dropped",
+		"plain: dialling",
+		"plain: dial failed after 0 ms: connection timed out after 15000ms",
+		"plain: next try in 5 s",
+	]);
+});

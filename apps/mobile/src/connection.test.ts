@@ -128,11 +128,15 @@ describe("a half-open socket", () => {
 		close() {}
 	}
 	const real = globalThis.WebSocket;
-	const dial = (onClose: () => void) => {
+	const dial = (onClose: () => void, log?: (event: string) => void) => {
 		muted = false;
 		slowMs = 0;
 		globalThis.WebSocket = HalfOpen as never;
-		return connect("ws://box:8787", { onClose, timing: { stallProbeMs: 20, pingTimeoutMs: 20 } });
+		return connect("ws://box:8787", {
+			onClose,
+			log,
+			timing: { stallProbeMs: 20, pingTimeoutMs: 20 },
+		});
 	};
 	afterAll(() => {
 		globalThis.WebSocket = real;
@@ -152,6 +156,24 @@ describe("a half-open socket", () => {
 		expect(await c.ping()).toBe(false);
 		c.close();
 		expect(drops).toBe(1);
+	});
+
+	test("the log says which call went unanswered, and nothing when the app closes it", async () => {
+		const events: string[] = [];
+		const c = await dial(
+			() => {},
+			(e) => events.push(e),
+		);
+		muted = true;
+		await expect(c.rpc.call("tasks:list")).rejects.toThrow("RPC connection closed");
+		expect(events).toEqual(["no answer in 20 ms (tasks:list unanswered for 20 ms): socket closed"]);
+		const quiet: string[] = [];
+		const d = await dial(
+			() => {},
+			(e) => quiet.push(e),
+		);
+		d.close();
+		expect(quiet).toEqual([]);
 	});
 
 	test("a slow call on a socket that still answers carries on", async () => {

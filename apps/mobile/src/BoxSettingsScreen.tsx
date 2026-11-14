@@ -3,6 +3,7 @@ import Feather from "@expo/vector-icons/Feather";
 import { useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { boxSubtitle, boxTitle, connectionOf, type SavedBox } from "./boxes";
+import { ConnLogSheet } from "./ConnLogSheet";
 import { ProviderIcon } from "./ProviderIcon";
 import { C, CONTENT_MAX } from "./theme";
 
@@ -30,6 +31,7 @@ export function BoxSettingsScreen({
 	onConnection: () => void;
 }) {
 	const connection = connectionOf(box);
+	const [logOpen, setLogOpen] = useState(false);
 	return (
 		<View style={styles.root}>
 			<View style={styles.header}>
@@ -72,7 +74,22 @@ export function BoxSettingsScreen({
 							</View>
 							<Feather name="chevron-right" size={18} color={C.muted} />
 						</Pressable>
+						<Pressable
+							style={({ pressed }) => [styles.row, styles.divider, pressed && styles.pressed]}
+							onPress={() => setLogOpen(true)}
+							accessibilityRole="button"
+							accessibilityLabel="Connection log"
+							accessibilityHint="Shows what this phone saw of its connections"
+						>
+							<Feather name="activity" size={20} color={C.muted} />
+							<View style={styles.rowText}>
+								<Text style={styles.rowTitle}>Connection log</Text>
+								<Text style={styles.note}>Each connect and drop this phone saw, to share</Text>
+							</View>
+							<Feather name="chevron-right" size={18} color={C.muted} />
+						</Pressable>
 					</View>
+					<ConnLogSheet visible={logOpen} onClose={() => setLogOpen(false)} />
 					<Text style={styles.sectionTitle}>Configuration</Text>
 					<View style={styles.group}>
 						{(

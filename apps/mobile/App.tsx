@@ -89,6 +89,7 @@ import {
 import { Composer, type ComposerSubmit, type RunOn } from "./src/Composer";
 import { ConsentScreen } from "./src/ConsentScreen";
 import { CreateBoxScreen } from "./src/CreateBoxScreen";
+import { connLog } from "./src/conn-log";
 import { connect, mobileNative, RPC_CLOSED, redeemPairing } from "./src/connection";
 import { DotfilesScreen } from "./src/DotfilesScreen";
 import { demoConnection } from "./src/demo";
@@ -124,6 +125,7 @@ import {
 	loadBoards,
 	loadBoxes,
 	loadBoxToken,
+	loadConnLog,
 	loadConsent,
 	loadDismissedSkew,
 	loadLeadBox,
@@ -137,6 +139,7 @@ import {
 	saveBoard,
 	saveBoxes,
 	saveBoxToken,
+	saveConnLog,
 	saveConsent,
 	saveDismissedSkew,
 	saveLeadBox,
@@ -1393,7 +1396,11 @@ export default function App() {
 			fleet,
 			// With this phone's token for the box, when it is paired with a locked one.
 			dial: async (_url, onClose, box) =>
-				connect(box, { onClose, token: box.ssh ? undefined : await loadBoxToken(boxKey(box)) }),
+				connect(box, {
+					onClose,
+					token: box.ssh ? undefined : await loadBoxToken(boxKey(box)),
+					log: (event) => connLog.add(boxTitle(box), event),
+				}),
 			boxes: () => boxesRef.current,
 			consented: () => consented.current,
 			askConsent: (then) => hooks.current.askConsent(then),
@@ -1405,6 +1412,7 @@ export default function App() {
 			prepare: (key, c) => hooks.current.prepare(key, c),
 			onConnected: (key, c) => hooks.current.onConnected(key, c),
 			onLinks: setLinks,
+			log: (key, event) => connLog.add(hooks.current.labelOf(key), event),
 		}),
 	);
 	// Each box's board as last seen (src/storage.ts), what stands in while it's away.
@@ -1766,6 +1774,7 @@ export default function App() {
 	useEffect(() => {
 		const sub = AppState.addEventListener("change", (s) => {
 			if (demo.current) return;
+			connLog.add(null, `app ${s}`);
 			if (s === "background") {
 				for (const key of link.liveKeys()) keepBoard(key, boardRef.current);
 				return;
@@ -1774,6 +1783,34 @@ export default function App() {
 		});
 		return () => sub.remove();
 	}, [link, keepBoard]);
+
+	// The connection log outlives a restart: what the last run kept goes back under
+	// this one's, and each change is written a second later (a drop logs in bursts).
+	useEffect(() => {
+		let timer: ReturnType<typeof setTimeout> | null = null;
+		let off = () => {};
+		let gone = false;
+		const save = () => {
+			if (timer) return;
+			timer = setTimeout(() => {
+				timer = null;
+				void saveConnLog(connLog.serialize());
+			}, 1_000);
+		};
+		connLog.add(null, "app started");
+		// Nothing is written until the kept log is back, or it would be overwritten.
+		void loadConnLog().then((raw) => {
+			if (gone) return;
+			connLog.restore(raw);
+			off = connLog.subscribe(save);
+			save();
+		});
+		return () => {
+			gone = true;
+			off();
+			if (timer) clearTimeout(timer);
+		};
+	}, []);
 
 	// The app itself going (a reload in development): every socket closed, every try stopped.
 	useEffect(() => () => link.pause(), [link]);
