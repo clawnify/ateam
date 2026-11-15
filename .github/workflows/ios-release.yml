@@ -4,9 +4,11 @@ name: iOS release
 # release needs no Mac of your own. Internal testers get every processed build;
 # submitting a build for App Store review is a separate, later step.
 #
-# Run it by hand from main (Actions > iOS release > Run workflow, or
-# `gh workflow run ios-release.yml`) after the PR that bumps `ios.buildNumber` in
-# apps/mobile/app.json has merged: App Store Connect refuses a build number twice.
+# It runs by itself when a push to main changes the version or `ios.buildNumber`
+# in apps/mobile/app.json, so merging the PR that bumps the build number is the
+# release. Any other change to that file starts nothing: App Store Connect refuses
+# a build number twice. It can still be run by hand from main (Actions > iOS
+# release > Run workflow, or `gh workflow run ios-release.yml`).
 #
 # A PR that changes this file runs the same build unsigned, with no secrets, as
 # the check that the runner can still build the app.
@@ -21,6 +23,10 @@ name: iOS release
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - apps/mobile/app.json
   pull_request:
     paths:
       - .github/workflows/ios-release.yml
@@ -67,9 +73,54 @@ jobs:
           -configuration Release -destination generic/platform=iOS
           CODE_SIGNING_ALLOWED=NO build -quiet
 
+  # Decided on a Linux runner, so a push that leaves the build alone costs seconds,
+  # not a Mac, and never opens the ios-release environment.
+  bump:
+    name: New build number?
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          build() {
+            node -e '
+              const { expo } = JSON.parse(require("fs").readFileSync(0, "utf8"));
+              console.log(`${expo.version} (${expo.ios.buildNumber})`);
+            '
+          }
+          now=$(build < apps/mobile/app.json)
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "Run by hand: releasing $now." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Without the commit main was at before, there is nothing to compare with,
+          # and uploading a build number a second time only fails 20 minutes later.
+          if ! git fetch --quiet --depth=1 origin "$BEFORE" ||
+            ! was=$(git show "$BEFORE:apps/mobile/app.json" | build); then
+            echo "::warning::Can't read app.json before this push. Run the workflow by hand to release $now."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$was" = "$now" ]; then
+            echo "Still $now: nothing to release." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$was -> $now: releasing." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
     name: Build and upload to TestFlight
-    if: github.event_name == 'workflow_dispatch'
+    needs: bump
+    if: needs.bump.outputs.release == 'true'
     runs-on: macos-26
     timeout-minutes: 90
     environment: ios-release
