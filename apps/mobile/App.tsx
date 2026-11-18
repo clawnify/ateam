@@ -118,6 +118,7 @@ import type { SSHSetup } from "./src/provider-setup";
 import { ScanQrIcon } from "./src/ScanQrIcon";
 import { emptySSHForm, SSHFields, type SSHForm, savedSSHForm, saveSSHForm } from "./src/SSHFields";
 import { SSHPreview } from "./src/SSHPreview";
+import { type SwipeAction, SwipeActions, swipeAccessibility } from "./src/SwipeActions";
 import { useScrollFade } from "./src/scroll-fade";
 import { prepareSSH } from "./src/ssh";
 import { parseSSHLink } from "./src/ssh-link";
@@ -152,6 +153,7 @@ import {
 import { type Tab, TabStrip } from "./src/TabStrip";
 import { TerminalScreen } from "./src/TerminalScreen";
 import { STATUS_BAR, TopFade } from "./src/TopFade";
+import { taskSwipeActions } from "./src/task-actions";
 import { sortTasks } from "./src/task-order";
 import { useBoxCreation } from "./src/useBoxCreation";
 import { useLeadBadge } from "./src/useLeadBadge";
@@ -261,16 +263,29 @@ function TaskCard({
 	tint,
 	place,
 	onOpen,
+	actions,
 }: {
 	task: TaskDTO;
 	tint: string;
 	/** Where it runs (src/HomeScreen.tsx TaskPlace). */
 	place: TaskPlace;
 	onOpen: () => void;
+	/** Its swipe actions, offered to VoiceOver here (the swipe itself wraps the card). */
+	actions: SwipeAction[];
 }) {
 	const where = placeText(place);
+	const a11y = swipeAccessibility(actions);
 	return (
-		<Pressable style={[styles.card, place.away && styles.cardAway]} onPress={onOpen} hitSlop={2}>
+		<Pressable
+			style={[styles.card, place.away && styles.cardAway]}
+			onPress={onOpen}
+			hitSlop={2}
+			accessibilityRole="button"
+			accessibilityActions={actions.length ? a11y.accessibilityActions : undefined}
+			onAccessibilityAction={
+				actions.length ? (e) => a11y.onAccessibilityAction(e, onOpen) : undefined
+			}
+		>
 			<View style={styles.cardTop}>
 				<AgentTag agent={task.agentId ?? "·"} />
 				<Text style={styles.cardName} numberOfLines={2}>
@@ -830,6 +845,9 @@ function Shell({
 	onTab,
 	loops,
 	onNewLoop,
+	onNewTask,
+	newTaskSeq,
+	onTaskGone,
 	onEditLoop,
 	onLoopsChanged,
 	openTask,
@@ -868,6 +886,12 @@ function Shell({
 	agents: AgentDTO[];
 	/** Every task on every box. */
 	tasks: TaskDTO[];
+	/** The sidebar's + beside Tasks: the composer is asked to take the keyboard. */
+	onNewTask: () => void;
+	/** Counts those asks (Composer `newTaskSeq`). */
+	newTaskSeq: number;
+	/** A task was deleted or archived from its swipe: it leaves the board now. */
+	onTaskGone: (id: string) => void;
 	/** The selected project's tasks, from every box it's on. */
 	shown: TaskDTO[];
 	/** Where a task runs: its box when it isn't the Lead's, and whether that box is away. */
@@ -945,6 +969,8 @@ function Shell({
 		onLead(false);
 	};
 	const [sidebarOrder, setSidebarOrder] = useState<string[]>([]);
+	// The Board card swiped open, if any: one at a time.
+	const [swipedCard, setSwipedCard] = useState<string | null>(null);
 	const [missionSession, setMissionSession] = useState<SessionDTO | undefined>();
 	useEffect(() => {
 		if (!openTask) setMissionSession(undefined);
@@ -1042,6 +1068,13 @@ function Shell({
 								onTab("loops");
 							}}
 							onNewLoop={onNewLoop}
+							onNewTask={() => {
+								// The composer lives under the board: go there and hand it the keyboard.
+								leaveDetail();
+								onTab("board");
+								onNewTask();
+							}}
+							onTaskGone={onTaskGone}
 						/>
 					</View>
 				)}
@@ -1189,6 +1222,10 @@ function Shell({
 							showsVerticalScrollIndicator={false}
 							keyboardShouldPersistTaps="handled"
 							{...scrollProps}
+							onScrollBeginDrag={(e) => {
+								setSwipedCard(null);
+								scrollProps.onScrollBeginDrag?.(e);
+							}}
 						>
 							<View style={styles.contentColumn}>
 								{loading && shown.length === 0 ? (
@@ -1211,15 +1248,31 @@ function Shell({
 													<Text style={styles.eyebrow}>{col.label}</Text>
 													<Text style={styles.eyebrowCount}>{inCol.length}</Text>
 												</View>
-												{inCol.map((t) => (
-													<TaskCard
-														key={t.id}
-														task={t}
-														tint={col.tint}
-														place={placeOf(t)}
-														onOpen={() => onOpenTask(t)}
-													/>
-												))}
+												{inCol.map((t) => {
+													const place = placeOf(t);
+													// A task whose box is asleep or not answering can't be
+													// changed from here.
+													const actions = place.away
+														? []
+														: taskSwipeActions(api, t, { gone: onTaskGone });
+													return (
+														<SwipeActions
+															key={t.id}
+															style={styles.cardSwipe}
+															actions={actions}
+															open={swipedCard === t.id}
+															onOpenChange={(open) => setSwipedCard(open ? t.id : null)}
+														>
+															<TaskCard
+																task={t}
+																tint={col.tint}
+																place={place}
+																onOpen={() => onOpenTask(t)}
+																actions={actions}
+															/>
+														</SwipeActions>
+													);
+												})}
 											</View>
 										);
 									})
@@ -1237,6 +1290,7 @@ function Shell({
 							onSelectProject={onSelectProject}
 							placeOf={placeOf}
 							onAddProject={onAddProject}
+							onTaskGone={onTaskGone}
 							tasks={shown}
 							loops={loops}
 							loading={loading}
@@ -1321,6 +1375,7 @@ function Shell({
 							onOpenSnack={onOpenSnack}
 							onDismissSnack={onDismissSnack}
 							runOn={runOn}
+							newTaskSeq={newTaskSeq}
 						/>
 					)}
 				</View>
@@ -1603,6 +1658,14 @@ export default function App() {
 		if (next) setLoops(next);
 	}, [board]);
 
+	// A task left the board: its row and card go, and its terminal if it was open.
+	const dropTask = useCallback((id: string) => {
+		setTasks((prev) => (prev.some((t) => t.id === id) ? prev.filter((t) => t.id !== id) : prev));
+		setOpenTask((t) => (t?.id === id ? null : t));
+	}, []);
+	// The sidebar's + beside Tasks asks the composer to take the keyboard (Composer `newTaskSeq`).
+	const [newTaskSeq, setNewTaskSeq] = useState(0);
+
 	// Live updates: merge each pushed task in place (replace by id, or prepend if new).
 	// The board's RPC fans in every live box and survives their reconnects (src/fleet.ts).
 	useEffect(() => {
@@ -1619,12 +1682,15 @@ export default function App() {
 				return next;
 			});
 		});
+		// Deleted, or archived (a box says both this way), from here or anywhere else.
+		const offRemoved = board.events.onTaskRemoved(dropTask);
 		const offLoops = board.loops.onUpdated(() => void refreshLoops());
 		return () => {
 			off();
+			offRemoved();
 			offLoops();
 		};
-	}, [view, board, fleet, boxByKey, refreshLoops]);
+	}, [view, board, fleet, boxByKey, refreshLoops, dropTask]);
 
 	// Consent state. A ref (not state) because connects read it synchronously and must
 	// not be re-created when it flips, which would retrigger the effects that depend on it.
@@ -3068,6 +3134,9 @@ export default function App() {
 				placeOf={placeOf}
 				loading={loading}
 				creating={creating}
+				onNewTask={() => setNewTaskSeq((n) => n + 1)}
+				newTaskSeq={newTaskSeq}
+				onTaskGone={dropTask}
 				snack={startedTask ? `Started ${startedTask.name}` : leadSent ? "Sent to the Lead" : asked}
 				onOpenSnack={() => {
 					// The list copy has the launch's newer status, if it has arrived.
@@ -3565,8 +3634,9 @@ const styles = StyleSheet.create({
 		borderColor: C.line,
 		borderRadius: 8,
 		padding: 12,
-		marginBottom: 8,
 	},
+	// Around a card: clips what its swipe uncovers to the card's corners.
+	cardSwipe: { borderRadius: 8, marginBottom: 8 },
 	// From a box that's asleep or not answering: its board as last seen.
 	cardAway: { opacity: 0.55 },
 	cardTop: { flexDirection: "row", alignItems: "flex-start", gap: 9 },

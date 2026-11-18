@@ -32,6 +32,8 @@ import {
 import { AgentIcon } from "./AgentIcon";
 import type { ScrollFadeProps } from "./scroll-fade";
 import { SIDEBAR_STATUSES, SidebarViewMenu } from "./SidebarViewMenu";
+import { type SwipeAction, SwipeActions, swipeAccessibility } from "./SwipeActions";
+import { taskSwipeActions } from "./task-actions";
 import { tagsFor, taskIconName } from "./task-tags";
 import { C, CONTENT_MAX } from "./theme";
 
@@ -92,11 +94,14 @@ function TaskRow({
 	sidebar = false,
 	rail = false,
 	selected = false,
+	actions = [],
 }: {
 	task: TaskDTO;
 	place: TaskPlace;
 	onPress: () => void;
 	onLongPress?: () => void;
+	/** Its swipe actions, offered to VoiceOver here (the swipe itself wraps the row). */
+	actions?: SwipeAction[];
 	sidebar?: boolean;
 	/** Desktop-style icon-only navigation; only used in the sidebar. */
 	rail?: boolean;
@@ -104,6 +109,7 @@ function TaskRow({
 }) {
 	const tags = tagsFor(task);
 	const where = placeText(place);
+	const a11y = swipeAccessibility(actions);
 	return (
 		<Pressable
 			style={[
@@ -119,6 +125,10 @@ function TaskRow({
 			accessibilityRole="button"
 			accessibilityLabel={rail ? [task.name, where].filter(Boolean).join(", ") : undefined}
 			accessibilityState={{ selected }}
+			accessibilityActions={actions.length ? a11y.accessibilityActions : undefined}
+			onAccessibilityAction={
+				actions.length ? (e) => a11y.onAccessibilityAction(e, onPress) : undefined
+			}
 		>
 			<View style={styles.icon}>
 				{task.agentId ? (
@@ -225,6 +235,8 @@ export function HomeScreen({
 	onOpenTask,
 	onOpenLoops,
 	onNewLoop,
+	onNewTask,
+	onTaskGone,
 	scrollProps,
 	topInset = 0,
 	sidebar = false,
@@ -246,6 +258,11 @@ export function HomeScreen({
 	onOpenTask: (task: TaskDTO) => void;
 	onOpenLoops: () => void;
 	onNewLoop: () => void;
+	/** The way to the composer, for the sidebar: a + beside Tasks. Absent on the
+	 *  phone's Home, where the composer sits right under the list. */
+	onNewTask?: () => void;
+	/** A task was deleted or archived from its swipe: it leaves the board now. */
+	onTaskGone: (id: string) => void;
 	/** The list's scrolling, for what floats over it (scroll-fade.ts). */
 	scrollProps?: ScrollFadeProps;
 	/** The floating top bar's height: the list scrolls under it and starts below it. */
@@ -267,6 +284,10 @@ export function HomeScreen({
 	const [loopsOpen, setLoopsOpen] = useState(true);
 	const [archived, setArchived] = useState<TaskDTO[]>([]);
 	const [archiveError, setArchiveError] = useState<string | null>(null);
+	// Bumped when a swipe archives or restores a task, to read the archived list again.
+	const [archiveTick, setArchiveTick] = useState(0);
+	// The task row swiped open, if any: one at a time.
+	const [swiped, setSwiped] = useState<string | null>(null);
 	const [readError, setReadError] = useState<string | null>(null);
 	const [marking, setMarking] = useState(false);
 	const [readAt, setReadAt] = useState<Record<string, number | null>>({});
@@ -306,6 +327,7 @@ export function HomeScreen({
 		.map((m) => m.id)
 		.sort()
 		.join(" ");
+	// biome-ignore lint/correctness/useExhaustiveDependencies: archiveTick asks for another read
 	useEffect(() => {
 		if (!view.showArchived) {
 			setArchived([]);
@@ -332,7 +354,7 @@ export function HomeScreen({
 			cancelled = true;
 			off();
 		};
-	}, [api, projectIds, view.showArchived]);
+	}, [api, projectIds, view.showArchived, archiveTick]);
 	const loopTaskIds = useMemo(() => new Set(loops.map((l) => l.taskId).filter(Boolean)), [loops]);
 	const ordered = useMemo(() => {
 		const all = [
@@ -420,6 +442,10 @@ export function HomeScreen({
 			contentContainerStyle={[styles.content, { paddingTop: topInset + 6 }]}
 			scrollIndicatorInsets={{ top: topInset }}
 			{...scrollProps}
+			onScrollBeginDrag={(e) => {
+				setSwiped(null);
+				scrollProps?.onScrollBeginDrag?.(e);
+			}}
 		>
 			<View style={styles.column}>
 				<View style={[styles.sectionHead, rail && styles.railSectionHead]}>
@@ -522,6 +548,17 @@ export function HomeScreen({
 						marking={marking}
 						error={archiveError ?? readError}
 					/>
+					{onNewTask && !rail && (
+						<Pressable
+							style={[styles.sortBtn, sidebar && styles.sidebarHit]}
+							onPress={onNewTask}
+							hitSlop={6}
+							accessibilityLabel="New task"
+							accessibilityRole="button"
+						>
+							<Feather name="plus" size={16} color={C.muted} />
+						</Pressable>
+					)}
 				</View>
 				{(archiveError || readError) && !rail && (
 					<Text style={styles.emptyText}>{archiveError ?? readError}</Text>
@@ -560,22 +597,43 @@ export function HomeScreen({
 									</Pressable>
 								)}
 								{(rail || !view.collapsed.includes(group.key)) &&
-									group.tasks.map((t) => (
-										<TaskRow
-											key={t.id}
-											task={t}
-											place={placeOf(t)}
-											onPress={() => onOpenTask(t)}
-											onLongPress={
-												sort === "custom" && group.tasks.length > 1
-													? () => moveTask(t, group.tasks)
-													: undefined
-											}
-											sidebar={sidebar}
-											rail={rail}
-											selected={t.id === selectedTaskId}
-										/>
-									))}
+									group.tasks.map((t) => {
+										// The rail's rows are icons, too narrow to slide; a task whose box
+										// is asleep or not answering can't be changed from here.
+										const actions =
+											rail || placeOf(t).away
+												? []
+												: taskSwipeActions(api, t, {
+														gone: (id) => {
+															setArchived((prev) => prev.filter((x) => x.id !== id));
+															onTaskGone(id);
+														},
+														changed: () => setArchiveTick((n) => n + 1),
+													});
+										return (
+											<SwipeActions
+												key={t.id}
+												actions={actions}
+												open={swiped === t.id}
+												onOpenChange={(open) => setSwiped(open ? t.id : null)}
+											>
+												<TaskRow
+													task={t}
+													place={placeOf(t)}
+													onPress={() => onOpenTask(t)}
+													onLongPress={
+														sort === "custom" && group.tasks.length > 1
+															? () => moveTask(t, group.tasks)
+															: undefined
+													}
+													sidebar={sidebar}
+													rail={rail}
+													selected={t.id === selectedTaskId}
+													actions={actions}
+												/>
+											</SwipeActions>
+										);
+									})}
 							</View>
 						))
 					))}

@@ -47,6 +47,9 @@ import { useKeyboardVisible } from "./useKeyboardVisible";
 // that remounts (a tab switch) starts on it with no flicker.
 let lastTarget: ComposerTarget | null = null;
 
+// The newest "new task" ask a composer has answered (its `newTaskSeq` prop).
+let answeredNewTask = 0;
+
 const C = {
 	surface: "#141418",
 	sunken: "#1c1c22",
@@ -99,6 +102,7 @@ export function Composer({
 	onOpenSnack,
 	onDismissSnack,
 	runOn,
+	newTaskSeq = 0,
 }: {
 	agents: AgentDTO[];
 	busy: boolean;
@@ -116,6 +120,9 @@ export function Composer({
 	onDismissSnack: () => void;
 	/** The Run on choice; absent when the project is on one box. */
 	runOn?: RunOn;
+	/** Counts asks for a new task from elsewhere (the sidebar's +): each one turns
+	 *  the switch to Task and takes the keyboard. */
+	newTaskSeq?: number;
 }) {
 	// Prefer an installed agent; fall back to claude so the picker is never empty
 	// even when the box's availability probe came back empty (non-login daemon).
@@ -157,6 +164,15 @@ export function Composer({
 		void saveComposerTarget(t);
 	};
 	const toLead = target === "lead" && lead !== undefined;
+	// The composer may only be mounting now (the ask came from over a terminal), so
+	// what was already answered is kept outside it. Not saved as the remembered target.
+	const inputRef = useRef<TextInput>(null);
+	useEffect(() => {
+		if (newTaskSeq <= answeredNewTask) return;
+		answeredNewTask = newTaskSeq;
+		setTargetState("task");
+		inputRef.current?.focus();
+	}, [newTaskSeq]);
 	const switchOpacity = useRef(new Animated.Value(1)).current;
 	useEffect(() => {
 		Animated.timing(switchOpacity, {
@@ -345,6 +361,7 @@ export function Composer({
 			    the field becomes an explicit task-name input (clearly labelled). */}
 					{agentMode && !toLead ? <Text style={styles.fieldLabel}>TASK NAME</Text> : null}
 					<TextInput
+						ref={inputRef}
 						style={styles.input}
 						placeholder={
 							toLead ? "Ask the Lead" : agentMode ? "Name this task" : "What do you want to do?"
