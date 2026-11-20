@@ -49,7 +49,9 @@
 # prebuilt node-pty fork — so the box needs a Node whose ABI both ship binaries
 # for, and NO compiler. Node 22 is the version this is proven on; if the box has
 # nothing suitable, nvm + node 22 are installed into the user's home.
+install_main() {
 set -euo pipefail
+export -n -f install_main
 
 REPO="clawnify/ateam"
 APP_DIR="$HOME/ateam-app"
@@ -90,7 +92,14 @@ else
 	SVC_MGR=none
 fi
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+install_state() { printf '%s\n' "$1" > "$APP_DIR/install-state.tmp"; mv "$APP_DIR/install-state.tmp" "$APP_DIR/install-state"; }
+finish_install() {
+    rc=$?
+    if [ "$rc" = 0 ]; then install_state ready; else install_state "failed:$rc"; fi
+    rm -rf "$TMP"
+}
+trap finish_install EXIT
+install_state preparing
 
 step() { printf '\n==> %s\n' "$1"; }
 info() { printf '    %s\n' "$1"; }
@@ -108,14 +117,35 @@ RPC_SOCK="${ATEAM_RPC_SOCK:-$HOME/.ateam/rpc.sock}"
 # `|| true` earns its place: pgrep exits 1 when nothing matches, and under
 # `pipefail` that becomes the substitution's status, which would trip `set -e` on
 # the ordinary "no daemon running" case.
-daemon_pid() { pgrep -f "$DAEMON_PAT" 2>/dev/null | head -1 || true; }
+daemon_pid() { pgrep -u "$(id -u)" -f "$DAEMON_PAT" 2>/dev/null | head -1 || true; }
 
-# One `system:hello` through the same relay a real client uses, so what this
-# reports is what a client would see. `attach` is a persistent relay: it never
-# self-exits after replying, so cap it and keep the first line.
+# A one-shot RPC probe. It never starts an engine, retries until the socket is
+# listening, and exits immediately after validating the activated release.
 handshake() {
-	printf '{"t":"req","id":1,"method":"system:hello","args":[]}\n' |
-		timeout 25 bash -lc 'ateam attach --stdio' 2>/dev/null | head -1 || true
+    timeout 25 "$NODE" - "$RPC_SOCK" "$APP_DIR/package.json" <<'NODE' || true
+const net = require('node:net');
+const expected = require(process.argv[3]).version;
+function dial() {
+    const socket = net.connect(process.argv[2]);
+    let input = '';
+    socket.setEncoding('utf8');
+    socket.on('connect', () => socket.write(JSON.stringify({t:'req', id:1, method:'system:hello', args:[]}) + '\n'));
+    socket.on('error', () => { socket.destroy(); setTimeout(dial, 100); });
+    socket.on('data', chunk => {
+        input += chunk;
+        const end = input.indexOf('\n');
+        if (end < 0) return;
+        try {
+            const reply = JSON.parse(input.slice(0, end));
+            if (!reply.ok || !reply.result?.protocolVersion || reply.result.release !== expected) process.exit(1);
+            console.log(JSON.stringify(reply));
+            socket.destroy();
+            process.exit(0);
+        } catch { process.exit(1); }
+    });
+}
+dial();
+NODE
 }
 
 if [ "$(id -u)" = 0 ]; then die "run this as the user that will own the agents, not as root"; fi
@@ -191,14 +221,15 @@ tar -xzf "$TARBALL" -C "$TMP"
 for f in cli.js daemon.js package.json; do
 	[ -f "$TMP/$f" ] || die "malformed tarball: missing $f"
 done
+# Refuse an old payload before touching the running install: it cannot honor
+# the startup barrier or connect-only verification required by this installer.
+"$NODE" -e 'if (require(process.argv[1]).ateamLifecycle !== 1) process.exit(1)' "$TMP/package.json" ||
+    die "this server release predates coordinated startup; use a release containing lifecycle version 1"
 
-step "[3/7] install to $APP_DIR"
-mkdir -p "$APP_DIR" "$BIN_DIR"
-cp "$TMP/cli.js" "$TMP/daemon.js" "$TMP/package.json" "$APP_DIR/"
-# Older pinned releases predate desktop control; keep their engine install valid.
-if [ -f "$TMP/desktop.js" ]; then cp "$TMP/desktop.js" "$APP_DIR/"; fi
-if [ -f "$TMP/desktop-wallpaper.png" ]; then cp "$TMP/desktop-wallpaper.png" "$APP_DIR/"; fi
-if [ -f "$TMP/install-browser.sh" ]; then cp "$TMP/install-browser.sh" "$APP_DIR/"; fi
+step "[3/7] prepare the installation"
+mkdir -p "$BIN_DIR"
+# Prepare the complete payload before stopping the current engine.
+# The startup gate below protects activation of these files.
 
 # ------------------------------------------------------------- natives -------
 
@@ -208,11 +239,11 @@ NPM="$(dirname "$NODE")/npm"
 [ -x "$NPM" ] || NPM="$(command -v npm || true)"
 [ -n "$NPM" ] || die "npm not found beside $NODE"
 
-natives_load() { (cd "$APP_DIR" && "$NODE" -e 'require("better-sqlite3");require("node-pty")' >/dev/null 2>&1); }
+natives_load() { (cd "$TMP" && "$NODE" -e 'require("better-sqlite3");require("node-pty")' >/dev/null 2>&1); }
 
 step "[4/7] install native modules (prebuilt — no compiler needed)"
-(cd "$APP_DIR" && PATH="$(dirname "$NODE"):$PATH" "$NPM" install --omit=dev --no-audit --no-fund >/dev/null 2>&1) ||
-	die "npm install failed in $APP_DIR"
+(cd "$TMP" && PATH="$(dirname "$NODE"):$PATH" "$NPM" install --omit=dev --no-audit --no-fund >/dev/null 2>&1) ||
+	die "npm install failed in staging directory $TMP"
 
 if ! natives_load; then
 	# The known failure: a Node newer than the prebuilds cover (node-pty has no
@@ -221,48 +252,10 @@ if ! natives_load; then
 	install_node22
 	NODE="$(find_node)"
 	NPM="$(dirname "$NODE")/npm"
-	(cd "$APP_DIR" && PATH="$(dirname "$NODE"):$PATH" "$NPM" install --omit=dev --no-audit --no-fund >/dev/null 2>&1)
+	(cd "$TMP" && PATH="$(dirname "$NODE"):$PATH" "$NPM" install --omit=dev --no-audit --no-fund >/dev/null 2>&1)
 	natives_load || die "native modules still fail to load under $("$NODE" --version)"
 fi
 info "better-sqlite3 + node-pty load OK"
-
-# -------------------------------------------------------------- launcher ----
-
-step "[5/7] install the 'ateam' launcher on the login PATH"
-# Node is pinned by absolute path: the launcher must use the SAME runtime the
-# natives were installed for, whatever a login shell's PATH happens to resolve.
-printf '#!/bin/sh\nexec %s "%s/cli.js" "$@"\n' "$NODE" "$APP_DIR" >"$BIN_DIR/ateam"
-chmod +x "$BIN_DIR/ateam"
-
-# Clients connect with `bash -lc 'exec ateam attach --stdio'`, so what matters is
-# the LOGIN shell's PATH. Bash reads only the first of these that exists.
-if ! bash -lc 'command -v ateam' >/dev/null 2>&1; then
-	PROFILE="$HOME/.profile"
-	for f in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
-		if [ -f "$f" ]; then
-			PROFILE="$f"
-			break
-		fi
-	done
-	{
-		echo ''
-		echo '# added by the ateam installer'
-		echo 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac'
-	} >>"$PROFILE"
-	info "added ~/.local/bin to the login PATH via $PROFILE"
-	bash -lc 'command -v ateam' >/dev/null 2>&1 || die "ateam still not on the login PATH ($PROFILE)"
-fi
-info "login shell resolves: $(bash -lc 'command -v ateam')"
-
-# Before the service starts, so a box that comes up locked lets that device in. An
-# engine older than `--add-device` says so and leaves the box as it was.
-if [ -n "${ATEAM_PAIR_DEVICE:-}" ]; then
-	if "$BIN_DIR/ateam" pair --add-device "$ATEAM_PAIR_DEVICE" --label "${ATEAM_PAIR_LABEL:-Phone}"; then
-		info "paired with ${ATEAM_PAIR_LABEL:-Phone}"
-	else
-		info "WARNING: couldn't pair ${ATEAM_PAIR_LABEL:-Phone} with this box"
-	fi
-fi
 
 # ------------------------------------------------------------ tailscale -----
 
@@ -366,8 +359,8 @@ fi
 # scope (so a user to system upgrade keeps it), the Sprite's service, the address
 # file. Only then the caller's ATEAM_WS_ADDR_DEFAULT.
 #
-# Written to the file BEFORE the old daemon stops, so the one the verify step
-# starts, and any later `ateam attach` spawn, serves the phone too. An address kept
+# Written to the file BEFORE the old daemon stops, so its replacement
+# and any later `ateam attach` spawn serve the phone too. An address kept
 # only in a service's environment was lost by every daemon started any other way.
 WS_ADDR="${ATEAM_WS_ADDR:-}"
 WS_FROM="ATEAM_WS_ADDR"
@@ -435,25 +428,6 @@ case "$WS_ADDR" in
 	;;
 esac
 
-# ------------------------------------------------------------ browser -------
-
-# Only an explicit request installs it. New-box clients pass --browser by
-# default; reconnects and engine upgrades do not change the user's choice.
-# Before starting the engine: a phone can launch its first task as soon as the
-# engine answers. Never fetch main's script for a different/pinned engine release.
-if [ "$WANT_BROWSER" = 1 ]; then
-	step "install the browser (--browser)"
-	mkdir -p "$DATA_DIR"
-	if [ ! -f "$TMP/install-browser.sh" ]; then
-		info "WARNING: this engine release has no bundled browser installer; update Ateam to include the browser"
-	elif ATEAM_DATA_DIR="$DATA_DIR" bash "$APP_DIR/install-browser.sh" >"$DATA_DIR/browser-install.log" 2>&1; then
-		info "browser ready"
-	else
-		info "WARNING: browser setup failed; terminal work is available. See $DATA_DIR/browser-install.log and retry from the Browser panel"
-		tail -5 "$DATA_DIR/browser-install.log"
-	fi
-fi
-
 # ------------------------------------------------------ Sprite service ------
 
 # On a Sprite the service must own the engine and must never be restarted.
@@ -467,7 +441,7 @@ fi
 # An older service that execs the engine directly is moved to the loop, but only
 # while no agent runs, since moving it means deleting it. No commas: sprite-env
 # splits --args on them.
-KEEPER=': ateam-keeper; while :; do s=$SECONDS; ateam daemon; if [ $((SECONDS - s)) -lt 10 ]; then sleep 30; else sleep 1; fi; done'
+KEEPER=': ateam-keeper; while :; do s=$SECONDS; ateam daemon --supervised; if [ $((SECONDS - s)) -lt 10 ]; then sleep 30; else sleep 1; fi; done'
 SPRITE_PLAN=""
 # "<exists> <is the keeper> <pid sprite-env has for it, or ->", each 0/1.
 sprite_service() {
@@ -508,7 +482,29 @@ fi
 
 # ------------------------------------------------------------- restart ------
 
-step "[6/7] stop the daemon still running the old dist"
+# Serialize only activation with daemon initialization. Existing sessions hold
+# no startup gate. The outer install lock still covers staging through verification.
+exec 9>"$APP_DIR/startup.lock"
+flock -x 9
+install_state activating
+# Publish the guarded CLI atomically BEFORE stopping legacy processes. An older
+# attach already in flight spawns its absolute cli.js path, bypassing the launcher;
+# that path must now load the guarded version, not resurrect the legacy engine
+# between our stop and activation. Native modules are staged and activated below.
+mkdir -p "$APP_DIR"
+cp "$TMP/cli.js" "$APP_DIR/.cli-next.js"
+mv "$APP_DIR/.cli-next.js" "$APP_DIR/cli.js"
+# Publish supervisor ownership before stopping the old daemon. Reconnecting
+# clients must never fill this gap with an out-of-service engine.
+if [ "$SVC_MGR" = sprite ] && { [ "$SPRITE_PLAN" = keeper ] || [ "$SPRITE_PLAN" = create ] || [ "$SPRITE_PLAN" = migrate ]; }; then
+    printf 'sprite\n' > "$APP_DIR/service-owner"
+elif [ "$SVC_MGR" = systemd ] && { [ "$WANT_SERVICE" = 1 ] || [ -f "$SYS_UNIT" ] || [ -f "$USER_UNIT" ]; }; then
+    WANT_SERVICE=1
+    if sudo -n true 2>/dev/null; then OWNER=system; else OWNER=user; fi
+    printf '%s\n' "$OWNER" > "$APP_DIR/service-owner"
+fi
+
+step "[5/7] stop the daemon still running the old dist"
 # An upgrade that does not restart is not an upgrade. A running daemon holds its
 # code in MEMORY, so overwriting cli.js above changes nothing about what it
 # serves: the box keeps answering `system:hello` with the PREVIOUS protocol
@@ -520,25 +516,96 @@ step "[6/7] stop the daemon still running the old dist"
 # start, and it only idle-exits once it has neither sessions nor clients. Clients
 # see a blip and no more: the desktop reconnects over SSH, the phone reattaches.
 #
-# Stopped rather than restarted, because nothing needs to own the socket yet: the
-# verify below spawns one from the NEW dist (which is what `ateam attach` does
-# when none is live), and the service step hands that to systemd right after. A
-# Sprite's service is deliberately left alone; the service step says why.
+# Stop the old engine while the startup gate excludes replacements. The chosen
+# supervisor starts the new payload after activation; verification is connect-only.
+# A Sprite's keeper itself is deliberately left alone.
 OLD_PID="$(daemon_pid)"
 if [ -n "$OLD_PID" ]; then
-	pkill -f "$DAEMON_PAT" 2>/dev/null || true
-	sleep 1
+	pkill -u "$(id -u)" -f "$DAEMON_PAT" 2>/dev/null || true
+    for _ in $(seq 1 100); do
+        [ -z "$(daemon_pid)" ] && break
+        sleep 0.1
+    done
+    [ -z "$(daemon_pid)" ] || die "old daemon did not stop; installation was not activated"
 	info "stopped the old daemon (pid $OLD_PID); its agents keep running"
 	# Under systemd this does NOT come back on its own: SIGTERM is one of the signals
 	# systemd counts as a clean exit, so `Restart=on-failure` leaves the unit stopped
-	# until the service step below restarts it. A run that dies in between leaves the
-	# box served by whatever engine starts next (the verify step's, or the next
-	# `ateam attach`), outside systemd but still on the phone's address, from the
-	# file written above. Whatever starts from here on runs the dist installed
-	# above; the verify below asserts it.
+	# until the service step below restarts it. If activation is interrupted, the
+	# durable state refuses startup until a retry completes the installation.
 else
 	info "no daemon was running"
 fi
+
+# No daemon can start until the complete staged payload is in place. An
+# interrupted activation leaves a non-ready state and is repaired by a retry.
+mkdir -p "$APP_DIR"
+cp "$TMP/daemon.js" "$TMP/package.json" "$APP_DIR/"
+# Optional assets introduced by newer server releases.
+for asset in desktop.js desktop-wallpaper.png install-browser.sh; do
+    if [ -f "$TMP/$asset" ]; then cp "$TMP/$asset" "$APP_DIR/"; fi
+done
+rm -rf "$APP_DIR/node_modules"
+mv "$TMP/node_modules" "$APP_DIR/node_modules"
+# -------------------------------------------------------------- launcher ----
+
+step "[6/7] install the 'ateam' launcher on the login PATH"
+# Node is pinned by absolute path: the launcher must use the SAME runtime the
+# natives were installed for, whatever a login shell's PATH happens to resolve.
+printf '#!/bin/sh\nexec %s "%s/cli.js" "$@"\n' "$NODE" "$APP_DIR" >"$BIN_DIR/ateam"
+chmod +x "$BIN_DIR/ateam"
+
+# Clients connect with `bash -lc 'exec ateam attach --stdio'`, so what matters is
+# the LOGIN shell's PATH. Bash reads only the first of these that exists.
+if ! bash -lc 'command -v ateam' >/dev/null 2>&1; then
+	PROFILE="$HOME/.profile"
+	for f in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+		if [ -f "$f" ]; then
+			PROFILE="$f"
+			break
+		fi
+	done
+	{
+		echo ''
+		echo '# added by the ateam installer'
+		echo 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac'
+	} >>"$PROFILE"
+	info "added ~/.local/bin to the login PATH via $PROFILE"
+	bash -lc 'command -v ateam' >/dev/null 2>&1 || die "ateam still not on the login PATH ($PROFILE)"
+fi
+info "login shell resolves: $(bash -lc 'command -v ateam')"
+
+# Before the service starts, so a box that comes up locked lets that device in. An
+# engine older than `--add-device` says so and leaves the box as it was.
+if [ -n "${ATEAM_PAIR_DEVICE:-}" ]; then
+	if "$BIN_DIR/ateam" pair --add-device "$ATEAM_PAIR_DEVICE" --label "${ATEAM_PAIR_LABEL:-Phone}"; then
+		info "paired with ${ATEAM_PAIR_LABEL:-Phone}"
+	else
+		info "WARNING: couldn't pair ${ATEAM_PAIR_LABEL:-Phone} with this box"
+	fi
+fi
+
+
+# ------------------------------------------------------------ browser -------
+
+# Only an explicit request installs it. New-box clients pass --browser by
+# default; reconnects and engine upgrades do not change the user's choice.
+# Before starting the engine: a phone can launch its first task as soon as the
+# engine answers. Never fetch main's script for a different/pinned engine release.
+if [ "$WANT_BROWSER" = 1 ]; then
+	step "install the browser (--browser)"
+	mkdir -p "$DATA_DIR"
+	if [ ! -f "$TMP/install-browser.sh" ]; then
+		info "WARNING: this engine release has no bundled browser installer; update Ateam to include the browser"
+	elif ATEAM_DATA_DIR="$DATA_DIR" bash "$APP_DIR/install-browser.sh" >"$DATA_DIR/browser-install.log" 2>&1; then
+		info "browser ready"
+	else
+		info "WARNING: browser setup failed; terminal work is available. See $DATA_DIR/browser-install.log and retry from the Browser panel"
+		tail -5 "$DATA_DIR/browser-install.log"
+	fi
+fi
+
+install_state starting
+exec 9>&-
 
 if [ "$SPRITE_PLAN" = migrate ]; then
 	step "move the Sprite service to the keeper loop (no agent is running)"
@@ -550,7 +617,7 @@ if [ "$SPRITE_PLAN" = migrate ] || [ "$SPRITE_PLAN" = create ]; then
 	info "the ateam service now keeps the engine running, and starts it when the Sprite boots"
 fi
 # Under the keeper the new engine comes from the loop. Wait for it to own the
-# socket, or the handshake's `ateam attach` would spawn a second one outside it.
+# socket before reporting service readiness.
 if [ "$SPRITE_PLAN" = keeper ] || [ "$SPRITE_PLAN" = migrate ] || [ "$SPRITE_PLAN" = create ]; then
 	KEPT=""
 	for _ in $(seq 1 40); do
@@ -561,25 +628,6 @@ if [ "$SPRITE_PLAN" = keeper ] || [ "$SPRITE_PLAN" = migrate ] || [ "$SPRITE_PLA
 		sleep 1
 	done
 	if [ -z "$KEPT" ]; then die "the Sprite's keeper loop didn't bring the engine up: sprite-env services get ateam"; fi
-fi
-
-# -------------------------------------------------------------- verify ------
-
-step "[7/7] verify the handshake"
-# Spawns a daemon from the dist just installed, so this proves the NEW code runs
-# on this box's Node (where an ABI break surfaces) and prints the version every
-# client will now see.
-HELLO="$(handshake)"
-case "$HELLO" in
-*protocolVersion*) info "OK  $HELLO" ;;
-*) die "handshake failed: ${HELLO:-<no reply>}" ;;
-esac
-# The one assertion that catches a silent no-op upgrade: the process answering
-# must not be the one that predates this install. A handshake alone cannot tell
-# the difference, which is why every stale box still reported a healthy install.
-NEW_PID="$(daemon_pid)"
-if [ -n "$OLD_PID" ] && [ "$NEW_PID" = "$OLD_PID" ]; then
-	die "pid $OLD_PID survived, so this box is still serving the OLD dist: stop it and re-run"
 fi
 
 # ------------------------------------------------------------------ gh ------
@@ -620,8 +668,7 @@ fi
 # the first `ateam attach`, which is enough for the desktop but NOT for the phone:
 # the WebSocket only exists once a daemon is already running, and nothing brings
 # one back after a reboot. A box that already runs the engine as a service keeps
-# it on a plain re-run, instead of being left on the verify step's daemon outside
-# it (how PR #283 found boxes).
+# it on a plain re-run; reconnects must continue using that supervisor.
 if [ "$WANT_SERVICE" = 0 ] && [ "$SVC_MGR" = systemd ] && { [ -f "$SYS_UNIT" ] || [ -f "$USER_UNIT" ]; }; then
 	WANT_SERVICE=1
 fi
@@ -689,7 +736,7 @@ elif [ "$WANT_SERVICE" = 1 ]; then
 		echo '[Service]'
 		# A LOGIN shell: agent CLIs are discovered with `which` against this
 		# process's own PATH, and a bare unit PATH resolves none of them.
-		echo "ExecStart=/bin/bash -lc 'exec ateam daemon'"
+		echo "ExecStart=/bin/bash -lc 'exec ateam daemon --supervised'"
 		if [ "$SERVICE_SCOPE" = system ]; then
 			echo "User=$(id -un)"
 			# NOT %h: in a system unit that expands to root's home, not User='s.
@@ -749,19 +796,8 @@ elif [ "$WANT_SERVICE" = 1 ]; then
 	$SYSTEMCTL daemon-reload
 	$SYSTEMCTL enable ateam.service >/dev/null 2>&1 || true
 
-	# Take the socket back, then RESTART. Two reasons this is not `start`:
-	#   1. `start` on an already-active unit does nothing, so an upgrade left the
-	#      OLD process serving. That is the bug this installer shipped with, and it
-	#      is why boxes stayed on an old protocol through repeated installs.
-	#   2. `ateam daemon` deliberately bows out when a live daemon already owns the
-	#      socket, so a service started around one (the verify step's, or one that
-	#      an `ateam attach` spawned) exits 0 and the old code keeps answering.
-	# Running agents survive both, for the reason spelled out at [6/7].
-	if [ -n "$(daemon_pid)" ] && ! $SYSTEMCTL is-active --quiet ateam.service; then
-		info "handing the out-of-systemd daemon over to the service"
-		pkill -f "$DAEMON_PAT" 2>/dev/null || true
-		sleep 1
-	fi
+	# The startup gate and supervisor marker prevent a reconnect from creating an
+    # intermediate daemon. Restart the actual service, then verify that process.
 	$SYSTEMCTL restart ateam.service
 
 	# Prove the SERVICE is what answers now, and that it answers with the dist just
@@ -771,8 +807,9 @@ elif [ "$WANT_SERVICE" = 1 ]; then
 	for _ in 1 2 3 4 5 6 7 8 9 10; do
 		sleep 1
 		if $SYSTEMCTL is-active --quiet ateam.service; then
-			SVC_PID="$(daemon_pid)"
-			if [ -n "$SVC_PID" ]; then break; fi
+			SVC_PID="$($SYSTEMCTL show -p MainPID --value ateam.service)"
+			if [ "$SVC_PID" != 0 ] && [ "$SVC_PID" = "$(daemon_pid)" ]; then break; fi
+            SVC_PID=""
 		fi
 	done
 	if [ -z "$SVC_PID" ]; then die "service failed to start: $SYSTEMCTL status ateam"; fi
@@ -794,6 +831,29 @@ elif [ "$WANT_SERVICE" = 1 ]; then
 		info "recovers on its own over SSH; the iOS app cannot. Grant sudo and"
 		info "re-run this installer to upgrade it to a system service."
 	fi
+fi
+
+# Unmanaged installs explicitly start one daemon. Verification itself never starts
+# one, and managed installs are started only by their existing supervisor.
+if [ ! -s "$APP_DIR/service-owner" ]; then
+    mkdir -p "$DATA_DIR"
+    nohup setsid "$BIN_DIR/ateam" daemon > "$DATA_DIR/daemon.log" 2>&1 < /dev/null &
+fi
+# -------------------------------------------------------------- verify ------
+
+step "[7/7] verify the handshake"
+# Connect-only verification of the process started by the chosen owner.
+HELLO="$(handshake)"
+case "$HELLO" in
+*protocolVersion*) info "OK  $HELLO" ;;
+*) die "handshake failed: ${HELLO:-<no reply>}" ;;
+esac
+# The one assertion that catches a silent no-op upgrade: the process answering
+# must not be the one that predates this install. A handshake alone cannot tell
+# the difference, which is why every stale box still reported a healthy install.
+NEW_PID="$(daemon_pid)"
+if [ -n "$OLD_PID" ] && [ "$NEW_PID" = "$OLD_PID" ]; then
+	die "pid $OLD_PID survived, so this box is still serving the OLD dist: stop it and re-run"
 fi
 
 # ----------------------------------------------------------- phone port -----
@@ -922,3 +982,19 @@ fi
 if [ -n "$FIRST_CODE" ]; then
 	printf '\nPair your first device with code %s: enter it in Ateam (Ateam Go, or Add a box on\na Mac) within 10 minutes. It works once; `ateam pair` makes another.\n' "$FIRST_CODE"
 fi
+
+}
+
+# The lock lives here, not in a particular caller: curl, desktop, cloud-init and
+# system:update all serialize. --close prevents installer children (including a
+# detached daemon) from inheriting the operation lock after the installer exits.
+for arg in "$@"; do
+    case "$arg" in --service|--tailscale|--browser) ;; *) printf '\n!! unknown option: %s (the options are --service, --tailscale and --browser)\n' "$arg" >&2; exit 1 ;; esac
+done
+[ "$(id -u)" != 0 ] || { echo '!! run this as the user that will own the agents, not as root' >&2; exit 1; }
+command -v flock >/dev/null || { echo '!! flock (util-linux) is required' >&2; exit 1; }
+# The payload is shared by every data directory under this account.
+INSTALL_DIR="$HOME/ateam-app"
+mkdir -p "$INSTALL_DIR"
+export -f install_main
+flock -n -E 75 --close "$INSTALL_DIR/install.lock" bash -c 'install_main "$@"' bash "$@"
