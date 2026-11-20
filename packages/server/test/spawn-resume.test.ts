@@ -93,6 +93,16 @@ beforeEach(() => {
 		agentStatus: "stopped",
 		lastEventAt: T0,
 	});
+	// ...and the agent that stopped: a resume is a way back to a conversation
+	// this task already had (a task that never had one starts fresh, below).
+	const earlier = repo.createSession(db, {
+		taskId: task.id,
+		agentId: "claude",
+		terminalId: "earlier-tab",
+		agentSessionId: null,
+		cwd: scratch,
+	});
+	repo.updateSession(db, earlier.id, { status: "stopped", startedAt: T0, exitedAt: T0 });
 	taskId = task.id;
 });
 
@@ -175,6 +185,57 @@ describe("spawnAgentInTask on resume", () => {
 			prompt: "fix the bug",
 		});
 		expect(repo.listOpenSessions(db).map((s) => s.status)).toEqual(["idle", "running"]);
+	});
+});
+
+// A task whose agent never started (its launch never reached the box) is
+// opened later, and opening asks to resume. `claude --continue` there ran the
+// first-run setup and then exited: "No conversation found to continue".
+describe("resuming a task whose agent never started", () => {
+	beforeEach(() => {
+		const before = repo.getTask(db, taskId);
+		if (!before) throw new Error("no seeded task");
+		const task = repo.createTask(db, {
+			projectId: before.projectId,
+			name: "never started",
+			slug: "never-started",
+			branch: "feat/never-started",
+			baseBranch: "main",
+			worktreePath: before.worktreePath,
+		});
+		repo.updateTask(db, task.id, {
+			column: "needs_attention",
+			agentStatus: "stopped",
+			lastEventAt: T0,
+		});
+		taskId = task.id;
+	});
+
+	it("starts a conversation, named so it can be resumed by id", async () => {
+		const { terminalId } = await spawnAgentInTask(services, () => {}, {
+			taskId,
+			agentId: "claude",
+			resume: true,
+		});
+		expect(spawned?.command).toStartWith(`claude ${G} --session-id '${terminalId}'`);
+		expect(spawned?.command).not.toInclude("--continue");
+		expect(repo.listSessionsByTask(db, taskId)[0]).toMatchObject({ agentSessionId: terminalId });
+	});
+
+	it("is still a look, not work: the card stays where it was", async () => {
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", resume: true });
+		expect(repo.getTask(db, taskId)).toMatchObject({
+			column: "needs_attention",
+			agentStatus: "stopped",
+			lastEventAt: T0,
+		});
+		expect(repo.listOpenSessions(db).map((s) => s.status)).toEqual(["idle"]);
+	});
+
+	it("a shell the task had is no conversation either", async () => {
+		repo.createSession(db, { taskId, agentId: "shell", terminalId: "sh", cwd: "/tmp" });
+		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude", resume: true });
+		expect(spawned?.command).not.toInclude("--continue");
 	});
 });
 
