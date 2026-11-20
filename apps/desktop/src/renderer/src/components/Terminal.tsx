@@ -263,6 +263,7 @@ export function TerminalView({
 		// and finally switch to writing live directly. JS is single-threaded, so no
 		// chunk can slip in between the flush and flipping `ready`.
 		let ready = false;
+		let restoring = true;
 		let pending: { data: string; seq: number }[] = [];
 		const writeOutput = (data: string) => {
 			const following = scroll.following;
@@ -275,13 +276,22 @@ export function TerminalView({
 			else pending.push({ data: e.data, seq: e.seq });
 		});
 
-		void window.ateam.pty.snapshot(terminalId).then(({ data, seq }) => {
+		void window.ateam.pty.snapshot(terminalId).then(({ data, seq, cols, rows }) => {
 			if (disposed) return;
+			// Serialized rows include padding to the source width. Replaying them
+			// in a narrower tile wraps that padding and scrolls the text away.
+			// Fit only after xterm has parsed the snapshot at its original size.
+			if (cols && rows) term.resize(cols, rows);
 			if (data) term.write(data);
 			for (const c of pending) if (c.seq > seq) term.write(c.data);
 			pending = [];
 			ready = true;
-			scroll.bottom();
+			term.write("", () => {
+				if (disposed) return;
+				restoring = false;
+				syncSize();
+				scroll.bottom();
+			});
 		});
 
 		// Grammar: follow the draft from our own keystrokes (see DraftTracker) and
@@ -416,6 +426,7 @@ export function TerminalView({
 		const syncSize = () => {
 			cancelAnimationFrame(raf);
 			raf = requestAnimationFrame(() => {
+				if (restoring || disposed) return;
 				const w = el.clientWidth;
 				const h = el.clientHeight;
 				if (w === 0 || h === 0) {

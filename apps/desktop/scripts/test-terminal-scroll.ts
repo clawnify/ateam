@@ -11,13 +11,23 @@ try {
 		entrypoints: [join(import.meta.dir, "terminal-scroll.fixture.tsx")],
 		outdir: dir,
 		target: "browser",
+		plugins: [
+			{
+				name: "renderer-alias",
+				setup(build) {
+					build.onResolve({ filter: /^@\// }, ({ path }) => ({
+						path: require.resolve(join(import.meta.dir, "../src/renderer/src", path.slice(2))),
+					}));
+				},
+			},
+		],
 	});
 	if (!build.success) throw new AggregateError(build.logs, "Fixture build failed");
 	await Bun.write(
 		join(dir, "index.html"),
 		`<link rel="stylesheet" href="terminal-scroll.fixture.css">
 <style>body{margin:0}#root{display:flex;width:700px;height:500px}</style>
-<div id="root"></div><script src="terminal-scroll.fixture.js"></script>`,
+<div id="root"></div><script type="module" src="terminal-scroll.fixture.js"></script>`,
 	);
 	await Bun.write(
 		join(dir, "main.cjs"),
@@ -26,6 +36,7 @@ app.setPath('userData', ${JSON.stringify(join(dir, "profile"))});
 app.whenReady().then(async () => {
   const win = new BrowserWindow({show:false, width:1000, height:800,
     webPreferences:{offscreen:true, backgroundThrottling:false}});
+  win.webContents.on('console-message', (_event, _level, message) => console.log(message));
   const timeout = setTimeout(() => {console.error('Terminal test timed out'); app.exit(1)}, 30000);
   try {
     await win.loadFile(${JSON.stringify(join(dir, "index.html"))});

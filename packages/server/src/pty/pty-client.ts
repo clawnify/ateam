@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
+import type { PtySnapshot } from "@ateam/protocol";
 import { withMouseEncoding } from "./snapshot-modes";
 
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
@@ -306,11 +307,17 @@ export class PtyClient extends EventEmitter {
 		return this.live.has(terminalId);
 	}
 
-	async snapshot(terminalId: string): Promise<{ data: string; seq: number }> {
+	async snapshot(terminalId: string): Promise<PtySnapshot> {
 		const r = await this.request({ t: "snapshot", terminalId });
 		return {
 			data: r.data ? withMouseEncoding(unb64(r.data as string)) : "",
 			seq: (r.seq as number) ?? 0,
+			...(Number.isInteger(r.cols) &&
+			Number.isInteger(r.rows) &&
+			Number(r.cols) > 0 &&
+			Number(r.rows) > 0
+				? { cols: r.cols as number, rows: r.rows as number }
+				: {}),
 		};
 	}
 

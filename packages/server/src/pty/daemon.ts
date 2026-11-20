@@ -198,7 +198,9 @@ function handleMessage(sock: net.Socket, m: Record<string, unknown>): void {
 		case "snapshot": {
 			const s = sessions.get(m.terminalId as string);
 			const reply = (data: string, seq: number) =>
-				sock.write(`${JSON.stringify({ t: "snapshot", id: m.id, data: b64(data), seq })}\n`);
+				sock.write(
+					`${JSON.stringify({ t: "snapshot", id: m.id, data: b64(data), seq, cols: s?.term.cols, rows: s?.term.rows })}\n`,
+				);
 			if (!s) {
 				reply("", 0);
 				break;
