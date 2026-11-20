@@ -83,6 +83,7 @@ filled in; you pick the repositories and paste the token into Ateam, which hands
 | Pull requests: read and write | `gh pr view`, `gh pr create`, `gh pr merge` |
 | Issues: read and write | list a project's issues, file one |
 | Commit statuses: read | see CI that reports statuses, so the merge queue waits for it |
+| Actions: read | `gh run view --log-failed`: read why a CI run failed |
 
 Workflows stays off: an agent that can edit `.github/workflows` can reach the repo's
 Actions secrets. Fine-grained tokens can't call the Checks API, which Ateam doesn't use.

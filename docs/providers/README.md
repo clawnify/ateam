@@ -139,7 +139,8 @@ The default on any box is the first: a [fine-grained
 token](sprites.md#github-credentials) limited to the org and repos the box works on,
 with Contents, Pull requests and Issues set to read and write, Commit statuses set to
 read (the merge queue waits on CI, and CI that reports commit statuses is hidden from
-a token without it on a private repo), and Workflows left off, since an agent that
+a token without it on a private repo), Actions set to read (so an agent can read a
+failed run's logs), and Workflows left off, since an agent that
 can edit `.github/workflows` can reach the repo's Actions secrets.
 
 Connect it from Ateam rather than a terminal: the box's page in **Settings → Boxes** on the
