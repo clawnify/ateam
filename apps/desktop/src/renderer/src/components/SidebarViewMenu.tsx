@@ -1,7 +1,8 @@
-import { type Alias, aliasLabel, type KanbanColumn } from "@ateam/protocol";
+import type { Alias, KanbanColumn } from "@ateam/protocol";
 import { ListFilter } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { useBoxName } from "../box-name";
 import {
 	filtersSet,
 	type PrKey,
@@ -120,6 +121,7 @@ export function SidebarViewMenu({
 	/** The list holds every project, so it can be grouped by project. */
 	allProjects: boolean;
 }) {
+	const boxNameOf = useBoxName();
 	const lit = filtersSet(view, machines);
 	const label = lit ? "View options (filters on)" : "View options";
 	const allFolded = groupKeys.length > 0 && groupKeys.every((k) => view.collapsed.includes(k));
@@ -199,7 +201,7 @@ export function SidebarViewMenu({
 					{machines.map((m) => (
 						<FilterItem
 							key={m ?? ""}
-							label={aliasLabel(m)}
+							label={boxNameOf(m)}
 							shown={!view.hiddenMachines.includes(m)}
 							onToggle={() => onView({ ...view, hiddenMachines: toggled(view.hiddenMachines, m) })}
 						/>

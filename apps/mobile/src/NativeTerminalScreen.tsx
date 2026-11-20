@@ -59,12 +59,15 @@ function extFromAsset(a: ImagePicker.ImagePickerAsset): string {
 export function NativeTerminalScreen({
 	api,
 	task,
+	place,
 	onClose,
 	autoFocus = false,
 	initialSession,
 }: {
 	api: AteamApi;
 	task: TaskDTO;
+	/** The box it runs on, when there is more than one to tell apart. */
+	place?: string | null;
 	onClose: () => void;
 	/** Bring the keyboard up as soon as the terminal is ready (expanding from a
 	 *  Mission Control tile to type). */
@@ -98,6 +101,7 @@ export function NativeTerminalScreen({
 			strip={
 				<TerminalStrip
 					task={task}
+					place={place}
 					expanded
 					onToggle={onClose}
 					shell={shell}
@@ -120,12 +124,15 @@ export function NativeTerminalScreen({
 export function ReconnectingTerminal({
 	lead,
 	title,
+	place,
 	onBack,
 	status,
 	wakeError,
 }: {
 	lead: ReactNode;
 	title: string;
+	/** The box being reached, when there is more than one to tell apart. */
+	place?: string | null;
 	onBack: () => void;
 	/** What the reattach is doing right now (connect-steps in @ateam/protocol), if anything. */
 	status: string | null;
@@ -134,7 +141,7 @@ export function ReconnectingTerminal({
 }) {
 	return (
 		<View style={styles.root}>
-			<StripBar lead={lead} title={title} expanded onToggle={onBack} />
+			<StripBar lead={lead} title={title} place={place} expanded onToggle={onBack} />
 			<View style={styles.center}>
 				<ActivityIndicator color={C.ink} />
 				<Text style={styles.hint}>{status ? `${status}…` : "Reconnecting to the box…"}</Text>

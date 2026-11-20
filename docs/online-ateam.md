@@ -437,7 +437,8 @@ them unasked, so the call button stays off until the box is updated. With
 more than one box it's the Lead of the box you pick in **Boxes** (swipe the box's
 card, then **Lead**), or the box you used last until you pick one. That box is the
 phone's home, as your Mac is on the desktop: new tasks start there unless you pick
-another box in **Run on**, and its tasks carry no box label. A dot
+another box in **Run on**, and its tasks carry no box label in the lists (an open
+task's bar names the box it runs on, this one included). A dot
 on the bubble says it has something for you: white for a reply since you last looked,
 amber while it waits for your answer before it can go on. When it proposes a task or a
 loop, the card's **Start it** or **Set it up** opens the New task sheet or the New loop

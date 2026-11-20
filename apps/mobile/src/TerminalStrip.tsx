@@ -12,12 +12,15 @@ import { C } from "./theme";
 
 export function TerminalStrip({
 	task,
+	place,
 	expanded,
 	onToggle,
 	shell = false,
 	onShell,
 }: {
 	task: TaskDTO;
+	/** The box it runs on, when there is more than one to tell apart. */
+	place?: string | null;
 	/** Full-width view shows a collapse icon; a tile shows expand. */
 	expanded: boolean;
 	onToggle: () => void;
@@ -58,6 +61,7 @@ export function TerminalStrip({
 				)
 			}
 			title={task.name}
+			place={place}
 			dotColor={statusColor(task)}
 			expanded={expanded}
 			onToggle={onToggle}
@@ -69,12 +73,15 @@ export function TerminalStrip({
 export function StripBar({
 	lead,
 	title,
+	place,
 	dotColor,
 	expanded,
 	onToggle,
 }: {
 	lead: ReactNode;
 	title: string;
+	/** Where it runs, dimmer, beside the title. */
+	place?: string | null;
 	dotColor?: string;
 	expanded: boolean;
 	onToggle: () => void;
@@ -86,6 +93,11 @@ export function StripBar({
 			<Text style={styles.name} numberOfLines={1}>
 				{title}
 			</Text>
+			{place ? (
+				<Text style={styles.place} numberOfLines={1} accessibilityLabel={`Runs on ${place}`}>
+					{place}
+				</Text>
+			) : null}
 			{dotColor ? <View style={[styles.dot, { backgroundColor: dotColor }]} /> : null}
 			<Pressable
 				style={styles.toggle}
@@ -114,6 +126,7 @@ const styles = StyleSheet.create({
 		borderBottomColor: C.line,
 	},
 	name: { flex: 1, color: C.ink, fontSize: 12, fontWeight: "600" },
+	place: { flexShrink: 1, maxWidth: "40%", color: C.muted, fontSize: 11 },
 	dot: { width: 6, height: 6, borderRadius: 3 },
 	toggle: { marginLeft: 8 },
 	tabs: {
