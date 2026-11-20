@@ -95,6 +95,7 @@ import {
 } from "./sessions";
 import { readSettings, settingsPath, updateSettings } from "./settings-file";
 import { linkSkill, listSkills } from "./skills";
+import { workAfterMerge } from "./task-triage";
 import { applySetWaiting, clearWaiting } from "./waits";
 
 /**
@@ -205,6 +206,10 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		changed?: number | null;
 	}> {
 		const live = repo.listSessionsByTask(db, task.id).some((s) => services.pty.has(s.terminalId));
+		// A merged PR is not enough when the branch carried on after it: that
+		// work would go with the worktree.
+		if (workAfterMerge(task))
+			return { recommended: false, reason: "PR merged, later work on the branch not merged", live };
 		const isMerged = task.column === "merged" || task.prState === "merged";
 		if (!isMerged) return { recommended: false, reason: "not merged", live };
 		if (live) return { recommended: false, reason: "agent still active", live };

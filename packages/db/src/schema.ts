@@ -126,6 +126,8 @@ export interface GitStatusSnapshot {
 	dirty: number;
 	/** `git status` entries; see the protocol's GitStatusSnapshot. */
 	uncommitted?: number;
+	/** The PR merged, with later work on the branch; see the protocol's GitStatusSnapshot. */
+	workAfterMerge?: boolean;
 	updatedAt: number;
 }
 

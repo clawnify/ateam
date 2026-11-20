@@ -967,6 +967,14 @@ describe("createDispatcher", () => {
 		repo.updateTask(db, swept.id, { column: "merged", prNumber: 7, prState: "merged" });
 		const busy = mk("busy");
 		repo.updateTask(db, busy.id, { column: "merged", prState: "merged" });
+		// Its PR merged, then the branch got commits that aren't on main.
+		const carried = mk("carried");
+		repo.updateTask(db, carried.id, {
+			column: "review",
+			prNumber: 9,
+			prState: "merged",
+			gitStatus: { ahead: 1, behind: 0, dirty: 2, workAfterMerge: true, updatedAt: 1 },
+		});
 		repo.createSession(db, {
 			taskId: busy.id,
 			agentId: "claude",
@@ -982,12 +990,18 @@ describe("createDispatcher", () => {
 		}>;
 
 		// Every task is listed — nothing is filtered out of the decision any more.
-		expect(list.map((c) => c.task.id).sort()).toEqual([ongoing.id, swept.id, busy.id].sort());
+		expect(list.map((c) => c.task.id).sort()).toEqual(
+			[ongoing.id, swept.id, busy.id, carried.id].sort(),
+		);
 
 		const by = (id: string) => list.find((c) => c.task.id === id)!;
 		expect(by(swept.id).recommended).toBe(true);
 		expect(by(ongoing.id)).toMatchObject({ recommended: false, reason: "not merged" });
 		expect(by(busy.id)).toMatchObject({ recommended: false, reason: "agent still active" });
+		expect(by(carried.id)).toMatchObject({
+			recommended: false,
+			reason: "PR merged, later work on the branch not merged",
+		});
 		// The live PTY rides along so the dialog can show the conversation.
 		expect(by(busy.id).terminalId).toBe("live-term");
 		expect(by(ongoing.id).terminalId).toBeNull();

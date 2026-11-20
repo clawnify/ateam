@@ -237,6 +237,30 @@ describe("lead tools", () => {
 		// Found by the first words its branch was made from, after the model renamed it.
 		const view = JSON.parse((await tools.call("read_task", { task: "Fix login" }))?.text ?? "");
 		expect(view.summary).toBe(summary);
+		expect(view.summaryStale).toBeUndefined();
+	});
+
+	// The summary that said "one file with uncommitted changes" after the agent
+	// had committed it: the Lead must not repeat it as where the task is now.
+	it("says a summary predates the task's latest turn, on the board line and in read_task", async () => {
+		const stale = TASKS.map((t) =>
+			t.id === "t1"
+				? {
+						...t,
+						summary: "One file with uncommitted changes.",
+						summaryAsOf: 1_000,
+						lastEventAt: 2_000,
+					}
+				: t,
+		);
+		const r = fakeRouter({ [CH.tasksList]: () => stale, [CH.tasksLastReply]: () => null });
+		const tools = createLeadTools({ handle: r.handle, machineOf: () => null });
+		const board = (await tools.call("get_board", {}))?.text ?? "";
+		const line = board.split("\n").find((l) => l.startsWith("t1 |")) ?? "";
+		expect(line).toContain("before its latest turn: One file with uncommitted changes.");
+		expect(line).not.toContain("now:");
+		const view = JSON.parse((await tools.call("read_task", { task: "t1" }))?.text ?? "");
+		expect(view.summaryStale).toContain("may be out of date");
 	});
 
 	it("shows a pending question and passes the user's answer to it", async () => {

@@ -18,6 +18,7 @@
 // previous summary in place and is retried after RETRY_AFTER_MS, or sooner if
 // the task moves again.
 import { type AteamDb, repo, type Task } from "@ateam/db";
+import { workAfterMerge } from "./task-triage";
 
 /** How long a task's agent must have been quiet. */
 export const SUMMARY_IDLE_MS = 3 * 60_000;
@@ -59,6 +60,8 @@ const COLUMN: Record<Task["column"], string> = {
 export function taskFacts(task: Task): string[] {
 	const facts = [`Board column: ${COLUMN[task.column] ?? task.column}.`];
 	if (task.prNumber) facts.push(`Pull request #${task.prNumber} is ${task.prState ?? "open"}.`);
+	if (workAfterMerge(task))
+		facts.push("The branch has later work that is not on the base branch yet.");
 	const ahead = task.gitStatus?.ahead ?? 0;
 	// `git status`, not `dirty` (the diff against base, committed work included).
 	const uncommitted = task.gitStatus?.uncommitted ?? 0;

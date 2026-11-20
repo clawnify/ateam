@@ -58,6 +58,9 @@ export interface WorktreeSignals {
 	prState?: "OPEN" | "MERGED" | "CLOSED" | null;
 	/** When the PR merged (epoch ms), if MERGED. */
 	mergedAtMs?: number | null;
+	/** The PR merged, but the branch holds work it didn't carry that isn't on
+	 *  base yet: commits made after the merge. */
+	workAfterMerge?: boolean;
 	/** On disk but not in `git worktree list` (broken/foreign git link). */
 	isOrphan?: boolean;
 }
@@ -167,6 +170,14 @@ export function triageWorktree(s: WorktreeSignals, opts: TriageOptions): TriageR
 
 	// 5. Merged: done ONLY if the conversation wrapped up with the merge.
 	if (merged) {
+		if (s.workAfterMerge) {
+			return {
+				bucket: "merged_unfinished",
+				done: false,
+				suggestedColumn: "review",
+				reason: "PR merged, with later work on the branch that isn't on base yet",
+			};
+		}
 		const gap =
 			s.transcriptMtimeMs != null && s.mergedAtMs != null ? s.transcriptMtimeMs - s.mergedAtMs : 0;
 		if (gap >= CONVERSATION_GAP_MS) {

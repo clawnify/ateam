@@ -128,6 +128,12 @@ export function createWorktreeSweep(deps: SweepDeps): WorktreeSweep {
 	 */
 	function applyPrFacts(task: Task, res: Awaited<ReturnType<typeof detectMerged>>): boolean {
 		const state = toPrState(res.state);
+		// A merged PR with later work on the branch is recorded only together with
+		// that work (the snapshot's workAfterMerge): "merged" alone reads as
+		// finished to cleanup. With no snapshot yet to carry it, wait for a probe
+		// that has one.
+		const after = res.state === "MERGED" && !res.merged;
+		if (after && !task.gitStatus) return false;
 		const patch: Parameters<typeof repo.updateTask>[2] = {};
 		let changed = false;
 		if (state !== null && state !== task.prState) {
@@ -142,6 +148,14 @@ export function createWorktreeSweep(deps: SweepDeps): WorktreeSweep {
 		}
 		if (res.prUrl != null && res.prUrl !== task.prUrl) {
 			patch.prUrl = res.prUrl;
+			changed = true;
+		}
+		// The PR merged but the branch carried on past it. Kept on the git
+		// snapshot, which the probe above wrote carrying the last verdict over,
+		// so cleanup never reads a moment without it.
+		if (task.gitStatus && Boolean(task.gitStatus.workAfterMerge) !== after) {
+			const { workAfterMerge: _, ...rest } = task.gitStatus;
+			patch.gitStatus = after ? { ...rest, workAfterMerge: true } : rest;
 			changed = true;
 		}
 		// A merge found outside Ateam moves the card to Done — but only under the
@@ -167,6 +181,8 @@ export function createWorktreeSweep(deps: SweepDeps): WorktreeSweep {
 		try {
 			await freshenBase(task);
 			snapshot = await computeGitStatus(task.worktreePath, task.baseBranch);
+			// Only the merge probe below can tell; until it does, keep its last word.
+			if (task.gitStatus?.workAfterMerge) snapshot.workAfterMerge = true;
 			repo.updateTask(db, task.id, { gitStatus: snapshot });
 			changed = true;
 		} catch {
@@ -179,6 +195,7 @@ export function createWorktreeSweep(deps: SweepDeps): WorktreeSweep {
 					worktreePath: task.worktreePath,
 					branch: task.branch,
 					baseBranch: task.baseBranch,
+					prNumber: task.prNumber,
 				});
 				// Re-read: computeGitStatus above already wrote, and the merge probe
 				// is slow enough that the row may have moved under us.

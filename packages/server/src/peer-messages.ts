@@ -77,7 +77,12 @@ import { getAgent } from "@ateam/agents";
 import type { AgentSession, AteamDb, PeerMessage, Project, Task } from "@ateam/db";
 import { repo } from "@ateam/db";
 import { isBranchForName } from "@ateam/git-core";
-import { projectRepo, type RemoteSenderDTO } from "@ateam/protocol";
+import {
+	projectRepo,
+	type RemoteSenderDTO,
+	STALE_SUMMARY_NOTE,
+	staleSummaryAt,
+} from "@ateam/protocol";
 import { holdsWork, INPUT_QUIET_MS } from "./pty/reap";
 
 export { INPUT_QUIET_MS };
@@ -314,6 +319,8 @@ export interface PeerView {
 	description: string | null;
 	/** Where the task stands, in a sentence or two (task-summaries.ts); null until one is written. */
 	summary: string | null;
+	/** Set when the summary predates the task's latest turn: it may be out of date. */
+	summaryStale?: string;
 	/** Only a search lists archived tasks. */
 	archived?: true;
 	you?: true;
@@ -501,6 +508,7 @@ export class PeerMessenger {
 			column: task.column,
 			description: task.description ? task.description.slice(0, 280) : null,
 			summary: task.summary ?? null,
+			...(staleSummaryAt(task) != null ? { summaryStale: STALE_SUMMARY_NOTE } : {}),
 			...(task.archivedAt != null ? { archived: true as const } : {}),
 			...(task.id === callerTaskId ? { you: true as const } : {}),
 		};

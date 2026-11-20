@@ -40,6 +40,7 @@ const git = (
 		behind: number;
 		dirty: number;
 		uncommitted: number;
+		workAfterMerge: boolean;
 		updatedAt: number;
 	}>,
 ) => ({
@@ -115,6 +116,34 @@ describe("triageTask", () => {
 		const r = triageTask(task({ prState: "merged", prNumber: 12 }), NOW);
 		expect(r.bucket).toBe("merged_done");
 		expect(r.done).toBe(true);
+	});
+
+	it("keeps a merged PR unfinished while its branch holds later work", () => {
+		const r = triageTask(
+			task({
+				column: "review",
+				prState: "merged",
+				prNumber: 12,
+				gitStatus: git({ dirty: 2, uncommitted: 0, workAfterMerge: true }),
+			}),
+			NOW,
+		);
+		expect(r.bucket).toBe("merged_unfinished");
+		expect(r.done).toBe(false);
+		expect(r.reason).toContain("later work");
+	});
+
+	// Done is the user's call (or a full merge's): a card there reads finished.
+	it("calls a merged task in Done finished whatever the branch holds", () => {
+		const r = triageTask(
+			task({
+				column: "merged",
+				prState: "merged",
+				gitStatus: git({ dirty: 2, uncommitted: 0, workAfterMerge: true }),
+			}),
+			NOW,
+		);
+		expect(r.bucket).toBe("merged_done");
 	});
 
 	// The bug the PTY cannot see: `exec $SHELL` keeps the terminal alive after the
