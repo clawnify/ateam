@@ -12,6 +12,7 @@ export function BoxSettingsScreen({
 	box,
 	connected,
 	security,
+	noAiKey,
 	onClose,
 	onGithub,
 	onAiKeys,
@@ -22,6 +23,9 @@ export function BoxSettingsScreen({
 	box: SavedBox;
 	connected: boolean;
 	security: PairingState["state"] | "unknown";
+	/** It answered that it holds neither AI key: nothing on it moves a finished
+	 *  task to Needs you, and nothing else on the phone says so. */
+	noAiKey: boolean;
 	onClose: () => void;
 	onGithub: () => void;
 	onAiKeys: () => void;
@@ -97,18 +101,23 @@ export function BoxSettingsScreen({
 								{
 									label: "GitHub",
 									detail: "Repository access and sign-in",
+									warn: false,
 									icon: "github",
 									onPress: onGithub,
 								},
 								{
 									label: "AI keys",
-									detail: "API keys used by this box",
+									detail: noAiKey
+										? "No AI key: finished tasks won't move to Needs you when they wait on you"
+										: "API keys used by this box",
+									warn: noAiKey,
 									icon: "key",
 									onPress: onAiKeys,
 								},
 								{
 									label: "Dotfiles",
 									detail: "Shell, tools and agent configuration",
+									warn: false,
 									icon: "file-text",
 									onPress: onDotfiles,
 								},
@@ -131,7 +140,7 @@ export function BoxSettingsScreen({
 								<Feather name={item.icon} size={20} color={C.muted} />
 								<View style={styles.rowText}>
 									<Text style={styles.rowTitle}>{item.label}</Text>
-									<Text style={styles.note}>{item.detail}</Text>
+									<Text style={item.warn ? styles.warning : styles.note}>{item.detail}</Text>
 								</View>
 								<Feather name="chevron-right" size={18} color={C.muted} />
 							</Pressable>
