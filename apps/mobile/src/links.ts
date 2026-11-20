@@ -210,6 +210,9 @@ export function createLinks(deps: LinkDeps): Links {
 	const awaySince = new Map<string, number>();
 	// Boxes whose wait Cancel stopped: not retried until a try is asked for again.
 	const stopped = new Set<string>();
+	// Boxes whose try from the background failed while another try still ran: the
+	// next try is set when that one ends, not while it is still dialling.
+	const owed = new Set<string>();
 	let state: Record<string, BoxLink> = {};
 	let paused = false;
 
@@ -273,6 +276,12 @@ export function createLinks(deps: LinkDeps): Links {
 		if (await connect(box, { wake })) return;
 		// A locked box waits for a pairing code: trying again changes nothing.
 		if (state[key]?.error === NEEDS_PAIRING) return;
+		// A tap's try is still dialling: a next try set now would only fire into it,
+		// be turned away, and count as one more failure each time.
+		if (attempts.has(key)) {
+			owed.add(key);
+			return;
+		}
 		retry(key);
 	}
 
@@ -477,6 +486,9 @@ export function createLinks(deps: LinkDeps): Links {
 			stopTick?.();
 			tries.delete(attempt);
 			if (tries.size === 0 && attempts.get(key) === tries) attempts.delete(key);
+			if (!attempts.has(key) && owed.delete(key) && state[key]?.error !== NEEDS_PAIRING) {
+				retry(key);
+			}
 		}
 	}
 
@@ -556,6 +568,7 @@ export function createLinks(deps: LinkDeps): Links {
 			awaySince.delete(key);
 			lastWakeAt.delete(key);
 			stopped.delete(key);
+			owed.delete(key);
 			for (const a of attempts.get(key) ?? []) a.stop();
 			attempts.delete(key);
 			const c = conns.get(key);
