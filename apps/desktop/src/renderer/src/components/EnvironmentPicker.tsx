@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import type { HostStatus, WakeStatus } from "../../../shared/host";
 import { startSetup, useSetups } from "../lib/setups";
 import { sshDestination } from "../lib/ssh-destination";
+import { DEFAULT_WS_PORT, joinEndpoint, splitEndpoint } from "../lib/tailscale-endpoint";
 import { BoxPageDialog } from "./BoxPage";
 import { ConnectSteps } from "./ConnectSteps";
 import { CreateBoxDialog } from "./CreateBoxDialog";
@@ -123,7 +124,11 @@ export function EnvironmentPicker({
 	// Where the back arrow returns to: the list for a form opened from a box's row (its
 	// moon or update button), the methods for one picked from the menu.
 	const [backTo, setBackTo] = useState<"" | "menu">("");
+	// The Tailscale form's host and port, joined into the box's `host:port` endpoint.
 	const [endpoint, setEndpoint] = useState("");
+	const [port, setPort] = useState(DEFAULT_WS_PORT);
+	const joined = joinEndpoint(endpoint, port);
+	const typedEndpoint = "endpoint" in joined ? joined.endpoint : "";
 	// The Tailscale form's provider ("" for none), the box's inputs, and the
 	// provider's key, asked for only while none is saved (or it is being replaced).
 	const [providerId, setProviderId] = useState("");
@@ -192,9 +197,9 @@ export function EnvironmentPicker({
 		if (addMode !== "tailscale") return;
 		void window.ateamHost.wakeStatus().then(setWakeSaved);
 		return window.ateamHost.onConnectProgress((e) => {
-			if (e.alias === endpoint.trim()) setSteps(e.steps);
+			if (e.alias === typedEndpoint) setSteps(e.steps);
 		});
-	}, [addMode, endpoint]);
+	}, [addMode, typedEndpoint]);
 
 	const back = () => {
 		// With no list behind the ways to add a box, backing out of them closes it.
@@ -216,7 +221,9 @@ export function EnvironmentPicker({
 	/** Open the Tailscale form, empty or for a listed box whose provider to change. */
 	const openTailscale = (env?: EnvOption) => {
 		setBackTo(env ? "" : "menu");
-		setEndpoint(env?.alias ?? "");
+		const at = splitEndpoint(env?.alias ?? "");
+		setEndpoint(at.host);
+		setPort(at.port || DEFAULT_WS_PORT);
 		setProviderId(env?.wake?.id ?? "");
 		setBoxValues(env?.wake?.box ?? {});
 		setAccountValues({});
@@ -237,8 +244,12 @@ export function EnvironmentPicker({
 	};
 
 	const submit = async () => {
-		const ep = endpoint.trim();
-		if (!ep || !onAdd || busy) return;
+		if (!onAdd || busy) return;
+		if ("problem" in joined) {
+			setError(joined.problem);
+			return;
+		}
+		const ep = joined.endpoint;
 		setError(null);
 		let wake: BoxWake | null = null;
 		if (provider) {
@@ -282,6 +293,7 @@ export function EnvironmentPicker({
 			// Connecting is what saves it, so only now is it a real option.
 			onChange(ep);
 			setEndpoint("");
+			setPort(DEFAULT_WS_PORT);
 			setNeedsCode(false);
 			setCode("");
 			close();
@@ -587,19 +599,42 @@ export function EnvironmentPicker({
 							</>
 						) : addMode === "tailscale" ? (
 							<div className={addForm}>
-								<Input
-									autoFocus
-									className={formInput}
-									placeholder="100.x.y.z:8787"
-									aria-label="Tailscale address and port"
-									value={endpoint}
-									disabled={busy}
-									onKeyDown={formKeys}
-									onChange={(e) => {
-										setEndpoint(e.target.value);
-										setNeedsCode(false);
-									}}
-								/>
+								<div className="flex gap-[3px]">
+									<Input
+										autoFocus
+										className={cn(formInput, "min-w-0 flex-1")}
+										placeholder="Tailscale IP or host: 100.x.y.z"
+										aria-label="Tailscale IP or host"
+										value={endpoint}
+										disabled={busy}
+										onKeyDown={formKeys}
+										onChange={(e) => {
+											// A pasted `host:port` fills both fields.
+											const at = splitEndpoint(e.target.value);
+											if (at.port) {
+												setEndpoint(at.host);
+												setPort(at.port);
+											} else setEndpoint(e.target.value);
+											setNeedsCode(false);
+											setError(null);
+										}}
+									/>
+									<Input
+										className={cn(formInput, "w-20 shrink-0")}
+										inputMode="numeric"
+										placeholder={DEFAULT_WS_PORT}
+										aria-label="Port"
+										title="Port"
+										value={port}
+										disabled={busy}
+										onKeyDown={formKeys}
+										onChange={(e) => {
+											setPort(e.target.value);
+											setNeedsCode(false);
+											setError(null);
+										}}
+									/>
+								</div>
 								<NativeSelect
 									wrapperClassName="w-full"
 									className={cn(formInput, "pr-8")}
