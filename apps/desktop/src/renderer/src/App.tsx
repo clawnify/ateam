@@ -17,7 +17,6 @@ import type {
 } from "@ateam/protocol";
 import {
 	type Alias,
-	aliasLabel,
 	BROWSER_NOT_INSTALLED_ERROR,
 	boxSupports,
 	byLatestActivity,
@@ -27,7 +26,6 @@ import {
 	PROTOCOL_VERSION,
 	TASK_REMOVING_ERROR,
 	unifyProjects,
-	wakeMachineName,
 } from "@ateam/protocol";
 import {
 	ArrowDownToLine,
@@ -58,6 +56,7 @@ import {
 	LayoutPanelLeft,
 	Maximize2,
 	Minimize2,
+	Monitor,
 	PanelLeft,
 	PanelRight,
 	Pause,
@@ -67,6 +66,7 @@ import {
 	Repeat,
 	RotateCw,
 	Rows2,
+	Server,
 	Settings,
 	SquareTerminal,
 	Trash2,
@@ -87,6 +87,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { BoxNameContext, boxName, useBoxName } from "./box-name";
 import { SessionGlyphs, SessionIcon } from "./components/AgentIcon";
 import { ChangesPane } from "./components/ChangeSteps";
 import { ChangesList, DiffStat } from "./components/Changes";
@@ -794,6 +795,8 @@ export function App() {
 	// Which engine a task runs on = the engine that owns its project (tasks never
 	// migrate between engines, so origin is intrinsic to the projectId).
 	const originOf = useCallback((projectId: string): Alias => origins[projectId] ?? null, [origins]);
+	// What a machine is called, the same everywhere (box-name.ts).
+	const boxNameOf = useCallback((alias: Alias) => boxName(alias, connections), [connections]);
 	// Where the main Lead chat lives, and what a box's Lead can reach (its own tasks).
 	const leadHome = useLeadHome();
 	const onLeadBox = useCallback(
@@ -827,14 +830,14 @@ export function App() {
 			return true;
 		} catch (e) {
 			setError(
-				`Couldn't reach ${aliasLabel(alias)}: ${e instanceof Error ? e.message : String(e)}`,
+				`Couldn't reach ${boxNameOf(alias)}: ${e instanceof Error ? e.message : String(e)}`,
 			);
 			return false;
 		} finally {
 			wakingRef.current = null;
 			setWakingAlias(null);
 		}
-	}, []);
+	}, [boxNameOf]);
 	const wakeIfOffline = (task: TaskDTO | undefined) => {
 		const alias = task ? offlineAliasOf(task) : null;
 		if (alias) void wakeBox(alias);
@@ -904,7 +907,7 @@ export function App() {
 				alias: c.alias,
 				// A box a provider wakes goes by its machine name there, as on the phone;
 				// its address moves to the row's subtitle.
-				label: wakeMachineName(c.wake) ?? c.alias,
+				label: boxNameOf(c.alias),
 				disabled: !memberAliases.has(c.alias) && !canRemote,
 				transport: c.transport,
 				// `known` is only set by a successful connect, so a config alias we've
@@ -933,6 +936,7 @@ export function App() {
 	}, [
 		needingBoxes,
 		connections,
+		boxNameOf,
 		canRemote,
 		hasLocalMember,
 		activeMembers,
@@ -1245,12 +1249,13 @@ export function App() {
 				listView.grouping,
 				{
 					machineOf,
+					machineLabel: boxNameOf,
 					projectOf,
 					statusLabel: (c) => COLUMNS.find((col) => col.key === c)?.label ?? c,
 					now: Date.now(),
 				},
 			),
-		[orderedSidebarTasks, listView, machineOf, projectOf],
+		[orderedSidebarTasks, listView, machineOf, boxNameOf, projectOf],
 	);
 	// The order Mission Control's Sync takes: the list as displayed, group by
 	// group, then what the filters hide. Archived tasks never have a tile.
@@ -1644,7 +1649,7 @@ export function App() {
 		run(async () => {
 			const ok = await confirm(
 				"Remove project?",
-				`Remove "${member.project.name}" from Ateam on ${aliasLabel(member.alias)}? Its task history and loops will be removed from Ateam. Repository files, branches, and worktrees will stay on disk.`,
+				`Remove "${member.project.name}" from Ateam on ${boxNameOf(member.alias)}? Its task history and loops will be removed from Ateam. Repository files, branches, and worktrees will stay on disk.`,
 			);
 			if (!ok) return;
 			await window.ateam.projects.remove(member.projectId);
@@ -1806,7 +1811,7 @@ export function App() {
 					// Its project is on the board from the box's last-seen board: wake
 					// it, and the engine takes over the same ids (host.ts connect).
 					if (!heldAliases?.has(input.alias)) {
-						setInfo(`Waking ${aliasLabel(input.alias)}…`);
+						setInfo(`Waking ${boxNameOf(input.alias)}…`);
 						setProvisioning(input.alias);
 						try {
 							await window.ateamHost.connect(input.alias, { wake: true });
@@ -1929,7 +1934,7 @@ export function App() {
 		if (activeProjectId && !allProjects && cleanupBlockedBy === null) setCleanupOpen(true);
 	};
 
-	return (
+	const page = (
 		<div
 			className={`app ${rail ? "rail" : ""} ${leadShown ? "lead-open" : ""}`}
 			style={{ "--sidebar-w": `${sidebarWidth}px`, "--lead-w": `${leadWidth}px` } as CSSProperties}
@@ -2165,6 +2170,10 @@ export function App() {
 												const row = (t: TaskDTO) => (
 													<TaskRow
 														task={t}
+														machine={machineOf(t)}
+														// Local goes unnamed, as on the board's cards; grouped by
+														// machine, the group's header already names it.
+														showMachine={listView.grouping !== "machine"}
 														offline={offlineAliasOf(t) !== null}
 														selected={t.id === sidebarSelectedId}
 														pulse={t.id === pulseId}
@@ -2376,7 +2385,7 @@ export function App() {
 								allProjects && cardByProject.get(t.projectId)?.name,
 								COLUMNS.find((c) => c.key === t.column)?.label,
 								age && (age === "just now" ? age : `${age} ago`),
-								box && aliasLabel(box),
+								box && boxNameOf(box),
 							]
 								.filter(Boolean)
 								.join(" · ");
@@ -2503,7 +2512,7 @@ export function App() {
 					{selectedTask && panelMode === "full" && selectedOffline ? (
 						<OfflineTaskPanel
 							task={selectedTask}
-							label={aliasLabel(selectedOffline)}
+							alias={selectedOffline}
 							asleep={connections.some((c) => c.alias === selectedOffline && c.asleep)}
 							waking={wakingAlias === selectedOffline}
 							steps={connectSteps[selectedOffline]}
@@ -2615,10 +2624,11 @@ export function App() {
 									const project = allProjects ? cardByProject.get(t.projectId)?.name : undefined;
 									if (!a) return project ?? null;
 									const box = offlineAliasOf(t)
-										? `${aliasLabel(a)} · ${connections.find((c) => c.alias === a)?.asleep ? "asleep" : "offline"}`
-										: aliasLabel(a);
+										? `${boxNameOf(a)} · ${connections.find((c) => c.alias === a)?.asleep ? "asleep" : "offline"}`
+										: boxNameOf(a);
 									return project ? `${project} · ${box}` : box;
 								}}
+								machineOf={machineOf}
 								isOffline={(t) => offlineAliasOf(t) !== null}
 							/>
 							{visibleIssue && (
@@ -2634,7 +2644,7 @@ export function App() {
 							{selectedTask && selectedOffline ? (
 								<OfflineTaskPanel
 									task={selectedTask}
-									label={aliasLabel(selectedOffline)}
+									alias={selectedOffline}
 									asleep={connections.some((c) => c.alias === selectedOffline && c.asleep)}
 									waking={wakingAlias === selectedOffline}
 									steps={connectSteps[selectedOffline]}
@@ -3073,6 +3083,7 @@ export function App() {
 			)}
 		</div>
 	);
+	return <BoxNameContext.Provider value={boxNameOf}>{page}</BoxNameContext.Provider>;
 }
 
 // The status pill's colour per column: the columns that want your eyes take
@@ -3142,7 +3153,7 @@ function TriageGlyph({ triage }: { triage: TaskTriage }) {
  */
 function OfflineTaskPanel({
 	task,
-	label,
+	alias,
 	asleep,
 	waking,
 	steps,
@@ -3151,7 +3162,8 @@ function OfflineTaskPanel({
 	onClose,
 }: {
 	task: TaskDTO;
-	label: string;
+	/** The box it is on, not held right now. */
+	alias: string;
 	asleep: boolean;
 	waking: boolean;
 	steps: ConnectStep[] | undefined;
@@ -3159,6 +3171,7 @@ function OfflineTaskPanel({
 	onWake: () => void;
 	onClose: () => void;
 }) {
+	const label = useBoxName()(alias);
 	return (
 		<section className={`panel ${mode === "full" ? "full" : ""}`}>
 			<div className="head">
@@ -3167,7 +3180,7 @@ function OfflineTaskPanel({
 					<IconButton icon={X} label="Close" onClick={onClose} />
 				</div>
 				<TaskSummary task={task} />
-				<BranchLine task={task} />
+				<BranchLine task={task} machine={alias} />
 			</div>
 			<div className="empty">
 				{waking ? (
@@ -3190,6 +3203,8 @@ function OfflineTaskPanel({
 
 function TaskRow({
 	task: t,
+	machine,
+	showMachine,
 	offline,
 	selected,
 	pulse,
@@ -3197,6 +3212,10 @@ function TaskRow({
 	onDelete,
 }: {
 	task: TaskDTO;
+	/** The machine it runs on (null: this Mac). The peek always names it. */
+	machine: Alias;
+	/** Name a box on the row itself. This Mac is never named there. */
+	showMachine: boolean;
 	/** Its box isn't held: the row is its last-seen state, not a live one. */
 	offline: boolean;
 	selected: boolean;
@@ -3208,6 +3227,8 @@ function TaskRow({
 	const Icon = taskIcon(t.name);
 	const tags = tagsFor(t);
 	const glyphs = taskGlyphs(t);
+	const box = useBoxName()(machine);
+	const named = machine !== null && showMachine;
 	// The row is a grid (icon | name | git glyph | status) that the row button
 	// shares as a subgrid. The menu is the button's sibling, so its click can't
 	// nest inside the row button, and it sits in the glyph's column: glyph at
@@ -3216,6 +3237,7 @@ function TaskRow({
 		<div className="tasknode-row">
 			<TaskPeek
 				task={t}
+				machine={box}
 				note={offline ? "Its box is asleep or out of reach. Open it to wake the box." : undefined}
 			>
 				<button
@@ -3233,8 +3255,15 @@ function TaskRow({
 					{/* The status stays put; on hover the tags slide in beside it, like
 				    the card's. They share one line with the name, so the name only
 				    gives up the room the tags that fit really take. */}
-					<span className="tmain">
+					{/* A task on a box names it on a second line: beside the name, a box
+					    name left a 240px sidebar's titles a few letters long. */}
+					<span className={`tmain ${named ? "on-box" : ""}`}>
 						<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
+						{named && (
+							<span className="row-box" title={`Runs on ${box}`}>
+								{box}
+							</span>
+						)}
 						{tags.map((tag) => (
 							<span className="pill row-tag" key={tag}>
 								{tag}
@@ -3355,6 +3384,7 @@ function Board({
 	onSelect,
 	onDeselect,
 	originLabel,
+	machineOf,
 	isOffline,
 }: {
 	tasks: TaskDTO[];
@@ -3370,9 +3400,12 @@ function Board({
 	onDeselect: () => void;
 	/** Engine badge for a task (e.g. a box alias), or null to show none (Local). */
 	originLabel: (t: TaskDTO) => string | null;
+	/** The machine a task runs on (null: this Mac), for its peek. */
+	machineOf: (t: TaskDTO) => Alias;
 	/** Its box isn't held: the card is its last-seen state, not a live one. */
 	isOffline: (t: TaskDTO) => boolean;
 }) {
+	const boxNameOf = useBoxName();
 	// The side panel is sticky over the right edge of the board (the board keeps
 	// its full width rather than reflowing), so a selected card in a right-hand
 	// column sits underneath it. Scroll it clear: `.card.selected` reserves the
@@ -3432,7 +3465,7 @@ function Board({
 								const glyphs = taskGlyphs(t);
 								const isSelected = t.id === selectedId;
 								return (
-									<TaskPeek task={t} key={t.id}>
+									<TaskPeek task={t} machine={boxNameOf(machineOf(t))} key={t.id}>
 										<motion.div
 											layout
 											transition={springy}
@@ -3564,9 +3597,11 @@ function WorkSize({ task, files = false }: { task: TaskDTO; files?: boolean }) {
 /**
  * The open task's branch, the one place it shows: here is where you act on
  * git, so a click copies it. Commits ahead of / behind the pushed branch ride
- * along when there are any.
+ * along when there are any. It leads with the machine the task runs on,
+ * Local included.
  */
-function BranchLine({ task }: { task: TaskDTO }) {
+function BranchLine({ task, machine }: { task: TaskDTO; machine: Alias }) {
+	const box = useBoxName()(machine);
 	const [copied, setCopied] = useState(false);
 	const ahead = task.gitStatus?.ahead ?? 0;
 	const behind = task.gitStatus?.behind ?? 0;
@@ -3581,6 +3616,14 @@ function BranchLine({ task }: { task: TaskDTO }) {
 	};
 	return (
 		<div className="branch-line muted">
+			<span className="branch-machine" title={`Runs on ${box}`}>
+				{machine === null ? (
+					<Monitor size={12} strokeWidth={1.75} aria-hidden />
+				) : (
+					<Server size={12} strokeWidth={1.75} aria-hidden />
+				)}
+				<span className="machine-name">{box}</span>
+			</span>
 			<button
 				type="button"
 				className="branch-copy"
@@ -4184,7 +4227,7 @@ export function TaskPanel({
 				</div>
 				<TaskSummary task={task} />
 				<BoardToolsNote task={task} />
-				<BranchLine task={task} />
+				<BranchLine task={task} machine={alias} />
 			</div>
 
 			<div className="actions">

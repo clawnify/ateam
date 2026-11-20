@@ -197,10 +197,11 @@ export function groupTasks(
 		case "machine": {
 			// This Mac first, then each box by name: the order the Projects
 			// section lists a repo's machines in.
+			const label = ctx.machineLabel ?? aliasLabel;
 			const machines = [...new Set(tasks.map(ctx.machineOf))].sort((a, b) =>
-				a === null ? -1 : b === null ? 1 : a.localeCompare(b),
+				a === null ? -1 : b === null ? 1 : label(a).localeCompare(label(b)),
 			);
-			return by(ctx.machineOf, machines, "machine", ctx.machineLabel ?? aliasLabel);
+			return by(ctx.machineOf, machines, "machine", label);
 		}
 		case "project": {
 			const projectOf = ctx.projectOf;

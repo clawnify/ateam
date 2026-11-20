@@ -810,6 +810,12 @@ interface BoxView {
 	wakeError: string | null;
 }
 
+/** The open task's box. */
+interface OpenTaskView extends BoxView {
+	/** Its name, for the terminal's bar; null with a single box, as on the rows. */
+	box: string | null;
+}
+
 /** The box terminal: one box's shell, outside every project. */
 interface BoxTerminalView extends BoxView {
 	title: string;
@@ -917,7 +923,7 @@ function Shell({
 	/** The task whose terminal fills the view under the navbar, if any. */
 	openTask: TaskDTO | null;
 	/** Its box, for the terminal. */
-	openTaskView: BoxView;
+	openTaskView: OpenTaskView;
 	/** Whether that terminal should open with the keyboard up (expanded from a tile). */
 	openTaskFocus: boolean;
 	onCloseTask: () => void;
@@ -1181,6 +1187,7 @@ function Shell({
 						<ReconnectingTerminal
 							lead={<AgentIcon agentId={openTask.agentId} size={12} />}
 							title={(tasks.find((t) => t.id === openTask.id) ?? openTask).name}
+							place={openTaskView.box}
 							onBack={onCloseTask}
 							status={openTaskView.status}
 							wakeError={openTaskView.wakeError}
@@ -1190,6 +1197,7 @@ function Shell({
 							key={`${openTaskView.gen}:${openTask.id}`}
 							api={openTaskView.api}
 							task={tasks.find((t) => t.id === openTask.id) ?? openTask}
+							place={openTaskView.box}
 							onClose={onCloseTask}
 							autoFocus={openTaskFocus}
 							initialSession={missionSession?.taskId === openTask.id ? missionSession : undefined}
@@ -3182,6 +3190,9 @@ export default function App() {
 					gen: openLink.gen,
 					status: activeLabel(openLink.steps),
 					wakeError: openLink.wakeError,
+					// Every box is named here, the Lead's too: an open task has no
+					// neighbours to tell it apart from.
+					box: multi && openOwner ? labelOf(openOwner) : null,
 				}}
 				openTaskFocus={openTaskFocus}
 				onCloseTask={() => {

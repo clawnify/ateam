@@ -1,7 +1,8 @@
-import { aliasLabel, type EngineMember, type UnifiedProject } from "@ateam/protocol";
+import type { EngineMember, UnifiedProject } from "@ateam/protocol";
 import { ChevronDown, FolderPlus, Layers, Monitor, Server } from "lucide-react";
 import { type DragEvent, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useBoxName } from "../box-name";
 import { pickerTrigger } from "./picker";
 import { Button } from "./ui/button";
 import {
@@ -49,11 +50,12 @@ function ProjectMark({ owner, color }: { owner: string | null; color: string | n
  *  box), shown only once it is on more than this Mac: the multi-engine cue the
  *  Projects rows carried. The name is the hover title. */
 function Machines({ members }: { members: EngineMember[] }) {
+	const boxNameOf = useBoxName();
 	if (members.length < 2 && members.every((m) => m.alias === null)) return null;
 	return (
 		<span className="flex flex-none items-center gap-[3px] text-muted-foreground">
 			{members.map((m) => {
-				const name = aliasLabel(m.alias);
+				const name = boxNameOf(m.alias);
 				return (
 					<span key={m.alias ?? "local"} className="inline-flex" title={name}>
 						{m.alias === null ? (
@@ -104,6 +106,7 @@ export function ProjectSwitcher({
 	};
 	dropping: boolean;
 }) {
+	const boxNameOf = useBoxName();
 	// No project at all: nothing to switch to, so the row is the way to add one
 	// (under All too, which with nothing in it would name nothing).
 	if (cards.length === 0)
@@ -188,7 +191,7 @@ export function ProjectSwitcher({
 								onSelect={() => onRemove(member)}
 							>
 								{active.members.length > 1 || member.alias !== null
-									? `Remove ${active.name} from ${aliasLabel(member.alias)}…`
+									? `Remove ${active.name} from ${boxNameOf(member.alias)}…`
 									: `Remove ${active.name}…`}
 							</DropdownMenuItem>
 						))}
