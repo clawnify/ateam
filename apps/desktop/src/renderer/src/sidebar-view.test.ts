@@ -128,6 +128,20 @@ test("machine groups put this Mac first, then boxes by name", () => {
 	]);
 });
 
+test("boxes are ordered by the name shown, not their address", () => {
+	// A box a provider wakes is named after its machine there; its alias is an IP.
+	const machineOf2 = (t: TaskDTO): Alias =>
+		t.projectId === "pBox" ? "100.64.0.9:8787" : t.projectId === "pBox2" ? "beta-box" : null;
+	const names: Record<string, string> = { "100.64.0.9:8787": "zulu", "beta-box": "beta-box" };
+	const list = [task("z", { projectId: "pBox" }), task("b", { projectId: "pBox2" }), task("l")];
+	const groups = groupTasks(list, "machine", {
+		...ctx,
+		machineOf: machineOf2,
+		machineLabel: (m) => (m === null ? "Local" : (names[m] ?? m)),
+	});
+	expect(groups.map((g) => g.label)).toEqual(["Local", "beta-box", "zulu"]);
+});
+
 test("project groups go by project name, keyed by the repo card", () => {
 	const cards: Record<string, { key: string; name: string }> = {
 		pLocal: { key: "gh:o/zeta", name: "zeta" },

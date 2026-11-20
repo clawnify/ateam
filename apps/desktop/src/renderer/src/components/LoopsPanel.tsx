@@ -1,7 +1,6 @@
 import {
 	type AgentDTO,
 	type Alias,
-	aliasLabel,
 	boxSupports,
 	dailyCron,
 	dailyTimeOf,
@@ -28,6 +27,7 @@ import {
 	Zap,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useBoxName } from "../box-name";
 import { AgentPicker } from "./AgentPicker";
 import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
 import { SCHEDULE_PRESETS, type ScheduleKind, SchedulePicker } from "./SchedulePicker";
@@ -131,6 +131,7 @@ export function LoopForm({
 	onSaved: (saved: { name: string }) => void;
 	onCancel: () => void;
 }) {
+	const boxNameOf = useBoxName();
 	// Where the cursor lands when the form opens. A new loop cannot be created
 	// without a name, so it starts there; an existing one already has its name,
 	// so it opens on the prompt, like the composer. Keyed by the loop's id, not
@@ -281,7 +282,7 @@ export function LoopForm({
 	// are the engines holding this repo, one per alias.
 	const envOptions: EnvOption[] = members.map((m) => ({
 		alias: m.alias,
-		label: aliasLabel(m.alias),
+		label: boxNameOf(m.alias),
 		disabled: false,
 		// Surface a skewed box on the pill itself, like the composer does — the
 		// feature gates below read off the same engine.
@@ -354,7 +355,7 @@ export function LoopForm({
 								) : (
 									<Server size={14} strokeWidth={1.75} />
 								)}
-								<span>{aliasLabel(ownerAlias)}</span>
+								<span>{boxNameOf(ownerAlias)}</span>
 							</span>
 						) : (
 							<EnvironmentPicker environments={envOptions} value={ownerAlias} onChange={pickEnv} />
@@ -466,6 +467,7 @@ export function LoopsPanel({
 	/** Open the edit dialog for this loop. */
 	onEdit: (id: string) => void;
 }) {
+	const boxNameOf = useBoxName();
 	const [busy, setBusy] = useState<string | null>(null);
 	const [now, setNow] = useState(() => Date.now());
 	// The master switch, `engine.loopsPaused` in settings.json. With settings
@@ -607,7 +609,7 @@ export function LoopsPanel({
 							<span className="loop-tag">
 								{[
 									l.projectId && projectName?.(l.projectId),
-									aliasLabel(memberFor(members, l.projectId)?.alias ?? null),
+									boxNameOf(memberFor(members, l.projectId)?.alias ?? null),
 								]
 									.filter(Boolean)
 									.join(" · ")}

@@ -1103,6 +1103,26 @@ input {
 .tasknode .tname + .row-tag {
 	margin-left: 4px;
 }
+/* A task on a box: the name has the first line to itself, and the box's name
+   starts the second, where the hover's tags join it while they fit. Local
+   tasks keep one line. */
+.tasknode .tmain.on-box {
+	height: 36px;
+	margin-block: 0;
+}
+.tasknode .tmain.on-box .tname {
+	flex-basis: 100%;
+}
+.tasknode .row-box {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 11px;
+	line-height: 18px;
+	color: var(--text-dim);
+}
 .tasknode-row:not(:hover) .row-tag {
 	display: none;
 }
@@ -1245,6 +1265,23 @@ input {
 }
 .branch-line .branch-base {
 	flex: none;
+	white-space: nowrap;
+}
+/* Where the task runs, ahead of the branch. A long box name gives way first. */
+.branch-line .branch-machine {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 40%;
+	/* The branch button pulls itself 4px left for its hover fill. */
+	margin-right: 4px;
+}
+.branch-machine .machine-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 .panel .actions {

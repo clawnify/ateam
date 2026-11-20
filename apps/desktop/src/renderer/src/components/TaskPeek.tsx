@@ -28,10 +28,13 @@ export function TaskPeekProvider({ children }: { children: ReactNode }) {
  */
 export function TaskPeek({
 	task,
+	machine,
 	note,
 	children,
 }: {
 	task: TaskDTO;
+	/** The machine it runs on, by name (box-name.ts). */
+	machine?: string;
 	/** A dimmer last line, such as why the row looks off. */
 	note?: string;
 	/** The row or card: one element that takes a ref. */
@@ -48,6 +51,7 @@ export function TaskPeek({
 			>
 				<div className="font-medium">{task.name}</div>
 				{task.summary && <div className="mt-1 text-xs text-muted-foreground">{task.summary}</div>}
+				{machine && <div className="mt-1 text-xs text-muted-foreground">Runs on {machine}</div>}
 				{note && <div className="mt-1 text-xs text-muted-foreground">{note}</div>}
 			</TooltipContent>
 		</Tooltip>
