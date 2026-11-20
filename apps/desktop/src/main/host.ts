@@ -43,6 +43,9 @@ import {
 	type PairingStatusDTO,
 	PROTOCOL_VERSION,
 	type ProjectDTO,
+	type ProxyCheck,
+	type ProxyPatch,
+	type ProxyStatus,
 	providerById,
 	type RepoAccessDTO,
 	type RpcClient,
@@ -234,6 +237,10 @@ export interface Host {
 	dotfilesStatus(alias: string): Promise<DotfilesStatus>;
 	prepareDotfiles(alias: string, config: DotfilesConfig): Promise<DotfilesPlan>;
 	applyDotfiles(alias: string, planId: string): Promise<DotfilesStatus>;
+	/** A connected box's own proxy (v39). The address goes to the box once and never comes back. */
+	proxyStatus(alias: string): Promise<ProxyStatus>;
+	updateProxy(alias: string, patch: ProxyPatch): Promise<ProxyStatus>;
+	checkProxy(alias: string): Promise<ProxyCheck>;
 	/** A connected box's GitHub access: what its gh and git sign in with. */
 	githubAccess(alias: string): Promise<GithubAccessDTO>;
 	/** Hand a connected box a GitHub token; answers its new access. The token never comes back. */
@@ -1513,6 +1520,15 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	async function applyDotfiles(alias: string, planId: string): Promise<DotfilesStatus> {
 		return (await heldBox(alias).handle(CH.dotfilesApply, [planId])) as DotfilesStatus;
 	}
+	async function proxyStatus(alias: string): Promise<ProxyStatus> {
+		return (await heldBox(alias).handle(CH.proxyStatus, [])) as ProxyStatus;
+	}
+	async function updateProxy(alias: string, patch: ProxyPatch): Promise<ProxyStatus> {
+		return (await heldBox(alias).handle(CH.proxyUpdate, [patch])) as ProxyStatus;
+	}
+	async function checkProxy(alias: string): Promise<ProxyCheck> {
+		return (await heldBox(alias).handle(CH.proxyCheck, [])) as ProxyCheck;
+	}
 	async function githubAccess(alias: string): Promise<GithubAccessDTO> {
 		const access = (await heldBox(alias).handle(CH.githubAccessStatus, [])) as GithubAccessDTO;
 		return rememberGithub(alias, access);
@@ -1676,6 +1692,9 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		dotfilesStatus,
 		prepareDotfiles,
 		applyDotfiles,
+		proxyStatus,
+		updateProxy,
+		checkProxy,
 		githubAccess,
 		connectGithub,
 		checkGithub,
@@ -1747,6 +1766,11 @@ export function registerHostIpc(host: Host): void {
 	ipcMain.handle(HOST_CH.applyDotfiles, (_e, alias: string, id: string) =>
 		host.applyDotfiles(alias, id),
 	);
+	ipcMain.handle(HOST_CH.proxyStatus, (_e, alias: string) => host.proxyStatus(alias));
+	ipcMain.handle(HOST_CH.updateProxy, (_e, alias: string, patch: ProxyPatch) =>
+		host.updateProxy(alias, patch),
+	);
+	ipcMain.handle(HOST_CH.checkProxy, (_e, alias: string) => host.checkProxy(alias));
 	ipcMain.handle(HOST_CH.githubAccess, (_e, alias: string) => host.githubAccess(alias));
 	ipcMain.handle(HOST_CH.connectGithub, (_e, alias: string, token: string) =>
 		host.connectGithub(alias, token),

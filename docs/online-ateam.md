@@ -316,6 +316,33 @@ is safe: it never restarts a Chrome an agent may be using. A Chrome an older
 version started keeps its blank startup window, with the agents' window behind
 it, until it restarts; the script prints the command.
 
+### Going out through a proxy
+
+A box can send its traffic through a proxy of yours: a residential or
+country-specific address for its browser, or a company proxy for everything. In
+the desktop app, open the box's page (Settings → Boxes) and paste the proxy's
+address in **Proxy**, like `http://user:password@host:port` (`https://` and
+`socks5://` work too). Then choose what goes through it:
+
+- **Browser**: the box's Chrome, so what agents browse and what the Browser panel
+  shows. It applies within seconds and open tabs stay open: Ateam sets Chrome's
+  managed proxy policy, which Chrome reloads by itself. That needs passwordless
+  sudo, as the browser install does. WebRTC is kept from revealing the box's own
+  address.
+- **Server**: everything else the engine starts: agents' terminals, `git`, `gh`,
+  `npm`, `curl` and the agent CLIs, through `HTTP_PROXY`/`HTTPS_PROXY`. Agents
+  started from then on use it, and turning it off applies to running ones too. The
+  engine's own requests follow on Node 24.14 or newer. SSH connections (`git@…`)
+  always go direct.
+
+**Check** shows the address sites see through the proxy, and its country. A small
+forwarder on the box (`127.0.0.1:9380` for Chrome, `:9381` for the rest) adds the
+proxy's username and password, which Chrome can't carry itself. If the proxy stops
+answering, traffic set to use it fails rather than leaving from the box's own
+address. Loopback and your tailnet never go through the proxy. The address and
+password stay on the box in `~/.ateam/proxy.json` (readable by you only); clients
+only ever see where the proxy is.
+
 ## 5. Same box, from the iOS app
 
 The phone can't run `ssh`, so it speaks to the **same daemon** over a WebSocket

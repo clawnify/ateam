@@ -16,6 +16,7 @@ import { setUpPhoneAccess } from "../lib/box-actions";
 import { type BoxSetup, dismissSetup, useSetup } from "../lib/setups";
 import { useLeadHome } from "../useLeadHome";
 import { BoxAccess } from "./BoxAccess";
+import { BoxProxy } from "./BoxProxy";
 import { BoxDotfiles } from "./Dotfiles";
 import { GithubAccess } from "./GithubAccess";
 import { Button } from "./ui/button";
@@ -604,6 +605,13 @@ export function BoxPage({
 					<GithubAccess alias={row.alias} label={row.title} />
 				)}
 			</div>
+			<BoxProxy
+				alias={row.alias}
+				label={row.title}
+				version={row.version}
+				connected={row.state === "connected"}
+				confirm={confirm}
+			/>
 			<BoxDotfiles
 				alias={row.alias}
 				label={row.title}

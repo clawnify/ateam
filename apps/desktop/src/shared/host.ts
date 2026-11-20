@@ -15,6 +15,9 @@ import type {
 	PairingInviteDTO,
 	PairingStatusDTO,
 	ProjectDTO,
+	ProxyCheck,
+	ProxyPatch,
+	ProxyStatus,
 	RepoAccessDTO,
 	SystemInfo,
 } from "@ateam/protocol";
@@ -76,6 +79,10 @@ export const HOST_CH = {
 	dotfilesStatus: "host:dotfilesStatus",
 	prepareDotfiles: "host:prepareDotfiles",
 	applyDotfiles: "host:applyDotfiles",
+	/** A connected box's own proxy (v39). */
+	proxyStatus: "host:proxyStatus",
+	updateProxy: "host:updateProxy",
+	checkProxy: "host:checkProxy",
 	/** A connected box's GitHub access, handing it a token, and its per-repo access. */
 	githubAccess: "host:githubAccess",
 	connectGithub: "host:connectGithub",
@@ -338,6 +345,12 @@ export interface AteamHost {
 	dotfilesStatus(alias: string): Promise<DotfilesStatus>;
 	prepareDotfiles(alias: string, config: DotfilesConfig): Promise<DotfilesPlan>;
 	applyDotfiles(alias: string, planId: string): Promise<DotfilesStatus>;
+	/** A connected box's own proxy (v39): where it is and what goes out through it. */
+	proxyStatus(alias: string): Promise<ProxyStatus>;
+	/** Save its address or switches. The address, password and all, goes to the box only. */
+	updateProxy(alias: string, patch: ProxyPatch): Promise<ProxyStatus>;
+	/** The address sites see through the box's proxy. */
+	checkProxy(alias: string): Promise<ProxyCheck>;
 	/** A connected box's GitHub access: what its gh and git sign in with. */
 	githubAccess(alias: string): Promise<GithubAccessDTO>;
 	/** Hand a connected box a GitHub token; answers its new access. Rejects with a
