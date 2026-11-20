@@ -386,13 +386,16 @@ function expiryPhrase(expiresAt: number, now: number): string {
  * What Ateam does on a box, and nothing else: the fine-grained permissions it asks
  * for. Commit statuses is read-only and there for the merge queue, which holds a
  * merge until CI passes: CI that reports commit statuses (rather than GitHub
- * Actions' check runs) is hidden on a private repository without it.
+ * Actions' check runs) is hidden on a private repository without it. Actions is
+ * read-only and there so an agent can read why CI failed: the runs, their jobs and
+ * the logs (`gh run view --log-failed`) all need it.
  */
 export const FINE_GRAINED_PERMISSIONS = {
 	contents: "write",
 	pull_requests: "write",
 	issues: "write",
 	statuses: "read",
+	actions: "read",
 	metadata: "read",
 } as const;
 

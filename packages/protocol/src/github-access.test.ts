@@ -60,6 +60,7 @@ describe("fineGrainedTokenUrl", () => {
 		expect(p.get("issues")).toBe("write");
 		expect(p.get("metadata")).toBe("read");
 		expect(p.get("statuses")).toBe("read");
+		expect(p.get("actions")).toBe("read");
 		expect(p.has("workflows")).toBe(false);
 		expect(p.has("administration")).toBe(false);
 	});
