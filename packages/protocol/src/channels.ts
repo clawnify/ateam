@@ -83,6 +83,10 @@ export const CH = {
 	dotfilesStatus: "dotfiles:status",
 	dotfilesPrepare: "dotfiles:prepare",
 	dotfilesApply: "dotfiles:apply",
+	// A box's own proxy (proxy.ts). Box-addressed, served by a box's daemon only.
+	proxyStatus: "proxy:status",
+	proxyUpdate: "proxy:update",
+	proxyCheck: "proxy:check",
 	credentialsGet: "credentials:get",
 	credentialsUpdate: "credentials:update",
 	githubAccessStatus: "githubAccess:status",

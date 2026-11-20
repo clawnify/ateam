@@ -180,7 +180,11 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // agent learns at its next turn whether the user created its proposal (and as
 // which task) or dismissed it. Both optional: an older engine ignores them, and
 // an older client's clear records nothing. No gate.
-export const PROTOCOL_VERSION = 38;
+// v39: a box's own proxy (proxy:status, proxy:update, proxy:check; proxy.ts):
+// one address, and switches for the box's browser and for everything else its
+// engine starts. New methods only, served by a box's daemon: an older box
+// answers "Unknown method" (FEATURE_MIN_VERSION.proxy).
+export const PROTOCOL_VERSION = 39;
 
 /**
  * The oldest client protocol an engine of this version still serves correctly, sent
@@ -419,6 +423,9 @@ export const FEATURE_MIN_VERSION = {
 	/** v25 added githubAccess:*. An older box answers "Unknown method", so clients
 	 *  point at its terminal (gh auth login) and at Update box instead. */
 	githubAccess: 25,
+	/** v39 added proxy:* on a box. An older box answers "Unknown method", so the
+	 *  box page offers its update instead of a proxy form. */
+	proxy: 39,
 } as const;
 
 export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
@@ -1379,6 +1386,7 @@ export interface SessionHitDTO {
 // ---- IPC channel names (their own module: see channels.ts) ----
 export { CH } from "./channels";
 export * from "./dotfiles";
+export * from "./proxy";
 
 // ---- event payloads ----
 export interface PtyDataEvent {

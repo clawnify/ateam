@@ -33,6 +33,8 @@ import { engineLead } from "./lead/engine-lead";
 import { chatPreferences } from "./lead/settings";
 import { BoxLinks } from "./links";
 import { Pairings } from "./pairing";
+import { BoxProxy } from "./proxy";
+import { runForwarder } from "./proxy/forwarder";
 import {
 	LinkLimiter,
 	LiveConnections,
@@ -230,7 +232,18 @@ async function initializeDaemon(releaseStartup: () => void): Promise<void> {
 		handle: async (method, args) => (method === CH.linksSet ? links.set(args[0]) : links.status()),
 		subscribe: () => () => {},
 	};
-	extensions = [lead, linkMethods];
+	// This box's own proxy (proxy/index.ts): Chrome's policy and the forwarder are
+	// Linux things, and only a box serves it, never the Mac's engine.
+	const proxy =
+		process.platform === "linux"
+			? new BoxProxy({
+					dataDir: DATA_DIR,
+					forwarderCommand: [process.execPath, SELF, "proxy"],
+					log: (line) => console.log(line),
+				})
+			: null;
+	proxy?.start();
+	extensions = [lead, linkMethods, ...(proxy ? [proxy.extension] : [])];
 	links.start();
 	wsAddr = resolveWsAddr(process.env, DATA_DIR) ?? null;
 	// A box listening on 127.0.0.1 behind Tailscale Serve (boxd) is reached at the
@@ -513,6 +526,9 @@ if (cmd === "daemon") {
 	runAttach();
 } else if (cmd === "pair") {
 	runPair(process.argv.slice(3));
+} else if (cmd === "proxy") {
+	// The proxy forwarder (proxy/forwarder.ts). The engine starts it; not for hands.
+	void runForwarder(DATA_DIR);
 } else {
 	console.error(
 		"usage: ateam <daemon | attach --stdio | pair [--unlock | --add-device <hash> [--label <name>]]>",

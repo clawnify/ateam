@@ -3583,6 +3583,44 @@ input {
 	justify-content: space-between;
 	gap: 12px;
 }
+/* A box's own proxy (BoxProxy): its address, a form to set it, and two switches. */
+.box-proxy {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	font-size: 13px;
+	min-width: 0;
+}
+/* The column's gap spaces its lines; a paragraph's own margin would double it. */
+.box-proxy p {
+	margin: 0;
+}
+.box-proxy-address {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.box-proxy-address code {
+	font-family: ui-monospace, Menlo, monospace;
+	font-size: 12px;
+}
+.box-proxy-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-shrink: 0;
+}
+.box-proxy-form {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+/* The switches are .check-rows (QuestionCard's checklist rows). */
+.box-proxy-switches {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin-inline: -4px;
+}
 /* Pair your iPhone and Add a box, side by side above the list. */
 .box-list-actions {
 	display: flex;
