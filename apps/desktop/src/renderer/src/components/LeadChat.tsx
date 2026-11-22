@@ -1178,6 +1178,7 @@ export function LeadChat({
 	onOpenTask,
 	onOpenProposal,
 	onHide,
+	onExpand,
 	scope,
 	home,
 	onLeadBox,
@@ -1205,6 +1206,8 @@ export function LeadChat({
 	/** Set when the chat is the sidebar on the right: its header is then the
 	 *  slim strip that hides it, not the Lead tab's title. */
 	onHide?: () => void;
+	/** The sidebar's way to the full-width chat, the Lead tab. */
+	onExpand?: () => void;
 }) {
 	const [snap, setSnap] = useState<LeadSnapshot>(EMPTY);
 	const call = useLeadCall();
@@ -1492,6 +1495,14 @@ export function LeadChat({
 						disabled={snap.items.length === 0}
 						onClick={() => void window.ateamLead.reset()}
 					/>
+					{onExpand && (
+						<IconButton
+							icon={Maximize2}
+							label="Expand to full width"
+							size={14}
+							onClick={onExpand}
+						/>
+					)}
 					<IconButton
 						icon={PanelRightFilled}
 						label="Hide Lead sidebar"
