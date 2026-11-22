@@ -1,5 +1,6 @@
 // macOS notification when a task's wait comes due (see waits.ts in the server),
-// an agent asks a question, or proposes a task or loop. While a project's own
+// an agent asks a question, or proposes a task or loop, or a message from the
+// Lead or the user never reaches a task's agent (peer-messages.ts). While a project's own
 // window is in front, other projects' banners wait until the user leaves it.
 //
 // The engine already does the board's half: it files the card in Needs You and
@@ -12,7 +13,7 @@
 // stamp on every later update (a git refresh, a rename), and after a restart
 // this process has forgotten what it already showed, so anything older than a
 // few minutes is the card's job, not a notification's.
-import type { TaskDTO } from "@ateam/protocol";
+import { type TaskDTO, undeliveredText } from "@ateam/protocol";
 import { Notification } from "electron";
 
 /** How late a firing may still be announced: covers boot and clock skew. */
@@ -91,6 +92,24 @@ export function proposalNotice(
 }
 
 /**
+ * A message from the Lead or the user that did not reach a task's agent
+ * (TaskDTO.undelivered), which files the card in Needs You: an answer sent
+ * from the board reaches no Lead chat, so this is where the user hears of it.
+ * Once per (task, at) and only while fresh.
+ */
+export function undeliveredNotice(
+	task: TaskDTO,
+	shown: ReadonlySet<string>,
+	now: number,
+): WaitNotice | null {
+	const u = task.undelivered;
+	if (!u || now - u.at > FRESH_MS) return null;
+	const key = `${task.id}:u:${u.at}`;
+	if (shown.has(key)) return null;
+	return { key, title: task.name, body: undeliveredText(u) };
+}
+
+/**
  * A question's markdown as the plain text a notification shows. Fence lines,
  * heading marks, `*` emphasis, code ticks and link syntax go; what is inside
  * code (a permission prompt's command, a path) stays as written. Underscores
@@ -118,7 +137,7 @@ function plainLine(line: string): string {
 		.replace(/(\d+)/g, (_, i: string) => code[Number(i)] ?? "");
 }
 
-const NOTICES = [waitNotice, questionNotice, proposalNotice];
+const NOTICES = [waitNotice, questionNotice, proposalNotice, undeliveredNotice];
 
 /**
  * Whether a banner held since `at` is still worth showing, judged on the task as
@@ -201,7 +220,8 @@ export function createWaitNotifier(
 			const notice =
 				waitNotice(task, shown, now) ??
 				questionNotice(task, shown, now) ??
-				proposalNotice(task, shown, now);
+				proposalNotice(task, shown, now) ??
+				undeliveredNotice(task, shown, now);
 			if (!notice) return;
 			shown.add(notice.key);
 			if (focused !== null && focused !== task.projectId) {
