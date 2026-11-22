@@ -2751,6 +2751,9 @@ export function App() {
 							onOpenTask={openFromLead}
 							onOpenProposal={openLeadProposal}
 							onHide={() => setLeadSide(false)}
+							// The Lead tab: the sidebar steps aside while it shows, and
+							// comes back on the other views.
+							onExpand={() => goToView("lead")}
 							scope={boundProject?.name}
 							home={leadHome}
 							onLeadBox={onLeadBox}
