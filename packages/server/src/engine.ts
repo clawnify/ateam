@@ -221,10 +221,13 @@ function mapEventToStatus(eventType: string): AgentStatus {
  * A session's status after `eventType`. A Start is the process coming up (a
  * `--resume`, or compaction mid-turn), not work, so the session keeps what it
  * was. isWorking() reads this: a resume written as "running" held its box awake
- * for as long as the idle pane lived, because only a Stop clears it.
+ * for as long as the idle pane lived, because only a Stop clears it. The one
+ * exception is a pane whose agent quit (`stopped`, pty/agent-quit.ts): a Start
+ * there is an agent the user ran again by hand, at its prompt, so it is `idle`.
  */
 export function sessionStatusAfter(eventType: string, current: AgentStatus): AgentStatus {
-	return eventType === "Start" ? current : mapEventToStatus(eventType);
+	if (eventType !== "Start") return mapEventToStatus(eventType);
+	return current === "stopped" ? "idle" : current;
 }
 
 function mapEventToColumn(eventType: string): KanbanColumn {
@@ -750,7 +753,12 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		// A fresh launch already filed the card as running when it spawned, and
 		// its first Working follows within seconds; a resume sits idle at the
 		// prompt and must not move the card or refresh its "last activity".
-		if (e.eventType === "Start") return;
+		if (e.eventType === "Start") {
+			// A pane drawn as a shell holds an agent again (sessionStatusAfter):
+			// the card's tab glyphs follow (liveAgentIds).
+			if (session.status === "stopped") sendTaskUpdated(session.taskId);
+			return;
+		}
 		const task = repo.getTask(db, session.taskId);
 		if (task) {
 			// Activity brings an archived task back, whatever the event: the early
