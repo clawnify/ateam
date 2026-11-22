@@ -299,6 +299,24 @@ export function Composer({
 		// With the switch, the composer reaches FLOAT up over the content above,
 		// where the switch floats centred; only the switch and the panel take touches.
 		<View pointerEvents="box-none" style={lead ? styles.floatRoot : undefined}>
+			{/* Above the switch (or the panel, with no Lead), over the bottom of the
+			    board. It hangs off a zero-height anchor ahead of both rather than off
+			    the panel with bottom: "100%": that percentage resolves against the
+			    panel's content box here, which put it under the input. */}
+			{snack ? (
+				<View pointerEvents="box-none" style={styles.snackAnchor}>
+					<View style={[styles.snack, !lead && styles.snackGap]} accessibilityLiveRegion="polite">
+						<Pressable style={styles.snackMain} onPress={onDismissSnack}>
+							<Text style={styles.snackText} numberOfLines={1}>
+								{snack}
+							</Text>
+						</Pressable>
+						<Pressable onPress={onOpenSnack} hitSlop={10} accessibilityRole="button">
+							<Text style={styles.snackAction}>Open</Text>
+						</Pressable>
+					</View>
+				</View>
+			) : null}
 			{lead ? (
 				<Animated.View
 					pointerEvents={switchFaded ? "none" : "box-none"}
@@ -338,18 +356,6 @@ export function Composer({
 				</Animated.View>
 			) : null}
 			<View style={[styles.wrap, keyboardUp && styles.wrapKeyboard]}>
-				{snack ? (
-					<View style={styles.snack} accessibilityLiveRegion="polite">
-						<Pressable style={styles.snackMain} onPress={onDismissSnack}>
-							<Text style={styles.snackText} numberOfLines={1}>
-								{snack}
-							</Text>
-						</Pressable>
-						<Pressable onPress={onOpenSnack} hitSlop={10} accessibilityRole="button">
-							<Text style={styles.snackAction}>Open</Text>
-						</Pressable>
-					</View>
-				) : null}
 				<View style={styles.inner}>
 					{note ? <Text style={styles.note}>{note}</Text> : null}
 					<AttachmentStrip
@@ -665,13 +671,14 @@ const styles = StyleSheet.create({
 		justifyContent: "center",
 	},
 	sendOff: { opacity: 0.35 },
-	// Floats just above the composer, over the bottom of the board.
+	snackAnchor: { height: 0 },
+	// Floats just above the composer, over the bottom of the board. The switch's
+	// band already keeps it off the switch; with no switch it needs its own gap.
 	snack: {
 		position: "absolute",
-		bottom: "100%",
+		bottom: 0,
 		left: 12,
 		right: 12,
-		marginBottom: 8,
 		flexDirection: "row",
 		alignItems: "center",
 		gap: 12,
@@ -682,6 +689,7 @@ const styles = StyleSheet.create({
 		paddingHorizontal: 14,
 		paddingVertical: 11,
 	},
+	snackGap: { bottom: 8 },
 	snackMain: { flex: 1 },
 	snackText: { color: C.ink, fontSize: 14 },
 	snackAction: { color: C.ink, fontSize: 14, fontWeight: "700" },
