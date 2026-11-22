@@ -119,7 +119,12 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 	const { handle } = deps;
 	// The session is created below; the follower records into it through this.
 	let session: LeadSession | null = null;
-	const follower = new Follower({ dir: deps.dir, handle, record: (item) => session?.record(item) });
+	const follower = new Follower({
+		dir: deps.dir,
+		handle,
+		record: (item) => session?.record(item),
+		note: (line) => session?.note(line),
+	});
 	const attachments = new LeadAttachments(deps.dir);
 	attachments.prune();
 	// A voice call: until when it is on, and the messages and answers held for
@@ -175,7 +180,7 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 					onElsewhere: ({ task, projectName, homeName, body }) => {
 						const said = body.replace(/\s+/g, " ").trim();
 						deps.onElsewhere?.(
-							`messaged [${task.name.replace(/[[\]\n]/g, " ")}](${TASK_LINK_SCHEME}${task.id}) in ${projectName} from ${homeName}'s own Lead chat: ${JSON.stringify(said.length > 200 ? `${said.slice(0, 200)}…` : said)}`,
+							`the user messaged [${task.name.replace(/[[\]\n]/g, " ")}](${TASK_LINK_SCHEME}${task.id}) in ${projectName} from ${homeName}'s own Lead chat: ${JSON.stringify(said.length > 200 ? `${said.slice(0, 200)}…` : said)}`,
 						);
 					},
 				}
@@ -275,10 +280,10 @@ export async function startLead(deps: LeadDeps): Promise<Lead> {
 			const what = `your proposed ${item.proposal.kind} ${JSON.stringify(item.proposal.name)}`;
 			lead.note(
 				outcome !== "created"
-					? `dismissed ${what}`
+					? `the user dismissed ${what}`
 					: task
-						? `created ${what} as [${task.name.replace(/[[\]\n]/g, " ")}](${TASK_LINK_SCHEME}${task.id})`
-						: `created ${what}`,
+						? `the user created ${what} as [${task.name.replace(/[[\]\n]/g, " ")}](${TASK_LINK_SCHEME}${task.id})`
+						: `the user created ${what}`,
 			);
 		},
 		// Shown in the thread as the user's message.

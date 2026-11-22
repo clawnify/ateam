@@ -18,6 +18,7 @@ import {
 	nextHop,
 	PEER_SEARCH_LIMIT,
 	PeerMessenger,
+	type PeerMessengerDeps,
 	planDelivery,
 	planUserDelivery,
 	STARTING_WATCH_MS,
@@ -1187,5 +1188,185 @@ describe("A message whose woken agent never reads it", () => {
 		messenger.agentQuit("launched-1");
 		expect(allMessages()).toHaveLength(1);
 		expect(allMessages()[0]?.error).toBeNull();
+	});
+});
+
+describe("What the Lead or the user sent that did not reach its agent", () => {
+	let notified: string[];
+	function withNotify(launch: PeerMessengerDeps["launch"]): void {
+		notified = [];
+		messenger = new PeerMessenger({
+			db,
+			isLive: (t) => live.has(t),
+			lastInputAt: () => null,
+			stopSession: async () => {},
+			launch,
+			notify: (taskId) => notified.push(taskId),
+			log: () => {},
+			now: () => now,
+		});
+	}
+	const startsOne = async () => ({ terminalId: "launched-1" });
+
+	it("puts a failed message from the Lead on the task and files it in Needs You", async () => {
+		withNotify(startsOne);
+		const b = addTask("b", "claude");
+		repo.updateTask(db, b.id, { column: "running" });
+		const sent = messenger.sendFrom("lead", { to: b.id, body: "please rebase\nthen push" });
+		expect(sent.reason).toContain("Ateam files the task in Needs You");
+		await flush();
+		messenger.agentOutput("launched-1", NO_CONVERSATION);
+		now += 7_000;
+		messenger.agentQuit("launched-1");
+
+		const after = repo.getTask(db, b.id);
+		expect(after?.undelivered).toEqual({
+			state: "failed",
+			from: ["lead"],
+			why: 'its agent quit 7 s after Ateam started it, before it reported starting up. The last thing it printed: "No conversation found to continue"',
+			opening: "please rebase",
+			at: now,
+		});
+		expect(after?.column).toBe("needs_attention");
+		expect(after?.isUnread).toBe(true);
+		expect(notified).toEqual([b.id]);
+		// Nothing to queue a notice for: the Lead has no inbox here.
+		expect(allMessages()).toHaveLength(1);
+	});
+
+	it("does the same for the user's answer when the agent cannot be started", async () => {
+		withNotify(async () => {
+			throw new Error("Claude Code isn't installed here");
+		});
+		const b = addTask("b", "claude");
+		messenger.sendFrom("user", {
+			to: b.id,
+			body: 'Answer to your ask_user question "Ship?"\n\nyes',
+		});
+		await flush();
+		const u = repo.getTask(db, b.id)?.undelivered;
+		expect(u?.state).toBe("failed");
+		expect(u?.from).toEqual(["user"]);
+		expect(u?.why).toBe("Ateam could not start its agent (Claude Code isn't installed here)");
+		expect(u?.opening).toBe('Answer to your ask_user question "Ship?"');
+	});
+
+	it("names both senders when the batch held the Lead's words and the user's", async () => {
+		withNotify(startsOne);
+		const b = addTask("b", "claude");
+		repo.insertPeerMessage(db, {
+			fromTaskId: null,
+			fromTerminalId: "ateam:user",
+			toTaskId: b.id,
+			body: "first",
+			hop: 1,
+			createdAt: now - 1,
+		});
+		messenger.sendFrom("lead", { to: b.id, body: "second" });
+		await flush();
+		messenger.agentQuit("launched-1");
+		const u = repo.getTask(db, b.id)?.undelivered;
+		expect(u?.from).toEqual(["user", "lead"]);
+		// What the Lead's agent is told it sent is its own message, not the user's.
+		expect(u?.opening).toBe("second");
+	});
+
+	it("counts a linked box's Lead as the Lead", async () => {
+		withNotify(startsOne);
+		const b = addTask("b", "codex");
+		messenger.receive({ to: b.id, body: "pause for now", from: { box: "probe", lead: true } });
+		await flush();
+		messenger.agentQuit("launched-1");
+		expect(repo.getTask(db, b.id)?.undelivered?.from).toEqual(["lead"]);
+	});
+
+	it("leaves the card alone when only a task's agent sent it: that task hears instead", async () => {
+		withNotify(startsOne);
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "claude");
+		repo.updateTask(db, b.id, { column: "running" });
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "hi" });
+		await flush();
+		messenger.agentQuit("launched-1");
+		expect(repo.getTask(db, b.id)?.undelivered).toBeNull();
+		expect(repo.getTask(db, b.id)?.column).toBe("running");
+		expect(notified).toEqual([]);
+	});
+
+	it("says a message is held when its agent has not started up, and clears it once it does", async () => {
+		withNotify(startsOne);
+		const b = addTask("b", "claude");
+		messenger.sendFrom("lead", { to: b.id, body: "please rebase" });
+		await flush();
+		live.add("launched-1"); // at a folder-trust dialog, say
+		now += STARTING_WATCH_MS + 1;
+		messenger.sweep();
+		const held = repo.getTask(db, b.id);
+		expect(held?.undelivered?.state).toBe("stalled");
+		expect(held?.undelivered?.why).toContain("most likely held at a prompt in its terminal");
+		expect(held?.column).toBe("needs_attention");
+		expect(notified).toEqual([b.id]);
+
+		// The user answers the dialog and the agent starts up.
+		messenger.agentEvent("launched-1", b.id);
+		expect(repo.getTask(db, b.id)?.undelivered).toBeNull();
+		expect(notified).toEqual([b.id, b.id]);
+		// Later events cost nothing more.
+		messenger.agentEvent("launched-1", b.id);
+		expect(notified).toEqual([b.id, b.id]);
+	});
+
+	it("brings an archived task back to say so", async () => {
+		withNotify(startsOne);
+		const b = addTask("b", "claude");
+		repo.updateTask(db, b.id, { archivedAt: now - 1000 });
+		messenger.sendFrom("lead", { to: b.id, body: "still there?" });
+		await flush();
+		messenger.agentQuit("launched-1");
+		const after = repo.getTask(db, b.id);
+		expect(after?.archivedAt).toBeNull();
+		expect(after?.restoredAt).toBe(now);
+		expect(after?.column).toBe("needs_attention");
+	});
+});
+
+describe("A task whose agent quit but whose tab is still open", () => {
+	it("starts its agent in a new tab rather than waiting on the shell forever", async () => {
+		const b = addTask("b", "claude");
+		const quit = addSession(b, "claude", "tb");
+		// The agent quit (/exit): its pane lives on as a shell (pty/agent-quit.ts).
+		repo.updateSession(db, quit.id, { status: "stopped" });
+
+		const r = messenger.sendFrom("lead", { to: b.id, body: "please rebase" });
+		expect(r.reason).toContain("starting it");
+		await flush();
+		expect(launched.map((l) => l.taskId)).toEqual([b.id]);
+		// The shell is the user's: nothing stops it.
+		expect(stopped).toEqual([]);
+		expect(live.has("tb")).toBe(true);
+	});
+
+	it("hands it to an agent started by hand in that tab, not to a second one", async () => {
+		const b = addTask("b", "opencode");
+		const quit = addSession(b, "opencode", "tb");
+		repo.updateSession(db, quit.id, { status: "stopped" });
+		// The user runs opencode again in the shell: its listener asks for messages.
+		const { result } = messenger.wait("tb");
+		expect(repo.getSessionByTerminal(db, "tb")?.status).toBe("idle");
+		messenger.sendFrom("lead", { to: b.id, body: "please rebase" });
+		const got = await result;
+		expect(got.kind).toBe("message");
+		await flush();
+		expect(launched).toEqual([]);
+	});
+
+	it("still waits for a live agent that is busy", async () => {
+		const b = addTask("b", "codex");
+		addSession(b, "codex", "tb", "running");
+		const r = messenger.sendFrom("lead", { to: b.id, body: "please rebase" });
+		expect(r.reason).toContain("queued: its agent is busy");
+		await flush();
+		expect(launched).toEqual([]);
 	});
 });

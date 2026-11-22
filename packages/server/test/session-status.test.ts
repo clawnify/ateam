@@ -14,6 +14,10 @@ describe("sessionStatusAfter", () => {
 		expect(sessionStatusAfter("Start", "awaiting_input")).toBe("awaiting_input");
 	});
 
+	it("a Start in a pane whose agent quit is an agent started there by hand, at its prompt", () => {
+		expect(sessionStatusAfter("Start", "stopped")).toBe("idle");
+	});
+
 	it("every other event sets the status as before", () => {
 		expect(sessionStatusAfter("UserReply", "idle")).toBe("running");
 		expect(sessionStatusAfter("Working", "idle")).toBe("running");

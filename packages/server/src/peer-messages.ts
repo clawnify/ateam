@@ -27,7 +27,8 @@
  *     `restoreAgentSession`), so it costs the conversation nothing.
  *   - A task with no live agent is woken the same way: its last conversation is
  *     resumed with the message as the prompt, or a fresh agent is started when
- *     it never had one.
+ *     it never had one. An agent that quit and left its tab open as a shell is
+ *     not live: the message starts it in a new tab.
  *
  * Starting an agent is not the same as it reading the prompt. A restart or a
  * launch is only known to have worked once the new agent shows up: its first
@@ -42,9 +43,12 @@
  * promise the user an answer that cannot come. One that neither shows up nor
  * quits within STARTING_WATCH_MS is most likely held at a prompt in its
  * terminal (folder trust, Codex's hook review, a sign-in): its senders hear
- * that an answer may still come once the user clears it. The Lead, the user and
- * agents on other boxes have no inbox here to tell: for them a failure is
- * recorded and logged only.
+ * that an answer may still come once the user clears it. The Lead and the user
+ * have no inbox here: what they sent is put on the task instead
+ * (`tasks.undelivered`, TaskDTO.undelivered), which files the card in Needs
+ * You, and the Lead chat that sent it says so (lead/follow.ts) and tells its
+ * agent with the user's next message. Agents on other boxes have no inbox here
+ * either: for them a failure is recorded and logged only.
  *
  * The user's own words to a live Claude conversation (an answer to its
  * ask_user question, a reply from the Lead chat or the phone) never take the
@@ -74,7 +78,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getAgent } from "@ateam/agents";
-import type { AgentSession, AteamDb, PeerMessage, Project, Task } from "@ateam/db";
+import type { AgentSession, AteamDb, PeerMessage, Project, Task, TaskUndelivered } from "@ateam/db";
 import { repo } from "@ateam/db";
 import { isBranchForName } from "@ateam/git-core";
 import { projectRepo, type RemoteSenderDTO } from "@ateam/protocol";
@@ -134,6 +138,8 @@ export const NOTICE_SENDER = "ateam:notice";
  *  task's id, which stays the same while its name changes. Not a UUID, so it
  *  never collides with a real terminal's id. */
 export const remoteSenderKey = (taskId: string): string => `ateam:task:${taskId}`;
+/** The same for a linked box's Lead, by the box's name. */
+const REMOTE_LEAD = "ateam:lead:";
 
 /** Senders that are not a task's agent, by the id they carry in `fromTerminalId`. */
 export type OutsideSender = "lead" | "user";
@@ -363,6 +369,8 @@ export interface PeerMessengerDeps {
 	/** Queue `text` for a live Codex's conversation (`agentSessionId`); true once
 	 *  Codex took it. Absent: every Codex message goes by restart. */
 	queue?: (session: AgentSession, text: string) => Promise<boolean>;
+	/** Announce a task whose row this changed (its `undelivered`, its column). */
+	notify?: (taskId: string) => void;
 	log: (line: string) => void;
 	now?: () => number;
 }
@@ -391,6 +399,15 @@ interface Starting {
 }
 
 const isFromUser = (m: PeerMessage) => m.fromTerminalId === USER_SENDER;
+
+/** Who sent `m` when it is the Lead (this machine's, the Mac's over RPC, or a
+ *  linked box's) or the user, who have no inbox here; null for an agent. */
+function outsideSender(m: PeerMessage): "lead" | "user" | null {
+	if (m.fromTaskId) return null;
+	if (m.fromTerminalId === USER_SENDER) return "user";
+	if (m.fromTerminalId === LEAD_SENDER || m.fromTerminalId?.startsWith(REMOTE_LEAD)) return "lead";
+	return null;
+}
 
 export class PeerMessenger {
 	/** Listeners on the hook door (Claude's inbox.sh, OpenCode's plugin). */
@@ -642,7 +659,7 @@ export class PeerMessenger {
 		if (typeof target === "string") return { ok: false, reason: target };
 		// A Lead's messages count against that box's Lead, like the Lead here, and
 		// no back-and-forth cap: it is the user's coordinator, not a peer.
-		const key = from.lead ? `ateam:lead:${from.box}` : remoteSenderKey(from.taskId);
+		const key = from.lead ? `${REMOTE_LEAD}${from.box}` : remoteSenderKey(from.taskId);
 		const cap = from.lead ? MAX_FROM_LEAD : MAX_PER_SENDER;
 		if (repo.countPeerMessagesFromTerminal(db, key, now - SENDER_WINDOW_MS) >= cap) {
 			return {
@@ -670,7 +687,11 @@ export class PeerMessenger {
 			createdAt: now,
 		});
 		const plan = this.deliverParts(target.id).rest;
-		return { ok: true, reason: `sent to "${target.name}" (${target.id}): ${describePlan(plan)}` };
+		const ifItFails = from.lead ? ifOutsideFails(plan) : "";
+		return {
+			ok: true,
+			reason: `sent to "${target.name}" (${target.id}): ${describePlan(plan)}${ifItFails}`,
+		};
 	}
 
 	/** Queue a message from a sender that is not a task (the Lead chat, or the
@@ -708,7 +729,10 @@ export class PeerMessenger {
 		// The door this message took: the user's own words may go apart from the rest.
 		const parts = this.deliverParts(target.id);
 		const plan = sender === "user" && parts.user !== "none" ? parts.user : parts.rest;
-		return { ok: true, reason: `sent to "${target.name}" (${target.id}): ${describePlan(plan)}` };
+		return {
+			ok: true,
+			reason: `sent to "${target.name}" (${target.id}): ${describePlan(plan)}${ifOutsideFails(plan)}`,
+		};
 	}
 
 	/**
@@ -724,8 +748,11 @@ export class PeerMessenger {
 			return { result: Promise.resolve({ kind: "gone" }), cancel: () => {} };
 		}
 		// Its listener is up, so its agent is: the one sign OpenCode gives, which
-		// reports no hook events.
-		this.agentEvent(terminalId);
+		// reports no hook events. In a pane whose agent had quit, it is an agent
+		// started there by hand, at its prompt (engine.ts sessionStatusAfter does
+		// the same for a Start).
+		this.agentEvent(terminalId, session.taskId);
+		if (session.status === "stopped") repo.updateSession(db, session.id, { status: "idle" });
 		this.waiters.get(terminalId)?.resolve({ kind: "superseded" });
 		this.dropWaiter(terminalId);
 		let cancel = () => {};
@@ -1005,9 +1032,13 @@ export class PeerMessenger {
 	}
 
 	/** A hook event from an agent's terminal (or its listener asking for
-	 *  messages): one started for a batch has shown up. */
-	agentEvent(terminalId: string): void {
+	 *  messages): one started for a batch has shown up. An agent of `taskId`
+	 *  being up also settles what the task says about a message from the Lead or
+	 *  the user that did not get through: the one that stalled has started up,
+	 *  or the user brought the agent back after a failure. */
+	agentEvent(terminalId: string, taskId?: string): void {
 		this.starting.delete(terminalId);
+		if (taskId && repo.clearUndelivered(this.deps.db, taskId)) this.deps.notify?.(taskId);
 	}
 
 	/** What a terminal printed, kept only while its agent is being watched. */
@@ -1038,7 +1069,8 @@ export class PeerMessenger {
 	/**
 	 * A batch that never reached `task`'s agent: keep why on its rows, and tell
 	 * each task that sent part of it, so it stops waiting for an answer. A
-	 * notice is never answered with one: its sender is not a task.
+	 * notice is never answered with one: its sender is not a task. What the
+	 * Lead or the user sent is put on the task itself (tellOutside).
 	 */
 	private fail(task: Task, batch: PeerMessage[], why: string): void {
 		if (batch.length === 0) return;
@@ -1056,6 +1088,7 @@ export class PeerMessenger {
 			(yours) =>
 				`${yours} did not reach its agent: ${why}. No answer to it will come from that task. If the user is waiting on that answer, tell them.`,
 		);
+		this.tellOutside(task, batch, "failed", why);
 		if (batch.some((m) => !m.fromTaskId && m.fromTerminalId !== NOTICE_SENDER)) {
 			this.deps.log(`[ateam] message to ${task.id} from outside a task not delivered: ${why}`);
 		}
@@ -1078,6 +1111,52 @@ export class PeerMessenger {
 			(yours) =>
 				`${yours} has not reached its agent yet: Ateam started that agent ${mins} min ago and it has not started up since. It is most likely waiting on a prompt in its terminal (a trust or review dialog, a sign-in) that only the user can answer. An answer may still come once that is cleared. If the user is waiting on that answer, tell them so they can look at that task.`,
 		);
+		this.tellOutside(
+			task,
+			s.batch,
+			"stalled",
+			`Ateam started its agent ${mins} min ago and it has not started up since, most likely held at a prompt in its terminal (a trust or review dialog, a sign-in)`,
+		);
+	}
+
+	/**
+	 * The Lead and the user have no inbox here, so what they sent that did not
+	 * get through is put on the task (TaskDTO.undelivered), which files the card
+	 * in Needs You. Every client hears it with the task: the Lead chat that
+	 * sent it says so, the Mac shows a banner, the task's panel shows why. An
+	 * archived task comes back for it, as it would for its agent's activity.
+	 */
+	private tellOutside(
+		task: Task,
+		batch: PeerMessage[],
+		state: TaskUndelivered["state"],
+		why: string,
+	): void {
+		const from = new Set<"lead" | "user">();
+		// The Lead's own message when it sent one: the note its agent reads quotes it.
+		let first: PeerMessage | undefined;
+		for (const m of batch) {
+			const who = outsideSender(m);
+			if (!who) continue;
+			from.add(who);
+			if (!first || (who === "lead" && outsideSender(first) !== "lead")) first = m;
+		}
+		if (!first) return;
+		const { db } = this.deps;
+		const now = this.now();
+		repo.updateTask(db, task.id, {
+			undelivered: {
+				state,
+				from: [...from],
+				why,
+				opening: first.body.split("\n", 1)[0]?.slice(0, 120) ?? "",
+				at: now,
+			},
+			column: "needs_attention",
+			isUnread: true,
+			...(task.archivedAt != null ? { archivedAt: null, restoredAt: now } : {}),
+		});
+		this.deps.notify?.(task.id);
 	}
 
 	/** A notice from Ateam to each task that sent part of `batch` to `task`. */
@@ -1150,11 +1229,21 @@ export class PeerMessenger {
 		);
 	}
 
-	/** The task's most recently active live agent (not a plain shell). */
+	/** The task's most recently active live agent (not a plain shell). An agent
+	 *  that quit leaves its pane alive as a shell, `stopped` (pty/agent-quit.ts):
+	 *  no agent is there, so a message starts one in a new tab, leaving that
+	 *  shell alone, as sessions.ts liveTabOn reads it. Counted as live, it held
+	 *  every message as "busy" for as long as the tab stayed open. */
 	private liveAgentSession(taskId: string): AgentSession | undefined {
 		return repo
 			.listSessionsByTask(this.deps.db, taskId)
-			.filter((s) => s.agentId !== "shell" && s.exitedAt == null && this.deps.isLive(s.terminalId))
+			.filter(
+				(s) =>
+					s.agentId !== "shell" &&
+					s.exitedAt == null &&
+					s.status !== "stopped" &&
+					this.deps.isLive(s.terminalId),
+			)
 			.sort((a, b) => (b.lastEventAt ?? b.startedAt ?? 0) - (a.lastEventAt ?? a.startedAt ?? 0))[0];
 	}
 
@@ -1233,6 +1322,14 @@ function safeJson(text: string): unknown {
 	} catch {
 		return null;
 	}
+}
+
+/** What the Lead hears when its message starts an agent: a start that fails
+ *  is said on the task and in the chat (tellOutside), not in its inbox. */
+function ifOutsideFails(plan: DeliveryPlan | "none"): string {
+	return plan === "launch" || plan === "restart"
+		? " If it does not reach its agent, Ateam files the task in Needs You with why, says so in the chat, and tells you with the user's next message."
+		: "";
 }
 
 function describePlan(plan: DeliveryPlan | "none"): string {

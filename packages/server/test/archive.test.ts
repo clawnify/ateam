@@ -117,6 +117,20 @@ describe("archiveIdleTasks", () => {
 		expect(archiveIdleTasks({ db, ...notLive }, 30, NOW + 31 * DAY)).toEqual([t.id]);
 	});
 
+	it("gives a task a message never reached a fresh stretch: its card just went to Needs You", () => {
+		const db = createTestDb();
+		const undelivered = {
+			state: "failed" as const,
+			from: ["lead" as const],
+			why: "its agent quit 7 s after Ateam started it",
+			opening: "who should know?",
+			at: NOW - DAY,
+		};
+		const t = makeTask(db, "month-old", { lastEventAt: NOW - 45 * DAY, undelivered });
+		expect(archiveIdleTasks({ db, ...notLive }, 30, NOW)).toEqual([]);
+		expect(archiveIdleTasks({ db, ...notLive }, 30, NOW + 30 * DAY)).toEqual([t.id]);
+	});
+
 	it("does not re-archive an archived task on the next pass", () => {
 		const db = createTestDb();
 		makeTask(db, "idle", { lastEventAt: NOW - 31 * DAY });

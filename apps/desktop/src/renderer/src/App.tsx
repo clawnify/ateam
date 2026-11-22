@@ -25,6 +25,7 @@ import {
 	FEATURE_MIN_VERSION,
 	PROTOCOL_VERSION,
 	TASK_REMOVING_ERROR,
+	undeliveredText,
 	unifyProjects,
 } from "@ateam/protocol";
 import {
@@ -3674,6 +3675,21 @@ function BoardToolsNote({ task }: { task: TaskDTO }) {
 	);
 }
 
+/**
+ * A message from the Lead or the user that did not reach the open task's agent
+ * (TaskDTO.undelivered, server/peer-messages.ts), which filed it in Needs You.
+ * It goes once an agent of the task shows up again.
+ */
+function UndeliveredNote({ task }: { task: TaskDTO }) {
+	if (!task.undelivered) return null;
+	const text = undeliveredText(task.undelivered);
+	return (
+		<p className={`undelivered-note ${task.undelivered.state}`} title={text}>
+			{text}
+		</p>
+	);
+}
+
 // Whether an artifact tab was opened or hidden. Hiding keeps the saved artifact;
 // the + menu can reopen it. Choices survive panel remounts and app restarts.
 const PAGE_CHOICES_KEY = "ateam.pageChoices";
@@ -4227,6 +4243,7 @@ export function TaskPanel({
 				</div>
 				<TaskSummary task={task} />
 				<BoardToolsNote task={task} />
+				<UndeliveredNote task={task} />
 				<BranchLine task={task} machine={alias} />
 			</div>
 

@@ -221,10 +221,14 @@ function mapEventToStatus(eventType: string): AgentStatus {
  * A session's status after `eventType`. A Start is the process coming up (a
  * `--resume`, or compaction mid-turn), not work, so the session keeps what it
  * was. isWorking() reads this: a resume written as "running" held its box awake
- * for as long as the idle pane lived, because only a Stop clears it.
+ * for as long as the idle pane lived, because only a Stop clears it. The one
+ * exception is a session whose agent quit (`stopped`, its pane left as a
+ * shell): a Start there is an agent the user started by hand in that pane, up
+ * at its prompt, and counting it as gone would put a second agent beside it.
  */
 export function sessionStatusAfter(eventType: string, current: AgentStatus): AgentStatus {
-	return eventType === "Start" ? current : mapEventToStatus(eventType);
+	if (eventType !== "Start") return mapEventToStatus(eventType);
+	return current === "stopped" ? "idle" : current;
 }
 
 function mapEventToColumn(eventType: string): KanbanColumn {
@@ -542,6 +546,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			session.agentSessionId
 				? queueCodexMessage(session.agentSessionId, text, session.cwd)
 				: Promise.resolve(false),
+		notify: (taskId) => sendTaskUpdated(taskId),
 		log: opts.log ?? ((line) => console.log(line)),
 	});
 	hooks.setPeerInbox({
@@ -702,7 +707,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			permissions.settle(e.terminalId, e.eventType);
 		// Any sign of life from an agent started to take a message: it is up.
 		if (e.eventType !== "AgentExit") {
-			peers.agentEvent(e.terminalId);
+			peers.agentEvent(e.terminalId, session.taskId);
 			boardConnections.up(e.terminalId);
 		}
 		// The agent called a browser tool. Its Working fires alongside and drives
