@@ -165,6 +165,25 @@ describe("spawnAgentInTask on resume", () => {
 		expect(task).toMatchObject({ column: "running", agentStatus: "running", lastEventAt: T0 });
 	});
 
+	// The conversation a message was meant for would not reopen, so a new one
+	// takes it (peer-messages.ts, startFresh).
+	it("a stand-in is a new conversation at work, whose prompt is not what the task is about", async () => {
+		const fired = { waitingReason: "Twilio approval", waitingUntil: T0, waitingFiredAt: T0 };
+		repo.updateTask(db, taskId, fired);
+		await spawnAgentInTask(services, () => {}, {
+			taskId,
+			agentId: "claude",
+			prompt: "[Ateam] Message from the Lead",
+			standIn: true,
+		});
+		expect(spawned?.command).toStartWith(`claude ${G} --session-id `);
+		const session = repo.listSessionsByTask(db, taskId)[0];
+		expect(session?.agentSessionId).toBe(session?.terminalId);
+		const task = repo.getTask(db, taskId);
+		expect(task).toMatchObject({ column: "running", agentStatus: "running", ...fired });
+		expect(task?.description).toBeNull();
+	});
+
 	it("a resumed session sits idle, so it doesn't hold its box awake; a prompted one runs", async () => {
 		// The box's sleep control reads session rows (Engine.isWorking): a resume
 		// filed as running kept the box up for as long as the idle pane lived.

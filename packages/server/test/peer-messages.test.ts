@@ -7,6 +7,7 @@ import * as schema from "../../db/src/schema";
 import {
 	type DeliveryFacts,
 	formatForRecipient,
+	freshNote,
 	INPUT_QUIET_MS,
 	LISTENER_GRACE_MS,
 	MAX_FROM_LEAD,
@@ -1188,6 +1189,237 @@ describe("A message whose woken agent never reads it", () => {
 		messenger.agentQuit("launched-1");
 		expect(allMessages()).toHaveLength(1);
 		expect(allMessages()[0]?.error).toBeNull();
+	});
+});
+
+// What Claude Code 2.1.330 printed into its terminal for
+// `claude --resume <id> "…"` with an id it has no conversation for, captured
+// raw with script(1). It exited with code 1 six seconds after it was started.
+const GONE_ID = "c3f63281-69f9-4291-b0c4-4272a6d27f84";
+const NO_SESSION = `\u001b7\u001b[r\u001b8\u001b[?25h\u001b[38;5;211mNo conversation found with session ID: ${GONE_ID}\u001b[39m\r\r\n\u001b[?25h\u001b(B\u000f\u001b[?1016l\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l\u001b[>4m\u001b[?1004l\u001b[?2031l\u001b[?2004l\u001b[?7h\u001b[<u\u001b[?25h\u001b7\u001b[r\u001b8\u001b[?25h\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l\u001b(B\u000f\u001b[?1016l\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l\u001b[>4m\u001b[?1004l\u001b[?2031l\u001b[?2004l\u001b[?7h\u001b[<u\u001b[?25h\u001b7\u001b[r\u001b8\u001b]0;\u0007\u001b[?25h`;
+
+describe("A message to a task whose conversation its CLI no longer keeps", () => {
+	let starts: { taskId: string; prompt: string; fresh: boolean }[];
+	let discarded: string[];
+	/** Refuses to start a new conversation, when set. */
+	let freshFails: string | null;
+	/** Terminals a human typed into. */
+	let typedInto: Set<string>;
+
+	beforeEach(() => {
+		starts = [];
+		discarded = [];
+		freshFails = null;
+		typedInto = new Set();
+		messenger = new PeerMessenger({
+			db,
+			isLive: (t) => live.has(t),
+			lastInputAt: (t) => (typedInto.has(t) ? now : null),
+			stopSession: async () => {},
+			// The engine's launch: a task that had an agent is resumed, unless told
+			// to start afresh.
+			launch: async (task, prompt, opts) => {
+				const fresh = opts?.fresh === true;
+				if (fresh && freshFails) throw new Error(freshFails);
+				starts.push({ taskId: task.id, prompt, fresh });
+				return { terminalId: `launched-${starts.length}`, resumed: !fresh };
+			},
+			discard: async (terminalId) => {
+				discarded.push(terminalId);
+			},
+			log: () => {},
+			now: () => now,
+		});
+	});
+
+	it("reads the refusal as text", () => {
+		expect(terminalTail(NO_SESSION)).toBe(`No conversation found with session ID: ${GONE_ID}`);
+	});
+
+	it("starts a new conversation with the message, told its history is gone", async () => {
+		const b = addTask("b", "claude");
+		messenger.sendFrom("lead", { to: b.id, body: "who should know about this alert?" });
+		await flush();
+		expect(starts).toEqual([expect.objectContaining({ taskId: b.id, fresh: false })]);
+
+		messenger.agentOutput("launched-1", NO_SESSION);
+		now += 7_000;
+		messenger.agentQuit("launched-1", true);
+		await flush();
+
+		// The pane that only held the refusal is closed before the new one opens.
+		expect(discarded).toEqual(["launched-1"]);
+		expect(starts).toHaveLength(2);
+		const fresh = starts[1];
+		expect(fresh).toMatchObject({ taskId: b.id, fresh: true });
+		expect(fresh?.prompt).toStartWith(
+			freshNote(`No conversation found with session ID: ${GONE_ID}`),
+		);
+		expect(fresh?.prompt).toContain("this is a new conversation with none of that history");
+		expect(fresh?.prompt).toContain("[Ateam] Message from the Lead");
+		expect(fresh?.prompt).toEndWith("who should know about this alert?");
+
+		// Delivered, not failed: the new agent showing up settles it.
+		messenger.agentEvent("launched-2");
+		messenger.agentQuit("launched-2", true);
+		await flush();
+		expect(allMessages()).toHaveLength(1);
+		expect(allMessages()[0]?.error).toBeNull();
+		expect(allMessages()[0]?.deliveredVia).toBe("launch");
+		expect(starts).toHaveLength(2);
+	});
+
+	it("tries a new conversation once: one that quits too fails the batch", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "claude");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "what did you do?" });
+		await flush();
+		messenger.agentQuit("launched-1", true);
+		await flush();
+		expect(starts).toHaveLength(2);
+
+		messenger.agentOutput("launched-2", "Please run /login\r\n");
+		now += 3_000;
+		messenger.agentQuit("launched-2", true);
+		await flush();
+		expect(starts).toHaveLength(2);
+		const original = allMessages().find((m) => m.toTaskId === b.id);
+		expect(original?.error).toContain("quit 3 s after Ateam started it");
+		expect(original?.error).toContain("Please run /login");
+		expect(repo.listPendingPeerMessages(db, a.id)[0]?.body).toContain("did not reach its agent");
+	});
+
+	// A CLI that dies at startup whatever it is asked (a bad release): the resume
+	// quits, and so does the conversation tried in its place.
+	it("forgets the id of a new conversation that never came up, and keeps a resumed one's", async () => {
+		const b = addTask("b", "claude");
+		// The rows the engine's launch writes: a resume carries the conversation's
+		// id, a new conversation is named after its terminal.
+		const row = (terminalId: string, agentSessionId: string) => {
+			repo.createSession(db, {
+				taskId: b.id,
+				agentId: "claude",
+				terminalId,
+				agentSessionId,
+				cwd: b.worktreePath,
+			});
+		};
+		messenger.sendFrom("lead", { to: b.id, body: "hi" });
+		await flush();
+		row("launched-1", "the-real-conversation");
+		messenger.agentQuit("launched-1", true);
+		await flush();
+		row("launched-2", "launched-2");
+		messenger.agentQuit("launched-2", true);
+		await flush();
+
+		expect(allMessages()[0]?.error).toContain("quit");
+		// Without an id the row means "the newest conversation in the worktree".
+		expect(repo.getSessionByTerminal(db, "launched-2")?.agentSessionId).toBeNull();
+		expect(repo.getSessionByTerminal(db, "launched-1")?.agentSessionId).toBe(
+			"the-real-conversation",
+		);
+	});
+
+	it("leaves a resume whose pane died to fail: that says nothing about its conversation", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "claude");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "hi" });
+		await flush();
+		messenger.agentQuit("launched-1");
+		await flush();
+		expect(starts).toHaveLength(1);
+		expect(discarded).toEqual([]);
+		expect(allMessages().find((m) => m.toTaskId === b.id)?.error).toContain("quit");
+	});
+
+	it("leaves a resume the user quit to fail: its conversation is still there", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "codex");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "hi" });
+		await flush();
+		typedInto.add("launched-1"); // a Ctrl+C, say
+		messenger.agentQuit("launched-1", true);
+		await flush();
+		expect(starts).toHaveLength(1);
+		expect(discarded).toEqual([]);
+		expect(allMessages().find((m) => m.toTaskId === b.id)?.error).toContain("quit");
+	});
+
+	it("leaves a resume that showed up alone, whenever it quits", async () => {
+		const b = addTask("b", "claude");
+		messenger.sendFrom("lead", { to: b.id, body: "hi" });
+		await flush();
+		messenger.agentEvent("launched-1");
+		messenger.agentQuit("launched-1", true);
+		await flush();
+		expect(starts).toHaveLength(1);
+		expect(allMessages()[0]?.error).toBeNull();
+	});
+
+	it("leaves one that quits after the watch alone: it was most likely used", async () => {
+		const b = addTask("b", "codex");
+		messenger.sendFrom("lead", { to: b.id, body: "hi" });
+		await flush();
+		now += STARTING_WATCH_MS + 1;
+		messenger.agentQuit("launched-1", true);
+		await flush();
+		expect(starts).toHaveLength(1);
+		expect(allMessages()[0]?.error).toBeNull();
+	});
+
+	it("says both when the new conversation cannot be started either", async () => {
+		freshFails = "Claude Code isn't installed here";
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "claude");
+		messenger.send({ fromTerminalId: "ta", to: b.id, body: "hi" });
+		await flush();
+		messenger.agentOutput("launched-1", NO_SESSION);
+		messenger.agentQuit("launched-1", true);
+		await flush();
+		const original = allMessages().find((m) => m.toTaskId === b.id);
+		expect(original?.error).toContain("its earlier conversation would not reopen");
+		expect(original?.error).toContain(GONE_ID);
+		expect(original?.error).toContain("Claude Code isn't installed here");
+		expect(repo.listPendingPeerMessages(db, a.id)[0]?.body).toContain("did not reach its agent");
+	});
+
+	it("keeps a message that arrives meanwhile for the new agent, starting no third", async () => {
+		let release = () => {};
+		const held = new Promise<void>((r) => {
+			release = r;
+		});
+		messenger = new PeerMessenger({
+			db,
+			isLive: (t) => live.has(t),
+			lastInputAt: () => null,
+			stopSession: async () => {},
+			launch: async (task, prompt, opts) => {
+				const fresh = opts?.fresh === true;
+				starts.push({ taskId: task.id, prompt, fresh });
+				return { terminalId: `launched-${starts.length}`, resumed: !fresh };
+			},
+			discard: () => held,
+			log: () => {},
+			now: () => now,
+		});
+		const b = addTask("b", "claude");
+		messenger.sendFrom("lead", { to: b.id, body: "first" });
+		await flush();
+		messenger.agentQuit("launched-1", true);
+		// The old pane is still closing when a second message comes.
+		messenger.sendFrom("lead", { to: b.id, body: "second" });
+		await flush();
+		expect(starts).toHaveLength(1);
+		release();
+		await flush();
+		expect(starts).toHaveLength(2);
+		expect(starts[1]?.fresh).toBe(true);
+		expect(repo.listPendingPeerMessages(db, b.id).map((m) => m.body)).toEqual(["second"]);
 	});
 });
 
