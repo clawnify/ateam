@@ -221,14 +221,10 @@ function mapEventToStatus(eventType: string): AgentStatus {
  * A session's status after `eventType`. A Start is the process coming up (a
  * `--resume`, or compaction mid-turn), not work, so the session keeps what it
  * was. isWorking() reads this: a resume written as "running" held its box awake
- * for as long as the idle pane lived, because only a Stop clears it. The one
- * exception is a session whose agent quit (`stopped`, its pane left as a
- * shell): a Start there is an agent the user started by hand in that pane, up
- * at its prompt, and counting it as gone would put a second agent beside it.
+ * for as long as the idle pane lived, because only a Stop clears it.
  */
 export function sessionStatusAfter(eventType: string, current: AgentStatus): AgentStatus {
-	if (eventType !== "Start") return mapEventToStatus(eventType);
-	return current === "stopped" ? "idle" : current;
+	return eventType === "Start" ? current : mapEventToStatus(eventType);
 }
 
 function mapEventToColumn(eventType: string): KanbanColumn {

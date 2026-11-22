@@ -27,8 +27,7 @@
  *     `restoreAgentSession`), so it costs the conversation nothing.
  *   - A task with no live agent is woken the same way: its last conversation is
  *     resumed with the message as the prompt, or a fresh agent is started when
- *     it never had one. An agent that quit and left its tab open as a shell is
- *     not live: the message starts it in a new tab.
+ *     it never had one.
  *
  * Starting an agent is not the same as it reading the prompt. A restart or a
  * launch is only known to have worked once the new agent shows up: its first
@@ -748,11 +747,8 @@ export class PeerMessenger {
 			return { result: Promise.resolve({ kind: "gone" }), cancel: () => {} };
 		}
 		// Its listener is up, so its agent is: the one sign OpenCode gives, which
-		// reports no hook events. In a pane whose agent had quit, it is an agent
-		// started there by hand, at its prompt (engine.ts sessionStatusAfter does
-		// the same for a Start).
+		// reports no hook events.
 		this.agentEvent(terminalId, session.taskId);
-		if (session.status === "stopped") repo.updateSession(db, session.id, { status: "idle" });
 		this.waiters.get(terminalId)?.resolve({ kind: "superseded" });
 		this.dropWaiter(terminalId);
 		let cancel = () => {};
@@ -1229,21 +1225,11 @@ export class PeerMessenger {
 		);
 	}
 
-	/** The task's most recently active live agent (not a plain shell). An agent
-	 *  that quit leaves its pane alive as a shell, `stopped` (pty/agent-quit.ts):
-	 *  no agent is there, so a message starts one in a new tab, leaving that
-	 *  shell alone, as sessions.ts liveTabOn reads it. Counted as live, it held
-	 *  every message as "busy" for as long as the tab stayed open. */
+	/** The task's most recently active live agent (not a plain shell). */
 	private liveAgentSession(taskId: string): AgentSession | undefined {
 		return repo
 			.listSessionsByTask(this.deps.db, taskId)
-			.filter(
-				(s) =>
-					s.agentId !== "shell" &&
-					s.exitedAt == null &&
-					s.status !== "stopped" &&
-					this.deps.isLive(s.terminalId),
-			)
+			.filter((s) => s.agentId !== "shell" && s.exitedAt == null && this.deps.isLive(s.terminalId))
 			.sort((a, b) => (b.lastEventAt ?? b.startedAt ?? 0) - (a.lastEventAt ?? a.startedAt ?? 0))[0];
 	}
 
