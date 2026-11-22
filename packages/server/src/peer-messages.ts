@@ -32,15 +32,38 @@
  * Starting an agent is not the same as it reading the prompt. A restart or a
  * launch is only known to have worked once the new agent shows up: its first
  * hook event of any kind, or its listener asking for messages (OpenCode reports
- * no hook events). One that quits before then never read the batch: a
- * conversation Claude Code no longer keeps (it deletes them after 30 days by
- * default) prints "No conversation found to continue" and exits within seconds,
- * worktree or not. One that cannot be started at all never got it either, and
- * retrying it on every sweep would only fail the same way, unseen. Both keep
- * the reason in the rows' `error`, and a task that sent one is told so by a
- * notice from Ateam carrying the last thing the agent printed, so it does not
- * promise the user an answer that cannot come. One that neither shows up nor
- * quits within STARTING_WATCH_MS is most likely held at a prompt in its
+ * no hook events). One that quits before then never read the batch.
+ *
+ * The common case is a conversation its CLI no longer keeps: Claude Code
+ * deletes one 30 days after its last use by default, then prints "No
+ * conversation found with session ID: ..." (or "... to continue") and exits
+ * within seconds, worktree or not. No later message could wake that task
+ * either, so an agent that leaves on its own as it is resumed gets one new
+ * conversation instead (startFresh): the pane that only holds the refusal
+ * is closed, and the batch goes in behind a notice that the history is gone
+ * and the worktree is what is left of it. Whether the conversation is there is
+ * never read off the CLI's own files beforehand: a wrong "gone" (a store moved
+ * by CLAUDE_CONFIG_DIR, a layout a new version changed) would drop every good
+ * conversation without a word. The CLI leaving on its own is the weaker claim
+ * "it would not reopen now", and the notice quotes what it printed.
+ * shortcut: a resume that dies at startup for another reason (a crash, an
+ * out-of-memory kill) is replaced too, while its transcript stays on disk; if
+ * that shows up, carry the exit status in AgentExit and stand in only for a
+ * plain exit.
+ *
+ * A CLI that is broken outright (a release that dies at startup) fails the
+ * resume and the conversation tried in its place. That second one is no
+ * conversation, so its id is taken off its row (forgetConversation): the next
+ * message then reopens the newest conversation the worktree really has,
+ * instead of chasing an id that never existed and leaving the real one behind.
+ *
+ * A new conversation that quits too, an agent whose pane died under it or
+ * that the user quit, and one that cannot be started at all never got the
+ * batch, and retrying on every sweep would only fail the same way, unseen.
+ * Those keep the reason in the rows' `error`, and a task that sent one is told
+ * so by a notice from Ateam carrying the last thing the agent printed, so it
+ * does not promise the user an answer that cannot come. One that neither shows
+ * up nor quits within STARTING_WATCH_MS is most likely held at a prompt in its
  * terminal (folder trust, Codex's hook review, a sign-in): its senders hear
  * that an answer may still come once the user clears it. The Lead, the user and
  * agents on other boxes have no inbox here to tell: for them a failure is
@@ -276,6 +299,16 @@ export function formatForRecipient(
 		.join("\n\n---\n\n");
 }
 
+/**
+ * What a new conversation reads ahead of the messages it was started for, when
+ * it stands in for one its CLI would not reopen (`said`: what the CLI printed
+ * as it quit). Without it the agent would answer "what did you do here?" as if
+ * it had never worked in the task, or guess.
+ */
+export function freshNote(said: string): string {
+	return `[Ateam] Notice from Ateam itself, not from the user and not from another agent. A message came for this task while its agent was stopped, and the conversation that agent had could not be reopened${said ? ` (its CLI said: "${said}")` : ""}. Agent CLIs delete conversations left unused for a while: Claude Code after 30 days by default. So this is a new conversation with none of that history. What the task did before is in its worktree, its branch and its commits, not in your memory: read them before you answer anything that depends on earlier work, and say in your reply that you are working from the code, not from the earlier conversation.`;
+}
+
 // Terminal codes, for reading what an agent printed as text: CSI (colours,
 // modes, cursor), OSC (titles, links), a charset pick like `ESC ( B`, any other
 // two-byte escape like `ESC 7`, then the controls left (`SI`, `BS`) except line
@@ -357,9 +390,19 @@ export interface PeerMessengerDeps {
 	/** Kill a live idle session and wait for its exit to be recorded. */
 	stopSession: (session: AgentSession) => Promise<void>;
 	/** Resume (or start) the task's agent with `prompt`, saying which terminal it
-	 *  runs in. Null when another launch is already bringing that conversation
-	 *  back: the batch then stays pending for that one. */
-	launch: (task: Task, prompt: string) => Promise<{ terminalId: string } | null>;
+	 *  runs in and whether it was asked to reopen a conversation (`resumed`).
+	 *  `fresh` starts a new conversation whatever the task had before. Null when
+	 *  another launch is already bringing that conversation back: the batch then
+	 *  stays pending for that one. */
+	launch: (
+		task: Task,
+		prompt: string,
+		opts?: { fresh?: boolean },
+	) => Promise<{ terminalId: string; resumed?: boolean } | null>;
+	/** Close for good the pane of an agent that quit as it was resumed, and wait
+	 *  for it to go: it holds nothing but the CLI's refusal, and must not be
+	 *  offered back as a tab. Absent: the pane is left open. */
+	discard?: (terminalId: string) => Promise<void>;
 	/** Queue `text` for a live Codex's conversation (`agentSessionId`); true once
 	 *  Codex took it. Absent: every Codex message goes by restart. */
 	queue?: (session: AgentSession, text: string) => Promise<boolean>;
@@ -388,6 +431,8 @@ interface Starting {
 	at: number;
 	/** The tail of what it printed, for the reason it quit. */
 	output: string;
+	/** It was asked to reopen a conversation, not to start one. */
+	resumed: boolean;
 }
 
 const isFromUser = (m: PeerMessage) => m.fromTerminalId === USER_SENDER;
@@ -992,7 +1037,13 @@ export class PeerMessenger {
 					"launch",
 					at,
 				);
-				this.starting.set(started.terminalId, { taskId: task.id, batch, at, output: "" });
+				this.starting.set(started.terminalId, {
+					taskId: task.id,
+					batch,
+					at,
+					output: "",
+					resumed: started.resumed === true,
+				});
 			} catch (e) {
 				const why = e instanceof Error ? e.message : String(e);
 				this.deps.log(`[ateam] peer message to ${task.id} not delivered: ${why}`);
@@ -1016,9 +1067,18 @@ export class PeerMessenger {
 		if (s) s.output = (s.output + data).slice(-STARTING_OUTPUT_KEEP);
 	}
 
-	/** An agent quit (or its pane died). One started for a batch that never
-	 *  showed up did not read it. */
-	agentQuit(terminalId: string): void {
+	/**
+	 * An agent quit on its own, its pane a shell now (`paneLives`), or its pane
+	 * died. One started for a batch that never showed up did not read it. When
+	 * it was asked to reopen a conversation and left on its own, with nobody
+	 * typing into its pane, its CLI no longer has that conversation, and the
+	 * batch goes to a new one. A pane that died says nothing about the
+	 * conversation (a tab closed by hand, the daemon gone), and neither does an
+	 * agent the user quit (a Ctrl+C at a trust dialog, or on a Codex that
+	 * reports nothing before its first turn ends): those fail as before, and
+	 * the conversation is kept.
+	 */
+	agentQuit(terminalId: string, paneLives = false): void {
 		const s = this.starting.get(terminalId);
 		if (!s) return;
 		this.starting.delete(terminalId);
@@ -1026,13 +1086,80 @@ export class PeerMessenger {
 		if (after > STARTING_WATCH_MS) return;
 		const task = repo.getTask(this.deps.db, s.taskId);
 		if (!task) return;
-		const secs = Math.max(1, Math.round(after / 1000));
 		const said = terminalTail(s.output);
+		if (s.resumed && paneLives && this.deps.lastInputAt(terminalId) == null) {
+			void this.startFresh(task, terminalId, s.batch, said);
+			return;
+		}
+		if (!s.resumed) this.forgetConversation(terminalId);
+		const secs = Math.max(1, Math.round(after / 1000));
 		this.fail(
 			task,
 			s.batch,
 			`its agent quit ${secs} s after Ateam started it, before it reported starting up${said ? `. The last thing it printed: "${said}"` : ""}`,
 		);
+	}
+
+	/**
+	 * A conversation Ateam named for a launch that never came up is no
+	 * conversation. Left on its row it would be the task's last: the next
+	 * message would try to reopen it, be refused, and start another, and the
+	 * conversation the task really had would never be reopened again. Without
+	 * an id the row means "the newest conversation in the worktree", which is
+	 * that one. A row that was resuming carries an older id, and keeps it.
+	 */
+	private forgetConversation(terminalId: string): void {
+		const row = repo.getSessionByTerminal(this.deps.db, terminalId);
+		if (row && row.agentSessionId === terminalId) {
+			repo.updateSession(this.deps.db, row.id, { agentSessionId: null });
+		}
+	}
+
+	/**
+	 * Give `batch` to a new conversation, in place of the one on `terminalId`
+	 * that its CLI would not reopen. Once: the new agent is watched like any
+	 * other started for a batch, and one that quits too fails it (agentQuit).
+	 */
+	private async startFresh(
+		task: Task,
+		terminalId: string,
+		batch: PeerMessage[],
+		said: string,
+	): Promise<void> {
+		// Held so a message arriving meanwhile starts no agent of its own: it
+		// stays pending, and the new agent's listener or the next sweep takes it.
+		this.waking.add(task.id);
+		try {
+			this.deps.log(
+				`[ateam] ${task.id}: its conversation would not reopen${said ? ` ("${said}")` : ""}; starting a new one with the message`,
+			);
+			// Gone before the new agent files the card as running: this pane's
+			// exit would otherwise file it as stopped over that.
+			await this.deps.discard?.(terminalId);
+			const started = await this.deps.launch(
+				task,
+				`${freshNote(said)}\n\n---\n\n${this.render(batch)}`,
+				{ fresh: true },
+			);
+			if (!started) throw new Error("another launch is under way");
+			this.starting.set(started.terminalId, {
+				taskId: task.id,
+				batch,
+				at: this.now(),
+				output: "",
+				resumed: false,
+			});
+		} catch (e) {
+			const why = e instanceof Error ? e.message : String(e);
+			this.deps.log(`[ateam] peer message to ${task.id} not delivered: ${why}`);
+			this.fail(
+				task,
+				batch,
+				`its earlier conversation would not reopen${said ? ` ("${said}")` : ""}, and Ateam could not start a new one (${why})`,
+			);
+		} finally {
+			this.waking.delete(task.id);
+		}
 	}
 
 	/**

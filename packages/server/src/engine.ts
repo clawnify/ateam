@@ -511,7 +511,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			pty.kill(session.terminalId);
 			await exited;
 		},
-		launch: async (task, prompt) => {
+		launch: async (task, prompt, opts) => {
 			// The conversation the task last had, resumed by id when known; a task
 			// that never had an agent gets a fresh one on the default. If a client
 			// is already bringing that conversation back (it saw the agent stop),
@@ -521,21 +521,38 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			const last = repo.listSessionsByTask(db, task.id).find((s) => s.agentId !== "shell");
 			const agentId =
 				last?.agentId ?? task.agentId ?? readSettings().settings.engine.defaultAgentId;
+			// `fresh`: that conversation would not reopen, so a new one stands in
+			// for it. The next message resumes the new one, now the task's last.
+			const resume =
+				!last || opts?.fresh
+					? null
+					: last.agentSessionId
+						? { resumeSessionId: last.agentSessionId }
+						: { resume: true };
 			try {
-				return await spawnAgentInTask(services, sendTaskUpdated, {
+				const started = await spawnAgentInTask(services, sendTaskUpdated, {
 					taskId: task.id,
 					agentId,
 					prompt,
-					...(last
-						? last.agentSessionId
-							? { resumeSessionId: last.agentSessionId }
-							: { resume: true }
-						: {}),
+					...(resume ?? (opts?.fresh ? { standIn: true } : {})),
 				});
+				return { ...started, resumed: resume != null };
 			} catch (e) {
 				if (e instanceof ResumeInFlightError) return null;
 				throw e;
 			}
+		},
+		discard: async (terminalId) => {
+			// A closed tab, exactly (pty:kill): stamped before the exit lands, so
+			// the conversation its CLI refused is never offered back as a tab.
+			const session = repo.getSessionByTerminal(db, terminalId);
+			if (session && session.exitedAt == null) {
+				repo.updateSession(db, session.id, { exitReason: "closed" });
+			}
+			if (!pty.has(terminalId)) return;
+			const exited = waitForExit(terminalId, 10_000);
+			pty.kill(terminalId);
+			await exited;
 		},
 		// A live Codex takes a message through its own queue (codex-queue.ts).
 		queue: (session, text) =>
@@ -712,8 +729,10 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			return;
 		}
 		if (e.eventType === "AgentExit") {
-			// Before any other event: an agent started to take a message never read it.
-			peers.agentQuit(e.terminalId);
+			// Before any other event: an agent started to take a message never read
+			// it. It left on its own, which for a resume means its CLI no longer has
+			// the conversation.
+			peers.agentQuit(e.terminalId, true);
 			// Its pane is a shell now: an agent run there next was started by hand.
 			boardConnections.quit(e.terminalId, session.taskId, session.agentId);
 			repo.recordEvent(db, {
