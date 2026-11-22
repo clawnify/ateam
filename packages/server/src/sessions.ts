@@ -44,6 +44,13 @@ export interface SpawnAgentInput {
 	 */
 	resumeSessionId?: string;
 	/**
+	 * A new conversation standing in for one the agent's CLI would not reopen
+	 * (peer-messages.ts, startFresh). To the task it is still a resume: its
+	 * prompt is a message to the task, not what the task is about, so it writes
+	 * no description, names nothing and ends no wait.
+	 */
+	standIn?: boolean;
+	/**
 	 * One extra turn to take right after the first response, delivered through
 	 * the agent's own turn-end hook (see `follow-ups.ts`). A slash command and a
 	 * plain sentence are both just text here.
@@ -465,7 +472,7 @@ async function launchAgent(
 	// there would be a lie the restore then acts on.
 	const mintsId = Boolean(agent.sessionIdFlag) && !input.resume && !input.agentMode;
 	const agentSessionId = resumeSessionId ?? (mintsId ? terminalId : null);
-	const isResume = Boolean(input.resume || input.resumeSessionId);
+	const isResume = Boolean(input.resume || input.resumeSessionId || input.standIn);
 	repo.createSession(services.db, {
 		taskId: task.id,
 		agentId: agent.id,
@@ -507,7 +514,7 @@ async function launchAgent(
 	// acting on it again, so that wait is over. A pending wait survives, and so
 	// does any wait across a resume: opening a stopped task auto-resumes it, and
 	// looking is not acting. See waits.ts.
-	const freshLaunch = !input.resume && !input.resumeSessionId && !input.agentMode;
+	const freshLaunch = !isResume && !input.agentMode;
 	if (freshLaunch && isFiredWait(task) && clearWaiting(services.db, task)) {
 		notifyTaskUpdated(task.id);
 	}
