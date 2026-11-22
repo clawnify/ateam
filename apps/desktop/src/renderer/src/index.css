@@ -1223,6 +1223,21 @@ input {
 	line-height: 1.45;
 	color: var(--amber);
 }
+/* A message that did not reach the open task's agent (TaskDTO.undelivered):
+   red when it never will, amber while its agent is held at a prompt. */
+.undelivered-note {
+	margin: 4px 0 6px;
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--red);
+	display: -webkit-box;
+	-webkit-line-clamp: 4;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+.undelivered-note.stalled {
+	color: var(--amber);
+}
 /* The open task's branch: the one place it shows, and a click copies it. */
 .branch-line {
 	display: flex;

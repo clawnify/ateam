@@ -19,15 +19,17 @@ const task = (over: Partial<TaskDTO> = {}): TaskDTO =>
 function make(dir = mkdtempSync(join(tmpdir(), "follow-"))) {
 	const items: LeadItem[] = [];
 	const reads: string[] = [];
+	const notes: string[] = [];
 	const follower = new Follower({
 		dir,
 		record: (i) => items.push(i),
+		note: (line) => notes.push(line),
 		handle: async (method, args) => {
 			reads.push(`${method} ${args[0]}`);
 			return method === CH.tasksLastReply ? { text: "Done, tests pass.", at: 200 } : null;
 		},
 	});
-	return { follower, items, reads, dir };
+	return { follower, items, reads, notes, dir };
 }
 
 describe("Follower", () => {
@@ -104,6 +106,65 @@ describe("Follower", () => {
 		await follower.onTaskUpdated(task({ agentStatus: "awaiting_input" }));
 		await follower.onTaskUpdated(task({ agentStatus: "awaiting_input" }));
 		expect(items).toMatchObject([{ kind: "notice", task: { taskId: "t1" } }]);
+	});
+
+	const quit = {
+		state: "failed" as const,
+		from: ["lead" as const],
+		why: "its agent quit 7 s after Ateam started it, before it reported starting up",
+		opening: "please rebase",
+		at: 300,
+	};
+
+	it("says when the Lead's message never reached a followed task, and tells the Lead", async () => {
+		const { follower, items, notes } = make();
+		follower.follow(task());
+		await follower.onTaskUpdated(task({ undelivered: quit }));
+		await follower.onTaskUpdated(task({ undelivered: quit }));
+		expect(items).toMatchObject([
+			{
+				kind: "notice",
+				tone: "error",
+				text: "The Lead's message to fix login did not reach its agent: its agent quit 7 s after Ateam started it, before it reported starting up.",
+				task: { taskId: "t1", name: "fix login" },
+			},
+		]);
+		expect(notes).toEqual([
+			'your message to [fix login](task:t1) that begins "please rebase" did not reach its agent: its agent quit 7 s after Ateam started it, before it reported starting up. No answer to it will come; the user saw this in the chat.',
+		]);
+	});
+
+	it("tells only the user about their own message, and a held one as news, not an error", async () => {
+		const { follower, items, notes } = make();
+		follower.follow(task());
+		await follower.onTaskUpdated(
+			task({
+				undelivered: {
+					state: "stalled",
+					from: ["user"],
+					why: "Ateam started its agent 2 min ago and it has not started up since, most likely held at a prompt in its terminal (a trust or review dialog, a sign-in)",
+					opening: "yes",
+					at: 300,
+				},
+			}),
+		);
+		expect(items).toMatchObject([
+			{
+				kind: "notice",
+				tone: "info",
+				text: "Your message to fix login has not reached its agent yet: Ateam started its agent 2 min ago and it has not started up since, most likely held at a prompt in its terminal (a trust or review dialog, a sign-in). It goes in once that is answered.",
+			},
+		]);
+		expect(notes).toEqual([]);
+	});
+
+	it("does not tell one the task already had when followed, but tells a later one", async () => {
+		const { follower, items } = make();
+		follower.follow(task({ undelivered: quit }));
+		await follower.onTaskUpdated(task({ undelivered: quit }));
+		expect(items).toHaveLength(0);
+		await follower.onTaskUpdated(task({ undelivered: { ...quit, at: 400 } }));
+		expect(items).toHaveLength(1);
 	});
 
 	it("remembers what it follows across restarts, and drops the oldest past the cap", async () => {

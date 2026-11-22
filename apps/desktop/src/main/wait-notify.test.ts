@@ -10,6 +10,7 @@ const {
 	proposalNotice,
 	questionNotice,
 	stillDue,
+	undeliveredNotice,
 	waitNotice,
 } = await import("./wait-notify");
 
@@ -151,6 +152,34 @@ describe("proposalNotice", () => {
 			proposalNotice(task({ proposals: [proposal("a", NOW - FRESH_MS - 1)] }), new Set(), NOW),
 		).toBeNull();
 		expect(proposalNotice(task({ proposals: null }), new Set(), NOW)).toBeNull();
+	});
+});
+
+describe("undeliveredNotice", () => {
+	const answer = task({
+		waitingFiredAt: null,
+		undelivered: {
+			state: "failed",
+			from: ["user"],
+			why: "Ateam could not start its agent (Claude Code isn't installed here)",
+			opening: 'Answer to your ask_user question "Ship?"',
+			at: NOW - 1000,
+		},
+	});
+
+	it("says once that the user's answer never reached the agent, and why", () => {
+		const notice = undeliveredNotice(answer, new Set(), NOW);
+		expect(notice).toEqual({
+			key: `t1:u:${NOW - 1000}`,
+			title: "permission rollout",
+			body: "Your message did not reach its agent: Ateam could not start its agent (Claude Code isn't installed here).",
+		});
+		expect(undeliveredNotice(answer, new Set([notice?.key ?? ""]), NOW)).toBeNull();
+	});
+
+	it("stays quiet for an old one, and for none", () => {
+		expect(undeliveredNotice(answer, new Set(), NOW + FRESH_MS)).toBeNull();
+		expect(undeliveredNotice(task({ undelivered: null }), new Set(), NOW)).toBeNull();
 	});
 });
 

@@ -1017,7 +1017,7 @@ describe("what the user did with the Lead's proposals", () => {
 		await tick();
 		expect(p.written.at(-1)).toMatchObject({
 			message: {
-				content: `${NOTES_HEAD}\n- created your proposed task "Fix login" as [fix login](task:t1)\n- dismissed your proposed task "Old idea"\n\nwhat's next?`,
+				content: `${NOTES_HEAD}\n- the user created your proposed task "Fix login" as [fix login](task:t1)\n- the user dismissed your proposed task "Old idea"\n\nwhat's next?`,
 			},
 		});
 		lead.dispose();

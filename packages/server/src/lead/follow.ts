@@ -5,7 +5,10 @@
 //
 // These items are the user's, not the Lead model's: they are recorded beside
 // the conversation (LeadSession.record) and never sent to the agent, so
-// following a task costs no tokens. A task is followed from the reply it had
+// following a task costs no tokens. The one exception is a message the Lead
+// sent that never reached the task's agent (TaskDTO.undelivered): the user sees
+// it in the thread, and the agent hears it with the user's next message
+// (LeadSession.note), so it stops promising an answer that cannot come. A task is followed from the reply it had
 // when touched, read from the task itself rather than this Mac's clock, so a
 // box whose clock runs behind cannot make a reply look old.
 import { randomUUID } from "node:crypto";
@@ -15,8 +18,11 @@ import {
 	CH,
 	type LeadItem,
 	type LeadTaskRef,
+	TASK_LINK_SCHEME,
 	type TaskDTO,
 	type TaskLastReplyDTO,
+	type TaskUndeliveredDTO,
+	undeliveredText,
 } from "@ateam/protocol";
 
 /** The most recently touched tasks; older ones stop reporting back. */
@@ -30,12 +36,16 @@ interface Followed {
 	/** The page already shown (or there when followed); absent in older files. */
 	pageId?: string | null;
 	pageAt?: number;
+	/** The undelivered message already told (or there when followed). */
+	undeliveredAt?: number;
 }
 
 export interface FollowerOptions {
 	dir: string;
 	handle(method: string, args: unknown[]): Promise<unknown>;
 	record(item: LeadItem): void;
+	/** Tell the Lead's agent with the user's next message (LeadSession.note). */
+	note?(line: string): void;
 }
 
 export const refOf = (t: TaskDTO): LeadTaskRef => ({
@@ -68,6 +78,7 @@ export class Follower {
 			agentStatus: task.agentStatus,
 			pageId: task.page?.id ?? null,
 			pageAt: task.page?.at,
+			undeliveredAt: Math.max(prev?.undeliveredAt ?? 0, task.undelivered?.at ?? 0),
 		});
 		while (this.followed.size > MAX_FOLLOWED) {
 			const oldest = this.followed.keys().next().value;
@@ -98,6 +109,12 @@ export class Follower {
 				task: f.ref,
 			});
 		f.agentStatus = task.agentStatus;
+		const missed = task.undelivered;
+		if (missed && missed.at > (f.undeliveredAt ?? 0)) {
+			f.undeliveredAt = missed.at;
+			this.save();
+			this.tellUndelivered(f.ref, missed);
+		}
 		// A new page or revision: drawn in the thread, unless it belongs to a question, whose
 		// card (below the thread) draws it.
 		if (task.page && (task.page.id !== (f.pageId ?? null) || task.page.at !== f.pageAt)) {
@@ -135,6 +152,28 @@ export class Follower {
 		} catch {
 			/* the box went away or predates v18: the card on the board still has it */
 		}
+	}
+
+	/** A message to a followed task that did not reach its agent: said in the
+	 *  thread, and to the Lead's agent when it was the Lead's. A box's Lead and
+	 *  the Mac's both send as the Lead, so either may hear of the other's. */
+	private tellUndelivered(ref: LeadTaskRef, u: TaskUndeliveredDTO): void {
+		this.o.record({
+			kind: "notice",
+			id: randomUUID(),
+			text: undeliveredText(u, ref.name),
+			tone: u.state === "failed" ? "error" : "info",
+			at: Date.now(),
+			task: ref,
+		});
+		if (!u.from.includes("lead")) return;
+		const link = `[${ref.name.replace(/[[\]\n]/g, " ")}](${TASK_LINK_SCHEME}${ref.taskId})`;
+		const yours = `your message to ${link} that begins ${JSON.stringify(u.opening)}`;
+		this.o.note?.(
+			u.state === "failed"
+				? `${yours} did not reach its agent: ${u.why}. No answer to it will come; the user saw this in the chat.`
+				: `${yours} has not reached its agent yet: ${u.why}. It goes in once the user answers that prompt.`,
+		);
 	}
 
 	private save(): void {

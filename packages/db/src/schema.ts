@@ -63,6 +63,16 @@ export interface TaskQuestion {
 	pageId?: string;
 }
 
+/** A message from the Lead or the user that did not reach the task's agent;
+ *  mirrors @ateam/protocol's TaskUndeliveredDTO, which documents each field. */
+export interface TaskUndelivered {
+	state: "failed" | "stalled";
+	from: ("lead" | "user")[];
+	why: string;
+	opening: string;
+	at: number;
+}
+
 /** A task or loop an agent proposed (propose_task / propose_loop); mirrors
  *  @ateam/protocol's TaskProposalDTO, which documents each field. */
 export interface TaskProposal {
@@ -234,6 +244,10 @@ export const tasks = sqliteTable(
 		/** What became of this task's decided proposals, newest last; server-side
 		 *  only (not in TaskDTO). */
 		proposalOutcomes: text("proposal_outcomes", { mode: "json" }).$type<ProposalOutcome[]>(),
+		/** The last message from the Lead or the user that did not reach the
+		 *  agent (peer-messages.ts in the server); null once an agent of the task
+		 *  has shown up since. */
+		undelivered: text("undelivered", { mode: "json" }).$type<TaskUndelivered>(),
 		lastReplyAt: integer("last_reply_at"),
 		lastEventAt: integer("last_event_at"),
 		isUnread: integer("is_unread", { mode: "boolean" }).default(false),
