@@ -286,7 +286,7 @@ describe("startLead for a project window", () => {
 			expect(res.ok).toBe(true);
 			await res.text();
 			expect(lines).toEqual([
-				'messaged [rename field](task:t2) in api from web\'s own Lead chat: "we use userId"',
+				'the user messaged [rename field](task:t2) in api from web\'s own Lead chat: "we use userId"',
 			]);
 		} finally {
 			lead.dispose();

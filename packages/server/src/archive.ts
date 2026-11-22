@@ -41,7 +41,14 @@ export function isArchivable(
 	if (task.column === "merged") return false;
 	if (exempt.live || exempt.loopOwned) return false;
 	if (task.waitingUntil != null && task.waitingFiredAt == null) return false;
-	const idleSince = Math.max(task.lastEventAt ?? task.createdAt ?? 0, task.restoredAt ?? 0);
+	// A message from the Lead or the user that never reached the agent files the
+	// card in Needs You without a hook event, often on a task idle for a month
+	// (the age at which Claude Code drops a conversation): it counts as activity.
+	const idleSince = Math.max(
+		task.lastEventAt ?? task.createdAt ?? 0,
+		task.restoredAt ?? 0,
+		task.undelivered?.at ?? 0,
+	);
 	return now - idleSince >= afterDays * DAY_MS;
 }
 

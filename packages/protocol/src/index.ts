@@ -279,6 +279,30 @@ export interface TaskProposalDTO {
 }
 
 /**
+ * A message from the Lead chat or the user (a reply, an answer to a question)
+ * that did not reach the task's agent: Ateam started an agent for it, and that
+ * agent could not start, quit before it started up, or has not started up for
+ * two minutes. The engine files the card in Needs You when it sets this. It is
+ * cleared once an agent of the task shows up again; a client tells the user
+ * once per (task, `at`).
+ */
+export interface TaskUndeliveredDTO {
+	/** "failed": the agent will never read it. "stalled": the agent is still
+	 *  there but has not started up, most likely held at a prompt in its
+	 *  terminal (a folder trust or hook review dialog, a sign-in); it reads the
+	 *  message once the user clears that. */
+	state: "failed" | "stalled";
+	/** Who sent what did not arrive: the Lead (of any machine), the user, or both. */
+	from: ("lead" | "user")[];
+	/** Why, as a clause: "its agent quit 7 s after Ateam started it, ...". */
+	why: string;
+	/** The first line of the Lead's first such message, or else the user's:
+	 *  what the Lead's agent is told it sent. */
+	opening: string;
+	at: number;
+}
+
+/**
  * An HTML page an agent made for the user (show_page, or ask_user's `page`):
  * a dashboard, a comparison, a report. Tasks retain multiple independent pages.
  * The HTML itself is read with tasks:page, so the board's task list stays small.
@@ -660,6 +684,11 @@ export interface TaskDTO {
 	 *  a few minutes after its agent goes quiet; null until the first one, and
 	 *  absent on an engine older than v23. */
 	summary?: string | null;
+	/** The last message from the Lead or the user that did not reach this
+	 *  task's agent; null once an agent of the task has shown up since. Absent
+	 *  on an older engine, which reads the same: a read-only addition, so no
+	 *  protocol bump. */
+	undelivered?: TaskUndeliveredDTO | null;
 	/** Done-vs-ongoing verdict, derived from this row (no git/gh calls). */
 	triage: TaskTriage;
 }
@@ -1868,6 +1897,8 @@ export {
 } from "./connect-steps";
 // GitHub access on a box (v25): its DTOs and the wording both clients share.
 export * from "./github-access";
+// A message from the Lead or the user that did not reach a task's agent.
+export { undeliveredText } from "./undelivered";
 // The Lead chat: its items and events, the desktop's IPC channels and the
 // engine's RPC for a box's own Lead (v24).
 export * from "./lead";

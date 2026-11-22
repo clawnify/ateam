@@ -542,6 +542,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			session.agentSessionId
 				? queueCodexMessage(session.agentSessionId, text, session.cwd)
 				: Promise.resolve(false),
+		notify: (taskId) => sendTaskUpdated(taskId),
 		log: opts.log ?? ((line) => console.log(line)),
 	});
 	hooks.setPeerInbox({
@@ -702,7 +703,7 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			permissions.settle(e.terminalId, e.eventType);
 		// Any sign of life from an agent started to take a message: it is up.
 		if (e.eventType !== "AgentExit") {
-			peers.agentEvent(e.terminalId);
+			peers.agentEvent(e.terminalId, session.taskId);
 			boardConnections.up(e.terminalId);
 		}
 		// The agent called a browser tool. Its Working fires alongside and drives

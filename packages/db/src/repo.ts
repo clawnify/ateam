@@ -186,6 +186,21 @@ export const repo = {
 	},
 
 	/**
+	 * Clear a task's undelivered message, if it has one; true when it did. One
+	 * statement, no row read: it runs on every hook event an agent sends.
+	 */
+	clearUndelivered(db: AteamDb, id: string): boolean {
+		return (
+			db
+				.update(tasks)
+				.set({ undelivered: null, updatedAt: Date.now() })
+				.where(and(eq(tasks.id, id), isNotNull(tasks.undelivered)))
+				.returning({ id: tasks.id })
+				.all().length > 0
+		);
+	},
+
+	/**
 	 * Tasks marked as having an agent at a prompt with no session open. An exit
 	 * once settled that mark only for a card in progress, so a card whose agent
 	 * ended in Needs You kept it, and updateTask would hold the card there for
