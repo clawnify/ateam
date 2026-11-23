@@ -2102,12 +2102,23 @@ input {
 	width: 20px;
 	height: 20px;
 }
+/* The task as its sidebar row lists it, so a tile is found by the look of its
+   row: the row's mark, then the name in the row's size and colour (the bar's
+   own text is smaller and dim). With the bar's 6px gap the mark sits the row's
+   7px from the name. */
+.mc .tile .bar .ticon {
+	flex: none;
+	margin-right: 1px;
+	color: var(--text-dim);
+}
 /* The name gives way first, so the size and PR stay readable on a narrow tile. */
-.mc .tile .bar .bar-name {
+.mc .tile .bar .tname {
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	font-size: 13px;
+	color: var(--text);
 }
 .mc .tile .bar .bar-pr {
 	flex: none;
