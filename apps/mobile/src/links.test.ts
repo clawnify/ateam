@@ -395,6 +395,28 @@ test("a background try that times out while a tap wakes the box leaves the tap's
 	expect(h.state()[key(sleepy)]).toMatchObject({ state: "live" });
 });
 
+test("a background try that fails while a tap's try still dials sets no next try until that one ends", async () => {
+	const lines: string[] = [];
+	const h = harness({ log: (_k, event) => void lines.push(event) });
+	const k = key(plain);
+	h.waited.add(k);
+	h.links.holdAll();
+	await settle();
+	const tap = h.links.connect(plain, { wake: true });
+	await settle();
+	const dials = h.calls.length;
+	h.calls[0]?.reject(new Error("connection timed out after 15000ms"));
+	await h.fc.advance(13_000);
+	// Nothing was set to fire into the tap's dial, and nothing dialled again.
+	expect(lines.filter((l) => l.startsWith("next try"))).toEqual([]);
+	expect(h.calls).toHaveLength(dials);
+	h.calls.at(-1)?.reject(new Error("connection timed out after 15000ms"));
+	expect(await tap).toBe(false);
+	await settle();
+	// The try owed from the background comes now, from the short end.
+	expect(lines.filter((l) => l.startsWith("next try"))).toEqual(["next try in 1 s"]);
+});
+
 test("back in the foreground, a dead socket is dropped and redialled, a live one left alone", async () => {
 	const h = harness();
 	const one = h.links.connect(plain);
