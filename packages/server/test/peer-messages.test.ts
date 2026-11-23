@@ -1562,3 +1562,73 @@ describe("What the Lead or the user sent that did not reach its agent", () => {
 		expect(after?.column).toBe("needs_attention");
 	});
 });
+
+// An agent that quits (/exit) leaves its pane open as a shell, its session
+// `stopped` on a live PTY (pty/agent-quit.ts). Counted as the task's busy
+// agent, it held every message for as long as the tab stayed open.
+describe("A task whose agent quit but whose tab is still open", () => {
+	function quitPane(task: Task, agentId: string, terminalId: string): AgentSession {
+		return addSession(task, agentId, terminalId, "stopped");
+	}
+
+	it("starts its agent for a message rather than waiting on the shell", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "claude");
+		quitPane(b, "claude", "tb");
+		expect(messenger.listPeers(undefined).find((p) => p.taskId === b.id)?.state).toBe(
+			"not_running",
+		);
+
+		const r = messenger.send({ fromTerminalId: "ta", to: b.id, body: "please rebase" });
+		expect(r.reason).toContain("starting it");
+		await flush();
+		expect(launched.map((l) => l.taskId)).toEqual([b.id]);
+		expect(launched[0]?.prompt).toContain("please rebase");
+		// The shell is the user's: nothing stops it.
+		expect(stopped).toEqual([]);
+		expect(live.has("tb")).toBe(true);
+	});
+
+	it("does the same for the Lead and for the user's own words", async () => {
+		const b = addTask("b", "claude");
+		const quit = quitPane(b, "claude", "tb");
+		repo.updateSession(db, quit.id, { agentSessionId: "conv-1" });
+		expect(messenger.sendFrom("lead", { to: b.id, body: "from the Lead" }).reason).toContain(
+			"starting it",
+		);
+		await flush();
+		const c = addTask("c", "claude");
+		quitPane(c, "claude", "tc");
+		messenger.sendFrom("user", { to: c.id, body: "go ahead" });
+		await flush();
+		expect(launched.map((l) => l.taskId)).toEqual([b.id, c.id]);
+	});
+
+	// OpenCode reports no hook events, so an agent the user runs again in that
+	// pane shows itself only by its listener asking for messages.
+	it("hands it to an agent run again in that pane whose listener is asking", async () => {
+		const a = addTask("a");
+		addSession(a, "claude", "ta");
+		const b = addTask("b", "opencode");
+		quitPane(b, "opencode", "tb");
+		const { result } = messenger.wait("tb");
+		const r = messenger.send({ fromTerminalId: "ta", to: b.id, body: "ping" });
+		expect(r.reason).toContain("delivered to its agent now");
+		expect((await result).kind).toBe("message");
+		expect(launched).toEqual([]);
+	});
+
+	it("leaves a message for the task's other, busy agent to that one", async () => {
+		const b = addTask("b", "codex");
+		addSession(b, "codex", "tb-busy", "running");
+		const quit = quitPane(b, "claude", "tb");
+		// The quit pane saw the latest event: it must not stand in for the busy one.
+		repo.updateSession(db, quit.id, { lastEventAt: now });
+		expect(messenger.sendFrom("lead", { to: b.id, body: "later" }).reason).toContain(
+			"queued: its agent is busy",
+		);
+		await flush();
+		expect(launched).toEqual([]);
+	});
+});

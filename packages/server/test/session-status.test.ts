@@ -14,6 +14,14 @@ describe("sessionStatusAfter", () => {
 		expect(sessionStatusAfter("Start", "awaiting_input")).toBe("awaiting_input");
 	});
 
+	// The pane of an agent that quit is a shell (`stopped`, pty/agent-quit.ts).
+	// A Start there is an agent the user ran again by hand, at its prompt: kept
+	// `stopped`, it read as a shell until its first activity while its listener
+	// already asked for messages.
+	it("a Start in a pane whose agent quit makes it an agent at its prompt again", () => {
+		expect(sessionStatusAfter("Start", "stopped")).toBe("idle");
+	});
+
 	it("every other event sets the status as before", () => {
 		expect(sessionStatusAfter("UserReply", "idle")).toBe("running");
 		expect(sessionStatusAfter("Working", "idle")).toBe("running");

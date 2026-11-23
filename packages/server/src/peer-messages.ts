@@ -27,7 +27,8 @@
  *     `restoreAgentSession`), so it costs the conversation nothing.
  *   - A task with no live agent is woken the same way: its last conversation is
  *     resumed with the message as the prompt, or a fresh agent is started when
- *     it never had one.
+ *     it never had one. A tab whose agent quit and left its pane open as a
+ *     shell is not a live agent.
  *
  * Starting an agent is not the same as it reading the prompt. A restart or a
  * launch is only known to have worked once the new agent shows up: its first
@@ -1352,11 +1353,24 @@ export class PeerMessenger {
 		);
 	}
 
-	/** The task's most recently active live agent (not a plain shell). */
+	/**
+	 * The task's most recently active live agent: not a plain shell, nor a pane
+	 * whose agent quit (`stopped` on a live PTY, pty/agent-quit.ts), which is a
+	 * shell too and would hold every message for as long as the tab stays open.
+	 * An agent run there again by hand counts once it reports a Start (engine.ts,
+	 * sessionStatusAfter) or its listener asks for messages: OpenCode reports no
+	 * Start, and Claude's listener can ask before its Start is recorded.
+	 */
 	private liveAgentSession(taskId: string): AgentSession | undefined {
 		return repo
 			.listSessionsByTask(this.deps.db, taskId)
-			.filter((s) => s.agentId !== "shell" && s.exitedAt == null && this.deps.isLive(s.terminalId))
+			.filter(
+				(s) =>
+					s.agentId !== "shell" &&
+					s.exitedAt == null &&
+					(s.status !== "stopped" || this.waiters.has(s.terminalId)) &&
+					this.deps.isLive(s.terminalId),
+			)
 			.sort((a, b) => (b.lastEventAt ?? b.startedAt ?? 0) - (a.lastEventAt ?? a.startedAt ?? 0))[0];
 	}
 
