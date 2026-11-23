@@ -3205,6 +3205,24 @@ function OfflineTaskPanel({
 	);
 }
 
+/**
+ * A task's mark where it is listed by name: one glyph per live session, or the
+ * icon inferred from its name while no agent has touched it. The sidebar row
+ * and the Mission Control tile draw this same one, so a tile is found by the
+ * look of its row.
+ */
+function TaskMark({ task }: { task: TaskDTO }) {
+	const glyphs = taskGlyphs(task);
+	if (glyphs.length > 0)
+		return (
+			<span className="ticon glyphs">
+				<SessionGlyphs ids={glyphs} size={14} />
+			</span>
+		);
+	const Icon = taskIcon(task.name);
+	return <Icon className="ticon" size={14} strokeWidth={1.75} />;
+}
+
 function TaskRow({
 	task: t,
 	machine,
@@ -3228,9 +3246,7 @@ function TaskRow({
 	onClick: () => void;
 	onDelete: () => void;
 }) {
-	const Icon = taskIcon(t.name);
 	const tags = tagsFor(t);
-	const glyphs = taskGlyphs(t);
 	const box = useBoxName()(machine);
 	const named = machine !== null && showMachine;
 	// The row is a grid (icon | name | git glyph | status) that the row button
@@ -3249,13 +3265,7 @@ function TaskRow({
 					className={`tasknode ${selected ? "selected" : ""} ${offline ? "offline" : ""} ${pulse ? "just-started" : ""}`}
 					onClick={onClick}
 				>
-					{glyphs.length > 0 ? (
-						<span className="ticon glyphs">
-							<SessionGlyphs ids={glyphs} size={14} />
-						</span>
-					) : (
-						<Icon className="ticon" size={14} strokeWidth={1.75} />
-					)}
+					<TaskMark task={t} />
 					{/* The status stays put; on hover the tags slide in beside it, like
 				    the card's. They share one line with the name, so the name only
 				    gives up the room the tags that fit really take. */}
@@ -5546,7 +5556,17 @@ export function MissionControl({
 									setDropTarget(null);
 								}}
 							>
-								<span className="bar-name">{task.name}</span>
+								{/* The task as its sidebar row lists it: the row's mark, and
+								    the name in the row's type, bold while unread. A loop's
+								    row leads with the loop icon, so its tile does too. */}
+								{mode === "loops" ? (
+									<span className="ticon">
+										<Repeat size={14} strokeWidth={1.75} />
+									</span>
+								) : (
+									<TaskMark task={task} />
+								)}
+								<span className={`tname ${task.isUnread ? "unread-row" : ""}`}>{task.name}</span>
 								{/* What the terminal below can't show: whether it has a PR (its
 								    size is the +N -M on the right). The branch used to sit here,
 								    but it is the name again as a slug. */}
