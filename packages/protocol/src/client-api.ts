@@ -83,6 +83,10 @@ export function linksClient(rpc: RpcClient) {
 	return {
 		list: () => rpc.call(CH.linksList) as Promise<BoxLinkDTO[]>,
 		set: (req: BoxLinksSetDTO) => rpc.call(CH.linksSet, [req]) as Promise<BoxLinkDTO[]>,
+		/** This Mac, by `name`, as a link the box reaches back down this connection (v40). */
+		offer: (name: string) => rpc.call(CH.linksOffer, [{ name }]) as Promise<void>,
+		/** Take that link down again. */
+		withdraw: () => rpc.call(CH.linksWithdraw) as Promise<void>,
 	};
 }
 

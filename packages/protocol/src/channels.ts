@@ -71,6 +71,10 @@ export const CH = {
 	// addressed: the Mac, which holds every box, sets them up.
 	linksList: "links:list",
 	linksSet: "links:set",
+	// The Mac joining a box's links (v40): it can't be dialled, so it offers itself
+	// on the connection it opened and the box calls back down it (duplex.ts).
+	linksOffer: "links:offer",
+	linksWithdraw: "links:withdraw",
 	fsListDir: "fs:listDir",
 	utilPickFiles: "util:pickFiles",
 	utilAttachImages: "util:attachImages",

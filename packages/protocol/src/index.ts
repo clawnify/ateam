@@ -184,7 +184,15 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // one address, and switches for the box's browser and for everything else its
 // engine starts. New methods only, served by a box's daemon: an older box
 // answers "Unknown method" (FEATURE_MIN_VERSION.proxy).
-export const PROTOCOL_VERSION = 39;
+// v40: this Mac joins its boxes' links. A box can't dial the Mac, so the Mac
+// offers itself down the connection it opened (links:offer, links:withdraw) and
+// the box calls back over it, in frames wrapped as `{ t: "back", frame }`
+// (duplex.ts): the box's agents and its Lead then list and message the Mac's
+// tasks, as they do a linked box's, and the Mac's agents reach the box's. New
+// methods and a frame an older end drops unread: a v39 box is left out of it
+// (FEATURE_MIN_VERSION.macLink). Settings gained `client.macLink`, read by the
+// desktop alone.
+export const PROTOCOL_VERSION = 40;
 
 /**
  * The oldest client protocol an engine of this version still serves correctly, sent
@@ -450,6 +458,10 @@ export const FEATURE_MIN_VERSION = {
 	/** v39 added proxy:* on a box. An older box answers "Unknown method", so the
 	 *  box page offers its update instead of a proxy form. */
 	proxy: 39,
+	/** v40 added links:offer and the session a box opens back to the Mac that
+	 *  holds it. An older box is left out of both directions until it is updated:
+	 *  a Mac task that reached it would get no answer back. */
+	macLink: 40,
 } as const;
 
 export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
@@ -879,6 +891,13 @@ export interface ClientSettings {
 	 * messages. Off until the user turns it on in Settings → Boxes.
 	 */
 	crossBox: boolean;
+	/**
+	 * Whether this Mac is linked with the boxes it holds (v40): agents here list
+	 * and message the tasks on them, and their agents and Leads this Mac's, while
+	 * Ateam is open. A link reads the board and sends messages, as between boxes.
+	 * Off until the user turns it on in Settings → Boxes.
+	 */
+	macLink: boolean;
 }
 export type ThemeId = "dark" | "light" | "classic";
 
@@ -1928,6 +1947,8 @@ export {
 } from "./providers";
 // How recently a task last changed, for the board and the Lead's get_board.
 export { byLatestActivity, relativeAge } from "./recency";
+// A second session, the other way, over one connection (a box calling back to the Mac).
+export * from "./duplex";
 // Transport-agnostic RPC framing + client (shared by every transport).
 export * from "./rpc";
 // Derived task tags (pure), shared by every client; icons are per-client.

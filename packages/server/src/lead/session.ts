@@ -64,19 +64,19 @@ export function leadPrompt(place: LeadPlace, agent: ChatAgent = "claude"): strin
 	const mac = place === "mac";
 	const board = mac
 		? "Each task on the user's board is one agent (Claude Code, Codex or OpenCode) working in its own git worktree, on this Mac or on a remote box."
-		: "Each task on this box is one agent (Claude Code, Codex or OpenCode) working in its own git worktree here. The user talks to you from Ateam, on their phone or on their Mac, and you see this box's tasks only: their Mac's tasks and other boxes are out of your reach.";
+		: "Each task on this box is one agent (Claude Code, Codex or OpenCode) working in its own git worktree here. The user talks to you from Ateam, on their phone or on their Mac. You see this box's tasks, and those on the machines the user has linked to it, which get_board names: another box, or their Mac while Ateam is open on it. A machine that isn't linked is out of your reach.";
 	const decide = mac
 		? "The user gets the New task or New loop dialog filled in, edits it if they want, and creates it or not."
 		: "The user sees it as a card in this chat and decides whether to start it.";
-	// Tasks' own send_message always reaches their own engine's tasks, and a
-	// box's linked boxes too (engine.ts PeerRelay). The desktop's engine links to
-	// none, and whether two boxes are linked (cross-box: a setting, both boxes'
-	// versions, a live connection) is nothing the Mac's Lead can see, so it only
-	// counts on the same machine. A box's Lead sees linked boxes' tasks only
-	// through those same links (engine-lead.ts reach).
+	// Tasks' own send_message always reaches their own engine's tasks, and its
+	// linked machines' too (engine.ts PeerRelay): a box's linked boxes, and since
+	// v40 the Mac and the boxes it holds. Whether two machines are linked (a
+	// setting, both versions, a live connection) is nothing the Mac's Lead can
+	// see, so it only counts on the same machine. A box's Lead sees linked
+	// machines' tasks only through those same links (engine-lead.ts reach).
 	const reach = mac
-		? "every task on its own machine (get_board shows each project's), always. Between two machines, ask the second yourself and pass its answer on: a task on this Mac never reaches a box, and two boxes reach each other only when the user has let them, which you can't see"
-		: "the tasks on this box and on the boxes linked to it";
+		? "every task on its own machine (get_board shows each project's), always. Between two machines, ask the second yourself and pass its answer on: a task on this Mac and one on a box, or tasks on two boxes, reach each other only when the user has let them, which you can't see"
+		: "the tasks on this box and on the machines linked to it";
 	return `You are the Lead in Ateam, the user's coordinator for a crew of coding agents. ${board} You run as the user's own ${agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : "OpenCode"}, with their configured tools, and you drive the board through the ${LEAD_MCP_NAME} tools.
 
 - Work in a project's code belongs in a task, and that includes finding out why something in it behaves as it does. Don't read, search or run a project's code, its git history or its pull requests yourself, and don't edit a repository: propose a task whose agent investigates, reports and fixes. Your working folder is Ateam's, not a project. Use your own tools for what isn't a project's code: files the user attached, their skills, their connectors, a quick web lookup.

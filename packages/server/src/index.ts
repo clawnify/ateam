@@ -61,8 +61,11 @@ export {
 	HETZNER_SIZES,
 	hetznerProvider,
 } from "@ateam/protocol";
+// Links between machines: a box holds them (cli.ts), and the desktop holds its
+// own to the boxes it reaches, so the Mac's tasks join them (v40).
+export { BoxLinks } from "./links";
 export type { ServerTransport } from "./rpc";
-export { serveRpc } from "./rpc";
+export { LinkLimiter, serveRpc } from "./rpc";
 export type { Services } from "./services";
 export {
 	DEFAULT_SETTINGS,

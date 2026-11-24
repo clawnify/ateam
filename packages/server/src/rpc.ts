@@ -155,6 +155,11 @@ export interface ServeOptions {
 	 *  sleeps now (sleep/index.ts providerReport), reported in hello for clients to wake
 	 *  it through; null on a box none does. Absent: not reported (not known yet, or tests). */
 	provider?: ProviderReport | null;
+	/** A link from a box, whatever the connection says of itself: the Mac serving
+	 *  a box back down the connection it opened (duplex.ts). It reads the board
+	 *  and sends messages only, its messages are said to come from `name`, and
+	 *  `limiter` caps how many it sends. */
+	link?: { name: string; limiter?: LinkLimiter };
 }
 
 /** Wrong tokens or codes on one connection before it is dropped. */
@@ -211,10 +216,10 @@ export function serveRpc(
 	let failures = 0;
 	// A link from another box (cross-box): its pairing is a box's, or its hello
 	// says it is one. Asking only ever narrows what a connection gets.
-	let link = false;
+	let link = opts.link !== undefined;
 	// The name that box goes by here, from its pairing, when it is paired: what a
 	// message it hands over is said to come from, whatever the message says.
-	let linkName: string | null = null;
+	let linkName: string | null = opts.link?.name ?? null;
 	let engineSubs: (() => void)[] = [];
 	const subscribeEngine = () => {
 		const events = link ? BOX_EVENTS : (Object.keys(FORWARDED) as (keyof EngineEventMap)[]);
@@ -330,7 +335,8 @@ export function serveRpc(
 		if (!admitted) throw new Error(NEEDS_PAIRING);
 		if (link && !BOX_METHODS.has(method)) throw new Error(BOX_REFUSED);
 		if (link && method === CH.peersSendFromBox) {
-			if (guard?.fromLinks && !guard.fromLinks.take(device ?? `connection:${client}`))
+			const cap = opts.link?.limiter ?? guard?.fromLinks;
+			if (cap && !cap.take(device ?? opts.link?.name ?? `connection:${client}`))
 				throw new Error(
 					`rate limit: at most ${MAX_FROM_LINK} messages from one box per ${LINK_WINDOW_MS / 60000} minutes`,
 				);

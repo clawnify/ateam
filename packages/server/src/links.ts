@@ -11,6 +11,11 @@
 //
 // Kept in <data dir>/links.json, readable by the owner alone like pairings.json,
 // read once at start and written on every change.
+//
+// A link can also run over a connection the other machine opened (attach, v40):
+// the user's Mac, which no box can dial, reached back down the connection it
+// holds to this box (offerExtension), and on the Mac itself the boxes it holds.
+// Such a link is never stored or redialled: it lasts while its connection does.
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -31,6 +36,7 @@ import {
 import WebSocket from "ws";
 import type { PeerRelay } from "./engine";
 import type { PeerSearch, PeerView, SendResult } from "./peer-messages";
+import type { RpcExtension } from "./rpc";
 import { needsTailscaleNc, tailscaleNc } from "./tailnet";
 
 export const LINKS_FILE = "links.json";
@@ -101,6 +107,8 @@ export class BoxLinks implements PeerRelay {
 	private readonly callTimeoutMs: number;
 	private self: string | null = null;
 	private readonly lives = new Map<string, Live>();
+	/** The links over a connection the other machine opened, by name (attach). */
+	private readonly attached = new Map<string, Live>();
 	/** Which link a task lives behind, as the last listings showed. */
 	private readonly where = new Map<string, Live>();
 	private readonly taskListeners = new Set<(task: TaskDTO, backend: AggregateBackend) => void>();
@@ -114,6 +122,8 @@ export class BoxLinks implements PeerRelay {
 		log?: (line: string) => void;
 		retryMs?: readonly number[];
 		callTimeoutMs?: number;
+		/** What this machine is called on the others, when no links:set says (the Mac). */
+		self?: string;
 	}) {
 		this.path = join(opts.dataDir, LINKS_FILE);
 		this.log = opts.log ?? (() => {});
@@ -121,7 +131,7 @@ export class BoxLinks implements PeerRelay {
 		this.retryMs = opts.retryMs ?? LINK_RETRY_MS;
 		this.callTimeoutMs = opts.callTimeoutMs ?? LINK_CALL_TIMEOUT_MS;
 		const f = this.read();
-		this.self = f.self;
+		this.self = f.self ?? opts.self ?? null;
 		for (const stored of f.links) this.add(stored);
 	}
 
@@ -174,8 +184,51 @@ export class BoxLinks implements PeerRelay {
 
 	/** The box a backend is, by the name the Mac gave it, or null for none. */
 	nameOf(backend: AggregateBackend | undefined): string | null {
-		for (const l of this.lives.values()) if (l.backend === backend) return l.stored.name;
+		for (const l of this.all()) if (l.backend === backend) return l.stored.name;
 		return null;
+	}
+
+	/** Hold a link to the machine `name` over `rpc`, a connection that machine
+	 *  opened or this one already holds: nothing is dialled or stored. Returns the
+	 *  call for when that connection ends; the link then stays, out of reach for
+	 *  the reason `away`, until it is attached again or dropped. */
+	attach(name: string, rpc: RpcClient, away: string): () => void {
+		let l = this.attached.get(name);
+		const fresh = !l;
+		if (!l) {
+			l = this.make({ name, url: `attached:${name}`, token: null, device: null });
+			this.attached.set(name, l);
+			this.backends.push(l.backend);
+		}
+		const held = l;
+		held.rpc = rpc;
+		held.state = "connected";
+		held.reason = undefined;
+		const off = rpc.on("taskUpdated", (task) => {
+			for (const cb of this.taskListeners) cb(task as TaskDTO, held.backend);
+		});
+		if (fresh) this.changed();
+		this.log(`[ateam] linked to ${name}, over a connection already open`);
+		return () => {
+			off();
+			// Only the connection this link is on now: an earlier one ending late is old news.
+			if (held.rpc !== rpc) return;
+			held.rpc = null;
+			held.state = "unreachable";
+			held.reason = away;
+			this.log(`[ateam] ${name} is out of reach: that connection ended`);
+		};
+	}
+
+	/** Forget an attached link (its machine withdrew, or was forgotten). */
+	drop(name: string): void {
+		const l = this.attached.get(name);
+		if (!l) return;
+		this.attached.delete(name);
+		l.rpc = null;
+		this.backends.splice(this.backends.indexOf(l.backend), 1);
+		for (const [task, at] of this.where) if (at === l) this.where.delete(task);
+		this.changed();
 	}
 
 	/** A linked box's task changed (what the Lead follows its tasks by). */
@@ -197,7 +250,7 @@ export class BoxLinks implements PeerRelay {
 	// ---- what this box's agents reach through (PeerRelay) ----
 
 	active(): boolean {
-		return this.lives.size > 0;
+		return this.lives.size > 0 || this.attached.size > 0;
 	}
 
 	async list(search: string | undefined): Promise<{
@@ -209,7 +262,7 @@ export class BoxLinks implements PeerRelay {
 		const unreachable: { box: string; reason: string }[] = [];
 		let more = false;
 		const answers = await Promise.all(
-			[...this.lives.values()].map(async (l) => {
+			this.all().map(async (l) => {
 				try {
 					return { l, got: await this.peersOf(l, search) };
 				} catch (e) {
@@ -235,13 +288,12 @@ export class BoxLinks implements PeerRelay {
 
 	async find(to: string): Promise<{ box: string; taskId: string } | { box: null; reason: string }> {
 		const known = this.where.get(to);
-		if (known?.rpc && this.lives.get(known.stored.url) === known)
-			return { box: known.stored.name, taskId: to };
+		if (known?.rpc && this.all().includes(known)) return { box: known.stored.name, taskId: to };
 		const want = to.toLowerCase();
 		const hits: { l: Live; taskId: string }[] = [];
 		const unreachable: string[] = [];
 		await Promise.all(
-			[...this.lives.values()].map(async (l) => {
+			this.all().map(async (l) => {
 				try {
 					const got = await this.peersOf(l, undefined);
 					for (const p of got.peers) {
@@ -277,7 +329,7 @@ export class BoxLinks implements PeerRelay {
 			from: { taskId: string; name: string; agent: string; lead?: boolean };
 		},
 	): Promise<SendResult> {
-		const l = [...this.lives.values()].find((x) => x.stored.name === box);
+		const l = this.all().find((x) => x.stored.name === box);
 		if (!l?.rpc)
 			return { ok: false, reason: `the box ${box} can't be reached right now; try again later` };
 		try {
@@ -315,7 +367,19 @@ export class BoxLinks implements PeerRelay {
 
 	// ---- connections ----
 
+	/** Every link: the stored ones, then the attached. */
+	private all(): Live[] {
+		return [...this.lives.values(), ...this.attached.values()];
+	}
+
 	private add(stored: StoredLink): Live {
+		const l = this.make(stored);
+		this.lives.set(stored.url, l);
+		this.backends.push(l.backend);
+		return l;
+	}
+
+	private make(stored: StoredLink): Live {
 		const l: Live = {
 			stored,
 			rpc: null,
@@ -332,8 +396,6 @@ export class BoxLinks implements PeerRelay {
 				},
 			},
 		};
-		this.lives.set(stored.url, l);
-		this.backends.push(l.backend);
 		return l;
 	}
 
@@ -466,6 +528,54 @@ export class BoxLinks implements PeerRelay {
 		renameSync(tmp, this.path);
 		chmodSync(this.path, 0o600);
 	}
+}
+
+/** Why a computer that offered itself isn't reached once its connection is gone. */
+export const OFFER_AWAY = "Ateam isn't open on it, or it is asleep";
+
+/**
+ * links:offer and links:withdraw, on one connection (v40). The computer on the
+ * other end, which no box can dial (the user's Mac), joins this box's links for
+ * as long as that connection lasts: this box reaches it back down the connection
+ * (`back`, duplex.ts), where it serves a link's narrow share and nothing else.
+ * `close` is for when the connection ends.
+ */
+export function offerExtension(
+	links: BoxLinks,
+	back: ClientTransport,
+	callTimeoutMs: number = LINK_CALL_TIMEOUT_MS,
+): RpcExtension & { close(): void } {
+	let rpc: RpcClient | null = null;
+	let name: string | null = null;
+	let detach: (() => void) | null = null;
+	return {
+		methods: [CH.linksOffer, CH.linksWithdraw],
+		handle: async (method, args) => {
+			if (method === CH.linksWithdraw) {
+				detach = null;
+				if (name) links.drop(name);
+				name = null;
+				return;
+			}
+			const raw = (args[0] ?? {}) as { name?: unknown };
+			const want = typeof raw.name === "string" ? raw.name.trim().slice(0, 100) : "";
+			if (!want) throw new Error("Say what this computer is called (name).");
+			if (links.status().some((l) => l.name === want))
+				throw new Error(`A box linked here is called "${want}" already.`);
+			rpc ??= createRpcClient(back);
+			// It has to answer on the way back before anything here counts on it.
+			await withTimeout(rpc.call(CH.systemHello), callTimeoutMs, "the computer");
+			if (name && name !== want) links.drop(name);
+			detach?.();
+			detach = links.attach(want, rpc, OFFER_AWAY);
+			name = want;
+		},
+		subscribe: () => () => {},
+		close: () => {
+			detach?.();
+			detach = null;
+		},
+	};
 }
 
 function isStored(v: unknown): v is StoredLink {

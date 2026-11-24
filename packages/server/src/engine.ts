@@ -85,7 +85,8 @@ export interface EngineOptions {
 	sockPath?: string;
 	log?: (line: string) => void;
 	/** The boxes this one links to (cross-box, links.ts): its agents' list_peers
-	 *  and send_message reach their tasks too. Absent on the desktop's engine. */
+	 *  and send_message reach their tasks too. On the desktop's engine, the boxes
+	 *  the Mac holds once it is linked with them (v40, mac-link.ts). */
 	peerRelay?: PeerRelay;
 }
 

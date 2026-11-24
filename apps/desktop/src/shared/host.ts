@@ -59,6 +59,8 @@ export const HOST_CH = {
 	phonePairing: "host:phonePairing",
 	crossBoxStatus: "host:crossBoxStatus",
 	crossBoxSet: "host:crossBoxSet",
+	macLinkStatus: "host:macLinkStatus",
+	macLinkSet: "host:macLinkSet",
 	/** Clone+register a repo onto a specific box (connect it first). */
 	provision: "host:provision",
 	/** Install the ateam engine on a reachable SSH box, then connect to it. */
@@ -258,6 +260,20 @@ export interface CrossBoxStatusDTO {
 	}[];
 }
 
+/** This Mac in its boxes' links (v40, main/mac-link.ts). */
+export interface MacLinkStatusDTO {
+	on: boolean;
+	/** What this Mac is called on the boxes. */
+	name: string;
+	/** The boxes held right now. */
+	boxes: {
+		alias: string;
+		linked: boolean;
+		/** Why it isn't linked. */
+		problem?: string;
+	}[];
+}
+
 export interface AteamHost {
 	list(): Promise<ConnectionDTO[]>;
 	/** Add an engine (idempotent if already held). `null` is a no-op — local is permanent. */
@@ -311,6 +327,11 @@ export interface AteamHost {
 	crossBoxStatus(): Promise<CrossBoxStatusDTO>;
 	/** Turn cross-box on or off: links are set up, or taken down, on every box. */
 	crossBoxSet(on: boolean): Promise<CrossBoxStatusDTO>;
+	/** Whether this Mac's tasks and its boxes' reach each other (v40), and which
+	 *  boxes are linked with it. */
+	macLinkStatus(): Promise<MacLinkStatusDTO>;
+	/** Turn that on or off: this Mac joins, or leaves, the links of every box it holds. */
+	macLinkSet(on: boolean): Promise<MacLinkStatusDTO>;
 	/** Connect the box if needed, then clone+register a repo ON it from its remote URL
 	 *  (so a task can run there). Returns the box's project row for that repo. */
 	provision(alias: string, input: { cloneUrl: string }): Promise<ProjectDTO>;
