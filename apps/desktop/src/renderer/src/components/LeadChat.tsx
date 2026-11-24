@@ -1384,7 +1384,8 @@ export function LeadChat({
 	const toolRunning =
 		lastBlock?.kind === "tools" && lastBlock.tools.some((t) => t.result === undefined);
 
-	// A box's Lead sees that box's tasks only: the @ picker offers no others.
+	// A box's Lead reaches that box's tasks, and those on the machines linked to it.
+	// Which those are isn't known here, so the @ picker offers the box's own.
 	const reachable = useMemo(
 		() => (home.box ? tasks.filter(onLeadBox) : tasks),
 		[home.box, tasks, onLeadBox],
@@ -1529,7 +1530,8 @@ export function LeadChat({
 										<span className={`lead-home-dot ${home.connected ? "on" : ""}`} />
 										{home.box}
 									</button>{" "}
-									and sees its tasks only. Your phone shares it when it picks that box.
+									and sees its tasks, and those on the machines linked to it. Your phone shares it
+									when it picks that box.
 								</>
 							) : (
 								"One chat for every task, on this Mac and on your boxes."

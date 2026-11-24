@@ -204,7 +204,7 @@ export function useBoxActions(load: () => Promise<void>, confirm: Confirm) {
 			if (row) {
 				const ok = await confirm(
 					`Run the Lead on ${row.title}?`,
-					`The desktop's Lead chat becomes ${row.title}'s own Lead, the conversation your phone has when it picks ${row.title} as its Lead box. It sees ${row.title}'s tasks only, uses the Claude account signed in there, and keeps the conversation and its attachments on the box. This Mac's conversation stays as it is, and moving back shows it again.`,
+					`The desktop's Lead chat becomes ${row.title}'s own Lead, the conversation your phone has when it picks ${row.title} as its Lead box. It sees ${row.title}'s tasks, and those on the machines you have linked to it, uses the Claude account signed in there, and keeps the conversation and its attachments on the box. This Mac's conversation stays as it is, and moving back shows it again.`,
 				);
 				if (!ok) return;
 			}
@@ -499,7 +499,7 @@ export function BoxPage({
 					<div className="box-lead-row">
 						<span className="gh-access-muted">
 							One Lead conversation with your phone, going on while this Mac sleeps. It sees this
-							box's tasks only.
+							box's tasks, and those on the machines you have linked to it.
 						</span>
 						<Button size="xs" variant="outline" onClick={() => void actions.moveLead(row)}>
 							Run the Lead here
