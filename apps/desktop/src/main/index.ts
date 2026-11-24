@@ -1,16 +1,18 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CH, type TaskDTO } from "@ateam/protocol";
-import { createEngine, type Engine, readSettings } from "@ateam/server";
+import { BoxLinks, createEngine, type Engine, readSettings } from "@ateam/server";
 import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { autoUpdater } from "electron-updater";
+import { HOST_CH } from "../shared/host";
 import { windowBackground } from "../shared/theme";
 import { WINDOW_CH } from "../shared/window";
 import { APP_NAME } from "./app-name";
 import { startCrossBox } from "./cross-box";
-import { createHost, registerHostIpc } from "./host";
+import { createHost, macLabel, registerHostIpc } from "./host";
 import { registerIpc } from "./ipc";
 import { type Lead, startLead } from "./lead";
+import { startMacLink } from "./mac-link";
 import { guardPageFrames } from "./page-navigation";
 import { registerPageScheme, servePages } from "./pages";
 import { showStartupFailure } from "./startup-failure";
@@ -290,12 +292,16 @@ app
 			}
 		}
 
+		// The boxes this Mac's agents reach, once it is linked with them (mac-link.ts):
+		// none until then, so nothing changes for its engine.
+		const macLinks = new BoxLinks({ dataDir: app.getPath("userData"), self: macLabel() });
 		engine = await createEngine({
 			dataDir: app.getPath("userData"),
 			// The detached PTY daemon (out/main/daemon.js) is run via the Electron
 			// binary as node (ELECTRON_RUN_AS_NODE) so node-pty's ABI matches.
 			daemonPath: join(__dirname, "daemon.js"),
 			execPath: process.execPath,
+			peerRelay: macLinks,
 		});
 		// The local engine is the default backend; the host swaps in a remote one (over
 		// SSH) on connect and re-points the IPC bridge + event forwarding at it. Binding
@@ -334,6 +340,10 @@ app
 		registerHostIpc(host);
 		// The boxes reaching each other, when the user turns it on (cross-box.ts).
 		startCrossBox(host, (line) => console.log(line));
+		// This Mac's tasks and its boxes' reaching each other, when turned on (mac-link.ts).
+		const macLink = startMacLink(host, engine, macLinks, macLabel(), (line) => console.log(line));
+		ipcMain.handle(HOST_CH.macLinkStatus, () => macLink.status());
+		ipcMain.handle(HOST_CH.macLinkSet, (_e, on: unknown) => macLink.set(on === true));
 		registerThemeIpc(async () => {
 			const [projects, boxes] = await Promise.all([
 				host.router.handle(CH.projectsList, []) as Promise<unknown[]>,

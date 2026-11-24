@@ -52,8 +52,10 @@ import {
 	reconnectDelay,
 	relabelActive,
 	reportedWake,
+	type ServerEndTransport,
 	type SettingsResult,
 	type SystemInfo,
+	splitClientTransport,
 	takeSnapshot,
 	tolerantRpc,
 	type WakeAdapter,
@@ -286,7 +288,14 @@ export interface BoxLink {
 	version: number;
 	/** Where its network port listens, as its hello said (v30), or null. */
 	wsAddr: string | null;
+	/** The serving end of the session the box opens back down this connection
+	 *  (duplex.ts), for this Mac's tasks to join its links (mac-link.ts). */
+	back: ServerEndTransport;
 }
+
+/** What this Mac is called on a box: its pairing there, and its tasks in the
+ *  box's links. */
+export const macLabel = () => hostname().replace(/\.local$/, "") || "Mac";
 export type BoxChange = "held" | "released" | "forgotten";
 
 export interface HostDeps {
@@ -531,7 +540,14 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	 * (electron 34.5.8 → node 20.19.1), which has no global WebSocket — the
 	 * renderer and the phone do, the main process doesn't.
 	 */
-	function openTransport(
+	function openTransport(alias: string, wire: HostTransport | null) {
+		const wired = openWire(alias, wire);
+		// The box may call back down this same connection (mac-link.ts).
+		const { main, back } = splitClientTransport(wired.transport);
+		return { ...wired, transport: main, back };
+	}
+
+	function openWire(
 		alias: string,
 		wire: HostTransport | null,
 	): { transport: ClientTransport; close(): void; stderr?: (ms?: number) => Promise<string> } {
@@ -675,7 +691,12 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		);
 		infos.set(alias, info); // cached before the backend is reachable — statusOf's invariant
 		backends.set(alias, backend);
-		links.set(alias, { rpc, version: info.protocolVersion, wsAddr: info.wsAddr ?? null });
+		links.set(alias, {
+			rpc,
+			version: info.protocolVersion,
+			wsAddr: info.wsAddr ?? null,
+			back: client.back,
+		});
 		// The live aggregate now fans out to it too. If its board was being served
 		// offline, the engine takes that place, and the ids already on screen with it.
 		const stand = offline.get(alias);
@@ -738,7 +759,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		wire: HostTransport | null,
 		opts: ConnectOptions,
 	): Promise<{
-		client: { transport: ClientTransport; close(): void };
+		client: { transport: ClientTransport; back: ServerEndTransport; close(): void };
 		rpc: RpcClient;
 		info: SystemInfo;
 	}> {
@@ -1137,7 +1158,6 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		secrets().save({ boxTokens: all });
 	};
 	/** How this Mac names itself to a box it pairs with. */
-	const macLabel = () => hostname().replace(/\.local$/, "") || "Mac";
 
 	/** A held box's own wire, on an engine that has a lock (v29). */
 	function pairingWire(alias: string): RpcClient {

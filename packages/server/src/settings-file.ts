@@ -45,6 +45,7 @@ export const DEFAULT_SETTINGS: AteamSettings = {
 		theme: "dark",
 		leadBox: null,
 		crossBox: false,
+		macLink: false,
 	},
 	engine: {
 		dotfiles: null,

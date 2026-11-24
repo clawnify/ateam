@@ -554,7 +554,9 @@ every box this Mac holds to every other one:
   the token never comes through the Mac. An open box takes a link as it takes any
   device, and once you make it private, the Mac pairs the links to it.
 - **A box that's asleep or off the tailnet** is listed as unreachable, and a message to
-  one of its tasks fails with that reason. Boxes don't wake each other.
+  one of its tasks fails with that reason. Boxes don't wake each other. A box that falls
+  asleep under a link is waited for once, ten seconds, then dialled again in the
+  background.
 - **What a box needs:** v30, and a network port the other boxes can reach (the one Ateam
   Go uses). A box whose port listens on 127.0.0.1 behind Tailscale Serve, as on boxd,
   reports the tailnet address Serve forwards to it; one whose port listens on 127.0.0.1
@@ -562,9 +564,38 @@ every box this Mac holds to every other one:
   Tailscale runs in userspace mode (boxd again) can't dial the tailnet itself, so its
   links go through `tailscale nc`. If your tailnet policy limits which devices reach
   which, let the boxes reach each other on that port.
-- **Your Mac's own tasks** aren't part of it yet: boxes can't reach your Mac.
+- **Your Mac's own tasks** aren't part of this switch: see the next section.
 
 The box keeps its links in `~/.ateam/links.json`, readable by you alone.
+
+### Let this Mac and your boxes reach each other (v40)
+
+A box can't dial your Mac: it sleeps, it has no port open, and a tailnet policy may let
+no box reach it. So the Mac joins from its own side. **Settings → Boxes → This Mac and
+your boxes reach each other → Turn on**, and on each connection the Mac already holds,
+the box calls back down that same connection:
+
+- **Agents on this Mac reach the tasks on your boxes,** and agents on a box reach the
+  tasks on this Mac: `list_peers` lists them with the machine they are on, and
+  `send_message` goes across and its reply comes back.
+- **A Lead that runs on a box sees this Mac's tasks** on its board and can message them,
+  weighed as a colleague's request. It can't answer a question for you.
+- **A box only reads this Mac's board and sends messages.** The Mac holds it to that
+  whatever the box says of itself: no terminals, no git, no deleting, no speaking or
+  answering as you. Mind what the board holds: every task on this Mac, in every
+  project, with what its agent last said.
+- **Only while Ateam is open on the Mac.** Closed, or with the lid shut, the box lists
+  the Mac as out of reach, and a message to one of its tasks fails saying so. Nothing is
+  queued. A Mac that goes to sleep says nothing, so the box finds out by asking: within
+  about half a minute, or at the first call, which waits ten seconds once. When the Mac
+  wakes it is taken back by itself.
+- **What a box needs:** v40. An older box is left out of both directions until it is
+  updated. No network port and no tailnet rule is needed: it works over SSH too.
+- It is a switch of its own, off until you turn it on, and separate from the one above:
+  with one box and a Mac, this is the one you want.
+
+Not part of it: this Mac's tasks don't show as rows in Ateam Go, which reads each box's
+own board.
 
 > **Without `--service`**, nothing re-launches the daemon after a reboot. That's fine
 > for desktop-only use — `ssh … ateam attach` starts one on demand — but it strands a
