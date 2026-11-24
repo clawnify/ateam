@@ -47,6 +47,11 @@ export const LINK_RETRY_MS: readonly number[] = [5_000, 15_000, 30_000, 60_000];
 /** How long one call over a link may take: a box gone half-open never answers. */
 export const LINK_CALL_TIMEOUT_MS = 10_000;
 
+/** How often an attached link is asked whether it is still there. A laptop that
+ *  goes to sleep closes nothing, and a box never hears from its clients unasked,
+ *  so only silence says the machine is gone. */
+export const LINK_PROBE_MS = 15_000;
+
 interface StoredLink {
 	name: string;
 	url: string;
@@ -70,9 +75,15 @@ interface Live {
 	close: (() => void) | null;
 	state: BoxLinkDTO["state"];
 	reason?: string;
+	/** A stored link's next dial; an attached link's check that it still answers. */
 	timer: ReturnType<typeof setTimeout> | null;
 	attempt: number;
 	stopped: boolean;
+	/** An attached link's connection that stopped answering: out of use, and
+	 *  asked again every so often, until it answers or ends. */
+	quiet: RpcClient | null;
+	/** Why an attached link is out of reach once its connection ends or goes quiet. */
+	away?: string;
 	/** The same object for the life of the link, so the Lead's router keeps
 	 *  routing a task to it across reconnects. */
 	backend: AggregateBackend;
@@ -105,6 +116,7 @@ export class BoxLinks implements PeerRelay {
 	private readonly log: (line: string) => void;
 	private readonly retryMs: readonly number[];
 	private readonly callTimeoutMs: number;
+	private readonly probeMs: number;
 	private self: string | null = null;
 	private readonly lives = new Map<string, Live>();
 	/** The links over a connection the other machine opened, by name (attach). */
@@ -122,6 +134,7 @@ export class BoxLinks implements PeerRelay {
 		log?: (line: string) => void;
 		retryMs?: readonly number[];
 		callTimeoutMs?: number;
+		probeMs?: number;
 		/** What this machine is called on the others, when no links:set says (the Mac). */
 		self?: string;
 	}) {
@@ -130,6 +143,7 @@ export class BoxLinks implements PeerRelay {
 		this.connect = opts.connect ?? tailnetConnector(this.log);
 		this.retryMs = opts.retryMs ?? LINK_RETRY_MS;
 		this.callTimeoutMs = opts.callTimeoutMs ?? LINK_CALL_TIMEOUT_MS;
+		this.probeMs = opts.probeMs ?? LINK_PROBE_MS;
 		const f = this.read();
 		this.self = f.self ?? opts.self ?? null;
 		for (const stored of f.links) this.add(stored);
@@ -202,18 +216,27 @@ export class BoxLinks implements PeerRelay {
 		}
 		const held = l;
 		held.rpc = rpc;
+		held.quiet = null;
+		held.away = away;
 		held.state = "connected";
 		held.reason = undefined;
 		const off = rpc.on("taskUpdated", (task) => {
 			for (const cb of this.taskListeners) cb(task as TaskDTO, held.backend);
 		});
+		// Its connection may go quiet without ending (a closed lid): ask it now and then.
+		if (held.timer) clearInterval(held.timer);
+		held.timer = setInterval(() => void this.check(held), this.probeMs);
+		held.timer.unref?.();
 		if (fresh) this.changed();
 		this.log(`[ateam] linked to ${name}, over a connection already open`);
 		return () => {
 			off();
 			// Only the connection this link is on now: an earlier one ending late is old news.
-			if (held.rpc !== rpc) return;
+			if (held.rpc !== rpc && held.quiet !== rpc) return;
+			if (held.timer) clearInterval(held.timer);
+			held.timer = null;
 			held.rpc = null;
+			held.quiet = null;
 			held.state = "unreachable";
 			held.reason = away;
 			this.log(`[ateam] ${name} is out of reach: that connection ended`);
@@ -225,7 +248,10 @@ export class BoxLinks implements PeerRelay {
 		const l = this.attached.get(name);
 		if (!l) return;
 		this.attached.delete(name);
+		if (l.timer) clearInterval(l.timer);
+		l.timer = null;
 		l.rpc = null;
+		l.quiet = null;
 		this.backends.splice(this.backends.indexOf(l.backend), 1);
 		for (const [task, at] of this.where) if (at === l) this.where.delete(task);
 		this.changed();
@@ -244,7 +270,7 @@ export class BoxLinks implements PeerRelay {
 	}
 
 	dispose(): void {
-		for (const l of this.lives.values()) this.stop(l);
+		for (const l of this.all()) this.stop(l);
 	}
 
 	// ---- what this box's agents reach through (PeerRelay) ----
@@ -333,16 +359,17 @@ export class BoxLinks implements PeerRelay {
 		if (!l?.rpc)
 			return { ok: false, reason: `the box ${box} can't be reached right now; try again later` };
 		try {
-			const res = (await withTimeout(
-				l.rpc.call(CH.peersSendFromBox, [
+			const res = (await this.ask(
+				l,
+				CH.peersSendFromBox,
+				[
 					{
 						to: msg.to,
 						body: msg.body,
 						hop: msg.hop,
 						from: { ...msg.from, box: this.self ?? "another box" },
 					},
-				]),
-				this.callTimeoutMs,
+				],
 				"the message",
 			)) as SendResult;
 			return { ok: res.ok, reason: `on the box ${box}: ${res.reason}` };
@@ -388,27 +415,88 @@ export class BoxLinks implements PeerRelay {
 			timer: null,
 			attempt: 0,
 			stopped: false,
+			quiet: null,
 			backend: {
 				kind: "remote",
 				handle: (method, args) => {
 					if (!l.rpc) throw new Error(`The box ${l.stored.name} can't be reached right now.`);
-					return withTimeout(l.rpc.call(method, args), this.callTimeoutMs, method);
+					return this.ask(l, method, args, method);
 				},
 			},
 		};
 		return l;
 	}
 
+	/** One call over a link, capped. With no answer in time the link is taken as
+	 *  gone (silent), so the calls after this one don't each wait as long too. */
+	private ask(l: Live, method: string, args: unknown[], what: string): Promise<unknown> {
+		const rpc = l.rpc;
+		if (!rpc) return Promise.reject(new Error(l.reason ?? "not connected"));
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				this.silent(l, rpc);
+				reject(new Error(`${what} timed out after ${this.callTimeoutMs}ms`));
+			}, this.callTimeoutMs);
+			rpc.call(method, args).then(
+				(v) => {
+					clearTimeout(timer);
+					resolve(v);
+				},
+				(e) => {
+					clearTimeout(timer);
+					reject(e);
+				},
+			);
+		});
+	}
+
+	/** A link whose connection is open but no longer answers: a machine asleep, or
+	 *  one that dropped off the network without a goodbye. A stored link is closed
+	 *  and dialled again, as when its connection ends. An attached one can't be
+	 *  dialled, so it is set aside and asked again (check) until it answers. */
+	private silent(l: Live, rpc: RpcClient): void {
+		if (l.rpc !== rpc) return;
+		l.rpc = null;
+		if (this.attached.get(l.stored.name) === l) {
+			l.quiet = rpc;
+			l.state = "unreachable";
+			l.reason = l.away;
+			this.log(`[ateam] ${l.stored.name} stopped answering: out of reach until it does`);
+			return;
+		}
+		const close = l.close;
+		// Before closing, so that connection's own close finds nothing left to do.
+		l.close = null;
+		close?.();
+		this.down(l, "unreachable", "it stopped answering");
+	}
+
+	/** Ask an attached link whether it is still there: in use, to notice a silence
+	 *  before a call has to wait for it; set aside, to take it back once it answers. */
+	private async check(l: Live): Promise<void> {
+		const rpc = l.rpc ?? l.quiet;
+		if (!rpc) return;
+		try {
+			await withTimeout(rpc.call(CH.systemHello), this.callTimeoutMs, "it");
+		} catch {
+			this.silent(l, rpc);
+			return;
+		}
+		if (l.quiet !== rpc) return;
+		l.quiet = null;
+		l.rpc = rpc;
+		l.state = "connected";
+		l.reason = undefined;
+		this.log(`[ateam] ${l.stored.name} answers again`);
+	}
+
 	private async peersOf(
 		l: Live,
 		search: string | undefined,
 	): Promise<{ peers: PeerView[]; more: boolean }> {
-		if (!l.rpc) throw new Error(l.reason ?? "not connected");
-		const got = (await withTimeout(
-			l.rpc.call(CH.peersList, [search ? { search } : {}]),
-			this.callTimeoutMs,
-			"its tasks",
-		)) as PeerView[] | PeerSearch;
+		const got = (await this.ask(l, CH.peersList, [search ? { search } : {}], "its tasks")) as
+			| PeerView[]
+			| PeerSearch;
 		return Array.isArray(got) ? { peers: got, more: false } : got;
 	}
 
@@ -495,6 +583,7 @@ export class BoxLinks implements PeerRelay {
 		l.close?.();
 		l.close = null;
 		l.rpc = null;
+		l.quiet = null;
 	}
 
 	private changed(): void {

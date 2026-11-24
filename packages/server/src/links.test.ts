@@ -10,6 +10,7 @@ import {
 	type ClientTransport,
 	createRpcClient,
 	linksClient,
+	type RpcClient,
 	type ServerFrame,
 	splitClientTransport,
 	splitServerTransport,
@@ -498,5 +499,88 @@ describe("the boxes a Mac holds, as its own engine's links", () => {
 		macLinks.drop("box-a");
 		expect(macLinks.active()).toBe(false);
 		macLinks.dispose();
+	});
+});
+
+describe("a link whose machine went quiet without closing", () => {
+	// A laptop with its lid shut, or a box put to sleep: the connection stays
+	// open and nothing on it answers.
+	const never = new Promise<never>(() => {});
+
+	it("takes an attached one as out of reach after one wait, and back when it answers", async () => {
+		let asleep = false;
+		const rpc = {
+			call: (method: string) =>
+				asleep
+					? never
+					: Promise.resolve(method === CH.peersList ? [{ ...MAC_TASK, project: "Repo" }] : {}),
+			on: () => () => {},
+		} as unknown as RpcClient;
+		const links = new BoxLinks({ dataDir: dir(), callTimeoutMs: 200, probeMs: 20 });
+		links.attach("studio-mac", rpc, OFFER_AWAY);
+		expect((await links.list(undefined)).peers).toHaveLength(1);
+
+		asleep = true;
+		// The first to ask waits for it, once.
+		expect((await links.list(undefined)).unreachable).toHaveLength(1);
+		// Nobody after that does, and they are told why.
+		const started = Date.now();
+		expect(await links.list(undefined)).toEqual({
+			peers: [],
+			more: false,
+			unreachable: [{ box: "studio-mac", reason: OFFER_AWAY }],
+		});
+		expect((await links.deliver("studio-mac", message(1))).ok).toBe(false);
+		expect(() => links.backends[0]?.handle(CH.tasksList, ["p"])).toThrow("can't be reached");
+		expect(Date.now() - started).toBeLessThan(100);
+
+		// It wakes on the same connection: the check takes it back by itself.
+		asleep = false;
+		for (let i = 0; i < 200 && (await links.list(undefined)).peers.length === 0; i++) await tick();
+		expect((await links.list(undefined)).unreachable).toEqual([]);
+		links.dispose();
+	});
+
+	it("notices an attached one by its check, before anyone has to wait for it", async () => {
+		let asleep = false;
+		const rpc = {
+			call: () => (asleep ? never : Promise.resolve([])),
+			on: () => () => {},
+		} as unknown as RpcClient;
+		const links = new BoxLinks({ dataDir: dir(), callTimeoutMs: 40, probeMs: 10 });
+		links.attach("studio-mac", rpc, OFFER_AWAY);
+		asleep = true;
+		// Nobody calls: the check alone finds it silent.
+		await new Promise((r) => setTimeout(r, 150));
+		const started = Date.now();
+		expect((await links.list(undefined)).unreachable).toEqual([
+			{ box: "studio-mac", reason: OFFER_AWAY },
+		]);
+		expect(Date.now() - started).toBeLessThan(30);
+		links.dispose();
+	});
+
+	it("drops a stored one and dials it again, so a sleeping box is waited for once", async () => {
+		const beta = fakeBox([{ taskId: "t-api", name: "api", branch: "feat/api" }]);
+		const answer = beta.dispatcher.handle.bind(beta.dispatcher);
+		let asleep = false;
+		beta.dispatcher.handle = ((method: string, args: unknown[]) =>
+			asleep ? never : answer(method, args)) as never;
+		const links = linksTo({ [BETA]: beta });
+		await links.set({ self: "alpha", links: [{ name: "beta", url: BETA }] });
+		expect((await links.list(undefined)).peers).toHaveLength(1);
+
+		asleep = true;
+		expect((await links.list(undefined)).unreachable).toHaveLength(1);
+		expect(links.status()[0]).toMatchObject({
+			state: "unreachable",
+			reason: "it stopped answering",
+		});
+		const started = Date.now();
+		expect((await links.list(undefined)).unreachable).toEqual([
+			{ box: "beta", reason: "it stopped answering" },
+		]);
+		expect(Date.now() - started).toBeLessThan(100);
+		links.dispose();
 	});
 });

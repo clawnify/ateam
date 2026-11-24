@@ -554,7 +554,9 @@ every box this Mac holds to every other one:
   the token never comes through the Mac. An open box takes a link as it takes any
   device, and once you make it private, the Mac pairs the links to it.
 - **A box that's asleep or off the tailnet** is listed as unreachable, and a message to
-  one of its tasks fails with that reason. Boxes don't wake each other.
+  one of its tasks fails with that reason. Boxes don't wake each other. A box that falls
+  asleep under a link is waited for once, ten seconds, then dialled again in the
+  background.
 - **What a box needs:** v30, and a network port the other boxes can reach (the one Ateam
   Go uses). A box whose port listens on 127.0.0.1 behind Tailscale Serve, as on boxd,
   reports the tailnet address Serve forwards to it; one whose port listens on 127.0.0.1
@@ -584,7 +586,9 @@ the box calls back down that same connection:
   project, with what its agent last said.
 - **Only while Ateam is open on the Mac.** Closed, or with the lid shut, the box lists
   the Mac as out of reach, and a message to one of its tasks fails saying so. Nothing is
-  queued.
+  queued. A Mac that goes to sleep says nothing, so the box finds out by asking: within
+  about half a minute, or at the first call, which waits ten seconds once. When the Mac
+  wakes it is taken back by itself.
 - **What a box needs:** v40. An older box is left out of both directions until it is
   updated. No network port and no tailnet rule is needed: it works over SSH too.
 - It is a switch of its own, off until you turn it on, and separate from the one above:
