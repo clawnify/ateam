@@ -129,7 +129,7 @@ describe("a box's own Lead over the engine's RPC", () => {
 		// The box's words, not the Mac's: the user may be on either.
 		const prompt = p.args[p.args.indexOf("--append-system-prompt") + 1] ?? "";
 		expect(prompt).toContain("on their phone or on their Mac");
-		expect(prompt).toContain("this box's tasks only");
+		expect(prompt).toContain("You see this box's tasks, and those on the machines");
 		expect(prompt).not.toContain("Mac or on");
 		p.say(
 			{ type: "system", subtype: "init", session_id: "s1" },

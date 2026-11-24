@@ -22,7 +22,13 @@ import { existsSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync
 import { connect, createServer, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { type AggregateBackend, type BoxWake, CH, createAggregate } from "@ateam/protocol";
+import {
+	type AggregateBackend,
+	type BoxWake,
+	CH,
+	createAggregate,
+	splitServerTransport,
+} from "@ateam/protocol";
 import { ownDaemon, startupGate } from "./daemon-ownership";
 import type { Dispatcher } from "./dispatcher";
 import { createDispatcher } from "./dispatcher";
@@ -31,7 +37,7 @@ import type { Engine } from "./engine";
 import { createEngine } from "./engine";
 import { engineLead } from "./lead/engine-lead";
 import { chatPreferences } from "./lead/settings";
-import { BoxLinks } from "./links";
+import { BoxLinks, offerExtension } from "./links";
 import { Pairings } from "./pairing";
 import { BoxProxy } from "./proxy";
 import { runForwarder } from "./proxy/forwarder";
@@ -75,6 +81,9 @@ const INSTALL_DIR = dirname(SELF);
 let sleepControl: SleepControl | null = null;
 // Served beside the dispatcher on every connection, once the engine is up.
 let extensions: RpcExtension[] = [];
+// The links this box holds (links.ts), once the engine is up: the computer on a
+// connection can offer itself as one (links:offer).
+let boxLinks: BoxLinks | null = null;
 // Where the network port listens (`<host>:<port>`), reported in hello for other
 // boxes to link to (cross-box), or null with no listener.
 let wsAddr: string | null = null;
@@ -173,6 +182,7 @@ async function initializeDaemon(releaseStartup: () => void): Promise<void> {
 	if (fresh && !hasBoxChoice()) updateSettings({ box: { alwaysOn: true } });
 	// The boxes this one links to (links.ts): its agents and its Lead reach them.
 	const links = new BoxLinks({ dataDir: DATA_DIR, log: (line) => console.log(line) });
+	boxLinks = links;
 	const engine = await createEngine({
 		dataDir: DATA_DIR,
 		daemonPath: ptyDaemon,
@@ -317,7 +327,12 @@ function serveClient(
 	trusted: boolean,
 ): void {
 	sleepControl?.touch();
-	serveRpc(engine, dispatcher, transport, extensions, {
+	// The Mac, which no box can dial, joins the links from its own connection: the
+	// box reaches it back down the same one (links.ts offerExtension).
+	const { main, back } = splitServerTransport(transport);
+	const offer = boxLinks ? offerExtension(boxLinks, back) : null;
+	if (offer) transport.onClose?.(() => offer.close());
+	serveRpc(engine, dispatcher, main, offer ? [...extensions, offer] : extensions, {
 		trusted,
 		pairing,
 		wsAddr,

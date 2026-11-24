@@ -1,15 +1,26 @@
 // Links between boxes (cross-box): a box linking to another through the real
 // gate (serveRpc, with a pairing store) over an in-memory pipe.
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CH, type ClientFrame, type ClientTransport, type ServerFrame } from "@ateam/protocol";
+import {
+	CH,
+	type ClientFrame,
+	type ClientTransport,
+	createRpcClient,
+	linksClient,
+	type ServerFrame,
+	splitClientTransport,
+	splitServerTransport,
+} from "@ateam/protocol";
 import type { Dispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
-import { BoxLinks, LINKS_FILE, type LinkConnector } from "./links";
+import { BoxLinks, LINKS_FILE, type LinkConnector, OFFER_AWAY, offerExtension } from "./links";
 import { Pairings } from "./pairing";
 import {
+	BOX_REFUSED,
+	LinkLimiter,
 	LiveConnections,
 	type PairingGuard,
 	RedeemLimiter,
@@ -32,8 +43,10 @@ function fakeBox(tasks: { taskId: string; name: string; branch: string }[]) {
 		},
 	} as unknown as Engine;
 	const received: unknown[] = [];
+	// The name each message's link goes by here, as the gate passed it on.
+	const via: (string | null | undefined)[] = [];
 	const dispatcher = {
-		handle: async (method: string, args: unknown[]) => {
+		handle: async (method: string, args: unknown[], ctx?: { linkName?: string | null }) => {
 			if (method === CH.systemHello) return { protocolVersion: 30, agents: [] };
 			if (method === CH.peersList)
 				return tasks.map((t) => ({
@@ -48,6 +61,7 @@ function fakeBox(tasks: { taskId: string; name: string; branch: string }[]) {
 				}));
 			if (method === CH.peersSendFromBox) {
 				received.push(args[0]);
+				via.push(ctx?.linkName);
 				return { ok: true, reason: "sent." };
 			}
 			return `did ${method}`;
@@ -62,7 +76,7 @@ function fakeBox(tasks: { taskId: string; name: string; branch: string }[]) {
 	const emit = (event: string, payload: unknown) => {
 		for (const l of listeners.get(event) ?? []) l(payload);
 	};
-	return { engine, dispatcher, guard, received, emit };
+	return { engine, dispatcher, guard, received, via, emit };
 }
 
 /** A client and the box's gate, joined in memory. */
@@ -246,5 +260,243 @@ describe("links to other boxes", () => {
 			links.set({ self: "alpha", links: [{ name: "beta", url: "http://evil" }] }),
 		).rejects.toThrow("ws://");
 		links.dispose();
+	});
+});
+
+/** A Mac holding a box over one connection, wired as the daemon and the desktop
+ *  wire it: the box's gate with the offer on it (cli.ts serveClient), and on the
+ *  way back the Mac's own, narrowed to a link (mac-link.ts). */
+function macHolding(
+	box: ReturnType<typeof fakeBox>,
+	boxLinks: BoxLinks,
+	mac: ReturnType<typeof fakeBox>,
+	limiter?: LinkLimiter,
+) {
+	let toServer: ((f: ClientFrame) => void) | null = null;
+	let toClient: ((f: ServerFrame) => void) | null = null;
+	const onClose: (() => void)[] = [];
+	let closed = false;
+	const close = () => {
+		if (closed) return;
+		closed = true;
+		for (const h of onClose) h();
+	};
+	const server: ServerTransport = {
+		send: (f) => {
+			if (!closed) queueMicrotask(() => toClient?.(f));
+		},
+		onFrame: (h) => {
+			toServer = h;
+		},
+		onClose: (h) => {
+			onClose.push(h);
+		},
+		close,
+	};
+	const client: ClientTransport = {
+		send: (f) => {
+			if (!closed) queueMicrotask(() => toServer?.(f));
+		},
+		onFrame: (h) => {
+			toClient = h;
+		},
+		onClose: (h) => {
+			onClose.push(h);
+		},
+	};
+	const boxEnd = splitServerTransport(server);
+	const offer = offerExtension(boxLinks, boxEnd.back, 500);
+	server.onClose?.(() => offer.close());
+	serveRpc(box.engine, box.dispatcher, boxEnd.main, [offer], { pairing: box.guard });
+	const macEnd = splitClientTransport(client);
+	serveRpc(mac.engine, mac.dispatcher, macEnd.back, [], { link: { name: "the-box", limiter } });
+	return { rpc: createRpcClient(macEnd.main), close };
+}
+
+const MAC_TASK = { taskId: "m-1", name: "design", branch: "feat/design" };
+const message = (n: number) => ({
+	to: "m-1",
+	body: `note ${n}`,
+	hop: 1,
+	from: { taskId: "t-here", name: "web", agent: "Claude Code" },
+});
+
+describe("the Mac in a box's links", () => {
+	it("is reached back down the connection it opened, and never stored", async () => {
+		const d = dir();
+		const boxLinks = linksTo({}, d);
+		const mac = fakeBox([MAC_TASK]);
+		const held = macHolding(fakeBox([]), boxLinks, mac);
+		expect(boxLinks.active()).toBe(false);
+		await linksClient(held.rpc).offer("studio-mac");
+
+		expect(boxLinks.active()).toBe(true);
+		const listed = await boxLinks.list(undefined);
+		expect(listed.unreachable).toEqual([]);
+		expect(listed.peers[0]).toMatchObject({ taskId: "m-1", name: "design", box: "studio-mac" });
+		expect(await boxLinks.find("feat/design")).toEqual({ box: "studio-mac", taskId: "m-1" });
+		expect(boxLinks.nameOf(boxLinks.backends[0])).toBe("studio-mac");
+
+		expect(await boxLinks.deliver("studio-mac", message(1))).toEqual({
+			ok: true,
+			reason: "on the box studio-mac: sent.",
+		});
+		// Named by what the Mac calls the box, whatever the message says of itself.
+		expect(mac.via).toEqual(["the-box"]);
+
+		// Nothing to redial or to carry over a restart, and links:list is the stored links.
+		expect(boxLinks.status()).toEqual([]);
+		expect(existsSync(join(d, LINKS_FILE))).toBe(false);
+		boxLinks.dispose();
+	});
+
+	it("gives the box a link's share and no more, though the box never said it was one", async () => {
+		const boxLinks = linksTo({});
+		const mac = fakeBox([MAC_TASK]);
+		const held = macHolding(fakeBox([]), boxLinks, mac);
+		await linksClient(held.rpc).offer("studio-mac");
+		const toMac = boxLinks.backends[0];
+
+		expect(await toMac?.handle(CH.tasksList, ["p-1"])).toBe(`did ${CH.tasksList}`);
+		for (const method of [
+			CH.tasksRemove,
+			CH.tasksAnswerQuestion,
+			CH.peersSendFromLead,
+			"pty:write",
+		])
+			await expect(toMac?.handle(method, [{}])).rejects.toThrow(BOX_REFUSED);
+		boxLinks.dispose();
+	});
+
+	it("caps what the box sends the Mac", async () => {
+		const boxLinks = linksTo({});
+		const mac = fakeBox([MAC_TASK]);
+		const held = macHolding(fakeBox([]), boxLinks, mac, new LinkLimiter(2, 60_000));
+		await linksClient(held.rpc).offer("studio-mac");
+
+		expect((await boxLinks.deliver("studio-mac", message(1))).ok).toBe(true);
+		expect((await boxLinks.deliver("studio-mac", message(2))).ok).toBe(true);
+		const third = await boxLinks.deliver("studio-mac", message(3));
+		expect(third.ok).toBe(false);
+		expect(third.reason).toContain("rate limit");
+		expect(mac.received).toHaveLength(2);
+		boxLinks.dispose();
+	});
+
+	it("stays listed, out of reach, once its connection ends, and comes back on the next", async () => {
+		const boxLinks = linksTo({});
+		const mac = fakeBox([MAC_TASK]);
+		const box = fakeBox([]);
+		const first = macHolding(box, boxLinks, mac);
+		await linksClient(first.rpc).offer("studio-mac");
+		const [backend] = boxLinks.backends;
+		first.close();
+
+		const away = await boxLinks.list(undefined);
+		expect(away.peers).toEqual([]);
+		expect(away.unreachable).toEqual([{ box: "studio-mac", reason: OFFER_AWAY }]);
+		const lost = await boxLinks.find("m-1");
+		expect(lost.box === null && lost.reason).toContain("Couldn't ask: studio-mac");
+		expect((await boxLinks.deliver("studio-mac", message(1))).ok).toBe(false);
+
+		const second = macHolding(box, boxLinks, mac);
+		await linksClient(second.rpc).offer("studio-mac");
+		expect((await boxLinks.list(undefined)).peers.map((p) => p.box)).toEqual(["studio-mac"]);
+		// The same backend, so a Lead's router keeps routing its tasks to it.
+		expect(boxLinks.backends).toEqual([backend as never]);
+		// The first connection ending late is old news.
+		first.close();
+		expect((await boxLinks.list(undefined)).unreachable).toEqual([]);
+		boxLinks.dispose();
+	});
+
+	it("is left alone by links:set, and goes when it withdraws", async () => {
+		const beta = fakeBox([{ taskId: "t-api", name: "api", branch: "feat/api" }]);
+		const boxLinks = linksTo({ [BETA]: beta });
+		const held = macHolding(fakeBox([]), boxLinks, fakeBox([MAC_TASK]));
+		await linksClient(held.rpc).offer("studio-mac");
+
+		await boxLinks.set({ self: "alpha", links: [{ name: "beta", url: BETA }] });
+		await boxLinks.set({ self: "alpha", links: [] });
+		expect((await boxLinks.list(undefined)).peers.map((p) => p.box)).toEqual(["studio-mac"]);
+
+		await linksClient(held.rpc).withdraw();
+		expect(boxLinks.active()).toBe(false);
+		expect(boxLinks.backends).toEqual([]);
+		boxLinks.dispose();
+	});
+
+	it("refuses an offer under a linked box's name, or under none", async () => {
+		const boxLinks = linksTo({ [BETA]: fakeBox([]) });
+		await boxLinks.set({ self: "alpha", links: [{ name: "beta", url: BETA }] });
+		const held = macHolding(fakeBox([]), boxLinks, fakeBox([]));
+		await expect(linksClient(held.rpc).offer("beta")).rejects.toThrow("already");
+		await expect(linksClient(held.rpc).offer("  ")).rejects.toThrow("name");
+		boxLinks.dispose();
+	});
+
+	it("is not taken from a computer that doesn't answer on the way back", async () => {
+		const boxLinks = linksTo({});
+		// An end that calls links:offer and serves nothing back.
+		const pair = pipeWith(fakeBox([]), boxLinks);
+		await expect(linksClient(createRpcClient(pair.transport)).offer("ghost")).rejects.toThrow(
+			"timed out",
+		);
+		expect(boxLinks.active()).toBe(false);
+		boxLinks.dispose();
+	});
+});
+
+/** A client on a box's gate with the offer on it, serving nothing back. */
+function pipeWith(box: ReturnType<typeof fakeBox>, boxLinks: BoxLinks): ReturnType<LinkConnector> {
+	let toServer: ((f: ClientFrame) => void) | null = null;
+	let toClient: ((f: ServerFrame) => void) | null = null;
+	const server: ServerTransport = {
+		send: (f) => queueMicrotask(() => toClient?.(f)),
+		onFrame: (h) => {
+			toServer = h;
+		},
+	};
+	const boxEnd = splitServerTransport(server);
+	serveRpc(box.engine, box.dispatcher, boxEnd.main, [offerExtension(boxLinks, boxEnd.back, 50)], {
+		pairing: box.guard,
+	});
+	return {
+		transport: {
+			send: (f) => queueMicrotask(() => toServer?.(f)),
+			onFrame: (h) => {
+				toClient = h;
+			},
+		},
+		close: () => {},
+	};
+}
+
+describe("the boxes a Mac holds, as its own engine's links", () => {
+	it("lists and messages a held box's tasks over the Mac's own connection, which stays whole", async () => {
+		const box = fakeBox([{ taskId: "t-api", name: "api", branch: "feat/api" }]);
+		const rpc = createRpcClient(pipe(box).transport);
+		const macLinks = new BoxLinks({ dataDir: dir(), self: "studio-mac", callTimeoutMs: 500 });
+		expect(macLinks.active()).toBe(false);
+		const detach = macLinks.attach("box-a", rpc, "this Mac isn't connected to it right now");
+
+		expect((await macLinks.list(undefined)).peers[0]).toMatchObject({
+			taskId: "t-api",
+			box: "box-a",
+		});
+		expect(await macLinks.deliver("box-a", { ...message(1), to: "t-api" })).toMatchObject({
+			ok: true,
+		});
+		expect(box.received.at(-1)).toMatchObject({ from: { box: "studio-mac", name: "web" } });
+		// Attaching never narrows the connection the desktop drives the box with.
+		expect(await rpc.call(CH.tasksRemove, [{}])).toBe(`did ${CH.tasksRemove}`);
+
+		detach();
+		expect((await macLinks.list(undefined)).unreachable).toEqual([
+			{ box: "box-a", reason: "this Mac isn't connected to it right now" },
+		]);
+		macLinks.drop("box-a");
+		expect(macLinks.active()).toBe(false);
+		macLinks.dispose();
 	});
 });

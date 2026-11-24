@@ -7,6 +7,7 @@ import { BoxPage, BoxSetupPage, statusLine, useBoxActions, useBoxes } from "./Bo
 import { CrossBox } from "./CrossBox";
 import { DotfilesDefault } from "./Dotfiles";
 import { EnvironmentPicker } from "./EnvironmentPicker";
+import { MacLink } from "./MacLink";
 import { PhonePairingPage } from "./PhonePairing";
 import {
 	Breadcrumb,
@@ -27,7 +28,8 @@ const PHONE_PAGE = "\0phone";
 // (BoxPage.tsx): what's left to set it up, its Lead, its Access and its GitHub. A box
 // added here opens its page when it's ready. Here too the desktop's Lead chat is moved
 // onto a box (client.leadBox, on the box's page), as the phone picks its Lead box in its
-// own Boxes, and the boxes are let reach each other (client.crossBox, CrossBox.tsx).
+// own Boxes, the boxes are let reach each other (client.crossBox, CrossBox.tsx), and
+// this Mac's tasks join them (client.macLink, MacLink.tsx).
 // It heads its own section: the list has the section's title and what it's for, a box's
 // page has crumbs back to the list in their place.
 export function BoxesSettings({ title, intro }: { title: string; intro?: string }) {
@@ -147,6 +149,7 @@ export function BoxesSettings({ title, intro }: { title: string; intro?: string 
 					</span>
 				</div>
 				{rows.length > 1 ? <CrossBox confirm={confirm} /> : null}
+				{rows.length > 0 ? <MacLink confirm={confirm} /> : null}
 				{rows.length + pending.length > 0 ? (
 					<ul className="box-list">
 						{pending.map((s) => (
