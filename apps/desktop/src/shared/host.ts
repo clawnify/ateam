@@ -120,6 +120,8 @@ export const HOST_CH = {
  *  the whole link has arrived. */
 export const TAILSCALE_LOGIN_URL = /https:\/\/login\.tailscale\.com\/a\/[A-Za-z0-9]+(?=\s)/;
 
+export type HostConnection = ConnectionDTO & { updating?: boolean };
+
 /** How a box update went: installed over SSH, or started by the box's own engine. */
 export type BoxUpdateResult = { via: "ssh" } | { via: "self"; started: boolean; logPath: string };
 
@@ -275,7 +277,7 @@ export interface MacLinkStatusDTO {
 }
 
 export interface AteamHost {
-	list(): Promise<ConnectionDTO[]>;
+	list(): Promise<HostConnection[]>;
 	/** Add an engine (idempotent if already held). `null` is a no-op — local is permanent. */
 	connect(alias: string | null, opts?: ConnectOptions): Promise<HostStatus>;
 	/** Drop a connected box (never local). */

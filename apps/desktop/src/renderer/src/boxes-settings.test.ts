@@ -70,6 +70,18 @@ describe("boxRows", () => {
 		expect(r).toMatchObject({ title: "mybox.exe.xyz", detail: "exe.dev · SSH mybox.exe.xyz" });
 	});
 
+	it("keeps an update visible across the restart without treating the box as connected", () => {
+		const updating = { ...conn({ alias: "box" }), updating: true };
+		for (const live of [[held("box", 24)], []]) {
+			const rows = boxRows([updating], live, {}, app);
+			expect(rows[0]).toMatchObject({
+				updating: true,
+				state: live.length ? "connected" : "offline",
+			});
+			expect(boxesNeedingYou(rows, {}, 0).size).toBe(0);
+		}
+	});
+
 	it("keeps why the last connect failed", () => {
 		expect(rows[2]).toMatchObject({
 			failure: "ssh: connect timed out",

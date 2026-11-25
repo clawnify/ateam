@@ -3743,6 +3743,8 @@ input {
 
 /* ---- Settings: section nav on the left, rows on the right, search across all ---- */
 .settings {
+	flex: 1;
+	min-width: 0;
 	display: flex;
 	height: 100%;
 	min-height: 0;

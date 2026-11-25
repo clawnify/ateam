@@ -3,14 +3,13 @@
 // engines it holds). Nothing here reaches a box, so listing never wakes one.
 
 import {
-	type ConnectionDTO,
 	FEATURE_MIN_VERSION,
 	type GithubAccessDTO,
 	githubTokenNeedsRenewal,
 	providerById,
 	wakeMachineName,
 } from "@ateam/protocol";
-import type { HostStatus } from "../../shared/host";
+import type { HostConnection, HostStatus } from "../../shared/host";
 
 export interface BoxRow {
 	/** The connection alias every host call takes. */
@@ -20,6 +19,7 @@ export interface BoxRow {
 	/** How it's reached, and through which provider. */
 	detail: string;
 	transport: "ssh" | "ws";
+	updating?: boolean;
 	state: "connected" | "asleep" | "offline";
 	/** The engine's protocol version: the live one when held, the last seen otherwise. */
 	version: number | null;
@@ -56,7 +56,7 @@ const ORDER = { connected: 0, asleep: 1, offline: 2 } as const;
  * then asleep, then the rest, each most recently seen first.
  */
 export function boxRows(
-	connections: readonly ConnectionDTO[],
+	connections: readonly HostConnection[],
 	held: readonly HostStatus[],
 	failures: Readonly<Record<string, string>>,
 	app: { protocol: number; release: string },
@@ -78,6 +78,7 @@ export function boxRows(
 				title: wakeMachineName(c.wake) ?? c.alias,
 				detail: provider ? `${provider} · ${reach}` : reach,
 				transport: c.transport === "ws" ? "ws" : "ssh",
+				updating: c.updating,
 				state: info ? "connected" : c.asleep ? "asleep" : "offline",
 				version,
 				release,
@@ -137,7 +138,9 @@ export function boxesNeedingYou(
 		const access = github[r.alias];
 		return r.engine === "behind" || (access != null && githubTokenNeedsRenewal(access, now));
 	};
-	return new Set(rows.filter((r) => r.state === "connected" && needs(r)).map((r) => r.alias));
+	return new Set(
+		rows.filter((r) => r.state === "connected" && !r.updating && needs(r)).map((r) => r.alias),
+	);
 }
 
 /** The engine half of a row's status line. */

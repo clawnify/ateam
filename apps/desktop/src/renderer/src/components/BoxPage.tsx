@@ -1,5 +1,4 @@
 import {
-	type ConnectionDTO,
 	type GithubAccessDTO,
 	githubAccessProblem,
 	NEEDS_PAIRING,
@@ -9,7 +8,7 @@ import {
 import { XIcon } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BoxReadiness, HostStatus } from "../../../shared/host";
+import type { BoxReadiness, HostConnection, HostStatus } from "../../../shared/host";
 import { type BoxRow, boxRows, engineLabel } from "../boxes-settings";
 import { stripAnsi } from "../lib/ansi";
 import { setUpPhoneAccess } from "../lib/box-actions";
@@ -35,6 +34,7 @@ export const errorText = (e: unknown) =>
 	(e instanceof Error ? e.message : String(e)).replace(IPC_PREFIX, "");
 
 export function statusLine(row: BoxRow, now: number): string {
+	if (row.updating) return "Updating engine…";
 	if (row.state === "connected") return "Connected";
 	if (row.state === "asleep") return "Asleep";
 	if (row.failure === NEEDS_PAIRING) return "Private: this Mac needs pairing";
@@ -52,7 +52,7 @@ export function statusLine(row: BoxRow, now: number): string {
  * read showed a box that was back as "Not connected" until the page was opened again.
  */
 export function useBoxes() {
-	const [connections, setConnections] = useState<ConnectionDTO[] | null>(null);
+	const [connections, setConnections] = useState<HostConnection[] | null>(null);
 	const [held, setHeld] = useState<HostStatus[]>([]);
 	const [failures, setFailures] = useState<Record<string, string>>({});
 	const [canUpdateSsh, setCanUpdateSsh] = useState(false);
@@ -154,10 +154,7 @@ export function useBoxActions(load: () => Promise<void>, confirm: Confirm) {
 			if (!ok) return;
 			await act(row.alias, "Updating…", async () => {
 				const r = await window.ateamHost.updateBox(row.alias);
-				if (r.via === "ssh") return "Updated.";
-				return r.started
-					? "Update started. The box reconnects by itself in a minute or two."
-					: "An update is already running there.";
+				return r.via === "ssh" ? "Updated." : null;
 			});
 		},
 
@@ -423,6 +420,16 @@ export function BoxPage({
 		row.state === "connected" &&
 		row.engine === "behind" &&
 		(row.transport === "ws" || canUpdateSsh);
+	if (row.updating || busy === "Updating…") {
+		return (
+			<section className="box-page" aria-label={row.title}>
+				<div className="box-card-title">{row.title}</div>
+				<output className="gh-access-muted">
+					Updating engine… Ateam will reconnect automatically when the engine restarts.
+				</output>
+			</section>
+		);
+	}
 	return (
 		<section className="box-page" aria-label={row.title}>
 			<div className="box-card-head">

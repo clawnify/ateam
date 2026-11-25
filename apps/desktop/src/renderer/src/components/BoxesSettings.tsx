@@ -187,10 +187,14 @@ export function BoxesSettings({ title, intro }: { title: string; intro?: string 
 											<span className={`box-card-state ${row.state}`}>
 												{actions.busy[row.alias] ?? statusLine(row, Date.now())}
 											</span>
-											{" · "}
-											<span className={row.engine === "behind" ? "box-card-behind" : undefined}>
-												{engineLabel(row)}
-											</span>
+											{!row.updating && (
+												<>
+													{" · "}
+													<span className={row.engine === "behind" ? "box-card-behind" : undefined}>
+														{engineLabel(row)}
+													</span>
+												</>
+											)}
 										</span>
 									</span>
 									<ChevronRight size={16} strokeWidth={1.75} className="box-row-chevron" />
