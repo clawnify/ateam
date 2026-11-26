@@ -72,7 +72,6 @@ import {
 	boxSnapshotOf,
 	boxWakeOf,
 	buildCloudInit,
-	type ConnectionDTO,
 	currentDecisionModel,
 	describeSshFailure,
 	type Engine,
@@ -104,6 +103,7 @@ import {
 	type CreateProgressEvent,
 	type GrammarJudgeIssue,
 	HOST_CH,
+	type HostConnection,
 	type HostStatus,
 	type InstallAgentResult,
 	type InstallLogEvent,
@@ -197,7 +197,7 @@ const FORWARDED: { event: BackendEvent; channel: string }[] = [
 export interface Host {
 	/** The stable indirection the IPC bridge registers against once. */
 	readonly router: Router;
-	list(): Promise<ConnectionDTO[]>;
+	list(): Promise<HostConnection[]>;
 	connect(alias: string | null, healed?: boolean, opts?: ConnectOptions): Promise<HostStatus>;
 	disconnect(alias: string): void;
 	/** Remove a box from the connections list (disconnecting it first if held). */
@@ -339,6 +339,14 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	const offline = new Map<string, Backend>();
 	// Boxes the user disconnected: left alone, not reconnected.
 	const parked = new Set<string>();
+	// SSH completes in install(). A self-update acknowledges before the engine exits,
+	// so keep it visible until the next handshake, or give the user control back.
+	const updates = new Map<string, ReturnType<typeof setTimeout> | null>();
+	function clearUpdate(alias: string) {
+		const timer = updates.get(alias);
+		if (timer) clearTimeout(timer);
+		updates.delete(alias);
+	}
 	// alias → the pending reconnect, and how many have failed in a row.
 	const reconnects = new Map<string, ReturnType<typeof setTimeout>>();
 	const attempts = new Map<string, number>();
@@ -691,6 +699,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 		);
 		infos.set(alias, info); // cached before the backend is reachable — statusOf's invariant
 		backends.set(alias, backend);
+		if (updates.get(alias)) clearUpdate(alias);
 		links.set(alias, {
 			rpc,
 			version: info.protocolVersion,
@@ -878,6 +887,10 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 
 	/** The user let go of a box: drop it and leave it be until they connect again. */
 	function disconnect(alias: string): void {
+		if (updates.get(alias)) {
+			clearUpdate(alias);
+			if (!backends.has(alias)) broadcastConnections();
+		}
 		parked.add(alias);
 		cancelReconnect(alias);
 		release(alias);
@@ -1019,6 +1032,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	}
 
 	function forget(alias: string): void {
+		clearUpdate(alias);
 		parked.delete(alias);
 		cancelReconnect(alias);
 		attempts.delete(alias);
@@ -1456,6 +1470,7 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 	// engine updates itself to the latest release and comes back on its own: the
 	// connection drops and the usual reconnect picks the new version up.
 	async function updateBox(alias: string): Promise<BoxUpdateResult> {
+		if (updates.has(alias)) throw new Error("An update is already running for this box.");
 		if (resolveTransport(db, alias) !== "ws") {
 			if (!canUpdateBoxes()) {
 				throw new Error("Only a released build of Ateam updates boxes over SSH.");
@@ -1465,17 +1480,38 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 			// first: the installer runs, restarting the engine under it anyway, and
 			// install() connects it again on the new release. A failed install holds it
 			// again as it was.
+			updates.set(alias, null);
 			release(alias);
 			try {
 				await install(alias);
 			} catch (err) {
 				void reconnect(alias);
 				throw err;
+			} finally {
+				clearUpdate(alias);
+				broadcastConnections();
 			}
 			return { via: "ssh" };
 		}
-		const started = (await heldBox(alias).handle(CH.systemUpdate, [])) as BoxUpdateStarted;
-		return { via: "self", ...started };
+		const box = heldBox(alias);
+		const timer = setTimeout(() => {
+			clearUpdate(alias);
+			broadcastConnections();
+		}, 5 * 60_000);
+		timer.unref();
+		updates.set(alias, timer);
+		broadcastConnections();
+		try {
+			const started = await withTimeout(
+				box.handle(CH.systemUpdate, []) as Promise<BoxUpdateStarted>,
+				CONNECT_TIMEOUT_MS,
+			);
+			return { via: "self", ...started };
+		} catch (err) {
+			if (updates.get(alias) === timer) clearUpdate(alias);
+			broadcastConnections();
+			throw err;
+		}
 	}
 
 	async function phoneAccess(alias: string): Promise<HostStatus> {
@@ -1689,8 +1725,12 @@ export function createHost({ localEngine, broadcast }: HostDeps): Host {
 
 	return {
 		router,
-		list: async (): Promise<ConnectionDTO[]> =>
-			listConnections(db).map((c) => (asleep.has(c.alias) ? { ...c, asleep: true } : c)),
+		list: async (): Promise<HostConnection[]> =>
+			listConnections(db).map((c) => ({
+				...c,
+				...(asleep.has(c.alias) && { asleep: true }),
+				...(updates.has(c.alias) && { updating: true }),
+			})),
 		connect,
 		disconnect,
 		forget,
