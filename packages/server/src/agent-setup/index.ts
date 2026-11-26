@@ -481,6 +481,15 @@ export async function ensureGhShim(userDataDir: string): Promise<void> {
 	await chmod(shimPath, 0o755);
 }
 
+/**
+ * How long, in seconds, Claude Code lets the inbox listener run. Claude kills a
+ * hook at its `timeout`, 600 s when none is set (still so in 2.1.332), and an
+ * idle session arms no new one until its next turn: without this, an agent idle
+ * for ten minutes stops hearing messages. 20 days, because Bun runs a timer
+ * longer than 2^31-1 ms (about 24.8 days) at once.
+ */
+export const INBOX_HOOK_TIMEOUT_S = 20 * 24 * 60 * 60;
+
 interface ClaudeHookEntry {
 	matcher?: string;
 	hooks: { type: "command"; command: string; asyncRewake?: boolean; timeout?: number }[];
@@ -576,12 +585,19 @@ export async function ensureClaudeHooks(
 	}
 
 	// The peer inbox listener (INBOX_SCRIPT): armed when the session starts and
-	// again after every turn, in the background, so a message can wake it.
+	// again after every turn, in the background, so a message can wake it. An
+	// entry written before it carried a timeout gains one here.
 	const inbox = `sh ${JSON.stringify(join(dirname(notifyScriptPath), "inbox.sh"))}`;
 	for (const claudeEvent of ["SessionStart", "Stop"]) {
 		const entries = settings.hooks[claudeEvent] ?? [];
-		if (!entries.some((e) => e.hooks.some((h) => h.command.includes("inbox.sh")))) {
-			entries.push({ hooks: [{ type: "command", command: inbox, asyncRewake: true }] });
+		const listeners = entries.flatMap((e) => e.hooks).filter((h) => h.command.includes("inbox.sh"));
+		for (const h of listeners) h.timeout = INBOX_HOOK_TIMEOUT_S;
+		if (listeners.length === 0) {
+			entries.push({
+				hooks: [
+					{ type: "command", command: inbox, asyncRewake: true, timeout: INBOX_HOOK_TIMEOUT_S },
+				],
+			});
 			settings.hooks[claudeEvent] = entries;
 		}
 	}

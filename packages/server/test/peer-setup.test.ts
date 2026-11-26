@@ -11,6 +11,7 @@ import {
 	ensureClaudeHooks,
 	ensureNotifyScript,
 	ensurePeerSecret,
+	INBOX_HOOK_TIMEOUT_S,
 	opencodeConfigContent,
 	peerToken,
 	removeAteamCodexHooks,
@@ -212,6 +213,31 @@ describe("per-launch agent config", () => {
 				.filter((h: { command: string }) => h.command.includes("inbox.sh"));
 			expect(inbox).toHaveLength(1);
 			expect(inbox[0].asyncRewake).toBe(true);
+			expect(inbox[0].timeout).toBe(INBOX_HOOK_TIMEOUT_S);
+		}
+	});
+
+	test("the inbox listener outlives Claude's 600 s hook default, under Bun's timer limit", () => {
+		expect(INBOX_HOOK_TIMEOUT_S).toBeGreaterThan(24 * 60 * 60);
+		expect(INBOX_HOOK_TIMEOUT_S * 1000).toBeLessThan(2 ** 31 - 1);
+	});
+
+	test("a worktree set up before the listener's timeout gains it, still once", async () => {
+		const wt = join(dir, "wt-inbox-old");
+		const file = join(wt, ".claude", "settings.local.json");
+		await mkdir(dirname(file), { recursive: true });
+		const inbox = `sh ${JSON.stringify(join(dirname(notifyPath), "inbox.sh"))}`;
+		const entry = () => [{ hooks: [{ type: "command", command: inbox, asyncRewake: true }] }];
+		await writeFile(file, JSON.stringify({ hooks: { SessionStart: entry(), Stop: entry() } }));
+		await ensureClaudeHooks(wt, notifyPath);
+		const s = JSON.parse(await readFile(file, "utf8"));
+		for (const event of ["SessionStart", "Stop"]) {
+			const listeners = s.hooks[event]
+				.flatMap((e: { hooks: unknown[] }) => e.hooks)
+				.filter((h: { command: string }) => h.command.includes("inbox.sh"));
+			expect(listeners).toEqual([
+				{ type: "command", command: inbox, asyncRewake: true, timeout: INBOX_HOOK_TIMEOUT_S },
+			]);
 		}
 	});
 
