@@ -38,7 +38,14 @@ import { ensureLoginEnv } from "./login-env";
 import { applySetStatus, buildBoardView } from "./loops/board-signals";
 import { LoopRunner } from "./loops/runner";
 import { MergeQueue } from "./merge-queue";
-import { type PeerSearch, type PeerView, PeerMessenger, type SendResult } from "./peer-messages";
+import {
+	capPeers,
+	PEER_SEARCH_LIMIT,
+	type PeerSearch,
+	type PeerView,
+	PeerMessenger,
+	type SendResult,
+} from "./peer-messages";
 import { applyAgentQuit, columnAfterExit } from "./pty/agent-quit";
 import { PtyClient } from "./pty/pty-client";
 import { reapableSessions } from "./pty/reap";
@@ -397,20 +404,17 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 		setStatus: async (req) => applySetStatus(db, req, sendTaskUpdated),
 		setWaiting: async (req) => applySetWaiting(db, req, waits, sendTaskUpdated),
 		listPeers: async (callerTerminalId, search) => {
+			// Unsearched, the head of this machine's board: a busy one is more than an
+			// agent can read in one answer, and search finds the rest.
 			const here = search
 				? peers.searchPeers(callerTerminalId, search)
-				: peers.listPeers(callerTerminalId);
+				: capPeers(peers.listPeers(callerTerminalId), PEER_SEARCH_LIMIT);
 			const relay = opts.peerRelay;
 			if (!relay?.active()) return here;
-			// The linked boxes' tasks too, each with its box (cross-box).
+			// The linked machines' tasks too, each with its machine (cross-box).
 			const there = await relay.list(search);
 			const gone = there.unreachable.length > 0 ? { unreachable: there.unreachable } : {};
-			if (search) {
-				const found = here as PeerSearch;
-				return { peers: [...found.peers, ...there.peers], more: found.more || there.more, ...gone };
-			}
-			const all = [...(here as PeerView[]), ...there.peers];
-			return there.unreachable.length > 0 ? { peers: all, ...gone } : all;
+			return { peers: [...here.peers, ...there.peers], more: here.more || there.more, ...gone };
 		},
 		sendMessage: async (req) => {
 			const relay = opts.peerRelay;

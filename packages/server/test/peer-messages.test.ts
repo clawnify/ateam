@@ -5,6 +5,7 @@ import { bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
 import {
+	capPeers,
 	type DeliveryFacts,
 	formatForRecipient,
 	freshNote,
@@ -898,6 +899,17 @@ describe("PeerMessenger.listPeers", () => {
 		});
 	});
 
+	it("lists the tasks with an agent up first, then the most recently active", () => {
+		const old = addTask("old");
+		const recent = addTask("recent");
+		const up = addTask("up", "claude");
+		repo.updateTask(db, old.id, { lastEventAt: now - 3 * 86_400_000 });
+		repo.updateTask(db, recent.id, { lastEventAt: now - 60_000 });
+		repo.updateTask(db, up.id, { lastEventAt: now - 7 * 86_400_000 });
+		addSession(up, "claude", "tu", "idle");
+		expect(messenger.listPeers(undefined).map((p) => p.name)).toEqual(["up", "recent", "old"]);
+	});
+
 	it("carries each task's summary once one is written", () => {
 		const a = addTask("a", "claude");
 		repo.updateTask(db, a.id, { summary: "Board loads in 200ms; PR #12 is open." });
@@ -1560,5 +1572,42 @@ describe("What the Lead or the user sent that did not reach its agent", () => {
 		expect(after?.archivedAt).toBeNull();
 		expect(after?.restoredAt).toBe(now);
 		expect(after?.column).toBe("needs_attention");
+	});
+});
+
+describe("capPeers", () => {
+	const view = (name: string, you = false) =>
+		({
+			taskId: name,
+			name,
+			project: "Repo",
+			repo: "/tmp/repo",
+			branch: name,
+			agent: null,
+			state: "not_running",
+			column: "review",
+			description: null,
+			summary: null,
+			...(you ? { you: true as const } : {}),
+		}) as const;
+
+	it("hands back the head of the list and says more were left out", () => {
+		const all = Array.from({ length: PEER_SEARCH_LIMIT + 3 }, (_, i) => view(`t${i}`));
+		const got = capPeers(all, PEER_SEARCH_LIMIT);
+		expect(got.peers).toHaveLength(PEER_SEARCH_LIMIT);
+		expect(got.peers[0]?.name).toBe("t0");
+		expect(got.more).toBe(true);
+		expect(capPeers(all.slice(0, 3), PEER_SEARCH_LIMIT)).toEqual({
+			peers: all.slice(0, 3),
+			more: false,
+		});
+	});
+
+	it("keeps the caller's own task when it would fall outside", () => {
+		const all = [...Array.from({ length: 30 }, (_, i) => view(`t${i}`)), view("me", true)];
+		const got = capPeers(all, 25);
+		expect(got.peers).toHaveLength(25);
+		expect(got.peers.at(-1)?.name).toBe("me");
+		expect(got.peers.filter((p) => p.you)).toHaveLength(1);
 	});
 });

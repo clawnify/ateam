@@ -357,13 +357,25 @@ export interface PeerView {
 	you?: true;
 }
 
-/** How many tasks a peer search hands back: merged history only grows. */
+/** How many of one machine's tasks a search or a listing hands an agent. Merged
+ *  history only grows, and so does a board: a Mac with 194 tasks in play listed
+ *  them in 174,000 characters, more than an agent can take in one answer. */
 export const PEER_SEARCH_LIMIT = 25;
 
 export interface PeerSearch {
 	peers: PeerView[];
 	/** More tasks matched than PEER_SEARCH_LIMIT: add a word to narrow it. */
 	more: boolean;
+}
+
+/** The first `limit` of `peers`, in their order, keeping the caller's own task
+ *  (it takes the last place when it would fall outside), and whether any were left out. */
+export function capPeers(peers: PeerView[], limit: number): PeerSearch {
+	if (peers.length <= limit) return { peers, more: false };
+	const head = peers.slice(0, limit);
+	const mine = peers.find((p) => p.you);
+	if (mine && !head.includes(mine)) head[limit - 1] = mine;
+	return { peers: head, more: true };
 }
 
 export interface SendResult {
@@ -502,18 +514,26 @@ export class PeerMessenger {
 		}
 	}
 
-	/** Every task outside `merged`, as a sender would choose among them. */
+	/** Every task outside `merged`, as a sender would choose among them: those
+	 *  with an agent up first (working, waiting on the user, idle), then the most
+	 *  recently active. Whole, since a linked machine finds a task to message in
+	 *  it (links.ts find); an agent is handed only its head (capPeers). */
 	listPeers(callerTerminalId: string | undefined): PeerView[] {
 		const { db } = this.deps;
 		const callerTaskId = this.callerTaskId(callerTerminalId);
-		const peers: PeerView[] = [];
+		const rows: { view: PeerView; at: number }[] = [];
 		for (const project of repo.listProjects(db)) {
 			for (const task of repo.listTasks(db, project.id)) {
 				if (task.column === "merged") continue;
-				peers.push(this.peerView(task, project, callerTaskId));
+				rows.push({
+					view: this.peerView(task, project, callerTaskId),
+					at: task.lastEventAt ?? task.createdAt ?? 0,
+				});
 			}
 		}
-		return peers;
+		const up = (v: PeerView) => (v.state === "not_running" ? 0 : 1);
+		rows.sort((a, b) => up(b.view) - up(a.view) || b.at - a.at);
+		return rows.map((r) => r.view);
 	}
 
 	/**
@@ -1410,7 +1430,8 @@ export class PeerMessenger {
 	}
 }
 
-const notFound = (to: string): string => `no task "${to}"; call list_peers for ids`;
+const notFound = (to: string): string =>
+	`no task "${to}"; call list_peers for ids, with search when it isn't among the ones listed`;
 
 /** Text no longer than `max`, or null: what another box says about its agent. */
 const shortText = (v: unknown, max = 200): string | null =>
