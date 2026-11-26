@@ -197,7 +197,7 @@ const TOOLS = [
 	{
 		name: "list_peers",
 		description:
-			"List the user's other tasks you can message with send_message: each task's id, name, project, repo (the project's GitHub owner/name, or its clone's path when it has no GitHub remote), branch, which agent works in it (Claude Code, Codex, OpenCode), its state (working, needs_you, idle, or not_running), what it was asked to do (description), and where it stands in a sentence or two (summary, written a few minutes after its agent goes quiet; null until then). Your own task is marked you: true. Tasks that have merged are left out unless you pass search, which looks through every task, merged and archived ones too. Inspect code and history first; find the original task only if a specific question remains. Discovery is not a reason to message, and task summaries are not proof that a change shipped.",
+			"List the user's other tasks you can message with send_message: each task's id, name, project, repo (the project's GitHub owner/name, or its clone's path when it has no GitHub remote), branch, which agent works in it (Claude Code, Codex, OpenCode), its state (working, needs_you, idle, or not_running), what it was asked to do (description), and where it stands in a sentence or two (summary, written a few minutes after its agent goes quiet; null until then). Your own task is marked you: true. Returns { peers, more }. Without search it lists the tasks with an agent up first, then the most recently active: at most 25 on this machine, and a share for each machine linked to it, with more: true when there are others. Tasks that have merged are left out unless you pass search, which looks through every task, merged and archived ones too, and is how you find one that isn't listed. send_message reaches any task by its id or exact name, listed or not. Inspect code and history first; find the original task only if a specific question remains. Discovery is not a reason to message, and task summaries are not proof that a change shipped.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -600,7 +600,8 @@ async function callBoardTool(
 		if (name === "list_peers") {
 			const search = typeof args.search === "string" ? args.search.trim() : "";
 			const peers = await board.listPeers(ctx.callerTerminalId, search || undefined);
-			return { text: JSON.stringify(peers, null, 2) };
+			// Unindented: a listing is the largest answer a board tool gives.
+			return { text: JSON.stringify(peers) };
 		}
 		if (name === "ask_user") {
 			const res = await board.askUser({

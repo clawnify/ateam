@@ -17,7 +17,14 @@ import {
 } from "@ateam/protocol";
 import type { Dispatcher } from "./dispatcher";
 import type { Engine } from "./engine";
-import { BoxLinks, LINKS_FILE, type LinkConnector, OFFER_AWAY, offerExtension } from "./links";
+import {
+	BoxLinks,
+	LINKED_BUDGET,
+	LINKS_FILE,
+	type LinkConnector,
+	OFFER_AWAY,
+	offerExtension,
+} from "./links";
 import { Pairings } from "./pairing";
 import {
 	BOX_REFUSED,
@@ -581,6 +588,61 @@ describe("a link whose machine went quiet without closing", () => {
 			{ box: "beta", reason: "it stopped answering" },
 		]);
 		expect(Date.now() - started).toBeLessThan(100);
+		links.dispose();
+	});
+});
+
+describe("a linked machine with a big board", () => {
+	const many = (prefix: string, n: number) =>
+		Array.from({ length: n }, (_, i) => ({
+			taskId: `${prefix}-${i}`,
+			name: `${prefix} ${i}`,
+			branch: `${prefix}/${i}`,
+		}));
+
+	it("adds only its share to a listing, and a task it left out is still messaged", async () => {
+		const beta = fakeBox(many("beta", 120));
+		const links = linksTo({ [BETA]: beta });
+		await links.set({ self: "alpha", links: [{ name: "beta", url: BETA }] });
+
+		const listed = await links.list(undefined);
+		expect(listed.peers).toHaveLength(LINKED_BUDGET);
+		expect(listed.peers[0]?.taskId).toBe("beta-0");
+		expect(listed.more).toBe(true);
+
+		// Messages find their task in the machine's whole list, not in what was shown.
+		expect(await links.find("beta-119")).toEqual({ box: "beta", taskId: "beta-119" });
+		expect(await links.find("beta/118")).toEqual({ box: "beta", taskId: "beta-118" });
+		expect(await links.deliver("beta", { ...message(1), to: "beta-119" })).toMatchObject({
+			ok: true,
+		});
+		links.dispose();
+	});
+
+	it("splits the budget between linked machines", async () => {
+		const beta = fakeBox(many("beta", 80));
+		const gamma = fakeBox(many("gamma", 80));
+		const links = linksTo({ [BETA]: beta, [GAMMA]: gamma });
+		await links.set({
+			self: "alpha",
+			links: [
+				{ name: "beta", url: BETA },
+				{ name: "gamma", url: GAMMA },
+			],
+		});
+		const listed = await links.list(undefined);
+		const share = Math.floor(LINKED_BUDGET / 2);
+		expect(listed.peers.filter((p) => p.box === "beta")).toHaveLength(share);
+		expect(listed.peers.filter((p) => p.box === "gamma")).toHaveLength(share);
+		expect(listed.more).toBe(true);
+		links.dispose();
+	});
+
+	it("says nothing was left out when every machine fits", async () => {
+		const beta = fakeBox(many("beta", 3));
+		const links = linksTo({ [BETA]: beta });
+		await links.set({ self: "alpha", links: [{ name: "beta", url: BETA }] });
+		expect(await links.list(undefined)).toMatchObject({ more: false, unreachable: [] });
 		links.dispose();
 	});
 });

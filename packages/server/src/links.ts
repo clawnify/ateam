@@ -44,6 +44,13 @@ export const LINKS_FILE = "links.json";
 /** Waits before trying a link again; the last one repeats while it stays down. */
 export const LINK_RETRY_MS: readonly number[] = [5_000, 15_000, 30_000, 60_000];
 
+/** How many tasks the linked machines together add to one listing an agent
+ *  asks for, each an equal share of it (at least one). With this machine's own
+ *  PEER_SEARCH_LIMIT that is 50 tasks at most, about 30,000 characters: under
+ *  what the agents take in one tool result (Claude Code saves one over 50,000
+ *  characters to a file, Codex cuts one over about 12,000 tokens). */
+export const LINKED_BUDGET = 25;
+
 /** How long one call over a link may take: a box gone half-open never answers. */
 export const LINK_CALL_TIMEOUT_MS = 10_000;
 
@@ -287,8 +294,10 @@ export class BoxLinks implements PeerRelay {
 		const peers: (PeerView & { box: string })[] = [];
 		const unreachable: { box: string; reason: string }[] = [];
 		let more = false;
+		const links = this.all();
+		const share = Math.max(1, Math.floor(LINKED_BUDGET / Math.max(1, links.length)));
 		const answers = await Promise.all(
-			this.all().map(async (l) => {
+			links.map(async (l) => {
 				try {
 					return { l, got: await this.peersOf(l, search) };
 				} catch (e) {
@@ -302,11 +311,15 @@ export class BoxLinks implements PeerRelay {
 				unreachable.push({ box, reason: a.error ?? "it didn't answer" });
 				continue;
 			}
-			if (a.got.more) more = true;
-			for (const p of a.got.peers) {
+			if (a.got.more || a.got.peers.length > share) more = true;
+			// Every task it named routes a message there, listed or not. A machine on
+			// this version sends its working and waiting tasks first, then the most
+			// recently active (peer-messages.ts listPeers); an older one, its board as it is.
+			for (const [i, p] of a.got.peers.entries()) {
+				this.where.set(p.taskId, a.l);
+				if (i >= share) continue;
 				const { you: _you, ...view } = p;
 				peers.push({ ...view, box });
-				this.where.set(p.taskId, a.l);
 			}
 		}
 		return { peers, more, unreachable };
