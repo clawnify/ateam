@@ -10,6 +10,7 @@ import {
 	formatForRecipient,
 	freshNote,
 	INPUT_QUIET_MS,
+	isStopRefusal,
 	LISTENER_GRACE_MS,
 	MAX_FROM_LEAD,
 	MAX_HOPS,
@@ -134,6 +135,7 @@ function userFacts(over: Partial<UserDeliveryFacts> = {}): UserDeliveryFacts {
 		modWaiting: false,
 		modExpected: false,
 		paused: false,
+		refused: false,
 		lastInputAt: null,
 		lastEventAt: NOW - 5 * 60_000,
 		now: NOW,
@@ -160,6 +162,36 @@ describe("planUserDelivery", () => {
 		expect(planUserDelivery(userFacts())).toBe("restart");
 		expect(planUserDelivery(userFacts({ status: "running" }))).toBe("wait");
 		expect(planUserDelivery(userFacts({ lastInputAt: NOW - INPUT_QUIET_MS + 1 }))).toBe("wait");
+	});
+});
+
+describe("planUserDelivery after Claude refused the words (an Esc, nobody typing since)", () => {
+	it("restarts, mod waiting or not, and whatever the status still says", () => {
+		for (const status of ["idle", "running"]) {
+			expect(planUserDelivery(userFacts({ refused: true, status, modWaiting: true }))).toBe(
+				"restart",
+			);
+		}
+	});
+
+	it("waits while someone is typing there, or left a draft", () => {
+		expect(
+			planUserDelivery(userFacts({ refused: true, lastInputAt: NOW - INPUT_QUIET_MS + 1 })),
+		).toBe("wait");
+		expect(
+			planUserDelivery(
+				userFacts({ refused: true, lastEventAt: NOW - 10 * 60_000, lastInputAt: NOW - 5 * 60_000 }),
+			),
+		).toBe("wait");
+	});
+});
+
+describe("isStopRefusal", () => {
+	it("is the refusal after an Esc, not a prompt the Esc took out of the queue", () => {
+		expect(isStopRefusal("the session was stopped and nobody has sent input since")).toBe(true);
+		expect(isStopRefusal("the prompt was removed from the queue before it ran")).toBe(false);
+		expect(isStopRefusal("a hook answered without passing the prompt on")).toBe(false);
+		expect(isStopRefusal(undefined)).toBe(false);
 	});
 });
 
@@ -790,6 +822,40 @@ describe("The user's own words to a Claude conversation", () => {
 		messenger.kick(b.id);
 		const retried = await held.result;
 		expect(retried.kind).toBe("message");
+	});
+
+	it("restart the conversation at once when Claude refused them after an Esc", async () => {
+		const b = addTask("b", "claude");
+		// An interrupted turn sends no Stop, so the status can still say running.
+		addConversation(b, "tb", "running");
+		const mod = messenger.waitUser("tb");
+		messenger.sendFrom("user", { to: b.id, body: "Build steps 1-4" });
+		const out = await mod.result;
+		if (out.kind !== "message") throw new Error("expected a batch");
+		const drop = "the session was stopped and nobody has sent input since";
+		expect(messenger.ackUser("tb", out.deliveryId, false, drop)).toBe(true);
+		await flush();
+		await flush();
+		expect(stopped).toEqual(["tb"]);
+		expect(launched).toHaveLength(1);
+		expect(launched[0]?.prompt).toContain("Build steps 1-4");
+		expect(deliveredVia(b.id)).toEqual(["launch"]);
+	});
+
+	it("keep waiting for a turn to end when the Esc took them out of the queue", async () => {
+		const b = addTask("b", "claude");
+		addConversation(b, "tb");
+		const mod = messenger.waitUser("tb");
+		messenger.sendFrom("user", { to: b.id, body: "yes" });
+		const out = await mod.result;
+		if (out.kind !== "message") throw new Error("expected a batch");
+		const drop = "the prompt was removed from the queue before it ran";
+		expect(messenger.ackUser("tb", out.deliveryId, false, drop)).toBe(true);
+		messenger.sweep();
+		await flush();
+		expect(stopped).toHaveLength(0);
+		expect(launched).toHaveLength(0);
+		expect(repo.listPendingPeerMessages(db, b.id)).toHaveLength(1);
 	});
 
 	it("are offered again once a lease runs out without an ack", async () => {

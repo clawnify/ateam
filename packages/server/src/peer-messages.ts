@@ -81,8 +81,11 @@
  * `--plugin-dir` (agent-setup), which long-polls `/inbox/user/wait` and submits
  * each batch with `$.prompt.submit({ asUser: true })`: Claude reads it exactly
  * as typed input, and its own provenance counts it as a person. A batch is
- * leased to the mod until it acks that the prompt entered the session (one
- * dropped after an Esc is offered again once a turn ends). A session with no
+ * leased to the mod until it acks that the prompt entered the session. After
+ * an Esc, Claude refuses mod prompts until someone types: words refused that
+ * way came after the Esc, so the session is restarted with them as its prompt
+ * (unless someone is typing there); words the Esc took out of the queue are
+ * offered again once a turn ends. A session with no
  * mod polling (launched before this, or mods turned off) is restarted with them
  * as its prompt, which Claude also reads as the user's. Messages from agents
  * and the Lead keep the hook door: through the mod they would fire Claude's
@@ -232,9 +235,13 @@ export interface UserDeliveryFacts {
 	modWaiting: boolean;
 	/** Its mod polled lately, or the session (or this engine) only just started. */
 	modExpected: boolean;
-	/** The mod's last batch was dropped (an Esc stands until the user's next
-	 *  input): hold until a turn ends. */
+	/** The mod's last batch was dropped after it was queued (the user's Esc
+	 *  came after the words): hold until a turn ends. */
 	paused: boolean;
+	/** Claude refused the mod's last batch because the session was stopped
+	 *  (an Esc) and nobody has typed since (isStopRefusal): it refuses every mod
+	 *  prompt until someone types, so the words go in by a restart. */
+	refused: boolean;
 	lastInputAt: number | null;
 	lastEventAt: number | null;
 	now: number;
@@ -247,11 +254,27 @@ export interface UserDeliveryFacts {
  * header).
  */
 export function planUserDelivery(f: UserDeliveryFacts): DeliveryPlan {
+	// The refusal says no turn is running, whatever the status still says, so
+	// only someone typing there holds the restart back.
+	if (f.refused) return holdsWork("idle", f.lastInputAt, f.lastEventAt, f.now) ? "wait" : "restart";
 	if (f.paused) return "wait";
 	if (f.modWaiting) return "listener";
 	if (f.modExpected) return "wait";
 	if (holdsWork(f.status, f.lastInputAt, f.lastEventAt, f.now)) return "wait";
 	return "restart";
+}
+
+/**
+ * Whether Claude refused a mod prompt because the user stopped the session
+ * (Esc) and nobody has typed since. Claude Code's mods API resolves the
+ * submit with `{ drop: 'the session was stopped and nobody has sent input
+ * since' }` (still the text in 2.1.332). A prompt already queued when the
+ * user pressed Esc is dropped as "removed from the queue" instead, which is
+ * not this. A reworded reason reads as not this, so the words wait for a turn
+ * to end as before.
+ */
+export function isStopRefusal(drop: string | undefined): boolean {
+	return drop != null && /\bsession was stopped\b/i.test(drop);
 }
 
 /** The hop a new message from `from` to `to` would carry, given their recent
@@ -476,6 +499,8 @@ export class PeerMessenger {
 	/** Terminals whose mod had a batch dropped, with their task: held until a
 	 *  turn ends there (kick). */
 	private paused = new Map<string, string>();
+	/** Terminals whose Claude refused the user's words after an Esc (ackUser), by task. */
+	private refused = new Map<string, string>();
 	private waking = new Set<string>();
 	/** Tasks with a `codex queue` call under way. */
 	private queuing = new Set<string>();
@@ -864,16 +889,21 @@ export class PeerMessenger {
 
 	/**
 	 * The mod says what became of a batch: `entered`, the prompt is in the
-	 * session (delivered); otherwise Claude dropped it (an Esc stands until the
-	 * user's next input), so it is offered again once a turn ends there. False
-	 * for a lease this terminal does not hold.
+	 * session (delivered). Otherwise Claude dropped it, and `drop` says why.
+	 * Refused because the session was stopped with nobody typing since: the
+	 * words came after the user's Esc, so they go in now by a restart. Dropped
+	 * any other way (the user's Esc took it out of the queue): offered again
+	 * once a turn ends there. False for a lease this terminal does not hold.
 	 */
-	ackUser(terminalId: string, deliveryId: string, entered: boolean): boolean {
+	ackUser(terminalId: string, deliveryId: string, entered: boolean, drop?: string): boolean {
 		const lease = this.leases.get(deliveryId);
 		if (!lease || lease.terminalId !== terminalId) return false;
 		this.leases.delete(deliveryId);
 		if (entered) {
 			repo.markPeerMessagesDelivered(this.deps.db, lease.ids, "mod", this.now());
+		} else if (isStopRefusal(drop)) {
+			this.refused.set(terminalId, lease.taskId);
+			this.deliver(lease.taskId);
 		} else {
 			this.paused.set(terminalId, lease.taskId);
 		}
@@ -884,6 +914,7 @@ export class PeerMessenger {
 	kick(taskId: string): void {
 		// A turn ended: whatever the user's Esc held back can go in now.
 		for (const [terminalId, t] of this.paused) if (t === taskId) this.paused.delete(terminalId);
+		for (const [terminalId, t] of this.refused) if (t === taskId) this.refused.delete(terminalId);
 		if (repo.listPendingPeerMessages(this.deps.db, taskId).length > 0) this.deliver(taskId);
 	}
 
@@ -945,6 +976,7 @@ export class PeerMessenger {
 				(seen != null && now - seen < MOD_FRESH_MS) ||
 				now - Math.max(live.startedAt ?? 0, this.startedAt) < MOD_GRACE_MS,
 			paused: this.paused.has(terminalId),
+			refused: this.refused.has(terminalId),
 			lastInputAt: this.deps.lastInputAt(terminalId),
 			lastEventAt: live.lastEventAt ?? null,
 			now,
