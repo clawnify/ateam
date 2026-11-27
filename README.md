@@ -107,35 +107,52 @@ below — via a **box provider** like [boxd](https://boxd.sh), or your own VPS.
 
 ### Box providers
 
-Our Ateam fit ratings weigh setup, always-on cost, and verified desktop and phone access. Five stars is the easiest overall fit, four is a strong fit with a trade-off, and three means more setup or a meaningful verification gap.
+Our Ateam fit ratings are estimates based on provider documentation and our experience where available. They weigh setup, always-on cost, SSH and Tailscale access, persistent data, connection reliability, scheduled wake-ups, and wake speed as files and worktrees accumulate. Five stars is the strongest overall fit, three indicates notable trade-offs or gaps, and one indicates a poor or unclear fit. Unknowns reduce confidence in a rating. Wake times with larger workspaces have not been established for every provider.
 
 | Provider | Pros | Cons | Tailscale support | Overall | Links |
 | --- | --- | --- | --- | --- | --- |
 | <img src="./assets/providers/hetzner.svg" alt="" width="24" height="24" /> **Hetzner** | Create a box in Ateam on desktop or iPhone. Always-on VPS. | Powered-off servers still bill. | Verified. Ateam can join the box during setup. | ★★★★★ | [Setup](docs/providers/hetzner.md) · [Hetzner Cloud](https://www.hetzner.com/cloud) |
 | <img src="https://exe.dev/apple-touch-icon.png" alt="" width="24" height="24" /> **exe.dev** | Always-on VMs share a flat monthly plan. | Concurrent VMs share the same CPU and RAM pool. | Verified on the box. Tailscale is preinstalled. | ★★★★☆ | [Setup](docs/providers/exe-dev.md) · [Pricing](https://www.exe.dev/pricing) |
-| <img src="./assets/boxd.png" alt="boxd" width="54" /> | SSH wakes a hibernated VM. Hibernation preserves sessions and bills disk only. | Waking a sleeping box from Ateam Go requires a boxd API key. | Verified with Ateam’s installer. | ★★★★☆ | [Setup](docs/providers/boxd.md) · [boxd](https://boxd.sh) |
-| <img src="./assets/providers/sprites.svg" alt="" width="24" height="24" /> **Sprites** | Persistent disk and usage-based compute. | SSH needs a proxy. A stopped Sprite loses live processes. | Verified as a Sprite service. Waking from Ateam Go requires a Sprites token. | ★★★☆☆ | [Setup](docs/providers/sprites.md) · [Sprites](https://sprites.dev) |
+| <img src="./assets/boxd.png" alt="boxd" width="54" /> | SSH and scheduled Ateam loops can wake a hibernated VM. Hibernation preserves sessions and bills disk only. | Waking a sleeping box from Ateam Go requires a boxd API key. | Verified with Ateam’s installer. | ★★★★☆ | [Setup](docs/providers/boxd.md) · [boxd](https://boxd.sh) |
+| <img src="./assets/providers/sprites.svg" alt="" width="24" height="24" /> **Sprites** | Persistent disk and usage-based compute. Ateam holds a Sprite awake for enabled loops. | SSH needs a proxy. A stopped Sprite loses live processes. | Verified as a Sprite service. Waking from Ateam Go requires a Sprites token. | ★★★☆☆ | [Setup](docs/providers/sprites.md) · [Sprites](https://sprites.dev) |
 | <img src="https://cdn.prod.website-files.com/64f9d9b4e737e7b37d4e39a4/64fe41a59732cbbaa5762828_Webclip.png" alt="" width="24" height="24" /> **Ubicloud** | Standard SSH. Ateam and its worktrees came back after a VM reboot. | Manual provisioning. Public IPv4 costs extra, and stopped VMs still bill. | TUN available. Tailnet enrollment and iPhone access untested. | ★★★☆☆ | [SSH setup](docs/online-ateam.md#0-preparing-a-freshly-bought-vps) · [Ubicloud Compute](https://www.ubicloud.com/use-cases/ubicloud-compute) |
 | <img src="https://www.google.com/s2/favicons?domain=boat.dev&amp;sz=64" alt="" width="24" height="24" /> **Boat** | A fresh VM ran Ateam over SSH, including worktrees and terminals. | In our November 2026 test, engine sockets became unreachable after cold restores. | TUN available in our test. Enrollment untested. | ★★☆☆☆ | [Boat](https://boat.dev/) · [SSH access](https://docs.boat.dev/ssh-access/editors) |
 | <img src="https://www.google.com/s2/favicons?domain=modal.com&amp;sz=64" alt="" width="24" height="24" /> **Modal** | Ateam, SSH, and the phone worked in our sandbox test. | The tested setup relied on experimental snapshots and needs periodic cold restarts. | Phone connection tested over Tailscale in the sandbox. | ★★☆☆☆ | [Evaluation](docs/providers/modal.md) · [Modal](https://modal.com/docs/guide/sandboxes) |
 
-These providers also appeared in our research. Their current offerings are promising, and their Ateam compatibility, always-on costs, and Tailscale support need a live test before we can rate them. Ateam can connect to a suitable machine over SSH.
+The following estimates use provider documentation. Ateam compatibility, connection reliability, scheduled wake-ups, and wake speed with larger workspaces remain unknown unless noted. Ateam can connect to a suitable machine over SSH.
 
 | Provider | Pros | Cons | Tailscale support | Overall | Links |
 | --- | --- | --- | --- | --- | --- |
-| <img src="https://www.google.com/s2/favicons?domain=avrea.com&amp;sz=64" alt="" width="24" height="24" /> **Avrea** | Linux sandboxes with SSH. | Sandbox access must be enabled. Ateam untested. | Untested. | Unrated | [Sandboxes](https://docs.avrea.com/sandboxes/) |
-| <img src="https://www.google.com/s2/favicons?domain=celesto.ai&amp;sz=64" alt="" width="24" height="24" /> **Celesto** | Persistent cloud sandboxes with a CLI SSH command. | Ateam's SSH connection and recovery untested. | Untested. | Unrated | [Sandboxes](https://celesto.ai/sandboxes) |
-| <img src="https://www.google.com/s2/favicons?domain=depot.dev&amp;sz=64" alt="" width="24" height="24" /> **Depot** | Linux microVM sandboxes for agents. | Ateam SSH access and persistence untested. | Untested. | Unrated | [Sandboxes](https://depot.dev/docs/sandboxes/overview) |
-| <img src="https://www.google.com/s2/favicons?domain=groundbox.dev&amp;sz=64" alt="" width="24" height="24" /> **Groundbox** | Offers agent sandboxes. | Ateam SSH access and persistence untested. | Untested. | Unrated | [Docs](https://groundbox.dev/docs) |
-| <img src="https://www.google.com/s2/favicons?domain=luxor.ai&amp;sz=64" alt="" width="24" height="24" /> **Luxor** | Linux VMs with SSH and sticky sessions. | SSH connections close when a session pauses. Ateam untested. | Untested. | Unrated | [Sandbox sessions](https://luxor.ai/docs/sandbox/sessions) |
-| <img src="https://www.google.com/s2/favicons?domain=namespace.so&amp;sz=64" alt="" width="24" height="24" /> **Namespace** | Devboxes with SSH and persistent storage options. | Ateam recovery and always-on behavior untested. | Untested. | Unrated | [Devboxes](https://namespace.so/devbox) |
-| <img src="https://www.google.com/s2/favicons?domain=blacksmith.sh&amp;sz=64" alt="" width="24" height="24" /> **Blacksmith** | Offers coding-agent sandboxes. | Ateam SSH access and persistence untested. | Untested. | Unrated | [Sandboxes](https://www.blacksmith.sh/sandboxes) |
-| <img src="https://www.google.com/s2/favicons?domain=github.com&amp;sz=64" alt="" width="24" height="24" /> **GitHub Codespaces** | Development environments with a configurable retention period. | Inactive codespaces can stop and are eventually deleted. Ateam untested. | Untested. | Unrated | [Lifecycle](https://docs.github.com/en/codespaces/about-codespaces/understanding-the-codespace-lifecycle) |
-| <img src="https://www.google.com/s2/favicons?domain=warpbuild.com&amp;sz=64" alt="" width="24" height="24" /> **WarpBuild** | Offers macOS sandboxes. | Ateam SSH access and persistence untested. | Untested. | Unrated | [Sandboxes](https://www.warpbuild.com/docs/ci/sandboxes) |
-| <img src="https://www.google.com/s2/favicons?domain=buildkite.com&amp;sz=64" alt="" width="24" height="24" /> **Buildkite** | Offers hosted CI agents. | A persistent Ateam box offering has not been verified. | Unknown. | Unrated | [Hosted agents](https://buildkite.com/docs/agent/buildkite-hosted) |
-| <img src="https://www.google.com/s2/favicons?domain=checklane.sh&amp;sz=64" alt="" width="24" height="24" /> **Checklane** | Offers GitHub Actions runners. | A persistent Ateam box offering has not been verified. | Unknown. | Unrated | [RunnersBench](https://runnersbench.com/) |
-| <img src="https://www.google.com/s2/favicons?domain=flamewill.com&amp;sz=64" alt="" width="24" height="24" /> **FlameWill** | Offers ARM64 GitHub Actions runners. | A persistent Ateam box offering has not been verified. | Unknown. | Unrated | [FlameWill](https://flamewill.com/) |
-| **Homemade** | Listed on RunnersBench. | A persistent Ateam box offering has not been verified. | Unknown. | Unrated | [RunnersBench](https://runnersbench.com/) |
+| <img src="https://www.google.com/s2/favicons?domain=avrea.com&amp;sz=64" alt="" width="24" height="24" /> **Avrea** | Linux sandboxes with SSH. | Sandbox access must be enabled. Ateam untested. | Untested. | ★★★☆☆ | [Sandboxes](https://docs.avrea.com/sandboxes/) |
+| <img src="https://www.google.com/s2/favicons?domain=celesto.ai&amp;sz=64" alt="" width="24" height="24" /> **Celesto** | Persistent cloud sandboxes with a CLI SSH command. | Ateam's SSH connection and recovery untested. | Untested. | ★★★☆☆ | [Sandboxes](https://celesto.ai/sandboxes) |
+| <img src="https://www.google.com/s2/favicons?domain=depot.dev&amp;sz=64" alt="" width="24" height="24" /> **Depot** | Linux microVM sandboxes for agents. | Ateam SSH access and persistence untested. | Untested. | ★★☆☆☆ | [Sandboxes](https://depot.dev/docs/sandboxes/overview) |
+| <img src="https://www.google.com/s2/favicons?domain=groundbox.dev&amp;sz=64" alt="" width="24" height="24" /> **Groundbox** | Offers agent sandboxes. | Ateam SSH access and persistence untested. | Untested. | ★★☆☆☆ | [Docs](https://groundbox.dev/docs) |
+| <img src="https://www.google.com/s2/favicons?domain=luxor.ai&amp;sz=64" alt="" width="24" height="24" /> **Luxor** | Linux VMs with SSH and sticky sessions. | SSH connections close when a session pauses. Ateam untested. | Untested. | ★★★☆☆ | [Sandbox sessions](https://luxor.ai/docs/sandbox/sessions) |
+| <img src="https://www.google.com/s2/favicons?domain=namespace.so&amp;sz=64" alt="" width="24" height="24" /> **Namespace** | Devboxes with SSH and persistent storage options. | Ateam recovery and always-on behavior untested. | Untested. | ★★★☆☆ | [Devboxes](https://namespace.so/devbox) |
+| <img src="https://www.google.com/s2/favicons?domain=blacksmith.sh&amp;sz=64" alt="" width="24" height="24" /> **Blacksmith** | Offers coding-agent sandboxes. | Ateam SSH access and persistence untested. | Untested. | ★★☆☆☆ | [Sandboxes](https://www.blacksmith.sh/sandboxes) |
+| <img src="https://www.google.com/s2/favicons?domain=github.com&amp;sz=64" alt="" width="24" height="24" /> **GitHub Codespaces** | Development environments with a configurable retention period. | Inactive codespaces can stop and are eventually deleted. Ateam untested. | Untested. | ★★☆☆☆ | [Lifecycle](https://docs.github.com/en/codespaces/about-codespaces/understanding-the-codespace-lifecycle) |
+| <img src="https://www.google.com/s2/favicons?domain=warpbuild.com&amp;sz=64" alt="" width="24" height="24" /> **WarpBuild** | Offers macOS sandboxes. | Ateam SSH access and persistence untested. | Untested. | ★★☆☆☆ | [Sandboxes](https://www.warpbuild.com/docs/ci/sandboxes) |
+| <img src="https://www.google.com/s2/favicons?domain=buildkite.com&amp;sz=64" alt="" width="24" height="24" /> **Buildkite** | Offers hosted CI agents. | A persistent Ateam box offering has not been verified. | Unknown. | ★☆☆☆☆ | [Hosted agents](https://buildkite.com/docs/agent/buildkite-hosted) |
+| <img src="https://www.google.com/s2/favicons?domain=checklane.sh&amp;sz=64" alt="" width="24" height="24" /> **Checklane** | Offers GitHub Actions runners. | A persistent Ateam box offering has not been verified. | Unknown. | ★☆☆☆☆ | [RunnersBench](https://runnersbench.com/) |
+| <img src="https://www.google.com/s2/favicons?domain=flamewill.com&amp;sz=64" alt="" width="24" height="24" /> **FlameWill** | Offers ARM64 GitHub Actions runners. | A persistent Ateam box offering has not been verified. | Unknown. | ★☆☆☆☆ | [FlameWill](https://flamewill.com/) |
+| **Homemade** | Listed on RunnersBench. | A persistent Ateam box offering has not been verified. | Unknown. | ★☆☆☆☆ | [RunnersBench](https://runnersbench.com/) |
+
+### Share your provider experience
+
+Have you run Ateam on one of these providers? [Open a GitHub issue](https://github.com/clawnify/ateam/issues/new) and include what you observed. Estimates, provider documentation, and failed attempts are welcome. Leave out anything you could not check.
+
+```text
+Provider and plan:
+Region, machine size, and operating system:
+Ateam version and connection method (SSH or Tailscale):
+Always-on cost and idle/sleep settings:
+Scheduled loops: stays awake or wakes on schedule? How?
+Connection reliability: reconnects, dropped sessions, or address changes:
+Wake time: approximate time and workspace size (files, disk use, worktrees):
+Persistence: what survived sleep, restart, or restore?
+Tailscale and Ateam Go: what worked or failed?
+Date, provider documentation, and other notes:
+```
 
 <details>
 <summary><b>Start to finish on a fresh Hetzner box</b></summary>
