@@ -123,7 +123,7 @@ export interface PeerInboxHandlers {
 		>;
 		cancel: () => void;
 	};
-	ackUser(terminalId: string, deliveryId: string, entered: boolean): boolean;
+	ackUser(terminalId: string, deliveryId: string, entered: boolean, drop?: string): boolean;
 }
 
 /** Claude Code's PermissionRequest hook, held open until someone decides
@@ -371,8 +371,9 @@ export class HookServer extends EventEmitter {
 				// The Claude mod (agent-setup): the user's own words for this
 				// terminal, which it submits as the user's prompt. Same answers as
 				// /inbox/wait, the 200 a JSON { deliveryId, text } it then acks with
-				// POST /inbox/user/ack?deliveryId=&entered=1|0 (204, or 404 for a
-				// lease this terminal does not hold).
+				// POST /inbox/user/ack?deliveryId=&entered=1|0, with &drop= Claude's
+				// reason when it dropped the prompt (204, or 404 for a lease this
+				// terminal does not hold).
 				if (url.pathname === "/inbox/user/wait" || url.pathname === "/inbox/user/ack") {
 					const terminalId = url.searchParams.get("terminalId") ?? "";
 					const token = (req.headers["x-ateam-terminal-token"] as string | undefined) ?? "";
@@ -385,7 +386,8 @@ export class HookServer extends EventEmitter {
 					if (req.method === "POST" && url.pathname === "/inbox/user/ack") {
 						const deliveryId = url.searchParams.get("deliveryId") ?? "";
 						const entered = url.searchParams.get("entered") === "1";
-						res.writeHead(this.inbox.ackUser(terminalId, deliveryId, entered) ? 204 : 404);
+						const drop = url.searchParams.get("drop") ?? undefined;
+						res.writeHead(this.inbox.ackUser(terminalId, deliveryId, entered, drop) ? 204 : 404);
 						res.end();
 						return;
 					}

@@ -336,16 +336,18 @@ function later($, cfg, misses, ms) {
   $.clock.after(ms, () => poll($, cfg, misses))
 }
 
-function ack($, cfg, deliveryId, entered) {
+function ack($, cfg, deliveryId, entered, drop) {
+  // drop: Claude's reason for dropping the prompt, which decides what Ateam
+  // does next (a refusal after an Esc restarts the session with it).
   const url = cfg.base + '/ack?' + cfg.query + '&deliveryId=' + encodeURIComponent(deliveryId) +
-    '&entered=' + (entered ? '1' : '0')
+    '&entered=' + (entered ? '1' : '0') + (drop ? '&drop=' + encodeURIComponent(String(drop)) : '')
   return $.http.fetch(url, { method: 'POST', headers: cfg.headers }).catch(() => {})
 }
 
 function submit($, cfg, batch) {
   // Resolves when the turn starts (after any running one), or with a drop.
   $.prompt.submit({ text: batch.text, asUser: true })
-    .then((r) => ack($, cfg, batch.deliveryId, !(r && r.drop)))
+    .then((r) => ack($, cfg, batch.deliveryId, !(r && r.drop), r && r.drop))
     .catch(() => ack($, cfg, batch.deliveryId, false))
 }
 

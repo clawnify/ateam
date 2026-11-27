@@ -578,7 +578,8 @@ export async function createEngine(opts: EngineOptions): Promise<Engine> {
 			boardConnections.up(terminalId, false);
 			return peers.waitUser(terminalId);
 		},
-		ackUser: (terminalId, deliveryId, entered) => peers.ackUser(terminalId, deliveryId, entered),
+		ackUser: (terminalId, deliveryId, entered, drop) =>
+			peers.ackUser(terminalId, deliveryId, entered, drop),
 	});
 
 	// Record an agent's exit: close the session and file its card. Shared by the

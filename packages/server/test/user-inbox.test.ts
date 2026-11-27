@@ -18,6 +18,8 @@ let db: AteamDb;
 let server: HookServer;
 let messenger: PeerMessenger;
 let taskId: string;
+/** The `drop` each ack carried, in order. */
+const drops: (string | undefined)[] = [];
 
 beforeAll(async () => {
 	const sqlite = new Database(":memory:");
@@ -56,8 +58,10 @@ beforeAll(async () => {
 		verify: (terminalId, token) => verifyPeerToken(SECRET, terminalId, token),
 		wait: (terminalId) => messenger.wait(terminalId),
 		waitUser: (terminalId) => messenger.waitUser(terminalId),
-		ackUser: (terminalId, deliveryId, entered) =>
-			messenger.ackUser(terminalId, deliveryId, entered),
+		ackUser: (terminalId, deliveryId, entered, drop) => {
+			drops.push(drop);
+			return messenger.ackUser(terminalId, deliveryId, entered, drop);
+		},
 	});
 	await server.start();
 });
@@ -99,5 +103,20 @@ describe("/inbox/user", () => {
 		);
 		expect(ack.status).toBe(204);
 		expect(repo.listPendingPeerMessages(db, taskId)).toHaveLength(0);
+		expect(drops.at(-1)).toBeUndefined();
+	});
+
+	it("passes on Claude's reason when the mod's prompt was dropped", async () => {
+		const asked = fetch(`${base()}/wait?terminalId=term-1`, { headers });
+		await new Promise((r) => setTimeout(r, 50));
+		messenger.sendFrom("user", { to: taskId, body: "Build steps 1-4" });
+		const batch = (await (await asked).json()) as { deliveryId: string };
+		const reason = "the session was stopped and nobody has sent input since";
+		const ack = await fetch(
+			`${base()}/ack?terminalId=term-1&deliveryId=${batch.deliveryId}&entered=0&drop=${encodeURIComponent(reason)}`,
+			{ method: "POST", headers },
+		);
+		expect(ack.status).toBe(204);
+		expect(drops.at(-1)).toBe(reason);
 	});
 });
