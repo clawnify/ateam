@@ -235,6 +235,13 @@ ssh my-ateam-box "bash -lc 'ateam'"
    keeps its tasks on the board as they were last seen, dimmed and marked asleep or
    offline. Opening one wakes the box. The rest of the board never waits for it.
 
+**Reasoning effort.** On desktop and phone, **Effort** appears in the task and
+loop forms when the selected Claude Code or Codex model offers effort levels.
+**Default** uses the CLI's settings. If a chosen level is unavailable at launch,
+Ateam uses the highest supported level at or below it, or the CLI default if
+none qualifies. Loops save the requested level, check it on each run, and let
+you change it in **Edit loop**.
+
 > **Editing files by hand on the box.** A task's toolbar has an **Edit files**
 > button that opens VS Code *running on the box*, scoped to that task's worktree,
 > inside the Ateam window — so you can fix a `.env` or anything else the agent
@@ -299,10 +306,12 @@ x86_64 box (Google Chrome has no Linux Arm build). It installs:
   the TaskWindow extension on a laptop.
 - noVNC on port 6080, so you can watch the desktop and take over for a login, a
   2FA prompt or a CAPTCHA. In the desktop app, the globe button on a task on this
-  box opens it in a Browser panel, already signed in. In the iOS app, a task whose
-  agent has used the browser shows it as a miniature over its terminal: tap it to
-  bring it above the terminal, and minimize it to put it back. The clients provide
-  its VNC password and separate viewer credential automatically.
+  box opens it in a Browser panel, already signed in. The desktop window remembers
+  which tasks had the Browser panel open and restores it when you return to them.
+  In the iOS app, a task whose agent has used the browser shows it as a miniature
+  over its terminal. Tap it to bring it above the terminal, or minimize it to put
+  it back. The clients provide its VNC password and separate viewer credential
+  automatically.
 
 Browser setup verifies Chrome's sandbox, extension pairing, authenticated MCP
 discovery, and the viewer before reporting success. If setup fails, the engine

@@ -27,6 +27,7 @@ import {
 	buildAteamApi,
 	CH,
 	clientBelowFloor,
+	effortLabel,
 	filled,
 	type InputValues,
 	type InstallableAgent,
@@ -844,6 +845,8 @@ function Shell({
 	onOpenConnection,
 	onOpenTask,
 	onCreate,
+	effortProjectId,
+	launchEffortNotice,
 	onAddProject,
 	notice,
 	api,
@@ -907,6 +910,8 @@ function Shell({
 	onOpenConnection: () => void;
 	onOpenTask: (task: TaskDTO) => void;
 	onCreate: (input: ComposerSubmit) => Promise<string | null>;
+	effortProjectId?: string;
+	launchEffortNotice?: string;
 	onAddProject: () => void;
 	/** A box that runs another Ateam than this app; null when none does. */
 	notice: SkewNotice | null;
@@ -1179,6 +1184,11 @@ function Shell({
 						)}
 					</View>
 					{!listUnder && <View style={{ height: topInset }} />}
+					{openTask && launchEffortNotice && (
+						<Text accessibilityLiveRegion="polite" style={styles.launchEffortNotice}>
+							{launchEffortNotice}
+						</Text>
+					)}
 
 					{/* While its box is being reached (asleep, or dropped) an open terminal keeps
 			    its place, and attaches (a new gen remounts it) once the box answers. It
@@ -1374,6 +1384,8 @@ function Shell({
 					{showTab && (contentTab === "board" || contentTab === "home") && (
 						<Composer
 							agents={agents}
+							api={api}
+							effortProjectId={effortProjectId}
 							busy={creating}
 							onSubmit={onCreate}
 							lead={composerLead}
@@ -1510,7 +1522,7 @@ export default function App() {
 	const [openTask, setOpenTask] = useState<TaskDTO | null>(null);
 	// A task started from the composer with "stay on board": the snackbar offers
 	// the way into it for a few seconds.
-	const [startedTask, setStartedTask] = useState<TaskDTO | null>(null);
+	const [startedTask, setStartedTask] = useState<{ task: TaskDTO; fallback?: string } | null>(null);
 	useEffect(() => {
 		if (!startedTask) return;
 		const timer = setTimeout(() => setStartedTask(null), 6000);
@@ -2751,9 +2763,10 @@ export default function App() {
 				// Attached on the phone: put on the task's box, where its agent reads them.
 				const boxApi = key ? link.conn(key)?.api : undefined;
 				const files = input.files.length && boxApi ? await filesToBox(boxApi, input.files) : [];
-				await board.pty.spawnAgent({
+				const started = await board.pty.spawnAgent({
 					taskId: task.id,
 					agentId: input.agentId,
+					effort: input.effort,
 					yolo: input.yolo,
 					agentMode: input.agentMode,
 					prompt: input.prompt || undefined,
@@ -2761,8 +2774,12 @@ export default function App() {
 				});
 				// Task events from launch already carry newer status and agent data.
 				setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [task, ...prev]));
+				const fallback =
+					input.effort && input.effort !== started.effort
+						? effortLabel(started.effort ?? null)
+						: undefined;
 				if (input.open) setOpenTask(task);
-				else setStartedTask(task);
+				if (!input.open || fallback) setStartedTask({ task, fallback });
 				return null;
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
@@ -3137,6 +3154,11 @@ export default function App() {
 				selectedKey={selectedKey}
 				onSelectProject={selectProject}
 				agents={(runOnKey ? agentsByBox[runOnKey] : undefined) ?? []}
+				effortProjectId={
+					runOnMember && boxSupports("agentEffort", linkOf(runOnKey).version ?? 0)
+						? runOnMember.projectId
+						: undefined
+				}
 				tasks={tasks}
 				shown={shown}
 				placeOf={placeOf}
@@ -3145,10 +3167,22 @@ export default function App() {
 				onNewTask={() => setNewTaskSeq((n) => n + 1)}
 				newTaskSeq={newTaskSeq}
 				onTaskGone={dropTask}
-				snack={startedTask ? `Started ${startedTask.name}` : leadSent ? "Sent to the Lead" : asked}
+				launchEffortNotice={
+					startedTask?.fallback && startedTask.task.id === openTask?.id
+						? `Effort: ${startedTask.fallback}`
+						: undefined
+				}
+				snack={
+					startedTask
+						? `Started ${startedTask.task.name}${startedTask.fallback ? ` · Effort: ${startedTask.fallback}` : ""}`
+						: leadSent
+							? "Sent to the Lead"
+							: asked
+				}
 				onOpenSnack={() => {
 					// The list copy has the launch's newer status, if it has arrived.
-					if (startedTask) setOpenTask(tasks.find((t) => t.id === startedTask.id) ?? startedTask);
+					if (startedTask)
+						setOpenTask(tasks.find((t) => t.id === startedTask.task.id) ?? startedTask.task);
 					else if (leadSent || asked) setLeadOpen(true);
 					setStartedTask(null);
 					setLeadSent(false);
@@ -3277,6 +3311,7 @@ export default function App() {
 			{proposalSheet && leadConn && (
 				<ProposalSheet
 					item={proposalSheet}
+					api={board}
 					agents={(leadKey ? agentsByBox[leadKey] : undefined) ?? []}
 					onClose={() => setProposalSheet(null)}
 					onStart={async (input) => {
@@ -3287,13 +3322,17 @@ export default function App() {
 							name: input.name,
 							agentId: input.agentId,
 						});
-						await board.pty.spawnAgent({
+						const started = await board.pty.spawnAgent({
 							taskId: task.id,
 							agentId: input.agentId,
+							effort: input.effort,
 							yolo: input.yolo,
 							prompt: input.prompt,
 							...(input.files.length ? { files: input.files } : {}),
 						});
+						if (input.effort && input.effort !== started.effort) {
+							setStartedTask({ task, fallback: effortLabel(started.effort ?? null) });
+						}
 						void c.lead.proposalCreated(proposalSheet.id, task.id).catch(() => {});
 						setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev : [task, ...prev]));
 						setProposalSheet(null);
@@ -3632,6 +3671,13 @@ const styles = StyleSheet.create({
 		borderBottomColor: "#5a2020",
 	},
 	skewErrorText: { color: "#f8a8a8", fontSize: 12, lineHeight: 16 },
+	launchEffortNotice: {
+		color: C.muted,
+		backgroundColor: C.surface,
+		paddingHorizontal: 14,
+		paddingVertical: 6,
+		fontSize: 12,
+	},
 	board: { flex: 1 },
 	boardContent: { padding: 16, paddingBottom: 24 },
 	// Centered, width-capped content column (see CONTENT_MAX) — keeps the phone layout

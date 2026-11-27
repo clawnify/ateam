@@ -3,6 +3,7 @@ import type {
 	ConnectionDTO,
 	ConnectStep,
 	DiffResultDTO,
+	Effort,
 	GithubIssueDTO,
 	KanbanColumn,
 	LoopDTO,
@@ -21,6 +22,7 @@ import {
 	boxSupports,
 	byLatestActivity,
 	describeMergeResult,
+	effortLabel,
 	type EngineMember,
 	FEATURE_MIN_VERSION,
 	PROTOCOL_VERSION,
@@ -289,6 +291,7 @@ interface ComposeInput {
 	nameAuto: boolean;
 	prompt: string;
 	agentId: string;
+	effort?: Effort;
 	yolo: boolean;
 	files: string[];
 	// Chosen environment: null = this Mac; an alias = that box. A box is connected
@@ -1892,9 +1895,10 @@ export function App() {
 				if (!input.open) announceStarted(task.id, `${task.name} already has a task`);
 				return;
 			}
-			const { terminalId } = await window.ateam.pty.spawnAgent({
+			const { terminalId, effort } = await window.ateam.pty.spawnAgent({
 				taskId: task.id,
 				agentId: input.agentId,
+				effort: input.effort,
 				yolo: input.yolo,
 				prompt: input.prompt || undefined,
 				files: input.files.length ? input.files : undefined,
@@ -1902,7 +1906,9 @@ export function App() {
 			});
 			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 			// Only once the agent is really up: a failed launch shows its error instead.
-			if (!input.open) announceStarted(task.id, `Started ${task.name}`);
+			if (input.effort && effort !== input.effort) {
+				announceStarted(task.id, `Started ${task.name} · Effort: ${effortLabel(effort ?? null)}`);
+			} else if (!input.open) announceStarted(task.id, `Started ${task.name}`);
 		});
 
 	// Cleanup reads a shape that changed in v6, so an older box would not degrade
@@ -2804,6 +2810,8 @@ export function App() {
 					initialFiles={composerSeed?.files ?? composerFiles}
 					defaultAgentId={composerSeed?.agentId}
 					initialYolo={composerSeed?.yolo}
+					initialEffort={composerSeed?.effort}
+					effortMembers={activeMembers}
 					initialAlias={composerSeed?.alias}
 					project={projectPill}
 					environments={composerEnvs}
@@ -2920,6 +2928,7 @@ export function App() {
 							initialPrompt={p.prompt}
 							defaultAgentId={p.agentId}
 							initialYolo={false}
+							effortMembers={activeMembers}
 							// Where the proposing agent runs: what it knows holds there.
 							initialAlias={originOf(task.projectId)}
 							header={note}
@@ -2991,6 +3000,7 @@ export function App() {
 							initialFiles={item.files}
 							defaultAgentId={p.agentId}
 							initialYolo={false}
+							effortMembers={activeMembers}
 							initialAlias={originOf(item.projectId)}
 							header={note}
 							environments={composerEnvs}
@@ -3738,6 +3748,9 @@ const PAGE_SPLIT_MIN = 880;
 
 type TaskCompanion = { taskId: string; kind: "page" | "terminal"; id: string };
 const taskCompanions = new Map<string, TaskCompanion>();
+// Remember the open pane across task switches and remounts. Resolve a fresh
+// browser URL on each visit, since the box connection may have changed.
+const openTaskBrowsers = new Set<string>();
 
 export function TaskPanel({
 	task,
@@ -3823,15 +3836,68 @@ export function TaskPanel({
 	// The browser on the task's box (its Chrome in noVNC). Kept mounted once
 	// loaded, like the editor, so hiding it doesn't drop the VNC session.
 	const [browserSrc, setBrowserSrc] = useState<string | null>(null);
-	const [browserOpen, setBrowserOpen] = useState(false);
+	const [browserOpen, setBrowserOpenState] = useState(false);
 	const [browserBusy, setBrowserBusy] = useState<string | null>(null);
-	// The task on screen now. This panel is reused across tasks, not remounted,
-	// and a browser open can outlive a switch (an install takes minutes): its
-	// result must not land in the next task's panel.
-	const shownTaskId = useRef(task.id);
-	useEffect(() => {
-		shownTaskId.current = task.id;
-	}, [task.id]);
+	const browserVisit = useRef<{ taskId: string; signal: AbortSignal } | null>(null);
+	const setBrowserOpen = useCallback(
+		(open: boolean) => {
+			if (open) openTaskBrowsers.add(task.id);
+			else openTaskBrowsers.delete(task.id);
+			if (browserVisit.current?.taskId === task.id) setBrowserOpenState(open);
+		},
+		[task.id],
+	);
+	const loadBrowser = useCallback(
+		(signal: AbortSignal, offerInstall?: () => Promise<boolean>) =>
+			run(async () => {
+				setBrowserBusy("Opening the browser…");
+				try {
+					let view: { url: string };
+					try {
+						view = await window.ateam.browser.view(task.id);
+					} catch (e) {
+						if (signal.aborted) return;
+						// Only clicking the globe can prompt for an install.
+						if (!offerInstall || !String(e).includes(BROWSER_NOT_INSTALLED_ERROR)) throw e;
+						const ok = await offerInstall();
+						if (signal.aborted) return;
+						if (!ok) {
+							setBrowserOpen(false);
+							return;
+						}
+						setBrowserBusy(`Installing the browser on "${alias}". This takes a few minutes…`);
+						await window.ateam.browser.install(task.id).catch((err) => {
+							// Older boxes include the manual install command in the original error.
+							throw /Unknown method/.test(String(err)) ? e : err;
+						});
+						if (signal.aborted) return;
+						view = await window.ateam.browser.view(task.id);
+					}
+					if (!signal.aborted) setBrowserSrc(view.url);
+				} catch (e) {
+					if (signal.aborted) return;
+					if (offerInstall) setBrowserOpen(false);
+					else setBrowserOpenState(false);
+					if (/Unknown method/.test(String(e)))
+						throw new Error(`Update Ateam on "${alias}" to open its browser here.`);
+					throw e;
+				} finally {
+					if (!signal.aborted) setBrowserBusy(null);
+				}
+			}),
+		[alias, run, setBrowserOpen, task.id],
+	);
+	useLayoutEffect(() => {
+		const visit = new AbortController();
+		browserVisit.current = { taskId: task.id, signal: visit.signal };
+		const open = alias !== null && openTaskBrowsers.has(task.id);
+		// Discard the previous task's iframe before the panel paints.
+		setBrowserSrc(null);
+		setBrowserBusy(null);
+		setBrowserOpenState(open);
+		if (open) void loadBrowser(visit.signal);
+		return () => visit.abort();
+	}, [alias, task.id, loadBrowser]);
 	// Dock the agent terminal as a right sidebar while the editor or the changes
 	// view owns the main area — the agent keeps working in view instead of
 	// vanishing behind it. Default on; the left-sidebar variant was left out.
@@ -3915,9 +3981,6 @@ export function TaskPanel({
 		setEditorOpen(false);
 		setEditorSrc(null);
 		setEditorBusy(null);
-		setBrowserOpen(false);
-		setBrowserSrc(null);
-		setBrowserBusy(null);
 	}, [task.id]);
 
 	const refreshSessions = useCallback(async () => {
@@ -4006,7 +4069,7 @@ export function TaskPanel({
 		const newest = [...restorable].reverse().find((s) => s.agentId !== "shell");
 		if (newest) void restoreTab(newest);
 		else void launch(false, true);
-	}, [restorable, restoreTab, launch]);
+	}, [restorable, restoreTab, launch, setBrowserOpen]);
 
 	// Keep the active tab pointed at something real. Covers (re)opening a task
 	// with surviving daemon sessions, and a session ending — its tab disappears
@@ -4498,55 +4561,17 @@ export function TaskPanel({
 								setBrowserOpen(false);
 								return;
 							}
-							void run(async () => {
-								setBrowserOpen(true);
-								setEditorOpen(false);
-								setChangesOpen(false);
-								// A loaded view stays connected (noVNC reconnects on its own),
-								// so only the first open asks the box.
-								if (browserSrc) return;
-								// After each await, touch the panel only if it still shows
-								// this task. An error still reaches the toast either way.
-								const forTask = task.id;
-								const stillShown = () => shownTaskId.current === forTask;
-								setBrowserBusy("Opening the browser…");
-								try {
-									let view: { url: string };
-									try {
-										view = await window.ateam.browser.view(task.id);
-									} catch (e) {
-										// A box without the browser: offer it, as the editor does.
-										// Nothing is installed without a yes.
-										if (!String(e).includes(BROWSER_NOT_INSTALLED_ERROR)) throw e;
-										const ok = await confirm(
-											`Install a browser on "${alias}"?`,
-											`The agents on "${alias}" get a Chrome of their own, which you can watch and take over in this panel. Ateam installs Chrome, a virtual desktop and noVNC there with apt, so the box needs passwordless sudo and x86_64 Debian or Ubuntu. It takes a few minutes.`,
-										);
-										if (!ok) {
-											if (stillShown()) setBrowserOpen(false);
-											return;
-										}
-										if (stillShown())
-											setBrowserBusy(
-												`Installing the browser on "${alias}". This takes a few minutes…`,
-											);
-										await window.ateam.browser.install(task.id).catch((err) => {
-											// A box from before browser:install: its own not-installed
-											// message carries the command to run there instead.
-											throw /Unknown method/.test(String(err)) ? e : err;
-										});
-										view = await window.ateam.browser.view(task.id);
-									}
-									if (stillShown()) setBrowserSrc(view.url);
-								} catch (e) {
-									if (stillShown()) setBrowserOpen(false);
-									if (/Unknown method/.test(String(e)))
-										throw new Error(`Update Ateam on "${alias}" to open its browser here.`);
-									throw e;
-								} finally {
-									if (stillShown()) setBrowserBusy(null);
-								}
-							});
+							setBrowserOpen(true);
+							setEditorOpen(false);
+							setChangesOpen(false);
+							const visit = browserVisit.current;
+							if (!visit || browserSrc || browserBusy) return;
+							void loadBrowser(visit.signal, () =>
+								confirm(
+									`Install a browser on "${alias}"?`,
+									`The agents on "${alias}" get a Chrome of their own, which you can watch and take over in this panel. Ateam installs Chrome, a virtual desktop and noVNC there with apt, so the box needs passwordless sudo and x86_64 Debian or Ubuntu. It takes a few minutes.`,
+								),
+							);
 						}}
 					/>
 				) : (
