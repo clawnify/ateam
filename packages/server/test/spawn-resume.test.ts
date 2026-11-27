@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import type { AteamDb } from "@ateam/db";
 import { bootstrap, repo } from "@ateam/db";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
+import * as effortDiscovery from "../src/agent-effort";
 import { peerToken } from "../src/agent-setup";
 import { FollowUps } from "../src/follow-ups";
 import { BOARD_INSTRUCTIONS } from "../src/hooks/board-mcp";
@@ -97,6 +98,40 @@ beforeEach(() => {
 });
 
 describe("the launch line", () => {
+	it("resolves effort in the task worktree and applies only a supported override", async () => {
+		const read = spyOn(effortDiscovery, "readAgentEffort");
+		read
+			.mockResolvedValueOnce({ model: "codex-model", levels: ["high", "low"] })
+			.mockResolvedValueOnce({ model: "claude-model", levels: ["max", "high"] })
+			.mockResolvedValueOnce(null);
+		try {
+			const codex = await spawnAgentInTask(services, () => {}, {
+				taskId,
+				agentId: "codex",
+				effort: "xhigh",
+			});
+			const claude = await spawnAgentInTask(services, () => {}, {
+				taskId,
+				agentId: "claude",
+				effort: "max",
+			});
+			const fallback = await spawnAgentInTask(services, () => {}, {
+				taskId,
+				agentId: "claude",
+				effort: "low",
+			});
+			expect(read).toHaveBeenCalledWith("codex", repo.getTask(db, taskId)?.worktreePath);
+			expect(codex.effort).toBe("high");
+			expect(launches[0]?.args.at(-1)).toContain(`-c model_reasoning_effort='"high"'`);
+			expect(claude.effort).toBe("max");
+			expect(launches[1]?.args.at(-1)).toContain("--effort 'max'");
+			expect(fallback.effort).toBeNull();
+			expect(launches[2]?.args.at(-1)).not.toContain("--effort");
+		} finally {
+			read.mockRestore();
+		}
+	});
+
 	it("reports the agent's exit before the pane falls back to a shell", async () => {
 		await spawnAgentInTask(services, () => {}, { taskId, agentId: "claude" });
 		const notify = services.notifyScriptPath;

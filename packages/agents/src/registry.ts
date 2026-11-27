@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
-import { AGENT_INSTALLS } from "@ateam/protocol";
+import { AGENT_INSTALLS, type Effort } from "@ateam/protocol";
 
 const pexec = promisify(execFile);
 
@@ -236,6 +236,7 @@ export function agentCommand(
 		/** Working dir to scope agent mode to (the task's worktree). */
 		cwd?: string;
 		prompt?: string;
+		effort?: Effort | null;
 		/** Id to pin a FRESH conversation to, so this tab can be resumed by name. */
 		sessionId?: string;
 		/** Resume THIS conversation — beats the cwd-scoped `resume`. */
@@ -262,6 +263,11 @@ export function agentCommand(
 	const base =
 		resumeOne ?? (opts.resume && agent.resumeCommand ? agent.resumeCommand : agent.command);
 	let cmd = withMode(base);
+	if (opts.effort && agent.id === "codex") {
+		cmd = `${cmd} -c model_reasoning_effort=${sq(JSON.stringify(opts.effort))}`;
+	} else if (opts.effort && agent.id === "claude") {
+		cmd = `${cmd} --effort ${sq(opts.effort)}`;
+	}
 	// Only a fresh launch takes an id: a resumed conversation already has one,
 	// and handing it a second would either be refused or fork it in two.
 	if (opts.sessionId && agent.sessionIdFlag && !resumeOne && !opts.resume) {

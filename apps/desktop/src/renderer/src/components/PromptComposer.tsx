@@ -1,9 +1,16 @@
-import type { AgentDTO, BoxWake } from "@ateam/protocol";
+import {
+	type AgentDTO,
+	boxSupports,
+	type BoxWake,
+	type Effort,
+	type EngineMember,
+} from "@ateam/protocol";
 import { ArrowUp, Paperclip, Plus, X, Zap } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { HostStatus } from "../../../shared/host";
 import { titleFromPrompt } from "../titleFromPrompt";
 import { AgentPicker } from "./AgentPicker";
+import { EffortPicker } from "./EffortPicker";
 import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
 
 /** localStorage keys of the coding agent and Auto mode last picked for a new task. */
@@ -48,6 +55,7 @@ export function PromptComposer({
 	sessionAlias,
 	defaultAgentId,
 	initialYolo,
+	initialEffort,
 	initialName = "",
 	initialPrompt = "",
 	initialFiles = [],
@@ -56,6 +64,7 @@ export function PromptComposer({
 	project,
 	environments = [],
 	envAgents,
+	effortMembers,
 	onAdd,
 	onInstall,
 	onForget,
@@ -73,6 +82,8 @@ export function PromptComposer({
 	/** Start Auto mode on or off instead of as last picked, e.g. off for an
 	 *  agent's proposal, which may only suggest it. */
 	initialYolo?: boolean;
+	initialEffort?: Effort;
+	effortMembers?: EngineMember[];
 	initialName?: string;
 	initialPrompt?: string;
 	/** Paths to start attached, e.g. files dropped on a project in the sidebar. */
@@ -108,6 +119,7 @@ export function PromptComposer({
 		nameAuto: boolean;
 		prompt: string;
 		agentId: string;
+		effort?: Effort;
 		yolo: boolean;
 		files: string[];
 		alias: string | null;
@@ -222,6 +234,12 @@ export function PromptComposer({
 		availOnEnv && !availOnEnv.includes(pickedAgent)
 			? (agents.find((a) => availOnEnv.includes(a.id))?.id ?? pickedAgent)
 			: pickedAgent;
+	const [effort, setEffort] = useState<Effort | null>(initialEffort ?? null);
+	const engineSkew = environments.find((environment) => environment.alias === alias)?.skew;
+	const effortProjectId =
+		engineSkew !== undefined && !boxSupports("agentEffort", engineSkew)
+			? undefined
+			: effortMembers?.find((member) => member.alias === alias)?.projectId;
 
 	// A session has no name to fall back on — it needs something to say.
 	// A file still being saved isn't in `files` yet: a quick ⌘⏎ would start the agent without it.
@@ -309,6 +327,7 @@ export function PromptComposer({
 			nameAuto: !name.trim(),
 			prompt: prompt.trim(),
 			agentId,
+			...(!session && effort ? { effort } : {}),
 			yolo,
 			files,
 			alias,
@@ -390,6 +409,14 @@ export function PromptComposer({
 						alias={alias}
 						onInstallAgent={onInstallAgent}
 					/>
+					{!session && (
+						<EffortPicker
+							projectId={isAvail(agentId) ? effortProjectId : undefined}
+							agentId={agentId}
+							value={effort}
+							onChange={setEffort}
+						/>
+					)}
 					{!session && (
 						<EnvironmentPicker
 							environments={environments}

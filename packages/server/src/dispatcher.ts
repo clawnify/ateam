@@ -61,6 +61,7 @@ import {
 	type TaskWait,
 	type UpdateLoopInput,
 } from "@ateam/protocol";
+import { readAgentEffort } from "./agent-effort";
 import { installBrowser, openBrowserView } from "./browser";
 import { credentialStatuses, credentialsPath, updateCredentials } from "./credentials-file";
 import { dotfilesFor, validateDotfiles } from "./dotfiles";
@@ -699,6 +700,19 @@ export function createDispatcher(engine: Engine): Dispatcher {
 		},
 
 		// ---- agents ----
+		[CH.agentsEffort]: (input: { projectId: string; agentId: string; loopId?: string }) => {
+			const project = requireProjectFor(services, input.projectId);
+			const loop = input.loopId && repo.getLoop(db, input.loopId);
+			const taskId =
+				loop && loop.projectId === project.id
+					? (loop.config?.taskId ?? loop.config?.lastTaskId)
+					: undefined;
+			const task = typeof taskId === "string" ? repo.getTask(db, taskId) : undefined;
+			return readAgentEffort(
+				input.agentId,
+				task?.projectId === project.id ? task.worktreePath : project.repoPath,
+			);
+		},
 		[CH.agentsList]: async () => {
 			// Opening the picker is the moment the user expects it to be current, and
 			// this process's PATH is otherwise a snapshot from when the engine

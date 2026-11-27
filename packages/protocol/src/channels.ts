@@ -53,6 +53,7 @@ export const CH = {
 	loopsUpdate: "loops:update",
 	loopsDelete: "loops:delete",
 	agentsList: "agents:list",
+	agentsEffort: "agents:effort",
 	agentsInstall: "agents:install",
 	searchSessions: "search:sessions",
 	skillsList: "skills:list",

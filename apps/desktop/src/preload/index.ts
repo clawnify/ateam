@@ -64,6 +64,7 @@ const api: AteamApi = {
 	},
 	agents: {
 		list: () => ipcRenderer.invoke(CH.agentsList),
+		effort: (input) => ipcRenderer.invoke(CH.agentsEffort, input),
 		install: (input) => ipcRenderer.invoke(CH.agentsInstall, input),
 	},
 	settings: {

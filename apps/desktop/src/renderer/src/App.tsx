@@ -3,6 +3,7 @@ import type {
 	ConnectionDTO,
 	ConnectStep,
 	DiffResultDTO,
+	Effort,
 	GithubIssueDTO,
 	KanbanColumn,
 	LoopDTO,
@@ -21,6 +22,7 @@ import {
 	boxSupports,
 	byLatestActivity,
 	describeMergeResult,
+	effortLabel,
 	type EngineMember,
 	FEATURE_MIN_VERSION,
 	PROTOCOL_VERSION,
@@ -289,6 +291,7 @@ interface ComposeInput {
 	nameAuto: boolean;
 	prompt: string;
 	agentId: string;
+	effort?: Effort;
 	yolo: boolean;
 	files: string[];
 	// Chosen environment: null = this Mac; an alias = that box. A box is connected
@@ -1892,9 +1895,10 @@ export function App() {
 				if (!input.open) announceStarted(task.id, `${task.name} already has a task`);
 				return;
 			}
-			const { terminalId } = await window.ateam.pty.spawnAgent({
+			const { terminalId, effort } = await window.ateam.pty.spawnAgent({
 				taskId: task.id,
 				agentId: input.agentId,
+				effort: input.effort,
 				yolo: input.yolo,
 				prompt: input.prompt || undefined,
 				files: input.files.length ? input.files : undefined,
@@ -1902,7 +1906,9 @@ export function App() {
 			});
 			setTermByTask((m) => ({ ...m, [task.id]: terminalId }));
 			// Only once the agent is really up: a failed launch shows its error instead.
-			if (!input.open) announceStarted(task.id, `Started ${task.name}`);
+			if (input.effort && effort !== input.effort) {
+				announceStarted(task.id, `Started ${task.name} · Effort: ${effortLabel(effort ?? null)}`);
+			} else if (!input.open) announceStarted(task.id, `Started ${task.name}`);
 		});
 
 	// Cleanup reads a shape that changed in v6, so an older box would not degrade
@@ -2804,6 +2810,8 @@ export function App() {
 					initialFiles={composerSeed?.files ?? composerFiles}
 					defaultAgentId={composerSeed?.agentId}
 					initialYolo={composerSeed?.yolo}
+					initialEffort={composerSeed?.effort}
+					effortMembers={activeMembers}
 					initialAlias={composerSeed?.alias}
 					project={projectPill}
 					environments={composerEnvs}
@@ -2920,6 +2928,7 @@ export function App() {
 							initialPrompt={p.prompt}
 							defaultAgentId={p.agentId}
 							initialYolo={false}
+							effortMembers={activeMembers}
 							// Where the proposing agent runs: what it knows holds there.
 							initialAlias={originOf(task.projectId)}
 							header={note}
@@ -2991,6 +3000,7 @@ export function App() {
 							initialFiles={item.files}
 							defaultAgentId={p.agentId}
 							initialYolo={false}
+							effortMembers={activeMembers}
 							initialAlias={originOf(item.projectId)}
 							header={note}
 							environments={composerEnvs}

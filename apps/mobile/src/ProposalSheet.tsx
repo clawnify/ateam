@@ -3,7 +3,7 @@
 // the desktop opens. Nothing starts until Start. Auto mode stays off even when
 // the Lead suggested it: the Lead acts on text it read from tasks and the web,
 // so only the user switches it on (the desktop's rule, Proposals in the wiki).
-import type { AgentDTO, LeadItem } from "@ateam/protocol";
+import type { AgentDTO, AteamApi, Effort, LeadItem } from "@ateam/protocol";
 import { useState } from "react";
 import {
 	KeyboardAvoidingView,
@@ -17,6 +17,7 @@ import {
 	View,
 } from "react-native";
 import { AgentIcon } from "./AgentIcon";
+import { EffortPicker } from "./EffortPicker";
 import { C, CONTENT_MAX } from "./theme";
 
 export type ProposalItem = Extract<LeadItem, { kind: "proposal" }>;
@@ -26,6 +27,7 @@ export interface ProposalStart {
 	name: string;
 	prompt: string;
 	agentId: string;
+	effort?: Effort;
 	yolo: boolean;
 	/** Files attached in the Lead's chat: already on this box, in its folder. */
 	files: string[];
@@ -33,11 +35,13 @@ export interface ProposalStart {
 
 export function ProposalSheet({
 	item,
+	api,
 	agents,
 	onClose,
 	onStart,
 }: {
 	item: ProposalItem;
+	api: AteamApi;
 	agents: AgentDTO[];
 	onClose: () => void;
 	/** Rejects with words for the user when the task can't be started. */
@@ -54,6 +58,7 @@ export function ProposalSheet({
 		p.agentId && pickable.some((a) => a.id === p.agentId && a.available) ? p.agentId : first,
 	);
 	const [yolo, setYolo] = useState(false);
+	const [effort, setEffort] = useState<Effort | null>(null);
 	const [starting, setStarting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const files = item.files ?? [];
@@ -69,6 +74,7 @@ export function ProposalSheet({
 				name: name.trim() || p.name,
 				prompt: prompt.trim(),
 				agentId,
+				effort: effort ?? undefined,
 				yolo,
 				files,
 			});
@@ -128,6 +134,13 @@ export function ProposalSheet({
 								);
 							})}
 						</View>
+						<EffortPicker
+							api={api}
+							projectId={item.projectId}
+							agentId={agentId}
+							value={effort}
+							onChange={setEffort}
+						/>
 						<Text style={styles.label}>MODE</Text>
 						<Pressable
 							style={[styles.agent, styles.mode, yolo && styles.auto]}

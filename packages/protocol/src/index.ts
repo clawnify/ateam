@@ -3,6 +3,7 @@
 // renderer, the Electron main process, and the (future) headless @ateam/server
 // over SSH — shares one definition without pulling in node/electron/db internals.
 
+import type { AgentEffort, Effort } from "./effort";
 import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 
 /**
@@ -192,7 +193,8 @@ import type { GithubAccessDTO, RepoAccessDTO } from "./github-access";
 // methods and a frame an older end drops unread: a v39 box is left out of it
 // (FEATURE_MIN_VERSION.macLink). Settings gained `client.macLink`, read by the
 // desktop alone.
-export const PROTOCOL_VERSION = 40;
+// v41: model effort discovery and per-launch overrides for tasks and loops.
+export const PROTOCOL_VERSION = 41;
 
 /**
  * The oldest client protocol an engine of this version still serves correctly, sent
@@ -462,6 +464,7 @@ export const FEATURE_MIN_VERSION = {
 	 *  holds it. An older box is left out of both directions until it is updated:
 	 *  a Mac task that reached it would get no answer back. */
 	macLink: 40,
+	agentEffort: 41,
 } as const;
 
 export type GatedFeature = keyof typeof FEATURE_MIN_VERSION;
@@ -1071,6 +1074,8 @@ export interface LoopDTO {
 	prompt: string | null;
 	/** Which coding agent each run launches (agent-session loops). */
 	agentId: string | null;
+	/** The requested effort, resolved against the current model on each run. */
+	effort?: Effort | null;
 	/** Optional second turn, sent once after the agent's first reply. */
 	followUp: string | null;
 	/** Whether each run launches its agent permission-free (the composer's Auto mode). */
@@ -1434,6 +1439,7 @@ export interface SessionHitDTO {
 // ---- IPC channel names (their own module: see channels.ts) ----
 export { CH } from "./channels";
 export * from "./dotfiles";
+export * from "./effort";
 export * from "./proxy";
 
 // ---- event payloads ----
@@ -1640,6 +1646,11 @@ export interface AteamApi {
 	};
 	agents: {
 		list(): Promise<AgentDTO[]>;
+		effort(input: {
+			projectId: string;
+			agentId: string;
+			loopId?: string;
+		}): Promise<AgentEffort | null>;
 		/**
 		 * Run this agent's official installer on the machine the engine is on, and
 		 * report what the machine looks like afterwards. `projectId` only says WHICH
@@ -1729,6 +1740,7 @@ export interface AteamApi {
 		spawnAgent(input: {
 			taskId: string;
 			agentId: string;
+			effort?: Effort;
 			yolo?: boolean;
 			resume?: boolean;
 			/** Launch the agent's own multi-agent board (e.g. `claude agents`) in the worktree. */
@@ -1743,7 +1755,7 @@ export interface AteamApi {
 			keepFiles?: string[];
 			/** Resume this exact conversation instead of starting a new one. */
 			resumeSessionId?: string;
-		}): Promise<{ terminalId: string }>;
+		}): Promise<{ terminalId: string; effort?: Effort | null }>;
 		spawnShell(input: { taskId: string }): Promise<{ terminalId: string }>;
 		/** The box's own shell, in its home folder and outside every project: the one
 		 *  already running, else a new one. One per box; it runs until it exits. */

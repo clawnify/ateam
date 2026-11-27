@@ -15,7 +15,7 @@
 // board (`claude agents`) in that worktree. The paperclip attaches photos or
 // files, held here and uploaded on send to where the message goes (attach.tsx).
 
-import type { AgentDTO, LeadClient } from "@ateam/protocol";
+import type { AgentDTO, AteamApi, Effort, LeadClient } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -32,6 +32,7 @@ import {
 	View,
 } from "react-native";
 import { AgentIcon } from "./AgentIcon";
+import { EffortPicker } from "./EffortPicker";
 import {
 	AttachmentStrip,
 	chooseAttachments,
@@ -71,6 +72,7 @@ export interface ComposerSubmit {
 	/** Explicit task/worktree name — set in agent mode, where there's no prompt to derive one from. */
 	name?: string;
 	agentId: string;
+	effort?: Effort;
 	yolo: boolean;
 	agentMode: boolean;
 	/** false: start it in the background and stay on the board (a tap on send);
@@ -93,6 +95,8 @@ export interface RunOn {
 
 export function Composer({
 	agents,
+	api,
+	effortProjectId,
 	busy,
 	onSubmit,
 	lead,
@@ -105,6 +109,8 @@ export function Composer({
 	newTaskSeq = 0,
 }: {
 	agents: AgentDTO[];
+	api: AteamApi;
+	effortProjectId?: string;
 	busy: boolean;
 	/** Start the task. Resolves with why it couldn't, null once it has started. */
 	onSubmit: (input: ComposerSubmit) => Promise<string | null>;
@@ -136,6 +142,7 @@ export function Composer({
 		pickable.find((a) => a.available)?.id ?? pickable[0]?.id ?? "claude",
 	);
 	const [yolo, setYolo] = useState(false);
+	const [effort, setEffort] = useState<Effort | null>(null);
 	const [agentMode, setAgentMode] = useState(false);
 	const [pickerOpen, setPickerOpen] = useState(false);
 	// The agent list arrives after the first render, and it is per-BOX: the
@@ -225,9 +232,20 @@ export function Composer({
 		const failed = await onSubmit(
 			agentMode
 				? { prompt: "", name: value, agentId, yolo, agentMode: true, open, files: sent }
-				: { prompt: value, agentId, yolo, agentMode: false, open, files: sent },
+				: {
+						prompt: value,
+						agentId,
+						effort: effort ?? undefined,
+						yolo,
+						agentMode: false,
+						open,
+						files: sent,
+					},
 		);
-		if (!failed) return;
+		if (!failed) {
+			setEffort(null);
+			return;
+		}
 		// Not started: say why, with what was typed back in the field to send again
 		// (unless something else has been typed there since).
 		setNote(failed);
@@ -473,6 +491,16 @@ export function Composer({
 										</View>
 									</Pressable>
 								</Modal>
+								{!agentMode && (
+									<EffortPicker
+										api={api}
+										projectId={effortProjectId}
+										agentId={agentId}
+										value={effort}
+										onChange={setEffort}
+										compact
+									/>
+								)}
 								<View style={styles.spacer} />
 								{/* Auto mode (yolo) */}
 								<Pressable
