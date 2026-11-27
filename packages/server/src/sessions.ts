@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { agentCommand, getAgent, latestSessionInDir, probeAgentBinary } from "@ateam/agents";
 import { repo, type Task } from "@ateam/db";
 import { createTask as gitCreateTask, seedWorktree } from "@ateam/git-core";
+import { type Effort, isEffort, resolveEffort } from "@ateam/protocol";
+import { readAgentEffort } from "./agent-effort";
 import {
 	BOARD_MCP_TOOLS,
 	buildAgentEnv,
@@ -32,6 +34,7 @@ export { shell };
 export interface SpawnAgentInput {
 	taskId: string;
 	agentId: string;
+	effort?: Effort;
 	yolo?: boolean;
 	resume?: boolean;
 	agentMode?: boolean;
@@ -332,7 +335,7 @@ export function spawnAgentInTask(
 	services: Services,
 	notifyTaskUpdated: (taskId: string) => void,
 	input: SpawnAgentInput,
-): Promise<{ terminalId: string }> {
+): Promise<{ terminalId: string; effort?: Effort | null }> {
 	// Tracked, so deleting the task waits for a launch already under way instead
 	// of racing it (see worktree-guard.ts).
 	const launch = () =>
@@ -361,7 +364,7 @@ async function launchAgent(
 	services: Services,
 	notifyTaskUpdated: (taskId: string) => void,
 	input: SpawnAgentInput,
-): Promise<{ terminalId: string }> {
+): Promise<{ terminalId: string; effort?: Effort | null }> {
 	const task = repo.getTask(services.db, input.taskId);
 	if (!task) throw new Error(`Task not found: ${input.taskId}`);
 	const agent = getAgent(input.agentId);
@@ -454,6 +457,19 @@ async function launchAgent(
 			return open;
 		}
 	}
+
+	const requestedEffort =
+		!input.agentMode &&
+		!input.resume &&
+		!input.resumeSessionId &&
+		!input.standIn &&
+		isEffort(input.effort)
+			? input.effort
+			: undefined;
+	const capabilities = requestedEffort ? await readAgentEffort(agent.id, task.worktreePath) : null;
+	const effort = requestedEffort
+		? resolveEffort(requestedEffort, capabilities?.levels ?? [])
+		: undefined;
 
 	// A delete may have begun during the probes above; it is waiting on this
 	// launch, so stop before writing anything rather than start an agent it
@@ -548,6 +564,7 @@ async function launchAgent(
 		agentMode: input.agentMode,
 		cwd: task.worktreePath,
 		prompt,
+		effort,
 		sessionId: agentSessionId ?? undefined,
 		resumeSessionId,
 	});
@@ -628,5 +645,5 @@ async function launchAgent(
 		task.id,
 		{ files: input.files, resume: isResume },
 	);
-	return { terminalId };
+	return { terminalId, ...(requestedEffort ? { effort } : {}) };
 }

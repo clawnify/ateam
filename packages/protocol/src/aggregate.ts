@@ -73,6 +73,7 @@ const ENTITY = new Set<string>([
 	CH.browserView, // taskId — the browser lives on the task's box
 	CH.browserInstall, // taskId — installs on that same box
 	CH.agentsInstall, // {projectId} — installs the agent CLI on that engine's machine
+	CH.agentsEffort, // {projectId} — read the model on the machine that will launch it
 	CH.ptySpawnAgent, // {taskId}
 	CH.ptySpawnShell, // {taskId}
 	// Loops live on the engine that runs them — that's what makes a loop local

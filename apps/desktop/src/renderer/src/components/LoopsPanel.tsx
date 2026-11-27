@@ -4,6 +4,7 @@ import {
 	boxSupports,
 	dailyCron,
 	dailyTimeOf,
+	type Effort,
 	type EngineMember,
 	FEATURE_MIN_VERSION,
 	type LoopDTO,
@@ -29,6 +30,7 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useBoxName } from "../box-name";
 import { AgentPicker } from "./AgentPicker";
+import { EffortPicker } from "./EffortPicker";
 import { EnvironmentPicker, type EnvOption } from "./EnvironmentPicker";
 import { SCHEDULE_PRESETS, type ScheduleKind, SchedulePicker } from "./SchedulePicker";
 
@@ -148,6 +150,7 @@ export function LoopForm({
 	const [name, setName] = useState(editing?.title ?? start?.name ?? "");
 	const [prompt, setPrompt] = useState(editing?.prompt ?? start?.prompt ?? "");
 	const [followUp, setFollowUp] = useState(editing?.followUp ?? start?.followUp ?? "");
+	const [effort, setEffort] = useState<Effort | null>(editing?.effort ?? null);
 	// Default environment: the proposing task's, else this Mac when it has the
 	// repo, else the first box.
 	const [projectId, setProjectId] = useState(
@@ -206,6 +209,7 @@ export function LoopForm({
 	// And for calendars: an older engine drops `cron` on update and keeps the old
 	// interval, so the save would look applied and not be.
 	const scheduleBlockedBy = gatedBy("loopSchedules");
+	const effortBlockedBy = gatedBy("agentEffort");
 
 	// The schedule fields to send. A calendar keeps the zone it was set in (so
 	// re-saving from another machine doesn't shift it); a new one takes this
@@ -239,6 +243,7 @@ export function LoopForm({
 					config: {
 						prompt: prompt.trim(),
 						agentId,
+						...(effortBlockedBy === null ? { effort } : {}),
 						followUp: followUpBlockedBy === null ? followUp.trim() : "",
 						yolo: autoBlockedBy === null ? yolo : false,
 					},
@@ -254,6 +259,7 @@ export function LoopForm({
 					config: {
 						prompt: prompt.trim(),
 						agentId,
+						...(effortBlockedBy === null && effort ? { effort } : {}),
 						followUp: followUpBlockedBy === null ? followUp.trim() : "",
 						yolo: autoBlockedBy === null ? yolo : false,
 					},
@@ -345,6 +351,15 @@ export function LoopForm({
 							alias={ownerAlias}
 							onInstallAgent={onInstallAgent}
 						/>
+						{effortBlockedBy === null && (
+							<EffortPicker
+								projectId={projectId}
+								agentId={agentId}
+								loopId={editing?.id}
+								value={effort}
+								onChange={setEffort}
+							/>
+						)}
 						{editing ? (
 							<span
 								className="comp-env-fixed"

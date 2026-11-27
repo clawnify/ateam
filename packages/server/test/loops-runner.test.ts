@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, it } from "bun:test";
 import type { AteamDb } from "@ateam/db";
 import { bootstrap, repo } from "@ateam/db";
+import type { Effort } from "@ateam/protocol";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "../../db/src/schema";
 import { LoopRunner, nextCronRun } from "../src/loops/runner";
@@ -32,7 +33,7 @@ let db: AteamDb;
 /** Everything the fake session layer records, for assertions. */
 interface SessionLog {
 	created: { projectId: string; name: string }[];
-	spawned: { taskId: string; agentId: string; prompt: string; yolo?: boolean }[];
+	spawned: { taskId: string; agentId: string; prompt: string; yolo?: boolean; effort?: Effort }[];
 	stopped: string[];
 	/** Task names that make the fake createTask throw (branch-collision sim). */
 	failNames: Set<string>;
@@ -356,6 +357,39 @@ describe("LoopRunner", () => {
 			taskId,
 		});
 		runner.stop();
+	});
+
+	it("keeps the requested effort across runs and clears it when reset to Default", async () => {
+		const projectId = seedProject();
+		const log = makeLog();
+		const runner = makeRunner(log);
+		runner.start();
+		try {
+			const loop = runner
+				.createUserLoop({
+					templateId: "agent-session",
+					name: "Review",
+					projectId,
+					config: { prompt: "review changes", agentId: "codex", effort: "xhigh" },
+					intervalMs: 3_600_000,
+				})
+				.find((item) => item.kind === "user");
+			if (!loop) throw new Error("Loop was not created");
+			expect(loop.effort).toBe("xhigh");
+			const { id } = loop;
+			await runner.runNow(id);
+			await runner.runNow(id);
+			expect(log.spawned.map((entry) => entry.effort)).toEqual(["xhigh", "xhigh"]);
+			expect(runner.describe().find((item) => item.id === id)?.lastSummary).toContain(
+				"Effort: Default",
+			);
+			runner.updateUserLoop({ id, config: { effort: null } });
+			await runner.runNow(id);
+			expect(log.spawned[2]?.effort).toBeUndefined();
+			expect(runner.describe().find((item) => item.id === id)?.effort).toBeNull();
+		} finally {
+			runner.stop();
+		}
 	});
 
 	it("keeps its task when a run fails to launch, instead of building a new one each tick", async () => {

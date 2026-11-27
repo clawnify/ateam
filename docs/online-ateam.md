@@ -235,6 +235,13 @@ ssh my-ateam-box "bash -lc 'ateam'"
    keeps its tasks on the board as they were last seen, dimmed and marked asleep or
    offline. Opening one wakes the box. The rest of the board never waits for it.
 
+**Reasoning effort.** On desktop and phone, **Effort** appears in the task and
+loop forms when the selected Claude Code or Codex model offers effort levels.
+**Default** uses the CLI's settings. If a chosen level is unavailable at launch,
+Ateam uses the highest supported level at or below it, or the CLI default if
+none qualifies. Loops save the requested level, check it on each run, and let
+you change it in **Edit loop**.
+
 > **Editing files by hand on the box.** A task's toolbar has an **Edit files**
 > button that opens VS Code *running on the box*, scoped to that task's worktree,
 > inside the Ateam window — so you can fix a `.env` or anything else the agent

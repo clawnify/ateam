@@ -88,6 +88,7 @@ export class JsonProcess {
 			stderr = (stderr + d).slice(-2000);
 		});
 		this.proc.on("error", (e) => this.exit(e.message));
+		this.proc.stdin?.on("error", (e) => this.exit(e.message));
 		this.proc.on("exit", (code) => this.exit(stderr.trim() || `${bin} exited (${code})`));
 	}
 	private exit(message: string): void {

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { repo } from "@ateam/db";
+import { effortLabel, isEffort } from "@ateam/protocol";
 import type { LoopCadence, LoopContext, LoopOutcome } from "./types";
 
 /** A configurable parameter a user sets when creating a loop from a template. */
@@ -106,6 +107,7 @@ const agentSession: LoopTemplate = {
 	params: [
 		{ key: "prompt", label: "Prompt", type: "string", default: "" },
 		{ key: "agentId", label: "Agent", type: "string", default: "claude" },
+		{ key: "effort", label: "Effort", type: "string", default: "" },
 		{
 			key: "followUp",
 			label: "Follow-up",
@@ -125,6 +127,7 @@ const agentSession: LoopTemplate = {
 		const prompt = str(config.prompt)?.trim();
 		const projectId = str(config.projectId);
 		const agentId = str(config.agentId) ?? "claude";
+		const effort = isEffort(config.effort) ? config.effort : undefined;
 		// Optional: the agent takes one more turn on this the moment its first
 		// response lands. Empty means the run is a single turn, as before.
 		const followUp = str(config.followUp)?.trim();
@@ -218,14 +221,19 @@ const agentSession: LoopTemplate = {
 			repo.updateLoop(ctx.db, loopId, { config: { ...rest, taskId: task.id } });
 		}
 
-		await ctx.spawnAgent({
+		const started = await ctx.spawnAgent({
 			taskId: task.id,
 			agentId,
+			...(effort ? { effort } : {}),
 			prompt: `${stateInstructions(task.worktreePath)}\n\n---\n\n${prompt}`,
 			followUp,
 			yolo,
 		});
-		return { summary: `run ${runNumber} started (${task.name})` };
+		const fallback =
+			effort && effort !== started.effort
+				? ` · Effort: ${effortLabel(started.effort ?? null)}`
+				: "";
+		return { summary: `run ${runNumber} started (${task.name})${fallback}` };
 	},
 };
 

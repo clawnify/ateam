@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AteamDb, Loop, LoopCadenceMode } from "@ateam/db";
 import { repo } from "@ateam/db";
-import type { LoopDTO } from "@ateam/protocol";
+import { isEffort, type LoopDTO } from "@ateam/protocol";
 import { Cron } from "croner";
 import { getTemplate } from "./templates";
 import type {
@@ -351,6 +351,7 @@ export class LoopRunner {
 				cadence: cadence?.mode ?? "self_paced",
 				prompt: typeof row.config?.prompt === "string" ? row.config.prompt : null,
 				agentId: typeof row.config?.agentId === "string" ? row.config.agentId : null,
+				effort: isEffort(row.config?.effort) ? row.config.effort : null,
 				followUp: typeof row.config?.followUp === "string" ? row.config.followUp : null,
 				yolo: typeof row.config?.yolo === "boolean" ? row.config.yolo : null,
 				// The loop's persistent task (lastTaskId = pre-persistent-era key).

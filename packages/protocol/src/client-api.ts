@@ -235,6 +235,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 		},
 		agents: {
 			list: () => call<AgentDTO[]>(CH.agentsList),
+			effort: (input) => call(CH.agentsEffort, [input]),
 			install: (input) => call<InstallAgentDTO>(CH.agentsInstall, [input]),
 		},
 		settings: {
@@ -284,7 +285,7 @@ export function buildAteamApi(rpc: RpcClient, native: NativeClientApi): AteamApi
 			onUpdated: (cb) => rpc.on("loopsUpdated", (p) => cb(p as LoopDTO[])),
 		},
 		pty: {
-			spawnAgent: (input) => call<{ terminalId: string }>(CH.ptySpawnAgent, [input]),
+			spawnAgent: (input) => call(CH.ptySpawnAgent, [input]),
 			spawnShell: (input) => call<{ terminalId: string }>(CH.ptySpawnShell, [input]),
 			boxShell: () => call<{ terminalId: string }>(CH.ptyBoxShell, []),
 			// Fire-and-forget in the API; over RPC each still gets a (tiny) ack frame.

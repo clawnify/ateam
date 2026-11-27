@@ -2,7 +2,7 @@
 // (Run now, enable/pause, edit, delete) and the same status line. Creating and
 // editing goes through LoopForm, which App renders as a modal so Home's plus
 // can open it too.
-import type { AgentDTO, AteamApi, LoopDTO, TaskDTO } from "@ateam/protocol";
+import type { AgentDTO, AteamApi, Effort, LoopDTO, TaskDTO } from "@ateam/protocol";
 import { boxSupports, loopScheduleLabel } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
 import { useEffect, useState } from "react";
@@ -21,6 +21,7 @@ import {
 	View,
 } from "react-native";
 import { AgentIcon } from "./AgentIcon";
+import { EffortPicker } from "./EffortPicker";
 import { C, CONTENT_MAX } from "./theme";
 
 /** "in 45s" / "in 2m" / "now", or "—" when no next run is scheduled. */
@@ -228,6 +229,7 @@ export function LoopForm({
 	const [name, setName] = useState(editing?.title ?? from?.name ?? "");
 	const [prompt, setPrompt] = useState(editing?.prompt ?? from?.prompt ?? "");
 	const [followUp, setFollowUp] = useState(editing?.followUp ?? from?.followUp ?? "");
+	const [effort, setEffort] = useState<Effort | null>(editing?.effort ?? null);
 	const [agentId, setAgentId] = useState(
 		editing?.agentId ??
 			(from?.agentId && pickable.some((a) => a.id === from.agentId && a.available)
@@ -246,6 +248,7 @@ export function LoopForm({
 	);
 	const [yolo, setYolo] = useState(editing?.yolo ?? false);
 	const autoSupported = boxSupports("loopAutoMode", boxProtocol);
+	const effortSupported = boxSupports("agentEffort", boxProtocol);
 	const [pickerOpen, setPickerOpen] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -270,6 +273,7 @@ export function LoopForm({
 				agentId,
 				followUp: followUp.trim(),
 				...(autoSupported ? { yolo } : {}),
+				...(effortSupported && (editing || effort) ? { effort } : {}),
 			};
 			const intervalMs = Number(everyMin) * 60_000;
 			const loops = editing
@@ -357,6 +361,16 @@ export function LoopForm({
 								</View>
 							</Pressable>
 						</Modal>
+						{effortSupported && (
+							<EffortPicker
+								api={api}
+								projectId={editing?.projectId ?? projectId}
+								agentId={agentId}
+								loopId={editing?.id}
+								value={effort}
+								onChange={setEffort}
+							/>
+						)}
 						{autoSupported ? (
 							<>
 								<Text style={styles.label}>MODE</Text>
