@@ -52,6 +52,7 @@ all. That's what the pages here record.
 | [boxd](boxd.md) | persistent KVM microVMs, driven by their CLI | ✅ via boxd's SSH proxy | ✅ Set up phone access, or `--tailscale` ([how](boxd.md#ios)) | ✅ and the phone wakes it ([how](boxd.md#sleep-and-wake)) |
 | [Sprites](sprites.md) | persistent hardware-isolated microVMs on Fly.io | ✅ via sshd and `sprite proxy` | ✅ Set up phone access, or `--tailscale` ([how](sprites.md#ios)) | ✅ and the phone wakes it; a loop keeps it awake ([how](sprites.md#sleeping)) |
 | [exe.dev](exe-dev.md) | persistent VMs sharing a flat-priced CPU/RAM pool | ✅ over exe.dev's SSH proxy | ✅ Set up phone access, or `--tailscale` ([how](exe-dev.md#ios)) | no: always on, billed flat |
+| [Ubicloud](https://www.ubicloud.com/use-cases/ubicloud-compute) | VPS provisioned in the Ubicloud console | ✅ over SSH | WebSocket pairing verified over SSH. iPhone over Tailscale untested. | no: stopped VMs still bill |
 
 Any other VPS (EC2, a home server, …) works the same way as Hetzner without a page
 of its own — see [`../online-ateam.md`](../online-ateam.md), the reference
