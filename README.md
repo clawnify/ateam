@@ -105,6 +105,18 @@ below — via a **box provider** like [boxd](https://boxd.sh), or your own VPS.
   <img src="./assets/screenshot-create-box.png" alt="Ateam — the Create a box dialog provisioning a Hetzner Cloud VPS: generating the SSH key, creating the server, joining Tailscale, and installing the engine, with the installer log streaming below" width="620" />
 </p>
 
+### Box providers
+
+Our Ateam fit ratings weigh setup, always-on cost, and verified desktop and phone access. Five stars is the easiest overall fit, four is a strong fit with a trade-off, and three means more setup or a meaningful verification gap.
+
+| Provider | Pros | Cons | Tailscale support | Overall | Links |
+| --- | --- | --- | --- | --- | --- |
+| <img src="./assets/providers/hetzner.svg" alt="" width="24" height="24" /> **Hetzner** | Create a box in Ateam on desktop or iPhone. Always-on VPS. | Powered-off servers still bill. | Verified. Ateam can join the box during setup. | ★★★★★ | [Setup](docs/providers/hetzner.md) · [Hetzner Cloud](https://www.hetzner.com/cloud) |
+| <img src="https://exe.dev/apple-touch-icon.png" alt="" width="24" height="24" /> **exe.dev** | Always-on VMs share a flat monthly plan. | Concurrent VMs share the same CPU and RAM pool. | Verified on the box. Tailscale is preinstalled. | ★★★★☆ | [Setup](docs/providers/exe-dev.md) · [Pricing](https://www.exe.dev/pricing) |
+| <img src="./assets/boxd.png" alt="boxd" width="54" /> | SSH wakes a hibernated VM. Hibernation preserves sessions and bills disk only. | Waking a sleeping box from Ateam Go requires a boxd API key. | Verified with Ateam’s installer. | ★★★★☆ | [Setup](docs/providers/boxd.md) · [boxd](https://boxd.sh) |
+| <img src="./assets/providers/sprites.svg" alt="" width="24" height="24" /> **Sprites** | Persistent disk and usage-based compute. | SSH needs a proxy. A stopped Sprite loses live processes. | Verified as a Sprite service. Waking from Ateam Go requires a Sprites token. | ★★★☆☆ | [Setup](docs/providers/sprites.md) · [Sprites](https://sprites.dev) |
+| <img src="https://cdn.prod.website-files.com/64f9d9b4e737e7b37d4e39a4/64fe41a59732cbbaa5762828_Webclip.png" alt="" width="24" height="24" /> **Ubicloud** | Standard SSH. Ateam and its worktrees came back after a VM reboot. | Manual provisioning. Public IPv4 costs extra, and stopped VMs still bill. | TUN available. Tailnet enrollment and iPhone access untested. | ★★★☆☆ | [SSH setup](docs/online-ateam.md#0-preparing-a-freshly-bought-vps) · [Ubicloud Compute](https://www.ubicloud.com/use-cases/ubicloud-compute) |
+
 <details>
 <summary><b>Start to finish on a fresh Hetzner box</b></summary>
 
