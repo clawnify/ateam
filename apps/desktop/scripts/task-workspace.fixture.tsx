@@ -1,4 +1,10 @@
-import type { AteamApi, SessionDTO, TaskDTO, TaskPageDTO } from "@ateam/protocol";
+import {
+	type AteamApi,
+	BROWSER_NOT_INSTALLED_ERROR,
+	type SessionDTO,
+	type TaskDTO,
+	type TaskPageDTO,
+} from "@ateam/protocol";
 import { useCallback, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { TaskPanel } from "../src/renderer/src/App";
@@ -25,6 +31,8 @@ let kills = 0;
 let errors: unknown[] = [];
 let changeTask: (task: TaskDTO) => void;
 let changeMode: (mode: "side" | "full") => void;
+let nextBrowserView: (() => Promise<{ url: string }>) | undefined;
+let installPrompts = 0;
 
 window.ateam = {
 	pty: {
@@ -62,6 +70,13 @@ window.ateam = {
 	git: { diff: async () => ({ files: [], additions: 0, deletions: 0 }), status: async () => ({}) },
 	settings: { get: async () => ({ settings: { client: { pinnedSkills: [] } } }) },
 	skills: { list: async () => [] },
+	browser: {
+		view: async (id: string) => {
+			const next = nextBrowserView;
+			nextBrowserView = undefined;
+			return next?.() ?? { url: `about:blank#${id}` };
+		},
+	},
 	utils: {},
 } as unknown as AteamApi;
 
@@ -85,7 +100,7 @@ function Harness() {
 				task={task}
 				agents={[]}
 				envAgents={{}}
-				alias={null}
+				alias="test-box"
 				onInstallAgent={async () => ({})}
 				onOpenProposal={() => {}}
 				onWait={() => {}}
@@ -95,7 +110,10 @@ function Harness() {
 				setTerminal={setTerminal}
 				run={run}
 				ask={async () => null}
-				confirm={async () => false}
+				confirm={async () => {
+					installPrompts++;
+					return false;
+				}}
 				onDelete={() => {}}
 				onClose={() => {}}
 			/>
@@ -108,6 +126,12 @@ const tab = (title: string) =>
 	[...document.querySelectorAll<HTMLButtonElement>(".sess-tab-name")].find(
 		(b) => b.textContent === title,
 	);
+const clickButton = (label: string) => {
+	const button = document.querySelector<HTMLButtonElement>(`[aria-label="${CSS.escape(label)}"]`);
+	if (!button) throw new Error(`Missing button: ${label}`);
+	button.click();
+};
+const browser = () => document.querySelector<HTMLIFrameElement>('iframe[title="Browser"]');
 const terminal = (id: string) => document.querySelector<HTMLElement>(`[data-terminal-id="${id}"]`);
 const input = (id: string) => terminal(id)?.querySelector<HTMLTextAreaElement>("textarea");
 const focused = () =>
@@ -216,6 +240,67 @@ Object.assign(window, {
 				hidden.every((entry: [string, boolean]) => entry[1] === false),
 			"hiding more than 200 docs preserves every hidden-tab choice",
 		);
+
+		clickButton('Open the browser on "test-box"');
+		await pause();
+		check(
+			browser()?.src === "about:blank#task" && document.querySelector(".panel-body.docked-term"),
+			"the box browser opens beside the terminal",
+		);
+		changeTask({ ...initial, id: "other", page: null });
+		await pause();
+		check(!browser(), "the browser stays closed on a task that never opened it");
+		changeTask({ ...initial, page: null });
+		await pause();
+		check(
+			browser()?.src === "about:blank#task" && document.querySelector(".panel-body.docked-term"),
+			"the browser split returns when revisiting its task",
+		);
+		changeMode("side");
+		await pause();
+		check(browser()?.src === "about:blank#task", "the browser survives a panel remount");
+		clickButton("Back to terminal");
+		changeTask({ ...initial, id: "other", page: null });
+		await pause();
+		changeTask({ ...initial, page: null });
+		await pause();
+		check(!browser(), "an explicitly closed browser stays closed on return");
+
+		let finishOldView!: (view: { url: string }) => void;
+		nextBrowserView = () =>
+			new Promise((resolve) => {
+				finishOldView = resolve;
+			});
+		clickButton('Open the browser on "test-box"');
+		await pause();
+		changeTask({ ...initial, id: "other", page: null });
+		await pause();
+		changeTask({ ...initial, page: null });
+		await pause();
+		finishOldView({ url: "about:blank#stale" });
+		await pause();
+		check(
+			browser()?.src === "about:blank#task",
+			"a browser request from an earlier visit cannot replace the current view",
+		);
+		changeTask({ ...initial, id: "other", page: null });
+		await pause();
+		nextBrowserView = async () => {
+			throw new Error(BROWSER_NOT_INSTALLED_ERROR);
+		};
+		changeTask({ ...initial, page: null });
+		await pause();
+		check(
+			!browser() &&
+				installPrompts === 0 &&
+				String(errors.pop()).includes(BROWSER_NOT_INSTALLED_ERROR),
+			"a failed automatic restore returns to the terminal without offering installation",
+		);
+		changeTask({ ...initial, id: "other", page: null });
+		await pause();
+		changeTask({ ...initial, page: null });
+		await pause();
+		check(browser()?.src === "about:blank#task", "a failed restore keeps the next visit's choice");
 		check(errors.length === 0, `no handler errors: ${errors.map(String).join(", ")}`);
 		return `${checks.length} task workspace checks passed\n${checks.join("\n")}`;
 	},
