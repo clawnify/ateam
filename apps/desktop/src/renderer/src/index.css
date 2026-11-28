@@ -509,17 +509,14 @@ input {
 .tasks-head {
 	margin-top: 4px;
 }
-/* icon | name and tags | git glyph or menu | status. The row button spans it
-   as a subgrid, so the menu (the button's sibling, since a button can't hold
-   another) lands in the same column as the glyph inside the button. An empty
-   column takes no room: the gaps are the items' own margins, not grid gaps,
-   so a row with no glyph puts its status right at the edge. */
+/* Task mark | subtitle or loop title | environment and PR | status | menu. */
 .tasknode-row {
 	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) auto auto;
+	grid-template-columns: auto minmax(0, 1fr) auto auto auto;
 	align-items: center;
 }
 .tasknode {
+	position: relative;
 	grid-column: 1 / -1;
 	grid-row: 1;
 	display: grid;
@@ -536,59 +533,72 @@ input {
 	border-left: 2px solid transparent;
 	border-radius: 0;
 }
+.tasknode.two-line {
+	--metadata-row: 2;
+	grid-template-rows: auto 18px;
+	row-gap: 3px;
+}
 .tasknode > .ticon {
 	grid-column: 1;
+	grid-row: var(--metadata-row, 1);
 	margin-right: 7px;
 }
-.tasknode > .tmain,
 .tasknode > .tname {
 	grid-column: 2;
 }
-.tasknode > .tstate,
-.row-menu {
-	grid-column: 3;
+.tasknode.two-line > .tname {
 	grid-row: 1;
-	justify-self: center;
+	grid-column: 1 / -1;
+	/* The title keeps its width when the actions appear beside both lines. */
+	margin-inline-end: calc(1.25rem + 5px);
+}
+.row-icons {
+	grid-column: 3;
+	grid-row: 2;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
 	margin-left: 7px;
+	color: var(--text-dim);
+}
+.row-commits {
+	display: grid;
+	justify-items: center;
+	font: 700 11px/8px ui-monospace, monospace;
+	color: var(--green);
+}
+.row-commits > :last-child {
+	color: var(--red);
 }
 .tasknode > .pill {
 	grid-column: 4;
+	grid-row: var(--metadata-row, 1);
 	margin-left: 7px;
+	margin-block: -2px;
 }
-/* The glyph and the menu swap in place: glyph at rest, menu on hover, while
-   it has focus, and while its dropdown is open (it anchors the dropdown). At
-   rest the menu is zero-width rather than gone, so it takes no room yet stays
-   focusable: display: none would drop the focus Tab hands it, because nothing
-   in the row is focused while focus is in flight. A keyboard-focused row shows
-   it too; a clicked row also keeps focus, hence :focus-visible, or its glyph
-   would stay hidden. */
+/* Reveal the menu in its own column. At rest it takes no space and Tab can reach it. */
 .row-menu {
+	grid-column: 5;
+	grid-row: 1;
+	justify-self: end;
 	width: 0;
-	margin-left: 0;
 	overflow: hidden;
-	/* A dimmed row (paused loop, offline task) has opacity, which lifts its row
-	   button into the positioned paint layer, over this in-flow sibling: the
-	   menu showed but every click hit the row. Positioned, it paints in that
-	   same layer after the button, so it stays on top. */
 	position: relative;
 }
 .tasknode-row:is(:hover, :has(> .tasknode:focus-visible, > .row-menu :focus, [data-state="open"]))
 	> .row-menu {
 	width: auto;
-	margin-left: 7px;
+	margin: 0 6px 0 5px;
 	overflow: visible;
-}
-.tasknode-row:is(:hover, :has(> .tasknode:focus-visible, > .row-menu :focus, [data-state="open"]))
-	.tstate {
-	opacity: 0;
 }
 /* The whole row stays lit while the pointer is on its menu. */
 .tasknode:hover,
-.tasknode-row:hover > .tasknode {
-	background: var(--bg-elev-2);
+.tasknode-row:hover > .tasknode,
+.tasknode.selected {
+	--row-bg: var(--bg-elev-2);
+	background: var(--row-bg);
 }
 .tasknode.selected {
-	background: var(--bg-elev-2);
 	border-left: 2px solid var(--primary);
 }
 .tasknode .ticon {
@@ -601,11 +611,16 @@ input {
 	align-items: center;
 	gap: 4px;
 }
-/* Takes the room the pills leave (basis 0), down to a floor that keeps its first
-   letters on screen while the hover's tags squeeze it. */
+.tasknode > .glyphs {
+	gap: 0;
+}
+.tasknode > .glyphs > svg + svg {
+	margin-inline-start: -4px;
+	border-radius: 3px;
+	background: var(--row-bg, var(--bg-elev));
+}
 .tasknode .tname {
-	flex: 1;
-	min-width: 2em;
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -970,21 +985,6 @@ input {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-/* Tags surface on hover inside the name's line, squeezing the name (which
-   ellipsizes), so a resting card stays quiet and hovering never reflows the
-   board. Zero height because the chip is taller than the name's line box.
-   The right margin keeps them off the agent ring in the corner. */
-.card .card-tags {
-	display: none;
-	flex: none;
-	gap: 3px;
-	height: 0;
-	align-items: center;
-	margin-right: 14px;
-}
-.card:hover .card-tags {
-	display: flex;
-}
 /* The one pill: a short name in a border, filled with a faint tint of that
    same border colour. Neutral by default (task tags, "archived", a Backlog or
    Done status); a colour class sets --pill and the text follows it. */
@@ -1068,53 +1068,9 @@ input {
 	color: var(--text);
 	font-weight: 600;
 }
-/* Sidebar pills: the status always, in a fixed spot at the row's end; on hover
-   the tags join it on its left (same as the card's). Room goes to the pills
-   first, then the name. A pill is 17.5px against the name's 15px line box, so
-   each is pulled in by 2px top and bottom: it takes horizontal room but never
-   grows the row. */
-.tasknode > .pill {
-	margin-block: -2px;
-}
-/* The name and the hover's tags, as one wrapping line clipped to a pill's
-   height: a tag that doesn't fit wraps onto the hidden second line, so tags
-   show whole or not at all. Wrapping counts the name at its 2em floor, so as
-   many tags as fit join the first line, and the name then grows into whatever
-   they leave, which pushes them against the status. A tags box of its own
-   would claim the width of every tag, shown or not, and leave the name a stub
-   beside empty space. The negative margin gives the row back the name's own
-   line box, so the row is exactly as tall as without the clip. */
-.tasknode .tmain {
-	flex: 1;
-	min-width: 0;
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	column-gap: 3px;
-	height: 18px;
-	margin-block: calc((1lh - 18px) / 2);
-	overflow: hidden;
-}
-/* The first line is a pill tall even when it holds only the name, so the
-   second line starts exactly at the clip. */
-.tasknode .tmain .tname {
-	line-height: 18px;
-}
-.tasknode .tname + .row-tag {
-	margin-left: 4px;
-}
-/* A task on a box: the name has the first line to itself, and the box's name
-   starts the second, where the hover's tags join it while they fit. Local
-   tasks keep one line. */
-.tasknode .tmain.on-box {
-	height: 36px;
-	margin-block: 0;
-}
-.tasknode .tmain.on-box .tname {
-	flex-basis: 100%;
-}
-.tasknode .row-box {
-	flex: 0 1 auto;
+.tasknode .row-subtitle {
+	grid-column: 2;
+	grid-row: 2;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1123,9 +1079,7 @@ input {
 	line-height: 18px;
 	color: var(--text-dim);
 }
-.tasknode-row:not(:hover) .row-tag {
-	display: none;
-}
+
 .ring {
 	position: absolute;
 	top: 10px;

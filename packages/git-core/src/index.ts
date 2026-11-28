@@ -36,6 +36,7 @@ export type {
 } from "./sync";
 export {
 	commit,
+	hasBranchCommits,
 	push,
 	trackingStatus,
 	uncommittedCount,

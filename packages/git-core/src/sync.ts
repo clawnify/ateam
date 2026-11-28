@@ -1,4 +1,4 @@
-import { gitFor, safeRaw } from "./git-client";
+import { baseRef, gitFor, safeRaw } from "./git-client";
 
 export interface CommitInput {
 	worktreePath: string;
@@ -33,6 +33,22 @@ export async function push(input: PushInput): Promise<void> {
 	} catch {
 		// Fallback for remotes that reject --set-upstream re-runs.
 		await git.raw(["push", "origin", refspec]);
+	}
+}
+
+/** Whether HEAD has a commit outside the task's base, including work already pushed. */
+export async function hasBranchCommits(
+	worktreePath: string,
+	baseBranch: string,
+): Promise<boolean | undefined> {
+	const git = gitFor(worktreePath);
+	const base = await baseRef(git, baseBranch);
+	if (!base) return undefined;
+	try {
+		const sha = await git.raw(["rev-list", "-1", "HEAD", `^${base}`, "--"]);
+		return sha.trim() !== "";
+	} catch {
+		return undefined;
 	}
 }
 

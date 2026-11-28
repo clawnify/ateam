@@ -37,6 +37,7 @@ describe("computeGitStatus", () => {
 
 		// README: 2 lines in for 1 out. notes.txt: 3 new lines, untracked.
 		expect(status.dirty).toBe(2);
+		expect(status.hasBranchCommits).toBe(true);
 		expect(status.additions).toBe(5);
 		expect(status.deletions).toBe(1);
 		// Only notes.txt is uncommitted: README is in a commit.
@@ -53,6 +54,7 @@ describe("computeGitStatus", () => {
 		const status = await computeGitStatus(repo.work, "main");
 
 		expect(status.uncommitted).toBe(3);
+		expect(status.hasBranchCommits).toBe(false);
 	});
 
 	// What an agent's tools and screenshots leave behind is not the task's work,
@@ -118,6 +120,18 @@ describe("computeGitStatus", () => {
 		expect(status.dirty).toBe(1);
 		expect(status.uncommitted).toBe(0);
 		expect(status.ahead).toBe(0);
+	});
+
+	it("keeps the commit marker after push and clears it when the base contains HEAD", async () => {
+		await repo.git.checkoutLocalBranch("task");
+		await commitFile(repo.work, "change.txt", "change", "task change");
+		await repo.git.push(["-u", "origin", "task"]);
+		expect(await computeGitStatus(repo.work, "main")).toMatchObject({
+			ahead: 0,
+			hasBranchCommits: true,
+		});
+		await repo.git.push("origin", "HEAD:main");
+		expect((await computeGitStatus(repo.work, "main")).hasBranchCommits).toBe(false);
 	});
 
 	it("reads zero for a task with no work yet", async () => {

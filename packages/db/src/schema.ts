@@ -131,6 +131,8 @@ export interface QuestionChoice {
 }
 
 export interface GitStatusSnapshot {
+	/** HEAD has a commit outside the base branch. Absent on older snapshots or unknown bases. */
+	hasBranchCommits?: boolean;
 	ahead: number;
 	behind: number;
 	dirty: number;

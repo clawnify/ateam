@@ -18,9 +18,7 @@ export type PrKey = PrState | "none";
 
 export interface SidebarView {
 	grouping: TaskGrouping;
-	/** The grouping while the sidebar lists every project. It is its own, so
-	 *  All opens grouped by project and a pick there leaves one project's list
-	 *  as it was. The filters are shared. */
+	/** All projects remembers its own grouping. The filters are shared. */
 	allGrouping: TaskGrouping;
 	/** Unticked filter values. Stored as what is hidden rather than what is
 	 *  shown, so a value that appears later (a box added next week) shows. */
@@ -35,7 +33,7 @@ export interface SidebarView {
 
 export const DEFAULT_VIEW: SidebarView = {
 	grouping: "none",
-	allGrouping: "project",
+	allGrouping: "none",
 	hiddenStatus: [],
 	hiddenPr: [],
 	hiddenMachines: [],
@@ -77,8 +75,8 @@ export function parseView(raw: string | null): SidebarView {
 	const grouping = (g: unknown, fallback: TaskGrouping): TaskGrouping =>
 		GROUPINGS.includes(g as TaskGrouping) ? (g as TaskGrouping) : fallback;
 	return {
-		grouping: grouping(o.grouping, "none"),
-		allGrouping: grouping(o.allGrouping, "project"),
+		grouping: grouping(o.grouping, DEFAULT_VIEW.grouping),
+		allGrouping: grouping(o.allGrouping, DEFAULT_VIEW.allGrouping),
 		hiddenStatus: list(o.hiddenStatus).filter(
 			(s): s is KanbanColumn => typeof s === "string" && s in STATUS_RANK,
 		),

@@ -175,7 +175,7 @@ import {
 	unscopedView,
 } from "./sidebar-view";
 import { draggedTaskId, TASK_DRAG_MIME } from "./task-drag";
-import { matchesTagQuery, tagsFor, taskIcon } from "./task-tags";
+import { matchesTagQuery, taskIcon } from "./task-tags";
 import { byWhatsNext, relativeAge, waitingLabel, waitState } from "./triage-order";
 import { useBoxesNeedingYou } from "./useBoxesNeedingYou";
 import { useGithubIssues } from "./useGithubIssues";
@@ -426,6 +426,14 @@ export function App() {
 	// layout. Mission Control's 3x2 grid used to tuck it away for wider tiles;
 	// the sidebar vanishing on its own cost more than the extra columns gave.
 	const [rail, setRail] = useState(() => localStorage.getItem("ateam.sidebarRail") === "1");
+	const [sidebarNow, setSidebarNow] = useState(Date.now);
+	useEffect(() => {
+		if (allProjects || rail || tasksCollapsed) return;
+		const tick = () => setSidebarNow(Date.now());
+		tick();
+		const timer = window.setInterval(tick, 60_000);
+		return () => window.clearInterval(timer);
+	}, [allProjects, rail, tasksCollapsed]);
 	const toggleRail = () => {
 		setRail((r) => {
 			localStorage.setItem("ateam.sidebarRail", r ? "0" : "1");
@@ -2178,9 +2186,8 @@ export function App() {
 													<TaskRow
 														task={t}
 														machine={machineOf(t)}
-														// Local goes unnamed, as on the board's cards; grouped by
-														// machine, the group's header already names it.
-														showMachine={listView.grouping !== "machine"}
+														now={sidebarNow}
+														project={allProjects ? cardByProject.get(t.projectId) : undefined}
 														offline={offlineAliasOf(t) !== null}
 														selected={t.id === sidebarSelectedId}
 														pulse={t.id === pulseId}
@@ -3236,7 +3243,8 @@ function TaskMark({ task }: { task: TaskDTO }) {
 function TaskRow({
 	task: t,
 	machine,
-	showMachine,
+	now,
+	project,
 	offline,
 	selected,
 	pulse,
@@ -3246,8 +3254,9 @@ function TaskRow({
 	task: TaskDTO;
 	/** The machine it runs on (null: this Mac). The peek always names it. */
 	machine: Alias;
-	/** Name a box on the row itself. This Mac is never named there. */
-	showMachine: boolean;
+	now: number;
+	/** The owning project, shown when browsing All projects. */
+	project?: UnifiedProject;
 	/** Its box isn't held: the row is its last-seen state, not a live one. */
 	offline: boolean;
 	selected: boolean;
@@ -3256,45 +3265,52 @@ function TaskRow({
 	onClick: () => void;
 	onDelete: () => void;
 }) {
-	const tags = tagsFor(t);
 	const box = useBoxName()(machine);
-	const named = machine !== null && showMachine;
-	// The row is a grid (icon | name | git glyph | status) that the row button
-	// shares as a subgrid. The menu is the button's sibling, so its click can't
-	// nest inside the row button, and it sits in the glyph's column: glyph at
-	// rest, menu on hover, swapped in place just left of the status.
+	const MachineIcon = machine === null ? Monitor : Server;
+	const repo =
+		project?.githubOwner && project.githubName
+			? `${project.githubOwner}/${project.githubName}`
+			: project?.name;
+	const age = project ? null : relativeAge(t.lastEventAt, now);
+	const subtitle = repo ?? (age && age !== "just now" ? `${age} ago` : age);
 	return (
 		<div className="tasknode-row">
 			<TaskPeek
 				task={t}
-				machine={box}
+				machine={machine}
 				note={offline ? "Its box is asleep or out of reach. Open it to wake the box." : undefined}
 			>
 				<button
 					type="button"
-					className={`tasknode ${selected ? "selected" : ""} ${offline ? "offline" : ""} ${pulse ? "just-started" : ""}`}
+					className={`tasknode two-line ${selected ? "selected" : ""} ${offline ? "offline" : ""} ${pulse ? "just-started" : ""}`}
 					onClick={onClick}
 				>
+					<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
 					<TaskMark task={t} />
-					{/* The status stays put; on hover the tags slide in beside it, like
-				    the card's. They share one line with the name, so the name only
-				    gives up the room the tags that fit really take. */}
-					{/* A task on a box names it on a second line: beside the name, a box
-					    name left a 240px sidebar's titles a few letters long. */}
-					<span className={`tmain ${named ? "on-box" : ""}`}>
-						<span className={`tname ${t.isUnread ? "unread-row" : ""}`}>{t.name}</span>
-						{named && (
-							<span className="row-box" title={`Runs on ${box}`}>
-								{box}
+					{subtitle && (
+						<span
+							className="row-subtitle"
+							title={
+								repo ?? (t.lastEventAt != null ? new Date(t.lastEventAt).toLocaleString() : undefined)
+							}
+						>
+							{subtitle}
+						</span>
+					)}
+					<span className="row-icons">
+						<MachineIcon size={12} strokeWidth={1.75} role="img" aria-label={box} />
+						{t.gitStatus?.hasBranchCommits && (
+							<span
+								className="row-commits"
+								role="img"
+								aria-label="Branch has commits beyond its base"
+							>
+								<span>+</span>
+								<span>−</span>
 							</span>
 						)}
-						{tags.map((tag) => (
-							<span className="pill row-tag" key={tag}>
-								{tag}
-							</span>
-						))}
+						<TriageGlyph triage={t.triage} />
 					</span>
-					<TriageGlyph triage={t.triage} />
 					{/* Listed under the Archived filter: it says so in the status's spot. */}
 					{t.archivedAt != null ? (
 						<span className="pill" title="Archived. Opening it brings it back to the board.">
@@ -3305,13 +3321,11 @@ function TaskRow({
 					)}
 				</button>
 			</TaskPeek>
-			{/* Vertical, so it's narrow enough to swap in beside the status without
-			    moving it. Wait on someone lives in the open task's ··· menu. */}
-			<span className="row-menu">
+			<span className="row-menu flex self-stretch">
 				<Menu
 					label={`Actions for ${t.name}`}
 					icon={EllipsisVertical}
-					className="size-5 [&_svg:not([class*='size-'])]:size-3.5"
+					className="h-full w-5 [&_svg:not([class*='size-'])]:size-3.5"
 					items={[
 						{
 							label: "Delete task",
@@ -3429,7 +3443,6 @@ function Board({
 	/** Its box isn't held: the card is its last-seen state, not a live one. */
 	isOffline: (t: TaskDTO) => boolean;
 }) {
-	const boxNameOf = useBoxName();
 	// The side panel is sticky over the right edge of the board (the board keeps
 	// its full width rather than reflowing), so a selected card in a right-hand
 	// column sits underneath it. Scroll it clear: `.card.selected` reserves the
@@ -3485,11 +3498,10 @@ function Board({
 								</>
 							)}
 							{items.map((t) => {
-								const tags = tagsFor(t);
 								const glyphs = taskGlyphs(t);
 								const isSelected = t.id === selectedId;
 								return (
-									<TaskPeek task={t} machine={boxNameOf(machineOf(t))} key={t.id}>
+									<TaskPeek task={t} machine={machineOf(t)} key={t.id}>
 										<motion.div
 											layout
 											transition={springy}
@@ -3512,9 +3524,7 @@ function Board({
 												/>
 											)}
 											{/* No branch line: the branch is the name as a slug, so the card
-								    carries state instead and the branch lives in the open task.
-								    Tags show on hover inside the name's line, the sidebar row's
-								    treatment, so hovering never reflows the board. */}
+								    carries state instead and the branch lives in the open task. */}
 											<div className="name">
 												<span className="name-text">
 													{t.isUnread && (
@@ -3522,15 +3532,6 @@ function Board({
 													)}
 													{t.name}
 												</span>
-												{tags.length > 0 && (
-													<span className="card-tags">
-														{tags.map((tag) => (
-															<span className="pill" key={tag}>
-																{tag}
-															</span>
-														))}
-													</span>
-												)}
 											</div>
 											{originLabel(t) && (
 												<span className="card-env muted" style={{ fontSize: 10 }}>
