@@ -411,13 +411,17 @@ providers under your accounts. Agreeing is remembered; declining opens the offli
 instead, which connects to nothing.
 
 **More than one box.** Add the others in **Boxes** (tap the status dot, then **+**).
-The phone holds every box you've added at once, as the desktop does: **Projects** lists
-the projects of all of them, and the same GitHub repo on two boxes is one project, its
+The phone holds every box you've added at once, as the desktop does: the project dropdown
+lists the projects of all of them, and the same GitHub repo on two boxes is one project, its
 tasks marked with the box they run on. In a project that's on more than one box,
 **Run on** under the composer's field picks where a new task starts. The phone never
 wakes a box on its own: a box that's asleep keeps its projects and tasks on the board,
 as the phone last saw them, dimmed and marked *asleep* (or *offline* when it doesn't
 answer), until you tap its card, open one of its tasks or start a task there.
+
+The phone remembers the agent, Auto mode, and **Run on** choices for your next task,
+even after you close the app. On a box that lacks your preferred agent, it uses an
+installed agent and keeps your preference for boxes that have it.
 
 **What still needs a computer.** Everything above — don't try to defer it. The phone
 has nothing to connect to until a daemon is listening, and it cannot install that
@@ -448,9 +452,9 @@ tapping the output never hides the keyboard (the chevron key at the end of the
 shortcut bar does), and a long press selects text for Copy without bringing the
 keyboard up.
 
-The phone opens on **Home**, the desktop sidebar as a list: your projects (a dropdown
-at the top of the desktop sidebar), then the selected project's tasks in status order,
-then its loops. The pill in the navbar
+The phone opens on **Home**, the desktop sidebar as a list: the project dropdown at the
+top, as in the desktop sidebar (**Add project…** is its last row), then the selected
+project's tasks in status order, then its loops. The pill in the navbar
 switches to **Board** (the kanban), **Mission Control** (two live terminals per
 page, paged with the control at the bottom right; tap a tile to highlight it and
 drive it from the shortcut bar, or expand it to type), and **Loops** (create, edit,

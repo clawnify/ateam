@@ -11,15 +11,15 @@ import {
 	parseView,
 	passesFilters,
 	type SidebarView,
-	spliceOrder,
 	STATUS_RANK,
+	spliceOrder,
 	type TaskDTO,
 	type TaskSortMode,
 	toggled,
 } from "@ateam/protocol";
 import Feather from "@expo/vector-icons/Feather";
-import { useEffect, useMemo, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Alert,
@@ -30,9 +30,10 @@ import {
 	View,
 } from "react-native";
 import { AgentIcon } from "./AgentIcon";
-import type { ScrollFadeProps } from "./scroll-fade";
+import { ProjectSwitcher } from "./ProjectSwitcher";
 import { SIDEBAR_STATUSES, SidebarViewMenu } from "./SidebarViewMenu";
 import { type SwipeAction, SwipeActions, swipeAccessibility } from "./SwipeActions";
+import type { ScrollFadeProps } from "./scroll-fade";
 import { taskSwipeActions } from "./task-actions";
 import { tagsFor, taskIconName } from "./task-tags";
 import { C, CONTENT_MAX } from "./theme";
@@ -279,7 +280,6 @@ export function HomeScreen({
 		order: [],
 	});
 	const { view, sort } = prefs;
-	const [projectsOpen, setProjectsOpen] = useState(true);
 	const [tasksOpen, setTasksOpen] = useState(true);
 	const [loopsOpen, setLoopsOpen] = useState(true);
 	const [archived, setArchived] = useState<TaskDTO[]>([]);
@@ -448,76 +448,62 @@ export function HomeScreen({
 			}}
 		>
 			<View style={styles.column}>
-				<View style={[styles.sectionHead, rail && styles.railSectionHead]}>
-					{!rail && (
-						<Pressable
-							style={[styles.sectionToggle, sidebar && styles.sidebarHit]}
-							onPress={() => setProjectsOpen((o) => !o)}
-							accessibilityRole="button"
-							accessibilityLabel="Projects"
-							accessibilityState={{ expanded: projectsOpen }}
-						>
-							<Feather
-								name={projectsOpen ? "chevron-down" : "chevron-right"}
-								size={14}
-								color={C.muted}
-							/>
-							<Text style={styles.sectionTitle}>Projects</Text>
-						</Pressable>
-					)}
-					<Pressable
-						style={[styles.sortBtn, sidebar && styles.sidebarHit]}
-						onPress={onAddProject}
-						hitSlop={6}
-						accessibilityLabel="Add project"
-						accessibilityRole="button"
-					>
-						<Feather name="folder-plus" size={16} color={C.muted} />
-					</Pressable>
-				</View>
-				{(rail || projectsOpen) &&
-					(projects.length === 0
-						? !rail && <Text style={styles.emptyText}>No projects yet</Text>
-						: projects.map((p) => {
-								const active = p.key === selectedKey;
-								return (
-									<Pressable
-										key={p.key}
-										style={[
-											styles.row,
-											sidebar && styles.sidebarRow,
-											rail && styles.railRow,
-											active && styles.rowActive,
-										]}
-										onPress={() => onSelectProject(p.key)}
-										accessibilityLabel={
-											rail ? [p.name, p.on].filter(Boolean).join(", ") : undefined
-										}
-										accessibilityRole="button"
-										accessibilityState={{ selected: active }}
-									>
-										<View style={styles.icon}>
-											{rail ? (
-												<Text style={styles.railInitial}>{p.name.charAt(0).toUpperCase()}</Text>
-											) : (
-												<View style={[styles.projDot, active && styles.projDotActive]} />
-											)}
-										</View>
-										{!rail && (
-											<Text style={[styles.name, active && styles.nameActive]} numberOfLines={1}>
-												{p.name}
-											</Text>
-										)}
-										{!rail && p.on ? (
-											<Text style={styles.box} numberOfLines={1}>
-												{p.on}
-											</Text>
-										) : null}
-									</Pressable>
-								);
-							}))}
+				{/* Projects: tiles on the rail, a switcher on the phone's Home. The
+				    expanded sidebar has its switcher in its header (App.tsx). */}
+				{rail ? (
+					<>
+						<View style={[styles.sectionHead, styles.railSectionHead]}>
+							<Pressable
+								style={[styles.sortBtn, styles.sidebarHit]}
+								onPress={onAddProject}
+								hitSlop={6}
+								accessibilityLabel="Add project"
+								accessibilityRole="button"
+							>
+								<Feather name="folder-plus" size={16} color={C.muted} />
+							</Pressable>
+						</View>
+						{projects.map((p) => {
+							const active = p.key === selectedKey;
+							return (
+								<Pressable
+									key={p.key}
+									style={[
+										styles.row,
+										styles.sidebarRow,
+										styles.railRow,
+										active && styles.rowActive,
+									]}
+									onPress={() => onSelectProject(p.key)}
+									accessibilityLabel={[p.name, p.on].filter(Boolean).join(", ")}
+									accessibilityRole="button"
+									accessibilityState={{ selected: active }}
+								>
+									<View style={styles.icon}>
+										<Text style={styles.railInitial}>{p.name.charAt(0).toUpperCase()}</Text>
+									</View>
+								</Pressable>
+							);
+						})}
+					</>
+				) : (
+					!sidebar && (
+						<ProjectSwitcher
+							projects={projects}
+							selectedKey={selectedKey}
+							onSelect={onSelectProject}
+							onAdd={onAddProject}
+						/>
+					)
+				)}
 
-				<View style={[styles.sectionHead, styles.sectionHeadLower, rail && styles.railSectionHead]}>
+				<View
+					style={[
+						styles.sectionHead,
+						rail && styles.sectionHeadLower,
+						rail && styles.railSectionHead,
+					]}
+				>
 					{!rail && (
 						<Pressable
 							style={[styles.sectionToggle, sidebar && styles.sidebarHit]}
@@ -748,9 +734,6 @@ const styles = StyleSheet.create({
 		borderTopWidth: StyleSheet.hairlineWidth,
 		borderTopColor: C.line,
 	},
-	projDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.line },
-	projDotActive: { backgroundColor: C.ink },
-	nameActive: { fontWeight: "700" },
 	icon: { width: 20, alignItems: "center" },
 	name: { flex: 1, color: C.ink, fontSize: 15 },
 	nameUnread: { fontWeight: "700" },

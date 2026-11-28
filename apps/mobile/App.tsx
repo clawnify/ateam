@@ -112,6 +112,7 @@ import { createLinks, type LinkDeps, type Waker } from "./src/links";
 import { MissionScreen, type MissionViewState } from "./src/MissionScreen";
 import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
+import { ProjectSwitcher } from "./src/ProjectSwitcher";
 import { type ProposalItem, ProposalSheet } from "./src/ProposalSheet";
 import { ProviderIcon } from "./src/ProviderIcon";
 import { pairTarget, parsePairLinks } from "./src/pair-link";
@@ -136,6 +137,7 @@ import {
 	loadRunOn,
 	loadSelectedProject,
 	loadSidebarCollapsed,
+	loadTaskPreferences,
 	removeBoard,
 	type SavedConnection,
 	saveBoard,
@@ -150,12 +152,15 @@ import {
 	saveRunOn,
 	saveSelectedProject,
 	saveSidebarCollapsed,
+	saveTaskAgent,
+	saveTaskAuto,
 } from "./src/storage";
 import { type Tab, TabStrip } from "./src/TabStrip";
 import { TerminalScreen } from "./src/TerminalScreen";
 import { STATUS_BAR, TopFade } from "./src/TopFade";
 import { taskSwipeActions } from "./src/task-actions";
 import { sortTasks } from "./src/task-order";
+import { type TaskPreferences, taskAgentOnBox } from "./src/task-preferences";
 import { useBoxCreation } from "./src/useBoxCreation";
 import { useLeadBadge } from "./src/useLeadBadge";
 import { onReminderTap, syncReminders } from "./src/wait-notifications";
@@ -837,6 +842,7 @@ function Shell({
 	selectedKey,
 	onSelectProject,
 	agents,
+	taskPreferences,
 	tasks,
 	shown,
 	placeOf,
@@ -893,6 +899,7 @@ function Shell({
 	onSelectProject: (key: string) => void;
 	/** The agents on the box a new task would run on. */
 	agents: AgentDTO[];
+	taskPreferences: TaskPreferences;
 	/** Every task on every box. */
 	tasks: TaskDTO[];
 	/** The sidebar's + beside Tasks: the composer is asked to take the keyboard. */
@@ -979,6 +986,10 @@ function Shell({
 		onCloseBoxTerminal();
 		onLead(false);
 	};
+	const selectSidebarProject = (key: string) => {
+		leaveDetail();
+		onSelectProject(key);
+	};
 	const [sidebarOrder, setSidebarOrder] = useState<string[]>([]);
 	// The Board card swiped open, if any: one at a time.
 	const [swipedCard, setSwipedCard] = useState<string | null>(null);
@@ -1035,6 +1046,16 @@ function Shell({
 						testID="project-task-sidebar"
 					>
 						<View style={[styles.sidebarHeader, sidebarCollapsed && styles.sidebarHeaderRail]}>
+							{/* Collapsed, the rail lists the projects as tiles instead. */}
+							{sidebar && (
+								<ProjectSwitcher
+									style={styles.sidebarSwitcher}
+									projects={projects}
+									selectedKey={selectedKey}
+									onSelect={selectSidebarProject}
+									onAdd={onAddProject}
+								/>
+							)}
 							<Pressable
 								style={styles.sidebarToggle}
 								onPress={onToggleSidebar}
@@ -1053,10 +1074,7 @@ function Shell({
 							rail={sidebarCollapsed}
 							projects={projects}
 							selectedKey={selectedKey}
-							onSelectProject={(key) => {
-								leaveDetail();
-								onSelectProject(key);
-							}}
+							onSelectProject={selectSidebarProject}
 							placeOf={placeOf}
 							onAddProject={onAddProject}
 							tasks={shown}
@@ -1383,6 +1401,7 @@ function Shell({
 
 					{showTab && (contentTab === "board" || contentTab === "home") && (
 						<Composer
+							preferences={taskPreferences}
 							agents={agents}
 							api={api}
 							effortProjectId={effortProjectId}
@@ -1565,6 +1584,20 @@ export default function App() {
 	// task runs on when its project is on several (the composer's Run on).
 	const [leadPicked, setLeadPicked] = useState<string | null>(null);
 	const [runOnPicked, setRunOnPicked] = useState<string | null>(null);
+	const [taskAgent, setTaskAgent] = useState<string | null>(null);
+	const [taskAuto, setTaskAuto] = useState<boolean | null>(null);
+	const taskPreferences: TaskPreferences = {
+		agentId: taskAgent,
+		auto: taskAuto ?? false,
+		pickAgent: (id) => {
+			setTaskAgent(id);
+			void saveTaskAgent(id);
+		},
+		setAuto: (on) => {
+			setTaskAuto(on);
+			void saveTaskAuto(on);
+		},
+	};
 	const [previewOpen, setPreviewOpen] = useState(false);
 	const [previewKey, setPreviewKey] = useState<string | null>(null);
 	const [sshPreview, setSSHPreview] = useState<{ key: string; port: number } | null>(null);
@@ -2572,16 +2605,25 @@ export default function App() {
 	// biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on mount
 	useEffect(() => {
 		booted.current = (async () => {
-			const [savedBoxes, savedProject, savedPreviewPort, agreed, leadBox, runOnBox, collapsed] =
-				await Promise.all([
-					loadBoxes(),
-					loadSelectedProject(),
-					loadPreviewPort(),
-					loadConsent(),
-					loadLeadBox(),
-					loadRunOn(),
-					loadSidebarCollapsed(),
-				]);
+			const [
+				savedBoxes,
+				savedProject,
+				savedPreviewPort,
+				agreed,
+				leadBox,
+				runOnBox,
+				collapsed,
+				taskPrefs,
+			] = await Promise.all([
+				loadBoxes(),
+				loadSelectedProject(),
+				loadPreviewPort(),
+				loadConsent(),
+				loadLeadBox(),
+				loadRunOn(),
+				loadSidebarCollapsed(),
+				loadTaskPreferences(),
+			]);
 			boxesRef.current = savedBoxes;
 			setBoxes(savedBoxes);
 			// Read in the same batch as the boxes, so the reach below can't race ahead
@@ -2591,6 +2633,8 @@ export default function App() {
 			if (savedPreviewPort) setPreviewPort(savedPreviewPort);
 			setLeadPicked(leadBox);
 			setRunOnPicked(runOnBox);
+			setTaskAgent((picked) => picked ?? taskPrefs.agentId);
+			setTaskAuto((picked) => picked ?? taskPrefs.auto);
 			setSidebarCollapsed((current) => current ?? collapsed);
 			if (savedBoxes.length === 0) return;
 			const boards = await loadBoards(savedBoxes.map(boxKey));
@@ -2742,7 +2786,8 @@ export default function App() {
 				// A socket the phone still holds can be dead already (its tunnel dropped
 				// with no close event): the task would be sent into it and lost. So the
 				// box is asked first, and reached again below if it doesn't answer.
-				if (key && link.conn(key)) await link.verify(key);
+				const before = key ? link.conn(key) : null;
+				if (key && before) await link.verify(key);
 				if (key && !link.conn(key)) {
 					const box = boxByKey(key);
 					if (!box || !(await link.connect(box, { wake: true }))) {
@@ -2750,22 +2795,28 @@ export default function App() {
 						throw new Error(`Couldn't reach ${labelOf(key)}. Its card in Boxes says why.`);
 					}
 				}
+				// The pick may predate the agent catalog, especially when this tap woke the box.
+				const conn = key ? link.conn(key) : null;
+				const agentId =
+					key && conn && (conn !== before || !agentsByBox[key]?.length)
+						? taskAgentOnBox(input.agentId, conn.info.agents)
+						: input.agentId;
 				// Agent mode supplies an explicit name; normal mode derives it from the prompt.
 				const name = input.name?.trim() || titleFromPrompt(input.prompt) || "task";
 				const task = await board.tasks.create({
 					projectId: member.projectId,
 					name,
-					agentId: input.agentId,
+					agentId,
 					// The engine may replace a name nobody typed with a model title, once.
 					nameAuto: !input.name?.trim(),
 				});
 				created = task;
 				// Attached on the phone: put on the task's box, where its agent reads them.
-				const boxApi = key ? link.conn(key)?.api : undefined;
+				const boxApi = conn?.api;
 				const files = input.files.length && boxApi ? await filesToBox(boxApi, input.files) : [];
 				const started = await board.pty.spawnAgent({
 					taskId: task.id,
-					agentId: input.agentId,
+					agentId,
 					effort: input.effort,
 					yolo: input.yolo,
 					agentMode: input.agentMode,
@@ -2795,7 +2846,7 @@ export default function App() {
 				setCreating(false);
 			}
 		},
-		[runOnMember, board, boxByKey, link, labelOf],
+		[runOnMember, board, boxByKey, link, labelOf, agentsByBox],
 	);
 
 	// The Lead: the picked box's own Lead (each box runs one, seeing its tasks only).
@@ -3143,6 +3194,7 @@ export default function App() {
 	return (
 		<>
 			<Shell
+				taskPreferences={taskPreferences}
 				sidebarCollapsed={sidebarCollapsed === true}
 				onToggleSidebar={() => {
 					const next = !sidebarCollapsed;
@@ -3310,21 +3362,26 @@ export default function App() {
 			/>
 			{proposalSheet && leadConn && (
 				<ProposalSheet
+					preferences={taskPreferences}
 					item={proposalSheet}
 					api={board}
 					agents={(leadKey ? agentsByBox[leadKey] : undefined) ?? []}
 					onClose={() => setProposalSheet(null)}
 					onStart={async (input) => {
 						const c = leadConn;
+						const agentId =
+							leadKey && agentsByBox[leadKey]?.length
+								? input.agentId
+								: taskAgentOnBox(input.agentId, c.info.agents);
 						// The proposal is the Lead box's, and so is its project: the board routes there.
 						const task = await board.tasks.create({
 							projectId: input.projectId,
 							name: input.name,
-							agentId: input.agentId,
+							agentId,
 						});
 						const started = await board.pty.spawnAgent({
 							taskId: task.id,
-							agentId: input.agentId,
+							agentId,
 							effort: input.effort,
 							yolo: input.yolo,
 							prompt: input.prompt,
@@ -3437,8 +3494,16 @@ const styles = StyleSheet.create({
 	},
 	sidebarToggle: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
 	sidebarRail: { width: SIDEBAR_RAIL_WIDTH },
-	sidebarHeader: { height: 44, paddingHorizontal: 6, alignItems: "flex-end" },
-	sidebarHeaderRail: { alignItems: "center" },
+	sidebarHeader: {
+		height: 44,
+		paddingHorizontal: 6,
+		flexDirection: "row",
+		alignItems: "center",
+		justifyContent: "flex-end",
+	},
+	sidebarHeaderRail: { justifyContent: "center" },
+	// Its name starts where the task rows' icons do.
+	sidebarSwitcher: { flex: 1, minWidth: 0, paddingHorizontal: 8 },
 	statusHit: { width: 44, alignItems: "flex-start", justifyContent: "center" },
 	statusDot: { width: 12, height: 12, borderRadius: 6 },
 	headerCenter: { flex: 1, alignItems: "center" },

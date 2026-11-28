@@ -32,7 +32,6 @@ import {
 	View,
 } from "react-native";
 import { AgentIcon } from "./AgentIcon";
-import { EffortPicker } from "./EffortPicker";
 import {
 	AttachmentStrip,
 	chooseAttachments,
@@ -40,8 +39,10 @@ import {
 	type PickedFile,
 	useLeadAuto,
 } from "./attach";
+import { EffortPicker } from "./EffortPicker";
 import { GLASS, GlassPill } from "./GlassPill";
 import { type ComposerTarget, loadComposerTarget, saveComposerTarget } from "./storage";
+import { type TaskPreferences, taskAgentOptions } from "./task-preferences";
 import { useKeyboardVisible } from "./useKeyboardVisible";
 
 // The last choice, read once from storage and then kept here, so a composer
@@ -95,6 +96,7 @@ export interface RunOn {
 
 export function Composer({
 	agents,
+	preferences,
 	api,
 	effortProjectId,
 	busy,
@@ -109,6 +111,7 @@ export function Composer({
 	newTaskSeq = 0,
 }: {
 	agents: AgentDTO[];
+	preferences: TaskPreferences;
 	api: AteamApi;
 	effortProjectId?: string;
 	busy: boolean;
@@ -130,32 +133,15 @@ export function Composer({
 	 *  the switch to Task and takes the keyboard. */
 	newTaskSeq?: number;
 }) {
-	// Prefer an installed agent; fall back to claude so the picker is never empty
-	// even when the box's availability probe came back empty (non-login daemon).
-	const pickable = agents.length
-		? agents
-		: [{ id: "claude", label: "Claude Code", available: true } as AgentDTO];
+	const { options: pickable, current } = taskAgentOptions(agents, preferences.agentId);
+	const agentId = current.id;
+	const yolo = preferences.auto;
 	// One field, two roles: the agent's first instruction (normal), or the task
 	// name (agent mode, which drives its own interactive board with no prompt).
 	const [text, setText] = useState("");
-	const [agentId, setAgentId] = useState(
-		pickable.find((a) => a.available)?.id ?? pickable[0]?.id ?? "claude",
-	);
-	const [yolo, setYolo] = useState(false);
 	const [effort, setEffort] = useState<Effort | null>(null);
 	const [agentMode, setAgentMode] = useState(false);
 	const [pickerOpen, setPickerOpen] = useState(false);
-	// The agent list arrives after the first render, and it is per-BOX: the
-	// default picked above can turn out to be one this box hasn't got. Drop to
-	// the first it can actually run (the desktop composer does the same when you
-	// switch environment). If it has none, leave the pick alone and let the
-	// launch say so.
-	useEffect(() => {
-		if (!agents.length || agents.some((a) => a.id === agentId && a.available)) return;
-		const first = agents.find((a) => a.available);
-		if (first) setAgentId(first.id);
-	}, [agents, agentId]);
-	const current = pickable.find((a) => a.id === agentId) ?? pickable[0];
 	const keyboardUp = useKeyboardVisible();
 	const [target, setTargetState] = useState<ComposerTarget>(lastTarget ?? "task");
 	useEffect(() => {
@@ -446,11 +432,15 @@ export function Composer({
 						{!toLead && (
 							<>
 								{/* Agent picker: show only the current agent; tap to open the popover. */}
-								<Pressable style={styles.chip} onPress={() => setPickerOpen(true)} hitSlop={4}>
-									<AgentIcon agentId={current?.id} size={14} />
-									<Text style={styles.chipTextOn}>
-										{current?.label.replace(/ Code$/, "") ?? "Agent"}
-									</Text>
+								<Pressable
+									style={styles.chip}
+									onPress={() => setPickerOpen(true)}
+									hitSlop={4}
+									accessibilityRole="button"
+									accessibilityLabel={`Agent, ${current.label}`}
+								>
+									<AgentIcon agentId={current.id} size={14} />
+									<Text style={styles.chipTextOn}>{current.label.replace(/ Code$/, "")}</Text>
 									{pickable.length > 1 ? <Text style={styles.caret}>▾</Text> : null}
 								</Pressable>
 								<Modal
@@ -467,7 +457,7 @@ export function Composer({
 													style={styles.popRow}
 													disabled={!a.available}
 													onPress={() => {
-														setAgentId(a.id);
+														preferences.pickAgent(a.id);
 														setPickerOpen(false);
 													}}
 												>
@@ -505,7 +495,10 @@ export function Composer({
 								{/* Auto mode (yolo) */}
 								<Pressable
 									style={[styles.mode, yolo && styles.modeAuto]}
-									onPress={() => setYolo((v) => !v)}
+									onPress={() => preferences.setAuto(!yolo)}
+									accessibilityRole="switch"
+									accessibilityLabel="Auto mode"
+									accessibilityState={{ checked: yolo }}
 									hitSlop={4}
 								>
 									<Text style={[styles.modeText, yolo && { color: C.amber }]}>auto</Text>

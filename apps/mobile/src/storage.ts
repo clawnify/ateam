@@ -176,6 +176,29 @@ export async function saveRunOn(box: string): Promise<void> {
 	}
 }
 
+const TASK_AGENT_KEY = "ateam.agent";
+const TASK_AUTO_KEY = "ateam.auto";
+
+export async function loadTaskPreferences() {
+	try {
+		const [agentId, auto] = await Promise.all([
+			AsyncStorage.getItem(TASK_AGENT_KEY),
+			AsyncStorage.getItem(TASK_AUTO_KEY),
+		]);
+		return { agentId, auto: auto === "1" };
+	} catch {
+		return { agentId: null, auto: false };
+	}
+}
+
+export function saveTaskAgent(id: string) {
+	return AsyncStorage.setItem(TASK_AGENT_KEY, id).catch(() => {});
+}
+
+export function saveTaskAuto(on: boolean) {
+	return AsyncStorage.setItem(TASK_AUTO_KEY, on ? "1" : "0").catch(() => {});
+}
+
 /** Remember the last-picked project so reopening the app lands on it, not project #1. */
 export async function loadSelectedProject(): Promise<string | null> {
 	try {
