@@ -18,6 +18,7 @@ import {
 } from "react-native";
 import { AgentIcon } from "./AgentIcon";
 import { EffortPicker } from "./EffortPicker";
+import { type TaskPreferences, taskAgentOptions } from "./task-preferences";
 import { C, CONTENT_MAX } from "./theme";
 
 export type ProposalItem = Extract<LeadItem, { kind: "proposal" }>;
@@ -37,26 +38,27 @@ export function ProposalSheet({
 	item,
 	api,
 	agents,
+	preferences,
 	onClose,
 	onStart,
 }: {
 	item: ProposalItem;
 	api: AteamApi;
 	agents: AgentDTO[];
+	preferences: TaskPreferences;
 	onClose: () => void;
 	/** Rejects with words for the user when the task can't be started. */
 	onStart: (input: ProposalStart) => Promise<void>;
 }) {
 	const p = item.proposal;
-	const pickable = agents.length
-		? agents
-		: [{ id: "claude", label: "Claude Code", available: true } as AgentDTO];
-	const first = pickable.find((a) => a.available)?.id ?? pickable[0]?.id ?? "claude";
 	const [name, setName] = useState(p.name);
 	const [prompt, setPrompt] = useState(p.prompt);
-	const [agentId, setAgentId] = useState(
-		p.agentId && pickable.some((a) => a.id === p.agentId && a.available) ? p.agentId : first,
+	const [pickedAgent, setPickedAgent] = useState(p.agentId);
+	const { options: pickable, current } = taskAgentOptions(
+		agents,
+		pickedAgent ?? preferences.agentId,
 	);
+	const agentId = current.id;
 	const [yolo, setYolo] = useState(false);
 	const [effort, setEffort] = useState<Effort | null>(null);
 	const [starting, setStarting] = useState(false);
@@ -123,7 +125,10 @@ export function ProposalSheet({
 									<Pressable
 										key={a.id}
 										style={[styles.agent, on && styles.agentOn, !a.available && styles.off]}
-										onPress={() => setAgentId(a.id)}
+										onPress={() => {
+											setPickedAgent(a.id);
+											preferences.pickAgent(a.id);
+										}}
 										disabled={!a.available}
 										accessibilityRole="radio"
 										accessibilityState={{ selected: on, disabled: !a.available }}
@@ -144,7 +149,10 @@ export function ProposalSheet({
 						<Text style={styles.label}>MODE</Text>
 						<Pressable
 							style={[styles.agent, styles.mode, yolo && styles.auto]}
-							onPress={() => setYolo((v) => !v)}
+							onPress={() => {
+								setYolo(!yolo);
+								preferences.setAuto(!yolo);
+							}}
 							accessibilityRole="switch"
 							accessibilityState={{ checked: yolo }}
 						>

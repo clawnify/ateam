@@ -419,6 +419,10 @@ wakes a box on its own: a box that's asleep keeps its projects and tasks on the 
 as the phone last saw them, dimmed and marked *asleep* (or *offline* when it doesn't
 answer), until you tap its card, open one of its tasks or start a task there.
 
+The phone remembers the agent, Auto mode, and **Run on** choices for your next task,
+even after you close the app. On a box that lacks your preferred agent, it uses an
+installed agent and keeps your preference for boxes that have it.
+
 **What still needs a computer.** Everything above — don't try to defer it. The phone
 has nothing to connect to until a daemon is listening, and it cannot install that
 daemon for you. Do steps 0–4 in one SSH session.
