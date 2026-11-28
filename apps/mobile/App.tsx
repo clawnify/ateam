@@ -112,6 +112,7 @@ import { createLinks, type LinkDeps, type Waker } from "./src/links";
 import { MissionScreen, type MissionViewState } from "./src/MissionScreen";
 import { NativeTerminalScreen, ReconnectingTerminal } from "./src/NativeTerminalScreen";
 import { ProjectBrowser } from "./src/ProjectBrowser";
+import { ProjectSwitcher } from "./src/ProjectSwitcher";
 import { type ProposalItem, ProposalSheet } from "./src/ProposalSheet";
 import { ProviderIcon } from "./src/ProviderIcon";
 import { pairTarget, parsePairLinks } from "./src/pair-link";
@@ -985,6 +986,10 @@ function Shell({
 		onCloseBoxTerminal();
 		onLead(false);
 	};
+	const selectSidebarProject = (key: string) => {
+		leaveDetail();
+		onSelectProject(key);
+	};
 	const [sidebarOrder, setSidebarOrder] = useState<string[]>([]);
 	// The Board card swiped open, if any: one at a time.
 	const [swipedCard, setSwipedCard] = useState<string | null>(null);
@@ -1041,6 +1046,16 @@ function Shell({
 						testID="project-task-sidebar"
 					>
 						<View style={[styles.sidebarHeader, sidebarCollapsed && styles.sidebarHeaderRail]}>
+							{/* Collapsed, the rail lists the projects as tiles instead. */}
+							{sidebar && (
+								<ProjectSwitcher
+									style={styles.sidebarSwitcher}
+									projects={projects}
+									selectedKey={selectedKey}
+									onSelect={selectSidebarProject}
+									onAdd={onAddProject}
+								/>
+							)}
 							<Pressable
 								style={styles.sidebarToggle}
 								onPress={onToggleSidebar}
@@ -1059,10 +1074,7 @@ function Shell({
 							rail={sidebarCollapsed}
 							projects={projects}
 							selectedKey={selectedKey}
-							onSelectProject={(key) => {
-								leaveDetail();
-								onSelectProject(key);
-							}}
+							onSelectProject={selectSidebarProject}
 							placeOf={placeOf}
 							onAddProject={onAddProject}
 							tasks={shown}
@@ -3482,8 +3494,16 @@ const styles = StyleSheet.create({
 	},
 	sidebarToggle: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
 	sidebarRail: { width: SIDEBAR_RAIL_WIDTH },
-	sidebarHeader: { height: 44, paddingHorizontal: 6, alignItems: "flex-end" },
-	sidebarHeaderRail: { alignItems: "center" },
+	sidebarHeader: {
+		height: 44,
+		paddingHorizontal: 6,
+		flexDirection: "row",
+		alignItems: "center",
+		justifyContent: "flex-end",
+	},
+	sidebarHeaderRail: { justifyContent: "center" },
+	// Its name starts where the task rows' icons do.
+	sidebarSwitcher: { flex: 1, minWidth: 0, paddingHorizontal: 8 },
 	statusHit: { width: 44, alignItems: "flex-start", justifyContent: "center" },
 	statusDot: { width: 12, height: 12, borderRadius: 6 },
 	headerCenter: { flex: 1, alignItems: "center" },
