@@ -38,6 +38,9 @@ test("a missing or corrupt stored view reads as the default", () => {
 	expect(parseView(null)).toEqual(DEFAULT_VIEW);
 	expect(parseView("{not json")).toEqual(DEFAULT_VIEW);
 	expect(parseView("42")).toEqual(DEFAULT_VIEW);
+	expect(parseView('{"grouping":"machine"}').allGrouping).toBe("none");
+	expect(parseView('{"allGrouping":"invalid"}').allGrouping).toBe("none");
+	expect(parseView('{"allGrouping":"project"}').allGrouping).toBe("project");
 });
 
 test("a stored view keeps the values it knows and drops the rest", () => {
@@ -162,12 +165,12 @@ test("project groups go by project name, keyed by the repo card", () => {
 test("All has its own grouping: picking one there leaves a project's list alone", () => {
 	const view = { ...DEFAULT_VIEW, grouping: "status" as const };
 	expect(scopedView(view, false).grouping).toBe("status");
-	expect(scopedView(view, true).grouping).toBe("project");
+	expect(scopedView(view, true).grouping).toBe("none");
 
 	const pickedInAll = unscopedView(view, { ...scopedView(view, true), grouping: "updated" }, true);
 	expect([pickedInAll.grouping, pickedInAll.allGrouping]).toEqual(["status", "updated"]);
 	const pickedInOne = unscopedView(view, { ...view, grouping: "machine" }, false);
-	expect([pickedInOne.grouping, pickedInOne.allGrouping]).toEqual(["machine", "project"]);
+	expect([pickedInOne.grouping, pickedInOne.allGrouping]).toEqual(["machine", "none"]);
 	// Filters are shared by both.
 	const filtered = unscopedView(view, { ...scopedView(view, true), showArchived: true }, true);
 	expect(filtered.showArchived).toBe(true);

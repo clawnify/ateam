@@ -19,6 +19,7 @@ import {
 	detectMerged,
 	diff,
 	fetchBase,
+	hasBranchCommits,
 	trackingStatus,
 	uncommittedWorkCount,
 } from "@ateam/git-core";
@@ -43,12 +44,14 @@ export async function computeGitStatus(
 	worktreePath: string,
 	baseBranch: string,
 ): Promise<GitStatusSnapshot> {
-	const [tracking, d, uncommitted] = await Promise.all([
+	const [tracking, d, uncommitted, branchCommits] = await Promise.all([
 		trackingStatus(worktreePath),
 		diff({ worktreePath, baseBranch }),
 		uncommittedWorkCount(worktreePath),
+		hasBranchCommits(worktreePath, baseBranch),
 	]);
 	return {
+		hasBranchCommits: branchCommits,
 		ahead: tracking?.ahead ?? 0,
 		behind: tracking?.behind ?? 0,
 		dirty: d.files.length,

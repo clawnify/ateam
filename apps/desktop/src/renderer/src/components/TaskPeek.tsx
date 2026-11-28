@@ -1,5 +1,7 @@
-import type { TaskDTO } from "@ateam/protocol";
+import { type Alias, type TaskDTO, tagsFor } from "@ateam/protocol";
+import { Monitor, Server } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
+import { useBoxName } from "../box-name";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
 /** How long the pointer rests on a task before its peek opens. Long on
@@ -20,11 +22,7 @@ export function TaskPeekProvider({ children }: { children: ReactNode }) {
 }
 
 /**
- * A task's full title and where it stands (TaskDTO.summary), beside the row or
- * card the pointer rests on. Rows and cards cut the title short and carry no
- * summary, which otherwise only the open task shows. A task with no summary
- * yet peeks its title alone. Clicking closes it, and it stays closed until the
- * pointer leaves and comes back. Needs a TaskPeekProvider above it.
+ * Full title, summary, machine and tags for the hovered task.
  */
 export function TaskPeek({
 	task,
@@ -33,13 +31,15 @@ export function TaskPeek({
 	children,
 }: {
 	task: TaskDTO;
-	/** The machine it runs on, by name (box-name.ts). */
-	machine?: string;
+	machine: Alias;
 	/** A dimmer last line, such as why the row looks off. */
 	note?: string;
 	/** The row or card: one element that takes a ref. */
 	children: ReactElement;
 }) {
+	const tags = tagsFor(task);
+	const box = useBoxName()(machine);
+	const MachineIcon = machine === null ? Monitor : Server;
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>{children}</TooltipTrigger>
@@ -51,7 +51,19 @@ export function TaskPeek({
 			>
 				<div className="font-medium">{task.name}</div>
 				{task.summary && <div className="mt-1 text-xs text-muted-foreground">{task.summary}</div>}
-				{machine && <div className="mt-1 text-xs text-muted-foreground">Runs on {machine}</div>}
+				<div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+					<MachineIcon size={12} strokeWidth={1.75} className="shrink-0" aria-hidden />
+					{box}
+				</div>
+				{tags.length > 0 && (
+					<div className="mt-1.5 flex flex-wrap gap-1">
+						{tags.map((tag) => (
+							<span className="pill" key={tag}>
+								{tag}
+							</span>
+						))}
+					</div>
+				)}
 				{note && <div className="mt-1 text-xs text-muted-foreground">{note}</div>}
 			</TooltipContent>
 		</Tooltip>

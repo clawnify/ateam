@@ -554,6 +554,8 @@ export interface RegisterProjectOptions {
 }
 
 export interface GitStatusSnapshot {
+	/** HEAD has a commit outside the base branch. Absent on older snapshots or unknown bases. */
+	hasBranchCommits?: boolean;
 	ahead: number;
 	behind: number;
 	/** Files in the task's diff against its base that haven't landed there:
